@@ -426,78 +426,71 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// Test wildcard hostname matching (*.wildcard.example.com)
+    /// Test wildcard hostname matching (*.wc-match-test.example.com)
     fn test_wildcard_hostname_match() -> TestCase {
         TestCase::new(
             "wildcard_hostname_match",
-            "Test wildcard hostname matching with *.wildcard.example.com",
+            "Test wildcard hostname matching with *.wc-match-test.example.com",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Test 1: Single-level subdomain (api.wildcard.example.com)
+                    // Test 1: Single-level subdomain should match
                     let mut request1 = ctx.http_client.get(format!("{}/wildcard-test", ctx.http_url()));
-                    request1 = request1.header("Host", "api.wildcard.example.com");
+                    request1 = request1.header("Host", "api.wc-match-test.example.com");
 
                     match request1.send().await {
                         Ok(response) => {
                             if !response.status().is_success() {
                                 return TestResult::failed(
                                 start.elapsed(),
-                                format!("Single-level subdomain (api.wildcard.example.com) should match *.wildcard.example.com, got status: {}", response.status())
+                                format!("Single-level subdomain (api.wc-match-test.example.com) should match *.wc-match-test.example.com, got status: {}", response.status())
                             );
                             }
                         }
                         Err(e) => {
                             return TestResult::failed(
                                 start.elapsed(),
-                                format!("Request to api.wildcard.example.com failed: {}", e),
+                                format!("Request to api.wc-match-test.example.com failed: {}", e),
                             );
                         }
                     }
 
-                    // Test 2: Multi-level subdomain should NOT match (foo.bar.wildcard.example.com)
-                    // Per RFC, wildcard only matches single-level subdomains
+                    // Test 2: Multi-level subdomain should NOT match
                     let mut request2 = ctx.http_client.get(format!("{}/wildcard-test", ctx.http_url()));
-                    request2 = request2.header("Host", "foo.bar.wildcard.example.com");
+                    request2 = request2.header("Host", "foo.bar.wc-match-test.example.com");
 
                     match request2.send().await {
                         Ok(response) => {
                             if response.status().is_success() {
                                 return TestResult::failed(
                                 start.elapsed(),
-                                format!("Multi-level subdomain (foo.bar.wildcard.example.com) should NOT match *.wildcard.example.com per RFC, but got success: {}", response.status())
+                                format!("Multi-level subdomain should NOT match *.wc-match-test.example.com per RFC, but got success: {}", response.status())
                             );
                             }
-                            // 404 is expected - not matched
                         }
-                        Err(_e) => {
-                            // Connection error is also acceptable as "not matched"
-                        }
+                        Err(_e) => {}
                     }
 
-                    // Test 3: Root domain should NOT match (wildcard.example.com)
+                    // Test 3: Root domain should NOT match
                     let mut request3 = ctx.http_client.get(format!("{}/wildcard-test", ctx.http_url()));
-                    request3 = request3.header("Host", "wildcard.example.com");
+                    request3 = request3.header("Host", "wc-match-test.example.com");
 
                     match request3.send().await {
                         Ok(response) => {
                             if response.status().is_success() {
                                 return TestResult::failed(
                                 start.elapsed(),
-                                format!("Root domain (wildcard.example.com) should NOT match *.wildcard.example.com, but got success status: {}", response.status())
+                                format!("Root domain (wc-match-test.example.com) should NOT match *.wc-match-test.example.com, but got success status: {}", response.status())
                             );
                             }
                         }
-                        Err(_e) => {
-                            // 404 or connection error is expected
-                            // We accept either as "not matched"
-                        }
+                        Err(_e) => {}
                     }
 
                     TestResult::passed_with_message(
                     start.elapsed(),
-                    "Wildcard hostname matching works correctly: *.wildcard.example.com matches api.wildcard.example.com, but NOT foo.bar.wildcard.example.com (multi-level) or wildcard.example.com (root)".to_string()
+                    "Wildcard hostname matching works correctly: *.wc-match-test.example.com matches single-level subdomain, but NOT multi-level or root".to_string()
                 )
                 })
             },

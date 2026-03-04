@@ -19,7 +19,9 @@ pub mod handlers;
 pub mod listener_port_manager;
 mod processor;
 pub mod ref_grant;
+pub mod ref_manager;
 pub mod secret_utils;
+pub mod service_ref;
 pub mod status_utils;
 
 pub use context::HandlerContext;
@@ -39,10 +41,13 @@ pub use handlers::{
     SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
+// Re-export generic ref_manager types
+pub use ref_manager::{BidirectionalRefManager, RefManagerStats, RefValue, ResourceRef};
+
 // Re-export secret utilities from local module
 pub use secret_utils::{
-    get_global_secret_store, get_secret, get_secret_by_name, replace_all_secrets, update_secrets, RefManagerStats,
-    ResourceRef, SecretRefManager, SecretStore,
+    get_global_secret_store, get_secret, get_secret_by_name, replace_all_secrets, update_secrets, SecretRefManager,
+    SecretStore,
 };
 
 // Re-export ref_grant utilities
@@ -59,6 +64,9 @@ pub use listener_port_manager::{get_listener_port_manager, make_port_key, Listen
 
 // Re-export attached_route_tracker utilities
 pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};
+
+// Re-export service_ref utilities
+pub use service_ref::get_service_ref_manager;
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

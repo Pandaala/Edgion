@@ -15,7 +15,7 @@ pub fn trigger_full_cross_ns_revalidation() {
     let manager = get_global_cross_ns_ref_manager();
     let stats = manager.stats();
 
-    if stats.resource_count == 0 {
+    if stats.value_count == 0 {
         tracing::debug!(
             component = "cross_ns_revalidation",
             "No resources with cross-namespace references, skipping full revalidation"
@@ -25,26 +25,21 @@ pub fn trigger_full_cross_ns_revalidation() {
 
     tracing::info!(
         component = "cross_ns_revalidation",
-        resource_count = stats.resource_count,
-        target_namespace_count = stats.target_namespace_count,
+        resource_count = stats.value_count,
+        target_namespace_count = stats.source_count,
         total_references = stats.total_references,
         "Triggering full cross-namespace revalidation after init"
     );
 
-    // Get all unique target namespaces and requeue resources referencing them
-    // We iterate through all target namespaces to find all resources
     let mut requeued = std::collections::HashSet::new();
     let mut requeued_count = 0;
 
-    // Get all namespaces by iterating through the stats
-    // Since we can't directly iterate the manager's internal data,
-    // we'll need to query each namespace that has references
-    for ns in collect_all_target_namespaces(&manager) {
-        for resource_ref in manager.get_refs_to_namespace(&ns) {
-            let full_key = resource_ref.full_key();
-            if !requeued.contains(&full_key) {
+    for ns in manager.all_source_keys() {
+        for resource_ref in manager.get_refs(&ns) {
+            let ref_key = resource_ref.key();
+            if !requeued.contains(&ref_key) {
                 PROCESSOR_REGISTRY.requeue(resource_ref.kind_str(), resource_ref.resource_key());
-                requeued.insert(full_key);
+                requeued.insert(ref_key);
                 requeued_count += 1;
             }
         }
@@ -57,13 +52,6 @@ pub fn trigger_full_cross_ns_revalidation() {
             "Completed full cross-namespace revalidation"
         );
     }
-}
-
-/// Helper function to collect all target namespaces from the manager
-fn collect_all_target_namespaces(manager: &super::cross_ns_ref_manager::CrossNamespaceRefManager) -> Vec<String> {
-    // We need to access the internal data structure
-    // For now, we'll expose a method to get all namespaces
-    manager.all_target_namespaces()
 }
 
 /// Requeue all Gateways after init to resolve TLS certificate references.
@@ -114,14 +102,12 @@ impl RevalidationListener for CrossNsRevalidationListener {
     fn on_reference_grant_changed(&self, event: &ReferenceGrantChangedEvent) {
         let manager = get_global_cross_ns_ref_manager();
 
-        // If affected_namespaces is empty, trigger full revalidation
-        // This is typically when a ReferenceGrant is deleted without specific namespace info
         let namespaces_to_check: Vec<String> = if event.affected_namespaces.is_empty() {
             tracing::info!(
                 component = "cross_ns_revalidation",
                 "ReferenceGrant changed with no specific affected namespaces, triggering full revalidation"
             );
-            manager.all_target_namespaces()
+            manager.all_source_keys()
         } else {
             event.affected_namespaces.iter().cloned().collect()
         };
@@ -134,12 +120,11 @@ impl RevalidationListener for CrossNsRevalidationListener {
         let mut requeued_count = 0;
 
         for ns in &namespaces_to_check {
-            let refs = manager.get_refs_to_namespace(ns);
+            let refs = manager.get_refs(ns);
 
             for resource_ref in refs {
-                let full_key = resource_ref.full_key();
-                // Avoid duplicate requeue for resources referencing multiple affected namespaces
-                if requeued.contains(&full_key) {
+                let ref_key = resource_ref.key();
+                if requeued.contains(&ref_key) {
                     continue;
                 }
 
@@ -155,7 +140,7 @@ impl RevalidationListener for CrossNsRevalidationListener {
                 );
 
                 PROCESSOR_REGISTRY.requeue(kind, key);
-                requeued.insert(full_key);
+                requeued.insert(ref_key);
                 requeued_count += 1;
             }
         }
@@ -173,8 +158,8 @@ impl RevalidationListener for CrossNsRevalidationListener {
 
 #[cfg(test)]
 mod tests {
-    use super::super::cross_ns_ref_manager::CrossNsResourceRef;
     use super::*;
+    use crate::core::conf_mgr::sync_runtime::resource_processor::ref_manager::ResourceRef;
     use crate::types::ResourceKind;
     use std::collections::HashSet;
 
@@ -182,14 +167,11 @@ mod tests {
     fn test_listener_finds_affected_resources() {
         let manager = get_global_cross_ns_ref_manager();
 
-        // Clear any previous state
         manager.clear();
 
-        // Add a resource that references 'backend' namespace
-        let route = CrossNsResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
-        manager.add_cross_ns_ref("backend".to_string(), route);
+        let route = ResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
+        manager.add_ref("backend".to_string(), route);
 
-        // Simulate ReferenceGrant change for 'backend' namespace
         let _event = ReferenceGrantChangedEvent {
             affected_namespaces: {
                 let mut set = HashSet::new();
@@ -198,13 +180,11 @@ mod tests {
             },
         };
 
-        // The listener should find 'app/my-route' for requeue
-        let refs = manager.get_refs_to_namespace("backend");
+        let refs = manager.get_refs("backend");
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].resource_key(), "app/my-route");
         assert_eq!(refs[0].kind_str(), "HTTPRoute");
 
-        // Clean up
         manager.clear();
     }
 }

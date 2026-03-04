@@ -2,12 +2,10 @@
 //!
 //! Handles GRPCRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{
-    get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_grpc_route_if_enabled, CrossNsResourceRef,
-};
+use super::super::ref_grant::{get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_grpc_route_if_enabled};
 use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
+    set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::GRPCRoute;
 use crate::types::resources::common::RefDenied;
@@ -25,13 +23,40 @@ impl GrpcRouteHandler {
         Self { controller_name }
     }
 
-    /// Create a CrossNsResourceRef for this route
-    fn create_resource_ref(route: &GRPCRoute) -> CrossNsResourceRef {
-        CrossNsResourceRef::new(
+    fn create_resource_ref(route: &GRPCRoute) -> ResourceRef {
+        ResourceRef::new(
             ResourceKind::GRPCRoute,
             route.metadata.namespace.clone(),
             route.metadata.name.clone().unwrap_or_default(),
         )
+    }
+
+    /// Register Service backend references for cross-resource requeue
+    fn register_service_refs(route: &GRPCRoute) {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+
+        let mut backend_refs_list = Vec::new();
+        if let Some(rules) = &route.spec.rules {
+            for rule in rules {
+                if let Some(backend_refs) = &rule.backend_refs {
+                    for br in backend_refs {
+                        backend_refs_list.push((
+                            br.kind.as_deref(),
+                            br.namespace.as_deref(),
+                            br.name.as_str(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        super::route_utils::register_service_backend_refs(
+            ResourceKind::GRPCRoute,
+            route_ns,
+            route_name,
+            &backend_refs_list,
+        );
     }
 
     /// Record cross-namespace references from backend_refs
@@ -50,7 +75,7 @@ impl GrpcRouteHandler {
                     for backend_ref in backend_refs {
                         if let Some(backend_ns) = &backend_ref.namespace {
                             if backend_ns != route_ns {
-                                manager.add_cross_ns_ref(backend_ns.clone(), resource_ref.clone());
+                                manager.add_ref(backend_ns.clone(), resource_ref.clone());
                             }
                         }
                     }
@@ -74,6 +99,9 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route);
+
+        // Register Service backend references for cross-resource requeue
+        Self::register_service_refs(&route);
 
         // Mark denied cross-namespace references
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
@@ -131,8 +159,11 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
+        // Clear Service backend references
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+        super::route_utils::clear_service_backend_refs(ResourceKind::GRPCRoute, route_ns, route_name);
+
         remove_from_attached_route_tracker(ResourceKind::GRPCRoute, route_ns, route_name);
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
     }

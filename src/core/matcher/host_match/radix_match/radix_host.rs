@@ -165,7 +165,7 @@ impl<T> RadixHost<T> {
         // Count segments (number of parts separated by dots)
         let segment_count = remaining_without_dot.split('.').count();
 
-        // Must match exactly the wildcard count
-        segment_count == self.wildcard_count
+        // Per Gateway API spec, wildcards match any number of labels (suffix match)
+        segment_count >= self.wildcard_count
     }
 }

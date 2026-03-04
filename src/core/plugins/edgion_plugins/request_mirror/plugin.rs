@@ -108,10 +108,21 @@ impl RequestMirrorPlugin {
             .namespace
             .clone()
             .unwrap_or_else(|| "default".to_string());
-        let host = format!("{}.{}.svc.cluster.local", self.config.backend_ref.name, ns);
         // TODO(Phase 2): Use BackendTLSPolicy to determine TLS instead of port heuristic.
-        // port 443 → https is a reasonable default but non-standard ports may use TLS too.
         let scheme = if port == 443 { "https" } else { "http" };
+
+        let service_key = format!("{}/{}", ns, self.config.backend_ref.name);
+
+        // Use the gateway's standard backend resolution which respects EndpointMode,
+        // performs round-robin LB across endpoints, and honours health checks.
+        if let Some(backend) = crate::core::backends::select_roundrobin_backend(&service_key) {
+            let target = format!("{}", backend.addr);
+            return Ok((target.clone(), format!("{scheme}://{target}")));
+        }
+
+        // Fallback to Kubernetes DNS when the endpoint store has no data yet
+        // (e.g. startup race, or the Service hasn't been synced).
+        let host = format!("{}.{}.svc.cluster.local", self.config.backend_ref.name, ns);
         let target = format!("{}:{}", host, port);
         Ok((target, format!("{scheme}://{host}:{port}")))
     }

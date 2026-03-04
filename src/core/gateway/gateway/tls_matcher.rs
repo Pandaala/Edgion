@@ -9,11 +9,20 @@
 //! This supports Gateway API semantics where the same hostname on different
 //! ports can have different certificates.
 //!
+//! ## Catch-all support
+//!
+//! Listeners without a hostname act as catch-all: their certificates are used
+//! when no exact or wildcard hostname match is found on that port.
+//! Catch-all entries are stored separately from the hostname-based `HashHost`
+//! (which requires valid domain keys) and are only consulted as a last resort
+//! to preserve the "most-specific wins" priority:
+//!   exact hostname > wildcard hostname > catch-all
+//!
 //! ## Performance Optimization
 //!
-//! Most users don't configure TLS in Gateway, so we use an `AtomicBool` flag to
-//! skip the HashMap lookup when no Gateway TLS is configured. This provides a
-//! fast path for the common case.
+//! Most users don't configure TLS in Gateway, so the inner `Option` provides a
+//! fast path: when no Gateway TLS is configured, lookups return immediately
+//! without touching any HashMap.
 
 use crate::core::matcher::HashHost;
 use crate::types::err::EdError;
@@ -36,7 +45,7 @@ pub struct GatewayTlsEntry {
     pub listener_name: String,
     /// Listener port
     pub port: u16,
-    /// Hostname pattern (e.g., "*.example.com")
+    /// Hostname pattern (e.g., "*.example.com"), empty string for catch-all
     pub hostname: String,
     /// References to Secrets containing certificates
     pub certificate_refs: Vec<SecretObjectReference>,
@@ -44,9 +53,17 @@ pub struct GatewayTlsEntry {
     pub secrets: Option<Vec<Secret>>,
 }
 
-/// Port-based TLS matcher structure
-/// Maps port -> (hostname -> TLS entries)
-type PortTlsMap = HashMap<u16, HashHost<Vec<GatewayTlsEntry>>>;
+/// Combined matcher data atomically swapped via `ArcSwap`.
+///
+/// Hostname-based entries and catch-all entries live in a single struct so that
+/// a single `ArcSwap::store` replaces both atomically - no window where one is
+/// stale while the other is fresh.
+struct TlsMatcherData {
+    /// Hostname-based matcher: port -> (hostname/SNI -> entries)
+    port_map: HashMap<u16, HashHost<Vec<GatewayTlsEntry>>>,
+    /// Catch-all entries: port -> entries (for listeners without hostname)
+    port_catch_all: HashMap<u16, Vec<GatewayTlsEntry>>,
+}
 
 /// Gateway TLS Matcher for port and hostname-based certificate lookup
 ///
@@ -54,18 +71,18 @@ type PortTlsMap = HashMap<u16, HashHost<Vec<GatewayTlsEntry>>>;
 /// The inner Option provides fast-path for the common case where
 /// no Gateway TLS is configured (avoids HashMap allocation and lookup).
 ///
-/// ## Structure
-/// Option<Port -> (Hostname/SNI -> Vec<GatewayTlsEntry>)>
+/// ## Lookup priority (per port)
+/// 1. Exact hostname match (via HashHost)
+/// 2. Wildcard hostname match (via HashHost)
+/// 3. Catch-all - hostname-less listener certificate
 pub struct GatewayTlsMatcher {
-    /// Port-based TLS matcher: None if no TLS configured, Some(port -> hostname -> entries) otherwise
-    /// Using Option avoids HashMap allocation when no Gateway TLS is configured
-    port_matcher: ArcSwap<Option<PortTlsMap>>,
+    data: ArcSwap<Option<TlsMatcherData>>,
 }
 
 impl GatewayTlsMatcher {
     pub fn new() -> Self {
         Self {
-            port_matcher: ArcSwap::from_pointee(None),
+            data: ArcSwap::from_pointee(None),
         }
     }
 
@@ -74,15 +91,7 @@ impl GatewayTlsMatcher {
     /// This is a fast O(1) check.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.port_matcher.load().is_none()
-    }
-
-    /// Set the entire Gateway TLS matcher (port-based)
-    ///
-    /// # Warning
-    /// Do not call this method frequently. Maintain at least 100ms interval between calls.
-    pub fn set(&self, port_map: Option<PortTlsMap>) {
-        self.port_matcher.store(Arc::new(port_map));
+        self.data.load().is_none()
     }
 
     /// Match SNI against Gateway Listener hostnames with port dimension
@@ -93,29 +102,31 @@ impl GatewayTlsMatcher {
     /// - `port`: The listening port (from TCP connection)
     /// - `sni`: Server Name Indication from TLS Client Hello
     ///
-    /// ## Performance
-    /// - Fast path: If no Gateway TLS configured, returns immediately (Option::None check)
-    /// - Slow path: Port lookup O(1) + Hostname lookup O(1)
     #[inline]
     pub fn match_sni_with_port(&self, port: u16, sni: &str) -> Result<GatewayTlsEntry, EdError> {
-        // Load port matcher - fast path if None
-        let port_map_opt = self.port_matcher.load();
-        let port_map = match port_map_opt.as_ref() {
-            Some(map) => map,
+        let data_guard = self.data.load();
+        let data = match data_guard.as_ref() {
+            Some(d) => d,
             None => return Err(EdError::SniNotMatch("Gateway TLS not configured".to_string())),
         };
 
-        // First layer: lookup by port
-        let host_matcher = match port_map.get(&port) {
-            Some(m) => m,
-            None => return Err(EdError::SniNotMatch(format!("No TLS config for port {}", port))),
-        };
-
-        // Second layer: lookup by hostname/SNI
-        match host_matcher.get(sni) {
-            Some(entries) if !entries.is_empty() => Ok(entries[0].clone()),
-            _ => Err(EdError::SniNotMatch(format!("Port {}: SNI {}", port, sni))),
+        // 1) Hostname-based lookup (exact > wildcard)
+        if let Some(host_matcher) = data.port_map.get(&port) {
+            if let Some(entries) = host_matcher.get(sni) {
+                if let Some(entry) = entries.first() {
+                    return Ok(entry.clone());
+                }
+            }
         }
+
+        // 2) Catch-all fallback
+        if let Some(catch_all) = data.port_catch_all.get(&port) {
+            if let Some(entry) = catch_all.first() {
+                return Ok(entry.clone());
+            }
+        }
+
+        Err(EdError::SniNotMatch(format!("Port {}: SNI {}", port, sni)))
     }
 
     /// Match SNI against Gateway Listener hostnames (without port, searches all ports)
@@ -124,19 +135,25 @@ impl GatewayTlsMatcher {
     /// Prefer `match_sni_with_port` when port is known.
     #[inline]
     pub fn match_sni(&self, sni: &str) -> Result<GatewayTlsEntry, EdError> {
-        // Load port matcher - fast path if None
-        let port_map_opt = self.port_matcher.load();
-        let port_map = match port_map_opt.as_ref() {
-            Some(map) => map,
+        let data_guard = self.data.load();
+        let data = match data_guard.as_ref() {
+            Some(d) => d,
             None => return Err(EdError::SniNotMatch("Gateway TLS not configured".to_string())),
         };
 
-        // Search across all ports
-        for (_port, host_matcher) in port_map.iter() {
+        // 1) Hostname-based lookup
+        for (_port, host_matcher) in data.port_map.iter() {
             if let Some(entries) = host_matcher.get(sni) {
                 if let Some(entry) = entries.first() {
                     return Ok(entry.clone());
                 }
+            }
+        }
+
+        // 2) Catch-all fallback
+        for (_port, catch_all) in data.port_catch_all.iter() {
+            if let Some(entry) = catch_all.first() {
+                return Ok(entry.clone());
             }
         }
 
@@ -147,9 +164,12 @@ impl GatewayTlsMatcher {
     ///
     /// Extracts TLS configurations from all Gateway Listeners and builds
     /// a port -> hostname-based matcher for certificate lookup.
+    /// Listeners without a hostname are registered as catch-all entries.
     pub fn rebuild_from_gateways(&self, gateways: &[Gateway]) {
-        let mut port_map: PortTlsMap = HashMap::new();
-        let mut entry_count = 0usize;
+        let mut port_map: HashMap<u16, HashHost<Vec<GatewayTlsEntry>>> = HashMap::new();
+        let mut port_catch_all: HashMap<u16, Vec<GatewayTlsEntry>> = HashMap::new();
+        let mut hostname_entry_count = 0usize;
+        let mut catch_all_entry_count = 0usize;
         let mut port_count = 0usize;
 
         for gateway in gateways {
@@ -175,53 +195,67 @@ impl GatewayTlsMatcher {
                     _ => continue,
                 };
 
-                // Get hostname, skip if not specified
-                let hostname = match &listener.hostname {
-                    Some(h) => h.clone(),
-                    None => continue,
-                };
-
                 let port = listener.port as u16;
+                match &listener.hostname {
+                    Some(hostname) => {
+                        let entry = GatewayTlsEntry {
+                            gateway_namespace: gateway_namespace.clone(),
+                            gateway_name: gateway_name.clone(),
+                            listener_name: listener.name.clone(),
+                            port,
+                            hostname: hostname.clone(),
+                            certificate_refs: cert_refs,
+                            secrets: tls_config.secrets.clone(),
+                        };
 
-                let entry = GatewayTlsEntry {
-                    gateway_namespace: gateway_namespace.clone(),
-                    gateway_name: gateway_name.clone(),
-                    listener_name: listener.name.clone(),
-                    port,
-                    hostname: hostname.clone(),
-                    certificate_refs: cert_refs,
-                    secrets: tls_config.secrets.clone(),
-                };
+                        let host_matcher = port_map.entry(port).or_insert_with(|| {
+                            port_count += 1;
+                            HashHost::new()
+                        });
 
-                // Get or create host matcher for this port
-                let host_matcher = port_map.entry(port).or_insert_with(|| {
-                    port_count += 1;
-                    HashHost::new()
-                });
-
-                // Add entry to host matcher
-                if let Some(existing) = host_matcher.get_mut(&hostname) {
-                    existing.push(entry);
-                } else {
-                    host_matcher.insert(&hostname, vec![entry]);
+                        if let Some(existing) = host_matcher.get_mut(hostname) {
+                            existing.push(entry);
+                        } else {
+                            host_matcher.insert(hostname, vec![entry]);
+                        }
+                        hostname_entry_count += 1;
+                    }
+                    None => {
+                        let entry = GatewayTlsEntry {
+                            gateway_namespace: gateway_namespace.clone(),
+                            gateway_name: gateway_name.clone(),
+                            listener_name: listener.name.clone(),
+                            port,
+                            hostname: String::new(),
+                            certificate_refs: cert_refs,
+                            secrets: tls_config.secrets.clone(),
+                        };
+                        port_catch_all.entry(port).or_default().push(entry);
+                        catch_all_entry_count += 1;
+                    }
                 }
-                entry_count += 1;
             }
         }
 
-        let has_entries = entry_count > 0;
+        let total_entries = hostname_entry_count + catch_all_entry_count;
 
         tracing::info!(
             component = "gateway_tls_matcher",
             gateways = gateways.len(),
             ports = port_count,
-            entries = entry_count,
-            has_entries = has_entries,
-            "Rebuilt Gateway TLS matcher with port dimension"
+            hostname_entries = hostname_entry_count,
+            catch_all_entries = catch_all_entry_count,
+            "Rebuilt Gateway TLS matcher"
         );
 
-        // Set to None if no entries, avoiding unnecessary HashMap allocation and lookup
-        self.set(if has_entries { Some(port_map) } else { None });
+        if total_entries > 0 {
+            self.data.store(Arc::new(Some(TlsMatcherData {
+                port_map,
+                port_catch_all,
+            })));
+        } else {
+            self.data.store(Arc::new(None));
+        }
     }
 }
 
@@ -263,6 +297,7 @@ mod tests {
     use super::*;
     use crate::types::resources::gateway::{GatewaySpec, GatewayTLSConfig, Listener};
     use kube::api::ObjectMeta;
+
     fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) -> Gateway {
         Gateway {
             metadata: ObjectMeta {
@@ -299,23 +334,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_rebuild_from_gateways() {
-        let matcher = GatewayTlsMatcher::new();
-
-        let tls_config = GatewayTLSConfig {
+    fn make_tls_config(cert_name: &str, cert_ns: Option<&str>) -> GatewayTLSConfig {
+        GatewayTLSConfig {
             mode: Some("Terminate".to_string()),
             certificate_refs: Some(vec![SecretObjectReference {
-                name: "test-cert".to_string(),
-                namespace: Some("default".to_string()),
+                name: cert_name.to_string(),
+                namespace: cert_ns.map(|s| s.to_string()),
                 group: None,
                 kind: None,
             }]),
             options: None,
             secrets: None,
-        };
+        }
+    }
 
-        let listener = create_test_listener("https", Some("example.com"), Some(tls_config));
+    #[test]
+    fn test_rebuild_from_gateways() {
+        let matcher = GatewayTlsMatcher::new();
+
+        let listener =
+            create_test_listener("https", Some("example.com"), Some(make_tls_config("test-cert", Some("default"))));
         let gateway = create_test_gateway("test-gw", "default", vec![listener]);
 
         matcher.rebuild_from_gateways(&[gateway]);

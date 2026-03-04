@@ -285,7 +285,8 @@ mod tests {
         assert!(engine.match_host("api.example.com").is_some());
         assert!(engine.match_host("web.example.com").is_some());
         assert!(engine.match_host("example.com").is_none());
-        assert!(engine.match_host("api.web.example.com").is_none());
+        // Multi-level subdomain should also match (per Gateway API spec)
+        assert!(engine.match_host("api.web.example.com").is_some());
     }
 
     #[test]
@@ -400,8 +401,9 @@ mod tests {
         assert!(r3.is_some());
         assert_eq!(r3.unwrap().identifier(), "runtime3");
 
-        // Test that *.example.com doesn't match_engine too many levels
-        let r_none = engine.match_host("sub.api.example.com");
-        assert!(r_none.is_none());
+        // Multi-level subdomain should also match *.example.com (per Gateway API spec)
+        let r_multi = engine.match_host("sub.api.example.com");
+        assert!(r_multi.is_some());
+        assert_eq!(r_multi.unwrap().identifier(), "runtime4");
     }
 }

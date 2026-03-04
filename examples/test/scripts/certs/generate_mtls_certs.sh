@@ -49,6 +49,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CONF_DIR="$PROJECT_ROOT/examples/test/conf/EdgionTls/mTLS"
 CERTS_DIR="$PROJECT_ROOT/examples/test/certs/mtls"
 BACKEND_TLS_CONF_DIR="$PROJECT_ROOT/examples/test/conf/HTTPRoute/Backend/BackendTLS"
+HEADER_CERT_AUTH_CONF_DIR="$PROJECT_ROOT/examples/test/conf/EdgionPlugins/HeaderCertAuth"
 
 # Create directories
 mkdir -p "$CONF_DIR"
@@ -85,6 +86,30 @@ EOF
     return 0
 }
 
+# Keep HeaderCertAuth CA Secret in sync with the client CA used to sign valid-client.crt.
+# Without this, the HeaderCertAuth plugin rejects certs signed by a regenerated CA.
+sync_header_cert_auth_ca() {
+    if [ ! -f "$CERTS_DIR/client-ca.crt" ]; then
+        return 1
+    fi
+
+    mkdir -p "$HEADER_CERT_AUTH_CONF_DIR"
+    local ca_b64
+    ca_b64=$(base64 < "$CERTS_DIR/client-ca.crt" | tr -d '\n')
+
+    cat > "$HEADER_CERT_AUTH_CONF_DIR/01_Secret_default_header-cert-ca.yaml" << EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: header-cert-ca
+  namespace: edgion-default
+type: Opaque
+data:
+  ca.crt: $ca_b64
+EOF
+    return 0
+}
+
 # Check if certificates already exist
 if [ -f "$CERTS_DIR/valid-client.crt" ]; then
     log_info "mTLS certificatealready存在，SkipGenerate..."
@@ -92,6 +117,9 @@ if [ -f "$CERTS_DIR/valid-client.crt" ]; then
         log_info "已同步 BackendTLS mTLS 客户端 Secret: ClientCert_edge_backend-client-cert.yaml"
     else
         log_warning "未能同步 BackendTLS mTLS 客户端 Secret（缺少 valid-client 证书或私钥）"
+    fi
+    if sync_header_cert_auth_ca; then
+        log_info "已同步 HeaderCertAuth CA Secret: 01_Secret_default_header-cert-ca.yaml"
     fi
     log_warning "如需重新Generate，Please先删除certificatedirectory:"
     log_warning "  rm -rf $CERTS_DIR"
@@ -363,6 +391,10 @@ data:
   tls.key: $CLIENTKEY_B64
 EOF
 log_success "创建 ClientCert_edge_backend-client-cert.yaml (BackendTLS mTLS client cert)"
+
+# HeaderCertAuth CA Secret (uses the same client CA)
+sync_header_cert_auth_ca
+log_success "创建 01_Secret_default_header-cert-ca.yaml (HeaderCertAuth CA)"
 
 # =============================================================================
 # Summary

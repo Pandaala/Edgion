@@ -37,7 +37,7 @@ fn gen_trace_id(label: &str) -> String {
 }
 
 /// Poll /mirror/query/{trace_id} on the test_server HTTP backend (port 30001 direct)
-/// until the mirror capture is found or retries are exhausted.
+/// until the mirror capture (with x-mirror: "true") is found or retries are exhausted.
 /// Returns Ok(captures) or Err(reason).
 async fn poll_mirror_received(
     ctx: &TestContext,
@@ -45,8 +45,6 @@ async fn poll_mirror_received(
     retries: u32,
     interval_ms: u64,
 ) -> Result<Vec<Value>, String> {
-    // Query the test_server directly (not through the gateway) so we don't create
-    // another mirror. The test_server listens on port 30001 on 127.0.0.1.
     let direct_url = format!("http://{}:30001/mirror/query/{}", ctx.target_host, trace_id);
     let client = &ctx.http_client;
 
@@ -55,10 +53,13 @@ async fn poll_mirror_received(
             Ok(resp) => {
                 if let Ok(body) = resp.json::<Value>().await {
                     let found = body["found"].as_bool().unwrap_or(false);
-                    let count = body["count"].as_u64().unwrap_or(0);
-                    if found && count > 0 {
+                    if found {
                         let captures = body["captures"].as_array().cloned().unwrap_or_default();
-                        return Ok(captures);
+                        // Wait until the mirror capture (x-mirror: "true") arrives,
+                        // not just the main request forwarded by the gateway
+                        if find_mirror_capture(&captures).is_some() {
+                            return Ok(captures);
+                        }
                     }
                 }
             }
@@ -72,13 +73,21 @@ async fn poll_mirror_received(
             sleep(Duration::from_millis(interval_ms)).await;
         }
     }
-    Err(format!("mirror request not received after {} retries", retries))
+    Err(format!("mirror capture (x-mirror: true) not received after {} retries", retries))
 }
 
 /// Reset the mirror capture store between tests.
 async fn reset_mirror_store(ctx: &TestContext) {
     let url = format!("http://{}:30001/mirror/reset", ctx.target_host);
     let _ = ctx.http_client.get(&url).send().await;
+}
+
+/// Find the mirror capture (the one with x-mirror: "true" header).
+/// The main request forwarded by the gateway also hits /mirror/capture but lacks x-mirror.
+fn find_mirror_capture(captures: &[Value]) -> Option<&Value> {
+    captures
+        .iter()
+        .find(|c| c["headers"]["x-mirror"].as_str() == Some("true"))
 }
 
 impl RequestMirrorTestSuite {
@@ -117,8 +126,18 @@ impl RequestMirrorTestSuite {
                     // Poll for mirror receipt (mirror is async — allow up to 2s)
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = &captures[0];
-                            // Verify x-mirror: true header was added
+                            let cap = match find_mirror_capture(&captures) {
+                                Some(c) => c,
+                                None => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "No mirror capture found (x-mirror: true); {} total capture(s)",
+                                            captures.len()
+                                        ),
+                                    );
+                                }
+                            };
                             let has_mirror_hdr = cap["headers"]["x-mirror"]
                                 .as_str()
                                 .map(|v| v == "true")
@@ -231,7 +250,16 @@ impl RequestMirrorTestSuite {
 
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let headers = &captures[0]["headers"];
+                            let cap = match find_mirror_capture(&captures) {
+                                Some(c) => c,
+                                None => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        "No mirror capture found (x-mirror: true)".to_string(),
+                                    );
+                                }
+                            };
+                            let headers = &cap["headers"];
                             let has_connection = !headers["connection"].is_null();
                             let has_proxy_auth = !headers["proxy-authorization"].is_null();
                             let has_te = !headers["te"].is_null();
@@ -245,7 +273,6 @@ impl RequestMirrorTestSuite {
                                     ),
                                 );
                             }
-                            // Verify x-trace-id IS forwarded (it's not hop-by-hop)
                             let trace_fwd = headers["x-trace-id"].as_str().unwrap_or("");
                             if trace_fwd != trace_id {
                                 return TestResult::failed(
@@ -502,14 +529,18 @@ impl RequestMirrorTestSuite {
                     // Wait for mirror async tasks to complete
                     sleep(Duration::from_millis(800)).await;
 
-                    // Count how many were received
+                    // Count how many were mirrored (look for captures with x-mirror: "true")
                     let mut received = 0u32;
                     for tid in &trace_ids {
                         let direct = format!("http://{}:30001/mirror/query/{}", ctx.target_host, tid);
                         if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                             if let Ok(body) = resp.json::<Value>().await {
                                 if body["found"].as_bool().unwrap_or(false) {
-                                    received += 1;
+                                    if let Some(caps) = body["captures"].as_array() {
+                                        if find_mirror_capture(caps).is_some() {
+                                            received += 1;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -613,8 +644,16 @@ impl RequestMirrorTestSuite {
                     // via the received headers having the trace_id (meaning request arrived)
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            // Verify at least the request was received and x-mirror is set
-                            let x_mirror = captures[0]["headers"]["x-mirror"].as_str().unwrap_or("");
+                            let cap = match find_mirror_capture(&captures) {
+                                Some(c) => c,
+                                None => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        "No mirror capture found (x-mirror: true)".to_string(),
+                                    );
+                                }
+                            };
+                            let x_mirror = cap["headers"]["x-mirror"].as_str().unwrap_or("");
                             if x_mirror != "true" {
                                 return TestResult::failed(start.elapsed(), "x-mirror not 'true'".to_string());
                             }
@@ -622,7 +661,7 @@ impl RequestMirrorTestSuite {
                                 start.elapsed(),
                                 format!(
                                     "Mirror received request with query string ✓ (path: {})",
-                                    captures[0]["path"].as_str().unwrap_or("")
+                                    cap["path"].as_str().unwrap_or("")
                                 ),
                             )
                         }
@@ -656,9 +695,17 @@ impl RequestMirrorTestSuite {
 
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let headers = &captures[0]["headers"];
+                            let cap = match find_mirror_capture(&captures) {
+                                Some(c) => c,
+                                None => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        "No mirror capture found (x-mirror: true)".to_string(),
+                                    );
+                                }
+                            };
+                            let headers = &cap["headers"];
 
-                            // x-mirror: true MUST be present
                             let x_mirror = headers["x-mirror"].as_str().unwrap_or("");
                             if x_mirror != "true" {
                                 return TestResult::failed(
@@ -667,8 +714,6 @@ impl RequestMirrorTestSuite {
                                 );
                             }
 
-                            // Original host header (mirror-basic.example.com) should be replaced
-                            // with the mirror backend host (test-http.edgion-test.svc.cluster.local:30001)
                             let host = headers["host"].as_str().unwrap_or("");
                             if host == HOST_BASIC {
                                 return TestResult::failed(

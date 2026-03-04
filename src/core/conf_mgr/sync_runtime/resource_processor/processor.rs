@@ -148,6 +148,9 @@ pub trait ProcessorObj: Send + Sync {
 
     /// List all resource keys in cache
     fn list_keys(&self) -> Vec<String>;
+
+    /// Check if a resource exists in cache by key
+    fn contains_key(&self, key: &str) -> bool;
 }
 
 /// Enhanced ResourceProcessor that holds ServerCache<T>
@@ -630,6 +633,10 @@ where
 
     fn list_keys(&self) -> Vec<String> {
         self.cache.list_keys()
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.cache.get_by_key(key).is_some()
     }
 }
 

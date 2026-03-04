@@ -11,7 +11,6 @@ use std::collections::HashSet;
 
 use crate::core::cli::config::is_reference_grant_validation_enabled;
 use crate::core::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
-use crate::core::conf_mgr::sync_runtime::resource_processor::ref_grant::cross_ns_ref_manager::CrossNsResourceRef;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
     get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_listener_port_manager, get_secret,
@@ -82,7 +81,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
         // Track cross-namespace Secret references so ReferenceGrant changes requeue this Gateway
-        let cross_ns_ref = CrossNsResourceRef::new(
+        let cross_ns_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
@@ -130,7 +129,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         // Register cross-namespace cert refs so ReferenceGrant changes requeue this Gateway
                         let cert_ns_str = secret_ns.map(|s| s.as_str()).unwrap_or("");
                         if cert_ns_str != gateway_ns {
-                            cross_ns_manager.add_cross_ns_ref(cert_ns_str.to_string(), cross_ns_ref.clone());
+                            cross_ns_manager.add_ref(cert_ns_str.to_string(), cross_ns_ref.clone());
                         }
 
                         // Try to resolve Secret from global store
@@ -201,7 +200,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
         // Clear cross-namespace reference tracking
-        let cross_ns_ref = CrossNsResourceRef::new(
+        let cross_ns_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),

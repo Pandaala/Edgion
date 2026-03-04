@@ -1,3 +1,5 @@
+# DEV ONLY — DO NOT USE IN PRODUCTION
+# Uses IfNotPresent + shell restart loop for hot-reload during development.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,13 +25,21 @@ spec:
       containers:
       - name: edgion-controller
         image: docker.io/pandaala/edgion-controller:dev
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command:
-        - "/usr/local/bin/edgion-controller"
-        args:
-        - "--config-file"
-        - "/usr/local/edgion/config/edgion-controller.toml"
-        - "--test-mode"
+        - "/bin/sh"
+        - "-c"
+        - |
+          while true; do
+            if [ -f /usr/local/edgion/edgion-controller ]; then
+              BINARY=/usr/local/edgion/edgion-controller
+            else
+              BINARY=/usr/local/bin/edgion-controller
+            fi
+            "$BINARY" --config-file /usr/local/edgion/config/edgion-controller.toml --test-mode || true
+            echo "[restart] edgion-controller exited, restarting in 2s..."
+            sleep 2
+          done
         ports:
         - name: grpc
           containerPort: 50051

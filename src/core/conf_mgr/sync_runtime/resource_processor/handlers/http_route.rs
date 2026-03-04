@@ -2,19 +2,16 @@
 //!
 //! Handles HTTPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{
-    get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_http_route_if_enabled, CrossNsResourceRef,
-};
+use super::super::ref_grant::{get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_http_route_if_enabled};
 use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler,
+    set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::HTTPRoute;
 use crate::types::resources::common::{ParentReference, RefDenied};
 use crate::types::resources::http_route::{HTTPRouteStatus, RouteParentStatus};
 use crate::types::ResourceKind;
-use k8s_openapi::api::core::v1::Service;
 
 /// HTTPRoute handler
 pub struct HttpRouteHandler {
@@ -26,13 +23,40 @@ impl HttpRouteHandler {
         Self { controller_name }
     }
 
-    /// Create a CrossNsResourceRef for this route
-    fn create_resource_ref(route: &HTTPRoute) -> CrossNsResourceRef {
-        CrossNsResourceRef::new(
+    fn create_resource_ref(route: &HTTPRoute) -> ResourceRef {
+        ResourceRef::new(
             ResourceKind::HTTPRoute,
             route.metadata.namespace.clone(),
             route.metadata.name.clone().unwrap_or_default(),
         )
+    }
+
+    /// Register Service backend references for cross-resource requeue
+    fn register_service_refs(route: &HTTPRoute) {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+
+        let mut backend_refs_list = Vec::new();
+        if let Some(rules) = &route.spec.rules {
+            for rule in rules {
+                if let Some(backend_refs) = &rule.backend_refs {
+                    for br in backend_refs {
+                        backend_refs_list.push((
+                            br.kind.as_deref(),
+                            br.namespace.as_deref(),
+                            br.name.as_str(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        super::route_utils::register_service_backend_refs(
+            ResourceKind::HTTPRoute,
+            route_ns,
+            route_name,
+            &backend_refs_list,
+        );
     }
 
     /// Record cross-namespace references from backend_refs
@@ -51,7 +75,7 @@ impl HttpRouteHandler {
                     for backend_ref in backend_refs {
                         if let Some(backend_ns) = &backend_ref.namespace {
                             if backend_ns != route_ns {
-                                manager.add_cross_ns_ref(backend_ns.clone(), resource_ref.clone());
+                                manager.add_ref(backend_ns.clone(), resource_ref.clone());
                             }
                         }
                     }
@@ -77,6 +101,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     fn parse(&self, mut route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route);
+
+        // Register Service backend references for cross-resource requeue
+        Self::register_service_refs(&route);
 
         // Mark denied cross-namespace references
         // This sets ref_denied field on BackendRef, which Gateway uses to deny requests
@@ -138,8 +165,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
+        // Clear Service backend references
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+        super::route_utils::clear_service_backend_refs(ResourceKind::HTTPRoute, route_ns, route_name);
+
         remove_from_attached_route_tracker(ResourceKind::HTTPRoute, route_ns, route_name);
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
     }
@@ -242,17 +272,7 @@ fn service_exists(namespace: &str, name: &str) -> bool {
     let Some(processor) = PROCESSOR_REGISTRY.get("Service") else {
         return true;
     };
-    let Ok((json, _)) = processor.as_watch_obj().list_json() else {
-        return true;
-    };
-    let Ok(services) = serde_json::from_str::<Vec<Service>>(&json) else {
-        return true;
-    };
-
-    services.iter().any(|svc| {
-        svc.metadata.namespace.as_deref().unwrap_or("default") == namespace
-            && svc.metadata.name.as_deref().unwrap_or("") == name
-    })
+    processor.contains_key(&format!("{}/{}", namespace, name))
 }
 
 fn validate_parent_ref_accepted_with_hostnames(

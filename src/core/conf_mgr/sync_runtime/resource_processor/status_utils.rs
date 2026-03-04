@@ -160,6 +160,15 @@ fn infer_resolved_refs_reason(errors: &[String]) -> &'static str {
             return condition_reasons::INVALID_KIND;
         }
     }
+    // Per Gateway API spec, ReferenceGrant denial takes precedence over backend-not-found.
+    // Match on "referencegrant" which appears in all cross-namespace denial messages
+    // (e.g. "not allowed by ReferenceGrant", "denied: NoMatchingReferenceGrant").
+    for err in errors {
+        let lower = err.to_lowercase();
+        if lower.contains("referencegrant") {
+            return condition_reasons::REF_NOT_PERMITTED;
+        }
+    }
     for err in errors {
         let lower = err.to_lowercase();
         if lower.contains("not found") {

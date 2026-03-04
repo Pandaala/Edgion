@@ -11,25 +11,18 @@ use crate::types::resources::gateway::AllowedRoutes;
 ///
 /// Supports:
 /// - Exact match (case-insensitive): "example.com" matches "example.com"
-/// - Wildcard match: "*.example.com" matches "api.example.com" (single level only)
-///
-/// Per Gateway API spec, wildcards match only one DNS label (no dots in the matched part).
+/// - Wildcard suffix match: "*.example.com" matches "api.example.com"
+///   and "a.b.example.com" (per Gateway API spec, any number of labels)
 #[inline]
 pub fn hostname_matches_listener(request_host: &str, listener_hostname: &str) -> bool {
     if listener_hostname.starts_with("*.") {
-        // Wildcard match: *.example.com matches api.example.com
         let suffix = &listener_hostname[1..]; // ".example.com"
         if !request_host.ends_with(suffix) {
             return false;
         }
-        // Check that the prefix (before suffix) has no dots (single label only)
         let prefix_len = request_host.len() - suffix.len();
-        if prefix_len == 0 {
-            return false; // ".example.com" should not match "*.example.com"
-        }
-        !request_host[..prefix_len].contains('.')
+        prefix_len > 0
     } else {
-        // Exact match (case-insensitive)
         request_host.eq_ignore_ascii_case(listener_hostname)
     }
 }
@@ -166,18 +159,19 @@ mod tests {
 
     #[test]
     fn test_hostname_wildcard_match() {
-        // Wildcard should match subdomain
+        // Single-level subdomain
         assert!(hostname_matches_listener("api.example.com", "*.example.com"));
         assert!(hostname_matches_listener("foo.example.com", "*.example.com"));
+
+        // Multi-level subdomain (per Gateway API spec, wildcards match any depth)
+        assert!(hostname_matches_listener("foo.api.example.com", "*.example.com"));
+        assert!(hostname_matches_listener("a.b.c.example.com", "*.example.com"));
 
         // Wildcard should NOT match the domain itself
         assert!(!hostname_matches_listener("example.com", "*.example.com"));
 
         // Wildcard should NOT match different domain
         assert!(!hostname_matches_listener("api.other.com", "*.example.com"));
-
-        // Wildcard should NOT match multi-level subdomain
-        assert!(!hostname_matches_listener("foo.api.example.com", "*.example.com"));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 
-use super::sync_runtime::resource_processor::{get_listener_port_manager, ProcessorObj};
+use super::sync_runtime::resource_processor::{get_listener_port_manager, get_service_ref_manager, ProcessorObj};
 use crate::core::conf_sync::conf_server::WatchObj;
 
 /// Global processor registry instance
@@ -160,6 +160,10 @@ impl ProcessorRegistry {
         // Clear ListenerPortManager to avoid stale port conflict data
         get_listener_port_manager().clear();
         tracing::info!(component = "processor_registry", "Cleared ListenerPortManager");
+
+        // Clear ServiceRefManager to avoid stale Service→Route references
+        get_service_ref_manager().clear();
+        tracing::info!(component = "processor_registry", "Cleared ServiceRefManager");
     }
 }
 
