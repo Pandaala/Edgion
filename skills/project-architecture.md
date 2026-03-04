@@ -156,11 +156,13 @@ SecretHandler.on_change()
       → target kind's workqueue.enqueue(key)
 ```
 
-`SecretRefManager` maintains bidirectional mappings:
-- Forward: `secret_key → Set<ResourceRef>` (which resources depend on this secret)
-- Reverse: `resource_key → Set<secret_key>` (which secrets this resource uses)
+**Service → dependent routes:**
 
-Handlers register refs: `ctx.secret_ref_manager().add_ref(secret_key, resource_ref)`
+```
+ServiceHandler.on_change()
+  → ServiceRefManager.get_refs(service_key)   # Returns Set<ResourceRef>
+    → for each ref: PROCESSOR_REGISTRY.requeue(kind, key)
+```
 
 **ReferenceGrant → cross-namespace resources:**
 
@@ -168,13 +170,57 @@ Handlers register refs: `ctx.secret_ref_manager().add_ref(secret_key, resource_r
 ReferenceGrant change
   → CrossNsRevalidationListener
     → requeue all resources with cross-namespace refs
-      (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
+      (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, Gateway)
 ```
 
+### BidirectionalRefManager — Generic Reference Tracking
+
+All three ref managers above (`SecretRefManager`, `ServiceRefManager`, `CrossNamespaceRefManager`) share the same pattern and are implemented as type aliases over a single generic:
+
+```rust
+BidirectionalRefManager<V: RefValue>
+├── Forward:  source_key → HashSet<V>    // which values reference this source
+├── Reverse:  value_key  → HashSet<source_key>  // which sources a value depends on
+└── Methods:  add_ref, get_refs, get_dependencies, clear_value_refs, all_source_keys, stats, clear
+```
+
+`ResourceRef { kind, namespace, name }` implements `RefValue` and is the common value type. Concrete managers:
+
+| Type Alias | Source Key | Usage |
+|------------|-----------|-------|
+| `SecretRefManager` | Secret key (`"ns/name"`) | Secret → dependent resources |
+| `ServiceRefManager` | Service key (`"ns/name"`) | Service → dependent routes |
+| `CrossNamespaceRefManager` | Target namespace (`"ns"`) | ReferenceGrant → cross-ns resources |
+
+Handlers register refs during `parse()` and clear them in `on_delete()`. The source handler's `on_change()` queries `get_refs()` to find and requeue dependents.
+
 **Key files:**
-- `src/core/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs` — `SecretRefManager`
+- `src/core/conf_mgr/sync_runtime/resource_processor/ref_manager.rs` — `BidirectionalRefManager<V>`, `RefValue`, `ResourceRef`, `RefManagerStats`
+- `src/core/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs` — `SecretRefManager` (type alias)
+- `src/core/conf_mgr/sync_runtime/resource_processor/service_ref.rs` — `ServiceRefManager` (type alias)
+- `src/core/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager.rs` — `CrossNamespaceRefManager` (type alias)
 - `src/core/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_store.rs` — `GLOBAL_SECRET_STORE`
-- `src/core/conf_mgr/sync_runtime/resource_processor/ref_grant/` — `CrossNamespaceRefManager`, revalidation
+
+### Architecture Constraint: No Circular Triggers
+
+**Rule: Cross-resource requeue must form a DAG (Directed Acyclic Graph). Circular trigger chains are forbidden.**
+
+Current trigger flow (unidirectional only):
+
+```
+Secret ──────► {EdgionTls, Gateway, EdgionPlugins, BackendTLSPolicy, ...}
+Service ─────► {HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute}
+ReferenceGrant ► {HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, Gateway}
+Route (any) ─► Gateway   (requeue parent gateways for status update)
+```
+
+**Critical constraint:** Gateway MUST NOT trigger Route requeue. If it did, `Route → Gateway → Route` would form an infinite loop.
+
+When adding new cross-resource triggers:
+1. Draw the trigger edge on the DAG above
+2. Verify no cycle is introduced
+3. If the new edge would create a cycle, redesign the dependency (e.g., use
+   a separate status-only path that doesn't trigger full reprocessing)
 
 ### Secret — Built-in Mechanism
 
