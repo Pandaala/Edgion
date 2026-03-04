@@ -221,7 +221,6 @@ impl AcmeClient {
         }
 
         // Drop auths to release borrow on order
-        drop(auths);
 
         Ok((pending, Http01OrderContext { order }))
     }
@@ -257,7 +256,6 @@ impl AcmeClient {
             );
         }
 
-        drop(auths);
         Ok(())
     }
 
@@ -324,7 +322,6 @@ impl AcmeClient {
             pending.push(PendingDnsChallenge { domain, digest });
         }
 
-        drop(auths);
 
         Ok((pending, Dns01OrderContext { order }))
     }
@@ -359,7 +356,6 @@ impl AcmeClient {
             );
         }
 
-        drop(auths);
         Ok(())
     }
 

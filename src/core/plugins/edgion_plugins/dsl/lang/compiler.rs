@@ -40,6 +40,12 @@ pub struct Compiler {
     max_loop_depth: u16,
 }
 
+impl Default for Compiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Compiler {
     pub fn new() -> Self {
         Self {

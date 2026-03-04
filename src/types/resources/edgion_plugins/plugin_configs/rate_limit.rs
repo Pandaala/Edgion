@@ -563,8 +563,10 @@ mod tests {
 
     #[test]
     fn test_validation_rate() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 0;
+        let mut config = RateLimitConfig {
+            rate: 0,
+            ..Default::default()
+        };
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("rate"));
@@ -572,9 +574,11 @@ mod tests {
 
     #[test]
     fn test_validation_key_name_empty() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 10;
-        config.key = vec![KeyGet::Header { name: "".to_string() }];
+        let mut config = RateLimitConfig {
+            rate: 10,
+            key: vec![KeyGet::Header { name: "".to_string() }],
+            ..Default::default()
+        };
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("key[0].name"));
@@ -582,8 +586,10 @@ mod tests {
 
     #[test]
     fn test_validation_success() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 10;
+        let mut config = RateLimitConfig {
+            rate: 10,
+            ..Default::default()
+        };
         config.validate();
         assert!(config.is_valid());
         assert_eq!(config.get_interval_duration(), Duration::from_secs(1));
@@ -601,9 +607,11 @@ mod tests {
 
     #[test]
     fn test_interval_parsing() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 10;
-        config.interval = "5s".to_string();
+        let mut config = RateLimitConfig {
+            rate: 10,
+            interval: "5s".to_string(),
+            ..Default::default()
+        };
         config.validate();
         assert!(config.is_valid());
         assert_eq!(config.interval_duration, Some(Duration::from_secs(5)));
@@ -626,8 +634,10 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_default() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 10;
+        let mut config = RateLimitConfig {
+            rate: 10,
+            ..Default::default()
+        };
         config.validate();
         assert!(config.is_valid());
         // Default should be 64K = 65536 (from global config)
@@ -636,9 +646,11 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_custom() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 10;
-        config.estimator_slots_k = Some(16); // 16K = 16384 slots
+        let mut config = RateLimitConfig {
+            rate: 10,
+            estimator_slots_k: Some(16), // 16K = 16384 slots
+            ..Default::default()
+        };
         config.validate();
         assert!(config.is_valid());
         assert_eq!(config.get_effective_slots(), 16 * SLOTS_K);
@@ -646,10 +658,12 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_capped_at_max() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 10;
-        config.estimator_slots_k = Some(2048); // 2048K, way over max 1024K
-                                               // Global config: default=64K, max=256K for this test
+        let mut config = RateLimitConfig {
+            rate: 10,
+            estimator_slots_k: Some(2048), // 2048K, way over max 1024K
+            ..Default::default()
+        };
+        // Global config: default=64K, max=256K for this test
         config.validate_with_global_config(64 * SLOTS_K, 256 * SLOTS_K);
         assert!(config.is_valid());
         assert_eq!(config.get_effective_slots(), 256 * SLOTS_K); // Capped at max
@@ -657,11 +671,13 @@ mod tests {
 
     #[test]
     fn test_estimator_slots_minimum() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 10;
-        // Setting to 0 is not valid as a K value, but it will be converted to 0 slots
-        // The min check will bump it up
-        config.estimator_slots_k = Some(0);
+        let mut config = RateLimitConfig {
+            rate: 10,
+            // Setting to 0 is not valid as a K value, but it will be converted to 0 slots
+            // The min check will bump it up
+            estimator_slots_k: Some(0),
+            ..Default::default()
+        };
         config.validate();
         assert!(config.is_valid());
         assert_eq!(config.get_effective_slots(), get_min_estimator_slots()); // At least minimum (1K)

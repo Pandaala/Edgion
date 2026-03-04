@@ -3,6 +3,7 @@ use crate::core::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::matcher::host_match::radix_match::RadixHostMatchEngine;
 use crate::core::routes::http_routes::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::routes::http_routes::match_engine::regex_routes_engine::RegexRoutesEngine;
+use crate::core::routes::http_routes::match_unit::RouteMatchResult;
 use crate::core::routes::http_routes::HttpRouteRuleUnit;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
@@ -15,6 +16,7 @@ use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 
 type DomainStr = String;
+type GatewayKey = String;
 
 pub struct RouteRules {
     /// All resource keys (HTTPRoute) that apply to this hostname
@@ -146,36 +148,30 @@ impl RouteRules {
         Err(EdError::BackendNotFound())
     }
 
-    /// Match a route using the match_engine engine
-    /// Try match in order: regex → radix (exact + prefix)
-    /// Returns Arc<HttpRouteRuleUnit> on success
+    /// Match a route using the match engines.
+    /// Try match in order: regex → radix (exact + prefix).
+    /// Returns `RouteMatchResult` on success (route + matched gateway context).
     ///
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `gateway_infos`: All gateway/listener contexts available on this listener
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
         ctx: &EdgionHttpContext,
-        gateway_info: &GatewayInfo,
-    ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
-        // Step 1: Try regex match first (highest priority)
+        gateway_infos: &[GatewayInfo],
+    ) -> Result<RouteMatchResult, EdError> {
         if let Some(ref regex_engine) = self.regex_routes_engine {
-            if let Some(route_unit) = regex_engine.match_route(session, ctx, gateway_info)? {
-                tracing::debug!(path=%session.req_header().uri.path(),"regex match ok");
-                return Ok(route_unit);
+            if let Some(result) = regex_engine.match_route(session, ctx, gateway_infos)? {
+                return Ok(result);
             }
         }
 
-        // Step 2: Fall back to radix tree match (exact + prefix)
         if let Some(ref match_engine) = self.match_engine {
-            let route_unit = match_engine.match_route(session, ctx, gateway_info)?;
-            tracing::debug!(path=%session.req_header().uri.path(),"radix match ok");
-            return Ok(route_unit);
+            return match_engine.match_route(session, ctx, gateway_infos);
         }
 
-        // No route matched
         Err(EdError::RouteNotFound())
     }
 }
@@ -192,54 +188,58 @@ pub struct DomainRouteRules {
 }
 
 impl DomainRouteRules {
-    /// Match a route for the given hostname and session
-    /// Returns Arc<HttpRouteRuleUnit> if found, or an error if no route matches
-    /// Supports wildcard hostname matching (e.g., *.example.com)
+    /// Match a route for the given hostname and session against the global route table.
     ///
     /// Matching priority (per Gateway API spec):
     /// 1. Exact domain match (HashMap lookup - O(1))
     /// 2. Wildcard domain match (RadixHostMatchEngine - O(log n))
+    /// 3. Catch-all ("*") domain match
+    ///
+    /// Gateway/listener validation happens inside `deep_match` for each candidate route.
     ///
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `gateway_infos`: All gateway/listener contexts available on this listener
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
         ctx: &EdgionHttpContext,
-        gateway_info: &GatewayInfo,
-    ) -> Result<Arc<HttpRouteRuleUnit>, EdError> {
-        // Get hostname from ctx (already extracted in pg_request_filter)
+        gateway_infos: &[GatewayInfo],
+    ) -> Result<RouteMatchResult, EdError> {
         let hostname = &ctx.request_info.hostname;
 
-        // Step 1: Try exact domain match first (highest priority, O(1))
-        // DNS hostnames are case-insensitive per RFC 952/1123
         let exact_map = self.exact_domain_map.load();
+        let wildcard_engine = self.wildcard_engine.load();
+
         if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
-            return route_rules.match_route(session, ctx, gateway_info);
+            return route_rules.match_route(session, ctx, gateway_infos);
         }
 
-        // Step 2: Try wildcard domain match (fallback, O(log n))
-        // Only check if wildcard engine exists
-        let wildcard_engine = self.wildcard_engine.load();
         if let Some(ref engine) = wildcard_engine.as_ref() {
             if let Some(route_rules) = engine.match_host(hostname) {
-                return route_rules.match_route(session, ctx, gateway_info);
+                return route_rules.match_route(session, ctx, gateway_infos);
             }
         }
 
-        // No route matched
+        if let Some(route_rules) = exact_map.get("*") {
+            return route_rules.match_route(session, ctx, gateway_infos);
+        }
+
         Err(EdError::RouteNotFound())
     }
 }
 
-type GatewayKey = String;
 type RouteKey = String; // Format: "namespace/name"
 
 pub struct RouteManager {
-    /// Maps gateway key to domain route rules
+    /// Legacy per-gateway map kept for compatibility with existing update/rebuild helpers.
     pub(crate) gateway_routes_map: DashMap<GatewayKey, Arc<DomainRouteRules>>,
+
+    /// Single global route table shared by all gateways/listeners.
+    /// Routes carry their own parentRef → Gateway binding; gateway validation
+    /// happens during deep_match via the caller-supplied `gateway_infos`.
+    pub(crate) global_routes: ArcSwap<DomainRouteRules>,
 
     /// Stores all HTTPRoute resources for lookup during delete events
     /// Key format: "namespace/name"
@@ -265,32 +265,31 @@ impl RouteManager {
     pub fn new() -> Self {
         Self {
             gateway_routes_map: DashMap::new(),
+            global_routes: ArcSwap::from_pointee(DomainRouteRules {
+                exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
+                wildcard_engine: ArcSwap::from_pointee(None),
+            }),
             http_routes: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Get or create DomainRouteRules for a specific gateway by namespace and name
-    /// This ensures the gateway has a route map even if no HTTPRoutes exist yet
+    /// Get the current global route table snapshot.
+    pub fn get_global_routes(&self) -> arc_swap::Guard<Arc<DomainRouteRules>> {
+        self.global_routes.load()
+    }
+
+    /// Get or create DomainRouteRules for a specific gateway by namespace and name.
     pub fn get_or_create_domain_routes(&self, namespace: &str, name: &str) -> Arc<DomainRouteRules> {
         let gateway_key = format!("{}/{}", namespace, name);
 
-        let entry = self.gateway_routes_map.entry(gateway_key.clone());
-        let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
-
-        let domain_routes = entry
+        let entry = self.gateway_routes_map.entry(gateway_key);
+        entry
             .or_insert_with(|| {
                 Arc::new(DomainRouteRules {
                     exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
                     wildcard_engine: ArcSwap::from_pointee(None),
                 })
             })
-            .value()
-            .clone();
-
-        if is_new {
-            tracing::info!(gateway_key = %gateway_key, "Created new domain routes for gateway");
-        }
-
-        domain_routes
+            .clone()
     }
 }

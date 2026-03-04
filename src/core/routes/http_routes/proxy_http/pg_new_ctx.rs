@@ -6,8 +6,10 @@ use crate::types::EdgionHttpContext;
 pub fn new_ctx(edgion_http: &EdgionHttp) -> EdgionHttpContext {
     let mut ctx = EdgionHttpContext::new();
 
-    // Copy gateway info for access log and metrics
-    ctx.gateway_info = edgion_http.gateway_info.clone();
+    // Use first gateway_info as default (will be overwritten upon successful route match)
+    if let Some(gi) = edgion_http.gateway_infos.first() {
+        ctx.gateway_info = gi.clone();
+    }
 
     global_metrics().ctx_created();
     ctx

@@ -14,6 +14,16 @@ pub const REFERENCE_GRANT_GROUP: &str = "gateway.networking.k8s.io";
 /// Kind for ReferenceGrant
 pub const REFERENCE_GRANT_KIND: &str = "ReferenceGrant";
 
+/// Per Gateway API spec, `""` and `"core"` both represent the Kubernetes core API group.
+fn api_groups_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let a_is_core = a.is_empty() || a == "core";
+    let b_is_core = b.is_empty() || b == "core";
+    a_is_core && b_is_core
+}
+
 /// ReferenceGrant identifies kinds of resources in other namespaces that are
 /// trusted to reference the specified kinds of resources in the same namespace.
 ///
@@ -130,21 +140,20 @@ impl ReferenceGrant {
         to_name: Option<&str>,
     ) -> bool {
         // Check if from matches
-        let from_matches = self
-            .spec
-            .from
-            .iter()
-            .any(|f| f.namespace == from_namespace && f.group == from_group && f.kind == from_kind);
+        let from_matches = self.spec.from.iter().any(|f| {
+            f.namespace == from_namespace && api_groups_match(&f.group, from_group) && f.kind == from_kind
+        });
 
         if !from_matches {
             return false;
         }
 
         // Check if to matches
-        self.spec
-            .to
-            .iter()
-            .any(|t| t.group == to_group && t.kind == to_kind && (t.name.is_none() || t.name.as_deref() == to_name))
+        self.spec.to.iter().any(|t| {
+            api_groups_match(&t.group, to_group)
+                && t.kind == to_kind
+                && (t.name.is_none() || t.name.as_deref() == to_name)
+        })
     }
 }
 

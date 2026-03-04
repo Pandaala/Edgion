@@ -107,6 +107,11 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         store_guard.get_by_key(key)
     }
 
+    pub fn list_keys(&self) -> Vec<String> {
+        let store_guard = self.store.read().unwrap();
+        store_guard.keys()
+    }
+
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
     ///

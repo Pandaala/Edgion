@@ -76,7 +76,7 @@ async fn try_serve_acme_challenge(session: &mut Session) -> pingora_core::Result
 
     let mut resp = ResponseHeader::build(200, None)?;
     resp.insert_header("Content-Type", "text/plain")?;
-    resp.insert_header("Content-Length", &key_auth.len().to_string())?;
+    resp.insert_header("Content-Length", key_auth.len().to_string())?;
 
     session.write_response_header(Box::new(resp), false).await?;
     session

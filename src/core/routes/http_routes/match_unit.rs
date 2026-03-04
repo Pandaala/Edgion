@@ -9,6 +9,13 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Result of a successful route match, bundling the matched route and the
+/// gateway/listener context that satisfied the parentRef constraints.
+pub struct RouteMatchResult {
+    pub route_unit: Arc<HttpRouteRuleUnit>,
+    pub matched_gateway: GatewayInfo,
+}
+
 #[derive(Clone)]
 pub struct HttpRouteRuleUnit {
     pub resource_key: String,
@@ -37,21 +44,22 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Perform deep match (headers, query params, method, sectionName/Gateway)
-    /// For use with regex routes or when called directly
+    /// Perform deep match (headers, query params, method, sectionName/Gateway).
+    ///
+    /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
     ///
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `gateway_infos`: All gateway/listener contexts available on this listener
     pub fn deep_match(
         &self,
         session: &Session,
         ctx: &EdgionHttpContext,
-        gateway_info: &GatewayInfo,
-    ) -> Result<bool, EdError> {
+        gateway_infos: &[GatewayInfo],
+    ) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
-        Self::deep_match_common(&self.matched_info, req_header, &self.parent_refs, ctx, gateway_info)
+        Self::deep_match_common(&self.matched_info, req_header, &self.parent_refs, ctx, gateway_infos)
     }
 
     /// Get route identifier
@@ -171,47 +179,44 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Common deep match logic for checking method, headers, query parameters, and Gateway/sectionName
+    /// Common deep match logic for checking Gateway/sectionName, method, headers, and query parameters.
     ///
-    /// This function is shared between HttpRouteRuleUnit and HttpRouteRuleRegexUnit
+    /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
     pub(crate) fn deep_match_common(
         matched_info: &MatchInfo,
         req_header: &pingora_http::RequestHeader,
         parent_refs: &Option<Vec<ParentReference>>,
         ctx: &EdgionHttpContext,
-        gateway_info: &GatewayInfo,
-    ) -> Result<bool, EdError> {
+        gateway_infos: &[GatewayInfo],
+    ) -> Result<Option<GatewayInfo>, EdError> {
         let method = req_header.method.as_str();
         let match_item = &matched_info.m;
 
-        // Parse query parameters from URI (if present)
         let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
 
         // 0. Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
-        if let Some(ref parent_refs) = parent_refs {
-            if !check_gateway_listener_match(
-                parent_refs,
-                gateway_info,
-                &ctx.request_info.hostname,
-                &matched_info.rns,
-                "HTTPRoute",
-                &matched_info.rn,
-            ) {
-                return Ok(false);
+        let matched_gi = if let Some(ref parent_refs) = parent_refs {
+            match gateway_infos.iter().find(|gi| {
+                check_gateway_listener_match(
+                    parent_refs,
+                    gi,
+                    &ctx.request_info.hostname,
+                    &matched_info.rns,
+                    "HTTPRoute",
+                    &matched_info.rn,
+                )
+            }) {
+                Some(gi) => gi.clone(),
+                None => return Ok(None),
             }
-        }
+        } else {
+            return Ok(None);
+        };
 
         // 1. Check HTTP Method (if specified)
         if let Some(match_method) = &match_item.method {
             if method != match_method.as_str() {
-                tracing::trace!(
-                    method = %method,
-                    expected = %match_method,
-                    route_ns = %matched_info.rns,
-                    route_name = %matched_info.rn,
-                    "HTTP method mismatch"
-                );
-                return Ok(false);
+                return Ok(None);
             }
         }
 
@@ -219,13 +224,7 @@ impl HttpRouteRuleUnit {
         if let Some(header_matches) = &match_item.headers {
             for header_match in header_matches {
                 if !Self::match_header(req_header, header_match)? {
-                    tracing::trace!(
-                        header = %header_match.name,
-                        route_ns = %matched_info.rns,
-                        route_name = %matched_info.rn,
-                        "Header match failed"
-                    );
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
@@ -234,24 +233,20 @@ impl HttpRouteRuleUnit {
         if let Some(query_param_matches) = &match_item.query_params {
             for query_param_match in query_param_matches {
                 if !Self::match_query_param(&query_params, query_param_match)? {
-                    tracing::trace!(
-                        param = %query_param_match.name,
-                        route_ns = %matched_info.rns,
-                        route_name = %matched_info.rn,
-                        "Query parameter match failed"
-                    );
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
 
-        // All conditions matched
-        tracing::debug!(
-            route_ns = %matched_info.rns,
-            route_name = %matched_info.rn,
-            "Deep match succeeded"
-        );
-        Ok(true)
+        Ok(Some(matched_gi))
+    }
+
+    /// Return the number of header matchers in the route's match item.
+    ///
+    /// Used for specificity-based sorting: rules with more header matchers are more specific
+    /// and should be evaluated before rules with fewer header matchers (per Gateway API spec).
+    pub fn header_matcher_count(&self) -> usize {
+        self.matched_info.m.headers.as_ref().map(|h| h.len()).unwrap_or(0)
     }
 
     /// Extract all path patterns from this route with their match types

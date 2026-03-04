@@ -52,6 +52,7 @@ impl ConfigSyncGrpcServer {
     }
 
     /// Get the current ConfigSyncServer, returns error if not available
+    #[allow(clippy::result_large_err)]
     fn get_server(&self) -> Result<Arc<ConfigSyncServer>, Status> {
         self.provider
             .config_sync_server()

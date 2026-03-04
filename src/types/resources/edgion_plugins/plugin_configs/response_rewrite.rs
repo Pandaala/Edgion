@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 ///       - from: X-Internal-Id
 ///         to: X-Request-Id
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseRewriteConfig {
     /// New HTTP status code (100-599).
@@ -96,16 +96,6 @@ pub struct HeaderRename {
     pub from: String,
     /// New header name to rename to
     pub to: String,
-}
-
-impl Default for ResponseRewriteConfig {
-    fn default() -> Self {
-        Self {
-            status_code: None,
-            headers: None,
-            validation_error: None,
-        }
-    }
 }
 
 impl ResponseRewriteConfig {

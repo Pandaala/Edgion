@@ -1,7 +1,9 @@
 use super::EdgionHttp;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_421, end_response_500};
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
+use crate::core::routes::grpc_routes::get_global_grpc_route_manager;
 use crate::core::routes::grpc_routes::try_match_grpc_route;
+use crate::core::routes::http_routes::routes_mgr::get_global_route_manager;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
 use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
@@ -20,28 +22,30 @@ pub async fn request_filter(
         return Ok(true); // Response already sent (XFF too long or hostname missing)
     }
 
-    // Step 1: Route matching - try gRPC first if applicable, then HTTP
-    // Use pre-built gateway_info from EdgionHttp (avoids per-request allocation)
+    // Step 1: Route matching — single lookup against the global route table.
+    // `gateway_infos` carries all Gateway/Listener contexts for this port;
+    // deep_match inside the route table validates which gateway each route belongs to.
+    let gateway_infos = &edgion_http.gateway_infos;
+
     if ctx.request_info.is_grpc_request {
-        // Only pure gRPC requires HTTP/2, gRPC-Web can work on HTTP/1.1
         if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
             ctx.add_error(EdgionStatus::Http2Required);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Ok(true);
         }
 
-        // Try to match gRPC route (sets ctx.is_grpc_route_matched internally if matched)
-        let _ = try_match_grpc_route(&edgion_http.grpc_routes, session, ctx, &edgion_http.gateway_info).await;
+        let grpc_route_manager = get_global_grpc_route_manager();
+        let grpc_routes = grpc_route_manager.get_global_grpc_routes();
+        let _ = try_match_grpc_route(&grpc_routes, session, ctx, gateway_infos).await;
     }
 
-    // HTTP route Match, if grpc route already matched, skip here
     if !ctx.is_grpc_route_matched {
-        match edgion_http
-            .domain_routes
-            .match_route(session, ctx, &edgion_http.gateway_info)
-        {
-            Ok(route_unit) => {
-                ctx.route_unit = Some(route_unit.clone());
+        let route_manager = get_global_route_manager();
+        let global_routes = route_manager.get_global_routes();
+        match global_routes.match_route(session, ctx, gateway_infos) {
+            Ok(result) => {
+                ctx.gateway_info = result.matched_gateway;
+                ctx.route_unit = Some(result.route_unit);
             }
             Err(_) => {
                 ctx.add_error(EdgionStatus::RouteNotFound);
@@ -193,21 +197,22 @@ async fn build_request_metadata(
 
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
     // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
+    // uri.host() returns host without port; Host header may include port so we strip it.
     ctx.request_info.hostname = req_header
         .uri
         .host()
-        .map(|h| h.to_string())
+        .map(normalize_host_for_matching)
         .or_else(|| {
             req_header
                 .headers
                 .get("host")
-                .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+                .and_then(|h| h.to_str().ok().map(normalize_host_for_matching))
         })
         .or_else(|| {
             req_header
                 .headers
                 .get(":authority")
-                .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
+                .and_then(|h| h.to_str().ok().map(normalize_host_for_matching))
         })
         .unwrap_or_default();
 
@@ -304,7 +309,7 @@ fn listener_hostname_mismatch(listener_hostname: Option<&str>, host: &str) -> bo
     let Some(listener_hostname) = listener_hostname else {
         return false;
     };
-    normalize_hostname(listener_hostname) != normalize_hostname(host)
+    normalize_host_for_matching(listener_hostname) != normalize_host_for_matching(host)
 }
 
 #[inline]
@@ -312,23 +317,33 @@ fn is_sni_host_mismatch(sni: Option<&str>, host: &str) -> bool {
     let Some(sni) = sni else {
         return false;
     };
-    normalize_hostname(sni) != normalize_hostname(host)
+    normalize_host_for_matching(sni) != normalize_host_for_matching(host)
 }
 
+/// Normalize a hostname from Host / :authority header for route matching:
+/// 1. Trim whitespace
+/// 2. Strip port (handling both IPv4 and IPv6 bracket notation)
+/// 3. Remove trailing dot (FQDN normalization)
+/// 4. Convert to lowercase (case-insensitive matching per RFC 4343)
 #[inline]
-fn normalize_hostname(value: &str) -> String {
-    let mut host = value.trim();
+fn normalize_host_for_matching(raw: &str) -> String {
+    let h = raw.trim();
 
-    // Handle HTTP Host header value that may contain port.
-    if let Some(stripped) = host.strip_prefix('[') {
-        if let Some(end) = stripped.find(']') {
-            host = &stripped[..end];
+    let host = if h.starts_with('[') {
+        // IPv6 bracket notation: [::1]:port -> ::1
+        match h.find(']') {
+            Some(end) => &h[1..end],
+            None => h,
         }
-    } else if let Some((h, _)) = host.split_once(':') {
-        host = h;
-    }
+    } else {
+        match h.rfind(':') {
+            Some(pos) if h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => &h[..pos],
+            _ => h,
+        }
+    };
 
-    host.trim_end_matches('.').to_ascii_lowercase()
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host.to_ascii_lowercase()
 }
 
 /// Append client IP to X-Forwarded-For header (inline for performance)

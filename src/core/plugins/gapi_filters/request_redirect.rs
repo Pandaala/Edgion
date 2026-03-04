@@ -23,11 +23,12 @@ impl RequestRedirectFilter {
     /// Build redirect Location header value from config and request
     fn build_location(
         &self,
+        original_scheme: &str,
         original_host: Option<&str>,
         original_path: &str,
         matched_path_len: Option<usize>,
     ) -> String {
-        let scheme = self.config.scheme.as_deref().unwrap_or("https");
+        let scheme = self.config.scheme.as_deref().unwrap_or(original_scheme);
         let hostname = self.config.hostname.as_deref().or(original_host).unwrap_or("localhost");
 
         let port_str = self.config.port.map(|p| format!(":{}", p)).unwrap_or_default();
@@ -65,9 +66,16 @@ impl RequestFilter for RequestRedirectFilter {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        // Determine the original request scheme from TLS context
+        let original_scheme = if session.ctx().request_info.sni.is_some() {
+            "https"
+        } else {
+            "http"
+        };
+
         // Get original request info for building Location
         let original_host = session.header_value("host");
-        let original_path = session.header_value(":path").unwrap_or_else(|| "/".to_string());
+        let original_path = session.get_path().to_string();
 
         // Extract matched path length from route info
         let matched_path_len = session
@@ -84,7 +92,12 @@ impl RequestFilter for RequestRedirectFilter {
             });
 
         // Build Location header
-        let location = self.build_location(original_host.as_deref(), &original_path, matched_path_len);
+        let location = self.build_location(
+            original_scheme,
+            original_host.as_deref(),
+            &original_path,
+            matched_path_len,
+        );
 
         // Determine status code (default: 302 Found)
         let status_code = self.config.status_code.unwrap_or(302) as u16;

@@ -89,30 +89,42 @@ pub struct GrpcRouteRuleUnit {
 }
 
 impl GrpcRouteRuleUnit {
-    /// Deep match: check hostname, Gateway/sectionName, and headers
-    pub fn deep_match(&self, session: &Session, gateway_info: &GatewayInfo, hostname: &str) -> Result<bool, EdError> {
+    /// Deep match: check hostname, Gateway/sectionName, and headers.
+    ///
+    /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
+    pub fn deep_match(
+        &self,
+        session: &Session,
+        gateway_infos: &[GatewayInfo],
+        hostname: &str,
+    ) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)
         if let Some(ref route_hostnames) = self.route_info.hostnames {
             if !route_hostnames.is_empty() && !Self::match_hostname(hostname, route_hostnames) {
-                return Ok(false);
+                return Ok(None);
             }
         }
 
         // Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
-        if let Some(ref parent_refs) = self.route_info.parent_refs {
-            if !check_gateway_listener_match(
-                parent_refs,
-                gateway_info,
-                hostname,
-                &self.matched_info.route_ns,
-                "GRPCRoute",
-                &self.matched_info.route_name,
-            ) {
-                return Ok(false);
+        let matched_gi = if let Some(ref parent_refs) = self.route_info.parent_refs {
+            match gateway_infos.iter().find(|gi| {
+                check_gateway_listener_match(
+                    parent_refs,
+                    gi,
+                    hostname,
+                    &self.matched_info.route_ns,
+                    "GRPCRoute",
+                    &self.matched_info.route_name,
+                )
+            }) {
+                Some(gi) => gi.clone(),
+                None => return Ok(None),
             }
-        }
+        } else {
+            return Ok(None);
+        };
 
         // Check Headers (if specified) - ALL must match (AND logic)
         if let Some(header_matches) = &self.matched_info.matched.headers {
@@ -123,17 +135,12 @@ impl GrpcRouteRuleUnit {
                     .get(idx)
                     .and_then(|r| r.as_ref());
                 if !Self::match_header(req_header, header_match, compiled_regex)? {
-                    tracing::trace!(
-                        header = %header_match.name,
-                        route = %self.identifier(),
-                        "gRPC header match failed"
-                    );
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
 
-        Ok(true)
+        Ok(Some(matched_gi))
     }
 
     /// Match hostname against route hostnames (supports wildcards)

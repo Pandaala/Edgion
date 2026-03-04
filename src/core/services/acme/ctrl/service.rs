@@ -882,8 +882,10 @@ async fn update_acme_status<F>(api: &Api<EdgionAcme>, name: &str, phase: AcmeCer
 where
     F: FnOnce(&mut EdgionAcmeStatus),
 {
-    let mut status = EdgionAcmeStatus::default();
-    status.phase = phase;
+    let mut status = EdgionAcmeStatus {
+        phase,
+        ..Default::default()
+    };
     modify(&mut status);
 
     let patch = serde_json::json!({

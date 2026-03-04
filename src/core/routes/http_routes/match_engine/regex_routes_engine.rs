@@ -1,5 +1,5 @@
 use crate::core::gateway::gateway::GatewayInfo;
-use crate::core::routes::http_routes::match_unit::HttpRouteRuleUnit;
+use crate::core::routes::http_routes::match_unit::{HttpRouteRuleUnit, RouteMatchResult};
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
@@ -28,7 +28,6 @@ impl RegexRoutesEngine {
     /// Build a new RegexRoutesEngine with the given regex routes
     pub fn build(routes: Vec<Arc<HttpRouteRuleUnit>>) -> Self {
         if routes.is_empty() {
-            tracing::debug!(component = "regex_routes_engine", "Built empty regex routes engine");
             return Self {
                 regex_set: None,
                 routes: Vec::new(),
@@ -51,14 +50,7 @@ impl RegexRoutesEngine {
             .collect();
 
         let regex_set = match RegexSet::new(&patterns) {
-            Ok(set) => {
-                tracing::debug!(
-                    component = "regex_routes_engine",
-                    count = routes.len(),
-                    "Built regex routes engine with RegexSet optimization"
-                );
-                Some(set)
-            }
+            Ok(set) => Some(set),
             Err(e) => {
                 tracing::warn!(
                     component = "regex_routes_engine",
@@ -78,65 +70,51 @@ impl RegexRoutesEngine {
         self.routes.len()
     }
 
-    /// Match a route against the request path
-    /// Returns the first matching Arc<HttpRouteRuleUnit>, or None if no route matches
-    /// Routes are checked in order of pattern length (longest first)
+    /// Match a route against the request path.
+    /// Returns the first matching `RouteMatchResult`, or `None` if no route matches.
+    /// Routes are checked in order of pattern length (longest first).
     ///
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `gateway_infos`: All gateway/listener contexts available on this listener
     pub fn match_route(
         &self,
         session: &mut Session,
         ctx: &EdgionHttpContext,
-        gateway_info: &GatewayInfo,
-    ) -> Result<Option<Arc<HttpRouteRuleUnit>>, EdError> {
+        gateway_infos: &[GatewayInfo],
+    ) -> Result<Option<RouteMatchResult>, EdError> {
         let path = session.req_header().uri.path();
 
         if let Some(ref regex_set) = self.regex_set {
-            // Fast path: Use RegexSet for O(M) batch matching
             let matches: Vec<usize> = regex_set.matches(path).into_iter().collect();
 
             if matches.is_empty() {
-                // No regex matched the path
                 return Ok(None);
             }
 
-            // Check matched routes in sorted order (longest first)
-            // Only iterate over pre-filtered matches, not all routes
             for &idx in &matches {
                 let regex_route = &self.routes[idx];
-
-                // Path already matched by RegexSet, now check deep match
-                // (headers, query params, method, Gateway/sectionName)
-                if regex_route.deep_match(session, ctx, gateway_info)? {
-                    tracing::debug!(
-                        path = %path,
-                        regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),
-                        "Regex match succeeded (RegexSet fast path)"
-                    );
-                    return Ok(Some(regex_route.clone()));
+                if let Some(matched_gi) = regex_route.deep_match(session, ctx, gateway_infos)? {
+                    return Ok(Some(RouteMatchResult {
+                        route_unit: regex_route.clone(),
+                        matched_gateway: matched_gi,
+                    }));
                 }
             }
         } else {
-            // Fallback path: Linear scan if RegexSet failed to build
             for regex_route in &self.routes {
                 if regex_route.matches_path(path) {
-                    // Path matches, check deep match (headers, query params, method, Gateway/sectionName)
-                    if regex_route.deep_match(session, ctx, gateway_info)? {
-                        tracing::debug!(
-                            path = %path,
-                            regex = %regex_route.path_regex.as_ref().map(|r| r.as_str()).unwrap_or(""),
-                            "Regex match succeeded (linear fallback)"
-                        );
-                        return Ok(Some(regex_route.clone()));
+                    if let Some(matched_gi) = regex_route.deep_match(session, ctx, gateway_infos)? {
+                        return Ok(Some(RouteMatchResult {
+                            route_unit: regex_route.clone(),
+                            matched_gateway: matched_gi,
+                        }));
                     }
                 }
             }
         }
 
-        // No route matched
         Ok(None)
     }
 }

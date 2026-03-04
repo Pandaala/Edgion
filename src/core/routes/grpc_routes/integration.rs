@@ -28,39 +28,38 @@ pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
         .unwrap_or(false)
 }
 
-/// Try to match gRPC route
+/// Try to match gRPC route against the global gRPC route table.
 ///
 /// Returns: Ok(true) - matched successfully and handled
 ///          Ok(false) - not matched, should fallback to HTTP routes
 ///          Err - error occurred
 ///
 /// # Parameters
-/// - `grpc_routes`: Domain gRPC route rules
+/// - `grpc_routes`: Domain gRPC route rules (global table)
 /// - `session`: The HTTP session
 /// - `ctx`: Request context
-/// - `gateway_info`: Gateway context for two-layer lookup
+/// - `gateway_infos`: All gateway/listener contexts available on this listener
 #[inline]
 pub async fn try_match_grpc_route(
     grpc_routes: &Arc<crate::core::routes::grpc_routes::DomainGrpcRouteRules>,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
-    gateway_info: &GatewayInfo,
+    gateway_infos: &[GatewayInfo],
 ) -> Result<bool, EdError> {
-    // 1. Parse gRPC service/method from path
     if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.path) {
         ctx.request_info.grpc_service = Some(service);
         ctx.request_info.grpc_method = Some(method);
     }
 
-    // 2. Try to match route (based on service/method, Gateway/section_name, and hostname)
-    match grpc_routes.match_route(session, gateway_info, &ctx.request_info.hostname) {
-        Ok(grpc_route_unit) => {
+    match grpc_routes.match_route(session, gateway_infos, &ctx.request_info.hostname) {
+        Ok((grpc_route_unit, matched_gi)) => {
             ctx.grpc_route_unit = Some(grpc_route_unit);
+            ctx.gateway_info = matched_gi;
             ctx.is_grpc_route_matched = true;
-            Ok(true) // Matched successfully
+            Ok(true)
         }
         Err(_) => {
-            Ok(false) // Not matched, fallback
+            Ok(false)
         }
     }
 }
@@ -96,21 +95,6 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
 
     backend_ref.backend_tls_policy =
         crate::core::backends::query_backend_tls_policy_for_service(service_name, service_namespace);
-
-    if let Some(ref policy) = backend_ref.backend_tls_policy {
-        tracing::debug!(
-            policy = %format!("{}/{}",
-                policy.namespace().unwrap_or(""),
-                policy.name()
-            ),
-            service = %format!("{}/{}",
-                service_namespace.unwrap_or(""),
-                service_name
-            ),
-            sni = %policy.spec.validation.hostname,
-            "BackendTLSPolicy found for selected gRPC backend"
-        );
-    }
 
     // Run backend-level request edgion_plugins
     // todo need keep here or change to run before route plugin run?

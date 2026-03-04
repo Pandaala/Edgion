@@ -99,6 +99,12 @@ pub struct HmacAuthConfig {
     pub auth_failure_delay_ms: u64,
 
     // === Credential Fields ===
+    /// Minimum acceptable secret length in bytes.
+    /// Secrets shorter than this trigger a warning during credential resolution.
+    /// Defaults to 32 (matching SHA-256 output size).
+    #[serde(default = "default_min_secret_length")]
+    pub min_secret_length: usize,
+
     /// Field name in credential entry for secret value.
     #[serde(default = "default_secret_field")]
     pub secret_field: String,
@@ -140,6 +146,10 @@ fn default_realm() -> String {
     "edgion".to_string()
 }
 
+fn default_min_secret_length() -> usize {
+    32
+}
+
 fn default_secret_field() -> String {
     "secret".to_string()
 }
@@ -160,6 +170,7 @@ impl Default for HmacAuthConfig {
             anonymous: None,
             realm: default_realm(),
             auth_failure_delay_ms: 0,
+            min_secret_length: default_min_secret_length(),
             secret_field: default_secret_field(),
             username_field: default_username_field(),
             upstream_header_fields: vec![],

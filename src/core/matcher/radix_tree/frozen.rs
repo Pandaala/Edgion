@@ -7,6 +7,17 @@ use crate::core::matcher::radix_tree::builder::{BuildNode, NodeType};
 use crate::core::matcher::radix_tree::error::RouterError;
 use smallvec::SmallVec;
 
+/// Describes how the request path aligned with a matched tree node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind {
+    /// The request path was fully consumed at this node.
+    FullyConsumed,
+    /// There is remaining path, and it starts on a segment boundary (`/`).
+    SegmentBoundary,
+    /// There is remaining path that does NOT start with `/` (partial segment).
+    PartialSegment,
+}
+
 /// Sentinel value indicating no parameter child
 const NO_PARAM_CHILD: u32 = u32::MAX;
 
@@ -435,6 +446,74 @@ impl FrozenRadixTree {
         results
     }
 
+    /// Like [`match_all`](Self::match_all), but each returned value carries a
+    /// [`MatchKind`] that tells the caller whether the request path was fully
+    /// consumed, ended on a segment boundary, or split a segment.
+    ///
+    /// This lets the caller distinguish exact vs prefix semantics in one pass
+    /// without re-parsing the path.
+    pub fn match_all_ext(&self, path: &str) -> SmallVec<[(u32, MatchKind); 8]> {
+        let mut results = SmallVec::<[(u32, MatchKind); 8]>::new();
+
+        if self.nodes.is_empty() {
+            return results;
+        }
+
+        let mut stack = SmallVec::<[(usize, &[u8]); 16]>::new();
+        stack.push((0, path.as_bytes()));
+
+        while let Some((node_idx, remaining)) = stack.pop() {
+            let node = &self.nodes[node_idx];
+
+            let (after_match, prefix_ends_with_slash) = if node.node_type == NodeType::Param as u8 {
+                let end = remaining.iter().position(|&c| c == b'/').unwrap_or(remaining.len());
+                if end == 0 {
+                    continue;
+                }
+                (&remaining[end..], false)
+            } else {
+                let prefix = self.get_node_prefix(node);
+                if !remaining.starts_with(prefix) {
+                    continue;
+                }
+                let ends_slash = !prefix.is_empty() && prefix[prefix.len() - 1] == b'/';
+                (&remaining[prefix.len()..], ends_slash)
+            };
+
+            if node.values_count > 0 {
+                let kind = if after_match.is_empty() {
+                    MatchKind::FullyConsumed
+                } else if after_match[0] == b'/' || prefix_ends_with_slash {
+                    MatchKind::SegmentBoundary
+                } else {
+                    MatchKind::PartialSegment
+                };
+                for &v in self.get_node_values(node_idx) {
+                    results.push((v, kind));
+                }
+            }
+
+            if !after_match.is_empty() {
+                let next_byte = after_match[0];
+
+                let children_start = node.children_offset as usize;
+                let children_end = children_start + node.children_count as usize;
+
+                for child_entry in &self.children[children_start..children_end] {
+                    if child_entry.first_byte == next_byte {
+                        stack.push((child_entry.node_index as usize, after_match));
+                    }
+                }
+
+                if node.param_child_idx != NO_PARAM_CHILD {
+                    stack.push((node.param_child_idx as usize, after_match));
+                }
+            }
+        }
+
+        results
+    }
+
     /// Matches a route exactly (no prefix matching).
     ///
     /// Unlike `match_route_longest` which matches prefixes, this method only
@@ -722,7 +801,126 @@ impl FlatTreeBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::MatchKind;
     use crate::core::matcher::radix_tree::RadixTreeBuilder;
+
+    fn ext_has(results: &[(u32, MatchKind)], val: u32, kind: MatchKind) -> bool {
+        results.iter().any(|&(v, k)| v == val && k == kind)
+    }
+
+    #[test]
+    fn test_ext_fully_consumed() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/api", 1).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        let results = tree.match_all_ext("/api");
+        assert!(ext_has(&results, 1, MatchKind::FullyConsumed));
+    }
+
+    #[test]
+    fn test_ext_segment_boundary() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/api", 1).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        let results = tree.match_all_ext("/api/users");
+        assert!(ext_has(&results, 1, MatchKind::SegmentBoundary));
+    }
+
+    #[test]
+    fn test_ext_partial_segment() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/v2", 1).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        let results = tree.match_all_ext("/v2example");
+        assert!(ext_has(&results, 1, MatchKind::PartialSegment));
+    }
+
+    #[test]
+    fn test_ext_root_prefix_matches_everything() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/", 1).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        let r = tree.match_all_ext("/");
+        assert!(ext_has(&r, 1, MatchKind::FullyConsumed));
+
+        let r = tree.match_all_ext("/anything");
+        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+
+        let r = tree.match_all_ext("/a/b/c");
+        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+    }
+
+    #[test]
+    fn test_ext_exact_and_prefix_same_path() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/api", 1).unwrap();
+        builder.insert("/api/users", 2).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        let r = tree.match_all_ext("/api");
+        assert!(ext_has(&r, 1, MatchKind::FullyConsumed));
+        assert!(!r.iter().any(|&(v, _)| v == 2));
+
+        let r = tree.match_all_ext("/api/users");
+        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 2, MatchKind::FullyConsumed));
+
+        let r = tree.match_all_ext("/api/users/123");
+        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 2, MatchKind::SegmentBoundary));
+    }
+
+    #[test]
+    fn test_ext_param_routes() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/users/:id", 1).unwrap();
+        builder.insert("/users/:id/profile", 2).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        let r = tree.match_all_ext("/users/123");
+        assert!(ext_has(&r, 1, MatchKind::FullyConsumed));
+
+        let r = tree.match_all_ext("/users/123/profile");
+        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 2, MatchKind::FullyConsumed));
+
+        let r = tree.match_all_ext("/users/123/settings");
+        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+        assert!(!r.iter().any(|&(v, _)| v == 2));
+    }
+
+    #[test]
+    fn test_ext_no_match() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/api", 1).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        let r = tree.match_all_ext("/home");
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn test_ext_multi_segment_boundary() {
+        let mut builder = RadixTreeBuilder::new();
+        builder.insert("/api/v1", 1).unwrap();
+        let tree = builder.freeze().unwrap();
+
+        assert!(ext_has(&tree.match_all_ext("/api/v1"), 1, MatchKind::FullyConsumed));
+        assert!(ext_has(
+            &tree.match_all_ext("/api/v1/users"),
+            1,
+            MatchKind::SegmentBoundary
+        ));
+        assert!(ext_has(
+            &tree.match_all_ext("/api/v1beta"),
+            1,
+            MatchKind::PartialSegment
+        ));
+    }
 
     #[test]
     fn test_match_all_static_routes() {

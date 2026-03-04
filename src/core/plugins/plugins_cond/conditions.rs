@@ -370,7 +370,7 @@ impl PluginConditions {
 
     /// Check if there are any conditions defined
     pub fn is_empty(&self) -> bool {
-        self.skip.as_ref().map_or(true, |v| v.is_empty()) && self.run.as_ref().map_or(true, |v| v.is_empty())
+        self.skip.as_ref().is_none_or(|v| v.is_empty()) && self.run.as_ref().is_none_or(|v| v.is_empty())
     }
 
     /// Add a skip condition

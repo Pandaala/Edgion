@@ -94,7 +94,7 @@ pub async fn resolve_webhook_key(
     for attempt in 0..max_attempts {
         if attempt > 0 {
             let base_ms = runtime.config.retry.as_ref().map_or(100, |r| r.retry_delay_ms);
-            let delay = compute_retry_delay_ms(attempt as u32, base_ms, WEBHOOK_RETRY_MAX_DELAY_MS);
+            let delay = compute_retry_delay_ms(attempt, base_ms, WEBHOOK_RETRY_MAX_DELAY_MS);
             tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
@@ -111,7 +111,7 @@ pub async fn resolve_webhook_key(
                     .config
                     .retry
                     .as_ref()
-                    .map_or(false, |retry| retry.retry_on_status.contains(&status));
+                    .is_some_and(|retry| retry.retry_on_status.contains(&status));
                 if should_retry && attempt + 1 < max_attempts {
                     last_error = Some(format!("status {}", status));
                     continue;
@@ -120,7 +120,7 @@ pub async fn resolve_webhook_key(
                 break;
             }
             Err(e) => {
-                let should_retry = runtime.config.retry.as_ref().map_or(false, |retry| {
+                let should_retry = runtime.config.retry.as_ref().is_some_and(|retry| {
                     (retry.retry_on_timeout && e.is_timeout()) || (retry.retry_on_connect_error && e.is_connect())
                 });
                 last_error = Some(e.to_string());

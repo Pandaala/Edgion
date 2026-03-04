@@ -72,54 +72,45 @@ impl GrpcMatchEngine {
         }
     }
 
-    /// Match gRPC route based on service/method with optimized lookup
+    /// Match gRPC route based on service/method with optimized lookup.
+    ///
+    /// Returns matched route unit and the specific `GatewayInfo` that passed validation.
     ///
     /// # Parameters
     /// - `session`: The HTTP session
-    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `gateway_infos`: All gateway/listener contexts available on this listener
     /// - `hostname`: Request hostname for route-level hostname matching
     pub fn match_route(
         &self,
         session: &Session,
-        gateway_info: &GatewayInfo,
+        gateway_infos: &[GatewayInfo],
         hostname: &str,
-    ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         let path = session.req_header().uri.path();
 
-        // Parse gRPC path: /{service}/{method}
         let (service, method) = parse_grpc_path(path)?;
 
         // Priority 1: Try exact match (service, method)
-        // Iterate through all routes with matching service/method and return first one that passes deep_match
         if let Some(routes) = self.exact_routes.get(&(service.clone(), method.clone())) {
             for route_unit in routes {
-                if route_unit.deep_match(session, gateway_info, hostname)? {
-                    return Ok(route_unit.clone());
+                if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                    return Ok((route_unit.clone(), matched_gi));
                 }
             }
         }
 
         // Priority 2: Try service-level match (service only)
-        // Iterate through all routes with matching service and return first one that passes deep_match
         if let Some(routes) = self.service_routes.get(&service) {
             for route_unit in routes {
-                if route_unit.deep_match(session, gateway_info, hostname)? {
-                    return Ok(route_unit.clone());
+                if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                    return Ok((route_unit.clone(), matched_gi));
                 }
             }
         }
 
-        // Priority 3: Try catch-all match
         if let Some(ref route_unit) = self.catch_all_route {
-            if route_unit.deep_match(session, gateway_info, hostname)? {
-                tracing::debug!(
-                    service = %service,
-                    method = %method,
-                    route = %route_unit.identifier(),
-                    match_type = "catch_all",
-                    "gRPC route matched"
-                );
-                return Ok(route_unit.clone());
+            if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                return Ok((route_unit.clone(), matched_gi));
             }
         }
 

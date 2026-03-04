@@ -239,6 +239,7 @@ impl GatewayMetrics {
 /// * `test_key` - Test identifier (from Gateway annotation, empty in production)
 /// * `test_data` - JSON test data (from TestData::to_json(), empty in production)
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub fn record_backend_request(
     gateway_ns: &str,
     gateway_name: &str,

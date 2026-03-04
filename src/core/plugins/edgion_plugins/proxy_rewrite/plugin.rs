@@ -168,7 +168,7 @@ impl ProxyRewrite {
                 plugin_log.push(&format!("URI: {} -> {}; ", original_path, final_uri));
             }
         } else if let Some(ref regex_uri) = self.config.regex_uri {
-            if let Some(ref caps) = captures {
+            if let Some(caps) = captures {
                 // Replace capture groups in replacement template
                 let mut result = regex_uri.replacement.clone();
                 for (i, cap) in caps.iter().enumerate().skip(1) {

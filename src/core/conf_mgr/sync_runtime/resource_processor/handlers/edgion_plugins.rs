@@ -1017,7 +1017,7 @@ mod tests {
 
         let mut ep = EdgionPlugins::new("oidc-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::OpenidConnect(
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::OpenidConnect(Box::new(
             OpenidConnectConfig {
                 discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
                 client_id: "my-client".to_string(),
@@ -1035,7 +1035,7 @@ mod tests {
                 }),
                 ..Default::default()
             },
-        ))]);
+        )))]);
 
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None);

@@ -98,7 +98,7 @@ impl AccessLogStore {
     pub fn store(&self, trace_id: String, json: String) -> Result<(), String> {
         // Periodic cleanup: on every 100th store, clean expired entries
         let count = self.total_stored.fetch_add(1, Ordering::Relaxed);
-        if count % 100 == 0 {
+        if count.is_multiple_of(100) {
             self.cleanup_expired();
         }
 

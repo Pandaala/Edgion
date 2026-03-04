@@ -70,7 +70,7 @@ fn check_endpoint_slice_with_port(
     let has_port = slice
         .ports
         .as_ref()
-        .map_or(false, |ports| ports.iter().any(|p| p.port == Some(port as i32)));
+        .is_some_and(|ports| ports.iter().any(|p| p.port == Some(port as i32)));
     if !has_port {
         return false;
     }
@@ -99,7 +99,7 @@ fn check_legacy_endpoints(target_ip: &IpAddr, port: u16, service_key: &str) -> b
                 let has_port = subset
                     .ports
                     .as_ref()
-                    .map_or(false, |ports| ports.iter().any(|p| p.port == port as i32));
+                    .is_some_and(|ports| ports.iter().any(|p| p.port == port as i32));
                 if !has_port {
                     continue;
                 }

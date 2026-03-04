@@ -157,6 +157,6 @@ mod tests {
         assert!(delay.is_some());
         let d = delay.unwrap();
         let micros = d.as_micros();
-        assert!(micros >= 1900 && micros <= 2000, "Expected ~1953us, got {}us", micros);
+        assert!((1900..=2000).contains(&micros), "Expected ~1953us, got {}us", micros);
     }
 }

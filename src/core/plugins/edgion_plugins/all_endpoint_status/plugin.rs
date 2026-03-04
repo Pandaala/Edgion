@@ -362,7 +362,6 @@ impl AllEndpointStatus {
                 let addr = ep.address.clone();
                 let backend_name = ep.backend_name.clone();
                 let use_tls = ep.use_tls;
-                let timeout = timeout;
                 let method = method.to_string();
                 let path = path.to_string();
                 let query = original_query.map(|q| q.to_string());
@@ -501,7 +500,7 @@ impl RequestFilter for AllEndpointStatus {
             let since_last = now.saturating_sub(last);
 
             if since_last < min_interval {
-                let retry_after_s = (min_interval - since_last + 999) / 1000;
+                let retry_after_s = (min_interval - since_last).div_ceil(1000);
                 log.push("FAIL rate-limited; ");
                 let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
                 return self

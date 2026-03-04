@@ -79,7 +79,7 @@ pub enum EdgionPlugin {
     /// ForwardAuth filter (forward request to external auth service for authentication)
     ForwardAuth(ForwardAuthConfig),
     /// OpenID Connect filter (OIDC / OAuth 2.0 authentication)
-    OpenidConnect(OpenidConnectConfig),
+    OpenidConnect(Box<OpenidConnectConfig>),
     /// BandwidthLimit filter (limit downstream response bandwidth per second)
     BandwidthLimit(BandwidthLimitConfig),
     /// DirectEndpoint filter (route to specific endpoint, bypassing LB)

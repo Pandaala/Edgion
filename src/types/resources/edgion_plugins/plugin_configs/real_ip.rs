@@ -230,7 +230,7 @@ mod tests {
         let config = RealIpConfig::default();
         assert_eq!(config.trusted_ips.len(), 0);
         assert_eq!(config.real_ip_header, "X-Forwarded-For");
-        assert_eq!(config.recursive, true);
+        assert!(config.recursive);
     }
 
     #[test]
@@ -335,7 +335,7 @@ mod tests {
         };
         assert!(config.validate_and_init().is_ok());
         assert_eq!(config.real_ip_header, "CF-Connecting-IP");
-        assert_eq!(config.recursive, false);
+        assert!(!config.recursive);
     }
 
     #[test]
@@ -352,7 +352,7 @@ mod tests {
 
         assert_eq!(deserialized.trusted_ips, config.trusted_ips);
         assert_eq!(deserialized.real_ip_header, "X-Real-IP");
-        assert_eq!(deserialized.recursive, false);
+        assert!(!deserialized.recursive);
     }
 
     #[test]

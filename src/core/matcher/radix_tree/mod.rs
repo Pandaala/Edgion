@@ -34,4 +34,5 @@ mod frozen;
 // Re-export with renamed types to hide implementation details
 pub use builder::RadixRouter as RadixTreeBuilder;
 pub use error::RouterError;
+pub use frozen::MatchKind;
 pub use frozen::FrozenRadixTree as RadixTree;

@@ -1,5 +1,4 @@
 use arc_swap::ArcSwap;
-use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
@@ -10,7 +9,6 @@ use crate::core::routes::grpc_routes::{GrpcMatchEngine, GrpcRouteRuleUnit};
 use crate::types::err::EdError;
 use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule};
 
-type GatewayKey = String;
 type RouteKey = String; // Format: "namespace/name"
 
 /// gRPC route rules for a specific domain
@@ -42,20 +40,22 @@ impl GrpcRouteRules {
         }
     }
 
-    /// Match a gRPC route
+    /// Match a gRPC route.
     ///
     /// # Parameters
     /// - `session`: The HTTP session
-    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `gateway_infos`: All gateway/listener contexts available on this listener
     /// - `hostname`: Request hostname for route-level hostname matching
+    ///
+    /// Returns matched route unit and the specific `GatewayInfo` that passed validation.
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-        gateway_info: &GatewayInfo,
+        gateway_infos: &[GatewayInfo],
         hostname: &str,
-    ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         if let Some(ref engine) = self.match_engine {
-            engine.match_route(session, gateway_info, hostname)
+            engine.match_route(session, gateway_infos, hostname)
         } else {
             Err(EdError::RouteNotFound())
         }
@@ -131,31 +131,31 @@ impl DomainGrpcRouteRules {
         }
     }
 
-    /// Match a route based on service/method
+    /// Match a route based on service/method.
     ///
     /// # Parameters
     /// - `session`: The HTTP session
-    /// - `gateway_info`: Gateway context containing namespace, name, and optional listener_name
+    /// - `gateway_infos`: All gateway/listener contexts available on this listener
     /// - `hostname`: Request hostname for route-level hostname matching
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-        gateway_info: &GatewayInfo,
+        gateway_infos: &[GatewayInfo],
         hostname: &str,
-    ) -> Result<Arc<GrpcRouteRuleUnit>, EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         let grpc_routes = self.grpc_routes.load();
-        grpc_routes.match_route(session, gateway_info, hostname)
+        grpc_routes.match_route(session, gateway_infos, hostname)
     }
 }
 
 /// Global gRPC route manager
 pub struct GrpcRouteManager {
-    /// Maps gateway key to domain gRPC route rules
-    pub gateway_routes_map: DashMap<GatewayKey, Arc<DomainGrpcRouteRules>>,
+    /// Single global gRPC route table shared by all gateways/listeners.
+    pub global_grpc_routes: ArcSwap<DomainGrpcRouteRules>,
 
-    /// Stores all GRPCRoute resources for lookup during delete events
+    /// Stores all GRPCRoute resources for lookup during delete events.
     /// Key format: "namespace/name"
-    /// Uses Mutex since route updates are serialized
+    /// Uses Mutex since route updates are serialized.
     pub grpc_routes: Mutex<HashMap<RouteKey, GRPCRoute>>,
 }
 
@@ -168,33 +168,14 @@ impl Default for GrpcRouteManager {
 impl GrpcRouteManager {
     pub fn new() -> Self {
         Self {
-            gateway_routes_map: DashMap::new(),
+            global_grpc_routes: ArcSwap::from_pointee(DomainGrpcRouteRules::new()),
             grpc_routes: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Get or create DomainGrpcRouteRules for a gateway
-    /// Ensures that each gateway has exactly one DomainGrpcRouteRules instance
-    pub fn get_or_create_domain_grpc_routes(&self, namespace: &str, name: &str) -> Arc<DomainGrpcRouteRules> {
-        let gateway_key = if namespace.is_empty() {
-            name.to_string()
-        } else {
-            format!("{}/{}", namespace, name)
-        };
-
-        let entry = self.gateway_routes_map.entry(gateway_key.clone());
-        let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
-
-        let domain_routes = entry
-            .or_insert_with(|| Arc::new(DomainGrpcRouteRules::new()))
-            .value()
-            .clone();
-
-        if is_new {
-            tracing::info!(gateway_key = %gateway_key, "Created new gRPC domain routes for gateway");
-        }
-
-        domain_routes
+    /// Get the current global gRPC route table snapshot.
+    pub fn get_global_grpc_routes(&self) -> arc_swap::Guard<Arc<DomainGrpcRouteRules>> {
+        self.global_grpc_routes.load()
     }
 }
 

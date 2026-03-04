@@ -154,9 +154,10 @@ mod route_matching_tests {
         // Check exact domain map first (case-insensitive)
         let exact_map = domain_routes.exact_domain_map.load();
         let exists_exact = exact_map.get(&hostname.to_lowercase()).is_some();
+        let exists_catch_all = exact_map.get("*").is_some();
 
         // Check wildcard engine if not found in exact map
-        let exists_wildcard = if !exists_exact {
+        let exists_wildcard = if !exists_exact && !exists_catch_all {
             let wildcard_engine = domain_routes.wildcard_engine.load();
             wildcard_engine
                 .as_ref()
@@ -167,7 +168,7 @@ mod route_matching_tests {
             false
         };
 
-        let exists = exists_exact || exists_wildcard;
+        let exists = exists_exact || exists_catch_all || exists_wildcard;
         assert_eq!(
             exists,
             should_exist,
@@ -187,6 +188,8 @@ mod route_matching_tests {
         // Try exact domain map first (case-insensitive)
         let exact_map = domain_routes.exact_domain_map.load();
         let route_rules = if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
+            Some(route_rules.clone())
+        } else if let Some(route_rules) = exact_map.get("*") {
             Some(route_rules.clone())
         } else {
             // Try wildcard engine
@@ -246,7 +249,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -286,7 +289,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -318,7 +321,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -358,7 +361,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -392,7 +395,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -428,7 +431,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com", "api1.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -473,7 +476,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -494,20 +497,23 @@ mod route_matching_tests {
 
         verify_route_exists(&domain_routes, "api.example.com", true);
 
-        // Update route to remove hostname (empty hostnames)
+        // Update route to remove explicit hostname (empty hostnames).
+        // Per Gateway API spec, routes with no explicit hostnames inherit
+        // from the listener. Since the listener hostname is "api.example.com",
+        // the route should still be registered under that hostname.
         let mut add_or_update = HashMap::new();
         let route1_updated = create_test_httproute_with_paths(
             "default",
             "route1",
-            vec![], // Empty hostnames
+            vec![], // Empty hostnames -> inherits from listener
             vec![("default", "gateway1")],
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
         mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
 
-        // Verify hostname was cleaned up (route no longer applies to this hostname)
-        verify_route_exists(&domain_routes, "api.example.com", false);
+        // Route should still exist at api.example.com (inherited from listener)
+        verify_route_exists(&domain_routes, "api.example.com", true);
     }
 
     #[test]
@@ -516,7 +522,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -565,7 +571,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -607,7 +613,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -643,7 +649,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -688,7 +694,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -733,7 +739,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -773,7 +779,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -813,7 +819,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -853,7 +859,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -893,7 +899,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -941,7 +947,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -972,7 +978,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1003,7 +1009,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1042,7 +1048,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1087,7 +1093,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1132,7 +1138,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1174,7 +1180,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1216,7 +1222,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1258,7 +1264,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1300,7 +1306,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1354,7 +1360,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();
@@ -1396,7 +1402,7 @@ mod route_matching_tests {
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-        let domain_routes = mgr.get_or_create_domain_routes("default", "gateway1");
+        let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
             let mut store_guard = store.write().unwrap();

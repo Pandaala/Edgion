@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 ///     remove:
 ///       - X-Debug
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyRewriteConfig {
     /// New upstream URI path.
@@ -154,20 +154,6 @@ pub struct HeaderActions {
     /// Remove request headers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remove: Option<Vec<String>>,
-}
-
-impl Default for ProxyRewriteConfig {
-    fn default() -> Self {
-        Self {
-            uri: None,
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        }
-    }
 }
 
 impl ProxyRewriteConfig {

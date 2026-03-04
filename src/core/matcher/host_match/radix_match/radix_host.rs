@@ -165,7 +165,7 @@ impl<T> RadixHost<T> {
         // Count segments (number of parts separated by dots)
         let segment_count = remaining_without_dot.split('.').count();
 
-        // Must match_engine exactly the wildcard count
+        // Must match exactly the wildcard count
         segment_count == self.wildcard_count
     }
 }

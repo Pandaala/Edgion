@@ -87,22 +87,20 @@ pub fn record_passive_result(runtime: &WebhookRuntime, success: bool) {
         }
     } else {
         let failures = runtime.passive_failures.fetch_add(1, Ordering::Relaxed) + 1;
-        if failures >= passive.unhealthy_threshold {
-            if runtime.healthy.load(Ordering::Relaxed) {
-                tracing::warn!(failures, "Webhook marked unhealthy by passive monitoring");
-                runtime.healthy.store(false, Ordering::Relaxed);
-                // Initialize backoff timer if passive-only
-                let has_active = runtime
-                    .config
-                    .health_check
-                    .as_ref()
-                    .and_then(|hc| hc.active.as_ref())
-                    .is_some();
-                if !has_active {
-                    if let Some(ref backoff) = passive.backoff {
-                        runtime.backoff_sec.store(backoff.initial_sec, Ordering::Relaxed);
-                        runtime.last_halfopen.store(now_epoch_secs(), Ordering::Relaxed);
-                    }
+        if failures >= passive.unhealthy_threshold && runtime.healthy.load(Ordering::Relaxed) {
+            tracing::warn!(failures, "Webhook marked unhealthy by passive monitoring");
+            runtime.healthy.store(false, Ordering::Relaxed);
+            // Initialize backoff timer if passive-only
+            let has_active = runtime
+                .config
+                .health_check
+                .as_ref()
+                .and_then(|hc| hc.active.as_ref())
+                .is_some();
+            if !has_active {
+                if let Some(ref backoff) = passive.backoff {
+                    runtime.backoff_sec.store(backoff.initial_sec, Ordering::Relaxed);
+                    runtime.last_halfopen.store(now_epoch_secs(), Ordering::Relaxed);
                 }
             }
         }

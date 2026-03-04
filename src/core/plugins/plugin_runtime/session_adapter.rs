@@ -297,7 +297,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         let existing = self.header_value(name);
         let new_value = if let Some(ref current) = existing {
-            format!("{}, {}", current, value)
+            format!("{},{}", current, value)
         } else {
             value.to_string()
         };

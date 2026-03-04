@@ -159,46 +159,58 @@ mod tests {
 
     #[test]
     fn test_timeout_clamped_to_5s() {
-        let mut config = AllEndpointStatusConfig::default();
-        config.timeout_ms = 10000;
+        let config = AllEndpointStatusConfig {
+            timeout_ms: 10000,
+            ..Default::default()
+        };
         assert_eq!(config.effective_timeout_ms(), 5000);
     }
 
     #[test]
     fn test_wall_timeout_clamped_to_10s() {
-        let mut config = AllEndpointStatusConfig::default();
-        config.wall_timeout_ms = 30000;
+        let config = AllEndpointStatusConfig {
+            wall_timeout_ms: 30000,
+            ..Default::default()
+        };
         assert_eq!(config.effective_wall_timeout_ms(), 10000);
     }
 
     #[test]
     fn test_max_endpoints_clamped_to_hard_cap() {
-        let mut config = AllEndpointStatusConfig::default();
-        config.max_endpoints = 500;
+        let config = AllEndpointStatusConfig {
+            max_endpoints: 500,
+            ..Default::default()
+        };
         // global_max = 100, hard cap = 50 → min(500, 100, 50) = 50
         assert_eq!(config.effective_max_endpoints(100), 50);
     }
 
     #[test]
     fn test_max_endpoints_clamped_to_global() {
-        let mut config = AllEndpointStatusConfig::default();
-        config.max_endpoints = 40;
+        let config = AllEndpointStatusConfig {
+            max_endpoints: 40,
+            ..Default::default()
+        };
         // global_max = 20, hard cap = 50 → min(40, 20, 50) = 20
         assert_eq!(config.effective_max_endpoints(20), 20);
     }
 
     #[test]
     fn test_max_endpoints_plugin_value_lowest() {
-        let mut config = AllEndpointStatusConfig::default();
-        config.max_endpoints = 15;
+        let config = AllEndpointStatusConfig {
+            max_endpoints: 15,
+            ..Default::default()
+        };
         // global_max = 30, hard cap = 50 → min(15, 30, 50) = 15
         assert_eq!(config.effective_max_endpoints(30), 15);
     }
 
     #[test]
     fn test_max_body_size_clamped() {
-        let mut config = AllEndpointStatusConfig::default();
-        config.max_body_size = 1024 * 1024; // 1MB
+        let config = AllEndpointStatusConfig {
+            max_body_size: 1024 * 1024,
+            ..Default::default()
+        }; // 1MB
         assert_eq!(config.effective_max_body_size(), 16 * 1024);
     }
 }

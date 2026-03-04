@@ -8,8 +8,6 @@ use crate::types::GRPCRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-type GatewayKey = String;
-
 /// Implement ConfHandler for Arc<GrpcRouteManager> to allow using the global instance
 impl ConfHandler<GRPCRoute> for Arc<GrpcRouteManager> {
     fn full_set(&self, data: &HashMap<String, GRPCRoute>) {
@@ -34,76 +32,17 @@ pub fn create_grpc_route_handler() -> Box<dyn ConfHandler<GRPCRoute> + Send + Sy
 
 /// Private helper methods for GrpcRouteManager
 impl GrpcRouteManager {
-    /// Build set of affected gateway keys from add_or_update and remove sets
-    fn build_affected_gateways(
-        &self,
-        add_or_update: &HashMap<String, GRPCRoute>,
-        remove: &HashSet<String>,
-    ) -> HashSet<GatewayKey> {
-        let mut affected_gateways = HashSet::new();
-
-        // Process add_or_update routes
-        for (_resource_key, route) in add_or_update.iter() {
-            if let Some(parent_refs) = &route.spec.parent_refs {
-                for parent_ref in parent_refs {
-                    let gateway_key = if let Some(ns) = &parent_ref.namespace {
-                        format!("{}/{}", ns, parent_ref.name)
-                    } else if let Some(ns) = &route.metadata.namespace {
-                        format!("{}/{}", ns, parent_ref.name)
-                    } else {
-                        parent_ref.name.clone()
-                    };
-                    affected_gateways.insert(gateway_key);
-                }
-            }
-        }
-
-        // Process remove routes
-        let grpc_routes = self.grpc_routes.lock().unwrap();
-        for resource_key in remove.iter() {
-            if let Some(route) = grpc_routes.get(resource_key) {
-                if let Some(parent_refs) = &route.spec.parent_refs {
-                    for parent_ref in parent_refs {
-                        let gateway_key = parent_ref.build_parent_key(route.metadata.namespace.as_deref());
-                        affected_gateways.insert(gateway_key);
-                    }
-                }
-            }
-        }
-
-        affected_gateways
-    }
-
-    /// Update gateway routes for a specific gateway
-    fn update_gateway_routes(&self, gateway_key: &str, all_routes: &HashMap<String, GRPCRoute>) -> Arc<GrpcRouteRules> {
+    /// Build global GrpcRouteRules from all stored routes.
+    fn build_global_routes(&self, all_routes: &HashMap<String, GRPCRoute>) -> Arc<GrpcRouteRules> {
         let mut resource_keys = HashSet::new();
         let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 
-        // Collect all routes that belong to this gateway
         for (resource_key, route) in all_routes.iter() {
-            // Check if this route applies to this gateway
-            let applies_to_gateway = route
-                .spec
-                .parent_refs
-                .as_ref()
-                .map(|refs| {
-                    refs.iter().any(|parent_ref| {
-                        let gw_key = parent_ref.build_parent_key(route.metadata.namespace.as_deref());
-                        gw_key == gateway_key
-                    })
-                })
-                .unwrap_or(false);
-
-            if !applies_to_gateway {
-                continue;
-            }
-
             resource_keys.insert(resource_key.clone());
 
             let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
             let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-            // Create shared route info for all rule units of this route
             let route_info = Arc::new(GrpcRouteInfo {
                 parent_refs: route.spec.parent_refs.clone(),
                 hostnames: route.spec.hostnames.clone(),
@@ -113,10 +52,8 @@ impl GrpcRouteManager {
                 for (rule_id, rule) in rules.iter().enumerate() {
                     let rule_arc = Arc::new(rule.clone());
 
-                    // Each rule may have multiple matches
                     if let Some(matches) = &rule.matches {
                         for (match_id, match_item) in matches.iter().enumerate() {
-                            // Create GrpcRouteRuleUnit
                             let unit = Arc::new(GrpcRouteRuleUnit {
                                 resource_key: resource_key.clone(),
                                 matched_info: GrpcMatchInfo::new(
@@ -137,14 +74,12 @@ impl GrpcRouteManager {
             }
         }
 
-        // Build match engine
         let match_engine = if route_rules_list.is_empty() {
             None
         } else {
             Some(Arc::new(GrpcMatchEngine::new(route_rules_list.clone())))
         };
 
-        // Create new GrpcRouteRules
         Arc::new(GrpcRouteRules {
             resource_keys: std::sync::RwLock::new(resource_keys),
             route_rules_list: std::sync::RwLock::new(route_rules_list),
@@ -152,7 +87,7 @@ impl GrpcRouteManager {
         })
     }
 
-    /// full_set implementation
+    /// full_set implementation — builds a single global gRPC route table.
     fn full_set(&self, data: &HashMap<String, GRPCRoute>) {
         tracing::info!(
             component = "grpc_route_manager",
@@ -160,78 +95,23 @@ impl GrpcRouteManager {
             "Full set gRPC routes"
         );
 
-        // Parse hidden logic for all routes
         let mut parsed_routes = HashMap::new();
         for (key, mut route) in data.clone() {
             route.preparse();
             parsed_routes.insert(key, route);
         }
 
-        // Update grpc_routes storage
-        {
-            let mut grpc_routes = self.grpc_routes.lock().unwrap();
-            *grpc_routes = parsed_routes.clone();
-        }
+        *self.grpc_routes.lock().unwrap() = parsed_routes.clone();
 
-        // Find all affected gateways
-        let empty_remove = HashSet::new();
-        let affected_gateways = self.build_affected_gateways(&parsed_routes, &empty_remove);
+        let new_route_rules = self.build_global_routes(&parsed_routes);
+        let new_domain = DomainGrpcRouteRules::new();
+        new_domain.grpc_routes.store(new_route_rules);
+        self.global_grpc_routes.store(Arc::new(new_domain));
 
-        // Update each gateway
-        for gateway_key in affected_gateways.iter() {
-            let new_route_rules = self.update_gateway_routes(gateway_key, &parsed_routes);
-
-            // Get or create DomainGrpcRouteRules for this gateway
-            let domain_routes = self
-                .gateway_routes_map
-                .entry(gateway_key.clone())
-                .or_insert_with(|| Arc::new(DomainGrpcRouteRules::new()))
-                .value()
-                .clone();
-
-            // Update the internal ArcSwap with new route rules
-            domain_routes.grpc_routes.store(new_route_rules);
-
-            tracing::info!(
-                component = "grpc_route_manager",
-                gateway = %gateway_key,
-                "Updated gRPC routes for gateway"
-            );
-        }
-
-        // Clean up stale gateway entries that no longer have any routes
-        // This prevents memory leaks after relist
-        let stale_keys: Vec<String> = self
-            .gateway_routes_map
-            .iter()
-            .filter(|entry| !affected_gateways.contains(entry.key()))
-            .map(|entry| entry.key().clone())
-            .collect();
-
-        for key in &stale_keys {
-            // Clear routes first (for any existing Arc references)
-            if let Some(entry) = self.gateway_routes_map.get(key) {
-                entry.value().grpc_routes.store(Arc::new(GrpcRouteRules::new()));
-            }
-            // Then remove from map
-            self.gateway_routes_map.remove(key);
-            tracing::debug!(
-                component = "grpc_route_manager",
-                gateway_key = %key,
-                "Removed stale gateway entry"
-            );
-        }
-
-        if !stale_keys.is_empty() {
-            tracing::info!(
-                component = "grpc_route_manager",
-                stale = stale_keys.len(),
-                "cleaned up stale gateway entries"
-            );
-        }
+        tracing::info!(component = "grpc_route_manager", "global gRPC routes updated");
     }
 
-    /// partial_update implementation
+    /// partial_update implementation — rebuilds the global gRPC route table.
     fn partial_update(
         &self,
         add: HashMap<String, GRPCRoute>,
@@ -246,54 +126,27 @@ impl GrpcRouteManager {
             "Partial update gRPC routes"
         );
 
-        // Parse hidden logic for add and update routes
         let mut parsed_add_or_update = HashMap::new();
-
         for (key, mut route) in add.into_iter().chain(update.into_iter()) {
             route.preparse();
             parsed_add_or_update.insert(key, route);
         }
 
-        // Update grpc_routes storage
         let all_routes = {
             let mut grpc_routes = self.grpc_routes.lock().unwrap();
-
-            // Add/update routes
             for (key, route) in parsed_add_or_update.iter() {
                 grpc_routes.insert(key.clone(), route.clone());
             }
-
-            // Remove routes
             for key in remove.iter() {
                 grpc_routes.remove(key);
             }
-
-            // Return a clone of all routes for rebuilding
             grpc_routes.clone()
         };
 
-        // Find all affected gateways
-        let affected_gateways = self.build_affected_gateways(&parsed_add_or_update, &remove);
+        let new_route_rules = self.build_global_routes(&all_routes);
+        let current = self.global_grpc_routes.load();
+        current.grpc_routes.store(new_route_rules);
 
-        // Update each affected gateway
-        for gateway_key in affected_gateways.iter() {
-            let new_route_rules = self.update_gateway_routes(gateway_key, &all_routes);
-
-            // Get or create DomainGrpcRouteRules for this gateway
-            let domain_routes = self
-                .gateway_routes_map
-                .entry(gateway_key.clone())
-                .or_insert_with(|| Arc::new(DomainGrpcRouteRules::new()))
-                .clone();
-
-            // Store new route rules (RCU update)
-            domain_routes.grpc_routes.store(new_route_rules);
-
-            tracing::info!(
-                component = "grpc_route_manager",
-                gateway = %gateway_key,
-                "Updated gRPC routes for gateway"
-            );
-        }
+        tracing::info!(component = "grpc_route_manager", "global gRPC routes updated");
     }
 }

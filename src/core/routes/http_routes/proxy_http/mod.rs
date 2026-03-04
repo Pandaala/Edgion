@@ -11,7 +11,6 @@ use std::time::SystemTime;
 use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::gateway::server_header::ServerHeaderOpts;
 use crate::core::observe::AccessLogger;
-use crate::core::routes::{grpc_routes::DomainGrpcRouteRules, DomainRouteRules};
 use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener};
 
 // Sub-modules
@@ -44,19 +43,13 @@ pub struct EdgionHttp {
 
     pub listener: Listener,
 
-    /// Pre-built GatewayInfo for route matching (avoids per-request allocation)
-    /// Contains: namespace, gateway_name, listener_name
-    pub gateway_info: GatewayInfo,
+    /// All Gateway/Listener contexts sharing this port.
+    /// Used to pass into `deep_match` so routes can validate which gateway they belong to.
+    pub gateway_infos: Arc<Vec<GatewayInfo>>,
 
     pub server_start_time: SystemTime,
 
     pub server_header_opts: ServerHeaderOpts,
-
-    /// HTTP domain routes for this gateway
-    pub domain_routes: Arc<DomainRouteRules>,
-
-    /// gRPC domain routes for this gateway
-    pub grpc_routes: Arc<DomainGrpcRouteRules>,
 
     /// Access logger for writing access logs
     pub access_logger: Arc<AccessLogger>,

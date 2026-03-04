@@ -496,8 +496,10 @@ mod tests {
 
     #[test]
     fn test_validation_invalid_uri() {
-        let mut config = WebhookServiceConfig::default();
-        config.uri = "ftp://invalid".to_string();
+        let config = WebhookServiceConfig {
+            uri: "ftp://invalid".to_string(),
+            ..Default::default()
+        };
         assert_eq!(
             config.get_validation_error(),
             Some("uri must start with http:// or https://")
@@ -506,9 +508,11 @@ mod tests {
 
     #[test]
     fn test_validation_invalid_method() {
-        let mut config = WebhookServiceConfig::default();
-        config.uri = "http://example.com".to_string();
-        config.request_method = "INVALID".to_string();
+        let config = WebhookServiceConfig {
+            uri: "http://example.com".to_string(),
+            request_method: "INVALID".to_string(),
+            ..Default::default()
+        };
         assert_eq!(
             config.get_validation_error(),
             Some("requestMethod must be a valid HTTP method")
@@ -517,17 +521,21 @@ mod tests {
 
     #[test]
     fn test_validation_zero_timeout() {
-        let mut config = WebhookServiceConfig::default();
-        config.uri = "http://example.com".to_string();
-        config.timeout_ms = 0;
+        let config = WebhookServiceConfig {
+            uri: "http://example.com".to_string(),
+            timeout_ms: 0,
+            ..Default::default()
+        };
         assert_eq!(config.get_validation_error(), Some("timeoutMs must be greater than 0"));
     }
 
     #[test]
     fn test_validation_max_response_bytes_exceeds_global() {
-        let mut config = WebhookServiceConfig::default();
-        config.uri = "http://example.com".to_string();
-        config.max_response_bytes = WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES + 1;
+        let config = WebhookServiceConfig {
+            uri: "http://example.com".to_string(),
+            max_response_bytes: WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES + 1,
+            ..Default::default()
+        };
         assert_eq!(
             config.get_validation_error(),
             Some("maxResponseBytes exceeds global limit (16KB)")
@@ -536,8 +544,10 @@ mod tests {
 
     #[test]
     fn test_validation_valid_config() {
-        let mut config = WebhookServiceConfig::default();
-        config.uri = "https://api.example.com/resolve".to_string();
+        let config = WebhookServiceConfig {
+            uri: "https://api.example.com/resolve".to_string(),
+            ..Default::default()
+        };
         assert!(config.get_validation_error().is_none());
     }
 
@@ -611,9 +621,11 @@ healthCheck:
 
     #[test]
     fn test_serde_roundtrip() {
-        let mut config = WebhookServiceConfig::default();
-        config.uri = "https://example.com/api".to_string();
-        config.request_method = "POST".to_string();
+        let config = WebhookServiceConfig {
+            uri: "https://example.com/api".to_string(),
+            request_method: "POST".to_string(),
+            ..Default::default()
+        };
 
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: WebhookServiceConfig = serde_json::from_str(&json).unwrap();

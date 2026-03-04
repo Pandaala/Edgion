@@ -23,7 +23,7 @@ pub use validation::validate_endpoint_in_route;
 use std::sync::OnceLock;
 
 use crate::core::conf_mgr::conf_center::EndpointMode;
-use crate::core::gateway::end_response_503;
+use crate::core::gateway::{end_response_500, end_response_503};
 use crate::core::utils::net::is_localhost;
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::edgion_status::EdgionStatus;
@@ -155,6 +155,8 @@ pub enum EdgionService {
     /// Force use EndpointSlice resource for backend discovery
     /// Useful in Both mode to explicitly select EndpointSlice
     ServiceEndpointSlice,
+    /// Unsupported backend kind (Gateway API conformance: must return 500)
+    Unsupported(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,7 +179,7 @@ impl EdgionService {
                 // Explicit endpoint mode selection (for Both mode)
                 "ServiceEndpoint" | "Endpoint" => EdgionService::ServiceEndpoint,
                 "ServiceEndpointSlice" | "EndpointSlice" => EdgionService::ServiceEndpointSlice,
-                _ => EdgionService::Service, // Default to Service for unknown types
+                _ => EdgionService::Unsupported(k.clone()),
             },
         }
     }
@@ -236,6 +238,113 @@ fn get_port_from_backend_ref_or_service(
             .and_then(|ports| ports.first())
             .map(|p| p.port as u16)
             .ok_or(EdgionStatus::BackendPortResolutionFailed),
+    }
+}
+
+/// Which endpoint resource to query when resolving targetPort by port name.
+#[derive(Debug, Clone, Copy)]
+enum PortLookupSource {
+    /// Determine from global endpoint mode (for `EdgionService::Service`).
+    Auto,
+    /// Force EndpointSlice (for `EdgionService::ServiceEndpointSlice`).
+    EndpointSlice,
+    /// Force Endpoint (for `EdgionService::ServiceEndpoint`).
+    Endpoint,
+}
+
+/// Resolve the correct targetPort for a backend address selected from the load balancer.
+///
+/// The LB stores backends with the targetPort from the first port entry in EndpointSlice/Endpoint.
+/// For multi-port Services, `br_port` (backendRef.port = Service port number) may refer to a
+/// different port entry. This function looks up the correct targetPort via:
+///   br_port (Service port) -> Service.spec.ports[].name -> EndpointSlice/Endpoint port name -> targetPort
+///
+/// If the Service has only one port, or `br_port` is None, the address is already correct.
+fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key: &str, source: PortLookupSource) {
+    let Some(br_port_val) = br_port else {
+        return;
+    };
+
+    let svc_store = get_global_service_store();
+    let Some(service) = svc_store.get(service_key) else {
+        return;
+    };
+
+    let Some(svc_ports) = service.spec.as_ref().and_then(|s| s.ports.as_ref()) else {
+        return;
+    };
+
+    if svc_ports.len() <= 1 {
+        return;
+    }
+
+    let Some(svc_port_entry) = svc_ports.iter().find(|p| p.port == br_port_val) else {
+        tracing::warn!(
+            service_key = %service_key,
+            br_port = br_port_val,
+            "backendRef.port does not match any Service port"
+        );
+        return;
+    };
+
+    let Some(port_name) = svc_port_entry.name.as_deref().filter(|n| !n.is_empty()) else {
+        return;
+    };
+
+    let use_endpoint_slice = match source {
+        PortLookupSource::EndpointSlice => true,
+        PortLookupSource::Endpoint => false,
+        PortLookupSource::Auto => !matches!(get_global_endpoint_mode(), EndpointMode::Endpoint),
+    };
+
+    let resolved = if use_endpoint_slice {
+        get_roundrobin_store()
+            .get_slices_for_service(service_key)
+            .and_then(|slices| {
+                slices.iter().find_map(|s| {
+                    s.ports.as_ref()?.iter().find_map(|p| {
+                        if p.name.as_deref() == Some(port_name) {
+                            p.port.map(|v| v as u16)
+                        } else {
+                            None
+                        }
+                    })
+                })
+            })
+    } else {
+        get_endpoint_roundrobin_store()
+            .get_endpoint_for_service(service_key)
+            .and_then(|ep| {
+                ep.subsets.as_ref()?.iter().find_map(|subset| {
+                    subset.ports.as_ref()?.iter().find_map(|p| {
+                        if p.name.as_deref() == Some(port_name) {
+                            Some(p.port as u16)
+                        } else {
+                            None
+                        }
+                    })
+                })
+            })
+    };
+
+    if let Some(target_port) = resolved {
+        let current_port = addr.as_inet().map(|a| a.port()).unwrap_or(0);
+        if current_port != target_port {
+            tracing::debug!(
+                service_key = %service_key,
+                port_name = port_name,
+                from_port = current_port,
+                to_port = target_port,
+                "Resolved targetPort for multi-port Service"
+            );
+            addr.set_port(target_port);
+        }
+    } else {
+        tracing::warn!(
+            service_key = %service_key,
+            port_name = port_name,
+            "Could not resolve targetPort by port name in endpoint resources"
+        );
     }
 }
 
@@ -612,9 +721,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             let backend = select_backend_by_policy(&service_key, lb_policy, session)?;
 
             let mut addr = backend.addr;
-            if let Some(port) = br_port {
-                addr.set_port(port as u16);
-            }
+            resolve_target_port(&mut addr, br_port, &service_key, PortLookupSource::Auto);
 
             // Extract TLS configuration from BackendTLSPolicy
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
@@ -739,14 +846,17 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             Err(EdgionStatus::BackendServiceImportNotImplemented)
         }
 
+        EdgionService::Unsupported(ref kind) => {
+            tracing::error!(service_key = %service_key, kind = %kind, "Unsupported backend kind");
+            Err(EdgionStatus::BackendUnsupportedKind)
+        }
+
         EdgionService::ServiceEndpoint => {
             // Force use Endpoints (ignore EndpointSlice even in Both mode)
             let backend = select_from_endpoints(&service_key, lb_policy, session)?;
 
             let mut addr = backend.addr;
-            if let Some(port) = br_port {
-                addr.set_port(port as u16);
-            }
+            resolve_target_port(&mut addr, br_port, &service_key, PortLookupSource::Endpoint);
 
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             let lb_policy_clone = lb_policy.clone();
@@ -782,9 +892,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             let backend = select_from_endpoint_slice(&service_key, lb_policy, session)?;
 
             let mut addr = backend.addr;
-            if let Some(port) = br_port {
-                addr.set_port(port as u16);
-            }
+            resolve_target_port(&mut addr, br_port, &service_key, PortLookupSource::EndpointSlice);
 
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             let lb_policy_clone = lb_policy.clone();
@@ -835,7 +943,9 @@ pub fn query_backend_tls_policy_for_service(name: &str, namespace: Option<&str>)
 
 /// Get HTTP peer from service and endpoint slice stores using load balancing
 ///
-/// On error, sets error status to ctx and sends 503 response
+/// On error, sets error status to ctx and sends an error response:
+/// - 500 for unsupported backend kinds (Gateway API conformance requirement)
+/// - 503 for all other backend resolution failures
 ///
 /// # Parameters
 /// - `is_grpc`: true if this is for gRPC backend, false for HTTP backend
@@ -848,9 +958,15 @@ pub async fn get_peer(
         Ok(peer) => Ok(peer),
         Err(status) => {
             ctx.add_error(status);
-            // Use default server header options for error response
             let server_header_opts = crate::core::gateway::server_header::ServerHeaderOpts::default();
-            let _ = end_response_503(session, ctx, &server_header_opts).await;
+            match status {
+                EdgionStatus::BackendUnsupportedKind => {
+                    let _ = end_response_500(session, ctx, &server_header_opts).await;
+                }
+                _ => {
+                    let _ = end_response_503(session, ctx, &server_header_opts).await;
+                }
+            }
             Err(PingoraError::new(ErrorType::InternalError))
         }
     }
@@ -915,14 +1031,13 @@ mod tests {
 
     #[test]
     fn test_edgion_service_from_kind_unknown() {
-        // Unknown kinds should default to Service
         assert_eq!(
             EdgionService::from_kind(Some(&"UnknownKind".to_string())),
-            EdgionService::Service
+            EdgionService::Unsupported("UnknownKind".to_string())
         );
         assert_eq!(
             EdgionService::from_kind(Some(&"RandomString".to_string())),
-            EdgionService::Service
+            EdgionService::Unsupported("RandomString".to_string())
         );
     }
 }

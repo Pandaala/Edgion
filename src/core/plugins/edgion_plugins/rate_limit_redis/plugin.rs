@@ -202,6 +202,7 @@ impl RateLimitRedis {
     }
 
     /// Execute sliding window rate limit check for a single policy.
+    #[allow(clippy::too_many_arguments)]
     async fn eval_sliding_window(
         &self,
         client: &RedisLinkClient,
@@ -227,6 +228,7 @@ impl RateLimitRedis {
     }
 
     /// Execute fixed window rate limit check for a single policy.
+    #[allow(clippy::too_many_arguments)]
     async fn eval_fixed_window(
         &self,
         client: &RedisLinkClient,
@@ -247,6 +249,7 @@ impl RateLimitRedis {
     }
 
     /// Execute token bucket rate limit check for a single policy.
+    #[allow(clippy::too_many_arguments)]
     async fn eval_token_bucket(
         &self,
         client: &RedisLinkClient,
@@ -420,7 +423,7 @@ impl RateLimitRedis {
                 .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
         );
         resp.insert_header("Content-Type", "application/json").ok();
-        resp.insert_header("Retry-After", &retry_after.as_secs().to_string())
+        resp.insert_header("Retry-After", retry_after.as_secs().to_string())
             .ok();
 
         // Add rate limit headers (all controlled by show_limit_headers)
@@ -433,23 +436,23 @@ impl RateLimitRedis {
 
                 if let Some(headers) = self.config.get_header_names() {
                     if let Some(limit_header) = headers.limit_header() {
-                        resp.insert_header(limit_header.to_string(), &r.limit.to_string()).ok();
+                        resp.insert_header(limit_header.to_string(), r.limit.to_string()).ok();
                     }
                     if let Some(remaining_header) = headers.remaining_header() {
                         resp.insert_header(remaining_header.to_string(), "0").ok();
                     }
                     if let Some(reset_header) = headers.reset_header() {
-                        resp.insert_header(reset_header.to_string(), &reset_timestamp.to_string())
+                        resp.insert_header(reset_header.to_string(), reset_timestamp.to_string())
                             .ok();
                     }
                     if let Some(retry_in_header) = headers.retry_in_header() {
-                        resp.insert_header(retry_in_header.to_string(), &format_duration(retry_after))
+                        resp.insert_header(retry_in_header.to_string(), format_duration(retry_after))
                             .ok();
                     }
                 } else {
-                    resp.insert_header("X-RateLimit-Limit", &r.limit.to_string()).ok();
+                    resp.insert_header("X-RateLimit-Limit", r.limit.to_string()).ok();
                     resp.insert_header("X-RateLimit-Remaining", "0").ok();
-                    resp.insert_header("X-RateLimit-Reset", &reset_timestamp.to_string())
+                    resp.insert_header("X-RateLimit-Reset", reset_timestamp.to_string())
                         .ok();
                 }
             }

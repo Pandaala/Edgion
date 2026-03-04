@@ -126,14 +126,8 @@ pub fn add_http_listener(
         return Ok(());
     }
 
-    // Get or create domain routes from global RouteManager
-    let route_manager = get_global_route_manager();
-    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
-    let domain_routes = route_manager.get_or_create_domain_routes(namespace_str, &context.gateway_name);
-
-    // Get or create gRPC routes for this gateway (same pattern as HTTP routes)
-    let grpc_route_manager = crate::core::routes::grpc_routes::get_global_grpc_route_manager();
-    let grpc_routes = grpc_route_manager.get_or_create_domain_grpc_routes(namespace_str, &context.gateway_name);
+    // Ensure the route manager is initialized.
+    let _route_manager = get_global_route_manager();
 
     // Pre-parse timeout configurations once at initialization
     let parsed_timeouts =
@@ -184,16 +178,15 @@ pub fn add_http_listener(
         metrics_test_key,
         metrics_test_type,
     );
+    let gateway_infos = Arc::new(vec![gateway_info]);
 
     // Create EdgionHttp proxy handler
     let edgion_http = EdgionHttp {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),
-        gateway_info,
+        gateway_infos,
         server_start_time: SystemTime::now(),
         server_header_opts: Default::default(),
-        domain_routes,
-        grpc_routes,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         parsed_timeouts,

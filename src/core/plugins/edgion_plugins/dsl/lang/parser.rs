@@ -174,7 +174,7 @@ fn ws(input: &str) -> &str {
 // ==================== Statement Parsing ====================
 
 fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(nom::Err::Failure)?;
 
     let input = ws(input);
 
@@ -195,7 +195,7 @@ fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, 
 }
 
 fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
 
     let input = ws(&input[3..]); // skip "let" + whitespace
 
@@ -240,8 +240,8 @@ fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
 }
 
 fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
-    ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
+    ctx.enter_nesting().map_err(nom::Err::Failure)?;
 
     let mut branches = Vec::new();
     let mut current_input = input;
@@ -301,8 +301,8 @@ fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stm
 }
 
 fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
-    ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
+    ctx.enter_nesting().map_err(nom::Err::Failure)?;
 
     let input = ws(&input[3..]); // skip "for" + whitespace
 
@@ -327,11 +327,10 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
 
     // Check for "range(start, end)"
     if input.starts_with("range(") || input.starts_with("range (") {
-        let input = if input.starts_with("range(") {
-            &input[6..]
-        } else {
-            &input[7..]
-        };
+        let input = input
+            .strip_prefix("range(")
+            .or_else(|| input.strip_prefix("range ("))
+            .expect("guard ensures one of these matches");
         let input = ws(input);
         let (input, start) = parse_expr(input, ctx)?;
         let input = ws(input);
@@ -384,8 +383,8 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
 }
 
 fn parse_while_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
-    ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
+    ctx.enter_nesting().map_err(nom::Err::Failure)?;
 
     let input = ws(&input[5..]); // skip "while" + whitespace
 
@@ -401,7 +400,7 @@ fn parse_while_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, 
 }
 
 fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
 
     let input = ws(&input[6..]); // skip "return" + whitespace
 
@@ -411,11 +410,10 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str,
     }
 
     if input.starts_with("deny(") || input.starts_with("deny (") {
-        let input = if input.starts_with("deny(") {
-            &input[5..]
-        } else {
-            &input[6..]
-        };
+        let input = input
+            .strip_prefix("deny(")
+            .or_else(|| input.strip_prefix("deny ("))
+            .expect("guard ensures one of these matches");
         let input = ws(input);
         let (input, status) = parse_expr(input, ctx)?;
         let input = ws(input);
@@ -437,7 +435,7 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str,
 }
 
 fn parse_assign_or_expr_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
 
     // Try to parse an expression first
     let (rest, expr) = parse_expr(input, ctx)?;
@@ -473,7 +471,7 @@ fn parse_block<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Vec<S
     let mut input = ws(input);
 
     while !input.is_empty() && !input.starts_with('}') {
-        ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+        ctx.tick().map_err(nom::Err::Failure)?;
         let (rest, stmt) = parse_stmt(input, ctx)?;
         stmts.push(stmt);
         input = ws(rest);
@@ -489,13 +487,13 @@ fn parse_block<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Vec<S
 // ==================== Expression Parsing (Pratt / Precedence Climbing) ====================
 
 fn parse_expr<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(nom::Err::Failure)?;
     parse_expr_bp(input, ctx, 0)
 }
 
 /// Pratt parser: parse expression with minimum binding power
 fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(nom::Err::Failure)?;
 
     // Parse prefix / atom
     let (mut input, mut lhs) = parse_unary_or_atom(input, ctx)?;
@@ -523,7 +521,7 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<
             // Short-circuit for && and ||
             let (rest, rhs) = parse_expr_bp(input, ctx, bp)?;
 
-            ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+            ctx.add_node().map_err(nom::Err::Failure)?;
             lhs = Expr::new(ExprKind::BinaryOp {
                 op,
                 left: Box::new(lhs),
@@ -540,13 +538,13 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<
 }
 
 fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(nom::Err::Failure)?;
     let input = ws(input);
 
     // Unary !
-    if input.starts_with('!') {
-        ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
-        let (rest, operand) = parse_unary_or_atom(&input[1..], ctx)?;
+    if let Some(stripped) = input.strip_prefix('!') {
+        ctx.add_node().map_err(nom::Err::Failure)?;
+        let (rest, operand) = parse_unary_or_atom(stripped, ctx)?;
         return Ok((
             rest,
             Expr::new(ExprKind::UnaryOp {
@@ -557,11 +555,11 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a st
     }
 
     // Unary - (negative): supports -42, -x, -(expr), -func()
-    if input.starts_with('-') && input.len() > 1 && !input[1..].starts_with(|c: char| c == '>' || c == '-') {
+    if input.starts_with('-') && input.len() > 1 && !input[1..].starts_with(['>', '-']) {
         let next = input.as_bytes()[1];
         // Accept digits, '(', identifiers (alpha/underscore)
         if next.is_ascii_digit() || next == b'(' || next.is_ascii_alphabetic() || next == b'_' {
-            ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+            ctx.add_node().map_err(nom::Err::Failure)?;
             let (rest, operand) = parse_unary_or_atom(&input[1..], ctx)?;
             return Ok((
                 rest,
@@ -574,9 +572,9 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a st
     }
 
     // Parenthesized expression
-    if input.starts_with('(') {
-        ctx.enter_nesting().map_err(|e| nom::Err::Failure(e))?;
-        let (rest, expr) = parse_expr(&input[1..], ctx)?;
+    if let Some(stripped) = input.strip_prefix('(') {
+        ctx.enter_nesting().map_err(nom::Err::Failure)?;
+        let (rest, expr) = parse_expr(stripped, ctx)?;
         let rest = ws(rest);
         if !rest.starts_with(')') {
             ctx.leave_nesting();
@@ -590,8 +588,8 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a st
 }
 
 fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(nom::Err::Failure)?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
     let input = ws(input);
 
     // String literal
@@ -616,8 +614,8 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
             _ => {
                 // Check for function call: ident(...)
                 let rest_ws = ws(rest);
-                if rest_ws.starts_with('(') {
-                    let (rest, args) = parse_call_args(&rest_ws[1..], ctx)?;
+                if let Some(stripped) = rest_ws.strip_prefix('(') {
+                    let (rest, args) = parse_call_args(stripped, ctx)?;
                     Ok((
                         rest,
                         Expr::new(ExprKind::FnCall {
@@ -641,17 +639,17 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
 // ==================== Dot Access (Method Call / Field Access) ====================
 
 fn parse_dot_access<'a>(input: &'a str, object: Expr, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
-    ctx.tick().map_err(|e| nom::Err::Failure(e))?;
-    ctx.add_node().map_err(|e| nom::Err::Failure(e))?;
+    ctx.tick().map_err(nom::Err::Failure)?;
+    ctx.add_node().map_err(nom::Err::Failure)?;
 
     let input = &input[1..]; // skip '.'
     let (input, method) = parse_identifier(input)
         .map_err(|_| nom::Err::Failure(ParseError::new("expected method/field name after '.'")))?;
 
     let input_ws = ws(input);
-    if input_ws.starts_with('(') {
+    if let Some(stripped) = input_ws.strip_prefix('(') {
         // Method call: obj.method(args...)
-        let (rest, args) = parse_call_args(&input_ws[1..], ctx)?;
+        let (rest, args) = parse_call_args(stripped, ctx)?;
         Ok((
             rest,
             Expr::new(ExprKind::MethodCall {
@@ -677,20 +675,20 @@ fn parse_call_args<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, V
     let mut args = Vec::new();
     let mut input = ws(input);
 
-    if input.starts_with(')') {
-        return Ok((&input[1..], args));
+    if let Some(stripped) = input.strip_prefix(')') {
+        return Ok((stripped, args));
     }
 
     loop {
-        ctx.tick().map_err(|e| nom::Err::Failure(e))?;
+        ctx.tick().map_err(nom::Err::Failure)?;
         let (rest, arg) = parse_expr(input, ctx)?;
         args.push(arg);
         let rest = ws(rest);
-        if rest.starts_with(')') {
-            return Ok((&rest[1..], args));
+        if let Some(stripped) = rest.strip_prefix(')') {
+            return Ok((stripped, args));
         }
-        if rest.starts_with(',') {
-            input = ws(&rest[1..]);
+        if let Some(stripped) = rest.strip_prefix(',') {
+            input = ws(stripped);
         } else {
             return Err(nom::Err::Failure(ParseError::new(
                 "expected ',' or ')' in argument list",
@@ -753,7 +751,7 @@ fn parse_string_literal<'a>(input: &'a str, _ctx: &mut ParseCtx) -> IResult<&'a 
     }
 }
 
-fn parse_int_literal<'a>(input: &'a str) -> IResult<&'a str, Expr, ParseError> {
+fn parse_int_literal(input: &str) -> IResult<&str, Expr, ParseError> {
     let end = input.find(|c: char| !c.is_ascii_digit()).unwrap_or(input.len());
     if end == 0 {
         return Err(nom::Err::Failure(ParseError::new("expected integer")));

@@ -19,7 +19,7 @@ static GLOBAL_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// When enabled via --integration-testing-mode:
 /// - Access Log Store: stores complete access logs in memory, queryable via Admin API
 /// - Metrics Test Data: collects test data labels on backend_requests_total metric
-/// This flag MUST NEVER be used in production.
+///   This flag MUST NEVER be used in production.
 static GLOBAL_INTEGRATION_TESTING_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Initialize global test mode (called once at startup)
