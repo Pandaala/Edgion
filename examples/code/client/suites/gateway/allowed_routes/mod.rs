@@ -2,7 +2,9 @@
 mod all_namespaces;
 mod kinds;
 mod same_namespace;
+mod selector_namespace;
 
 pub use all_namespaces::AllowedRoutesAllNamespacesTestSuite;
 pub use kinds::AllowedRoutesKindsTestSuite;
 pub use same_namespace::AllowedRoutesSameNamespaceTestSuite;
+pub use selector_namespace::AllowedRoutesSelectorNamespaceTestSuite;

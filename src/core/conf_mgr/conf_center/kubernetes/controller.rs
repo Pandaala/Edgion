@@ -34,10 +34,12 @@
 //! 5. **Graceful Shutdown**: Handles SIGTERM/SIGINT for clean shutdown.
 
 use anyhow::Result;
-use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
+use futures::TryStreamExt;
+use k8s_openapi::api::core::v1::{Endpoints, Namespace, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::runtime::watcher;
-use kube::{Client, Resource};
+use kube::runtime::WatchStreamExt;
+use kube::{Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
@@ -172,6 +174,107 @@ where
     .with_relink_signal(ctx.relink_tx.clone());
 
     tokio::spawn(async move { rc.run_cluster_scoped().await })
+}
+
+/// Spawn a lightweight Namespace label watcher.
+///
+/// Unlike other resources, Namespace does not go through the ResourceProcessor
+/// pipeline. It only populates the global NamespaceStore for Selector
+/// namespace policy evaluation.
+fn spawn_namespace_watcher(
+    client: Client,
+    watcher_config: watcher::Config,
+    shutdown: ShutdownSignal,
+) -> JoinHandle<Result<()>> {
+    tokio::spawn(async move {
+        let api: kube::Api<Namespace> = kube::Api::all(client);
+        let store =
+            crate::core::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store();
+
+        tracing::info!(component = "namespace_watcher", "Starting Namespace label watcher");
+
+        let stream = watcher::watcher(api, watcher_config)
+            .default_backoff()
+            .applied_objects();
+
+        futures::pin_mut!(stream);
+
+        let mut shutdown = shutdown;
+        loop {
+            tokio::select! {
+                _ = shutdown.wait() => {
+                    tracing::info!(component = "namespace_watcher", "Shutdown signal received");
+                    break;
+                }
+                event = stream.try_next() => {
+                    match event {
+                        Ok(Some(ns)) => {
+                            let name = ns.name_any();
+                            let changed = if ns.metadata.deletion_timestamp.is_some() {
+                                store.remove(&name)
+                            } else {
+                                store.upsert(ns)
+                            };
+                            if changed {
+                                tracing::debug!(
+                                    component = "namespace_watcher",
+                                    namespace = %name,
+                                    "Namespace labels changed, requeuing Selector Gateways"
+                                );
+                                requeue_selector_gateways();
+                            }
+                        }
+                        Ok(None) => {
+                            tracing::warn!(component = "namespace_watcher", "Watch stream ended");
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::error!(component = "namespace_watcher", error = %e, "Watch error");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Requeue all Gateways that use Selector namespace policy so they
+/// re-evaluate listener namespace constraints.
+fn requeue_selector_gateways() {
+    let Some(processor) = PROCESSOR_REGISTRY.get("Gateway") else {
+        return;
+    };
+    let Ok((json, _)) = processor.as_watch_obj().list_json() else {
+        return;
+    };
+    let gateways: Vec<crate::types::prelude_resources::Gateway> = match serde_json::from_str(&json) {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    for gw in &gateways {
+        let uses_selector = gw
+            .spec
+            .listeners
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|l| {
+                l.allowed_routes
+                    .as_ref()
+                    .and_then(|ar| ar.namespaces.as_ref())
+                    .and_then(|ns| ns.from.as_deref())
+                    == Some("Selector")
+            });
+        if uses_selector {
+            let key = format!(
+                "{}/{}",
+                gw.metadata.namespace.as_deref().unwrap_or("default"),
+                gw.metadata.name.as_deref().unwrap_or("")
+            );
+            PROCESSOR_REGISTRY.requeue("Gateway", key);
+        }
+    }
 }
 
 /// Kubernetes Controller that spawns independent ResourceControllers for each resource type
@@ -440,6 +543,13 @@ impl KubernetesController {
             "EdgionGatewayConfig",
             EdgionGatewayConfigHandler::new(),
             &ctx,
+        ));
+
+        // ==================== Auxiliary Watchers ====================
+        h.push(spawn_namespace_watcher(
+            self.client.clone(),
+            watcher::Config::default(),
+            ctx.shutdown.clone(),
         ));
 
         // Drop our copy of the sender so we can detect when all controllers stop

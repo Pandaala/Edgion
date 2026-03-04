@@ -1,0 +1,22 @@
+# Same namespace HTTPRoute for Selector test
+# Even same-namespace routes should be denied when Selector mode is active
+# and namespace labels are not available (FileSystem mode safe degradation)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: selector-same-ns-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: allowed-routes-selector-gateway
+      namespace: edgion-test
+  hostnames:
+    - "selector-same-ns.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001

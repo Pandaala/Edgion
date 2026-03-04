@@ -57,7 +57,11 @@ pub fn check_allowed_routes(
                 }
             }
             "Selector" => {
-                // TODO: full implementation requires k8s namespace label access
+                // Selector policy is fully evaluated by the controller.
+                // Gateway does not have namespace labels; fall back to Same for safety.
+                if route_namespace != gateway_namespace {
+                    return false;
+                }
             }
             _ => {
                 tracing::warn!(from = %from, "Unknown AllowedRoutes.namespaces.from value");
@@ -202,5 +206,34 @@ mod tests {
 
         // Different namespace - not allowed
         assert!(!check_allowed_routes(&Some(allowed), "other", "HTTPRoute", "default"));
+    }
+
+    #[test]
+    fn test_allowed_routes_selector_falls_back_to_same() {
+        use crate::types::resources::gateway::RouteNamespaces;
+
+        let allowed = AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("Selector".to_string()),
+                selector: Some(serde_json::json!({ "matchLabels": { "env": "prod" } })),
+            }),
+            kinds: None,
+        };
+
+        // Same namespace — always allowed (Selector degrades to Same on gateway)
+        assert!(check_allowed_routes(
+            &Some(allowed.clone()),
+            "default",
+            "HTTPRoute",
+            "default"
+        ));
+
+        // Different namespace — denied on gateway side (controller is the authority)
+        assert!(!check_allowed_routes(
+            &Some(allowed),
+            "other",
+            "HTTPRoute",
+            "default"
+        ));
     }
 }

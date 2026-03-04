@@ -1,0 +1,20 @@
+# AllowedRoutes Selector Namespace test
+# Gateway with allowedRoutes.namespaces.from: Selector
+# In FileSystem mode, namespace labels are unavailable → all routes denied (safe degradation)
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: allowed-routes-selector-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31276
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              env: prod

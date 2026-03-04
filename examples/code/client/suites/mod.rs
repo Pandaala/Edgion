@@ -29,9 +29,9 @@ pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTest
 // Gateway tests
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
-    BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
-    ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite,
-    UpdatePhaseTestSuite,
+    AllowedRoutesSelectorNamespaceTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite,
+    InitialPhaseTestSuite, ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite,
+    StreamPluginsTestSuite, UpdatePhaseTestSuite,
 };
 
 // EdgionPlugins tests

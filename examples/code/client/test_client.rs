@@ -194,6 +194,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
+        "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
@@ -605,6 +606,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::AllowedRoutesKindsTestSuite));
+        }
+        "Gateway/AllowedRoutes/Selector" => {
+            if !gateway {
+                eprintln!("Error: Gateway/AllowedRoutes/Selector tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AllowedRoutesSelectorNamespaceTestSuite));
         }
         "Gateway/Combined" => {
             if !gateway {

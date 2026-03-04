@@ -17,6 +17,7 @@ mod context;
 mod handler;
 pub mod handlers;
 pub mod listener_port_manager;
+pub mod namespace_store;
 mod processor;
 pub mod ref_grant;
 pub mod ref_manager;
@@ -67,6 +68,9 @@ pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracke
 
 // Re-export service_ref utilities
 pub use service_ref::get_service_ref_manager;
+
+// Re-export namespace_store utilities
+pub use namespace_store::get_namespace_store;
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

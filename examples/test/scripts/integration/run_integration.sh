@@ -579,6 +579,7 @@ run_all_tests() {
                     run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
                     run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
                     run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
                     run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
                     run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
                 else
@@ -745,6 +746,7 @@ run_all_tests() {
         run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
         run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
         run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
         run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
         run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
         

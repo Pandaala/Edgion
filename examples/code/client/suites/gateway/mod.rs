@@ -17,6 +17,7 @@ mod tls;
 pub use allowed_routes::AllowedRoutesAllNamespacesTestSuite;
 pub use allowed_routes::AllowedRoutesKindsTestSuite;
 pub use allowed_routes::AllowedRoutesSameNamespaceTestSuite;
+pub use allowed_routes::AllowedRoutesSelectorNamespaceTestSuite;
 pub use combined::CombinedScenariosTestSuite;
 pub use dynamic::InitialPhaseTestSuite;
 pub use dynamic::UpdatePhaseTestSuite;
