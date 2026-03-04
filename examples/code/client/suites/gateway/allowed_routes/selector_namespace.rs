@@ -34,7 +34,7 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = format!("http://{}:31276/health", ctx.target_host);
+                    let url = format!("http://{}:{}/health", ctx.target_host, ctx.http_port);
 
                     let response = client
                         .get(&url)
@@ -79,7 +79,7 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                    let url = format!("http://{}:31276/health", ctx.target_host);
+                    let url = format!("http://{}:{}/health", ctx.target_host, ctx.http_port);
 
                     let response = client
                         .get(&url)

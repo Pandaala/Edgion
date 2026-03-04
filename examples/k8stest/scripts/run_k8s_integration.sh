@@ -49,6 +49,8 @@ IMAGE_ARCH="${IMAGE_ARCH:-}"
 PREPARE_LOCAL_IMAGES=false
 LOCAL_IMAGE_REBUILD=false
 PULL_POLICY_OVERRIDE="${PULL_POLICY_OVERRIDE:-}"
+LOCAL_IMAGE_MODE_RESOLVED=""
+LOCAL_BUILD_IMAGE_VERSION_SUFFIX="${LOCAL_BUILD_IMAGE_VERSION_SUFFIX:-}"
 
 FILTERED_MODE=false
 SELECTED_COUNT=0
@@ -430,14 +432,21 @@ EOF
 }
 
 build_and_import_local_images() {
-  local arch build_script
+  local arch build_script build_version
   build_script="${PROJECT_ROOT}/build-image.sh"
   arch="${IMAGE_ARCH}"
   if [[ -z "${arch}" ]]; then
     arch="$(auto_detect_image_arch)"
   fi
 
-  local build_args=(--arch "${arch}" --with-examples --version "${IMAGE_VERSION}")
+  if [[ -n "${LOCAL_BUILD_IMAGE_VERSION_SUFFIX}" ]]; then
+    build_version="${IMAGE_VERSION}-${LOCAL_BUILD_IMAGE_VERSION_SUFFIX}"
+  else
+    build_version="${IMAGE_VERSION}-local$(date +%Y%m%d%H%M%S)"
+  fi
+  echo "[local build-import] resolved image version: ${build_version}"
+
+  local build_args=(--arch "${arch}" --with-examples --version "${build_version}")
   if [[ "${LOCAL_IMAGE_REBUILD}" == "true" ]]; then
     build_args+=(--rebuild)
   fi
@@ -450,6 +459,7 @@ build_and_import_local_images() {
   echo "[local build-import] building local images: ${build_args[*]}"
   IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" "${build_script}" "${build_args[@]}"
 
+  IMAGE_VERSION="${build_version}"
   CONTROLLER_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-controller:${IMAGE_VERSION}_${arch}"
   GATEWAY_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-gateway:${IMAGE_VERSION}_${arch}"
   TEST_CLIENT_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-test-client:${IMAGE_VERSION}_${arch}"
@@ -503,6 +513,7 @@ print_cluster_and_image_context() {
 
   if [[ "${mode}" == "local" ]]; then
     local_mode="$(prompt_local_image_mode)"
+    LOCAL_IMAGE_MODE_RESOLVED="${local_mode}"
     echo "Local image mode: ${local_mode}"
     case "${local_mode}" in
       remote-pull)
@@ -521,6 +532,8 @@ print_cluster_and_image_context() {
         exit 1
         ;;
     esac
+  else
+    LOCAL_IMAGE_MODE_RESOLVED="remote-pull"
   fi
 
   prepare_local_images_if_needed "${mode}"
@@ -543,6 +556,70 @@ print_cluster_and_image_context() {
       echo "[WARN] remote mode detected but some images are not set."
       echo "[WARN] IMAGE_ARCH=${IMAGE_ARCH} should auto-resolve them; check images-remote.env or set explicitly."
     fi
+  fi
+}
+
+apply_all_conf_with_fallback() {
+  if "${APPLY_ALL_SCRIPT}" "${CONF_ROOT}"; then
+    return 0
+  fi
+  local strict_rc=$?
+
+  # `apply_all_conf_strict.sh` depends on PyYAML; in minimal environments
+  # provide a best-effort server-side apply fallback instead of hard-failing.
+  if python3 -c 'import yaml' >/dev/null 2>&1; then
+    return "${strict_rc}"
+  fi
+
+  echo "[WARN] apply_all_conf_strict failed and python3-yaml is unavailable."
+  echo "[WARN] Falling back to sorted recursive server-side apply under: ${CONF_ROOT}"
+  local exclude_re
+  exclude_re='00-namespace\.ya?ml$|01-deployment\.ya?ml$|/Gateway/DynamicTest/(updates|delete)/|/base/Secret_edgion-test_edge-tls\.ya?ml$|/EdgionTls/mTLS/Secret_edge_client-ca\.ya?ml$|/EdgionTls/mTLS/Secret_edge_ca-chain\.ya?ml$|/EdgionTls/mTLS/Secret_edge_mtls-server\.ya?ml$|/HTTPRoute/Backend/BackendTLS/Secret_backend-ca\.ya?ml$|/Gateway/PortConflict/Gateway_internal_conflict\.ya?ml$'
+  local file
+  while IFS= read -r file; do
+    if echo "${file}" | grep -Eq "${exclude_re}"; then
+      continue
+    fi
+    local ok=false attempt out rc saw_conflict=false
+    for attempt in 1 2 3; do
+      out="$(kubectl apply --server-side --force-conflicts --field-manager=edgion-k8s-test -f "${file}" 2>&1)" && rc=0 || rc=$?
+      if [[ "${rc}" -eq 0 ]]; then
+        echo "${out}"
+        ok=true
+        break
+      fi
+      if echo "${out}" | grep -qE 'Operation cannot be fulfilled|the object has been modified'; then
+        saw_conflict=true
+        echo "[WARN] transient apply conflict (${attempt}/3): ${file}"
+        sleep 1
+        continue
+      fi
+      echo "${out}"
+      return "${rc}"
+    done
+    if [[ "${ok}" != "true" && "${saw_conflict}" == "true" ]]; then
+      echo "[WARN] conflict persists, fallback to kubectl replace --force: ${file}"
+      if kubectl replace --force -f "${file}"; then
+        ok=true
+      fi
+    fi
+    if [[ "${ok}" != "true" ]]; then
+      echo "[ERROR] failed to apply after retries: ${file}"
+      return 1
+    fi
+  done < <(find "${CONF_ROOT}" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort)
+}
+
+ensure_gatewayclass_compat() {
+  local gc_name expected current
+  gc_name="public-gateway"
+  expected="edgion.io/gateway-controller"
+  current="$(kubectl get gatewayclass "${gc_name}" -o jsonpath='{.spec.controllerName}' 2>/dev/null || true)"
+
+  if [[ -n "${current}" && "${current}" != "${expected}" ]]; then
+    echo "[WARN] gatewayclass/${gc_name} controllerName mismatch: current=${current}, expected=${expected}"
+    echo "[WARN] deleting gatewayclass/${gc_name} to allow recreation by test conf"
+    kubectl delete gatewayclass "${gc_name}" --wait=true || true
   fi
 }
 
@@ -874,6 +951,7 @@ run_all_selected_suites() {
     "Gateway/AllowedRoutes/Same|Gateway|AllowedRoutes/Same"
     "Gateway/AllowedRoutes/All|Gateway|AllowedRoutes/All"
     "Gateway/AllowedRoutes/Kinds|Gateway|AllowedRoutes/Kinds"
+    "Gateway/AllowedRoutes/Selector|Gateway|AllowedRoutes/Selector"
     "Gateway/Combined|Gateway|Combined"
     "Gateway/StreamPlugins|Gateway|StreamPlugins"
     "Gateway/PortConflict|Gateway|PortConflict"
@@ -1092,7 +1170,8 @@ if should_run_prepare; then
       --test-server-replicas "${TEST_SERVER_REPLICAS}"
   fi
 
-  "${APPLY_ALL_SCRIPT}" "${CONF_ROOT}"
+  ensure_gatewayclass_compat
+  apply_all_conf_with_fallback
   override_suite_test_server_images
   restart_secret_dependent_workloads
 

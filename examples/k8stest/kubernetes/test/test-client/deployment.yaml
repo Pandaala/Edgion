@@ -134,7 +134,7 @@ data:
         port: 31050
   ports.json: |
     {
-      "current_max": 31275,
+      "current_max": 31276,
       "suites": {
         "HTTPRoute/Basic": {
           "http": 31000
@@ -223,6 +223,9 @@ data:
         "TCPRoute/StreamPlugins": {
           "tcp": 31274,
           "tcp_filtered": 31275
+        },
+        "Gateway/AllowedRoutes/Selector": {
+          "http": 31276
         }
       }
     }

@@ -222,6 +222,10 @@ spec:
     port: 31275
     targetPort: 31275
     protocol: TCP
+  - name: p31276
+    port: 31276
+    targetPort: 31276
+    protocol: TCP
   - name: p31900
     port: 31900
     targetPort: 31900
