@@ -198,6 +198,7 @@ impl KubernetesCenter {
             client.clone(),
             config.gateway_class.clone(),
             config.controller_name.clone(),
+            config.gateway_address.clone(),
             config.watch_namespaces.clone(),
             config.label_selector.clone(),
             config.metadata_filter.clone(),
@@ -515,6 +516,10 @@ impl KubernetesCenter {
                 // Trigger full cross-namespace revalidation
                 // This ensures Routes processed before ReferenceGrants are revalidated
                 crate::core::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+
+                // Requeue Gateways with TLS cert refs so they re-check SecretStore
+                // (Secrets may have been processed after Gateways during init)
+                crate::core::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
 
                 // Start ACME background service (certificate issuance/renewal)
                 crate::core::services::acme::start_acme_service(acme_client);

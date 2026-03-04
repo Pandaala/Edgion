@@ -30,35 +30,31 @@ impl ConfHandler<Gateway> for GatewayHandler {
             data.len()
         );
 
-        let global_store = get_global_gateway_store();
-        let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
-        store.clear();
-
         let route_manager = get_global_route_manager();
 
-        for (key, gateway) in data {
-            let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
-            tracing::info!(
-                key = %key,
-                namespace = ?gateway.namespace(),
-                name = %gateway.name_any(),
-                gateway_class = %gateway.spec.gateway_class_name,
-                listeners = listener_count,
-                "Gateway stored"
-            );
+        let gateways = {
+            let global_store = get_global_gateway_store();
+            let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
+            store.clear();
 
-            if let Err(e) = store.add_gateway(gateway.clone()) {
-                tracing::warn!(key = %key, error = %e, "Failed to add gateway to store");
+            for (key, gateway) in data {
+                let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
+                tracing::info!(
+                    key = %key,
+                    namespace = ?gateway.namespace(),
+                    name = %gateway.name_any(),
+                    gateway_class = %gateway.spec.gateway_class_name,
+                    listeners = listener_count,
+                    "Gateway stored"
+                );
+
+                if let Err(e) = store.add_gateway(gateway.clone()) {
+                    tracing::warn!(key = %key, error = %e, "Failed to add gateway to store");
+                }
             }
 
-            // Initialize route manager entry for this gateway
-            let namespace = gateway.namespace().unwrap_or_default();
-            let name = gateway.name_any();
-            route_manager.get_or_create_domain_routes(&namespace, &name);
-        }
-
-        // Get all gateways for rebuilding
-        let gateways = store.list_gateways();
+            store.list_gateways()
+        }; // write lock on gateway store released here
 
         // Rebuild GatewayConfigStore (two-layer structure for dynamic lookup)
         let config_store = get_global_gateway_config_store();
@@ -66,12 +62,18 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
         // Rebuild Gateway TLS matcher (port-based certificate lookup)
         rebuild_gateway_tls_matcher(&gateways);
+
+        // Rebuild routes now that the gateway store is populated, so routes with no explicit
+        // hostnames can correctly inherit their listener's hostname.
+        route_manager.rebuild_from_stored_routes();
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
         let global_store = get_global_gateway_store();
         let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
         let config_store = get_global_gateway_config_store();
+        let route_manager = get_global_route_manager();
+        let mut need_route_rebuild = false;
 
         if !add.is_empty() {
             tracing::info!(
@@ -79,6 +81,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 "Gateway partial_update: added {} Gateway resources",
                 add.len()
             );
+            need_route_rebuild = true;
             for (key, gateway) in add {
                 let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
                 tracing::info!(
@@ -90,7 +93,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     "Gateway added"
                 );
 
-                // Update GatewayConfigStore for dynamic lookup
                 config_store.update_gateway(&gateway);
 
                 if let Err(e) = store.add_gateway(gateway) {
@@ -105,6 +107,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 "Gateway partial_update: updated {} Gateway resources",
                 update.len()
             );
+            need_route_rebuild = true;
             for (key, gateway) in update {
                 let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
                 tracing::info!(
@@ -116,7 +119,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     "Gateway updated (dynamic listener/TLS config updated)"
                 );
 
-                // Update GatewayConfigStore for dynamic lookup
                 config_store.update_gateway(&gateway);
 
                 store.update_gateway(gateway);
@@ -157,6 +159,15 @@ impl ConfHandler<Gateway> for GatewayHandler {
         // Rebuild Gateway TLS matcher (port-based certificate lookup)
         let gateways = store.list_gateways();
         rebuild_gateway_tls_matcher(&gateways);
+
+        // Release the store write lock before rebuilding routes
+        drop(store);
+
+        // Rebuild HTTP routes so that routes with no explicit hostnames
+        // pick up the newly added/updated Gateway's listener hostnames.
+        if need_route_rebuild {
+            route_manager.rebuild_from_stored_routes();
+        }
     }
 }
 

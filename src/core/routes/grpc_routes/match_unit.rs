@@ -92,12 +92,7 @@ impl GrpcRouteRuleUnit {
     /// Deep match: check hostname, Gateway/sectionName, and headers.
     ///
     /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
-    pub fn deep_match(
-        &self,
-        session: &Session,
-        gateway_infos: &[GatewayInfo],
-        hostname: &str,
-    ) -> Result<Option<GatewayInfo>, EdError> {
+    pub fn deep_match(&self, session: &Session, gateway_infos: &[GatewayInfo], hostname: &str) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)
@@ -109,17 +104,15 @@ impl GrpcRouteRuleUnit {
 
         // Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
         let matched_gi = if let Some(ref parent_refs) = self.route_info.parent_refs {
-            match gateway_infos.iter().find(|gi| {
-                check_gateway_listener_match(
-                    parent_refs,
-                    gi,
-                    hostname,
-                    &self.matched_info.route_ns,
-                    "GRPCRoute",
-                    &self.matched_info.route_name,
-                )
-            }) {
-                Some(gi) => gi.clone(),
+            match check_gateway_listener_match(
+                parent_refs,
+                gateway_infos,
+                hostname,
+                &self.matched_info.route_ns,
+                "GRPCRoute",
+                &self.matched_info.route_name,
+            ) {
+                Some(gi) => gi,
                 None => return Ok(None),
             }
         } else {

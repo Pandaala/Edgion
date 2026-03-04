@@ -60,6 +60,12 @@ pub struct KubernetesConfig {
     /// Endpoint discovery mode for Kubernetes
     #[serde(default)]
     pub endpoint_mode: EndpointMode,
+
+    /// Static address to set on all managed Gateways' status.addresses
+    /// when spec.addresses is empty and no matching Service is found.
+    /// Useful for conformance testing or single-gateway deployments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_address: Option<String>,
 }
 
 impl KubernetesConfig {
@@ -73,6 +79,7 @@ impl KubernetesConfig {
             metadata_filter: MetadataFilterConfig::default(),
             leader_election: LeaderElectionConfig::default(),
             endpoint_mode: EndpointMode::default(),
+            gateway_address: None,
         }
     }
 
@@ -135,6 +142,11 @@ impl KubernetesConfig {
     /// Get controller name
     pub fn controller_name(&self) -> &str {
         &self.controller_name
+    }
+
+    /// Get static gateway address (for status.addresses fallback)
+    pub fn gateway_address(&self) -> Option<&str> {
+        self.gateway_address.as_deref()
     }
 
     /// Get metadata filter

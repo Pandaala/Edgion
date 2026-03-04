@@ -196,17 +196,15 @@ impl HttpRouteRuleUnit {
 
         // 0. Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
         let matched_gi = if let Some(ref parent_refs) = parent_refs {
-            match gateway_infos.iter().find(|gi| {
-                check_gateway_listener_match(
-                    parent_refs,
-                    gi,
-                    &ctx.request_info.hostname,
-                    &matched_info.rns,
-                    "HTTPRoute",
-                    &matched_info.rn,
-                )
-            }) {
-                Some(gi) => gi.clone(),
+            match check_gateway_listener_match(
+                parent_refs,
+                gateway_infos,
+                &ctx.request_info.hostname,
+                &matched_info.rns,
+                "HTTPRoute",
+                &matched_info.rn,
+            ) {
+                Some(gi) => gi,
                 None => return Ok(None),
             }
         } else {

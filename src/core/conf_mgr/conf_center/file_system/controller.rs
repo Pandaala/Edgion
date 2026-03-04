@@ -273,7 +273,7 @@ impl FileSystemController {
         handles.push(
             spawn::<Gateway, _>(
                 "Gateway",
-                GatewayHandler::new(None),
+                GatewayHandler::new(None, None),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),

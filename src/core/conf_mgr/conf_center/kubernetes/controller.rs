@@ -182,6 +182,7 @@ pub struct KubernetesController {
     client: Client,
     gateway_class_name: String,
     controller_name: String,
+    gateway_address: Option<String>,
     watch_mode: NamespaceWatchMode,
     label_selector: Option<String>,
     /// Optional metadata filter configuration for reducing resource memory usage
@@ -195,6 +196,7 @@ impl KubernetesController {
     pub async fn new(
         gateway_class_name: String,
         controller_name: String,
+        gateway_address: Option<String>,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         endpoint_mode: EndpointMode,
@@ -204,6 +206,7 @@ impl KubernetesController {
             client,
             gateway_class_name,
             controller_name,
+            gateway_address,
             watch_namespaces,
             label_selector,
             MetadataFilterConfig::default(),
@@ -214,10 +217,12 @@ impl KubernetesController {
     /// Create a new KubernetesController with metadata filter
     ///
     /// Accepts an external Client to enable Client reuse across components.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_metadata_filter(
         client: Client,
         gateway_class_name: String,
         controller_name: String,
+        gateway_address: Option<String>,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
@@ -231,6 +236,7 @@ impl KubernetesController {
             label_selector = ?label_selector,
             gateway_class_name = %gateway_class_name,
             controller_name = %controller_name,
+            gateway_address = ?gateway_address,
             metadata_filter_enabled = true,
             endpoint_mode = ?endpoint_mode,
             "Creating Kubernetes controller"
@@ -240,6 +246,7 @@ impl KubernetesController {
             client,
             gateway_class_name,
             controller_name,
+            gateway_address,
             watch_mode,
             label_selector,
             metadata_filter: Some(metadata_filter),
@@ -382,7 +389,7 @@ impl KubernetesController {
         h.push(spawn::<Gateway, _>(
             self,
             "Gateway",
-            GatewayHandler::new(Some(self.gateway_class_name.clone())),
+            GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
             &ctx,
         ));
 

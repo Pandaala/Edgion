@@ -457,13 +457,14 @@ impl EdgionPluginsHandler {
                                 continue;
                             }
 
-                            if secret_value.as_bytes().len() < 32 {
+                            if secret_value.len() < config.min_secret_length {
                                 tracing::warn!(
                                     edgion_plugins = %resource_ref.key(),
                                     secret_key = %secret_key,
                                     username = %username,
-                                    secret_len = secret_value.as_bytes().len(),
-                                    "HmacAuth: secret length is below recommended minimum (32 bytes)"
+                                    secret_len = secret_value.len(),
+                                    min_len = config.min_secret_length,
+                                    "HmacAuth: secret length is below configured minimum"
                                 );
                             }
 

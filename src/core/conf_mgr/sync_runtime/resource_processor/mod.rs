@@ -12,6 +12,7 @@
 //! - `ProcessorObj`: Object-safe trait for registry management
 //! - `HandlerContext`: Context passed to handler methods
 
+pub mod attached_route_tracker;
 mod context;
 mod handler;
 pub mod handlers;
@@ -26,7 +27,8 @@ pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkItemResult};
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
-    programmed_condition, ready_condition, resolved_refs_condition, set_route_parent_conditions, update_condition,
+    programmed_condition, ready_condition, resolved_refs_condition, set_route_parent_conditions,
+    set_route_parent_conditions_full, update_condition,
 };
 
 // Re-export handlers
@@ -46,14 +48,17 @@ pub use secret_utils::{
 // Re-export ref_grant utilities
 pub use ref_grant::{
     get_global_cross_ns_ref_manager, get_global_dispatcher, get_global_reference_grant_store, is_cross_ns_ref_allowed,
-    trigger_full_cross_ns_revalidation, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
-    validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,
-    CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsResourceRef, CrossNsRevalidationListener,
-    ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
+    trigger_full_cross_ns_revalidation, trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled,
+    validate_http_route_if_enabled, validate_tcp_route_if_enabled, validate_tls_route_if_enabled,
+    validate_udp_route_if_enabled, CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsResourceRef,
+    CrossNsRevalidationListener, ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
 };
 
 // Re-export listener_port_manager utilities
 pub use listener_port_manager::{get_listener_port_manager, make_port_key, ListenerPortManager, ListenerRef};
+
+// Re-export attached_route_tracker utilities
+pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

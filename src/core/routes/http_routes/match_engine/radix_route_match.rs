@@ -1,6 +1,6 @@
 use super::radix_path::RadixPath;
 use crate::core::gateway::gateway::GatewayInfo;
-use crate::core::matcher::radix_tree::{RadixTree, RadixTreeBuilder, RouterError};
+use crate::core::matcher::radix_tree::{MatchKind, RadixTree, RadixTreeBuilder, RouterError};
 use crate::core::routes::http_routes::match_unit::RouteMatchResult;
 use crate::core::routes::http_routes::HttpRouteRuleUnit;
 use crate::types::ctx::EdgionHttpContext;
@@ -11,6 +11,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Radix tree based route matching engine.
+///
+/// Uses a single `match_all_ext` tree traversal that returns both the matched
+/// values and a [`MatchKind`] per value. The engine then applies lightweight
+/// filtering:
+/// - **Exact routes**: accepted only when `MatchKind::FullyConsumed`
+/// - **Prefix routes**: accepted when `FullyConsumed` or `SegmentBoundary`
+///   (rejects partial-segment matches like `/v2` vs `/v2example`)
 ///
 /// **Lock-free concurrent reads**: the tree is immutable after initialization.
 pub struct RadixRouteMatchEngine {
@@ -74,8 +81,8 @@ impl RadixRouteMatchEngine {
 
     /// Match a route for the given request (recommended entry point).
     ///
-    /// Performs a single `match_all` tree traversal, filters candidates,
-    /// sorts by priority, and runs deep matching.
+    /// Performs a single `match_all_ext` tree traversal, filters candidates by
+    /// [`MatchKind`], sorts by priority, and runs deep matching.
     ///
     /// Priority order (highest first):
     /// 1. Static exact matches
@@ -91,24 +98,25 @@ impl RadixRouteMatchEngine {
         gateway_infos: &[GatewayInfo],
     ) -> Result<RouteMatchResult, EdError> {
         let path = session.req_header().uri.path();
-        let all_values = self.tree.match_all(path);
+        let all_results = self.tree.match_all_ext(path);
 
-        if all_values.is_empty() {
+        if all_results.is_empty() {
             return Err(RouteNotFound());
         }
 
-        let request_segments = if path.is_empty() || path == "/" {
-            0
-        } else {
-            path.split('/').filter(|s| !s.is_empty()).count()
-        };
-
         let mut matched_paths: Vec<usize> = Vec::new();
-        for tree_value in all_values {
-            if let Some(path_indices) = self.tree_value_to_path_idx.get(&tree_value) {
+        for (tree_value, match_kind) in &all_results {
+            if let Some(path_indices) = self.tree_value_to_path_idx.get(tree_value) {
                 for &path_idx in path_indices {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
-                        if !radix_path.is_prefix_match && request_segments != radix_path.segment_count {
+                        if !radix_path.is_prefix_match
+                            && *match_kind != MatchKind::FullyConsumed
+                        {
+                            continue;
+                        }
+                        if radix_path.is_prefix_match
+                            && *match_kind == MatchKind::PartialSegment
+                        {
                             continue;
                         }
                         matched_paths.push(path_idx);
@@ -154,6 +162,7 @@ impl RadixRouteMatchEngine {
 
         for (route_idx, runtime) in route_runtimes.iter().enumerate() {
             let paths = runtime.extract_paths();
+
             for (path, is_prefix) in paths {
                 if path.is_empty() {
                     continue;

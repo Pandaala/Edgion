@@ -343,6 +343,7 @@ impl CenterLifeCycle for FileSystemCenter {
 
             // 5.5. Trigger full cross-namespace revalidation
             crate::core::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+            crate::core::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
 
             // 6. Create ConfigSyncServer and register all WatchObjs
             let config_sync_server = Arc::new(ConfigSyncServer::new());

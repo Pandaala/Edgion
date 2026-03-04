@@ -10,13 +10,11 @@ use crate::types::err::EdError;
 use crate::types::HTTPRoute;
 use crate::types::{HTTPBackendRef, HTTPRouteRule};
 use arc_swap::ArcSwap;
-use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 
 type DomainStr = String;
-type GatewayKey = String;
 
 pub struct RouteRules {
     /// All resource keys (HTTPRoute) that apply to this hostname
@@ -216,12 +214,14 @@ impl DomainRouteRules {
             return route_rules.match_route(session, ctx, gateway_infos);
         }
 
+        // Step 2: Try wildcard domain match (O(log n))
         if let Some(ref engine) = wildcard_engine.as_ref() {
             if let Some(route_rules) = engine.match_host(hostname) {
                 return route_rules.match_route(session, ctx, gateway_infos);
             }
         }
 
+        // Step 3: Try catch-all routes (hostname "*", from HTTPRoutes with no spec.hostnames)
         if let Some(route_rules) = exact_map.get("*") {
             return route_rules.match_route(session, ctx, gateway_infos);
         }
@@ -233,17 +233,14 @@ impl DomainRouteRules {
 type RouteKey = String; // Format: "namespace/name"
 
 pub struct RouteManager {
-    /// Legacy per-gateway map kept for compatibility with existing update/rebuild helpers.
-    pub(crate) gateway_routes_map: DashMap<GatewayKey, Arc<DomainRouteRules>>,
-
     /// Single global route table shared by all gateways/listeners.
     /// Routes carry their own parentRef → Gateway binding; gateway validation
     /// happens during deep_match via the caller-supplied `gateway_infos`.
     pub(crate) global_routes: ArcSwap<DomainRouteRules>,
 
-    /// Stores all HTTPRoute resources for lookup during delete events
+    /// Stores all HTTPRoute resources for lookup during delete events.
     /// Key format: "namespace/name"
-    /// Uses Mutex since route updates are serialized (no concurrent writes needed)
+    /// Uses Mutex since route updates are serialized (no concurrent writes needed).
     pub(crate) http_routes: Mutex<HashMap<RouteKey, HTTPRoute>>,
 }
 
@@ -264,7 +261,6 @@ impl Default for RouteManager {
 impl RouteManager {
     pub fn new() -> Self {
         Self {
-            gateway_routes_map: DashMap::new(),
             global_routes: ArcSwap::from_pointee(DomainRouteRules {
                 exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
                 wildcard_engine: ArcSwap::from_pointee(None),
@@ -276,20 +272,5 @@ impl RouteManager {
     /// Get the current global route table snapshot.
     pub fn get_global_routes(&self) -> arc_swap::Guard<Arc<DomainRouteRules>> {
         self.global_routes.load()
-    }
-
-    /// Get or create DomainRouteRules for a specific gateway by namespace and name.
-    pub fn get_or_create_domain_routes(&self, namespace: &str, name: &str) -> Arc<DomainRouteRules> {
-        let gateway_key = format!("{}/{}", namespace, name);
-
-        let entry = self.gateway_routes_map.entry(gateway_key);
-        entry
-            .or_insert_with(|| {
-                Arc::new(DomainRouteRules {
-                    exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
-                    wildcard_engine: ArcSwap::from_pointee(None),
-                })
-            })
-            .clone()
     }
 }

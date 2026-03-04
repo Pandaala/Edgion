@@ -57,24 +57,14 @@ pub fn check_allowed_routes(
     if let Some(ref ns_config) = allowed.namespaces {
         let from = ns_config.from.as_deref().unwrap_or("Same");
         match from {
-            "All" => {
-                // Allow routes from any namespace
-            }
+            "All" => {}
             "Same" => {
-                // Only allow routes from same namespace as Gateway
                 if route_namespace != gateway_namespace {
-                    tracing::trace!(
-                        route_ns = %route_namespace,
-                        gateway_ns = %gateway_namespace,
-                        "Route namespace does not match Gateway namespace (AllowedRoutes.namespaces.from=Same)"
-                    );
                     return false;
                 }
             }
             "Selector" => {
-                // Label selector matching - would need namespace labels
-                // For now, treat as allow (full implementation requires k8s API access)
-                tracing::trace!("AllowedRoutes.namespaces.from=Selector not fully implemented, allowing");
+                // TODO: full implementation requires k8s namespace label access
             }
             _ => {
                 tracing::warn!(from = %from, "Unknown AllowedRoutes.namespaces.from value");
@@ -88,11 +78,6 @@ pub fn check_allowed_routes(
         if !kinds.is_empty() {
             let kind_allowed = kinds.iter().any(|k| k.kind.eq_ignore_ascii_case(route_kind));
             if !kind_allowed {
-                tracing::trace!(
-                    route_kind = %route_kind,
-                    allowed_kinds = ?kinds.iter().map(|k| &k.kind).collect::<Vec<_>>(),
-                    "Route kind not in AllowedRoutes.kinds"
-                );
                 return false;
             }
         }
@@ -101,88 +86,71 @@ pub fn check_allowed_routes(
     true
 }
 
-/// Check if route's parent references match current gateway and listener constraints
+/// Check if route's parent references match any of the provided gateway/listener contexts.
 ///
-/// This function validates:
-/// 1. Parent reference matches current gateway (namespace + name)
-/// 2. SectionName matches current listener (if specified)
+/// This function validates for each (parentRef, gatewayInfo) combination:
+/// 1. Parent reference matches the gateway (namespace + name)
+/// 2. SectionName matches the listener (if specified)
 /// 3. Request hostname matches listener hostname constraint (if configured)
 /// 4. Route is allowed by listener's AllowedRoutes (namespace and kind restrictions)
 ///
-/// Returns true if at least one parent_ref passes all checks.
+/// Returns `Some(GatewayInfo)` for the first gateway that passes all checks,
+/// or `None` if no match is found.
 pub fn check_gateway_listener_match(
     parent_refs: &[ParentReference],
-    gateway_info: &GatewayInfo,
+    gateway_infos: &[GatewayInfo],
     request_hostname: &str,
     route_ns: &str,
     route_kind: &str,
-    route_name: &str,
-) -> bool {
+    _route_name: &str,
+) -> Option<GatewayInfo> {
     let config_store = get_global_gateway_config_store();
-    let gateway_ns = gateway_info.namespace_str();
 
-    parent_refs.iter().any(|pr| {
-        // Get parent gateway namespace (default to route's namespace per Gateway API spec)
+    for pr in parent_refs {
         let parent_ns = pr.namespace.as_deref().unwrap_or(route_ns);
 
-        // Check if parent reference matches current gateway
-        // A Route can have multiple parentRefs pointing to different Gateways,
-        // so not matching current gateway is normal - just skip this parentRef
-        if parent_ns != gateway_ns || pr.name != gateway_info.name {
-            return false;
-        }
+        for gi in gateway_infos {
+            let gateway_ns = gi.namespace_str();
 
-        // Dynamically get current listener configuration (supports hot-reload)
-        let listener_config = config_store.get_listener_config(gateway_info);
+            if parent_ns != gateway_ns || pr.name != gi.name {
+                continue;
+            }
 
-        // Check sectionName matching
-        match (&pr.section_name, &gateway_info.listener_name) {
-            // Route specifies sectionName - must match current listener exactly
-            (Some(section_name), Some(listener_name)) => {
-                if section_name != listener_name {
-                    return false;
+            let listener_config = config_store.get_listener_config(gi);
+
+            // Check sectionName matching
+            match (&pr.section_name, &gi.listener_name) {
+                (Some(section_name), Some(listener_name)) => {
+                    if section_name != listener_name {
+                        continue;
+                    }
                 }
+                (Some(section_name), None) => {
+                    if config_store.has_listener(parent_ns, &pr.name, section_name) {
+                        return Some(gi.clone());
+                    }
+                    continue;
+                }
+                (None, _) => {}
             }
-            // Route specifies sectionName but we don't have listener context
-            // This shouldn't happen in normal EdgionHttp flow, but handle gracefully
-            (Some(section_name), None) => {
-                // Just verify the listener exists - caller should have listener context
-                return config_store.has_listener(parent_ns, &pr.name, section_name);
-            }
-            // Route doesn't specify sectionName - can attach to any listener
-            (None, _) => {}
-        }
 
-        // Check listener constraints (hostname and AllowedRoutes)
-        if let Some(ref config) = listener_config {
-            // Check hostname constraint
-            if let Some(ref listener_host) = config.hostname {
-                if !hostname_matches_listener(request_hostname, listener_host) {
-                    tracing::trace!(
-                        request_host = %request_hostname,
-                        listener_host = %listener_host,
-                        route_ns = %route_ns,
-                        route_name = %route_name,
-                        "Request hostname does not match listener hostname constraint"
-                    );
-                    return false;
+            if let Some(ref config) = listener_config {
+                if let Some(ref listener_host) = config.hostname {
+                    if !hostname_matches_listener(request_hostname, listener_host) {
+                        continue;
+                    }
+                }
+
+                if !check_allowed_routes(&config.allowed_routes, route_ns, route_kind, gateway_ns) {
+                    continue;
                 }
             }
 
-            // Check AllowedRoutes constraint
-            if !check_allowed_routes(&config.allowed_routes, route_ns, route_kind, gateway_ns) {
-                tracing::trace!(
-                    route_ns = %route_ns,
-                    route_name = %route_name,
-                    gateway_ns = %gateway_ns,
-                    "Route not allowed by listener's AllowedRoutes"
-                );
-                return false;
-            }
+            return Some(gi.clone());
         }
+    }
 
-        true
-    })
+    None
 }
 
 #[cfg(test)]

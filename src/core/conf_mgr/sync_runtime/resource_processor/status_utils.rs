@@ -28,9 +28,11 @@ pub mod condition_types {
 pub mod condition_reasons {
     // Accepted reasons
     pub const ACCEPTED: &str = "Accepted";
-    pub const INVALID_ROUTE_KIND: &str = "InvalidRouteKind";
+    pub const INVALID_ROUTE_KIND: &str = "InvalidRouteKinds";
     pub const NO_MATCHING_PARENT: &str = "NoMatchingParent";
     pub const NOT_ALLOWED_BY_LISTENERS: &str = "NotAllowedByListeners";
+    /// Route hostnames don't intersect with the listener's hostname (Gateway API v1.1+)
+    pub const NO_MATCHING_LISTENER_HOSTNAME: &str = "NoMatchingListenerHostname";
 
     // ResolvedRefs reasons
     pub const RESOLVED_REFS: &str = "ResolvedRefs";
@@ -141,13 +143,30 @@ pub fn resolved_refs_condition(validation_errors: &[String], observed_generation
             observed_generation,
         )
     } else {
+        let reason = infer_resolved_refs_reason(validation_errors);
         condition_false(
             condition_types::RESOLVED_REFS,
-            condition_reasons::REF_NOT_PERMITTED,
+            reason,
             validation_errors.join("; "),
             observed_generation,
         )
     }
+}
+
+fn infer_resolved_refs_reason(errors: &[String]) -> &'static str {
+    for err in errors {
+        let lower = err.to_lowercase();
+        if lower.contains("invalid") && lower.contains("kind") {
+            return condition_reasons::INVALID_KIND;
+        }
+    }
+    for err in errors {
+        let lower = err.to_lowercase();
+        if lower.contains("not found") {
+            return condition_reasons::BACKEND_NOT_FOUND;
+        }
+    }
+    condition_reasons::REF_NOT_PERMITTED
 }
 
 /// Create standard "Programmed: True" condition
@@ -170,19 +189,69 @@ pub fn ready_condition(observed_generation: Option<i64>) -> Condition {
     )
 }
 
-/// Set all standard conditions for a route's parent status
+/// Set all standard conditions for a route's parent status.
+/// `accepted_errors` controls the Accepted condition per-parent.
+/// `resolved_refs_errors` controls the ResolvedRefs condition (route-level).
 pub fn set_route_parent_conditions(
     conditions: &mut Vec<Condition>,
     validation_errors: &[String],
     observed_generation: Option<i64>,
 ) {
-    update_condition(conditions, accepted_condition(observed_generation));
+    set_route_parent_conditions_full(conditions, &[], validation_errors, observed_generation);
+}
+
+pub fn set_route_parent_conditions_full(
+    conditions: &mut Vec<Condition>,
+    accepted_errors: &[String],
+    resolved_refs_errors: &[String],
+    observed_generation: Option<i64>,
+) {
+    if accepted_errors.is_empty() {
+        update_condition(conditions, accepted_condition(observed_generation));
+        update_condition(conditions, programmed_condition(observed_generation));
+        update_condition(conditions, ready_condition(observed_generation));
+    } else {
+        let reason = infer_accepted_reason(accepted_errors);
+        update_condition(
+            conditions,
+            condition_false(
+                condition_types::ACCEPTED,
+                reason,
+                accepted_errors.join("; "),
+                observed_generation,
+            ),
+        );
+    }
     update_condition(
         conditions,
-        resolved_refs_condition(validation_errors, observed_generation),
+        resolved_refs_condition(resolved_refs_errors, observed_generation),
     );
-    update_condition(conditions, programmed_condition(observed_generation));
-    update_condition(conditions, ready_condition(observed_generation));
+}
+
+fn infer_accepted_reason(errors: &[String]) -> &'static str {
+    // Check namespace/policy violations first (NotAllowedByListeners takes priority)
+    for err in errors {
+        let lower = err.to_lowercase();
+        if lower.contains("not allowed") {
+            return condition_reasons::NOT_ALLOWED_BY_LISTENERS;
+        }
+    }
+    // Check for listener hostname intersection failure (NoMatchingListenerHostname)
+    // This occurs when route hostnames don't intersect with any listener's hostname.
+    for err in errors {
+        let lower = err.to_lowercase();
+        if lower.contains("listener hostname") || lower.contains("no matching hostname") {
+            return condition_reasons::NO_MATCHING_LISTENER_HOSTNAME;
+        }
+    }
+    // Check for no matching parent (sectionName or port mismatch)
+    for err in errors {
+        let lower = err.to_lowercase();
+        if lower.contains("no matching") || lower.contains("sectionname") {
+            return condition_reasons::NO_MATCHING_PARENT;
+        }
+    }
+    condition_reasons::NO_MATCHING_PARENT
 }
 
 #[cfg(test)]

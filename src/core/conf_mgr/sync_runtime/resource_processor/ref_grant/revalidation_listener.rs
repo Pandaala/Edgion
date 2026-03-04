@@ -66,6 +66,32 @@ fn collect_all_target_namespaces(manager: &super::cross_ns_ref_manager::CrossNam
     manager.all_target_namespaces()
 }
 
+/// Requeue all Gateways after init to resolve TLS certificate references.
+///
+/// During init, Gateways may be processed before Secrets are loaded into the
+/// SecretStore (each resource type initializes independently). This function
+/// requeues all Gateways so they re-evaluate ResolvedRefs with fully populated stores.
+pub fn trigger_gateway_secret_revalidation() {
+    let Some(gateway_proc) = PROCESSOR_REGISTRY.get("Gateway") else {
+        return;
+    };
+
+    let keys = gateway_proc.list_keys();
+    if keys.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        component = "gateway_secret_revalidation",
+        gateway_count = keys.len(),
+        "Requeuing all Gateways for post-init TLS secret revalidation"
+    );
+
+    for key in keys {
+        PROCESSOR_REGISTRY.requeue("Gateway", key);
+    }
+}
+
 /// Cross-namespace revalidation listener
 ///
 /// When ReferenceGrant changes, finds all resources that have cross-namespace

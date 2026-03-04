@@ -330,7 +330,7 @@ fn normalize_host_for_matching(raw: &str) -> String {
     let h = raw.trim();
 
     let host = if h.starts_with('[') {
-        // IPv6 bracket notation: [::1]:port -> ::1
+        // IPv6 bracket notation: [::1]:port → ::1
         match h.find(']') {
             Some(end) => &h[1..end],
             None => h,

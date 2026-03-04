@@ -45,7 +45,7 @@ pub enum EndpointMode {
     ///
     /// - In Kubernetes mode: Queries the API server to determine the best option
     /// - In FileSystem mode: Defaults to EndpointSlice
-    /// Backend selection defaults to EndpointSlice.
+    ///   Backend selection defaults to EndpointSlice.
     #[default]
     Auto,
 }

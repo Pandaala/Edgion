@@ -145,6 +145,9 @@ pub trait ProcessorObj: Send + Sync {
 
     /// Get the workqueue for this processor (for RequeueRegistry registration)
     fn workqueue(&self) -> Arc<Workqueue>;
+
+    /// List all resource keys in cache
+    fn list_keys(&self) -> Vec<String>;
 }
 
 /// Enhanced ResourceProcessor that holds ServerCache<T>
@@ -623,6 +626,10 @@ where
 
     fn workqueue(&self) -> Arc<Workqueue> {
         self.workqueue.clone()
+    }
+
+    fn list_keys(&self) -> Vec<String> {
+        self.cache.list_keys()
     }
 }
 

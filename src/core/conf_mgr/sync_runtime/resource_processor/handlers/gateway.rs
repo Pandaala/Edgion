@@ -10,14 +10,15 @@
 use std::collections::HashSet;
 
 use crate::core::cli::config::is_reference_grant_validation_enabled;
+use crate::core::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
+use crate::core::conf_mgr::sync_runtime::resource_processor::ref_grant::cross_ns_ref_manager::CrossNsResourceRef;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
-    get_global_reference_grant_store, get_listener_port_manager, get_secret, make_port_key, HandlerContext,
-    ProcessResult, ProcessorHandler, ResourceRef,
+    get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_listener_port_manager, get_secret,
+    make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
-use crate::types::prelude_resources::{GRPCRoute, Gateway, HTTPRoute, TCPRoute, TLSRoute, UDPRoute};
-use crate::types::resources::common::ParentReference;
+use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{
     GatewayStatus, GatewayStatusAddress, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
@@ -38,6 +39,8 @@ pub struct GatewayHandler {
     /// If Some, only process Gateways with matching gatewayClassName
     /// If None, process all Gateways (used by FileSystem mode)
     gateway_class_name: Option<String>,
+    /// Static fallback address for Gateway status.addresses
+    default_address: Option<String>,
 }
 
 struct ListenerInfo {
@@ -52,8 +55,11 @@ impl GatewayHandler {
     ///
     /// - `gateway_class_name`: If Some, filter Gateways by this class name (K8s mode).
     ///   If None, process all Gateways (FileSystem mode).
-    pub fn new(gateway_class_name: Option<String>) -> Self {
-        Self { gateway_class_name }
+    pub fn new(gateway_class_name: Option<String>, default_address: Option<String>) -> Self {
+        Self {
+            gateway_class_name,
+            default_address,
+        }
     }
 }
 
@@ -74,6 +80,15 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+
+        // Track cross-namespace Secret references so ReferenceGrant changes requeue this Gateway
+        let cross_ns_ref = CrossNsResourceRef::new(
+            ResourceKind::Gateway,
+            g.metadata.namespace.clone(),
+            g.metadata.name.clone().unwrap_or_default(),
+        );
+        let cross_ns_manager = get_global_cross_ns_ref_manager();
+        cross_ns_manager.clear_resource_refs(&cross_ns_ref);
 
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
@@ -101,6 +116,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     }
 
                     let mut resolved_secrets = Vec::new();
+                    let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
 
                     for cert_ref in cert_refs {
                         let secret_ns = cert_ref.namespace.as_ref().or(g.metadata.namespace.as_ref());
@@ -110,6 +126,12 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         // When this Secret arrives or updates, SecretHandler will trigger requeue for this Gateway
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
+
+                        // Register cross-namespace cert refs so ReferenceGrant changes requeue this Gateway
+                        let cert_ns_str = secret_ns.map(|s| s.as_str()).unwrap_or("");
+                        if cert_ns_str != gateway_ns {
+                            cross_ns_manager.add_cross_ns_ref(cert_ns_str.to_string(), cross_ns_ref.clone());
+                        }
 
                         // Try to resolve Secret from global store
                         if let Some(secret) = get_secret(secret_ns.map(|s| s.as_str()), &cert_ref.name) {
@@ -178,6 +200,14 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
+        // Clear cross-namespace reference tracking
+        let cross_ns_ref = CrossNsResourceRef::new(
+            ResourceKind::Gateway,
+            g.metadata.namespace.clone(),
+            g.metadata.name.clone().unwrap_or_default(),
+        );
+        get_global_cross_ns_ref_manager().clear_resource_refs(&cross_ns_ref);
+
         // Get conflicting gateways BEFORE unregistering (they need to be requeued)
         let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
 
@@ -209,6 +239,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let gateway_name = gateway.metadata.name.clone().unwrap_or_default();
+        let tracker = get_attached_route_tracker();
+        let gateway_key_for_tracker = format!("{}/{}", gateway_ns, gateway_name);
 
         // Pre-compute per-listener info while gateway is only immutably borrowed.
         let listener_infos: Vec<ListenerInfo> = gateway
@@ -218,7 +250,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .unwrap_or_default()
             .iter()
             .map(|l| {
-                let route_count = count_attached_routes_for_listener_by_key(&gateway_ns, &gateway_name, &l.name);
+                let route_count = tracker.count_for_listener(&gateway_key_for_tracker, &l.name);
                 let (supported_kinds, mut kind_errors) = compute_supported_kinds(l);
                 let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l);
                 resolved_refs_errors.append(&mut kind_errors);
@@ -232,7 +264,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             })
             .collect();
 
-        let derived_addresses = derive_gateway_addresses(gateway);
+        let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref());
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
@@ -351,100 +383,25 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 // Update other listener conditions (pass conflict status for Programmed/Ready)
                 update_listener_conditions(ls, validation_errors, generation, is_conflicted, &resolved_refs_errors);
             }
+
+            // Remove stale listener statuses for listeners no longer in the spec
+            let current_listener_names: Vec<&str> = gateway
+                .spec
+                .listeners
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect();
+            listener_statuses.retain(|ls| current_listener_names.contains(&ls.name.as_str()));
+        } else {
+            // All listeners removed from spec: clear status listeners
+            status.listeners = Some(Vec::new());
         }
     }
 }
 
-fn count_attached_routes_for_listener_by_key(gateway_ns: &str, gateway_name: &str, listener_name: &str) -> i32 {
-    if gateway_name.is_empty() {
-        return 0;
-    }
-
-    let mut total = 0_i32;
-    total +=
-        count_attached_routes_of_kind::<HTTPRoute, _>("HTTPRoute", gateway_ns, gateway_name, listener_name, |route| {
-            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-        });
-    total +=
-        count_attached_routes_of_kind::<GRPCRoute, _>("GRPCRoute", gateway_ns, gateway_name, listener_name, |route| {
-            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-        });
-    total +=
-        count_attached_routes_of_kind::<TCPRoute, _>("TCPRoute", gateway_ns, gateway_name, listener_name, |route| {
-            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-        });
-    total +=
-        count_attached_routes_of_kind::<TLSRoute, _>("TLSRoute", gateway_ns, gateway_name, listener_name, |route| {
-            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-        });
-    total +=
-        count_attached_routes_of_kind::<UDPRoute, _>("UDPRoute", gateway_ns, gateway_name, listener_name, |route| {
-            (route.spec.parent_refs.as_ref(), route.metadata.namespace.as_deref())
-        });
-    total
-}
-
-fn count_attached_routes_of_kind<K, F>(
-    kind: &str,
-    gateway_ns: &str,
-    gateway_name: &str,
-    listener_name: &str,
-    parent_refs_fn: F,
-) -> i32
-where
-    K: serde::de::DeserializeOwned,
-    F: Fn(&K) -> (Option<&Vec<ParentReference>>, Option<&str>),
-{
-    let Some(processor) = PROCESSOR_REGISTRY.get(kind) else {
-        return 0;
-    };
-
-    let Ok((json, _)) = processor.as_watch_obj().list_json() else {
-        tracing::warn!(kind = %kind, "Failed to list resources while calculating attachedRoutes");
-        return 0;
-    };
-
-    let routes: Vec<K> = match serde_json::from_str(&json) {
-        Ok(routes) => routes,
-        Err(e) => {
-            tracing::warn!(kind = %kind, error = %e, "Failed to decode resources while calculating attachedRoutes");
-            return 0;
-        }
-    };
-
-    routes
-        .iter()
-        .filter(|route| {
-            let (parent_refs_opt, route_ns) = parent_refs_fn(route);
-            let Some(parent_refs) = parent_refs_opt else {
-                return false;
-            };
-            parent_refs.iter().any(|parent_ref| {
-                parent_ref_matches_gateway_and_listener(parent_ref, route_ns, gateway_ns, gateway_name, listener_name)
-            })
-        })
-        .count() as i32
-}
-
-fn parent_ref_matches_gateway_and_listener(
-    parent_ref: &ParentReference,
-    route_ns: Option<&str>,
-    gateway_ns: &str,
-    gateway_name: &str,
-    listener_name: &str,
-) -> bool {
-    let parent_ns = parent_ref.namespace.as_deref().or(route_ns).unwrap_or("default");
-    if parent_ns != gateway_ns || parent_ref.name != gateway_name {
-        return false;
-    }
-
-    match parent_ref.section_name.as_deref() {
-        Some(section_name) => section_name == listener_name,
-        None => true,
-    }
-}
-
-fn derive_gateway_addresses(gateway: &Gateway) -> Vec<GatewayStatusAddress> {
+fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) -> Vec<GatewayStatusAddress> {
     if let Some(spec_addresses) = gateway.spec.addresses.as_ref().filter(|a| !a.is_empty()) {
         return spec_addresses
             .iter()
@@ -464,6 +421,13 @@ fn derive_gateway_addresses(gateway: &Gateway) -> Vec<GatewayStatusAddress> {
                 value: cluster_ip,
             }];
         }
+    }
+
+    if let Some(addr) = default_address {
+        return vec![GatewayStatusAddress {
+            address_type: Some("IPAddress".to_string()),
+            value: addr.to_string(),
+        }];
     }
 
     vec![GatewayStatusAddress {
@@ -542,7 +506,27 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, cond);
     }
 
-    // Programmed: False if conflicted (not actually bound to port)
+    // ResolvedRefs: True only when all references are valid and resolvable.
+    let has_unresolved_refs = !resolved_refs_errors.is_empty();
+    if has_unresolved_refs {
+        let resolved = condition_false(
+            condition_types::RESOLVED_REFS,
+            resolved_refs_condition_reason(resolved_refs_errors),
+            resolved_refs_errors.join("; "),
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, resolved);
+    } else {
+        let resolved = condition_true(
+            condition_types::RESOLVED_REFS,
+            condition_reasons::RESOLVED_REFS,
+            "All references resolved",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, resolved);
+    }
+
+    // Programmed: False if conflicted or has unresolved refs
     if is_conflicted {
         let programmed = condition_false(
             condition_types::PROGRAMMED,
@@ -551,48 +535,48 @@ fn update_listener_conditions(
             generation,
         );
         update_gateway_condition(&mut ls.conditions, programmed);
+    } else if has_unresolved_refs {
+        let programmed = condition_false(
+            condition_types::PROGRAMMED,
+            condition_reasons::INVALID,
+            "Listener not programmed due to unresolved references",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, programmed);
     } else {
         let programmed = condition_true(
             condition_types::PROGRAMMED,
-            "Programmed",
+            condition_reasons::PROGRAMMED,
             "Listener configuration programmed",
             generation,
         );
         update_gateway_condition(&mut ls.conditions, programmed);
     }
 
-    // ResolvedRefs: True only when all references are valid and resolvable.
-    if resolved_refs_errors.is_empty() {
-        let resolved = condition_true(
-            condition_types::RESOLVED_REFS,
-            condition_reasons::RESOLVED_REFS,
-            "All references resolved",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, resolved);
+    // Ready: False if conflicted or has unresolved refs
+    if is_conflicted || has_unresolved_refs {
+        let reason = if is_conflicted {
+            condition_reasons::LISTENER_CONFLICT
+        } else {
+            condition_reasons::PENDING
+        };
+        let msg = if is_conflicted {
+            "Listener not ready due to port conflict".to_string()
+        } else {
+            "Listener not ready due to unresolved references".to_string()
+        };
+        let ready = condition_false(condition_types::READY, reason, msg, generation);
+        update_gateway_condition(&mut ls.conditions, ready);
     } else {
-        let resolved = condition_false(
-            condition_types::RESOLVED_REFS,
-            resolved_refs_condition_reason(resolved_refs_errors),
-            resolved_refs_errors.join("; "),
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, resolved);
+        let ready = condition_true(condition_types::READY, condition_reasons::READY, "Listener is ready", generation);
+        update_gateway_condition(&mut ls.conditions, ready);
     }
+}
 
-    // Ready: False if conflicted (not ready to serve traffic)
-    if is_conflicted {
-        let ready = condition_false(
-            condition_types::READY,
-            condition_reasons::LISTENER_CONFLICT,
-            "Listener not ready due to port conflict",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, ready);
-    } else {
-        let ready = condition_true(condition_types::READY, "Ready", "Listener is ready", generation);
-        update_gateway_condition(&mut ls.conditions, ready);
-    }
+fn is_valid_pem(data: &[u8]) -> bool {
+    x509_parser::pem::Pem::iter_from_buffer(data)
+        .next()
+        .is_some_and(|r| r.is_ok())
 }
 
 fn resolved_refs_condition_reason(resolved_refs_errors: &[String]) -> &'static str {
@@ -604,7 +588,7 @@ fn resolved_refs_condition_reason(resolved_refs_errors: &[String]) -> &'static s
     } else if resolved_refs_errors.iter().any(|error| error.contains("Route kind")) {
         condition_reasons::INVALID_ROUTE_KIND
     } else {
-        condition_reasons::INVALID_KIND
+        "InvalidCertificateRef"
     }
 }
 
@@ -641,11 +625,53 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
             .or(gateway.metadata.namespace.as_deref())
             .unwrap_or("default");
 
-        if get_secret(Some(cert_ns), &cert_ref.name).is_none() {
-            errors.push(format!(
-                "Secret '{}/{}' not found for listener '{}'",
-                cert_ns, cert_ref.name, listener.name
-            ));
+        match get_secret(Some(cert_ns), &cert_ref.name) {
+            None => {
+                errors.push(format!(
+                    "Secret '{}/{}' not found for listener '{}'",
+                    cert_ns, cert_ref.name, listener.name
+                ));
+            }
+            Some(secret) => {
+                use crate::types::constants::secret_keys::tls;
+                if let Some(data) = &secret.data {
+                    if !data.contains_key(tls::CERT) || !data.contains_key(tls::KEY) {
+                        errors.push(format!(
+                            "Secret '{}/{}' missing required keys '{}' and/or '{}'",
+                            cert_ns,
+                            cert_ref.name,
+                            tls::CERT,
+                            tls::KEY
+                        ));
+                    } else {
+                        let cert_bytes = data.get(tls::CERT).map(|b| &b.0);
+                        let key_bytes = data.get(tls::KEY).map(|b| &b.0);
+                        let cert_empty = cert_bytes.is_none_or(|b| b.is_empty());
+                        let key_empty = key_bytes.is_none_or(|b| b.is_empty());
+                        if cert_empty || key_empty {
+                            errors.push(format!(
+                                "Secret '{}/{}' has empty certificate or key data",
+                                cert_ns, cert_ref.name
+                            ));
+                        } else {
+                            if !is_valid_pem(cert_bytes.unwrap()) {
+                                errors.push(format!(
+                                    "Secret '{}/{}' has invalid certificate PEM data",
+                                    cert_ns, cert_ref.name
+                                ));
+                            }
+                            if !is_valid_pem(key_bytes.unwrap()) {
+                                errors.push(format!(
+                                    "Secret '{}/{}' has invalid private key PEM data",
+                                    cert_ns, cert_ref.name
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    errors.push(format!("Secret '{}/{}' has no data", cert_ns, cert_ref.name));
+                }
+            }
         }
 
         if gateway_ns != cert_ns && is_reference_grant_validation_enabled() {

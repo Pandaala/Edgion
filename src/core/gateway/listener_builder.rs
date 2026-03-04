@@ -17,17 +17,14 @@ use std::time::SystemTime;
 use tokio::net::UdpSocket;
 
 use crate::core::gateway::gateway::GatewayInfo;
-use crate::core::observe::test_metrics::TestType;
 use crate::core::observe::AccessLogger;
 use crate::core::plugins::edgion_stream_plugins::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
-use crate::core::routes::get_global_route_manager;
 use crate::core::routes::http_routes::{EdgionHttp, EdgionHttpRedirect};
 use crate::core::routes::tcp_routes::{get_global_tcp_route_manager, EdgionTcp};
 use crate::core::routes::tls_routes::{get_global_tls_route_manager, EdgionTls};
 use crate::core::routes::udp_routes::{get_global_udp_route_manager, EdgionUdp};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::tls::gateway_common::tls_pingora::TlsCallback;
-use crate::types::constants::annotations::edgion as annotations;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
 
@@ -73,6 +70,8 @@ pub struct ListenerContext {
     pub enable_http2: bool,
     /// Gateway annotations
     pub gateway_annotations: std::collections::HashMap<String, String>,
+    /// All GatewayInfo contexts sharing this listener port (for multi-Gateway support)
+    pub gateway_infos: Arc<Vec<GatewayInfo>>,
 }
 
 /// Add an HTTP or HTTPS listener to the Pingora server
@@ -126,9 +125,6 @@ pub fn add_http_listener(
         return Ok(());
     }
 
-    // Ensure the route manager is initialized.
-    let _route_manager = get_global_route_manager();
-
     // Pre-parse timeout configurations once at initialization
     let parsed_timeouts =
         crate::core::routes::http_routes::proxy_http::ParsedTimeouts::from_config(&context.edgion_gateway_config);
@@ -141,7 +137,6 @@ pub fn add_http_listener(
         ) {
             Ok(extractor) => Some(Arc::new(extractor)),
             Err(e) => {
-                // Should rarely happen (only if builder.build() fails after all CIDRs are skipped)
                 tracing::warn!(
                     gateway = %context.gateway_name,
                     listener = %listener_name,
@@ -160,31 +155,11 @@ pub fn add_http_listener(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
 
-    // Pre-build GatewayInfo for route matching (avoids per-request allocation)
-    // Note: Listener config (hostname, allowedRoutes) is queried dynamically
-    // from GatewayConfigStore to support hot-reload of Gateway configuration
-    //
-    // Extract test metrics configuration from Gateway annotations (optional)
-    let metrics_test_key = context.gateway_annotations.get(annotations::METRICS_TEST_KEY).cloned();
-    let metrics_test_type = context
-        .gateway_annotations
-        .get(annotations::METRICS_TEST_TYPE)
-        .map(|s| TestType::from_str(s));
-
-    let gateway_info = GatewayInfo::new(
-        context.gateway_namespace.clone(),
-        context.gateway_name.clone(),
-        Some(context.listener.name.clone()),
-        metrics_test_key,
-        metrics_test_type,
-    );
-    let gateway_infos = Arc::new(vec![gateway_info]);
-
-    // Create EdgionHttp proxy handler
+    // Create EdgionHttp proxy handler with global route table and multi-gateway infos
     let edgion_http = EdgionHttp {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),
-        gateway_infos,
+        gateway_infos: context.gateway_infos.clone(),
         server_start_time: SystemTime::now(),
         server_header_opts: Default::default(),
         access_logger: context.access_logger.clone(),

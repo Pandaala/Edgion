@@ -5,7 +5,7 @@
 use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_tcp_route_if_enabled, CrossNsResourceRef,
 };
-use super::requeue_parent_gateways;
+use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
 };
@@ -116,6 +116,13 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
 
     fn on_change(&self, route: &TCPRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+        update_attached_route_tracker(
+            ResourceKind::TCPRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
     }
 
@@ -125,6 +132,8 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+        remove_from_attached_route_tracker(ResourceKind::TCPRoute, route_ns, route_name);
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
     }
 
