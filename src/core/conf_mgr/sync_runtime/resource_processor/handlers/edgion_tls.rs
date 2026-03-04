@@ -8,8 +8,9 @@
 //! - Gateway API standard status management (per parent)
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, get_secret, set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler,
-    ResourceRef,
+    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
+    get_secret, programmed_condition, ready_condition, update_condition, HandlerContext, ProcessResult,
+    ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionTls;
 use crate::types::resources::edgion_tls::EdgionTlsStatus;
@@ -151,8 +152,26 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         );
     }
 
-    fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, _validation_errors: &[String]) {
         let generation = tls.metadata.generation;
+
+        // Check Secret resolution: if Secret is not found, set ResolvedRefs=False
+        let secret_ns = tls
+            .spec
+            .secret_ref
+            .namespace
+            .as_ref()
+            .or(tls.metadata.namespace.as_ref());
+        let secret_resolved = get_secret(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name).is_some();
+
+        let resolved_refs_errors: Vec<ResolvedRefsError> = if secret_resolved {
+            vec![]
+        } else {
+            vec![ResolvedRefsError::BackendNotFound {
+                namespace: secret_ns.map(|s| s.as_str()).unwrap_or("default").to_string(),
+                name: tls.spec.secret_ref.name.clone(),
+            }]
+        };
 
         // Initialize status if not present
         let status = tls.status.get_or_insert_with(|| EdgionTlsStatus { parents: vec![] });
@@ -160,18 +179,42 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // Update status for each parent ref
         if let Some(parent_refs) = &tls.spec.parent_refs {
             for parent_ref in parent_refs {
-                // Find existing parent status or create new one
                 let parent_status = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name && ps.parent_ref.namespace == parent_ref.namespace
                 });
 
+                let update_conditions = |conditions: &mut Vec<_>| {
+                    update_condition(conditions, accepted_condition(generation));
+                    update_condition(conditions, programmed_condition(generation));
+                    update_condition(conditions, ready_condition(generation));
+                    if resolved_refs_errors.is_empty() {
+                        update_condition(
+                            conditions,
+                            condition_true(
+                                condition_types::RESOLVED_REFS,
+                                condition_reasons::RESOLVED_REFS,
+                                "Secret resolved",
+                                generation,
+                            ),
+                        );
+                    } else {
+                        update_condition(
+                            conditions,
+                            condition_false(
+                                condition_types::RESOLVED_REFS,
+                                condition_reasons::BACKEND_NOT_FOUND,
+                                resolved_refs_errors[0].message(),
+                                generation,
+                            ),
+                        );
+                    }
+                };
+
                 if let Some(ps) = parent_status {
-                    // Update existing parent status
-                    set_route_parent_conditions(&mut ps.conditions, validation_errors, generation);
+                    update_conditions(&mut ps.conditions);
                 } else {
-                    // Create new parent status
                     let mut conditions = Vec::new();
-                    set_route_parent_conditions(&mut conditions, validation_errors, generation);
+                    update_conditions(&mut conditions);
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),

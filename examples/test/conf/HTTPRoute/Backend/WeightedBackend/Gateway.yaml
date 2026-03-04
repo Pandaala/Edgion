@@ -10,3 +10,6 @@ spec:
     - name: http
       protocol: HTTP
       port: 31130
+      allowedRoutes:
+        namespaces:
+          from: All

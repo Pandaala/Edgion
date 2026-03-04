@@ -1,3 +1,4 @@
+use crate::core::conf_mgr::sync_runtime::resource_processor::condition_types;
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::gateway::gateway::get_global_gateway_store;
 use crate::core::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
@@ -488,6 +489,38 @@ impl RouteManager {
     }
 }
 
+/// Filter parentRefs to only those whose corresponding status condition Accepted=True.
+///
+/// Routes whose all parent references are rejected (Accepted=False or missing) are not
+/// compiled into the data-plane routing tables.
+fn filter_accepted_parent_refs<'a>(route: &'a HTTPRoute) -> Option<Vec<&'a ParentReference>> {
+    let parent_refs = route.spec.parent_refs.as_ref()?;
+    let status = route.status.as_ref()?;
+
+    let accepted: Vec<&ParentReference> = parent_refs
+        .iter()
+        .filter(|pr| {
+            // A parentRef is considered accepted if its status.parents entry has
+            // Accepted condition with status "True".
+            status.parents.iter().any(|ps| {
+                ps.parent_ref.name == pr.name
+                    && ps.parent_ref.namespace == pr.namespace
+                    && ps
+                        .conditions
+                        .iter()
+                        .any(|c| c.type_ == condition_types::ACCEPTED && c.status == "True")
+            })
+        })
+        .collect();
+
+    if accepted.is_empty() {
+        // No accepted parentRefs — this route should not be compiled
+        None
+    } else {
+        Some(accepted)
+    }
+}
+
 /// Parse all HTTPRoutes and collect rules into a global domain->rules structure.
 ///
 /// Routes from all gateways are merged into a single table keyed by hostname.
@@ -500,6 +533,22 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
 
     // Iterate through all HTTPRoutes and collect rules
     for (_key, route) in data.iter() {
+        // Filter to only accepted parentRefs. Routes that have no accepted parentRefs are skipped.
+        let accepted_parent_refs = match filter_accepted_parent_refs(route) {
+            Some(refs) => refs,
+            None => {
+                // Fall back to compiling all parent_refs if status is not yet populated
+                // (e.g. first-time processing before status update)
+                match &route.spec.parent_refs {
+                    Some(refs) if !refs.is_empty() => refs.iter().collect(),
+                    _ => {
+                        skipped_routes += 1;
+                        continue;
+                    }
+                }
+            }
+        };
+
         // Validate HTTPRoute and extract required fields
         let validated = match validate_http_route(route) {
             Some(v) => v,
@@ -509,10 +558,39 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
             }
         };
 
-        // Resolve effective hostnames across ALL parent_refs.
-        // A route with explicit hostnames uses those directly.
-        // A route with no hostnames inherits from each listener it is attached to.
-        let effective_hostnames = resolve_all_effective_hostnames(route, &validated.namespace);
+        // Resolve effective hostnames across accepted parent_refs only.
+        let effective_hostnames: Vec<String> = {
+            let mut hostnames = if let Some(hs) = &route.spec.hostnames {
+                if !hs.is_empty() {
+                    hs.clone()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            if hostnames.is_empty() {
+                // Inherit hostnames from each accepted parent_ref's listener
+                for pr in &accepted_parent_refs {
+                    let gw_key = pr.build_parent_key(Some(&validated.namespace));
+                    let resolved = resolve_effective_hostnames_for_route(route, &gw_key, pr);
+                    for h in resolved {
+                        if !hostnames.contains(&h) {
+                            hostnames.push(h);
+                        }
+                    }
+                }
+                if hostnames.is_empty() {
+                    hostnames.push(CATCH_ALL_HOSTNAME.to_string());
+                }
+            }
+            hostnames
+        };
+
+        let parent_refs_to_embed: Option<Vec<ParentReference>> =
+            Some(accepted_parent_refs.iter().map(|pr| (*pr).clone()).collect());
+
         for hostname in &effective_hostnames {
             for (rule_id, rule) in validated.rules.iter().enumerate() {
                 let rule_arc = Arc::new(rule.clone());
@@ -546,7 +624,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             &route.key_name(),
                             match_item,
                             rule_arc.clone(),
-                            route.spec.parent_refs.clone(),
+                            parent_refs_to_embed.clone(),
                         ) {
                             Ok(regex_unit) => {
                                 split.1.push(Arc::new(regex_unit));
@@ -567,7 +645,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             ),
                             rule: rule_arc.clone(),
                             path_regex: None,
-                            parent_refs: route.spec.parent_refs.clone(),
+                            parent_refs: parent_refs_to_embed.clone(),
                         };
                         split.0.push(Arc::new(rule_unit));
                     }

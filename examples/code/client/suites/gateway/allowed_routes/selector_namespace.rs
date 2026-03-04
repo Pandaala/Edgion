@@ -1,14 +1,12 @@
 // AllowedRoutes Selector Namespace test suite
 //
-// Tests the Selector namespace policy behavior at the data-plane level.
+// Tests the Selector namespace policy behavior.
 //
 // In FileSystem mode (used by integration tests), the NamespaceStore is empty
-// (no K8s Namespace watcher), so the controller-side Selector evaluation denies
-// all routes. However, routes are still synced to the Gateway data-plane which
-// performs its own independent check. The data-plane falls back to Same policy
-// for Selector (defense-in-depth):
-//   - Same namespace route   → allowed (200) via Same fallback
-//   - Cross namespace route  → denied  (404) via Same fallback
+// (no K8s Namespace watcher). When namespace labels are unavailable, both the
+// controller and data-plane fall back to Same policy for Selector:
+//   - Same namespace route   → Accepted=True, compiled, allowed (200)
+//   - Cross namespace route  → Accepted=False, not compiled, denied (404)
 //
 // This verifies the Selector code path is active and behaves differently from
 // "All" (which would allow cross-namespace) while maintaining security.
@@ -24,8 +22,8 @@ use std::time::Instant;
 pub struct AllowedRoutesSelectorNamespaceTestSuite;
 
 impl AllowedRoutesSelectorNamespaceTestSuite {
-    /// Same-namespace route should be allowed because the data-plane Selector
-    /// falls back to Same policy (defense-in-depth).
+    /// Same-namespace route should be allowed: controller falls back to Same
+    /// when namespace labels are unavailable, so the route is Accepted and compiled.
     fn test_same_namespace_allowed_via_fallback() -> TestCase {
         TestCase::new(
             "selector_same_ns_allowed",
@@ -69,8 +67,8 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
         )
     }
 
-    /// Cross-namespace route should be denied because the data-plane Selector
-    /// falls back to Same policy, and the route is in a different namespace.
+    /// Cross-namespace route should be denied: controller falls back to Same
+    /// when labels are unavailable → Accepted=False → not compiled → 404.
     fn test_cross_namespace_denied_via_fallback() -> TestCase {
         TestCase::new(
             "selector_cross_ns_denied",

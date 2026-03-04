@@ -31,7 +31,7 @@ pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkI
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
     programmed_condition, ready_condition, resolved_refs_condition, set_route_parent_conditions,
-    set_route_parent_conditions_full, update_condition,
+    set_route_parent_conditions_full, update_condition, AcceptedError, ResolvedRefsError,
 };
 
 // Re-export handlers

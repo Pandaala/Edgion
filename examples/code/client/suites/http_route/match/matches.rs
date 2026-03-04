@@ -456,20 +456,25 @@ impl HttpMatchTestSuite {
                         }
                     }
 
-                    // Test 2: Multi-level subdomain should NOT match
+                    // Test 2: Multi-level subdomain should also match (per Gateway API spec, suffix match)
                     let mut request2 = ctx.http_client.get(format!("{}/wildcard-test", ctx.http_url()));
                     request2 = request2.header("Host", "foo.bar.wc-match-test.example.com");
 
                     match request2.send().await {
                         Ok(response) => {
-                            if response.status().is_success() {
+                            if !response.status().is_success() {
                                 return TestResult::failed(
                                 start.elapsed(),
-                                format!("Multi-level subdomain should NOT match *.wc-match-test.example.com per RFC, but got success: {}", response.status())
+                                format!("Multi-level subdomain (foo.bar.wc-match-test.example.com) should match *.wc-match-test.example.com per Gateway API spec, got status: {}", response.status())
                             );
                             }
                         }
-                        Err(_e) => {}
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Request to foo.bar.wc-match-test.example.com failed: {}", e),
+                            );
+                        }
                     }
 
                     // Test 3: Root domain should NOT match
@@ -490,7 +495,7 @@ impl HttpMatchTestSuite {
 
                     TestResult::passed_with_message(
                     start.elapsed(),
-                    "Wildcard hostname matching works correctly: *.wc-match-test.example.com matches single-level subdomain, but NOT multi-level or root".to_string()
+                    "Wildcard hostname matching works correctly: *.wc-match-test.example.com matches single and multi-level subdomains, but NOT root domain".to_string()
                 )
                 })
             },

@@ -2,10 +2,13 @@
 //!
 //! Handles HTTPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_http_route_if_enabled};
+use super::super::ref_grant::{
+    get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_http_route_if_enabled,
+};
 use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    set_route_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler,
+    ResolvedRefsError, ResourceRef,
 };
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::HTTPRoute;
@@ -41,11 +44,7 @@ impl HttpRouteHandler {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {
                     for br in backend_refs {
-                        backend_refs_list.push((
-                            br.kind.as_deref(),
-                            br.namespace.as_deref(),
-                            br.name.as_str(),
-                        ));
+                        backend_refs_list.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
                     }
                 }
             }
@@ -94,7 +93,7 @@ impl Default for HttpRouteHandler {
 impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     fn validate(&self, route: &HTTPRoute, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = validate_http_route_if_enabled(route);
-        errors.extend(validate_backend_refs(route));
+        errors.extend(validate_backend_refs(route).iter().map(|e| e.message()));
         errors
     }
 
@@ -174,26 +173,12 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
     }
 
-    fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, _validation_errors: &[String]) {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        let mut resolved_refs_errors: Vec<String> = validation_errors.to_vec();
-
-        if let Some(rules) = &route.spec.rules {
-            for rule in rules {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    for backend_ref in backend_refs {
-                        if let Some(ref_denied) = &backend_ref.ref_denied {
-                            resolved_refs_errors.push(format!(
-                                "Cross-namespace reference to {}/{} not allowed by ReferenceGrant",
-                                ref_denied.target_namespace, ref_denied.target_name,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        let mut resolved_refs_errors = validate_backend_refs(route);
+        collect_ref_denied_errors(route, &mut resolved_refs_errors);
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
@@ -236,7 +221,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     }
 }
 
-fn validate_backend_refs(route: &HTTPRoute) -> Vec<String> {
+/// Validate backend refs and return typed errors for condition generation.
+fn validate_backend_refs(route: &HTTPRoute) -> Vec<ResolvedRefsError> {
     let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
     let mut errors = Vec::new();
 
@@ -251,21 +237,42 @@ fn validate_backend_refs(route: &HTTPRoute) -> Vec<String> {
         for backend_ref in backend_refs {
             let kind = backend_ref.kind.as_deref().unwrap_or("Service");
             if kind != "Service" {
-                errors.push(format!(
-                    "Invalid backend ref kind '{}' for backend '{}'",
-                    kind, backend_ref.name
-                ));
+                errors.push(ResolvedRefsError::InvalidKind {
+                    kind: kind.to_string(),
+                    name: backend_ref.name.clone(),
+                });
                 continue;
             }
 
             let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
             if !service_exists(backend_ns, &backend_ref.name) {
-                errors.push(format!("Service '{}/{}' not found", backend_ns, backend_ref.name));
+                errors.push(ResolvedRefsError::BackendNotFound {
+                    namespace: backend_ns.to_string(),
+                    name: backend_ref.name.clone(),
+                });
             }
         }
     }
 
     errors
+}
+
+/// Collect RefNotPermitted errors from ref_denied fields on backend refs.
+fn collect_ref_denied_errors(route: &HTTPRoute, errors: &mut Vec<ResolvedRefsError>) {
+    if let Some(rules) = &route.spec.rules {
+        for rule in rules {
+            if let Some(backend_refs) = &rule.backend_refs {
+                for backend_ref in backend_refs {
+                    if let Some(ref_denied) = &backend_ref.ref_denied {
+                        errors.push(ResolvedRefsError::RefNotPermitted {
+                            target_namespace: ref_denied.target_namespace.clone(),
+                            target_name: ref_denied.target_name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn service_exists(namespace: &str, name: &str) -> bool {
@@ -279,7 +286,7 @@ fn validate_parent_ref_accepted_with_hostnames(
     route_ns: &str,
     parent_ref: &ParentReference,
     route_hostnames: Option<&Vec<String>>,
-) -> Vec<String> {
+) -> Vec<AcceptedError> {
     let mut errors = Vec::new();
 
     let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
@@ -304,7 +311,9 @@ fn validate_parent_ref_accepted_with_hostnames(
     if let Some(section_name) = &parent_ref.section_name {
         let has_listener = listeners.iter().any(|l| l.name == *section_name);
         if !has_listener {
-            errors.push(format!("No matching listener for sectionName '{}'", section_name));
+            errors.push(AcceptedError::NoMatchingParent {
+                section_name: section_name.clone(),
+            });
             return errors;
         }
     }
@@ -320,10 +329,9 @@ fn validate_parent_ref_accepted_with_hostnames(
         .any(|l| super::route_utils::listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns));
 
     if !ns_allowed {
-        errors.push(format!(
-            "Route namespace '{}' not allowed by Gateway listeners",
-            route_ns
-        ));
+        errors.push(AcceptedError::NotAllowedByListeners {
+            route_ns: route_ns.to_string(),
+        });
         return errors;
     }
 
@@ -340,7 +348,9 @@ fn validate_parent_ref_accepted_with_hostnames(
                 }
             });
             if !hostname_match {
-                errors.push(format!("No matching hostname for route hostnames {:?}", route_hs));
+                errors.push(AcceptedError::NoMatchingListenerHostname {
+                    hostnames: route_hs.clone(),
+                });
             }
         }
     }

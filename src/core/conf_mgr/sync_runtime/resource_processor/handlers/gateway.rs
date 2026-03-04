@@ -42,11 +42,79 @@ pub struct GatewayHandler {
     default_address: Option<String>,
 }
 
+/// Typed errors for Gateway listener ResolvedRefs condition.
+///
+/// Eliminates string-based reason inference in favour of compile-time
+/// safe enum matching.
+#[derive(Debug, Clone)]
+enum GatewayResolvedRefsError {
+    /// certificateRef kind is not "Secret"
+    InvalidCertRef { kind: String },
+    /// Secret referenced by certificateRef not found in the store
+    SecretNotFound { namespace: String, name: String },
+    /// Secret data is invalid (missing keys, empty, or invalid PEM)
+    SecretInvalid {
+        namespace: String,
+        name: String,
+        reason: String,
+    },
+    /// Cross-namespace Secret reference denied by ReferenceGrant
+    RefNotPermitted { namespace: String, name: String },
+    /// Route kind is not supported for this listener's protocol
+    InvalidRouteKind {
+        group: String,
+        kind: String,
+        protocol: String,
+    },
+}
+
+impl GatewayResolvedRefsError {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::InvalidCertRef { .. } => "InvalidCertificateRef",
+            Self::SecretNotFound { .. } => "InvalidCertificateRef",
+            Self::SecretInvalid { .. } => "InvalidCertificateRef",
+            Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
+            Self::InvalidRouteKind { .. } => condition_reasons::INVALID_ROUTE_KIND,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::InvalidCertRef { kind } => {
+                format!("Invalid certificateRef kind '{}', must be 'Secret'", kind)
+            }
+            Self::SecretNotFound { namespace, name } => {
+                format!("Secret '{}/{}' not found", namespace, name)
+            }
+            Self::SecretInvalid {
+                namespace,
+                name,
+                reason,
+            } => {
+                format!("Secret '{}/{}' invalid: {}", namespace, name, reason)
+            }
+            Self::RefNotPermitted { namespace, name } => {
+                format!(
+                    "Cross-namespace reference to Secret '{}/{}' not allowed by ReferenceGrant",
+                    namespace, name
+                )
+            }
+            Self::InvalidRouteKind { group, kind, protocol } => {
+                format!(
+                    "Route kind '{}/{}' is not supported for protocol '{}'",
+                    group, kind, protocol
+                )
+            }
+        }
+    }
+}
+
 struct ListenerInfo {
     name: String,
     supported_kinds: Vec<RouteGroupKind>,
     route_count: i32,
-    resolved_refs_errors: Vec<String>,
+    resolved_refs_errors: Vec<GatewayResolvedRefsError>,
 }
 
 impl GatewayHandler {
@@ -484,7 +552,7 @@ fn update_listener_conditions(
     validation_errors: &[String],
     generation: Option<i64>,
     is_conflicted: bool,
-    resolved_refs_errors: &[String],
+    resolved_refs_errors: &[GatewayResolvedRefsError],
 ) {
     // Accepted: True if no validation errors (conflict doesn't affect Accepted)
     if validation_errors.is_empty() {
@@ -508,12 +576,13 @@ fn update_listener_conditions(
     // ResolvedRefs: True only when all references are valid and resolvable.
     let has_unresolved_refs = !resolved_refs_errors.is_empty();
     if has_unresolved_refs {
-        let resolved = condition_false(
-            condition_types::RESOLVED_REFS,
-            resolved_refs_condition_reason(resolved_refs_errors),
-            resolved_refs_errors.join("; "),
-            generation,
-        );
+        let reason = pick_gateway_resolved_refs_reason(resolved_refs_errors);
+        let message = resolved_refs_errors
+            .iter()
+            .map(|e| e.message())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let resolved = condition_false(condition_types::RESOLVED_REFS, reason, message, generation);
         update_gateway_condition(&mut ls.conditions, resolved);
     } else {
         let resolved = condition_true(
@@ -583,20 +652,24 @@ fn is_valid_pem(data: &[u8]) -> bool {
         .is_some_and(|r| r.is_ok())
 }
 
-fn resolved_refs_condition_reason(resolved_refs_errors: &[String]) -> &'static str {
-    if resolved_refs_errors
+fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'static str {
+    // Priority: InvalidRouteKind > RefNotPermitted > InvalidCertificateRef
+    if errors
         .iter()
-        .any(|error| error.contains("not allowed by ReferenceGrant"))
+        .any(|e| matches!(e, GatewayResolvedRefsError::InvalidRouteKind { .. }))
     {
-        condition_reasons::REF_NOT_PERMITTED
-    } else if resolved_refs_errors.iter().any(|error| error.contains("Route kind")) {
-        condition_reasons::INVALID_ROUTE_KIND
-    } else {
-        "InvalidCertificateRef"
+        return condition_reasons::INVALID_ROUTE_KIND;
     }
+    if errors
+        .iter()
+        .any(|e| matches!(e, GatewayResolvedRefsError::RefNotPermitted { .. }))
+    {
+        return condition_reasons::REF_NOT_PERMITTED;
+    }
+    "InvalidCertificateRef"
 }
 
-fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener) -> Vec<String> {
+fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener) -> Vec<GatewayResolvedRefsError> {
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
     let mut errors = Vec::new();
 
@@ -610,16 +683,17 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
     for cert_ref in certificate_refs {
         let cert_kind = cert_ref.kind.as_deref().unwrap_or("Secret");
         if cert_kind != "Secret" {
-            errors.push(format!("Invalid certificateRef kind '{}', must be 'Secret'", cert_kind));
+            errors.push(GatewayResolvedRefsError::InvalidCertRef {
+                kind: cert_kind.to_string(),
+            });
             continue;
         }
 
         let cert_group = cert_ref.group.as_deref().unwrap_or("");
         if !cert_group.is_empty() && cert_group != "core" {
-            errors.push(format!(
-                "Invalid certificateRef group '{}', must be empty/core for Secret",
-                cert_group
-            ));
+            errors.push(GatewayResolvedRefsError::InvalidCertRef {
+                kind: format!("group:{}", cert_group),
+            });
             continue;
         }
 
@@ -631,49 +705,54 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
 
         match get_secret(Some(cert_ns), &cert_ref.name) {
             None => {
-                errors.push(format!(
-                    "Secret '{}/{}' not found for listener '{}'",
-                    cert_ns, cert_ref.name, listener.name
-                ));
+                errors.push(GatewayResolvedRefsError::SecretNotFound {
+                    namespace: cert_ns.to_string(),
+                    name: cert_ref.name.clone(),
+                });
             }
             Some(secret) => {
                 use crate::types::constants::secret_keys::tls;
                 if let Some(data) = &secret.data {
                     if !data.contains_key(tls::CERT) || !data.contains_key(tls::KEY) {
-                        errors.push(format!(
-                            "Secret '{}/{}' missing required keys '{}' and/or '{}'",
-                            cert_ns,
-                            cert_ref.name,
-                            tls::CERT,
-                            tls::KEY
-                        ));
+                        errors.push(GatewayResolvedRefsError::SecretInvalid {
+                            namespace: cert_ns.to_string(),
+                            name: cert_ref.name.clone(),
+                            reason: format!("missing required keys '{}' and/or '{}'", tls::CERT, tls::KEY),
+                        });
                     } else {
                         let cert_bytes = data.get(tls::CERT).map(|b| &b.0);
                         let key_bytes = data.get(tls::KEY).map(|b| &b.0);
                         let cert_empty = cert_bytes.is_none_or(|b| b.is_empty());
                         let key_empty = key_bytes.is_none_or(|b| b.is_empty());
                         if cert_empty || key_empty {
-                            errors.push(format!(
-                                "Secret '{}/{}' has empty certificate or key data",
-                                cert_ns, cert_ref.name
-                            ));
+                            errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                namespace: cert_ns.to_string(),
+                                name: cert_ref.name.clone(),
+                                reason: "empty certificate or key data".to_string(),
+                            });
                         } else {
                             if !is_valid_pem(cert_bytes.unwrap()) {
-                                errors.push(format!(
-                                    "Secret '{}/{}' has invalid certificate PEM data",
-                                    cert_ns, cert_ref.name
-                                ));
+                                errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                    namespace: cert_ns.to_string(),
+                                    name: cert_ref.name.clone(),
+                                    reason: "invalid certificate PEM data".to_string(),
+                                });
                             }
                             if !is_valid_pem(key_bytes.unwrap()) {
-                                errors.push(format!(
-                                    "Secret '{}/{}' has invalid private key PEM data",
-                                    cert_ns, cert_ref.name
-                                ));
+                                errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                    namespace: cert_ns.to_string(),
+                                    name: cert_ref.name.clone(),
+                                    reason: "invalid private key PEM data".to_string(),
+                                });
                             }
                         }
                     }
                 } else {
-                    errors.push(format!("Secret '{}/{}' has no data", cert_ns, cert_ref.name));
+                    errors.push(GatewayResolvedRefsError::SecretInvalid {
+                        namespace: cert_ns.to_string(),
+                        name: cert_ref.name.clone(),
+                        reason: "no data".to_string(),
+                    });
                 }
             }
         }
@@ -689,10 +768,10 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
                 Some(&cert_ref.name),
             );
             if !allowed {
-                errors.push(format!(
-                    "Cross-namespace reference to Secret '{}/{}' not allowed by ReferenceGrant",
-                    cert_ns, cert_ref.name
-                ));
+                errors.push(GatewayResolvedRefsError::RefNotPermitted {
+                    namespace: cert_ns.to_string(),
+                    name: cert_ref.name.clone(),
+                });
             }
         }
     }
@@ -701,7 +780,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
 }
 
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
-fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, Vec<String>) {
+fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, Vec<GatewayResolvedRefsError>) {
     let protocol_kinds = get_supported_kinds_for_protocol(&listener.protocol);
     let requested_kinds = listener
         .allowed_routes
@@ -726,10 +805,11 @@ fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, 
         if is_valid_for_protocol {
             supported.push(requested.clone());
         } else {
-            errors.push(format!(
-                "Route kind '{}/{}' is not supported for protocol '{}'",
-                requested_group, requested.kind, listener.protocol
-            ));
+            errors.push(GatewayResolvedRefsError::InvalidRouteKind {
+                group: requested_group.to_string(),
+                kind: requested.kind.clone(),
+                protocol: listener.protocol.clone(),
+            });
         }
     }
 

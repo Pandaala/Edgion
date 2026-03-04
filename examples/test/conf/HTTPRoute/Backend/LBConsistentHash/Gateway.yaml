@@ -14,3 +14,6 @@ spec:
     - name: http
       protocol: HTTP
       port: 31121
+      allowedRoutes:
+        namespaces:
+          from: All

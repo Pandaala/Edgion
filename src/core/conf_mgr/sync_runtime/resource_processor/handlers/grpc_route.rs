@@ -2,10 +2,12 @@
 //!
 //! Handles GRPCRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_grpc_route_if_enabled};
+use super::super::ref_grant::{
+    get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_grpc_route_if_enabled,
+};
 use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    set_route_parent_conditions, HandlerContext, ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
 use crate::types::prelude_resources::GRPCRoute;
 use crate::types::resources::common::RefDenied;
@@ -41,11 +43,7 @@ impl GrpcRouteHandler {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {
                     for br in backend_refs {
-                        backend_refs_list.push((
-                            br.kind.as_deref(),
-                            br.namespace.as_deref(),
-                            br.name.as_str(),
-                        ));
+                        backend_refs_list.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
                     }
                 }
             }
@@ -168,24 +166,19 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
     }
 
-    fn update_status(&self, route: &mut GRPCRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, route: &mut GRPCRoute, _ctx: &HandlerContext, _validation_errors: &[String]) {
         let generation = route.metadata.generation;
 
-        // Collect ref_denied errors from backendRefs
-        let mut all_errors: Vec<String> = validation_errors.to_vec();
-
+        let mut resolved_refs_errors: Vec<ResolvedRefsError> = Vec::new();
         if let Some(rules) = &route.spec.rules {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {
                     for backend_ref in backend_refs {
                         if let Some(ref_denied) = &backend_ref.ref_denied {
-                            let msg = format!(
-                                "Cross-namespace reference to {}/{} denied: {}",
-                                ref_denied.target_namespace,
-                                ref_denied.target_name,
-                                ref_denied.reason.as_deref().unwrap_or("NoMatchingReferenceGrant")
-                            );
-                            all_errors.push(msg);
+                            resolved_refs_errors.push(ResolvedRefsError::RefNotPermitted {
+                                target_namespace: ref_denied.target_namespace.clone(),
+                                target_name: ref_denied.target_name.clone(),
+                            });
                         }
                     }
                 }
@@ -201,10 +194,10 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_route_parent_conditions(&mut ps.conditions, &all_errors, generation);
+                    set_route_parent_conditions(&mut ps.conditions, &resolved_refs_errors, generation);
                 } else {
                     let mut conditions = Vec::new();
-                    set_route_parent_conditions(&mut conditions, &all_errors, generation);
+                    set_route_parent_conditions(&mut conditions, &resolved_refs_errors, generation);
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),

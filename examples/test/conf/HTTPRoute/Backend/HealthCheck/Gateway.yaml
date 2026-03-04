@@ -9,3 +9,6 @@ spec:
     - name: http
       protocol: HTTP
       port: 31141
+      allowedRoutes:
+        namespaces:
+          from: All

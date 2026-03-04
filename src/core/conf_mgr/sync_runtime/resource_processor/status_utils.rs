@@ -2,6 +2,7 @@
 //!
 //! Provides utilities for managing resource status according to Gateway API standards (GEP-1364):
 //! - Standard conditions: Accepted, ResolvedRefs, Programmed, Ready
+//! - Typed error enums for compile-time safe reason mapping
 //! - Condition update helpers
 //! - Time formatting
 
@@ -52,6 +53,99 @@ pub mod condition_reasons {
     pub const LISTENER_CONFLICT: &str = "ListenerConflict";
     pub const NO_CONFLICTS: &str = "NoConflicts";
 }
+
+// ============================================================================
+// Typed error enums — replace string-based reason inference
+// ============================================================================
+
+/// Typed errors for Route Accepted condition.
+///
+/// Each variant maps to a specific Gateway API reason string, eliminating
+/// string-based inference and providing compile-time safety.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AcceptedError {
+    /// Route namespace not allowed by listener's allowedRoutes policy
+    NotAllowedByListeners { route_ns: String },
+    /// Route hostnames don't intersect with any listener hostname
+    NoMatchingListenerHostname { hostnames: Vec<String> },
+    /// sectionName doesn't match any listener
+    NoMatchingParent { section_name: String },
+}
+
+impl AcceptedError {
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::NotAllowedByListeners { .. } => condition_reasons::NOT_ALLOWED_BY_LISTENERS,
+            Self::NoMatchingListenerHostname { .. } => condition_reasons::NO_MATCHING_LISTENER_HOSTNAME,
+            Self::NoMatchingParent { .. } => condition_reasons::NO_MATCHING_PARENT,
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::NotAllowedByListeners { route_ns } => {
+                format!("Route namespace '{}' not allowed by Gateway listeners", route_ns)
+            }
+            Self::NoMatchingListenerHostname { hostnames } => {
+                format!("No matching hostname for route hostnames {:?}", hostnames)
+            }
+            Self::NoMatchingParent { section_name } => {
+                format!("No matching listener for sectionName '{}'", section_name)
+            }
+        }
+    }
+}
+
+/// Typed errors for Route ResolvedRefs condition.
+///
+/// Each variant maps to a specific Gateway API reason string, eliminating
+/// string-based inference and providing compile-time safety.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedRefsError {
+    /// Backend kind not supported (e.g., not "Service")
+    InvalidKind { kind: String, name: String },
+    /// Backend Service not found
+    BackendNotFound { namespace: String, name: String },
+    /// Cross-namespace reference denied by ReferenceGrant policy
+    RefNotPermitted {
+        target_namespace: String,
+        target_name: String,
+    },
+}
+
+impl ResolvedRefsError {
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::InvalidKind { .. } => condition_reasons::INVALID_KIND,
+            Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
+            Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::InvalidKind { kind, name } => {
+                format!("Invalid backend ref kind '{}' for backend '{}'", kind, name)
+            }
+            Self::BackendNotFound { namespace, name } => {
+                format!("Service '{}/{}' not found", namespace, name)
+            }
+            Self::RefNotPermitted {
+                target_namespace,
+                target_name,
+            } => {
+                format!(
+                    "Cross-namespace reference to {}/{} not allowed by ReferenceGrant",
+                    target_namespace, target_name
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Condition helpers
+// ============================================================================
 
 /// Get current time in RFC3339 format
 pub fn now_rfc3339() -> String {
@@ -133,9 +227,9 @@ pub fn accepted_condition_with_message(observed_generation: Option<i64>, message
     )
 }
 
-/// Create standard "ResolvedRefs" condition based on validation errors
-pub fn resolved_refs_condition(validation_errors: &[String], observed_generation: Option<i64>) -> Condition {
-    if validation_errors.is_empty() {
+/// Create standard "ResolvedRefs" condition based on typed validation errors
+pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation: Option<i64>) -> Condition {
+    if errors.is_empty() {
         condition_true(
             condition_types::RESOLVED_REFS,
             condition_reasons::RESOLVED_REFS,
@@ -143,37 +237,36 @@ pub fn resolved_refs_condition(validation_errors: &[String], observed_generation
             observed_generation,
         )
     } else {
-        let reason = infer_resolved_refs_reason(validation_errors);
-        condition_false(
-            condition_types::RESOLVED_REFS,
-            reason,
-            validation_errors.join("; "),
-            observed_generation,
-        )
+        let reason = pick_resolved_refs_reason(errors);
+        let message = errors.iter().map(|e| e.message()).collect::<Vec<_>>().join("; ");
+        condition_false(condition_types::RESOLVED_REFS, reason, message, observed_generation)
     }
 }
 
-fn infer_resolved_refs_reason(errors: &[String]) -> &'static str {
-    for err in errors {
-        let lower = err.to_lowercase();
-        if lower.contains("invalid") && lower.contains("kind") {
-            return condition_reasons::INVALID_KIND;
-        }
+/// Pick the highest-priority reason from a set of ResolvedRefs errors.
+///
+/// Priority order (matching Gateway API spec precedence):
+/// 1. InvalidKind — fundamentally wrong backend type
+/// 2. RefNotPermitted — policy denial
+/// 3. BackendNotFound — missing backend
+fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'static str {
+    if errors
+        .iter()
+        .any(|e| matches!(e, ResolvedRefsError::InvalidKind { .. }))
+    {
+        return condition_reasons::INVALID_KIND;
     }
-    // Per Gateway API spec, ReferenceGrant denial takes precedence over backend-not-found.
-    // Match on "referencegrant" which appears in all cross-namespace denial messages
-    // (e.g. "not allowed by ReferenceGrant", "denied: NoMatchingReferenceGrant").
-    for err in errors {
-        let lower = err.to_lowercase();
-        if lower.contains("referencegrant") {
-            return condition_reasons::REF_NOT_PERMITTED;
-        }
+    if errors
+        .iter()
+        .any(|e| matches!(e, ResolvedRefsError::RefNotPermitted { .. }))
+    {
+        return condition_reasons::REF_NOT_PERMITTED;
     }
-    for err in errors {
-        let lower = err.to_lowercase();
-        if lower.contains("not found") {
-            return condition_reasons::BACKEND_NOT_FOUND;
-        }
+    if errors
+        .iter()
+        .any(|e| matches!(e, ResolvedRefsError::BackendNotFound { .. }))
+    {
+        return condition_reasons::BACKEND_NOT_FOUND;
     }
     condition_reasons::REF_NOT_PERMITTED
 }
@@ -199,20 +292,22 @@ pub fn ready_condition(observed_generation: Option<i64>) -> Condition {
 }
 
 /// Set all standard conditions for a route's parent status.
-/// `accepted_errors` controls the Accepted condition per-parent.
-/// `resolved_refs_errors` controls the ResolvedRefs condition (route-level).
+/// Uses empty `accepted_errors`; `resolved_refs_errors` controls the ResolvedRefs condition.
 pub fn set_route_parent_conditions(
     conditions: &mut Vec<Condition>,
-    validation_errors: &[String],
+    resolved_refs_errors: &[ResolvedRefsError],
     observed_generation: Option<i64>,
 ) {
-    set_route_parent_conditions_full(conditions, &[], validation_errors, observed_generation);
+    set_route_parent_conditions_full(conditions, &[], resolved_refs_errors, observed_generation);
 }
 
+/// Set all standard conditions for a route's parent status.
+/// `accepted_errors` controls the Accepted condition per-parent.
+/// `resolved_refs_errors` controls the ResolvedRefs condition (route-level).
 pub fn set_route_parent_conditions_full(
     conditions: &mut Vec<Condition>,
-    accepted_errors: &[String],
-    resolved_refs_errors: &[String],
+    accepted_errors: &[AcceptedError],
+    resolved_refs_errors: &[ResolvedRefsError],
     observed_generation: Option<i64>,
 ) {
     if accepted_errors.is_empty() {
@@ -220,47 +315,21 @@ pub fn set_route_parent_conditions_full(
         update_condition(conditions, programmed_condition(observed_generation));
         update_condition(conditions, ready_condition(observed_generation));
     } else {
-        let reason = infer_accepted_reason(accepted_errors);
+        let reason = accepted_errors[0].reason();
+        let message = accepted_errors
+            .iter()
+            .map(|e| e.message())
+            .collect::<Vec<_>>()
+            .join("; ");
         update_condition(
             conditions,
-            condition_false(
-                condition_types::ACCEPTED,
-                reason,
-                accepted_errors.join("; "),
-                observed_generation,
-            ),
+            condition_false(condition_types::ACCEPTED, reason, message, observed_generation),
         );
     }
     update_condition(
         conditions,
         resolved_refs_condition(resolved_refs_errors, observed_generation),
     );
-}
-
-fn infer_accepted_reason(errors: &[String]) -> &'static str {
-    // Check namespace/policy violations first (NotAllowedByListeners takes priority)
-    for err in errors {
-        let lower = err.to_lowercase();
-        if lower.contains("not allowed") {
-            return condition_reasons::NOT_ALLOWED_BY_LISTENERS;
-        }
-    }
-    // Check for listener hostname intersection failure (NoMatchingListenerHostname)
-    // This occurs when route hostnames don't intersect with any listener's hostname.
-    for err in errors {
-        let lower = err.to_lowercase();
-        if lower.contains("listener hostname") || lower.contains("no matching hostname") {
-            return condition_reasons::NO_MATCHING_LISTENER_HOSTNAME;
-        }
-    }
-    // Check for no matching parent (sectionName or port mismatch)
-    for err in errors {
-        let lower = err.to_lowercase();
-        if lower.contains("no matching") || lower.contains("sectionname") {
-            return condition_reasons::NO_MATCHING_PARENT;
-        }
-    }
-    condition_reasons::NO_MATCHING_PARENT
 }
 
 #[cfg(test)]
@@ -300,17 +369,214 @@ mod tests {
     }
 
     #[test]
-    fn test_resolved_refs_condition() {
-        // No errors -> True
+    fn test_resolved_refs_condition_no_errors() {
         let cond = resolved_refs_condition(&[], Some(1));
         assert_eq!(cond.status, "True");
         assert_eq!(cond.reason, "ResolvedRefs");
+    }
 
-        // With errors -> False
-        let cond = resolved_refs_condition(&["Error 1".to_string(), "Error 2".to_string()], Some(1));
+    #[test]
+    fn test_accepted_error_not_allowed_by_listeners() {
+        let err = AcceptedError::NotAllowedByListeners {
+            route_ns: "test-ns".to_string(),
+        };
+        assert_eq!(err.reason(), "NotAllowedByListeners");
+        assert_eq!(
+            err.message(),
+            "Route namespace 'test-ns' not allowed by Gateway listeners"
+        );
+    }
+
+    #[test]
+    fn test_accepted_error_no_matching_listener_hostname() {
+        let err = AcceptedError::NoMatchingListenerHostname {
+            hostnames: vec!["a.example.com".to_string(), "b.example.com".to_string()],
+        };
+        assert_eq!(err.reason(), "NoMatchingListenerHostname");
+        assert!(err.message().contains("a.example.com"));
+        assert!(err.message().contains("b.example.com"));
+    }
+
+    #[test]
+    fn test_accepted_error_no_matching_parent() {
+        let err = AcceptedError::NoMatchingParent {
+            section_name: "https".to_string(),
+        };
+        assert_eq!(err.reason(), "NoMatchingParent");
+        assert_eq!(err.message(), "No matching listener for sectionName 'https'");
+    }
+
+    #[test]
+    fn test_resolved_refs_error_invalid_kind() {
+        let err = ResolvedRefsError::InvalidKind {
+            kind: "Deployment".to_string(),
+            name: "my-deploy".to_string(),
+        };
+        assert_eq!(err.reason(), "InvalidKind");
+        assert_eq!(
+            err.message(),
+            "Invalid backend ref kind 'Deployment' for backend 'my-deploy'"
+        );
+    }
+
+    #[test]
+    fn test_resolved_refs_error_backend_not_found() {
+        let err = ResolvedRefsError::BackendNotFound {
+            namespace: "default".to_string(),
+            name: "my-svc".to_string(),
+        };
+        assert_eq!(err.reason(), "BackendNotFound");
+        assert_eq!(err.message(), "Service 'default/my-svc' not found");
+    }
+
+    #[test]
+    fn test_resolved_refs_error_ref_not_permitted() {
+        let err = ResolvedRefsError::RefNotPermitted {
+            target_namespace: "other-ns".to_string(),
+            target_name: "other-svc".to_string(),
+        };
+        assert_eq!(err.reason(), "RefNotPermitted");
+        assert_eq!(
+            err.message(),
+            "Cross-namespace reference to other-ns/other-svc not allowed by ReferenceGrant"
+        );
+    }
+
+    #[test]
+    fn test_resolved_refs_condition_single_error() {
+        let errors = vec![ResolvedRefsError::BackendNotFound {
+            namespace: "default".to_string(),
+            name: "svc-a".to_string(),
+        }];
+        let cond = resolved_refs_condition(&errors, Some(1));
         assert_eq!(cond.status, "False");
+        assert_eq!(cond.reason, "BackendNotFound");
+        assert!(cond.message.contains("svc-a"));
+    }
+
+    #[test]
+    fn test_resolved_refs_reason_priority_invalid_kind_highest() {
+        let errors = vec![
+            ResolvedRefsError::RefNotPermitted {
+                target_namespace: "ns".to_string(),
+                target_name: "svc".to_string(),
+            },
+            ResolvedRefsError::InvalidKind {
+                kind: "Deployment".to_string(),
+                name: "deploy".to_string(),
+            },
+            ResolvedRefsError::BackendNotFound {
+                namespace: "default".to_string(),
+                name: "svc2".to_string(),
+            },
+        ];
+        let cond = resolved_refs_condition(&errors, Some(1));
+        assert_eq!(cond.reason, "InvalidKind");
+    }
+
+    #[test]
+    fn test_resolved_refs_reason_priority_ref_not_permitted_over_backend() {
+        let errors = vec![
+            ResolvedRefsError::BackendNotFound {
+                namespace: "default".to_string(),
+                name: "svc".to_string(),
+            },
+            ResolvedRefsError::RefNotPermitted {
+                target_namespace: "other".to_string(),
+                target_name: "svc2".to_string(),
+            },
+        ];
+        let cond = resolved_refs_condition(&errors, Some(1));
         assert_eq!(cond.reason, "RefNotPermitted");
-        assert!(cond.message.contains("Error 1"));
-        assert!(cond.message.contains("Error 2"));
+    }
+
+    #[test]
+    fn test_resolved_refs_condition_message_joins_multiple() {
+        let errors = vec![
+            ResolvedRefsError::BackendNotFound {
+                namespace: "a".to_string(),
+                name: "svc1".to_string(),
+            },
+            ResolvedRefsError::BackendNotFound {
+                namespace: "b".to_string(),
+                name: "svc2".to_string(),
+            },
+        ];
+        let cond = resolved_refs_condition(&errors, Some(1));
+        assert!(cond.message.contains("a/svc1"));
+        assert!(cond.message.contains("b/svc2"));
+        assert!(cond.message.contains("; "));
+    }
+
+    #[test]
+    fn test_set_route_parent_conditions_no_errors() {
+        let mut conditions = Vec::new();
+        set_route_parent_conditions(&mut conditions, &[], Some(1));
+
+        assert_eq!(conditions.len(), 4); // Accepted, Programmed, Ready, ResolvedRefs
+        assert!(conditions.iter().all(|c| c.status == "True"));
+        assert!(conditions.iter().any(|c| c.type_ == "Accepted"));
+        assert!(conditions.iter().any(|c| c.type_ == "Programmed"));
+        assert!(conditions.iter().any(|c| c.type_ == "Ready"));
+        assert!(conditions.iter().any(|c| c.type_ == "ResolvedRefs"));
+    }
+
+    #[test]
+    fn test_set_route_parent_conditions_with_resolved_refs_errors() {
+        let mut conditions = Vec::new();
+        let errors = vec![ResolvedRefsError::RefNotPermitted {
+            target_namespace: "ns".to_string(),
+            target_name: "svc".to_string(),
+        }];
+        set_route_parent_conditions(&mut conditions, &errors, Some(1));
+
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "True");
+
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, "RefNotPermitted");
+    }
+
+    #[test]
+    fn test_set_route_parent_conditions_full_with_accepted_errors() {
+        let mut conditions = Vec::new();
+        let accepted_errors = vec![AcceptedError::NotAllowedByListeners {
+            route_ns: "blocked-ns".to_string(),
+        }];
+        set_route_parent_conditions_full(&mut conditions, &accepted_errors, &[], Some(1));
+
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "NotAllowedByListeners");
+        assert!(accepted.message.contains("blocked-ns"));
+
+        // Programmed and Ready should NOT be set when Accepted is False
+        assert!(!conditions.iter().any(|c| c.type_ == "Programmed"));
+        assert!(!conditions.iter().any(|c| c.type_ == "Ready"));
+
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(resolved.status, "True");
+    }
+
+    #[test]
+    fn test_set_route_parent_conditions_full_with_both_errors() {
+        let mut conditions = Vec::new();
+        let accepted_errors = vec![AcceptedError::NoMatchingParent {
+            section_name: "nonexistent".to_string(),
+        }];
+        let resolved_errors = vec![ResolvedRefsError::BackendNotFound {
+            namespace: "default".to_string(),
+            name: "missing-svc".to_string(),
+        }];
+        set_route_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_errors, Some(1));
+
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "NoMatchingParent");
+
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, "BackendNotFound");
     }
 }

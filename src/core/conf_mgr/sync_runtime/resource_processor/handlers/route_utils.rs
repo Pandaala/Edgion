@@ -32,12 +32,14 @@ pub fn listener_allows_route_namespace(
             };
             let store = super::super::namespace_store::get_namespace_store();
             let Some(ns_labels) = store.get_labels(route_ns) else {
-                // Namespace not found in store (not yet synced or non-K8s mode)
+                // Namespace not found in store (not yet synced or non-K8s mode).
+                // Fall back to Same policy: same-ns is safe, cross-ns is denied.
                 tracing::warn!(
                     route_ns = %route_ns,
-                    "Namespace labels not found for Selector evaluation, denying"
+                    gateway_ns = %gateway_ns,
+                    "Namespace labels not found for Selector evaluation, falling back to Same"
                 );
-                return false;
+                return route_ns == gateway_ns;
             };
             super::super::namespace_store::label_selector_matches(selector, &ns_labels)
         }
@@ -160,6 +162,21 @@ mod tests {
     }
 
     #[test]
+    fn test_ns_policy_selector_falls_back_to_same_when_labels_missing() {
+        // When namespace labels are unavailable (FileSystem / non-K8s mode),
+        // Selector falls back to Same: same-ns allowed, cross-ns denied.
+        let allowed = Some(AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("Selector".into()),
+                selector: Some(serde_json::json!({ "matchLabels": { "env": "prod" } })),
+            }),
+            kinds: None,
+        });
+        assert!(listener_allows_route_namespace(&allowed, "gw-ns", "gw-ns"));
+        assert!(!listener_allows_route_namespace(&allowed, "other-ns", "gw-ns"));
+    }
+
+    #[test]
     fn test_ns_policy_selector_with_store() {
         use crate::core::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store;
         use std::collections::BTreeMap;
@@ -192,6 +209,7 @@ mod tests {
 
         assert!(listener_allows_route_namespace(&allowed, "allowed-ns", "gw-ns"));
         assert!(!listener_allows_route_namespace(&allowed, "denied-ns", "gw-ns"));
+        // unknown-ns: labels not in store → falls back to Same → denied (different ns)
         assert!(!listener_allows_route_namespace(&allowed, "unknown-ns", "gw-ns"));
 
         store.remove("allowed-ns");
@@ -229,11 +247,7 @@ pub fn register_service_backend_refs(
 }
 
 /// Clear Service backend references for a deleted route.
-pub fn clear_service_backend_refs(
-    route_kind: crate::types::ResourceKind,
-    route_ns: &str,
-    route_name: &str,
-) {
+pub fn clear_service_backend_refs(route_kind: crate::types::ResourceKind, route_ns: &str, route_name: &str) {
     use crate::core::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
     use crate::core::conf_mgr::sync_runtime::resource_processor::ResourceRef;
 
