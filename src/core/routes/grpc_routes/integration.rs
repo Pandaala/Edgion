@@ -58,9 +58,7 @@ pub async fn try_match_grpc_route(
             ctx.is_grpc_route_matched = true;
             Ok(true)
         }
-        Err(_) => {
-            Ok(false)
-        }
+        Err(_) => Ok(false),
     }
 }
 

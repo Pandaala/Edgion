@@ -568,7 +568,12 @@ fn update_listener_conditions(
         let ready = condition_false(condition_types::READY, reason, msg, generation);
         update_gateway_condition(&mut ls.conditions, ready);
     } else {
-        let ready = condition_true(condition_types::READY, condition_reasons::READY, "Listener is ready", generation);
+        let ready = condition_true(
+            condition_types::READY,
+            condition_reasons::READY,
+            "Listener is ready",
+            generation,
+        );
         update_gateway_condition(&mut ls.conditions, ready);
     }
 }

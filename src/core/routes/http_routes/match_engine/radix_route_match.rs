@@ -109,14 +109,10 @@ impl RadixRouteMatchEngine {
             if let Some(path_indices) = self.tree_value_to_path_idx.get(tree_value) {
                 for &path_idx in path_indices {
                     if let Some(radix_path) = self.radix_paths.get(path_idx) {
-                        if !radix_path.is_prefix_match
-                            && *match_kind != MatchKind::FullyConsumed
-                        {
+                        if !radix_path.is_prefix_match && *match_kind != MatchKind::FullyConsumed {
                             continue;
                         }
-                        if radix_path.is_prefix_match
-                            && *match_kind == MatchKind::PartialSegment
-                        {
+                        if radix_path.is_prefix_match && *match_kind == MatchKind::PartialSegment {
                             continue;
                         }
                         matched_paths.push(path_idx);
@@ -137,16 +133,12 @@ impl RadixRouteMatchEngine {
             }
             let route_a = &self.routes[self.radix_paths[*a].route_idx];
             let route_b = &self.routes[self.radix_paths[*b].route_idx];
-            route_b
-                .header_matcher_count()
-                .cmp(&route_a.header_matcher_count())
+            route_b.header_matcher_count().cmp(&route_a.header_matcher_count())
         });
 
         for path_idx in &matched_paths {
             let radix_path = &self.radix_paths[*path_idx];
-            if let Some(result) =
-                self.try_route_deep_match(radix_path.route_idx, session, ctx, gateway_infos)?
-            {
+            if let Some(result) = self.try_route_deep_match(radix_path.route_idx, session, ctx, gateway_infos)? {
                 return Ok(result);
             }
         }

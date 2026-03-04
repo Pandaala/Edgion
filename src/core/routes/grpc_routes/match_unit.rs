@@ -92,7 +92,12 @@ impl GrpcRouteRuleUnit {
     /// Deep match: check hostname, Gateway/sectionName, and headers.
     ///
     /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
-    pub fn deep_match(&self, session: &Session, gateway_infos: &[GatewayInfo], hostname: &str) -> Result<Option<GatewayInfo>, EdError> {
+    pub fn deep_match(
+        &self,
+        session: &Session,
+        gateway_infos: &[GatewayInfo],
+        hostname: &str,
+    ) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
 
         // Check Hostname (if route specifies hostnames)

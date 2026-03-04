@@ -99,7 +99,6 @@ impl RadixPath {
             (false, false) => "Exact",
         }
     }
-
 }
 
 /// Normalize a path by merging consecutive slashes.

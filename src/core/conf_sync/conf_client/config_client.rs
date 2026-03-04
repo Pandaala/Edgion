@@ -535,40 +535,6 @@ impl ConfigClient {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_ready_uses_required_kinds() {
-        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-        let _enter = rt.enter();
-        let client = ConfigClient::new("cid".to_string(), "cname".to_string());
-        client.set_required_kinds_for_readiness(&[
-            "GatewayClass".to_string(),
-            "Gateway".to_string(),
-            "HTTPRoute".to_string(),
-        ]);
-
-        // Mark only required kinds as ready.
-        client
-            .get_dyn_cache(ResourceKind::GatewayClass)
-            .expect("gateway class cache")
-            .set_ready();
-        client
-            .get_dyn_cache(ResourceKind::Gateway)
-            .expect("gateway cache")
-            .set_ready();
-        client
-            .get_dyn_cache(ResourceKind::HTTPRoute)
-            .expect("http route cache")
-            .set_ready();
-
-        // Other caches remain not ready, but should not block.
-        assert!(client.is_ready().is_ok());
-    }
-}
-
 pub struct ListDataSimple {
     pub data: String,
     pub sync_version: u64,
@@ -650,5 +616,39 @@ impl ConfigClientEventDispatcher for ConfigClient {
             ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),
             ResourceKind::EdgionAcme => apply_change!(EdgionAcme, edgion_acme, "EdgionAcme"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_ready_uses_required_kinds() {
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let _enter = rt.enter();
+        let client = ConfigClient::new("cid".to_string(), "cname".to_string());
+        client.set_required_kinds_for_readiness(&[
+            "GatewayClass".to_string(),
+            "Gateway".to_string(),
+            "HTTPRoute".to_string(),
+        ]);
+
+        // Mark only required kinds as ready.
+        client
+            .get_dyn_cache(ResourceKind::GatewayClass)
+            .expect("gateway class cache")
+            .set_ready();
+        client
+            .get_dyn_cache(ResourceKind::Gateway)
+            .expect("gateway cache")
+            .set_ready();
+        client
+            .get_dyn_cache(ResourceKind::HTTPRoute)
+            .expect("http route cache")
+            .set_ready();
+
+        // Other caches remain not ready, but should not block.
+        assert!(client.is_ready().is_ok());
     }
 }

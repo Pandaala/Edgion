@@ -225,10 +225,7 @@ impl GatewayBase {
                     );
 
                     // Inject ALL gateway infos for this port into the context
-                    let gateway_infos_for_port = port_gateway_infos
-                        .get(&port)
-                        .cloned()
-                        .unwrap_or_default();
+                    let gateway_infos_for_port = port_gateway_infos.get(&port).cloned().unwrap_or_default();
 
                     let context = listener_builder::ListenerContext {
                         gateway_class_name: gateway_class_name_clone.clone(),

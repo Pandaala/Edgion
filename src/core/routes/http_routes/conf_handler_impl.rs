@@ -219,11 +219,7 @@ impl RouteManager {
 
     /// Rebuild RouteRules for a single exact hostname from ALL stored routes.
     /// Returns new RouteRules or None if no routes remain for this hostname.
-    fn rebuild_exact_hostname(
-        &self,
-        hostname: &str,
-        remove: &HashSet<String>,
-    ) -> Option<Arc<RouteRules>> {
+    fn rebuild_exact_hostname(&self, hostname: &str, remove: &HashSet<String>) -> Option<Arc<RouteRules>> {
         let http_routes = self.http_routes.lock().unwrap();
 
         let mut route_rules_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
@@ -237,8 +233,8 @@ impl RouteManager {
 
             // Check if this route applies to this hostname (explicit or listener-inherited)
             let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-            let applies_to_hostname = resolve_all_effective_hostnames(route, route_namespace)
-                .contains(&hostname.to_string());
+            let applies_to_hostname =
+                resolve_all_effective_hostnames(route, route_namespace).contains(&hostname.to_string());
 
             if !applies_to_hostname {
                 continue;
@@ -456,9 +452,9 @@ impl RouteManager {
                 continue;
             }
 
-                let match_engine = if route_rules_list.is_empty() {
-                    None
-                } else {
+            let match_engine = if route_rules_list.is_empty() {
+                None
+            } else {
                 match RadixRouteMatchEngine::build(route_rules_list.clone()) {
                     Ok(engine) => Some(Arc::new(engine)),
                     Err(e) => {
@@ -468,10 +464,10 @@ impl RouteManager {
                 }
             };
 
-                let regex_routes_engine =
-                    (!regex_routes_list.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(regex_routes_list.clone())));
+            let regex_routes_engine =
+                (!regex_routes_list.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(regex_routes_list.clone())));
 
-                let route_rules = Arc::new(RouteRules {
+            let route_rules = Arc::new(RouteRules {
                 resource_keys: RwLock::new(resource_keys),
                 route_rules_list: RwLock::new(route_rules_list),
                 match_engine,
@@ -725,11 +721,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         let global = self.global_routes.load();
         global.exact_domain_map.store(Arc::new(exact_domain_map));
         global.wildcard_engine.store(Arc::new(wildcard_engine));
-        tracing::info!(
-            component = "route_manager",
-            ms = elapsed.as_millis(),
-            "full set done"
-        );
+        tracing::info!(component = "route_manager", ms = elapsed.as_millis(), "full set done");
     }
 
     /// Handle partial configuration updates.
@@ -793,7 +785,11 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             }
 
             current_global.exact_domain_map.store(Arc::new(new_map));
-            tracing::info!(component="route_manager",cnt=exact_hostnames.len(),"exact domains updated");
+            tracing::info!(
+                component = "route_manager",
+                cnt = exact_hostnames.len(),
+                "exact domains updated"
+            );
         }
 
         // Update wildcard domains (rebuild engine with Arc reuse)
@@ -804,7 +800,11 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             match self.rebuild_wildcard_engine(&wildcard_hostnames, &remove, current_engine) {
                 Ok(new_engine_opt) => {
                     current_global.wildcard_engine.store(Arc::new(new_engine_opt));
-                    tracing::info!(component="route_manager",cnt=wildcard_hostnames.len(),"wildcard engine rebuilt");
+                    tracing::info!(
+                        component = "route_manager",
+                        cnt = wildcard_hostnames.len(),
+                        "wildcard engine rebuilt"
+                    );
                 }
                 Err(e) => {
                     tracing::error!(component="route_manager",err=%e,"failed to rebuild wildcard engine");

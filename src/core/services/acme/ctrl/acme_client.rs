@@ -322,7 +322,6 @@ impl AcmeClient {
             pending.push(PendingDnsChallenge { domain, digest });
         }
 
-
         Ok((pending, Dns01OrderContext { order }))
     }
 

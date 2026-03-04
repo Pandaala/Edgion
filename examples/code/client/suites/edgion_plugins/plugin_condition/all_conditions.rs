@@ -334,9 +334,10 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| {
-                                            s.contains("run:keyExist") && s.contains("cke:session_id")
-                                        })
+                                        && log
+                                            .cond_skip
+                                            .as_ref()
+                                            .is_some_and(|s| s.contains("run:keyExist") && s.contains("cke:session_id"))
                                 });
 
                             if found_skipped {
