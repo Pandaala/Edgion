@@ -328,7 +328,7 @@ fn parse_labels(labels_str: &str) -> HashMap<String, String> {
 
     while chars.peek().is_some() {
         // Skip whitespace and commas
-        while chars.peek().map_or(false, |c| *c == ',' || c.is_whitespace()) {
+        while chars.peek().is_some_and(|c| *c == ',' || c.is_whitespace()) {
             chars.next();
         }
 
@@ -338,7 +338,7 @@ fn parse_labels(labels_str: &str) -> HashMap<String, String> {
 
         // Parse label name
         let mut name = String::new();
-        while chars.peek().map_or(false, |c| *c != '=') {
+        while chars.peek().is_some_and(|c| *c != '=') {
             name.push(chars.next().unwrap());
         }
         chars.next(); // skip '='
@@ -462,7 +462,7 @@ fn analyze_chash_consistency(metrics: &[BackendMetric]) -> Result<ConsistentHash
             if let (Some(hash_key), Some(ip), Some(port)) = (&test_data.hash_key, &test_data.ip, test_data.port) {
                 if !hash_key.is_empty() {
                     let endpoint = format!("{}:{}", ip, port);
-                    let endpoints = key_mapping.entry(hash_key.clone()).or_insert_with(HashMap::new);
+                    let endpoints = key_mapping.entry(hash_key.clone()).or_default();
                     *endpoints.entry(endpoint).or_insert(0) += metric.count;
                 }
             }

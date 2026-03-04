@@ -33,7 +33,7 @@ fn generate_jwt_with_claims(claims_json: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(JWT_SECRET.as_bytes()).unwrap();
     mac.update(message.as_bytes());
     let signature = mac.finalize().into_bytes();
-    let signature_b64 = URL_SAFE_NO_PAD.encode(&signature);
+    let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
 
     format!("{}.{}.{}", header_b64, payload_b64, signature_b64)
 }

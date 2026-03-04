@@ -17,7 +17,7 @@ const CLIENT_CERT_SECRET_YAML: &str =
 fn read_secret_data_field(yaml: &str, key: &str) -> Option<String> {
     let value: Value = serde_yaml::from_str(yaml).ok()?;
     let data = value.get("data")?.as_mapping()?;
-    data.get(&Value::String(key.to_string()))?
+    data.get(Value::String(key.to_string()))?
         .as_str()
         .map(|s| s.to_string())
 }

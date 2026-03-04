@@ -1,6 +1,7 @@
 // Edgion Unified Test Client
 // Supports all protocol tests: HTTP/HTTPS, gRPC, WebSocket, TCP, UDP
 
+#![allow(clippy::module_inception)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 

@@ -13,6 +13,7 @@
 //   - all       Run all tests
 
 // Reuse client modules
+#![allow(clippy::module_inception)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #[path = "../client/access_log_client.rs"]
@@ -69,7 +70,6 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
 
-    ///
     #[arg(short, long)]
     verbose: bool,
 }

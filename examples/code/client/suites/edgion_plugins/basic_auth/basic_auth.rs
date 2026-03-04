@@ -73,7 +73,7 @@ impl BasicAuthTestSuite {
                             if status == 200 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("Alice authenticated successfully (200)"),
+                                    "Alice authenticated successfully (200)".to_string(),
                                 )
                             } else {
                                 TestResult::failed(

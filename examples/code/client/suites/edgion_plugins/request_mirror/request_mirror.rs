@@ -517,7 +517,7 @@ impl RequestMirrorTestSuite {
 
                     let pct = (received as f64 / total as f64) * 100.0;
                     // With 50% sampling and N=40, expect 30-70% to be mirrored (generous range due to randomness)
-                    if pct >= 15.0 && pct <= 85.0 {
+                    if (15.0..=85.0).contains(&pct) {
                         TestResult::passed_with_message(
                             start.elapsed(),
                             format!("50% sampling: {}/{} mirrored ({:.0}%) ✓", received, total, pct),

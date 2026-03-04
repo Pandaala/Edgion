@@ -180,7 +180,7 @@ impl AllConditionsTestSuite {
                                         && log
                                             .cond_skip
                                             .as_ref()
-                                            .map_or(false, |s| s.contains("hdr:X-Skip-KeyExist-Header"))
+                                            .is_some_and(|s| s.contains("hdr:X-Skip-KeyExist-Header"))
                                 });
 
                             if found_skipped {
@@ -256,7 +256,7 @@ impl AllConditionsTestSuite {
                                 .any(|log| {
                                     log.name == "Mock"
                                         && was_skipped_by_condition(log, "keyExist")
-                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("query:skip_query"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("query:skip_query"))
                                 });
 
                             if found_skipped {
@@ -334,7 +334,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().map_or(false, |s| {
+                                        && log.cond_skip.as_ref().is_some_and(|s| {
                                             s.contains("run:keyExist") && s.contains("cke:session_id")
                                         })
                                 });
@@ -429,7 +429,7 @@ impl AllConditionsTestSuite {
                                         && log
                                             .cond_skip
                                             .as_ref()
-                                            .map_or(false, |s| s.contains("run:keyMatch") && s.contains("hdr:X-Env"))
+                                            .is_some_and(|s| s.contains("run:keyMatch") && s.contains("hdr:X-Env"))
                                 });
 
                             if found_skipped {
@@ -798,7 +798,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("run:timeRange"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:timeRange"))
                                 });
 
                             if found_skipped {
@@ -879,7 +879,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("run:probability"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:probability"))
                                 });
 
                             if found_skipped {
@@ -1005,7 +1005,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("run:include"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:include"))
                                 });
 
                             if found_skipped {
@@ -1207,7 +1207,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("skip:exclude"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:exclude"))
                                 });
 
                             if found_skipped {
@@ -1252,7 +1252,7 @@ impl AllConditionsTestSuite {
                                         && log
                                             .cond_skip
                                             .as_ref()
-                                            .map_or(false, |s| s.contains("skip:exclude") && s.contains("mtd"))
+                                            .is_some_and(|s| s.contains("skip:exclude") && s.contains("mtd"))
                                 });
 
                             if found_skipped {
@@ -1294,7 +1294,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().map_or(false, |s| s.contains("skip:exclude"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:exclude"))
                                 });
 
                             if found_skipped {

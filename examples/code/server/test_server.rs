@@ -400,7 +400,6 @@ async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse 
 // ============================================================================
 // Mirror handlers (for RequestMirror plugin integration tests)
 // ============================================================================
-
 /// /mirror/capture  — receive mirrored requests and store them by x-trace-id.
 ///
 /// The gateway's RequestMirror plugin copies the original request (including its

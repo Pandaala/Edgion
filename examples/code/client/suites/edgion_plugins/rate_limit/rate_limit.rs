@@ -264,7 +264,7 @@ impl RateLimitTestSuite {
                             if status == 200 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("Key A (exhausted) blocked 429, Key B (fresh) allowed 200"),
+                                    "Key A (exhausted) blocked 429, Key B (fresh) allowed 200".to_string(),
                                 )
                             } else {
                                 TestResult::failed(

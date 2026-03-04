@@ -245,7 +245,7 @@ impl RefGrantStatusTestSuite {
                         Ok(route) => {
                             let has_accepted = if let Some(parents) = route["status"]["parents"].as_array() {
                                 parents.iter().any(|p| {
-                                    p["conditions"].as_array().map_or(false, |conds| {
+                                    p["conditions"].as_array().is_some_and(|conds| {
                                         conds.iter().any(|c| c["type"].as_str() == Some("Accepted"))
                                     })
                                 })
@@ -285,7 +285,7 @@ impl RefGrantStatusTestSuite {
 
                     match Self::fetch_gateway_class_status(&ctx, "public-gateway").await {
                         Ok(gc) => {
-                            let accepted_true = gc["status"]["conditions"].as_array().map_or(false, |conds| {
+                            let accepted_true = gc["status"]["conditions"].as_array().is_some_and(|conds| {
                                 conds.iter().any(|c| {
                                     c["type"].as_str() == Some("Accepted") && c["status"].as_str() == Some("True")
                                 })

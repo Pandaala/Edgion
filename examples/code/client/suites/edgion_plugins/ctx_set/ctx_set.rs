@@ -56,7 +56,7 @@ impl CtxSetTestSuite {
                         if access_log.contains(r#""tenant_id":"acme-corp""#) {
                             TestResult::passed_with_message(
                                 start.elapsed(),
-                                format!("ctx.tenant_id correctly set from header"),
+                                "ctx.tenant_id correctly set from header".to_string(),
                             )
                         } else {
                             TestResult::failed(
