@@ -49,6 +49,37 @@ log_section() {
     echo -e "${BLUE}========================================${NC}"
 }
 
+# Runtime-generated certificate Secrets should never be loaded from conf/.
+is_runtime_generated_secret_template() {
+    local relative_path=$1
+    case "$relative_path" in
+        "base/Secret_edgion-test_edge-tls.yaml")
+            return 0
+            ;;
+        "EdgionTls/mTLS/Secret_edge_client-ca.yaml")
+            return 0
+            ;;
+        "EdgionTls/mTLS/Secret_edge_ca-chain.yaml")
+            return 0
+            ;;
+        "EdgionTls/mTLS/Secret_edge_mtls-server.yaml")
+            return 0
+            ;;
+        "HTTPRoute/Backend/BackendTLS/Secret_backend-ca.yaml")
+            return 0
+            ;;
+        "HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml")
+            return 0
+            ;;
+        "EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca.yaml")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # =============================================================================
 # helpinfo
 # =============================================================================
@@ -175,6 +206,12 @@ load_directory_recursive() {
     fi
     
     for file in $files; do
+        local relative_file="${file#${CONF_DIR}/}"
+        if is_runtime_generated_secret_template "$relative_file"; then
+            log_info "Skipping runtime-managed Secret template: $relative_file"
+            continue
+        fi
+
         if ! apply_file "$file"; then
             failed=true
         fi

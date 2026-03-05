@@ -24,9 +24,11 @@ CERTS_DIR="${SCRIPT_DIR}/../certs"
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/integration_testing/testing_${TIMESTAMP}"
+GENERATED_SECRET_DIR="${WORK_DIR}/generated-secrets"
 
 #  WORK_DIR scriptuse
 export EDGION_WORK_DIR="$WORK_DIR"
+export EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR"
 
 # directory
 LOG_DIR="${WORK_DIR}/logs"
@@ -427,11 +429,13 @@ load_base_config() {
 # =============================================================================
 generate_certs() {
     log_section "GenerateTestcertificate"
+    mkdir -p "$GENERATED_SECRET_DIR"
+    log_info "Generated Secret output directory: $GENERATED_SECRET_DIR"
     
     # Generate TLS certificate
     if [ -f "${CERTS_DIR}/generate_tls_certs.sh" ]; then
         log_info "Run generate_tls_certs.sh..."
-        if bash "${CERTS_DIR}/generate_tls_certs.sh" > /dev/null 2>&1; then
+        if EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR" bash "${CERTS_DIR}/generate_tls_certs.sh" > /dev/null 2>&1; then
             log_success "TLS certificateGeneratecompleted"
         else
             log_warning "TLS certificatealreadyGenerateSkip"
@@ -441,7 +445,7 @@ generate_certs() {
     # Generateafter TLS certificate
     if [ -f "${CERTS_DIR}/generate_backend_certs.sh" ]; then
         log_info "Run generate_backend_certs.sh..."
-        if bash "${CERTS_DIR}/generate_backend_certs.sh" > /dev/null 2>&1; then
+        if EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR" bash "${CERTS_DIR}/generate_backend_certs.sh" > /dev/null 2>&1; then
             log_success "after TLS certificateGeneratecompleted"
         else
             log_warning "after TLS certificatealreadyGenerateSkip"
@@ -451,13 +455,54 @@ generate_certs() {
     # Generate mTLS certificate
     if [ -f "${CERTS_DIR}/generate_mtls_certs.sh" ]; then
         log_info "Run generate_mtls_certs.sh..."
-        if bash "${CERTS_DIR}/generate_mtls_certs.sh" > /dev/null 2>&1; then
+        if EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR" bash "${CERTS_DIR}/generate_mtls_certs.sh" > /dev/null 2>&1; then
             log_success "mTLS certificateGeneratecompleted"
         else
             log_warning "mTLS certificatealreadyGenerateSkip"
         fi
     fi
     
+}
+
+# =============================================================================
+# Load generated Secret configs (runtime only, never write into conf/)
+# =============================================================================
+load_generated_secrets() {
+    log_section "LoadGeneratedSecrets"
+
+    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
+    if [ ! -d "$GENERATED_SECRET_DIR" ]; then
+        log_warning "Generated Secret directory not found: $GENERATED_SECRET_DIR"
+        return 0
+    fi
+
+    local files
+    files=$(find "$GENERATED_SECRET_DIR" -type f \( -name "*.yaml" -o -name "*.yml" \) | sort)
+    if [ -z "$files" ]; then
+        log_warning "No generated Secret YAML files found in: $GENERATED_SECRET_DIR"
+        return 0
+    fi
+
+    local failed=false
+    local count=0
+    for file in $files; do
+        local relative_file="${file#${GENERATED_SECRET_DIR}/}"
+        log_info "Load generated Secret $relative_file via API..."
+        if "$edgion_ctl" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
+            log_success "$relative_file Loadsuccess"
+        else
+            log_warning "$relative_file Loadfailed"
+            failed=true
+        fi
+        count=$((count + 1))
+    done
+
+    if $failed; then
+        log_error "Partial generated Secret config load failed"
+        exit 1
+    fi
+
+    log_success "Generated Secret configs loaded: $count"
 }
 
 # =============================================================================
@@ -630,6 +675,9 @@ Logs:
   - ${LOG_DIR}/gateway.log
   - ${LOG_DIR}/access.log
 
+Generated Secrets:
+  - ${GENERATED_SECRET_DIR}
+
 Stop: ./examples/test/scripts/utils/kill_all.sh
 EOF
 }
@@ -678,7 +726,7 @@ main() {
     
     # : Workdirectory
     log_section "Workdirectory"
-    mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
+    mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR" "$GENERATED_SECRET_DIR"
     log_success "Workdirectorycompleted: $WORK_DIR"
     
     # :  CRD schemas 
@@ -707,9 +755,12 @@ main() {
     
     # : （ API）
     load_base_config
-    
+
     # : LoadTestconfig（ API）
     load_configs
+
+    # : Load generated Secret config（ API, override templates in conf/）
+    load_generated_secrets
     
     # : Start gateway
     start_gateway
@@ -733,6 +784,7 @@ main() {
     echo ""
     echo "logdirectory: ${LOG_DIR}"
     echo "configdirectory: ${CONFIG_DIR}"
+    echo "generated secrets: ${GENERATED_SECRET_DIR}"
     echo ""
     echo "Stopservice: ./examples/test/scripts/utils/kill_all.sh"
     echo ""

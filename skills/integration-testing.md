@@ -32,12 +32,14 @@ Step 2: Start      →  start_all_with_conf.sh
   ├─ 2c: Create work dir (integration_testing/testing_YYYYMMDD_HHMMSS/)
   ├─ 2d: Copy CRD schemas to work dir
   ├─ 2e: Generate TLS certs (scripts/certs/*.sh)
-  ├─ 2f: Start test_server → wait health
-  ├─ 2g: Start controller  → wait health + ConfigServer ready
-  ├─ 2h: Load base config (conf/base/*.yaml) via edgion-ctl
-  ├─ 2i: Load test suite configs (conf/<Resource>/<Item>/) via edgion-ctl
-  ├─ 2j: Start gateway → wait ready + LB preload
-  └─ 2k: Verify resource sync (resource_diff)
+  ├─ 2f: Write runtime Secret YAMLs (WORK_DIR/generated-secrets/, not conf/)
+  ├─ 2g: Start test_server → wait health
+  ├─ 2h: Start controller  → wait health + ConfigServer ready
+  ├─ 2i: Load base config (conf/base/*.yaml) via edgion-ctl
+  ├─ 2j: Load test suite configs (conf/<Resource>/<Item>/) via edgion-ctl
+  ├─ 2k: Load runtime Secret YAMLs (generated-secrets/) via edgion-ctl (override templates)
+  ├─ 2l: Start gateway → wait ready + LB preload
+  └─ 2m: Verify resource sync (resource_diff)
 Step 3: Run tests  →  test_client -g -r <Resource> -i <Item>
 Step 4: Cleanup    →  kill_all.sh
 ```
@@ -521,13 +523,18 @@ Keep this mapping clean when adding new tests.
 
 ## TLS Certificates
 
-Certs are **never committed** to the repository. They are generated on-the-fly:
+Cert files are **never committed** to the repository. They are generated on-the-fly.
+
+Certificate-bearing Secret YAMLs are **runtime-generated only**:
+- Generated under `integration_testing/testing_YYYYMMDD_HHMMSS/generated-secrets/`
+- Loaded by `start_all_with_conf.sh` after suite config (as final override)
+- **Never** written back to `examples/test/conf/`
 
 | Script | Output | Used by |
 |---|---|---|
-| `scripts/certs/generate_tls_certs.sh` | `examples/test/certs/tls/` | HTTPS, GatewayTLS tests |
-| `scripts/certs/generate_backend_certs.sh` | `examples/test/certs/backend/` | Backend TLS tests |
-| `scripts/certs/generate_mtls_certs.sh` | `examples/test/certs/mtls/` | mTLS tests |
+| `scripts/certs/generate_tls_certs.sh` | `examples/test/certs/` + `WORK_DIR/generated-secrets/base/` | HTTPS, GatewayTLS tests |
+| `scripts/certs/generate_backend_certs.sh` | `examples/test/certs/backend/` + `WORK_DIR/generated-secrets/HTTPRoute/Backend/BackendTLS/` | Backend TLS tests |
+| `scripts/certs/generate_mtls_certs.sh` | `examples/test/certs/mtls/` + `WORK_DIR/generated-secrets/{EdgionTls,HTTPRoute,EdgionPlugins}/` | mTLS tests |
 
 If your plugin needs TLS (e.g., calling external HTTPS endpoints), either:
 - Reuse existing certs from `examples/test/certs/`
@@ -686,6 +693,11 @@ All logs are in the timestamped work directory:
 
 ```
 integration_testing/testing_YYYYMMDD_HHMMSS/
+├── generated-secrets/        # Runtime-generated Secret YAML (cert-related)
+│   ├── base/
+│   ├── EdgionTls/mTLS/
+│   ├── HTTPRoute/Backend/BackendTLS/
+│   └── EdgionPlugins/HeaderCertAuth/
 ├── logs/
 │   ├── controller.log        # Controller stderr (errors, warnings, info)
 │   ├── gateway.log           # Gateway stderr
