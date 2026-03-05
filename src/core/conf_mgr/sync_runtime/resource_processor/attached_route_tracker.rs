@@ -76,7 +76,8 @@ impl AttachedRouteTracker {
     /// Register (or re-register) a route's attachments derived from its parentRefs.
     ///
     /// Single-lock-acquisition: removes old entries and inserts new ones atomically.
-    pub fn update_route(&self, route_kind: ResourceKind, route_key: &str, attachments: HashSet<Attachment>) {
+    /// Returns true if the attachments actually changed (or were newly created).
+    pub fn update_route(&self, route_kind: ResourceKind, route_key: &str, attachments: HashSet<Attachment>) -> bool {
         let route_ref = RouteRef {
             kind: route_kind,
             key: route_key.to_string(),
@@ -85,11 +86,15 @@ impl AttachedRouteTracker {
         let mut fwd = self.forward.write().unwrap();
         let mut rev = self.reverse.write().unwrap();
 
-        // Remove old entries first
+        let old = rev.get(&route_ref);
+        if old.map(|o| o == &attachments).unwrap_or(attachments.is_empty()) {
+            return false;
+        }
+
         Self::remove_from_maps(&mut fwd, &mut rev, &route_ref);
 
         if attachments.is_empty() {
-            return;
+            return true;
         }
 
         for att in &attachments {
@@ -103,10 +108,12 @@ impl AttachedRouteTracker {
         }
 
         rev.insert(route_ref, attachments);
+        true
     }
 
     /// Remove all entries for a deleted route.
-    pub fn remove_route(&self, route_kind: ResourceKind, route_key: &str) {
+    /// Returns true if the route was tracked (had entries to remove).
+    pub fn remove_route(&self, route_kind: ResourceKind, route_key: &str) -> bool {
         let route_ref = RouteRef {
             kind: route_kind,
             key: route_key.to_string(),
@@ -115,7 +122,9 @@ impl AttachedRouteTracker {
         let mut fwd = self.forward.write().unwrap();
         let mut rev = self.reverse.write().unwrap();
 
+        let had_entries = rev.contains_key(&route_ref);
         Self::remove_from_maps(&mut fwd, &mut rev, &route_ref);
+        had_entries
     }
 
     /// Count attached routes for a specific listener on a gateway.

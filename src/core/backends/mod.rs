@@ -718,6 +718,9 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
 
     match service_type {
         EdgionService::Service => {
+            if !get_global_service_store().contains(&service_key) {
+                return Err(EdgionStatus::BackendServiceNotFound);
+            }
             let backend = select_backend_by_policy(&service_key, lb_policy, session)?;
 
             let mut addr = backend.addr;
@@ -944,8 +947,9 @@ pub fn query_backend_tls_policy_for_service(name: &str, namespace: Option<&str>)
 /// Get HTTP peer from service and endpoint slice stores using load balancing
 ///
 /// On error, sets error status to ctx and sends an error response:
-/// - 500 for unsupported backend kinds (Gateway API conformance requirement)
-/// - 503 for all other backend resolution failures
+/// - 500 for invalid backend configuration (non-existent service, unsupported kind,
+///   denied cross-namespace ref) per Gateway API conformance
+/// - 503 for transient backend resolution failures (no endpoints, address errors)
 ///
 /// # Parameters
 /// - `is_grpc`: true if this is for gRPC backend, false for HTTP backend
@@ -960,7 +964,10 @@ pub async fn get_peer(
             ctx.add_error(status);
             let server_header_opts = crate::core::gateway::server_header::ServerHeaderOpts::default();
             match status {
-                EdgionStatus::BackendUnsupportedKind => {
+                EdgionStatus::BackendUnsupportedKind
+                | EdgionStatus::BackendServiceNotFound
+                | EdgionStatus::RefDenied
+                | EdgionStatus::BackendServiceImportNotImplemented => {
                     let _ = end_response_500(session, ctx, &server_header_opts).await;
                 }
                 _ => {

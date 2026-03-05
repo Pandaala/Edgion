@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 
 use super::sync_runtime::resource_processor::{get_listener_port_manager, get_service_ref_manager, ProcessorObj};
+use super::sync_runtime::workqueue::TriggerChain;
 use crate::core::conf_sync::conf_server::WatchObj;
 
 /// Global processor registry instance
@@ -97,16 +98,12 @@ impl ProcessorRegistry {
             .collect()
     }
 
-    /// Cross-resource requeue
+    /// Cross-resource requeue (immediate, no trigger chain).
     ///
-    /// Enqueues a key to another resource's workqueue.
-    /// Used by processors to trigger reprocessing of dependent resources.
+    /// Enqueues a key to another resource's workqueue immediately.
+    /// Used for init-time revalidation and scenarios without cascade context.
     ///
-    /// # Example
-    /// ```ignore
-    /// // When a Secret changes, requeue dependent Gateway
-    /// PROCESSOR_REGISTRY.requeue("Gateway", "default/my-gateway".to_string());
-    /// ```
+    /// For cascade-aware requeue with delay coalescing, use `requeue_with_chain`.
     pub fn requeue(&self, kind: &str, key: String) {
         if let Some(processor) = self.get(kind) {
             processor.requeue(key.clone());
@@ -122,6 +119,31 @@ impl ProcessorRegistry {
                 target_kind = kind,
                 key = %key,
                 "Requeue failed: processor not found"
+            );
+        }
+    }
+
+    /// Cross-resource requeue with trigger chain (delayed, coalesced).
+    ///
+    /// Enqueues a key through the delay subsystem for coalescing.
+    /// The trigger chain is propagated for cascade cycle detection.
+    ///
+    /// Called by `HandlerContext::requeue` after cycle detection passes.
+    pub fn requeue_with_chain(&self, kind: &str, key: String, chain: TriggerChain) {
+        if let Some(processor) = self.get(kind) {
+            processor.requeue_with_chain(key.clone(), chain);
+            tracing::debug!(
+                component = "processor_registry",
+                target_kind = kind,
+                key = %key,
+                "Cross-resource requeue with chain triggered"
+            );
+        } else {
+            tracing::warn!(
+                component = "processor_registry",
+                target_kind = kind,
+                key = %key,
+                "Requeue with chain failed: processor not found"
             );
         }
     }

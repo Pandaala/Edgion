@@ -11,6 +11,13 @@ use crate::core::plugins::plugin_runtime::traits::{PluginSession, RequestFilter}
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::HTTPRequestRedirectFilter;
 
+fn default_port_for_scheme(scheme: &str) -> u16 {
+    match scheme {
+        "https" => 443,
+        _ => 80,
+    }
+}
+
 pub struct RequestRedirectFilter {
     config: HTTPRequestRedirectFilter,
 }
@@ -20,18 +27,40 @@ impl RequestRedirectFilter {
         Self { config }
     }
 
-    /// Build redirect Location header value from config and request
+    /// Build redirect Location header value from config and request.
+    ///
+    /// Port omission follows RFC 7230 / Gateway API semantics:
+    /// - HTTP  scheme default port is 80  → omit from Location
+    /// - HTTPS scheme default port is 443 → omit from Location
+    /// - Any other port is always included
     fn build_location(
         &self,
         original_scheme: &str,
         original_host: Option<&str>,
         original_path: &str,
         matched_path_len: Option<usize>,
+        listener_port: u16,
     ) -> String {
         let scheme = self.config.scheme.as_deref().unwrap_or(original_scheme);
-        let hostname = self.config.hostname.as_deref().or(original_host).unwrap_or("localhost");
+        let hostname = self.config.hostname.as_deref()
+            .or_else(|| original_host.map(|h| h.split(':').next().unwrap_or(h)))
+            .unwrap_or("localhost");
 
-        let port_str = self.config.port.map(|p| format!(":{}", p)).unwrap_or_default();
+        let final_port: u16 = if let Some(p) = self.config.port {
+            p as u16
+        } else if self.config.scheme.is_some() {
+            // Scheme changed without explicit port → use new scheme's default
+            default_port_for_scheme(scheme)
+        } else {
+            // No scheme change, no port override → preserve listener port
+            listener_port
+        };
+
+        let port_str = if final_port == default_port_for_scheme(scheme) {
+            String::new()
+        } else {
+            format!(":{}", final_port)
+        };
 
         // Handle path modification
         let path = if let Some(path_modifier) = &self.config.path {
@@ -76,6 +105,7 @@ impl RequestFilter for RequestRedirectFilter {
         // Get original request info for building Location
         let original_host = session.header_value("host");
         let original_path = session.get_path().to_string();
+        let listener_port = session.ctx().request_info.listener_port;
 
         // Extract matched path length from route info
         let matched_path_len = session
@@ -97,6 +127,7 @@ impl RequestFilter for RequestRedirectFilter {
             original_host.as_deref(),
             &original_path,
             matched_path_len,
+            listener_port,
         );
 
         // Determine status code (default: 302 Found)

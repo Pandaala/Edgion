@@ -3,9 +3,12 @@
 //! Deduplicates common logic used across gateway.rs, http_route.rs,
 //! grpc_route.rs, and other route handlers.
 
+use crate::core::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::core::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::Gateway;
+use crate::types::resources::common::{ParentReference, RefDenied};
 use crate::types::resources::gateway::AllowedRoutes;
+use crate::types::resources::http_route::RouteParentStatus;
 
 /// Check if a listener's namespace policy allows a route from the given namespace.
 ///
@@ -79,6 +82,159 @@ pub fn hostnames_intersect(listener_hn: &str, route_hn: &str) -> bool {
     }
 
     false
+}
+
+/// Check if a Service resource exists in the processor registry.
+pub fn service_exists(namespace: &str, name: &str) -> bool {
+    let Some(processor) = PROCESSOR_REGISTRY.get("Service") else {
+        return true;
+    };
+    processor.contains_key(&format!("{}/{}", namespace, name))
+}
+
+/// Validate backend refs: check kind is "Service" and the Service exists.
+///
+/// Each tuple is `(kind, namespace, name)` extracted from the route's backend refs.
+/// Returns typed errors for ResolvedRefs condition generation.
+pub fn validate_backend_refs(
+    route_ns: &str,
+    backend_refs: &[(Option<&str>, Option<&str>, &str)],
+) -> Vec<ResolvedRefsError> {
+    let mut errors = Vec::new();
+    for &(kind, namespace, name) in backend_refs {
+        let kind_str = kind.unwrap_or("Service");
+        if kind_str != "Service" {
+            errors.push(ResolvedRefsError::InvalidKind {
+                kind: kind_str.to_string(),
+                name: name.to_string(),
+            });
+            continue;
+        }
+        let backend_ns = namespace.unwrap_or(route_ns);
+        if !service_exists(backend_ns, name) {
+            errors.push(ResolvedRefsError::BackendNotFound {
+                namespace: backend_ns.to_string(),
+                name: name.to_string(),
+            });
+        }
+    }
+    errors
+}
+
+/// Collect RefNotPermitted errors from ref_denied fields on backend refs.
+pub fn collect_ref_denied_errors(ref_denied_list: &[Option<&RefDenied>]) -> Vec<ResolvedRefsError> {
+    let mut errors = Vec::new();
+    for ref_denied in ref_denied_list.iter().flatten() {
+        errors.push(ResolvedRefsError::RefNotPermitted {
+            target_namespace: ref_denied.target_namespace.clone(),
+            target_name: ref_denied.target_name.clone(),
+        });
+    }
+    errors
+}
+
+/// Validate a parent ref for the Accepted condition.
+///
+/// Checks namespace policy and (optionally) hostname intersection.
+/// For L4 routes without hostnames, pass `None` to skip hostname checks.
+pub fn validate_parent_ref_accepted(
+    route_ns: &str,
+    parent_ref: &ParentReference,
+    route_hostnames: Option<&Vec<String>>,
+) -> Vec<AcceptedError> {
+    let mut errors = Vec::new();
+
+    let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+    if parent_group != "gateway.networking.k8s.io" {
+        return errors;
+    }
+    let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
+    if parent_kind != "Gateway" {
+        return errors;
+    }
+
+    let parent_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
+    let parent_name = &parent_ref.name;
+
+    let Some(gateway) = lookup_gateway(parent_ns, parent_name) else {
+        return errors;
+    };
+
+    let empty_listeners = Vec::new();
+    let listeners = gateway.spec.listeners.as_ref().unwrap_or(&empty_listeners);
+
+    if let Some(section_name) = &parent_ref.section_name {
+        let has_listener = listeners.iter().any(|l| {
+            l.name == *section_name && parent_ref.port.map_or(true, |p| l.port == p)
+        });
+        if !has_listener {
+            errors.push(AcceptedError::NoMatchingParent {
+                section_name: section_name.clone(),
+            });
+            return errors;
+        }
+    } else if let Some(port) = parent_ref.port {
+        let has_listener = listeners.iter().any(|l| l.port == port);
+        if !has_listener {
+            errors.push(AcceptedError::NoMatchingParent {
+                section_name: format!("port:{}", port),
+            });
+            return errors;
+        }
+    }
+
+    let matching_listeners: Vec<_> = listeners
+        .iter()
+        .filter(|l| {
+            parent_ref.section_name.as_ref().is_none_or(|sn| l.name == *sn)
+                && parent_ref.port.map_or(true, |p| l.port == p)
+        })
+        .collect();
+
+    let ns_allowed = matching_listeners
+        .iter()
+        .any(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns));
+
+    if !ns_allowed {
+        errors.push(AcceptedError::NotAllowedByListeners {
+            route_ns: route_ns.to_string(),
+        });
+        return errors;
+    }
+
+    if let Some(route_hs) = route_hostnames {
+        if !route_hs.is_empty() {
+            let hostname_match = matching_listeners.iter().any(|listener| {
+                match &listener.hostname {
+                    None => true,
+                    Some(listener_hn) => route_hs
+                        .iter()
+                        .any(|route_hn| hostnames_intersect(listener_hn, route_hn)),
+                }
+            });
+            if !hostname_match {
+                errors.push(AcceptedError::NoMatchingListenerHostname {
+                    hostnames: route_hs.clone(),
+                });
+            }
+        }
+    }
+
+    errors
+}
+
+/// Remove stale parent statuses for parents no longer in the spec.
+///
+/// Mirrors the stale listener status cleanup in Gateway handler.
+pub fn retain_current_parent_statuses(parents: &mut Vec<RouteParentStatus>, parent_refs: &[ParentReference]) {
+    parents.retain(|ps| {
+        parent_refs.iter().any(|pr| {
+            pr.name == ps.parent_ref.name
+                && pr.namespace == ps.parent_ref.namespace
+                && pr.section_name == ps.parent_ref.section_name
+                && pr.port == ps.parent_ref.port
+        })
+    });
 }
 
 #[cfg(test)]

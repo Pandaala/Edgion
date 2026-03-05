@@ -183,6 +183,11 @@ pub struct DomainRouteRules {
     /// Uses RadixHostMatchEngine for wildcard support
     /// None if no wildcard domains are configured
     pub(crate) wildcard_engine: ArcSwap<Option<RadixHostMatchEngine<RouteRules>>>,
+
+    /// Catch-all routes from HTTPRoutes with no spec.hostnames.
+    /// Stored separately from exact_domain_map to avoid mixing fallback
+    /// semantics with exact-match semantics (previously used "*" sentinel key).
+    pub(crate) catch_all_routes: ArcSwap<Option<Arc<RouteRules>>>,
 }
 
 impl DomainRouteRules {
@@ -221,9 +226,9 @@ impl DomainRouteRules {
             }
         }
 
-        // Step 3: Try catch-all routes (hostname "*", from HTTPRoutes with no spec.hostnames)
-        if let Some(route_rules) = exact_map.get("*") {
-            return route_rules.match_route(session, ctx, gateway_infos);
+        // Step 3: Try catch-all routes (from HTTPRoutes with no spec.hostnames)
+        if let Some(ref catch_all) = **self.catch_all_routes.load() {
+            return catch_all.match_route(session, ctx, gateway_infos);
         }
 
         Err(EdError::RouteNotFound())
@@ -264,6 +269,7 @@ impl RouteManager {
             global_routes: ArcSwap::from_pointee(DomainRouteRules {
                 exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
                 wildcard_engine: ArcSwap::from_pointee(None),
+                catch_all_routes: ArcSwap::from_pointee(None),
             }),
             http_routes: Mutex::new(HashMap::new()),
         }

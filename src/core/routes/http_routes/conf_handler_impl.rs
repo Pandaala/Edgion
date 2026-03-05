@@ -1,4 +1,3 @@
-use crate::core::conf_mgr::sync_runtime::resource_processor::condition_types;
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::gateway::gateway::get_global_gateway_store;
 use crate::core::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
@@ -8,6 +7,7 @@ use crate::core::routes::http_routes::match_engine::regex_routes_engine::RegexRo
 use crate::core::routes::http_routes::routes_mgr::RouteRules;
 use crate::core::routes::http_routes::{get_global_route_manager, HttpRouteRuleUnit, RouteManager};
 use crate::types::resources::common::ParentReference;
+use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, MatchInfo, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -31,6 +31,74 @@ struct ValidatedHttpRoute<'a> {
 /// Per Gateway API spec, omitting hostnames means "match all hosts".
 const CATCH_ALL_HOSTNAME: &str = "*";
 
+/// Check if a specific parentRef has Accepted=True in the route status.
+///
+/// Returns true when no matching status entry is found (optimistic: include
+/// until the controller explicitly rejects it, e.g. during the first sync
+/// before status is populated).
+fn is_parent_ref_accepted(
+    pr: &ParentReference,
+    status_parents: &[RouteParentStatus],
+    route_ns: Option<&str>,
+) -> bool {
+    let pr_ns = pr.namespace.as_deref().or(route_ns).unwrap_or("default");
+
+    for sp in status_parents {
+        let sp_ns = sp
+            .parent_ref
+            .namespace
+            .as_deref()
+            .or(route_ns)
+            .unwrap_or("default");
+        if sp_ns == pr_ns
+            && sp.parent_ref.name == pr.name
+            && sp.parent_ref.section_name == pr.section_name
+            && sp.parent_ref.port == pr.port
+        {
+            return sp
+                .conditions
+                .iter()
+                .any(|c| c.type_ == "Accepted" && c.status == "True");
+        }
+    }
+    true
+}
+
+/// Filter parentRefs to only those with Accepted=True status.
+///
+/// Routes whose parentRef is not accepted by any Gateway/Listener are excluded
+/// from compilation, keeping the route table clean and simplifying debugging.
+///
+/// Returns None if no parentRefs survive (route should be skipped entirely).
+/// When status is not yet available, all parentRefs are included optimistically.
+pub(crate) fn filter_accepted_parent_refs(
+    parent_refs: Option<&Vec<ParentReference>>,
+    status_parents: Option<&[RouteParentStatus]>,
+    route_ns: Option<&str>,
+) -> Option<Vec<ParentReference>> {
+    let parent_refs = parent_refs?;
+    if parent_refs.is_empty() {
+        return None;
+    }
+
+    let status_parents = match status_parents {
+        Some(sp) if !sp.is_empty() => sp,
+        _ => return Some(parent_refs.clone()),
+    };
+
+    let accepted: Vec<ParentReference> = parent_refs
+        .iter()
+        .filter(|pr| is_parent_ref_accepted(pr, status_parents, route_ns))
+        .cloned()
+        .collect();
+
+    if accepted.is_empty() {
+        None
+    } else {
+        Some(accepted)
+    }
+}
+
 /// Resolve the effective hostnames for a route attached to a specific gateway via a given parent_ref.
 ///
 /// Per Gateway API spec, if an HTTPRoute has no `spec.hostnames`, it inherits the hostname
@@ -51,8 +119,17 @@ fn resolve_effective_hostnames_for_route(
         if let Ok(gw) = store.get_gateway(gateway_key) {
             if let Some(listeners) = &gw.spec.listeners {
                 let listener = match parent_ref.section_name.as_deref() {
-                    Some(section_name) => listeners.iter().find(|l| l.name == section_name),
-                    None => listeners.first(),
+                    Some(section_name) => listeners.iter().find(|l| {
+                        l.name == section_name
+                            && parent_ref.port.map_or(true, |p| l.port == p)
+                    }),
+                    None => {
+                        if let Some(port) = parent_ref.port {
+                            listeners.iter().find(|l| l.port == port)
+                        } else {
+                            listeners.first()
+                        }
+                    }
                 };
                 if let Some(listener) = listener {
                     if let Some(hostname) = &listener.hostname {
@@ -68,8 +145,15 @@ fn resolve_effective_hostnames_for_route(
     vec![CATCH_ALL_HOSTNAME.to_string()]
 }
 
-/// Resolve ALL effective hostnames for a route across all its parentRefs.
-fn resolve_all_effective_hostnames(route: &HTTPRoute, route_namespace: &str) -> Vec<String> {
+/// Resolve ALL effective hostnames for a route across the given parentRefs.
+///
+/// The caller decides which parentRefs to pass: all (for affected-hostname
+/// collection) or only accepted ones (for route-table compilation).
+fn resolve_all_effective_hostnames(
+    route: &HTTPRoute,
+    route_namespace: &str,
+    parent_refs: &[ParentReference],
+) -> Vec<String> {
     if let Some(hostnames) = &route.spec.hostnames {
         if !hostnames.is_empty() {
             return hostnames.clone();
@@ -77,14 +161,12 @@ fn resolve_all_effective_hostnames(route: &HTTPRoute, route_namespace: &str) -> 
     }
 
     let mut all_hostnames: Vec<String> = Vec::new();
-    if let Some(parent_refs) = &route.spec.parent_refs {
-        for pr in parent_refs {
-            let gw_key = pr.build_parent_key(Some(route_namespace));
-            let resolved = resolve_effective_hostnames_for_route(route, &gw_key, pr);
-            for h in resolved {
-                if !all_hostnames.contains(&h) {
-                    all_hostnames.push(h);
-                }
+    for pr in parent_refs {
+        let gw_key = pr.build_parent_key(Some(route_namespace));
+        let resolved = resolve_effective_hostnames_for_route(route, &gw_key, pr);
+        for h in resolved {
+            if !all_hostnames.contains(&h) {
+                all_hostnames.push(h);
             }
         }
     }
@@ -193,14 +275,16 @@ impl RouteManager {
 
         for (resource_key, route) in add_or_update.iter() {
             let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-            for h in resolve_all_effective_hostnames(route, route_ns) {
+            let all_refs = route.spec.parent_refs.as_deref().unwrap_or(&[]);
+            for h in resolve_all_effective_hostnames(route, route_ns, all_refs) {
                 affected.insert(h);
             }
             // For updates, also include old hostnames
             let old_route = http_routes.get(resource_key);
             if let Some(old_route) = old_route {
                 let old_ns = old_route.metadata.namespace.as_deref().unwrap_or("default");
-                for h in resolve_all_effective_hostnames(old_route, old_ns) {
+                let old_refs = old_route.spec.parent_refs.as_deref().unwrap_or(&[]);
+                for h in resolve_all_effective_hostnames(old_route, old_ns, old_refs) {
                     affected.insert(h);
                 }
             }
@@ -209,7 +293,8 @@ impl RouteManager {
         for resource_key in remove.iter() {
             if let Some(route) = http_routes.get(resource_key) {
                 let ns = route.metadata.namespace.as_deref().unwrap_or("default");
-                for h in resolve_all_effective_hostnames(route, ns) {
+                let all_refs = route.spec.parent_refs.as_deref().unwrap_or(&[]);
+                for h in resolve_all_effective_hostnames(route, ns, all_refs) {
                     affected.insert(h);
                 }
             }
@@ -232,16 +317,29 @@ impl RouteManager {
                 continue;
             }
 
-            // Check if this route applies to this hostname (explicit or listener-inherited)
             let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+
+            // Only include parentRefs that are Accepted=True
+            let accepted_refs = match filter_accepted_parent_refs(
+                route.spec.parent_refs.as_ref(),
+                route.status.as_ref().map(|s| s.parents.as_slice()),
+                Some(route_namespace),
+            ) {
+                Some(refs) => refs,
+                None => continue,
+            };
+
+            // Check if this route applies to this hostname (using accepted parentRefs only)
             let applies_to_hostname =
-                resolve_all_effective_hostnames(route, route_namespace).contains(&hostname.to_string());
+                resolve_all_effective_hostnames(route, route_namespace, &accepted_refs)
+                    .contains(&hostname.to_string());
 
             if !applies_to_hostname {
                 continue;
             }
 
             let route_name = route.metadata.name.as_deref().unwrap_or("");
+            let accepted_refs_opt = Some(accepted_refs.clone());
 
             if let Some(rules) = &route.spec.rules {
                 for (rule_id, rule) in rules.iter().enumerate() {
@@ -273,7 +371,7 @@ impl RouteManager {
                                 resource_key,
                                 match_item,
                                 rule_arc.clone(),
-                                route.spec.parent_refs.clone(),
+                                accepted_refs_opt.clone(),
                             ) {
                                 regex_routes_list.push(Arc::new(regex_unit));
                             }
@@ -289,7 +387,7 @@ impl RouteManager {
                                 ),
                                 rule: rule_arc.clone(),
                                 path_regex: None,
-                                parent_refs: route.spec.parent_refs.clone(),
+                                parent_refs: accepted_refs_opt.clone(),
                             };
                             route_rules_list.push(Arc::new(rule_unit));
                         }
@@ -345,7 +443,7 @@ impl RouteManager {
             }
         }
 
-        // Collect ALL wildcard hostnames across all routes
+        // Collect wildcard hostnames across all routes (using only accepted parentRefs)
         let mut wildcard_hostnames: HashSet<String> = HashSet::new();
         for (resource_key, route) in http_routes.iter() {
             if remove.contains(resource_key) {
@@ -353,7 +451,15 @@ impl RouteManager {
             }
 
             let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-            for h in resolve_all_effective_hostnames(route, route_ns) {
+            let accepted_refs = match filter_accepted_parent_refs(
+                route.spec.parent_refs.as_ref(),
+                route.status.as_ref().map(|s| s.parents.as_slice()),
+                Some(route_ns),
+            ) {
+                Some(refs) => refs,
+                None => continue,
+            };
+            for h in resolve_all_effective_hostnames(route, route_ns, &accepted_refs) {
                 if h.starts_with("*.") {
                     wildcard_hostnames.insert(h);
                 }
@@ -381,15 +487,27 @@ impl RouteManager {
                     continue;
                 }
 
-                // Check if this route applies to this hostname (explicit or inherited)
                 let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-                let applies = resolve_all_effective_hostnames(route, route_namespace).contains(&hostname.to_string());
+
+                // Only include parentRefs that are Accepted=True
+                let accepted_refs = match filter_accepted_parent_refs(
+                    route.spec.parent_refs.as_ref(),
+                    route.status.as_ref().map(|s| s.parents.as_slice()),
+                    Some(route_namespace),
+                ) {
+                    Some(refs) => refs,
+                    None => continue,
+                };
+
+                let applies = resolve_all_effective_hostnames(route, route_namespace, &accepted_refs)
+                    .contains(&hostname.to_string());
 
                 if !applies {
                     continue;
                 }
 
                 let route_name = route.metadata.name.as_deref().unwrap_or("");
+                let accepted_refs_opt = Some(accepted_refs.clone());
 
                 if let Some(rules) = &route.spec.rules {
                     for (rule_id, rule) in rules.iter().enumerate() {
@@ -421,7 +539,7 @@ impl RouteManager {
                                     resource_key,
                                     match_item,
                                     rule_arc.clone(),
-                                    route.spec.parent_refs.clone(),
+                                    accepted_refs_opt.clone(),
                                 ) {
                                     regex_routes_list.push(Arc::new(regex_unit));
                                 }
@@ -437,7 +555,7 @@ impl RouteManager {
                                     ),
                                     rule: rule_arc.clone(),
                                     path_regex: None,
-                                    parent_refs: route.spec.parent_refs.clone(),
+                                    parent_refs: accepted_refs_opt.clone(),
                                 };
                                 route_rules_list.push(Arc::new(rule_unit));
                             }
@@ -489,38 +607,6 @@ impl RouteManager {
     }
 }
 
-/// Filter parentRefs to only those whose corresponding status condition Accepted=True.
-///
-/// Routes whose all parent references are rejected (Accepted=False or missing) are not
-/// compiled into the data-plane routing tables.
-fn filter_accepted_parent_refs<'a>(route: &'a HTTPRoute) -> Option<Vec<&'a ParentReference>> {
-    let parent_refs = route.spec.parent_refs.as_ref()?;
-    let status = route.status.as_ref()?;
-
-    let accepted: Vec<&ParentReference> = parent_refs
-        .iter()
-        .filter(|pr| {
-            // A parentRef is considered accepted if its status.parents entry has
-            // Accepted condition with status "True".
-            status.parents.iter().any(|ps| {
-                ps.parent_ref.name == pr.name
-                    && ps.parent_ref.namespace == pr.namespace
-                    && ps
-                        .conditions
-                        .iter()
-                        .any(|c| c.type_ == condition_types::ACCEPTED && c.status == "True")
-            })
-        })
-        .collect();
-
-    if accepted.is_empty() {
-        // No accepted parentRefs — this route should not be compiled
-        None
-    } else {
-        Some(accepted)
-    }
-}
-
 /// Parse all HTTPRoutes and collect rules into a global domain->rules structure.
 ///
 /// Routes from all gateways are merged into a single table keyed by hostname.
@@ -531,25 +617,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
 
-    // Iterate through all HTTPRoutes and collect rules
     for (_key, route) in data.iter() {
-        // Filter to only accepted parentRefs. Routes that have no accepted parentRefs are skipped.
-        let accepted_parent_refs = match filter_accepted_parent_refs(route) {
-            Some(refs) => refs,
-            None => {
-                // Fall back to compiling all parent_refs if status is not yet populated
-                // (e.g. first-time processing before status update)
-                match &route.spec.parent_refs {
-                    Some(refs) if !refs.is_empty() => refs.iter().collect(),
-                    _ => {
-                        skipped_routes += 1;
-                        continue;
-                    }
-                }
-            }
-        };
-
-        // Validate HTTPRoute and extract required fields
         let validated = match validate_http_route(route) {
             Some(v) => v,
             None => {
@@ -558,39 +626,25 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
             }
         };
 
-        // Resolve effective hostnames across accepted parent_refs only.
-        let effective_hostnames: Vec<String> = {
-            let mut hostnames = if let Some(hs) = &route.spec.hostnames {
-                if !hs.is_empty() {
-                    hs.clone()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-
-            if hostnames.is_empty() {
-                // Inherit hostnames from each accepted parent_ref's listener
-                for pr in &accepted_parent_refs {
-                    let gw_key = pr.build_parent_key(Some(&validated.namespace));
-                    let resolved = resolve_effective_hostnames_for_route(route, &gw_key, pr);
-                    for h in resolved {
-                        if !hostnames.contains(&h) {
-                            hostnames.push(h);
-                        }
-                    }
-                }
-                if hostnames.is_empty() {
-                    hostnames.push(CATCH_ALL_HOSTNAME.to_string());
-                }
+        // Only compile parentRefs that are Accepted=True by their Gateway/Listener.
+        // When status is not yet available (initial sync), all parentRefs are included.
+        let accepted_refs = match filter_accepted_parent_refs(
+            route.spec.parent_refs.as_ref(),
+            route.status.as_ref().map(|s| s.parents.as_slice()),
+            Some(&validated.namespace),
+        ) {
+            Some(refs) => refs,
+            None => {
+                skipped_routes += 1;
+                continue;
             }
-            hostnames
         };
 
-        let parent_refs_to_embed: Option<Vec<ParentReference>> =
-            Some(accepted_parent_refs.iter().map(|pr| (*pr).clone()).collect());
+        let accepted_refs_opt = Some(accepted_refs.clone());
 
+        // Resolve effective hostnames using only accepted parentRefs.
+        let effective_hostnames =
+            resolve_all_effective_hostnames(route, &validated.namespace, &accepted_refs);
         for hostname in &effective_hostnames {
             for (rule_id, rule) in validated.rules.iter().enumerate() {
                 let rule_arc = Arc::new(rule.clone());
@@ -624,7 +678,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             &route.key_name(),
                             match_item,
                             rule_arc.clone(),
-                            parent_refs_to_embed.clone(),
+                            accepted_refs_opt.clone(),
                         ) {
                             Ok(regex_unit) => {
                                 split.1.push(Arc::new(regex_unit));
@@ -645,7 +699,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             ),
                             rule: rule_arc.clone(),
                             path_regex: None,
-                            parent_refs: parent_refs_to_embed.clone(),
+                            parent_refs: accepted_refs_opt.clone(),
                         };
                         split.0.push(Arc::new(rule_unit));
                     }
@@ -745,6 +799,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         // Step 2: Build the single global DomainRouteRules
         let mut exact_domain_map: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
         let mut wildcard_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
+        let mut catch_all_routes: Option<Arc<RouteRules>> = None;
         for (domain, split) in domain_rules_map.into_iter() {
             if split.0.is_empty() && split.1.is_empty() {
                 continue;
@@ -776,7 +831,9 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 regex_routes_engine,
             });
 
-            if domain.starts_with("*.") {
+            if domain == CATCH_ALL_HOSTNAME {
+                catch_all_routes = Some(route_rules);
+            } else if domain.starts_with("*.") {
                 wildcard_hosts.push(RadixHost::new(&domain, route_rules));
             } else {
                 exact_domain_map.insert(domain.to_lowercase(), route_rules);
@@ -799,6 +856,7 @@ impl ConfHandler<HTTPRoute> for RouteManager {
         let global = self.global_routes.load();
         global.exact_domain_map.store(Arc::new(exact_domain_map));
         global.wildcard_engine.store(Arc::new(wildcard_engine));
+        global.catch_all_routes.store(Arc::new(catch_all_routes));
         tracing::info!(component = "route_manager", ms = elapsed.as_millis(), "full set done");
     }
 
@@ -832,11 +890,14 @@ impl ConfHandler<HTTPRoute> for RouteManager {
             }
         }
 
-        // Step 2: Separate exact and wildcard hostnames
+        // Step 2: Separate exact, wildcard, and catch-all hostnames
         let mut exact_hostnames: HashSet<String> = HashSet::new();
         let mut wildcard_hostnames: HashSet<String> = HashSet::new();
+        let mut catch_all_affected = false;
         for hostname in &affected_hostnames {
-            if hostname.starts_with("*.") {
+            if hostname == CATCH_ALL_HOSTNAME {
+                catch_all_affected = true;
+            } else if hostname.starts_with("*.") {
                 wildcard_hostnames.insert(hostname.clone());
             } else {
                 exact_hostnames.insert(hostname.clone());
@@ -868,6 +929,13 @@ impl ConfHandler<HTTPRoute> for RouteManager {
                 cnt = exact_hostnames.len(),
                 "exact domains updated"
             );
+        }
+
+        // Update catch-all routes (dedicated field)
+        if catch_all_affected {
+            let new_catch_all = self.rebuild_exact_hostname(CATCH_ALL_HOSTNAME, &remove);
+            current_global.catch_all_routes.store(Arc::new(new_catch_all));
+            tracing::info!(component = "route_manager", "catch-all routes updated");
         }
 
         // Update wildcard domains (rebuild engine with Arc reuse)

@@ -7,85 +7,14 @@
 //! This module enables dynamic updates of Gateway listener configurations
 //! without requiring server restart.
 
+pub use super::gateway_info::GatewayInfo;
 use crate::core::matcher::HashHost;
-use crate::core::observe::test_metrics::TestType;
 use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::Gateway;
 use arc_swap::ArcSwap;
 use kube::ResourceExt;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-
-/// Gateway information for route matching context
-///
-/// Used to pass gateway context during route matching to support
-/// both sectionName-based and hostname-based lookup strategies.
-///
-/// This struct should be created once when EdgionHttp is constructed,
-/// not per-request, to avoid allocation overhead.
-///
-/// Note: Listener configuration (hostname, allowedRoutes) is queried dynamically
-/// from GatewayConfigStore to support hot-reload of Gateway configuration.
-#[derive(Clone, Debug, Default)]
-pub struct GatewayInfo {
-    /// Gateway namespace (None for cluster-scoped or default namespace)
-    pub namespace: Option<String>,
-    /// Gateway name
-    pub name: String,
-    /// Current listener name (required for listener-specific config lookup)
-    pub listener_name: Option<String>,
-
-    // ========== Test metrics fields (from Gateway annotations) ==========
-    /// Test key for metrics filtering (from edgion.io/metrics-test-key annotation)
-    pub metrics_test_key: Option<String>,
-    /// Test type for metrics collection (from edgion.io/metrics-test-type annotation)
-    pub metrics_test_type: Option<TestType>,
-}
-
-impl GatewayInfo {
-    /// Create a new GatewayInfo
-    pub fn new(
-        namespace: Option<String>,
-        name: String,
-        listener_name: Option<String>,
-        metrics_test_key: Option<String>,
-        metrics_test_type: Option<TestType>,
-    ) -> Self {
-        Self {
-            namespace,
-            name,
-            listener_name,
-            metrics_test_key,
-            metrics_test_type,
-        }
-    }
-
-    /// Get namespace as &str, returns empty string if None
-    #[inline]
-    pub fn namespace_str(&self) -> &str {
-        self.namespace.as_deref().unwrap_or("")
-    }
-
-    /// Build Gateway Key: "{namespace}/{name}" or just "{name}" if no namespace
-    pub fn gateway_key(&self) -> String {
-        match &self.namespace {
-            Some(ns) if !ns.is_empty() => format!("{}/{}", ns, self.name),
-            _ => self.name.clone(),
-        }
-    }
-
-    /// Get gateway namespace for metrics (returns empty string if None)
-    #[inline]
-    pub fn gateway_namespace(&self) -> &str {
-        self.namespace.as_deref().unwrap_or("")
-    }
-
-    /// Get gateway name for metrics
-    #[inline]
-    pub fn gateway_name(&self) -> &str {
-        &self.name
-    }
-}
 
 /// Single Listener's dynamic configuration
 #[derive(Clone, Debug)]
@@ -98,7 +27,6 @@ pub struct ListenerConfig {
     pub allowed_routes: Option<AllowedRoutes>,
 }
 
-/// Single Gateway's configuration with two-layer structure
 /// Single Gateway's configuration with two-layer structure
 ///
 /// ## Performance Optimization
@@ -185,7 +113,6 @@ impl GatewayListenerConfig {
         false
     }
 
-    /// Get listener config by name
     /// Get listener config by name
     #[inline]
     pub fn get_listener(&self, listener_name: &str) -> Option<Arc<ListenerConfig>> {

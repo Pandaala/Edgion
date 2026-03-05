@@ -41,14 +41,19 @@ pub fn check_allowed_routes(
     route_kind: &str,
     gateway_namespace: &str,
 ) -> bool {
-    // If no AllowedRoutes configured, allow all (Gateway API default behavior)
+    // Per Gateway API spec, when allowedRoutes is not specified the default
+    // is "Same" — only routes from the gateway's own namespace are allowed.
     let Some(allowed) = allowed_routes else {
-        return true;
+        return route_namespace == gateway_namespace;
     };
 
-    // 1. Check namespace restrictions
-    if let Some(ref ns_config) = allowed.namespaces {
-        let from = ns_config.from.as_deref().unwrap_or("Same");
+    // 1. Check namespace restrictions (default "Same" when namespaces not specified)
+    {
+        let from = allowed
+            .namespaces
+            .as_ref()
+            .and_then(|ns| ns.from.as_deref())
+            .unwrap_or("Same");
         match from {
             "All" => {}
             "Same" => {
@@ -57,11 +62,11 @@ pub fn check_allowed_routes(
                 }
             }
             "Selector" => {
-                // Selector policy is fully evaluated by the controller.
-                // Gateway does not have namespace labels; fall back to Same for safety.
-                if route_namespace != gateway_namespace {
-                    return false;
-                }
+                // Selector policy is fully evaluated by the controller, which has
+                // access to namespace labels via NamespaceStore.  The gateway data
+                // plane only sees routes whose parentRef was already accepted
+                // (filter_accepted_parent_refs), so we trust the controller's
+                // decision and allow the route through — same as "All".
             }
             _ => {
                 tracing::warn!(from = %from, "Unknown AllowedRoutes.namespaces.from value");
@@ -179,9 +184,10 @@ mod tests {
     }
 
     #[test]
-    fn test_allowed_routes_none() {
-        // No AllowedRoutes means allow all
-        assert!(check_allowed_routes(&None, "ns1", "HTTPRoute", "ns2"));
+    fn test_allowed_routes_none_defaults_to_same() {
+        // Per Gateway API spec, no AllowedRoutes defaults to Same namespace
+        assert!(check_allowed_routes(&None, "default", "HTTPRoute", "default"));
+        assert!(!check_allowed_routes(&None, "other", "HTTPRoute", "default"));
     }
 
     #[test]
@@ -209,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allowed_routes_selector_falls_back_to_same() {
+    fn test_allowed_routes_selector_trusts_controller() {
         use crate::types::resources::gateway::RouteNamespaces;
 
         let allowed = AllowedRoutes {
@@ -220,7 +226,7 @@ mod tests {
             kinds: None,
         };
 
-        // Same namespace — always allowed (Selector degrades to Same on gateway)
+        // Same namespace — allowed
         assert!(check_allowed_routes(
             &Some(allowed.clone()),
             "default",
@@ -228,8 +234,8 @@ mod tests {
             "default"
         ));
 
-        // Different namespace — denied on gateway side (controller is the authority)
-        assert!(!check_allowed_routes(
+        // Cross-namespace — allowed on gateway side (controller already validated)
+        assert!(check_allowed_routes(
             &Some(allowed),
             "other",
             "HTTPRoute",

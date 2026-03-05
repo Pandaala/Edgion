@@ -21,6 +21,7 @@ use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{
     GatewayStatus, GatewayStatusAddress, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
+use crate::types::resources::common::is_core_api_group;
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
 
@@ -69,16 +70,6 @@ enum GatewayResolvedRefsError {
 }
 
 impl GatewayResolvedRefsError {
-    fn reason(&self) -> &'static str {
-        match self {
-            Self::InvalidCertRef { .. } => "InvalidCertificateRef",
-            Self::SecretNotFound { .. } => "InvalidCertificateRef",
-            Self::SecretInvalid { .. } => "InvalidCertificateRef",
-            Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
-            Self::InvalidRouteKind { .. } => condition_reasons::INVALID_ROUTE_KIND,
-        }
-    }
-
     fn message(&self) -> String {
         match self {
             Self::InvalidCertRef { kind } => {
@@ -690,7 +681,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
         }
 
         let cert_group = cert_ref.group.as_deref().unwrap_or("");
-        if !cert_group.is_empty() && cert_group != "core" {
+        if !is_core_api_group(cert_group) {
             errors.push(GatewayResolvedRefsError::InvalidCertRef {
                 kind: format!("group:{}", cert_group),
             });

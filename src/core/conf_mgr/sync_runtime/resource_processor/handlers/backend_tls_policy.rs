@@ -11,7 +11,7 @@ use crate::types::prelude_resources::BackendTLSPolicy;
 use crate::types::resources::backend_tls_policy::{
     BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, PolicyAncestorStatus,
 };
-use crate::types::resources::common::ParentReference;
+use crate::types::resources::common::{is_core_api_group, ParentReference};
 use crate::types::ResourceKind;
 
 /// BackendTLSPolicy handler
@@ -255,7 +255,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
 impl BackendTlsPolicyHandler {
     #[inline]
     fn is_secret_ref(ca_ref: &BackendTLSPolicyCACertificateRef) -> bool {
-        (ca_ref.group.is_empty() || ca_ref.group == "core") && ca_ref.kind == "Secret"
+        is_core_api_group(&ca_ref.group) && ca_ref.kind == "Secret"
     }
 
     #[inline]

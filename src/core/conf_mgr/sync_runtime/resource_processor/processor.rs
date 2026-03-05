@@ -44,7 +44,7 @@ use crate::types::ResourceMeta;
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::{make_resource_key, SecretRefManager};
-use crate::core::conf_mgr::sync_runtime::workqueue::{Workqueue, WorkqueueConfig};
+use crate::core::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
 
 /// Result of status extraction
 #[derive(Debug, PartialEq)]
@@ -119,11 +119,14 @@ pub trait ProcessorObj: Send + Sync {
     /// Get WatchObj for ConfigSyncServer registration
     fn as_watch_obj(&self) -> Arc<dyn WatchObj>;
 
-    /// Enqueue a key for processing
+    /// Enqueue a key for immediate processing (original events, init revalidation)
     fn requeue(&self, key: String);
 
-    /// Enqueue a key with delay
+    /// Enqueue a key with delay (unused legacy; prefer requeue_with_chain)
     fn requeue_after(&self, key: String, duration: Duration);
+
+    /// Cross-resource requeue with trigger chain (goes through delay subsystem)
+    fn requeue_with_chain(&self, key: String, chain: TriggerChain);
 
     /// Check if cache is ready
     fn is_ready(&self) -> bool;
@@ -280,7 +283,7 @@ where
     ///
     /// Returns WorkItemResult for status persistence handling by caller.
     pub fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
-        let ctx = self.create_context();
+        let ctx = self.create_context(TriggerChain::default());
         self.process_resource(obj, &ctx, true, existing_status_json)
     }
 
@@ -352,6 +355,7 @@ where
     /// * `existing_status_json` - Existing status from config center (for FileSystem: from .status file)
     ///   - K8s mode: pass None (status is already in store_obj)
     ///   - FileSystem mode: pass content of .status file as JSON string
+    /// * `trigger_chain` - Cascade trigger chain from the WorkItem
     ///
     /// Returns `WorkItemResult` indicating what action was taken and whether
     /// status needs to be persisted.
@@ -360,8 +364,10 @@ where
         key: &str,
         store_obj: Option<K>,
         existing_status_json: Option<String>,
+        trigger_chain: TriggerChain,
     ) -> WorkItemResult<K> {
-        let ctx = self.create_context();
+        let extended_chain = trigger_chain.extend(self.kind, key);
+        let ctx = self.create_context(extended_chain);
         let cache_obj = self.get(key);
 
         match (store_obj, cache_obj) {
@@ -384,12 +390,14 @@ where
 
     // ==================== Internal Methods ====================
 
-    /// Create handler context
-    fn create_context(&self) -> HandlerContext {
+    /// Create handler context with trigger chain for cascade tracking
+    fn create_context(&self, trigger_chain: TriggerChain) -> HandlerContext {
         HandlerContext::new(
             self.secret_ref_manager.clone(),
             self.metadata_filter.read().unwrap().clone(),
             self.namespace_filter.read().unwrap().clone(),
+            trigger_chain,
+            self.workqueue.config().max_trigger_cycles,
         )
     }
 
@@ -600,6 +608,14 @@ where
         tokio::spawn(async move {
             tokio::time::sleep(duration).await;
             workqueue.enqueue(key).await;
+        });
+    }
+
+    fn requeue_with_chain(&self, key: String, chain: TriggerChain) {
+        let workqueue = self.workqueue.clone();
+        let delay = self.workqueue.config().default_requeue_delay;
+        tokio::spawn(async move {
+            workqueue.enqueue_after(key, delay, chain).await;
         });
     }
 

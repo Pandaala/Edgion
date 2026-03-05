@@ -154,7 +154,7 @@ mod route_matching_tests {
         // Check exact domain map first (case-insensitive)
         let exact_map = domain_routes.exact_domain_map.load();
         let exists_exact = exact_map.get(&hostname.to_lowercase()).is_some();
-        let exists_catch_all = exact_map.get("*").is_some();
+        let exists_catch_all = domain_routes.catch_all_routes.load().is_some();
 
         // Check wildcard engine if not found in exact map
         let exists_wildcard = if !exists_exact && !exists_catch_all {
@@ -189,8 +189,8 @@ mod route_matching_tests {
         let exact_map = domain_routes.exact_domain_map.load();
         let route_rules = if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
             Some(route_rules.clone())
-        } else if let Some(route_rules) = exact_map.get("*") {
-            Some(route_rules.clone())
+        } else if let Some(ref catch_all) = **domain_routes.catch_all_routes.load() {
+            Some(catch_all.clone())
         } else {
             // Try wildcard engine
             let wildcard_engine = domain_routes.wildcard_engine.load();

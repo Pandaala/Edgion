@@ -104,9 +104,16 @@ pub async fn logging(
 /// AND the Gateway has the corresponding annotations set.
 #[inline]
 fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>) {
-    // Get gateway information
-    let gateway_ns = ctx.gateway_info.gateway_namespace();
-    let gateway_name = ctx.gateway_info.gateway_name();
+    // When route matching fails, gateway_info stays at Default (empty name).
+    // Use "unknown" to stay consistent with route/backend fallback labels.
+    let gateway_ns = match ctx.gateway_info.gateway_namespace() {
+        "" => "unknown",
+        ns => ns,
+    };
+    let gateway_name = match ctx.gateway_info.gateway_name() {
+        "" => "unknown",
+        name => name,
+    };
 
     // Get matched route information (HTTP or gRPC)
     let (route_ns, route_name) = if let Some(ref route_unit) = ctx.route_unit {

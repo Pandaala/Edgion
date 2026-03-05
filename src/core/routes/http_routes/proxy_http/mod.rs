@@ -8,7 +8,6 @@ use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::gateway::server_header::ServerHeaderOpts;
 use crate::core::observe::AccessLogger;
 use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener};
@@ -42,10 +41,6 @@ pub struct EdgionHttp {
     pub gateway_class_name: Option<String>,
 
     pub listener: Listener,
-
-    /// All Gateway/Listener contexts sharing this port.
-    /// Used to pass into `deep_match` so routes can validate which gateway they belong to.
-    pub gateway_infos: Arc<Vec<GatewayInfo>>,
 
     pub server_start_time: SystemTime,
 

@@ -1,16 +1,14 @@
 use crate::core::conf_sync::conf_client::ConfigClient;
 use crate::core::gateway::gateway::get_global_gateway_store;
-use crate::core::gateway::gateway::GatewayInfo;
+use crate::core::gateway::gateway::port_gateway_info_store::rebuild_port_gateway_infos;
 use crate::core::gateway::listener_builder;
 use crate::core::observe::access_log::get_access_logger_unchecked;
-use crate::core::observe::test_metrics::TestType;
 use crate::core::observe::AccessLogger;
-use crate::types::constants::annotations::edgion as annotations;
 use crate::types::{Gateway, ResourceMeta};
 use anyhow::{anyhow, Result};
 use kube::ResourceExt;
 use pingora_core::server::Server;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct GatewayBase {
@@ -85,39 +83,9 @@ impl GatewayBase {
         // 2. Get ServerConf Arc from pingora_server for listener creation
         let server_conf_arc = pingora_server.configuration.clone();
 
-        // 2.5. Pre-collect GatewayInfo per port for all gateways/listeners.
-        // Multiple Gateways sharing the same port will all appear in the same Vec.
-        let mut port_gateway_infos: HashMap<u16, Vec<GatewayInfo>> = HashMap::new();
-        for gateway in gateways.iter() {
-            if let Some(listeners) = &gateway.spec.listeners {
-                let gateway_annotations_map: std::collections::HashMap<String, String> = gateway
-                    .metadata
-                    .annotations
-                    .clone()
-                    .map(|btree| btree.into_iter().collect())
-                    .unwrap_or_default();
-
-                let metrics_test_key = gateway_annotations_map.get(annotations::METRICS_TEST_KEY).cloned();
-                let metrics_test_type = gateway_annotations_map
-                    .get(annotations::METRICS_TEST_TYPE)
-                    .map(|s| TestType::from_str(s));
-
-                for listener in listeners {
-                    if is_listener_conflicted(gateway, &listener.name) {
-                        continue;
-                    }
-                    let port = listener.port as u16;
-                    let gi = GatewayInfo::new(
-                        gateway.metadata.namespace.clone(),
-                        gateway.name_any(),
-                        Some(listener.name.clone()),
-                        metrics_test_key.clone(),
-                        metrics_test_type.clone(),
-                    );
-                    port_gateway_infos.entry(port).or_default().push(gi);
-                }
-            }
-        }
+        // 2.5. Populate global PortGatewayInfoStore so that route matching can
+        // dynamically look up which Gateways share each port.
+        rebuild_port_gateway_infos(&gateways);
 
         // Track bound ports to avoid duplicate physical bindings
         let mut bound_ports: HashSet<u16> = HashSet::new();
@@ -224,9 +192,6 @@ impl GatewayBase {
                         listener.port
                     );
 
-                    // Inject ALL gateway infos for this port into the context
-                    let gateway_infos_for_port = port_gateway_infos.get(&port).cloned().unwrap_or_default();
-
                     let context = listener_builder::ListenerContext {
                         gateway_class_name: gateway_class_name_clone.clone(),
                         gateway_namespace: gateway_namespace.clone(),
@@ -238,7 +203,6 @@ impl GatewayBase {
                         server_conf: server_conf_arc.clone(),
                         enable_http2,
                         gateway_annotations: gateway_annotations.clone(),
-                        gateway_infos: Arc::new(gateway_infos_for_port),
                     };
 
                     // Add listener to pingora_server

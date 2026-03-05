@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::UdpSocket;
 
-use crate::core::gateway::gateway::GatewayInfo;
 use crate::core::observe::AccessLogger;
 use crate::core::plugins::edgion_stream_plugins::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
 use crate::core::routes::http_routes::{EdgionHttp, EdgionHttpRedirect};
@@ -70,8 +69,6 @@ pub struct ListenerContext {
     pub enable_http2: bool,
     /// Gateway annotations
     pub gateway_annotations: std::collections::HashMap<String, String>,
-    /// All GatewayInfo contexts sharing this listener port (for multi-Gateway support)
-    pub gateway_infos: Arc<Vec<GatewayInfo>>,
 }
 
 /// Add an HTTP or HTTPS listener to the Pingora server
@@ -155,11 +152,9 @@ pub fn add_http_listener(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
 
-    // Create EdgionHttp proxy handler with global route table and multi-gateway infos
     let edgion_http = EdgionHttp {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),
-        gateway_infos: context.gateway_infos.clone(),
         server_start_time: SystemTime::now(),
         server_header_opts: Default::default(),
         access_logger: context.access_logger.clone(),

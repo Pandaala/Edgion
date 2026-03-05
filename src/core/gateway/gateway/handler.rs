@@ -1,6 +1,7 @@
 use crate::core::conf_sync::traits::ConfHandler;
 use crate::core::gateway::gateway::config_store::get_global_gateway_config_store;
 use crate::core::gateway::gateway::get_global_gateway_store;
+use crate::core::gateway::gateway::port_gateway_info_store::rebuild_port_gateway_infos;
 use crate::core::gateway::gateway::tls_matcher::rebuild_gateway_tls_matcher;
 use crate::core::routes::http_routes::get_global_route_manager;
 use crate::types::prelude_resources::Gateway;
@@ -62,6 +63,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
         // Rebuild Gateway TLS matcher (port-based certificate lookup)
         rebuild_gateway_tls_matcher(&gateways);
+
+        // Rebuild port → GatewayInfo mapping (for dynamic route matching)
+        rebuild_port_gateway_infos(&gateways);
 
         // Rebuild routes now that the gateway store is populated, so routes with no explicit
         // hostnames can correctly inherit their listener's hostname.
@@ -156,9 +160,10 @@ impl ConfHandler<Gateway> for GatewayHandler {
             // Note: Physical listener cleanup requires Pingora restart
         }
 
-        // Rebuild Gateway TLS matcher (port-based certificate lookup)
+        // Rebuild Gateway TLS matcher and port GatewayInfo store
         let gateways = store.list_gateways();
         rebuild_gateway_tls_matcher(&gateways);
+        rebuild_port_gateway_infos(&gateways);
 
         // Release the store write lock before rebuilding routes
         drop(store);

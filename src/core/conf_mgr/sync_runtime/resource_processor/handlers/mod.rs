@@ -81,16 +81,17 @@ pub(crate) fn requeue_parent_gateways(
 ///
 /// Only reads parentRef fields (gateway ns/name, optional sectionName).
 /// Does NOT look up Gateway — works even if the target Gateway hasn't arrived yet.
+///
+/// Returns true if the attachments actually changed.
 pub(crate) fn update_attached_route_tracker(
     route_kind: ResourceKind,
     route_ns: &str,
     route_name: &str,
     parent_refs: Option<&Vec<ParentReference>>,
-) {
+) -> bool {
     let route_key = format!("{}/{}", route_ns, route_name);
     let Some(parent_refs) = parent_refs else {
-        get_attached_route_tracker().remove_route(route_kind, &route_key);
-        return;
+        return get_attached_route_tracker().remove_route(route_kind, &route_key);
     };
 
     let mut attachments = HashSet::new();
@@ -111,11 +112,12 @@ pub(crate) fn update_attached_route_tracker(
         });
     }
 
-    get_attached_route_tracker().update_route(route_kind, &route_key, attachments);
+    get_attached_route_tracker().update_route(route_kind, &route_key, attachments)
 }
 
 /// Remove a route from the attached-route tracker.
-pub(crate) fn remove_from_attached_route_tracker(route_kind: ResourceKind, route_ns: &str, route_name: &str) {
+/// Returns true if the route was tracked (had entries to remove).
+pub(crate) fn remove_from_attached_route_tracker(route_kind: ResourceKind, route_ns: &str, route_name: &str) -> bool {
     let route_key = format!("{}/{}", route_ns, route_name);
-    get_attached_route_tracker().remove_route(route_kind, &route_key);
+    get_attached_route_tracker().remove_route(route_kind, &route_key)
 }

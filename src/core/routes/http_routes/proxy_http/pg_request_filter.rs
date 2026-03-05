@@ -1,4 +1,5 @@
 use super::EdgionHttp;
+use crate::core::gateway::gateway::port_gateway_info_store::get_port_gateway_info_store;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_421, end_response_500};
 use crate::core::plugins::edgion_plugins::get_global_plugin_store;
 use crate::core::routes::grpc_routes::get_global_grpc_route_manager;
@@ -23,9 +24,10 @@ pub async fn request_filter(
     }
 
     // Step 1: Route matching — single lookup against the global route table.
-    // `gateway_infos` carries all Gateway/Listener contexts for this port;
-    // deep_match inside the route table validates which gateway each route belongs to.
-    let gateway_infos = &edgion_http.gateway_infos;
+    // Load gateway_infos dynamically from the global store so that Gateways
+    // added/removed at runtime are reflected without restart.
+    let port = edgion_http.listener.port as u16;
+    let gateway_infos = get_port_gateway_info_store().get(port);
 
     if ctx.request_info.is_grpc_request {
         if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
@@ -36,13 +38,13 @@ pub async fn request_filter(
 
         let grpc_route_manager = get_global_grpc_route_manager();
         let grpc_routes = grpc_route_manager.get_global_grpc_routes();
-        let _ = try_match_grpc_route(&grpc_routes, session, ctx, gateway_infos).await;
+        let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos).await;
     }
 
     if !ctx.is_grpc_route_matched {
         let route_manager = get_global_route_manager();
         let global_routes = route_manager.get_global_routes();
-        match global_routes.match_route(session, ctx, gateway_infos) {
+        match global_routes.match_route(session, ctx, &gateway_infos) {
             Ok(result) => {
                 ctx.gateway_info = result.matched_gateway;
                 ctx.route_unit = Some(result.route_unit);

@@ -4,6 +4,7 @@ use crate::core::routes::grpc_routes::routes_mgr::{DomainGrpcRouteRules, GrpcRou
 use crate::core::routes::grpc_routes::{
     get_global_grpc_route_manager, GrpcMatchEngine, GrpcRouteManager, GrpcRouteRuleUnit,
 };
+use crate::core::routes::http_routes::conf_handler_impl::filter_accepted_parent_refs;
 use crate::types::GRPCRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -38,13 +39,23 @@ impl GrpcRouteManager {
         let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 
         for (resource_key, route) in all_routes.iter() {
-            resource_keys.insert(resource_key.clone());
-
             let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
             let route_name = route.metadata.name.as_deref().unwrap_or("");
 
+            // Only compile parentRefs that are Accepted=True
+            let accepted_refs = match filter_accepted_parent_refs(
+                route.spec.parent_refs.as_ref(),
+                route.status.as_ref().map(|s| s.parents.as_slice()),
+                Some(route_namespace),
+            ) {
+                Some(refs) => refs,
+                None => continue,
+            };
+
+            resource_keys.insert(resource_key.clone());
+
             let route_info = Arc::new(GrpcRouteInfo {
-                parent_refs: route.spec.parent_refs.clone(),
+                parent_refs: Some(accepted_refs),
                 hostnames: route.spec.hostnames.clone(),
             });
 
