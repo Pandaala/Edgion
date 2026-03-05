@@ -1,0 +1,136 @@
+# Pre-created Gateways that the conformance suite expects.
+# These must be applied BEFORE starting the gateway pod so that listeners are
+# created at startup (Edgion does not support dynamic listener creation yet).
+#
+# Source: gateway-api conformance/base/manifests.yaml with gatewayClassName set
+# to "edgion".  The conformance suite will see these already exist when
+# --cleanup-base-resources=false is used.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway-conformance-infra
+  labels:
+    gateway-conformance: infra
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway-conformance-app-backend
+  labels:
+    gateway-conformance: backend
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway-conformance-web-backend
+  labels:
+    gateway-conformance: backend
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: same-namespace
+  namespace: gateway-conformance-infra
+spec:
+  gatewayClassName: edgion
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: same-namespace-with-https-listener
+  namespace: gateway-conformance-infra
+spec:
+  gatewayClassName: edgion
+  listeners:
+  - name: https
+    port: 443
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra
+  - name: https-with-hostname
+    port: 443
+    hostname: second-example.org
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra
+  - name: https-with-wildcard-hostname
+    port: 443
+    hostname: "*.wildcard.org"
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra
+  - name: https-with-hostname-matching-wildcard
+    port: 443
+    hostname: "fourth-example.wildcard.org"
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: all-namespaces
+  namespace: gateway-conformance-infra
+spec:
+  gatewayClassName: edgion
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: backend-namespaces
+  namespace: gateway-conformance-infra
+spec:
+  gatewayClassName: edgion
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            gateway-conformance: backend

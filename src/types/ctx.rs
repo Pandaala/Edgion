@@ -135,6 +135,9 @@ pub struct RequestInfo {
     /// TLS connection id for correlating tls.log and access.log
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_id: Option<u64>,
+    /// Listener port that received this request (set at context creation, always available)
+    #[serde(rename = "listener-port")]
+    pub listener_port: u16,
 }
 
 /// Backend TLS connection information

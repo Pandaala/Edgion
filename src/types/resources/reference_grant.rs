@@ -14,15 +14,7 @@ pub const REFERENCE_GRANT_GROUP: &str = "gateway.networking.k8s.io";
 /// Kind for ReferenceGrant
 pub const REFERENCE_GRANT_KIND: &str = "ReferenceGrant";
 
-/// Per Gateway API spec, `""` and `"core"` both represent the Kubernetes core API group.
-fn api_groups_match(a: &str, b: &str) -> bool {
-    if a == b {
-        return true;
-    }
-    let a_is_core = a.is_empty() || a == "core";
-    let b_is_core = b.is_empty() || b == "core";
-    a_is_core && b_is_core
-}
+use super::common::api_groups_match;
 
 /// ReferenceGrant identifies kinds of resources in other namespaces that are
 /// trusted to reference the specified kinds of resources in the same namespace.
