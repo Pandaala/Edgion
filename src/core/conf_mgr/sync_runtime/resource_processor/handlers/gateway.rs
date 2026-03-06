@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 
 use crate::core::cli::config::is_reference_grant_validation_enabled;
+use crate::core::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index;
 use crate::core::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
@@ -223,14 +224,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
     }
 
     fn on_change(&self, gateway: &Gateway, ctx: &HandlerContext) {
-        // Bidirectional conflict marking: when conflicts are detected, requeue all conflicting Gateways
-        // This ensures all conflicting Listeners are marked as Conflicted (no winner picked)
         let gateway_key = format!(
             "{}/{}",
             gateway.metadata.namespace.as_deref().unwrap_or(""),
             gateway.metadata.name.as_deref().unwrap_or("")
         );
 
+        // Bidirectional conflict marking: requeue all conflicting Gateways
         let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
 
         let mut requeued = HashSet::new();
@@ -243,6 +243,38 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     conflicting_gateway = %conflicting_gateway_key,
                     "Requeue conflicting Gateway for Conflicted status update"
                 );
+            }
+        }
+
+        // Requeue routes only when listener hostnames actually changed.
+        // Cycle safety: route on_change only requeues Gateways when parentRef
+        // attachments change; hostname-only changes don't trigger Gateway requeue.
+        let route_index = get_gateway_route_index();
+
+        let current_hostnames: Vec<String> = gateway
+            .spec
+            .listeners
+            .as_ref()
+            .map(|ls| {
+                ls.iter()
+                    .filter_map(|l| l.hostname.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
+
+        if hostnames_changed {
+            let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
+            if !referencing_routes.is_empty() {
+                tracing::info!(
+                    gateway = %gateway_key,
+                    route_count = referencing_routes.len(),
+                    "Listener hostnames changed, requeue referencing routes"
+                );
+                for (route_kind, route_key) in referencing_routes {
+                    ctx.requeue(route_kind.as_str(), route_key);
+                }
             }
         }
     }
@@ -283,9 +315,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             );
         }
 
+        get_gateway_route_index().remove_gateway_hostnames(&gateway_key);
+
         tracing::debug!(
             gateway = %gateway_key,
-            "Cleared secret and port manager references on Gateway delete"
+            "Cleared secret, port manager, and hostname cache on Gateway delete"
         );
     }
 

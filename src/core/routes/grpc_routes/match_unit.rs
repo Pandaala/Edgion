@@ -1,4 +1,4 @@
-use crate::core::gateway::gateway::route_match::check_gateway_listener_match;
+use crate::core::gateway::gateway::route_match::{check_gateway_listener_match, hostname_matches_listener};
 use crate::core::gateway::gateway::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
@@ -9,11 +9,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub const CATCH_ALL_HOSTNAME: &str = "*";
+
 /// gRPC route level information shared across all rule units
 #[derive(Clone, Debug)]
 pub struct GrpcRouteInfo {
     pub parent_refs: Option<Vec<ParentReference>>,
-    pub hostnames: Option<Vec<String>>,
+    /// Effective hostnames for this route (from resolved_hostnames or hostnames).
+    /// Unlike HTTP routes (bucketed by domain), gRPC routes share a single
+    /// match engine so we must verify hostname match explicitly.
+    pub effective_hostnames: Vec<String>,
 }
 
 /// gRPC route match information
@@ -91,6 +96,10 @@ pub struct GrpcRouteRuleUnit {
 impl GrpcRouteRuleUnit {
     /// Deep match: check hostname, Gateway/sectionName, and headers.
     ///
+    /// Unlike HTTP routes which are bucketed by domain, gRPC routes share a single
+    /// match engine indexed by service/method. We must explicitly verify that the
+    /// request hostname matches the route's effective hostnames.
+    ///
     /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
     pub fn deep_match(
         &self,
@@ -100,14 +109,13 @@ impl GrpcRouteRuleUnit {
     ) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
 
-        // Check Hostname (if route specifies hostnames)
-        if let Some(ref route_hostnames) = self.route_info.hostnames {
-            if !route_hostnames.is_empty() && !Self::match_hostname(hostname, route_hostnames) {
-                return Ok(None);
-            }
+        // Check route-level hostname constraint: gRPC routes are NOT bucketed
+        // by domain so we verify here that the request host is allowed.
+        if !self.matches_hostname(hostname) {
+            return Ok(None);
         }
 
-        // Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
+        // Check Gateway/Listener constraints (sectionName, AllowedRoutes)
         let matched_gi = if let Some(ref parent_refs) = self.route_info.parent_refs {
             match check_gateway_listener_match(
                 parent_refs,
@@ -139,32 +147,6 @@ impl GrpcRouteRuleUnit {
         }
 
         Ok(Some(matched_gi))
-    }
-
-    /// Match hostname against route hostnames (supports wildcards)
-    fn match_hostname(req_hostname: &str, route_hostnames: &[String]) -> bool {
-        for pattern in route_hostnames {
-            if Self::hostname_matches(req_hostname, pattern) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Check if hostname matches a pattern (supports wildcard *.example.com)
-    fn hostname_matches(hostname: &str, pattern: &str) -> bool {
-        if let Some(suffix) = pattern.strip_prefix("*.") {
-            // Wildcard match: *.example.com matches foo.example.com but not example.com
-            // Remove "*."
-            if let Some(dot_pos) = hostname.find('.') {
-                let hostname_suffix = &hostname[dot_pos + 1..];
-                return hostname_suffix == suffix;
-            }
-            false
-        } else {
-            // Exact match
-            hostname == pattern
-        }
     }
 
     /// Match gRPC header
@@ -208,6 +190,25 @@ impl GrpcRouteRuleUnit {
         }
     }
 
+    /// Check if request hostname matches this route's effective hostnames.
+    #[inline]
+    fn matches_hostname(&self, request_hostname: &str) -> bool {
+        let hostnames = &self.route_info.effective_hostnames;
+        if hostnames.is_empty() || (hostnames.len() == 1 && hostnames[0] == CATCH_ALL_HOSTNAME) {
+            return true;
+        }
+        for h in hostnames {
+            if h.starts_with("*.") {
+                if hostname_matches_listener(request_hostname, h) {
+                    return true;
+                }
+            } else if request_hostname.eq_ignore_ascii_case(h) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Get route identifier with rule and match details
     pub fn identifier(&self) -> String {
         format!(
@@ -220,60 +221,3 @@ impl GrpcRouteRuleUnit {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hostname_exact_match() {
-        assert!(GrpcRouteRuleUnit::hostname_matches(
-            "api.example.com",
-            "api.example.com"
-        ));
-        assert!(!GrpcRouteRuleUnit::hostname_matches(
-            "api.example.com",
-            "foo.example.com"
-        ));
-        assert!(!GrpcRouteRuleUnit::hostname_matches("api.example.com", "example.com"));
-    }
-
-    #[test]
-    fn test_hostname_wildcard_match() {
-        // Wildcard should match subdomain
-        assert!(GrpcRouteRuleUnit::hostname_matches("api.example.com", "*.example.com"));
-        assert!(GrpcRouteRuleUnit::hostname_matches("foo.example.com", "*.example.com"));
-
-        // Wildcard should NOT match the domain itself
-        assert!(!GrpcRouteRuleUnit::hostname_matches("example.com", "*.example.com"));
-
-        // Wildcard should NOT match different domain
-        assert!(!GrpcRouteRuleUnit::hostname_matches("api.other.com", "*.example.com"));
-    }
-
-    #[test]
-    fn test_hostname_multi_level_subdomain() {
-        // Multi-level subdomain
-        assert!(GrpcRouteRuleUnit::hostname_matches(
-            "foo.bar.example.com",
-            "*.bar.example.com"
-        ));
-        assert!(!GrpcRouteRuleUnit::hostname_matches(
-            "foo.bar.example.com",
-            "*.example.com"
-        ));
-    }
-
-    #[test]
-    fn test_match_hostname_list() {
-        let hostnames = vec!["api.example.com".to_string(), "*.test.com".to_string()];
-
-        // Should match exact
-        assert!(GrpcRouteRuleUnit::match_hostname("api.example.com", &hostnames));
-
-        // Should match wildcard
-        assert!(GrpcRouteRuleUnit::match_hostname("foo.test.com", &hostnames));
-
-        // Should not match
-        assert!(!GrpcRouteRuleUnit::match_hostname("other.com", &hostnames));
-    }
-}

@@ -14,6 +14,7 @@
 
 pub mod attached_route_tracker;
 mod context;
+pub mod gateway_route_index;
 mod handler;
 pub mod handlers;
 pub mod listener_port_manager;
@@ -65,6 +66,9 @@ pub use listener_port_manager::{get_listener_port_manager, make_port_key, Listen
 
 // Re-export attached_route_tracker utilities
 pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};
+
+// Re-export gateway_route_index utilities
+pub use gateway_route_index::get_gateway_route_index;
 
 // Re-export service_ref utilities
 pub use service_ref::get_service_ref_manager;

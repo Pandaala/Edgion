@@ -3,7 +3,6 @@ use crate::core::gateway::gateway::config_store::get_global_gateway_config_store
 use crate::core::gateway::gateway::get_global_gateway_store;
 use crate::core::gateway::gateway::port_gateway_info_store::rebuild_port_gateway_infos;
 use crate::core::gateway::gateway::tls_matcher::rebuild_gateway_tls_matcher;
-use crate::core::routes::http_routes::get_global_route_manager;
 use crate::types::prelude_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
@@ -30,8 +29,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
             "Gateway full_set: received {} Gateway resources",
             data.len()
         );
-
-        let route_manager = get_global_route_manager();
 
         let gateways = {
             let global_store = get_global_gateway_store();
@@ -67,17 +64,14 @@ impl ConfHandler<Gateway> for GatewayHandler {
         // Rebuild port → GatewayInfo mapping (for dynamic route matching)
         rebuild_port_gateway_infos(&gateways);
 
-        // Rebuild routes now that the gateway store is populated, so routes with no explicit
-        // hostnames can correctly inherit their listener's hostname.
-        route_manager.rebuild_from_stored_routes();
+        // Hostname resolution is handled by the controller via resolved_hostnames.
+        // Gateway changes trigger route requeue at the controller level.
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
         let global_store = get_global_gateway_store();
         let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
         let config_store = get_global_gateway_config_store();
-        let route_manager = get_global_route_manager();
-        let mut need_route_rebuild = false;
 
         if !add.is_empty() {
             tracing::info!(
@@ -85,7 +79,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 "Gateway partial_update: added {} Gateway resources",
                 add.len()
             );
-            need_route_rebuild = true;
             for (key, gateway) in add {
                 let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
                 tracing::info!(
@@ -111,7 +104,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 "Gateway partial_update: updated {} Gateway resources",
                 update.len()
             );
-            need_route_rebuild = true;
             for (key, gateway) in update {
                 let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
                 tracing::info!(
@@ -164,15 +156,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
         let gateways = store.list_gateways();
         rebuild_gateway_tls_matcher(&gateways);
         rebuild_port_gateway_infos(&gateways);
-
-        // Release the store write lock before rebuilding routes
-        drop(store);
-
-        // Rebuild HTTP routes so that routes with no explicit hostnames
-        // pick up the newly added/updated Gateway's listener hostnames.
-        if need_route_rebuild {
-            route_manager.rebuild_from_stored_routes();
-        }
     }
 }
 

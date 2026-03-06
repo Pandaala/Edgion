@@ -1,5 +1,5 @@
 use crate::core::conf_sync::traits::ConfHandler;
-use crate::core::routes::grpc_routes::match_unit::{GrpcMatchInfo, GrpcRouteInfo};
+use crate::core::routes::grpc_routes::match_unit::{GrpcMatchInfo, GrpcRouteInfo, CATCH_ALL_HOSTNAME};
 use crate::core::routes::grpc_routes::routes_mgr::{DomainGrpcRouteRules, GrpcRouteRules};
 use crate::core::routes::grpc_routes::{
     get_global_grpc_route_manager, GrpcMatchEngine, GrpcRouteManager, GrpcRouteRuleUnit,
@@ -8,6 +8,20 @@ use crate::core::routes::http_routes::conf_handler_impl::filter_accepted_parent_
 use crate::types::GRPCRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+fn get_effective_hostnames(route: &GRPCRoute) -> Vec<String> {
+    if let Some(resolved) = &route.spec.resolved_hostnames {
+        if !resolved.is_empty() {
+            return resolved.clone();
+        }
+    }
+    if let Some(hostnames) = &route.spec.hostnames {
+        if !hostnames.is_empty() {
+            return hostnames.clone();
+        }
+    }
+    vec![CATCH_ALL_HOSTNAME.to_string()]
+}
 
 /// Implement ConfHandler for Arc<GrpcRouteManager> to allow using the global instance
 impl ConfHandler<GRPCRoute> for Arc<GrpcRouteManager> {
@@ -56,7 +70,7 @@ impl GrpcRouteManager {
 
             let route_info = Arc::new(GrpcRouteInfo {
                 parent_refs: Some(accepted_refs),
-                hostnames: route.spec.hostnames.clone(),
+                effective_hostnames: get_effective_hostnames(route),
             });
 
             if let Some(rules) = &route.spec.rules {

@@ -21,6 +21,8 @@ use std::sync::{Arc, LazyLock};
 pub struct ListenerConfig {
     /// Listener name
     pub name: String,
+    /// Listener port
+    pub port: i32,
     /// Hostname for SNI matching (optional)
     pub hostname: Option<String>,
     /// Allowed routes configuration
@@ -119,6 +121,69 @@ impl GatewayListenerConfig {
         self.listener_map.as_ref().and_then(|m| m.get(listener_name).cloned())
     }
 
+    /// Check if another listener **on the same port** has a more specific hostname
+    /// that also matches the given request hostname.
+    ///
+    /// Used for HTTP Listener Isolation: a listener should not serve a request
+    /// when a more specific listener on the same gateway+port also matches.
+    /// Specificity: exact > wildcard > catch-all (no hostname)
+    ///
+    /// Listeners on different ports are independent per Gateway API spec,
+    /// so cross-port listeners are never considered.
+    ///
+    /// `current_listener_hostname`: the hostname of the listener being evaluated
+    ///   - `None` → catch-all listener
+    ///   - `Some("*.example.com")` → wildcard listener
+    ///   - `Some("foo.example.com")` → exact listener (no check needed)
+    pub fn has_more_specific_listener(
+        &self,
+        hostname: &str,
+        current_listener_hostname: Option<&str>,
+        current_port: i32,
+    ) -> bool {
+        use super::route_match::hostname_matches_listener;
+
+        if matches!(current_listener_hostname, Some(h) if !h.starts_with("*.")) {
+            return false;
+        }
+
+        let listeners = match self.listener_map {
+            Some(ref m) => m,
+            None => return false,
+        };
+
+        for config in listeners.values() {
+            if config.port != current_port {
+                continue;
+            }
+            let other_host = match config.hostname.as_deref() {
+                Some(h) => h,
+                None => continue,
+            };
+
+            if !hostname_matches_listener(hostname, other_host) {
+                continue;
+            }
+
+            match current_listener_hostname {
+                None => {
+                    // Catch-all: any listener with a hostname that matches is more specific
+                    return true;
+                }
+                Some(current_host) => {
+                    // Wildcard: blocked by exact match, or a longer (more specific) wildcard
+                    if !other_host.starts_with("*.") {
+                        return true;
+                    }
+                    if other_host != current_host && other_host.len() > current_host.len() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Add a listener config
     fn add_listener(&mut self, config: Arc<ListenerConfig>) {
         // Always add to listener_map
@@ -158,6 +223,12 @@ impl GatewayConfigStore {
         }
     }
 
+    /// Load the current gateways map (for reuse in hot path).
+    #[inline]
+    pub fn load_gateways(&self) -> arc_swap::Guard<Arc<HashMap<String, Arc<GatewayListenerConfig>>>> {
+        self.gateways.load()
+    }
+
     /// Check if a listener exists for a gateway
     pub fn has_listener(&self, namespace: &str, gateway_name: &str, listener_name: &str) -> bool {
         let gateway_key = if namespace.is_empty() {
@@ -184,6 +255,7 @@ impl GatewayConfigStore {
         let gateway_config = gateways.get(&gateway_key)?;
         gateway_config.get_listener(listener_name)
     }
+
 
     /// Full set of all Gateway configurations
     ///
@@ -271,6 +343,7 @@ fn parse_gateway_to_config(gateway: &Gateway) -> GatewayListenerConfig {
         for listener in listeners {
             let listener_config = Arc::new(ListenerConfig {
                 name: listener.name.clone(),
+                port: listener.port,
                 hostname: listener.hostname.clone(),
                 allowed_routes: listener.allowed_routes.clone(),
             });
@@ -365,6 +438,163 @@ mod tests {
         // Check wildcard
         assert!(config.has_host("api.example.com"));
         assert!(config.has_host("www.example.com"));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_catchall_vs_exact() {
+        let listeners = vec![
+            create_test_listener("catch-all", 80, None),
+            create_test_listener("exact", 80, Some("abc.foo.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        // catch-all should be blocked because exact listener claims this hostname
+        assert!(config.has_more_specific_listener("abc.foo.example.com", None, 80));
+        // catch-all should NOT be blocked for an unrelated hostname
+        assert!(!config.has_more_specific_listener("bar.com", None, 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_catchall_vs_wildcard() {
+        let listeners = vec![
+            create_test_listener("catch-all", 80, None),
+            create_test_listener("wildcard", 80, Some("*.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        // catch-all blocked: *.example.com matches foo.example.com
+        assert!(config.has_more_specific_listener("foo.example.com", None, 80));
+        // catch-all NOT blocked: *.example.com doesn't match bar.com
+        assert!(!config.has_more_specific_listener("bar.com", None, 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_catchall_no_others() {
+        let listeners = vec![
+            create_test_listener("catch-all", 80, None),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        assert!(!config.has_more_specific_listener("anything.com", None, 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_wildcard_vs_exact() {
+        let listeners = vec![
+            create_test_listener("wildcard", 80, Some("*.example.com")),
+            create_test_listener("exact", 80, Some("abc.foo.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        // wildcard blocked: exact listener claims abc.foo.example.com
+        assert!(config.has_more_specific_listener("abc.foo.example.com", Some("*.example.com"), 80));
+        // wildcard NOT blocked: no exact listener for bar.example.com
+        assert!(!config.has_more_specific_listener("bar.example.com", Some("*.example.com"), 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_wildcard_vs_more_specific_wildcard() {
+        let listeners = vec![
+            create_test_listener("broad", 80, Some("*.example.com")),
+            create_test_listener("specific", 80, Some("*.foo.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        // *.example.com blocked for abc.foo.example.com because *.foo.example.com is more specific
+        assert!(config.has_more_specific_listener("abc.foo.example.com", Some("*.example.com"), 80));
+        // *.foo.example.com NOT blocked — it IS the most specific wildcard
+        assert!(!config.has_more_specific_listener("abc.foo.example.com", Some("*.foo.example.com"), 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_wildcard_no_more_specific() {
+        let listeners = vec![
+            create_test_listener("wildcard", 80, Some("*.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        assert!(!config.has_more_specific_listener("foo.example.com", Some("*.example.com"), 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_exact_always_false() {
+        let listeners = vec![
+            create_test_listener("exact", 80, Some("foo.example.com")),
+            create_test_listener("wildcard", 80, Some("*.example.com")),
+            create_test_listener("catch-all", 80, None),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        // Exact listener is never blocked — nothing is more specific
+        assert!(!config.has_more_specific_listener("foo.example.com", Some("foo.example.com"), 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_full_isolation() {
+        // Mimics GatewayHTTPListenerIsolation conformance scenario:
+        //   listeners: empty-hostname, *.example.com, *.foo.example.com, abc.foo.example.com
+        let listeners = vec![
+            create_test_listener("empty", 80, None),
+            create_test_listener("wildcard-example", 80, Some("*.example.com")),
+            create_test_listener("wildcard-foo", 80, Some("*.foo.example.com")),
+            create_test_listener("exact-abc", 80, Some("abc.foo.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        let host = "abc.foo.example.com";
+        // empty blocked: exact listener claims it
+        assert!(config.has_more_specific_listener(host, None, 80));
+        // *.example.com blocked: exact listener claims it
+        assert!(config.has_more_specific_listener(host, Some("*.example.com"), 80));
+        // *.foo.example.com blocked: exact listener claims it
+        assert!(config.has_more_specific_listener(host, Some("*.foo.example.com"), 80));
+        // abc.foo.example.com NOT blocked
+        assert!(!config.has_more_specific_listener(host, Some("abc.foo.example.com"), 80));
+
+        let host2 = "bar.foo.example.com";
+        // empty blocked: *.foo.example.com matches
+        assert!(config.has_more_specific_listener(host2, None, 80));
+        // *.example.com blocked: *.foo.example.com is more specific
+        assert!(config.has_more_specific_listener(host2, Some("*.example.com"), 80));
+        // *.foo.example.com NOT blocked — it IS the most specific
+        assert!(!config.has_more_specific_listener(host2, Some("*.foo.example.com"), 80));
+
+        let host3 = "bar.example.com";
+        // empty blocked: *.example.com matches
+        assert!(config.has_more_specific_listener(host3, None, 80));
+        // *.example.com NOT blocked — most specific match for bar.example.com
+        assert!(!config.has_more_specific_listener(host3, Some("*.example.com"), 80));
+
+        let host4 = "bar.com";
+        // empty NOT blocked: no other listener matches bar.com
+        assert!(!config.has_more_specific_listener(host4, None, 80));
+    }
+
+    #[test]
+    fn test_has_more_specific_listener_cross_port_independent() {
+        // Listeners on different ports should NOT trigger isolation.
+        // HTTP catch-all on port 80, HTTPS wildcard on port 443.
+        let listeners = vec![
+            create_test_listener("http", 80, None),
+            create_test_listener("https", 443, Some("*.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        // Catch-all on port 80: the *.example.com listener is on port 443,
+        // so it must NOT block catch-all on port 80.
+        assert!(!config.has_more_specific_listener("foo.example.com", None, 80));
+
+        // On port 443, *.example.com is the only listener, nothing blocks it
+        assert!(!config.has_more_specific_listener("foo.example.com", Some("*.example.com"), 443));
     }
 
     #[test]

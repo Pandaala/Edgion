@@ -498,21 +498,22 @@ mod route_matching_tests {
         verify_route_exists(&domain_routes, "api.example.com", true);
 
         // Update route to remove explicit hostname (empty hostnames).
-        // Per Gateway API spec, routes with no explicit hostnames inherit
-        // from the listener. Since the listener hostname is "api.example.com",
-        // the route should still be registered under that hostname.
+        // In the new architecture, the controller resolves effective hostnames
+        // and sets resolved_hostnames. Simulate controller behavior here.
         let mut add_or_update = HashMap::new();
-        let route1_updated = create_test_httproute_with_paths(
+        let mut route1_updated = create_test_httproute_with_paths(
             "default",
             "route1",
-            vec![], // Empty hostnames -> inherits from listener
+            vec![], // Empty hostnames
             vec![("default", "gateway1")],
             vec![("Exact", "/api/users")],
         );
+        // Controller would set resolved_hostnames to the listener's hostname
+        route1_updated.spec.resolved_hostnames = Some(vec!["api.example.com".to_string()]);
         add_or_update.insert("default/route1".to_string(), route1_updated);
         mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
 
-        // Route should still exist at api.example.com (inherited from listener)
+        // Route should still exist at api.example.com (resolved by controller)
         verify_route_exists(&domain_routes, "api.example.com", true);
     }
 

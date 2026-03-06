@@ -43,6 +43,11 @@ pub struct GRPCRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostnames: Option<Vec<String>>,
 
+    /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
+    /// Set by the controller ProcessorHandler; the data plane uses these directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_hostnames: Option<Vec<String>>,
+
     /// Rules defines the gRPC routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<GRPCRouteRule>>,

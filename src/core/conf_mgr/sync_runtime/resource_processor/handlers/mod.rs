@@ -15,6 +15,7 @@ mod endpoints;
 mod gateway;
 mod gateway_class;
 mod grpc_route;
+pub(crate) mod hostname_resolution;
 mod http_route;
 mod link_sys;
 mod plugin_metadata;
@@ -51,6 +52,7 @@ use std::collections::HashSet;
 
 use crate::core::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
 use crate::core::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
+use crate::core::conf_mgr::sync_runtime::resource_processor::get_gateway_route_index;
 use crate::core::conf_mgr::sync_runtime::resource_processor::HandlerContext;
 use crate::types::resources::common::ParentReference;
 use crate::types::ResourceKind;
@@ -120,4 +122,23 @@ pub(crate) fn update_attached_route_tracker(
 pub(crate) fn remove_from_attached_route_tracker(route_kind: ResourceKind, route_ns: &str, route_name: &str) -> bool {
     let route_key = format!("{}/{}", route_ns, route_name);
     get_attached_route_tracker().remove_route(route_kind, &route_key)
+}
+
+/// Update the Gateway → Route index so that Gateway changes can requeue affected routes.
+pub(crate) fn update_gateway_route_index(
+    route_kind: ResourceKind,
+    route_ns: &str,
+    route_name: &str,
+    parent_refs: Option<&Vec<ParentReference>>,
+) {
+    let route_key = format!("{}/{}", route_ns, route_name);
+    let empty_refs = Vec::new();
+    let refs = parent_refs.unwrap_or(&empty_refs);
+    get_gateway_route_index().update_route(route_kind, &route_key, refs, route_ns);
+}
+
+/// Remove a route from the Gateway → Route index.
+pub(crate) fn remove_from_gateway_route_index(route_kind: ResourceKind, route_ns: &str, route_name: &str) {
+    let route_key = format!("{}/{}", route_ns, route_name);
+    get_gateway_route_index().remove_route(route_kind, &route_key);
 }

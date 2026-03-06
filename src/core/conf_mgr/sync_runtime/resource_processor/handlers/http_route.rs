@@ -5,7 +5,10 @@
 use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_http_route_if_enabled,
 };
-use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
+use super::{
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
+    update_attached_route_tracker, update_gateway_route_index,
+};
 use crate::core::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
@@ -108,6 +111,25 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // Register Service backend references for cross-resource requeue
         Self::register_service_refs(&route);
 
+        // Resolve effective hostnames (intersection with Gateway listener hostnames)
+        if let Some(parent_refs) = &route.spec.parent_refs {
+            let route_ns_resolve = route.metadata.namespace.as_deref().unwrap_or("default");
+            let resolved = super::hostname_resolution::resolve_effective_hostnames(
+                route.spec.hostnames.as_ref(),
+                parent_refs,
+                route_ns_resolve,
+            );
+            route.spec.resolved_hostnames = if resolved.hostnames.is_empty() {
+                None
+            } else {
+                Some(resolved.hostnames)
+            };
+            if let Some(annotation) = resolved.annotation {
+                let annotations = route.metadata.annotations.get_or_insert_with(Default::default);
+                annotations.insert("edgion.io/hostname-resolution".to_string(), annotation);
+            }
+        }
+
         // Mark denied cross-namespace references
         // This sets ref_denied field on BackendRef, which Gateway uses to deny requests
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
@@ -154,6 +176,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     fn on_change(&self, route: &HTTPRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+
+        update_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name, route.spec.parent_refs.as_ref());
+
         let tracker_changed = update_attached_route_tracker(
             ResourceKind::HTTPRoute,
             route_ns,
@@ -172,6 +197,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         super::route_utils::clear_service_backend_refs(ResourceKind::HTTPRoute, route_ns, route_name);
+
+        remove_from_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name);
 
         let tracker_changed = remove_from_attached_route_tracker(ResourceKind::HTTPRoute, route_ns, route_name);
         if tracker_changed {

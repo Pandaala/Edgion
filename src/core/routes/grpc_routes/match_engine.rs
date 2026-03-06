@@ -179,7 +179,7 @@ mod tests {
         };
         let route_info1 = Arc::new(crate::core::routes::grpc_routes::GrpcRouteInfo {
             parent_refs: None,
-            hostnames: Some(vec!["api.example.com".to_string()]),
+            effective_hostnames: vec!["*".to_string()],
         });
         let rule1 = Arc::new(GRPCRouteRule {
             matches: None,
@@ -210,7 +210,7 @@ mod tests {
         };
         let route_info2 = Arc::new(crate::core::routes::grpc_routes::GrpcRouteInfo {
             parent_refs: None,
-            hostnames: Some(vec!["grpc.example.com".to_string()]),
+            effective_hostnames: vec!["*".to_string()],
         });
         let route2 = Arc::new(GrpcRouteRuleUnit {
             resource_key: "default/route2".to_string(),
@@ -233,8 +233,8 @@ mod tests {
         assert_eq!(routes[0].matched_info.route_name, "route1");
         assert_eq!(routes[1].matched_info.route_name, "route2");
 
-        // Verify hostnames are different
-        assert_eq!(routes[0].route_info.hostnames.as_ref().unwrap()[0], "api.example.com");
-        assert_eq!(routes[1].route_info.hostnames.as_ref().unwrap()[0], "grpc.example.com");
+        // Verify route identifiers distinguish the two routes
+        assert_eq!(routes[0].resource_key, "default/route1");
+        assert_eq!(routes[1].resource_key, "default/route2");
     }
 }

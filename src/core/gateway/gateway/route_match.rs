@@ -90,10 +90,15 @@ pub fn check_allowed_routes(
 
 /// Check if route's parent references match any of the provided gateway/listener contexts.
 ///
-/// This function validates for each (parentRef, gatewayInfo) combination:
+/// Hostname intersection is pre-resolved by the controller into `resolved_hostnames`,
+/// but we still need to enforce **HTTP Listener Isolation** at the data plane:
+/// a route attached to a listener with hostname "foo.example.com" must not match
+/// requests whose Host header targets a different listener (e.g., "*.example.com").
+///
+/// Validates for each (parentRef, gatewayInfo) combination:
 /// 1. Parent reference matches the gateway (namespace + name)
 /// 2. SectionName matches the listener (if specified)
-/// 3. Request hostname matches listener hostname constraint (if configured)
+/// 3. Request hostname matches the listener's hostname constraint (listener isolation)
 /// 4. Route is allowed by listener's AllowedRoutes (namespace and kind restrictions)
 ///
 /// Returns `Some(GatewayInfo)` for the first gateway that passes all checks,
@@ -107,6 +112,7 @@ pub fn check_gateway_listener_match(
     _route_name: &str,
 ) -> Option<GatewayInfo> {
     let config_store = get_global_gateway_config_store();
+    let gateways = config_store.load_gateways();
 
     for pr in parent_refs {
         let parent_ns = pr.namespace.as_deref().unwrap_or(route_ns);
@@ -137,8 +143,19 @@ pub fn check_gateway_listener_match(
             }
 
             if let Some(ref config) = listener_config {
+                // HTTP Listener Isolation:
+                // 1. If listener has a hostname, the request must match it.
                 if let Some(ref listener_host) = config.hostname {
                     if !hostname_matches_listener(request_hostname, listener_host) {
+                        continue;
+                    }
+                }
+
+                // 2. Even if this listener matches, reject if a more specific
+                //    listener on the same gateway+port also matches the request hostname.
+                let gw_key = gi.gateway_key();
+                if let Some(gw_config) = gateways.get(&gw_key) {
+                    if gw_config.has_more_specific_listener(request_hostname, config.hostname.as_deref(), config.port) {
                         continue;
                     }
                 }
