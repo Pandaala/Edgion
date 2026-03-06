@@ -11,8 +11,11 @@ pub struct HeaderCertAuthTestSuite;
 const TEST_HOST: &str = "header-cert-auth-test.example.com";
 const CERT_HEADER_NAME: &str = "X-Client-Cert";
 
-const CLIENT_CERT_SECRET_YAML: &str =
+const COMPILE_TIME_SECRET_YAML: &str =
     include_str!("../../../../../test/conf/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml");
+
+const RUNTIME_SECRET_RELATIVE: &str =
+    "generated-secrets/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml";
 
 fn read_secret_data_field(yaml: &str, key: &str) -> Option<String> {
     let value: Value = serde_yaml::from_str(yaml).ok()?;
@@ -22,9 +25,17 @@ fn read_secret_data_field(yaml: &str, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn load_runtime_secret_yaml() -> Option<String> {
+    let work_dir = std::env::var("EDGION_WORK_DIR").ok()?;
+    let path = std::path::Path::new(&work_dir).join(RUNTIME_SECRET_RELATIVE);
+    std::fs::read_to_string(&path).ok()
+}
+
 fn load_client_cert_pem() -> Result<String, String> {
-    let cert_b64 = read_secret_data_field(CLIENT_CERT_SECRET_YAML, "tls.crt")
-        .ok_or_else(|| "missing tls.crt in test fixture".to_string())?;
+    let yaml = load_runtime_secret_yaml().unwrap_or_else(|| COMPILE_TIME_SECRET_YAML.to_string());
+
+    let cert_b64 = read_secret_data_field(&yaml, "tls.crt")
+        .ok_or_else(|| "missing tls.crt in test fixture (runtime and compile-time)".to_string())?;
     let cert_bytes = STANDARD
         .decode(cert_b64.as_bytes())
         .map_err(|e| format!("failed to decode tls.crt base64: {}", e))?;

@@ -970,6 +970,7 @@ main() {
         
         # Set environment variables
         export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
+        export EDGION_WORK_DIR="${WORK_DIR}"
         
         log_success "All services started, config loaded"
         log_info "Work directory: ${WORK_DIR}"
@@ -978,6 +979,7 @@ main() {
         if [ -f "${PROJECT_ROOT}/integration_testing/.current" ]; then
             WORK_DIR=$(cat "${PROJECT_ROOT}/integration_testing/.current")
             export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
+            export EDGION_WORK_DIR="${WORK_DIR}"
             log_info "Using existing work directory: ${WORK_DIR}"
         fi
     fi
