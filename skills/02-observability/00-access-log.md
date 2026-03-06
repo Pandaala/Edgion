@@ -30,7 +30,7 @@
 
 ## AccessLogEntry 字段
 
-`src/core/observe/access_log/entry.rs` — 由 `AccessLogEntry::from_context(ctx)` 在 `pg_logging.rs` 的 `logging()` 阶段生成：
+`src/core/gateway/observe/access_log/entry.rs` — 由 `AccessLogEntry::from_context(ctx)` 在 `pg_logging.rs` 的 `logging()` 阶段生成：
 
 | 字段 | 含义 |
 |------|------|
@@ -155,7 +155,7 @@ log.push(&format!("Rewrite -> {}; ", new_path));
 ## Key Files
 
 - `src/types/ctx.rs` — `EdgionHttpContext`
-- `src/core/observe/access_log/entry.rs` — `AccessLogEntry`
-- `src/core/observe/access_log/logger.rs` — `AccessLogger`
-- `src/core/observe/access_log/logger_factory.rs` — `create_async_logger()`
-- `src/core/plugins/plugin_runtime/log.rs` — `PluginLog`, `LogBuffer` (100-byte SmallVec)
+- `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
+- `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
+- `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`
+- `src/core/gateway/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (100-byte SmallVec)

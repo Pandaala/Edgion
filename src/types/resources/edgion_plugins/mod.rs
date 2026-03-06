@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::plugins::PluginRuntime;
+use crate::core::gateway::plugins::PluginRuntime;
 
 // Submodules
 pub mod custom_plugins;

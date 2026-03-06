@@ -14,8 +14,8 @@ use super::http_route::{
     SessionPersistence,
 };
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::lb::BackendSelector;
-use crate::core::plugins::PluginRuntime;
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::PluginRuntime;
 
 /// API group for GRPCRoute
 pub const GRPC_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -414,7 +414,7 @@ impl GRPCRoute {
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
-        use crate::core::utils::parse_duration;
+        use crate::core::common::utils::parse_duration;
 
         let Some(rules) = self.spec.rules.as_mut() else {
             return;

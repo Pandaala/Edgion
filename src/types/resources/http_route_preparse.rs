@@ -2,7 +2,7 @@
 //! These structures are not serialized, only used for runtime analysis
 
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
-use crate::core::plugins::PluginRuntime;
+use crate::core::gateway::plugins::PluginRuntime;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

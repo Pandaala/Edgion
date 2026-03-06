@@ -11,16 +11,16 @@
 LinkSys has two layers:
 
 1. **CRD Layer** (`types/resources/link_sys/`) — Declares connections to external systems (Redis, Etcd, ES, Kafka). Managed as K8s CRDs, synced from controller → gateway via gRPC.
-2. **Runtime Layer** (`core/link_sys/`) — Provides the `DataSender<T>` trait and concrete client implementations that actually connect to external systems at runtime.
+2. **Runtime Layer** (`core/gateway/link_sys/`) — Provides the `DataSender<T>` trait, `LinkSysStore`, and concrete client implementations that actually connect to external systems at runtime.
 
 ```
 LinkSys CRD (config declaration)
     ↓ synced via gRPC
 ClientCache<LinkSys> on gateway
     ↓ watch events (add/update/delete)
-LinkSysConfHandler (ConfHandler impl, in conf_handler_impl.rs)
+LinkSysConfHandler (ConfHandler impl, in runtime/conf_handler.rs)
     ↓ invokes LinkSysStore.replace_all / update
-LinkSysStore (link_sys_store.rs)
+LinkSysStore (runtime/store.rs)
     ↓ dispatch_full_set / dispatch_partial_update
     ↓ match SystemConfig type → build/swap/shutdown runtime clients
 Typed runtime stores (e.g., REDIS_RUNTIME, ETCD_RUNTIME)
@@ -36,32 +36,20 @@ Plugins, DataSender impls, etc.
 
 ```
 src/
-├── core/link_sys/
-│   ├── mod.rs                          # Re-exports: DataSender, LocalFileWriter, LogType, get_redis_client, etc.
-│   ├── conf_handler_impl.rs            # ConfHandler trait impl (bridges ClientCache → LinkSysStore)
-│   ├── data_sender_trait.rs            # DataSender<T> trait (async init/send/healthy/name)
-│   ├── link_sys_store.rs               # LinkSysStore + typed runtime stores + dispatch logic
-│   ├── local_file/                     # LocalFileWriter implementation (file + rotation)
-│   │   ├── mod.rs
-│   │   ├── data_sender_impl.rs
-│   │   └── rotation.rs
-│   ├── webhook/                        # Webhook subsystem
-│   ├── redis/                          # Redis connector (implemented)
-│   │   ├── mod.rs                      # pub use client/ops/config_mapping/data_sender
-│   │   ├── client.rs                   # RedisLinkClient: wraps fred::clients::Pool
-│   │   ├── config_mapping.rs           # CRD RedisClientConfig → fred Config + Builder
-│   │   ├── ops.rs                      # High-level ops: KV, Hash, List, Lock, Health
-│   │   └── data_sender.rs             # RedisDataSender (DataSender<String> for failed cache)
-│   ├── etcd/                           # Etcd connector (to be implemented)
-│   │   ├── mod.rs
-│   │   ├── client.rs
-│   │   ├── config_mapping.rs
-│   │   └── ops.rs
-│   └── <system>/                       # Future system connectors
-│       ├── mod.rs
-│       ├── client.rs
-│       ├── config_mapping.rs
-│       └── ops.rs
+├── core/gateway/link_sys/
+│   ├── mod.rs                          # Re-exports: DataSender, LocalFileWriter, get_redis_client, etc.
+│   ├── runtime/
+│   │   ├── mod.rs                      # Runtime facade re-exports
+│   │   ├── conf_handler.rs             # ConfHandler trait impl (bridges ClientCache → LinkSysStore)
+│   │   ├── data_sender.rs              # DataSender<T> trait (async init/send/healthy/name)
+│   │   └── store.rs                    # LinkSysStore + typed runtime stores + dispatch logic
+│   ├── providers/
+│   │   ├── local_file/                 # LocalFileWriter implementation (file + rotation)
+│   │   ├── webhook/                    # Webhook subsystem
+│   │   ├── redis/                      # Redis connector (implemented)
+│   │   ├── etcd/                       # Etcd connector
+│   │   ├── elasticsearch/              # Elasticsearch connector
+│   │   └── <system>/                   # Future system connectors
 ├── types/
 │   ├── resources/link_sys/
 │   │   ├── mod.rs                      # LinkSys CRD, SystemConfig enum, validate_config()
@@ -101,14 +89,14 @@ Adding a new system touches these areas:
 
 ### If CRD Config Types Already Exist (e.g., Redis, Etcd)
 
-1. **Runtime client** — `src/core/link_sys/<system>/client.rs`
-2. **Config mapping** — `src/core/link_sys/<system>/config_mapping.rs` (CRD → library config)
-3. **Operations** — `src/core/link_sys/<system>/ops.rs`
-4. **DataSender** (optional) — `src/core/link_sys/<system>/data_sender.rs` (only if used as log sink)
-5. **Module exports** — `src/core/link_sys/<system>/mod.rs` + `src/core/link_sys/mod.rs`
-6. **Link store dispatch** — Add `SystemConfig::<System>` match branches in `link_sys_store.rs` (`dispatch_full_set` + `dispatch_partial_update` + typed runtime store + accessor functions)
+1. **Runtime client** — `src/core/gateway/link_sys/providers/<system>/client.rs`
+2. **Config mapping** — `src/core/gateway/link_sys/providers/<system>/config_mapping.rs` (CRD → library config)
+3. **Operations** — `src/core/gateway/link_sys/providers/<system>/ops.rs`
+4. **DataSender** (optional) — `src/core/gateway/link_sys/providers/<system>/data_sender.rs` (only if used as log sink)
+5. **Module exports** — `src/core/gateway/link_sys/providers/<system>/mod.rs` + `src/core/gateway/link_sys/providers/mod.rs` + `src/core/gateway/link_sys/mod.rs`
+6. **Link store dispatch** — Add `SystemConfig::<System>` match branches in `src/core/gateway/link_sys/runtime/store.rs`
 7. **Cargo.toml** — Add or update the library dependency with appropriate features
-8. **Gateway Admin API testing endpoints** — Add testing endpoints in `src/core/api/gateway/mod.rs` under `create_testing_router()` for `--integration-testing-mode`
+8. **Gateway Admin API testing endpoints** — Add testing endpoints in `src/core/gateway/api/mod.rs` under `create_testing_router()` for `--integration-testing-mode`
 9. **Integration test config** — `examples/test/conf/LinkSys/<System>/` (CRD YAMLs + minimal Gateway resource)
 10. **Docker Compose** — `examples/test/conf/Services/<system>/docker-compose.yaml` (external service for testing)
 11. **Integration test script** — `examples/test/scripts/integration/run_<system>_test.sh`
@@ -151,7 +139,7 @@ etcd-client = { version = "0.18", features = ["tls"] }
 
 ### Step 2: Create Client Module
 
-`src/core/link_sys/<system>/client.rs`:
+`src/core/gateway/link_sys/providers/<system>/client.rs`:
 
 ```rust
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -228,7 +216,7 @@ impl <System>LinkClient {
 
 ### Step 3: Create Config Mapping Module
 
-`src/core/link_sys/<system>/config_mapping.rs`:
+`src/core/gateway/link_sys/providers/<system>/config_mapping.rs`:
 
 Isolate the CRD → library config mapping logic in its own file. This keeps `client.rs` focused on lifecycle management and makes the mapping logic independently testable.
 
@@ -261,7 +249,7 @@ pub(crate) fn parse_url(url: &str) -> Result<(String, u16)> {
 
 ### Step 4: Create Operations Module
 
-`src/core/link_sys/<system>/ops.rs`:
+`src/core/gateway/link_sys/providers/<system>/ops.rs`:
 
 Define high-level operations that plugins and other code will use. Don't wrap every library function — only expose what Edgion actually needs:
 
@@ -315,7 +303,7 @@ impl <System>LinkClient {
 
 ### Step 5: Export and Register
 
-`src/core/link_sys/<system>/mod.rs`:
+`src/core/gateway/link_sys/providers/<system>/mod.rs`:
 
 ```rust
 pub mod client;
@@ -328,7 +316,7 @@ pub use client::<System>LinkClient;
 // pub use ops::LinkSysHealth;  // Only if health struct is defined here
 ```
 
-`src/core/link_sys/mod.rs` — add:
+`src/core/gateway/link_sys/mod.rs` — add:
 
 ```rust
 pub mod <system>;
@@ -337,7 +325,7 @@ pub use <system>::<System>LinkClient;
 
 ### Step 6: LinkSysStore — Add Dispatch Branches
 
-In `src/core/link_sys/link_sys_store.rs`, add:
+In `src/core/gateway/link_sys/runtime/store.rs`, add:
 
 #### 6a. Typed runtime store (ArcSwap)
 
@@ -385,7 +373,7 @@ crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
 
 ### Step 7: Gateway Admin API Testing Endpoints
 
-When `--integration-testing-mode` is enabled, the Gateway exposes admin API endpoints for testing LinkSys clients. Add endpoints in `src/core/api/gateway/mod.rs` under `create_testing_router()`.
+When `--integration-testing-mode` is enabled, the Gateway exposes admin API endpoints for testing LinkSys clients. Add endpoints in `src/core/gateway/api/mod.rs` under `create_testing_router()`.
 
 **URL convention:** `/api/v1/testing/link-sys/<system>/{name}/{operation}`
 
@@ -408,11 +396,11 @@ Where `{name}` uses underscore as namespace separator: `"default_redis-test"` �
 fn get_<system>_client_by_name(name: &str) -> Result<Arc<<System>LinkClient>, Json<ApiResponse<serde_json::Value>>> {
     // URL path uses underscore as separator: "default_my-client" → "default/my-client"
     let key = name.replacen('_', "/", 1);
-    crate::core::link_sys::get_<system>_client(&key).ok_or_else(|| {
+    crate::core::gateway::link_sys::get_<system>_client(&key).ok_or_else(|| {
         Json(ApiResponse::error(format!(
             "<System> client '{}' not found. Available: {:?}",
             key,
-            crate::core::link_sys::link_sys_store::list_<system>_clients()
+            crate::core::gateway::link_sys::runtime::store::list_<system>_clients()
         )))
     })
 }
@@ -469,7 +457,7 @@ examples/test/conf/
 
 ## CRD Config ↔ Runtime Client Mapping
 
-The CRD config types (`types/resources/link_sys/<system>.rs`) define what users configure in YAML. The config mapping (`core/link_sys/<system>/config_mapping.rs`) translates this into library-specific config.
+The CRD config types (`types/resources/link_sys/<system>.rs`) define what users configure in YAML. The config mapping (`core/gateway/link_sys/providers/<system>/config_mapping.rs`) translates this into library-specific config.
 
 ```
 User YAML → CRD Type (serde) → config_mapping.rs → Library Config → Library Client
@@ -558,7 +546,7 @@ pub struct SecretReference {
 At parse time (controller side), resolve the secret:
 
 ```rust
-use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
 
 if let Some(secret_ref) = &config.auth.secret_ref {
     let secret = get_secret(Some(namespace), &secret_ref.name);
@@ -640,5 +628,5 @@ examples/test/scripts/integration/
 3. **Fail loudly on init, recover silently at runtime** — startup failures should be clear; runtime disconnects should auto-reconnect
 4. **No secrets in logs** — use `tracing` for operational logs; never log passwords, tokens, or connection strings with credentials
 5. **Feature-gate heavy dependencies** — if the library is large (e.g., rdkafka), consider a Cargo feature to make it optional
-6. **Background init/shutdown** — `init()` and `shutdown()` are spawned in background tasks in `link_sys_store.rs` to avoid blocking the config sync path
+6. **Background init/shutdown** — `init()` and `shutdown()` are spawned in background tasks in `runtime/store.rs` to avoid blocking the config sync path
 7. **Safety ceilings** — Always clamp user-configurable values (pool size, timeouts) to safe maximums to prevent misconfigured CRDs from causing harm

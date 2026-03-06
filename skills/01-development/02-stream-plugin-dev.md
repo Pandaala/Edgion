@@ -9,7 +9,7 @@ description: Stream plugin (EdgionStreamPlugins) development guide. TCP connecti
 > **TODO (2026-02-25): P0, New**
 > - [ ] `StreamPlugin` trait (`on_connection()` → `StreamPluginResult::Allow/Deny`)
 > - [ ] `StreamContext` (client_ip, listener_port, remote_addr)
-> - [ ] Directory structure: `src/core/plugins/edgion_stream_plugins/`
+> - [ ] Directory structure: `src/core/gateway/plugins/stream/`
 > - [ ] Checklist: config struct, plugin impl, `EdgionStreamPlugin` enum, StreamPluginStore registration
 > - [ ] Gateway listener binding via `edgion.io/edgion-stream-plugins` annotation
 > - [ ] Reference implementation: `StreamIpRestriction`

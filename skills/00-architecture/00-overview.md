@@ -57,21 +57,50 @@ src/
 │   └── edgion_ctl.rs            #   → Cli::run()
 ├── lib.rs                       # Crate root: pub mod core, pub mod types
 ├── core/                        # All business logic
-│   ├── cli/                     # CLI parsing + startup wiring
-│   ├── conf_mgr/                # Config management (controller core)
-│   ├── conf_sync/               # gRPC sync (server + client + cache)
-│   ├── api/                     # HTTP APIs (controller admin, gateway admin, metrics)
-│   ├── gateway/                 # Gateway config, listeners, route dispatch
-│   ├── routes/                  # HTTP, gRPC, TCP, TLS, UDP route processing
-│   ├── plugins/                 # Plugin system (edgion_plugins, stream_plugins, gapi_filters)
-│   ├── backends/                # Backend discovery (Service, EndpointSlice, Endpoint)
-│   ├── lb/                      # Load balancing (EWMA, LeastConn, WeightedSelector)
-│   ├── tls/                     # TLS termination, cert management
-│   ├── observe/                 # Logging: access_log, ssl_log, tcp_log, udp_log, metrics
-│   ├── link_sys/                # External system connectors (file, ES, Kafka, Redis)
-│   ├── matcher/                 # Host matching, IP radix tree
-│   ├── services/                # ACME certificate automation
-│   └── utils/                   # Duration parsing, metadata filter, networking, real IP
+│   ├── controller/              # edgion-controller 归属代码
+│   │   ├── api/                 #   Controller Admin API
+│   │   ├── cli/                 #   Controller CLI entry wiring
+│   │   ├── conf_mgr/            #   配置中心 / Workqueue / ResourceProcessor
+│   │   ├── conf_sync/           #   gRPC server + server cache
+│   │   ├── observe/             #   Controller logging facade
+│   │   └── services/            #   Controller-side services (e.g. ACME issuer)
+│   ├── gateway/                 # edgion-gateway 归属代码
+│   │   ├── api/                 #   Gateway Admin API
+│   │   ├── backends/            #   Backend discovery / health / backend policy
+│   │   │   ├── discovery/       #     Service / EndpointSlice / Endpoint backend discovery
+│   │   │   ├── health/          #     Active health-check state and config
+│   │   │   └── policy/          #     BackendTLSPolicy and related backend policy runtime
+│   │   ├── cli/                 #   Gateway CLI entry wiring
+│   │   ├── config/              #   GatewayClass / EdgionGatewayConfig handlers and stores
+│   │   ├── conf_sync/           #   gRPC client + client cache
+│   │   ├── lb/                  #   Load balancing (EWMA, LeastConn, WeightedSelector)
+│   │   ├── link_sys/            #   External systems runtime (providers / runtime store)
+│   │   │   ├── providers/       #     Redis / Etcd / Elasticsearch / Webhook / LocalFile
+│   │   │   └── runtime/         #     LinkSysStore, ConfHandler, DataSender
+│   │   ├── observe/             #   access_log / metrics / ssl/tcp/udp/sys log
+│   │   ├── plugins/             #   Plugin system (http / stream / runtime)
+│   │   │   ├── http/            #     EdgionPlugins HTTP plugin implementations
+│   │   │   ├── stream/          #     EdgionStreamPlugins + connection filter bridge
+│   │   │   └── runtime/         #     PluginRuntime + conditions + Gateway API filter adapters
+│   │   ├── routes/              #   HTTP / gRPC / TCP / TLS / UDP route processing
+│   │   │   ├── http/            #     HTTPRoute matching + proxy_http lifecycle
+│   │   │   ├── grpc/            #     GRPCRoute matching + gRPC upstream integration
+│   │   │   ├── tcp/             #     TCPRoute runtime
+│   │   │   ├── tls/             #     TLSRoute runtime
+│   │   │   └── udp/             #     UDPRoute runtime
+│   │   ├── services/            #   Gateway-side services (e.g. ACME challenge serving)
+│   │   ├── tls/                 #   TLS termination, cert management
+│   │   │   ├── runtime/         #     TLS callbacks and shared TLS runtime helpers
+│   │   │   ├── store/           #     EdgionTls store and SNI certificate matcher
+│   │   │   └── validation/      #     certificate and mTLS whitelist validation
+│   │   └── runtime/             #   Data plane runtime (server / matching / store)
+│   ├── ctl/                     # edgion-ctl 归属代码
+│   │   └── cli/                 #   CLI commands / output / client
+│   ├── common/                  # 跨 bin 共享模块
+│   │   ├── config/              #   启动期共享配置（test mode, cache config）
+│   │   ├── conf_sync/           #   gRPC proto / traits / shared types
+│   │   ├── matcher/             #   Host matching, IP radix tree
+│   │   └── utils/               #   metadata/net/duration/real_ip 等通用工具
 └── types/                       # Shared type definitions
     ├── resource/                # Resource system (define_resources!, ResourceKind, ResourceMeta)
     ├── resources/               # Per-kind resource structs (Gateway, HTTPRoute, EdgionPlugins, ...)
@@ -83,7 +112,7 @@ src/
     └── err.rs                   # Error types
 ```
 
-**Design principle:** `types/` is pure data definitions (no business logic), `core/` is all logic. Binaries in `bin/` are thin wrappers that parse CLI and call into `core/cli/`.
+**Design principle:** `types/` is pure data definitions (no business logic), `core/` is all logic. `core/` 现在直接按二进制归属分层（`controller` / `gateway` / `ctl` / `common`），不再保留旧的顶层 shim 模块。
 
 ## EdgionHttpContext — Per-Request State
 

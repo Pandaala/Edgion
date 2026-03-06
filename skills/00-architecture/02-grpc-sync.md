@@ -5,7 +5,7 @@
 
 ## Proto Definition
 
-`src/core/conf_sync/proto/config_sync.proto`:
+`src/core/common/conf_sync/proto/config_sync.proto`:
 
 ```protobuf
 service ConfigSync {
@@ -53,8 +53,14 @@ ConfigSyncClient
       → preparse triggered on update
 ```
 
+## Module Split
+
+- `src/core/common/conf_sync/` — gRPC proto、shared traits、shared event/list/watch types
+- `src/core/controller/conf_sync/` — Controller 侧 `ConfigSyncServer`、`ServerCache`
+- `src/core/gateway/conf_sync/` — Gateway 侧 `ConfigSyncClient`、`ClientCache`
+
 **Key files:**
-- `src/core/conf_sync/proto/config_sync.proto` — proto definition
-- `src/core/conf_sync/conf_server/` — gRPC server, `ConfigSyncServer`
-- `src/core/conf_sync/conf_client/grpc_client.rs` — `ConfigSyncClient`
-- `src/core/conf_sync/cache_client/cache.rs` — `ClientCache<T>`, `DynClientCache`
+- `src/core/common/conf_sync/proto/config_sync.proto` — proto definition
+- `src/core/controller/conf_sync/conf_server/` — gRPC server, `ConfigSyncServer`
+- `src/core/gateway/conf_sync/conf_client/grpc_client.rs` — `ConfigSyncClient`
+- `src/core/gateway/conf_sync/cache_client/cache.rs` — `ClientCache<T>`, `DynClientCache`

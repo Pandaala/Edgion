@@ -16,6 +16,7 @@
 | [06-load-balancing.md](06-load-balancing.md) | 负载均衡 | 修改 LB 策略、理解后端选择 |
 | [07-gateway-api.md](07-gateway-api.md) | Gateway API 支持 | 添加新的 Gateway API 资源支持 |
 | [08-resource-system.md](08-resource-system.md) | 资源系统 | 添加新资源类型、理解 define_resources! |
+| [09-core-layout.md](09-core-layout.md) | Core 分层定版 | 放置新模块、避免回到旧目录结构 |
 
 ## 架构总览图
 

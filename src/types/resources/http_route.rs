@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::common::{Condition, ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::lb::BackendSelector;
-use crate::core::plugins::PluginRuntime;
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::PluginRuntime;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -653,7 +653,7 @@ impl ParsedRouteTimeouts {
     /// Parse route timeouts from HTTPRouteTimeouts
     /// Returns None if no timeouts are configured
     pub fn from_config(config: &HTTPRouteTimeouts) -> Option<Self> {
-        use crate::core::utils::parse_duration;
+        use crate::core::common::utils::parse_duration;
 
         // Parse request timeout (end-to-end, Gateway API v1.4 standard)
         let request_timeout = config.request.as_ref().and_then(|s| {

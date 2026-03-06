@@ -25,7 +25,7 @@
 | Issue | Status | Notes |
 |-------|--------|-------|
 | EdgionGatewayConfig missing | **Fixed** | Created `manifests/edgion-gateway-config.yaml` |
-| Port conflict (multi-gateway) | **Fixed** | `gateway_base.rs` skips duplicate port bindings |
+| Port conflict (multi-gateway) | **Fixed** | `runtime/server/base.rs` skips duplicate port bindings |
 | Host header port stripping | **Fixed** | `strip_port_from_host()` in request filter |
 | Routes not rebuilt on Gateway partial_update | **Fixed** | `rebuild_from_stored_routes()` after Gateway add/update |
 | gateway_address hardcoded | **Fixed** | `setup.sh` dynamically patches with Service ClusterIP |

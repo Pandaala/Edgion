@@ -350,7 +350,7 @@ impl Default for RateLimitConfig {
 }
 
 // Re-export from cli config for convenience
-pub use crate::core::cli::edgion_gateway::config::{
+pub use crate::core::gateway::cli::config::{
     get_default_estimator_slots, get_gateway_instance_count, get_max_estimator_slots, get_min_estimator_slots, SLOTS_K,
 };
 
@@ -536,7 +536,7 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::cli::edgion_gateway::config::set_gateway_instance_count;
+    use crate::core::gateway::cli::config::set_gateway_instance_count;
     use std::sync::{Mutex, OnceLock};
 
     static GATEWAY_INSTANCE_COUNT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

@@ -4,7 +4,7 @@ description: Comprehensive guide for adding new CRD resource types.
 ---
 # Add New Resource Guide
 
-> Comprehensive guide for adding new CRD resource types. Touches 10+ files across types/, core/conf_mgr/, core/conf_sync/, core/api/, CRD YAML.
+> Comprehensive guide for adding new CRD resource types. Touches 10+ files across `types/`, `core/controller/conf_mgr/`, `core/controller/conf_sync/`, `core/controller/api/`, `core/gateway/conf_sync/`, `core/gateway/api/`, and CRD YAML.
 >
 > **TODO (2026-02-25): P0, New**
 > - [ ] `define_resources!` macro: adding new kind entry in `src/types/resource/defs.rs`

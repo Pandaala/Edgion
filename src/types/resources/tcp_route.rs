@@ -9,8 +9,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
-use crate::core::lb::BackendSelector;
-use crate::core::plugins::StreamPluginRuntime;
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::StreamPluginRuntime;
 
 /// API group for TCPRoute
 pub const TCP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";

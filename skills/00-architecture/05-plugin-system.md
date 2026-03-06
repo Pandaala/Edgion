@@ -1,7 +1,7 @@
 # 插件系统
 
-> Edgion 的四阶段插件框架：RequestFilter → UpstreamResponseFilter → UpstreamResponseBodyFilter → UpstreamResponse。
-> 插件在路由预解析时实例化（非请求时），通过 PluginRuntime 统一管理。
+> Edgion 的插件目录现在分成三层：`plugins/http` 放 HTTP 插件实现，`plugins/stream` 放 TCP/UDP 侧 stream 插件，`plugins/runtime` 放执行框架、条件系统和 Gateway API filter adapter。
+> 核心执行阶段仍然是四阶段插件框架：RequestFilter → UpstreamResponseFilter → UpstreamResponseBodyFilter → UpstreamResponse。
 
 ## Plugin Stages
 
@@ -36,12 +36,24 @@ All plugins are automatically wrapped in `ConditionalRequestFilter` / `Condition
 
 `PluginRuntime` is built during HTTPRoute/GRPCRoute preparse (not at request time), stored on the route rule. Plugin instantiation happens once per config change, not per request.
 
+## Directory Layout
+
+- `src/core/gateway/plugins/http/` — EdgionPlugins HTTP plugin implementations
+- `src/core/gateway/plugins/stream/` — EdgionStreamPlugins runtime and connection filter bridge
+- `src/core/gateway/plugins/runtime/runtime.rs` — `PluginRuntime` core
+- `src/core/gateway/plugins/runtime/conditions/` — conditional execution (`PluginConditions`, evaluator)
+- `src/core/gateway/plugins/runtime/gateway_api_filters/` — Gateway API filter adapters like `ExtensionRef`, `RequestHeaderModifier`
+- `src/core/gateway/plugins/runtime/traits/` — all plugin trait definitions
+
 ## Key Files
 
-- `src/core/plugins/plugin_runtime/runtime.rs` — `PluginRuntime`
-- `src/core/plugins/plugin_runtime/conditional_filter.rs` — condition wrapping
-- `src/core/plugins/plugin_runtime/traits/` — all trait definitions
-- `src/core/plugins/edgion_plugins/` — plugin implementations
+- `src/core/gateway/plugins/runtime/runtime.rs` — `PluginRuntime`
+- `src/core/gateway/plugins/runtime/conditional_filter.rs` — condition wrapping
+- `src/core/gateway/plugins/runtime/conditions/` — condition model and evaluator
+- `src/core/gateway/plugins/runtime/gateway_api_filters/` — Gateway API filter adapters
+- `src/core/gateway/plugins/runtime/traits/` — all trait definitions
+- `src/core/gateway/plugins/http/` — plugin implementations
+- `src/core/gateway/plugins/stream/` — stream plugin implementations and bridge
 
 ## Related
 

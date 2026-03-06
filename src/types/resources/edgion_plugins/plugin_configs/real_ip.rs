@@ -30,7 +30,7 @@
 //! recursive: false
 //! ```
 
-use crate::core::matcher::ip_radix_tree::IpRadixMatcher;
+use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;

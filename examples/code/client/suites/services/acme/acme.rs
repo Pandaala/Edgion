@@ -13,8 +13,8 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
 
-use edgion::core::services::acme::ctrl::acme_client::AcmeClient;
-use edgion::core::services::acme::ctrl::dns_provider::{create_dns_provider, DnsProvider};
+use edgion::core::controller::services::acme::acme_client::AcmeClient;
+use edgion::core::controller::services::acme::dns_provider::{create_dns_provider, DnsProvider};
 use edgion::types::resources::edgion_acme::AcmeKeyType;
 
 /// Pebble ACME directory URL

@@ -39,7 +39,7 @@ RouteManager
     Stores all HTTPRoute resources for lookup during delete/update events.
 ```
 
-**Key file:** `src/core/routes/http_routes/routes_mgr.rs`
+**Key file:** `src/core/gateway/routes/http/routes_mgr.rs`
 
 ### DomainRouteRules (global domain matching)
 
@@ -104,7 +104,7 @@ RouteMatchResult
 └── matched_gateway: GatewayInfo         The specific gateway that satisfied parentRef constraints
 ```
 
-**Key file:** `src/core/routes/http_routes/match_unit.rs`
+**Key file:** `src/core/gateway/routes/http/match_unit.rs`
 
 ## Match Engines
 
@@ -128,7 +128,7 @@ Match phase (per request):
   4. Run deep_match on each candidate until one succeeds
 ```
 
-**Key file:** `src/core/routes/http_routes/match_engine/radix_route_match.rs`
+**Key file:** `src/core/gateway/routes/http/match_engine/radix_route_match.rs`
 
 ### RegexRoutesEngine
 
@@ -146,7 +146,7 @@ Match phase:
   3. First deep_match success wins
 ```
 
-**Key file:** `src/core/routes/http_routes/match_engine/regex_routes_engine.rs`
+**Key file:** `src/core/gateway/routes/http/match_engine/regex_routes_engine.rs`
 
 ### RadixPath (route path metadata)
 
@@ -163,7 +163,7 @@ RadixPath
 
 Priority weight formula: `base(exact=2000, prefix=1000) + segment_count * 10 + (param ? 0 : 5)`
 
-**Key file:** `src/core/routes/http_routes/match_engine/radix_path.rs`
+**Key file:** `src/core/gateway/routes/http/match_engine/radix_path.rs`
 
 ## Deep Match (Gateway/Listener Constraint Checking)
 
@@ -189,7 +189,7 @@ deep_match_common(matched_info, req_header, parent_refs, ctx, gateway_infos)
         Supports: Exact, RegularExpression
 ```
 
-**Key file:** `src/core/gateway/gateway/route_match.rs`
+**Key file:** `src/core/gateway/runtime/matching/route.rs`
 
 ### GatewayInfo
 
@@ -205,7 +205,7 @@ GatewayInfo
 └── metrics_test_type: Option<TestType>
 ```
 
-**Key file:** `src/core/gateway/gateway/config_store.rs`
+**Key file:** `src/core/gateway/runtime/store/config.rs`
 
 ## Multi-Gateway Port Sharing
 
@@ -217,7 +217,7 @@ a single `EdgionHttp` instance carrying `Arc<Vec<GatewayInfo>>` — the
 full list of Gateway/Listener contexts for that port.
 
 ```
-gateway_base.rs:
+runtime/server/base.rs:
   1. Pre-collect GatewayInfo per port:
      port_gateway_infos: HashMap<u16, Vec<GatewayInfo>>
 
@@ -227,7 +227,7 @@ gateway_base.rs:
        ...
      }
 
-  3. listener_builder creates EdgionHttp:
+  3. runtime/server/listener_builder creates EdgionHttp:
      EdgionHttp {
        gateway_infos: Arc<Vec<GatewayInfo>>,  // passed to match_route
        ...
@@ -253,7 +253,7 @@ pg_request_filter():
   3. No fallback needed — single unified lookup handles all gateways
 ```
 
-**Key file:** `src/core/routes/http_routes/proxy_http/pg_request_filter.rs`
+**Key file:** `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs`
 
 ## Route Registration (Config Time)
 
@@ -282,7 +282,7 @@ Per Gateway API spec, if HTTPRoute has no `spec.hostnames`:
 2. If no sectionName, use first listener's hostname
 3. If listener has no hostname, fall back to catch-all `"*"`
 
-**Key function:** `resolve_all_effective_hostnames()` in `conf_handler_impl.rs`
+**Key function:** `resolve_all_effective_hostnames()` in `src/core/gateway/routes/http/conf_handler_impl.rs`
 
 ### Partial Update Strategy
 
@@ -318,7 +318,7 @@ DomainGrpcRouteRules
 Each candidate runs `deep_match` with `gateway_infos` for Gateway/Listener
 validation, identical to HTTP routes.
 
-**Key files:** `src/core/routes/grpc_routes/`
+**Key files:** `src/core/gateway/routes/grpc/`
 
 ## Request Lifecycle Integration
 
@@ -359,22 +359,22 @@ Pingora receives request
 
 | File | Purpose |
 |------|---------|
-| `src/core/routes/http_routes/routes_mgr.rs` | RouteManager, DomainRouteRules, RouteRules |
-| `src/core/routes/http_routes/match_unit.rs` | HttpRouteRuleUnit, RouteMatchResult, deep_match |
-| `src/core/routes/http_routes/conf_handler_impl.rs` | HTTPRoute → RouteManager registration |
-| `src/core/routes/http_routes/match_engine/radix_route_match.rs` | RadixRouteMatchEngine |
-| `src/core/routes/http_routes/match_engine/radix_path.rs` | RadixPath compilation |
-| `src/core/routes/http_routes/match_engine/regex_routes_engine.rs` | RegexRoutesEngine |
-| `src/core/routes/http_routes/proxy_http/pg_request_filter.rs` | Request filter + route matching invocation |
-| `src/core/routes/http_routes/proxy_http/mod.rs` | EdgionHttp struct (gateway_infos) |
-| `src/core/routes/grpc_routes/routes_mgr.rs` | GrpcRouteManager, DomainGrpcRouteRules |
-| `src/core/routes/grpc_routes/match_engine.rs` | GrpcMatchEngine (service/method routing) |
-| `src/core/routes/grpc_routes/match_unit.rs` | GrpcRouteRuleUnit, gRPC deep_match |
-| `src/core/routes/grpc_routes/integration.rs` | try_match_grpc_route integration helper |
-| `src/core/gateway/gateway_base.rs` | GatewayBase, port-level GatewayInfo collection |
-| `src/core/gateway/listener_builder.rs` | ListenerContext, add_http_listener |
-| `src/core/gateway/gateway/config_store.rs` | GatewayInfo, GatewayConfigStore |
-| `src/core/gateway/gateway/route_match.rs` | check_gateway_listener_match, hostname matching |
-| `src/core/matcher/host_match/radix_match.rs` | RadixHostMatchEngine (wildcard domain matching) |
+| `src/core/gateway/routes/http/routes_mgr.rs` | RouteManager, DomainRouteRules, RouteRules |
+| `src/core/gateway/routes/http/match_unit.rs` | HttpRouteRuleUnit, RouteMatchResult, deep_match |
+| `src/core/gateway/routes/http/conf_handler_impl.rs` | HTTPRoute → RouteManager registration |
+| `src/core/gateway/routes/http/match_engine/radix_route_match.rs` | RadixRouteMatchEngine |
+| `src/core/gateway/routes/http/match_engine/radix_path.rs` | RadixPath compilation |
+| `src/core/gateway/routes/http/match_engine/regex_routes_engine.rs` | RegexRoutesEngine |
+| `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs` | Request filter + route matching invocation |
+| `src/core/gateway/routes/http/proxy_http/mod.rs` | EdgionHttp struct (gateway_infos) |
+| `src/core/gateway/routes/grpc/routes_mgr.rs` | GrpcRouteManager, DomainGrpcRouteRules |
+| `src/core/gateway/routes/grpc/match_engine.rs` | GrpcMatchEngine (service/method routing) |
+| `src/core/gateway/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit, gRPC deep_match |
+| `src/core/gateway/routes/grpc/integration.rs` | try_match_grpc_route integration helper |
+| `src/core/gateway/runtime/server/base.rs` | GatewayBase, listener bootstrap and port-level GatewayInfo collection |
+| `src/core/gateway/runtime/server/listener_builder.rs` | ListenerContext, add_http_listener |
+| `src/core/gateway/runtime/store/config.rs` | GatewayInfo, GatewayConfigStore |
+| `src/core/gateway/runtime/matching/route.rs` | check_gateway_listener_match, hostname matching |
+| `src/core/common/matcher/host_match/radix_match/radix_host_match.rs` | RadixHostMatchEngine (wildcard domain matching) |
 | `src/types/resources/common.rs` | ParentReference type definition |
 | `src/types/ctx.rs` | EdgionHttpContext (per-request state) |

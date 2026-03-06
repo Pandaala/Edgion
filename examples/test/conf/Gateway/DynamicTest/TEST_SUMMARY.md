@@ -91,7 +91,7 @@ cd /Users/caohao/ws1/Edgion
 
 ## 关键文件
 
-- `/src/core/gateway/gateway/config_store.rs` - 配置存储
-- `/src/core/gateway/gateway/handler.rs` - Gateway 处理器
-- `/src/core/api/controller/namespaced_handlers.rs` - Controller API
+- `/src/core/gateway/runtime/store/config.rs` - 配置存储
+- `/src/core/gateway/runtime/handler.rs` - Gateway 处理器
+- `/src/core/controller/api/namespaced_handlers.rs` - Controller API
 - `/examples/test/scripts/utils/load_conf.sh` - 配置加载脚本

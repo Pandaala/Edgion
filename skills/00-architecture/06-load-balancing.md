@@ -5,12 +5,14 @@
 ## LB 模块结构
 
 ```
-src/core/lb/
-├── lb_manager.rs        # LB 管理器，Gateway 级别的 LB 实例缓存
-├── ewma.rs              # EWMA (Exponentially Weighted Moving Average) 策略
-├── least_conn.rs        # 最少连接策略
-├── weighted_selector.rs # 加权选择器
-└── ...
+src/core/gateway/lb/
+├── backend_selector/
+│   ├── selector.rs          # BackendSelector trait + 公共入口
+│   └── weighted_selector.rs # 加权选择器
+├── ewma/                    # EWMA (Exponentially Weighted Moving Average) 策略
+├── leastconn/               # 最少连接策略
+├── lb_policy/               # LB policy 解析与存储
+└── mod.rs
 ```
 
 ## 支持的负载均衡策略
@@ -27,18 +29,22 @@ src/core/lb/
 ## 后端发现
 
 ```
-src/core/backends/
-├── backend_manager.rs   # 后端管理器，维护所有 Service 的后端列表
-├── service.rs           # Service 资源处理
-├── endpoint_slice.rs    # EndpointSlice 资源处理
-└── endpoint.rs          # Endpoint 资源处理（兼容旧版）
+src/core/gateway/backends/
+├── discovery/
+│   ├── services/        # Service 资源处理
+│   ├── endpoint_slice/  # EndpointSlice 资源处理
+│   └── endpoint/        # Endpoint 资源处理（兼容旧版）
+├── health/
+│   └── check/           # 健康检查配置、探测器、状态存储
+└── policy/
+    └── backend_tls/     # BackendTLSPolicy 存储与处理
 ```
 
 **两种 Endpoint 模式**（由 Controller `endpoint_mode` 决定）：
 - `EndpointSlice` — K8s 1.21+ 推荐，支持大规模集群
 - `Endpoint` — 兼容旧版 K8s
 
-后端信息通过 gRPC 从 Controller 同步到 Gateway，Gateway 侧的 `BackendManager` 维护运行时后端列表。
+后端信息通过 gRPC 从 Controller 同步到 Gateway，Gateway 侧的 discovery stores 维护运行时后端列表，health 子层负责健康检查状态筛选，policy 子层负责 BackendTLSPolicy。
 
 ## LB 选择流程
 
@@ -76,6 +82,8 @@ filters:
 
 ## Key Files
 
-- `src/core/lb/` — 所有 LB 策略实现
-- `src/core/backends/` — 后端发现与管理
-- `src/core/routes/http_routes/proxy_http/pg_upstream_peer.rs` — LB 选择入口
+- `src/core/gateway/lb/` — 所有 LB 策略实现
+- `src/core/gateway/backends/discovery/` — 后端发现与运行时存储
+- `src/core/gateway/backends/health/check/` — 健康检查配置与状态
+- `src/core/gateway/backends/policy/backend_tls/` — BackendTLSPolicy
+- `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs` — LB 选择入口

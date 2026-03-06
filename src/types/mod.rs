@@ -57,7 +57,7 @@ pub use self::schema::*;
 pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
 
 // Re-export from conf_mgr for backward compatibility
-pub use crate::core::conf_mgr::{
+pub use crate::core::controller::conf_mgr::{
     CenterApi as ResourceStore, ConfEntry as ResourceEntry, ConfStoreError as ResourceStoreError,
 };
 

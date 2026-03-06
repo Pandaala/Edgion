@@ -51,7 +51,7 @@ response_filter()          ← Async response processing
 logging()                  ← Metrics update, AccessLogEntry build + send
 ```
 
-**Key files:** `src/core/routes/http_routes/proxy_http/pg_*.rs` (one file per hook)
+**Key files:** `src/core/gateway/routes/http/proxy_http/pg_*.rs` (one file per hook)
 
 ## Connection Filter — TCP-Level (StreamPlugins)
 
@@ -70,9 +70,9 @@ TCP Connection arrives
 Configured per Gateway listener via annotation: `edgion.io/edgion-stream-plugins: "namespace/name"`.
 
 **Key files:**
-- `src/core/plugins/edgion_stream_plugins/connection_filter_bridge.rs`
-- `src/core/plugins/edgion_stream_plugins/stream_plugin_runtime.rs`
-- `src/core/gateway/listener_builder.rs` — `apply_connection_filter()`
+- `src/core/gateway/plugins/stream/connection_filter_bridge.rs`
+- `src/core/gateway/plugins/stream/stream_plugin_runtime.rs`
+- `src/core/gateway/runtime/server/listener_builder.rs` — `apply_connection_filter()`
 
 ## Access Log — High Efficiency Design
 
@@ -109,10 +109,10 @@ DataSender<String>                   ← Pluggable output via LinkSys
 
 **Key files:**
 - `src/types/ctx.rs` — `EdgionHttpContext`
-- `src/core/observe/access_log/entry.rs` — `AccessLogEntry`
-- `src/core/observe/access_log/logger.rs` — `AccessLogger`
-- `src/core/observe/access_log/logger_factory.rs` — `create_async_logger()`
-- `src/core/plugins/plugin_runtime/log.rs` — `PluginLog`, `LogBuffer` (100-byte SmallVec)
+- `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
+- `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
+- `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`
+- `src/core/gateway/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (100-byte SmallVec)
 
 ## LinkSys Design
 
@@ -138,5 +138,6 @@ spec:
 
 **Key files:**
 - `src/types/resources/link_sys/` — CRD type definitions
-- `src/core/link_sys/` — `DataSender`, `LocalFileWriter`
+- `src/core/gateway/link_sys/runtime/` — `DataSender`, `LinkSysStore`, `ConfHandler`
+- `src/core/gateway/link_sys/providers/local_file/` — `LocalFileWriter`
 - `src/types/output.rs` — `StringOutput` (local file vs external)

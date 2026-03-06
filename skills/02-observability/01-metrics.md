@@ -13,7 +13,7 @@
 
 ## 添加新指标的步骤
 
-`src/core/observe/metrics.rs` — 唯一的 metrics 定义文件，所有指标统一在此定义。
+`src/core/gateway/observe/metrics/registry.rs` — 唯一的 metrics 定义文件，所有指标统一在此定义。Prometheus 暴露入口在 `src/core/gateway/observe/metrics/api.rs`。
 
 **1. 在 `names` mod 中定义常量名**
 
@@ -57,7 +57,7 @@ pub fn my_event(&self) {
 **5. 在调用点使用**
 
 ```rust
-use crate::core::observe::metrics::global_metrics;
+use crate::core::gateway::observe::metrics::global_metrics;
 
 global_metrics().my_event();
 ```
@@ -116,7 +116,7 @@ counter!(
 
 ## Test Metrics 例外
 
-`src/core/observe/test_metrics.rs` 是专为集成测试设计的测试专用数据收集模块，**不受上述生产 metrics 规则约束**。
+`src/core/gateway/observe/metrics/test_metrics.rs` 是专为集成测试设计的测试专用数据收集模块，**不受上述生产 metrics 规则约束**。
 
 ### 特点
 
@@ -127,7 +127,7 @@ counter!(
 
 ### 新增测试数据类型
 
-在 `test_metrics.rs` 中：
+在 `metrics/test_metrics.rs` 中：
 
 1. 在 `TestType` 新增枚举值
 2. 在 `TestData` 新增对应字段（`#[serde(skip_serializing_if = "Option::is_none")]`）
@@ -136,11 +136,11 @@ counter!(
 
 ### 场景：需要监控某类事件的频率
 
-先检查 `metrics.rs` 中是否已有合适的 Counter。如果没有：
+先检查 `metrics/registry.rs` 中是否已有合适的 Counter。如果没有：
 1. 确认 cardinality 可控
-2. 按上方步骤在 `metrics.rs` 统一添加
+2. 按上方步骤在 `metrics/registry.rs` 统一添加
 3. 不要在各自模块里用 `metrics::counter!()` 宏直接创建游离指标
 
 ### 场景：集成测试需要验证某个细节行为
 
-在 `test_metrics.rs` 中扩展 `TestData`，不要污染生产 access log 或 metrics。测试数据通过 Gateway annotation 显式激活，生产环境零开销。
+在 `metrics/test_metrics.rs` 中扩展 `TestData`，不要污染生产 access log 或 metrics。测试数据通过 Gateway annotation 显式激活，生产环境零开销。

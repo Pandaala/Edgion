@@ -20,10 +20,10 @@ ConfMgr (facade, in manager.rs)
 - `ConfCenter = CenterApi + CenterLifeCycle`
 
 **Key files:**
-- `src/core/conf_mgr/conf_center/traits.rs` — trait definitions
-- `src/core/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter`
-- `src/core/conf_mgr/conf_center/kubernetes/center.rs` — `KubernetesCenter`
-- `src/core/conf_mgr/manager.rs` — `ConfMgr` facade
+- `src/core/controller/conf_mgr/conf_center/traits.rs` — trait definitions
+- `src/core/controller/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter`
+- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs` — `KubernetesCenter`
+- `src/core/controller/conf_mgr/manager.rs` — `ConfMgr` facade
 
 ## Workqueue — Per-Resource Processing
 
@@ -48,11 +48,11 @@ Event (file change / K8s watch)
 **Dirty requeue:** Key is removed from `pending` on dequeue, so new events for the same key can be enqueued while processing. This ensures no events are lost.
 
 **Key files:**
-- `src/core/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
-- `src/core/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`
-- `src/core/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler` trait
-- `src/core/conf_mgr/sync_runtime/resource_processor/handlers/` — per-kind handlers
-- `src/core/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY` (global, for cross-kind requeue)
+- `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler` trait
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/` — per-kind handlers
+- `src/core/controller/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY` (global, for cross-kind requeue)
 
 ## Cross-Resource Requeue
 
@@ -106,11 +106,11 @@ BidirectionalRefManager<V: RefValue>
 Handlers register refs during `parse()` and clear them in `on_delete()`. The source handler's `on_change()` queries `get_refs()` to find and requeue dependents.
 
 **Key files:**
-- `src/core/conf_mgr/sync_runtime/resource_processor/ref_manager.rs` — `BidirectionalRefManager<V>`, `RefValue`, `ResourceRef`, `RefManagerStats`
-- `src/core/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs` — `SecretRefManager` (type alias)
-- `src/core/conf_mgr/sync_runtime/resource_processor/service_ref.rs` — `ServiceRefManager` (type alias)
-- `src/core/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager.rs` — `CrossNamespaceRefManager` (type alias)
-- `src/core/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_store.rs` — `GLOBAL_SECRET_STORE`
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_manager.rs` — `BidirectionalRefManager<V>`, `RefValue`, `ResourceRef`, `RefManagerStats`
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs` — `SecretRefManager` (type alias)
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/service_ref.rs` — `ServiceRefManager` (type alias)
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager.rs` — `CrossNamespaceRefManager` (type alias)
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_store.rs` — `GLOBAL_SECRET_STORE`
 
 ## Architecture Constraint: No Circular Triggers
 

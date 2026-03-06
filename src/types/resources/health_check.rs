@@ -1,4 +1,4 @@
-use crate::core::utils::duration::parse_duration;
+use crate::core::common::utils::duration::parse_duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

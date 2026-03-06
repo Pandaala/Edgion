@@ -12,16 +12,16 @@
 
 ```
 src/
-├── core/plugins/
-│   ├── edgion_plugins/                          # All plugin implementations live here
-│   │   ├── common/                              # Shared utilities across plugins
+├── core/gateway/plugins/
+│   ├── http/                                    # All HTTP plugin implementations live here
+│   │   ├── common/                              # Shared utilities across HTTP plugins
 │   │   │   ├── mod.rs
 │   │   │   └── http_client.rs                   # Global reqwest::Client singleton (get_http_client())
 │   │   ├── <your_plugin>/                       # Your new plugin directory
 │   │   │   ├── mod.rs                           # pub use plugin::YourPlugin;
 │   │   │   └── plugin.rs                        # impl RequestFilter / UpstreamResponseFilter
 │   │   └── mod.rs                               # Register: pub mod your_plugin; pub use ...;
-│   └── plugin_runtime/                          # Core runtime (usually don't touch)
+│   └── runtime/                                 # Core plugin runtime (usually don't touch)
 │       ├── traits/
 │       │   ├── session.rs                       # PluginSession trait (read/write request & response)
 │       │   ├── request_filter.rs                # RequestFilter trait (async, before upstream)
@@ -50,13 +50,13 @@ Adding a plugin touches **6 files** (create 3, modify 3):
 ### Create
 
 1. **Config** — `src/types/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
-2. **Plugin mod** — `src/core/plugins/edgion_plugins/<your_plugin>/mod.rs`
-3. **Plugin impl** — `src/core/plugins/edgion_plugins/<your_plugin>/plugin.rs`
+2. **Plugin mod** — `src/core/gateway/plugins/http/<your_plugin>/mod.rs`
+3. **Plugin impl** — `src/core/gateway/plugins/http/<your_plugin>/plugin.rs`
 
 ### Modify
 
 4. **EdgionPlugin enum** — `src/types/resources/edgion_plugins/edgion_plugin.rs`
-5. **Runtime registration** — `src/core/plugins/plugin_runtime/runtime.rs`
+5. **Runtime registration** — `src/core/gateway/plugins/runtime/runtime.rs`
 6. **Module exports** — multiple `mod.rs` files (see Step 6 below)
 
 ## Step-by-Step
@@ -148,18 +148,18 @@ impl EdgionPlugin {
 
 ### Step 4: Implement Plugin
 
-`src/core/plugins/edgion_plugins/your_plugin/mod.rs`:
+`src/core/gateway/plugins/http/your_plugin/mod.rs`:
 
 ```rust
 mod plugin;
 pub use plugin::YourPlugin;
 ```
 
-`src/core/plugins/edgion_plugins/your_plugin/plugin.rs`:
+`src/core/gateway/plugins/http/your_plugin/plugin.rs`:
 
 ```rust
 use async_trait::async_trait;
-use crate::core::plugins::plugin_runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::YourPluginConfig;
 
@@ -197,12 +197,12 @@ impl RequestFilter for YourPlugin {
 
 ### Step 5: Register in Runtime
 
-`src/core/plugins/plugin_runtime/runtime.rs`:
+`src/core/gateway/plugins/runtime/runtime.rs`:
 
 Add import at top:
 
 ```rust
-use crate::core::plugins::edgion_plugins::your_plugin::YourPlugin;
+use crate::core::gateway::plugins::http::your_plugin::YourPlugin;
 ```
 
 Add to `create_request_filter_from_edgion()`:
@@ -219,7 +219,7 @@ EdgionPlugin::YourPlugin(config) => config.get_validation_error().map(|s| s.to_s
 
 ### Step 6: Export Plugin
 
-`src/core/plugins/edgion_plugins/mod.rs` — add:
+`src/core/gateway/plugins/http/mod.rs` — add:
 
 ```rust
 pub mod your_plugin;
@@ -332,14 +332,14 @@ For detailed debugging, use `tracing::debug!()` — it goes to system log, not a
 
 ## Common Utilities
 
-`src/core/plugins/edgion_plugins/common/` — shared code lives here.
+`src/core/gateway/plugins/http/common/` — shared code lives here.
 
 ### HTTP Client
 
 For plugins calling external services (IdP, auth service, webhook, etc.):
 
 ```rust
-use crate::core::plugins::edgion_plugins::common::http_client::get_http_client;
+use crate::core::gateway::plugins::http::common::http_client::get_http_client;
 
 let client = get_http_client();  // Global singleton, connection pooling
 let resp = client.get(&url)
@@ -353,7 +353,7 @@ Features: connection pooling (32/host), no auto-redirect, 10s default timeout, r
 ### Hop-by-hop Header Filtering
 
 ```rust
-use crate::core::plugins::edgion_plugins::common::http_client::is_hop_by_hop;
+use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
 
 if !is_hop_by_hop(header_name) {
     // Safe to forward
@@ -403,7 +403,7 @@ When adapting designs from Kong/APISIX plugins, replace any Consumer-related flo
 5. **Secrets via K8s Secret** — never hardcode secrets. Use `SecretObjectReference` in config, controller resolves to `resolved_*` fields. At runtime, use `get_secret()` as fallback:
 
 ```rust
-use crate::core::conf_mgr::sync_runtime::resource_processor::get_secret;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
 let secret = get_secret(Some(namespace), &secret_ref.name);
 ```
 
@@ -412,7 +412,7 @@ let secret = get_secret(Some(namespace), &secret_ref.name);
 ```rust
 #[cfg(test)]
 mod tests {
-    use crate::core::plugins::plugin_runtime::traits::session::MockPluginSession;
+    use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
 
     #[tokio::test]
     async fn test_basic() {
@@ -432,7 +432,7 @@ Minimum viable plugin (request stage):
 
 ```bash
 # Create plugin directory
-mkdir -p src/core/plugins/edgion_plugins/your_plugin
+mkdir -p src/core/gateway/plugins/http/your_plugin
 ```
 
 Then create the 3 files (config, mod.rs, plugin.rs), modify the 3 registration points (enum, runtime, exports), and you're done. Use existing plugins as reference — `mock` is the simplest, `jwt_auth` is a full-featured auth example.
