@@ -15,4 +15,7 @@ pub mod providers;
 pub mod runtime;
 
 pub use providers::{LocalFileWriter, LogType};
-pub use runtime::{create_link_sys_handler, get_es_client, get_etcd_client, get_global_link_sys_store, get_redis_client, DataSender, LinkSysStore};
+pub use runtime::{
+    create_link_sys_handler, get_es_client, get_etcd_client, get_global_link_sys_store, get_redis_client, DataSender,
+    LinkSysStore,
+};

@@ -73,7 +73,10 @@ async fn poll_mirror_received(
             sleep(Duration::from_millis(interval_ms)).await;
         }
     }
-    Err(format!("mirror capture (x-mirror: true) not received after {} retries", retries))
+    Err(format!(
+        "mirror capture (x-mirror: true) not received after {} retries",
+        retries
+    ))
 }
 
 /// Reset the mirror capture store between tests.

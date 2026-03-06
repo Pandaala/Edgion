@@ -47,10 +47,7 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
                             if resp.status().is_success() {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!(
-                                        "Selector correctly allowed same-ns route (status: {})",
-                                        resp.status()
-                                    ),
+                                    format!("Selector correctly allowed same-ns route (status: {})", resp.status()),
                                 )
                             } else {
                                 TestResult::failed(
@@ -118,9 +115,6 @@ impl TestSuite for AllowedRoutesSelectorNamespaceTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_same_namespace_allowed(),
-            Self::test_cross_namespace_denied(),
-        ]
+        vec![Self::test_same_namespace_allowed(), Self::test_cross_namespace_denied()]
     }
 }

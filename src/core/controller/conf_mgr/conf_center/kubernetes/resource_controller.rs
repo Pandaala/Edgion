@@ -504,7 +504,12 @@ where
 
                     if should_process {
                         // K8s mode: pass None for existing_status_json (status is already in store_obj from K8s API)
-                        let result = processor.process_work_item(&work_item.key, store_obj, None, work_item.trigger_chain.clone());
+                        let result = processor.process_work_item(
+                            &work_item.key,
+                            store_obj,
+                            None,
+                            work_item.trigger_chain.clone(),
+                        );
 
                         // Persist status to K8s API when status changes
                         if let WorkItemResult::Processed { obj, status_changed } = result {

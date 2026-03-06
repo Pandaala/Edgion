@@ -35,20 +35,11 @@ const CATCH_ALL_HOSTNAME: &str = "*";
 /// Returns true when no matching status entry is found (optimistic: include
 /// until the controller explicitly rejects it, e.g. during the first sync
 /// before status is populated).
-fn is_parent_ref_accepted(
-    pr: &ParentReference,
-    status_parents: &[RouteParentStatus],
-    route_ns: Option<&str>,
-) -> bool {
+fn is_parent_ref_accepted(pr: &ParentReference, status_parents: &[RouteParentStatus], route_ns: Option<&str>) -> bool {
     let pr_ns = pr.namespace.as_deref().or(route_ns).unwrap_or("default");
 
     for sp in status_parents {
-        let sp_ns = sp
-            .parent_ref
-            .namespace
-            .as_deref()
-            .or(route_ns)
-            .unwrap_or("default");
+        let sp_ns = sp.parent_ref.namespace.as_deref().or(route_ns).unwrap_or("default");
         if sp_ns == pr_ns
             && sp.parent_ref.name == pr.name
             && sp.parent_ref.section_name == pr.section_name
@@ -263,8 +254,7 @@ impl RouteManager {
                 None => continue,
             };
 
-            let applies_to_hostname = get_effective_hostnames(route)
-                .contains(&hostname.to_string());
+            let applies_to_hostname = get_effective_hostnames(route).contains(&hostname.to_string());
 
             if !applies_to_hostname {
                 continue;
@@ -386,7 +376,9 @@ impl RouteManager {
                 route.spec.parent_refs.as_ref(),
                 route.status.as_ref().map(|s| s.parents.as_slice()),
                 Some(route_ns),
-            ).is_none() {
+            )
+            .is_none()
+            {
                 continue;
             }
             for h in get_effective_hostnames(route) {
@@ -429,8 +421,7 @@ impl RouteManager {
                     None => continue,
                 };
 
-                let applies = get_effective_hostnames(route)
-                    .contains(&hostname.to_string());
+                let applies = get_effective_hostnames(route).contains(&hostname.to_string());
 
                 if !applies {
                     continue;
@@ -1197,7 +1188,8 @@ mod tests {
     #[test]
     fn test_get_effective_hostnames_prefers_resolved() {
         let mut route = create_test_httproute(
-            "default", "route1",
+            "default",
+            "route1",
             vec!["original.example.com"],
             vec![("default", "gw1")],
         );
@@ -1209,11 +1201,7 @@ mod tests {
 
     #[test]
     fn test_get_effective_hostnames_falls_back_to_spec_hostnames() {
-        let route = create_test_httproute(
-            "default", "route1",
-            vec!["spec.example.com"],
-            vec![("default", "gw1")],
-        );
+        let route = create_test_httproute("default", "route1", vec!["spec.example.com"], vec![("default", "gw1")]);
         // resolved_hostnames is None (default from deserialization)
 
         let result = get_effective_hostnames(&route);
@@ -1222,11 +1210,7 @@ mod tests {
 
     #[test]
     fn test_get_effective_hostnames_catch_all_when_empty() {
-        let route = create_test_httproute(
-            "default", "route1",
-            vec![],
-            vec![("default", "gw1")],
-        );
+        let route = create_test_httproute("default", "route1", vec![], vec![("default", "gw1")]);
 
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["*"]);
@@ -1235,7 +1219,8 @@ mod tests {
     #[test]
     fn test_get_effective_hostnames_skips_empty_resolved() {
         let mut route = create_test_httproute(
-            "default", "route1",
+            "default",
+            "route1",
             vec!["fallback.example.com"],
             vec![("default", "gw1")],
         );
@@ -1248,14 +1233,12 @@ mod tests {
     #[test]
     fn test_get_effective_hostnames_multiple_resolved() {
         let mut route = create_test_httproute(
-            "default", "route1",
+            "default",
+            "route1",
             vec!["ignored.example.com"],
             vec![("default", "gw1")],
         );
-        route.spec.resolved_hostnames = Some(vec![
-            "a.example.com".to_string(),
-            "b.example.com".to_string(),
-        ]);
+        route.spec.resolved_hostnames = Some(vec!["a.example.com".to_string(), "b.example.com".to_string()]);
 
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["a.example.com", "b.example.com"]);

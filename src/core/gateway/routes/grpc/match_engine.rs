@@ -1,5 +1,5 @@
-use crate::core::gateway::runtime::GatewayInfo;
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
+use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
 use std::collections::HashMap;

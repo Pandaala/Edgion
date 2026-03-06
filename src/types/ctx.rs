@@ -1,7 +1,7 @@
-use crate::core::gateway::runtime::GatewayInfo;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
+use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};

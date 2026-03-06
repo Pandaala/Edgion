@@ -7,7 +7,9 @@
 use k8s_openapi::api::core::v1::Service;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    HandlerContext, ProcessResult, ProcessorHandler,
+};
 
 /// Service handler
 pub struct ServiceHandler;

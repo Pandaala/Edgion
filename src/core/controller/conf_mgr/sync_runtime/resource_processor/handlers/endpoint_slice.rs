@@ -4,7 +4,9 @@
 
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    HandlerContext, ProcessResult, ProcessorHandler,
+};
 
 /// EndpointSlice handler
 pub struct EndpointSliceHandler;

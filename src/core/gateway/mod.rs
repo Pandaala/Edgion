@@ -1,8 +1,8 @@
 pub mod api;
 pub mod backends;
 pub mod cli;
-pub mod config;
 pub mod conf_sync;
+pub mod config;
 pub mod lb;
 pub mod link_sys;
 pub mod observe;

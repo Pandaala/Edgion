@@ -1,7 +1,7 @@
-use crate::core::gateway::cli::config::set_gateway_instance_count;
-use crate::core::gateway::conf_sync::conf_client::ConfigClient;
 use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
+use crate::core::gateway::cli::config::set_gateway_instance_count;
+use crate::core::gateway::conf_sync::conf_client::ConfigClient;
 use crate::types::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;

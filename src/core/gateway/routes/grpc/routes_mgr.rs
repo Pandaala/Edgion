@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::core::gateway::runtime::GatewayInfo;
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
+use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule};
 

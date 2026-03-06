@@ -252,11 +252,6 @@ mod tests {
         ));
 
         // Cross-namespace — allowed on gateway side (controller already validated)
-        assert!(check_allowed_routes(
-            &Some(allowed),
-            "other",
-            "HTTPRoute",
-            "default"
-        ));
+        assert!(check_allowed_routes(&Some(allowed), "other", "HTTPRoute", "default"));
     }
 }

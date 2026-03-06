@@ -1,6 +1,6 @@
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
-use crate::core::gateway::runtime::matching::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::gateway::observe::logs::ssl_log::{log_ssl, SslLogEntry};
+use crate::core::gateway::runtime::matching::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
 use crate::core::gateway::tls::store::cert_matcher::match_sni;

@@ -1,8 +1,8 @@
 use super::{get_consistent_store, get_ewma_store, get_leastconn_store, get_roundrobin_store};
+use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
-use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};

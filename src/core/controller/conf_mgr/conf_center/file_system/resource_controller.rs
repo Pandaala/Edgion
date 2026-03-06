@@ -466,7 +466,12 @@ where
                     let existing_status_json = status_handler.read_status_json(kind, &work_item.key);
 
                     // Use processor's process_work_item which handles the reconciliation logic
-                    let result = processor.process_work_item(&work_item.key, store_obj, existing_status_json, work_item.trigger_chain.clone());
+                    let result = processor.process_work_item(
+                        &work_item.key,
+                        store_obj,
+                        existing_status_json,
+                        work_item.trigger_chain.clone(),
+                    );
 
                     // Persist status based on result
                     match result {

@@ -45,9 +45,7 @@ impl PortGatewayInfoStore {
     #[inline]
     pub fn get(&self, port: u16) -> Arc<Vec<GatewayInfo>> {
         let data = self.data.load();
-        data.get(&port)
-            .cloned()
-            .unwrap_or_else(|| Arc::new(Vec::new()))
+        data.get(&port).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
     /// Rebuild the store from the full list of Gateway resources.
@@ -73,9 +71,7 @@ impl PortGatewayInfoStore {
                 .map(|btree| btree.into_iter().collect())
                 .unwrap_or_default();
 
-            let metrics_test_key = gateway_annotations_map
-                .get(annotations::METRICS_TEST_KEY)
-                .cloned();
+            let metrics_test_key = gateway_annotations_map.get(annotations::METRICS_TEST_KEY).cloned();
             let metrics_test_type = gateway_annotations_map
                 .get(annotations::METRICS_TEST_TYPE)
                 .map(|s| TestType::from_str(s));
@@ -140,8 +136,7 @@ fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-static GLOBAL_PORT_GATEWAY_INFO_STORE: LazyLock<PortGatewayInfoStore> =
-    LazyLock::new(PortGatewayInfoStore::new);
+static GLOBAL_PORT_GATEWAY_INFO_STORE: LazyLock<PortGatewayInfoStore> = LazyLock::new(PortGatewayInfoStore::new);
 
 /// Get a reference to the global PortGatewayInfoStore
 pub fn get_port_gateway_info_store() -> &'static PortGatewayInfoStore {

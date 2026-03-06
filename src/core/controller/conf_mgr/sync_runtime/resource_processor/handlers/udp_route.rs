@@ -189,8 +189,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_errors =
-                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None);
+                let accepted_errors = super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None);
 
                 let parent_status = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name

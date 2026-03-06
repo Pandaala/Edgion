@@ -256,7 +256,6 @@ impl GatewayConfigStore {
         gateway_config.get_listener(listener_name)
     }
 
-
     /// Full set of all Gateway configurations
     ///
     /// Parses all Gateways and rebuilds the entire store.
@@ -472,9 +471,7 @@ mod tests {
 
     #[test]
     fn test_has_more_specific_listener_catchall_no_others() {
-        let listeners = vec![
-            create_test_listener("catch-all", 80, None),
-        ];
+        let listeners = vec![create_test_listener("catch-all", 80, None)];
         let gw = create_test_gateway("gw", "default", listeners);
         let config = parse_gateway_to_config(&gw);
 
@@ -513,9 +510,7 @@ mod tests {
 
     #[test]
     fn test_has_more_specific_listener_wildcard_no_more_specific() {
-        let listeners = vec![
-            create_test_listener("wildcard", 80, Some("*.example.com")),
-        ];
+        let listeners = vec![create_test_listener("wildcard", 80, Some("*.example.com"))];
         let gw = create_test_gateway("gw", "default", listeners);
         let config = parse_gateway_to_config(&gw);
 

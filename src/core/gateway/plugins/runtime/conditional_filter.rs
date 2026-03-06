@@ -226,8 +226,8 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::core::gateway::plugins::runtime::conditions::{Condition, IncludeCondition, KeyExistCondition};
+    use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::types::common::KeyGet;
     use mockall::predicate::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -519,8 +519,9 @@ mod tests {
         assert_eq!(c2.cond_detail(), "method");
 
         // Test probability
-        let c3 =
-            Condition::Probability(crate::core::gateway::plugins::runtime::conditions::ProbabilityCondition { ratio: 0.1, key: None });
+        let c3 = Condition::Probability(
+            crate::core::gateway::plugins::runtime::conditions::ProbabilityCondition { ratio: 0.1, key: None },
+        );
         assert_eq!(c3.cond_type(), "prob");
         assert_eq!(c3.cond_detail(), "10%");
     }

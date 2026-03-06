@@ -177,7 +177,12 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-        update_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name, route.spec.parent_refs.as_ref());
+        update_gateway_route_index(
+            ResourceKind::HTTPRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
 
         let tracker_changed = update_attached_route_tracker(
             ResourceKind::HTTPRoute,

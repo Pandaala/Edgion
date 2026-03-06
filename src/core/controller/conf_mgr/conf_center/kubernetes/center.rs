@@ -515,7 +515,8 @@ impl KubernetesCenter {
 
                 // Trigger full cross-namespace revalidation
                 // This ensures Routes processed before ReferenceGrants are revalidated
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
+                );
 
                 // Requeue Gateways with TLS cert refs so they re-check SecretStore
                 // (Secrets may have been processed after Gateways during init)

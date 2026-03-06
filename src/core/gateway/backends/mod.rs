@@ -6,10 +6,10 @@ pub mod validation;
 
 pub use crate::core::controller::conf_mgr::conf_center::EndpointMode;
 pub use discovery::{
-    create_endpoint_handler, get_endpoint_consistent_store, get_endpoint_ewma_store, get_endpoint_leastconn_store,
-    get_endpoint_roundrobin_store, get_global_service_store, get_roundrobin_store, create_ep_slice_handler,
-    get_consistent_store, get_ewma_store, get_leastconn_store, create_service_handler, EndpointDiscovery, EndpointExt,
-    EndpointSliceExt, EndpointStore, EpSliceStore, ServiceStore,
+    create_endpoint_handler, create_ep_slice_handler, create_service_handler, get_consistent_store,
+    get_endpoint_consistent_store, get_endpoint_ewma_store, get_endpoint_leastconn_store,
+    get_endpoint_roundrobin_store, get_ewma_store, get_global_service_store, get_leastconn_store, get_roundrobin_store,
+    EndpointDiscovery, EndpointExt, EndpointSliceExt, EndpointStore, EpSliceStore, ServiceStore,
 };
 pub use health::{get_health_check_manager, get_health_status_store};
 pub use policy::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
@@ -18,8 +18,8 @@ pub use validation::validate_endpoint_in_route;
 
 use std::sync::OnceLock;
 
-use crate::core::gateway::{end_response_500, end_response_503};
 use crate::core::common::utils::net::is_localhost;
+use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::resources::BackendTLSPolicy;

@@ -1,6 +1,6 @@
-use crate::core::gateway::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+use crate::core::gateway::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::gateway::observe::metrics::global_metrics;
 use crate::types::{
     ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,

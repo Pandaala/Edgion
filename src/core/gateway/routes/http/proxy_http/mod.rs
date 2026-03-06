@@ -8,8 +8,8 @@ use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::core::gateway::observe::AccessLogger;
+use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener};
 
 // Sub-modules

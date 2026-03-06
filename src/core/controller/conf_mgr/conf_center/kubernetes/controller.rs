@@ -52,7 +52,9 @@ use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{ApiScope, RelinkReason, RelinkSignalSender, ResourceController};
 use super::ShutdownSignal;
 use crate::core::controller::conf_mgr::conf_center::{EndpointMode, MetadataFilterConfig};
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor, SecretRefManager};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    ProcessorHandler, ResourceProcessor, SecretRefManager,
+};
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceMeta;
@@ -253,19 +255,13 @@ fn requeue_selector_gateways() {
         Err(_) => return,
     };
     for gw in &gateways {
-        let uses_selector = gw
-            .spec
-            .listeners
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .any(|l| {
-                l.allowed_routes
-                    .as_ref()
-                    .and_then(|ar| ar.namespaces.as_ref())
-                    .and_then(|ns| ns.from.as_deref())
-                    == Some("Selector")
-            });
+        let uses_selector = gw.spec.listeners.as_deref().unwrap_or_default().iter().any(|l| {
+            l.allowed_routes
+                .as_ref()
+                .and_then(|ar| ar.namespaces.as_ref())
+                .and_then(|ns| ns.from.as_deref())
+                == Some("Selector")
+        });
         if uses_selector {
             let key = format!(
                 "{}/{}",

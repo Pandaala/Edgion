@@ -2,7 +2,9 @@
 //!
 //! Handles PluginMetaData resources.
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    HandlerContext, ProcessResult, ProcessorHandler,
+};
 use crate::types::prelude_resources::PluginMetaData;
 
 /// PluginMetaData handler

@@ -8,6 +8,12 @@ pub struct GatewayStore {
     gateways: HashMap<String, Gateway>,
 }
 
+impl Default for GatewayStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GatewayStore {
     pub fn new() -> Self {
         GatewayStore {

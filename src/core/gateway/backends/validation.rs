@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
-use crate::core::gateway::backends::{get_endpoint_roundrobin_store, get_global_endpoint_mode, get_roundrobin_store};
 use crate::core::controller::conf_mgr::conf_center::EndpointMode;
+use crate::core::gateway::backends::{get_endpoint_roundrobin_store, get_global_endpoint_mode, get_roundrobin_store};
 use crate::types::HTTPBackendRef;
 
 /// Validate that a given IP is a valid endpoint for one of the route's backend_refs.

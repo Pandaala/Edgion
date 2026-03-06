@@ -3,8 +3,10 @@
 //! Implements the CenterApi trait using local file system as the backend.
 //! Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
 
-use crate::core::controller::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
 use crate::core::common::utils::extract_resource_metadata;
+use crate::core::controller::conf_mgr::conf_center::traits::{
+    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
+};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::fs;

@@ -3,7 +3,9 @@
 //! Implements the CenterApi trait by calling Kubernetes API.
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
-use crate::core::controller::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
+use crate::core::controller::conf_mgr::conf_center::traits::{
+    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams};

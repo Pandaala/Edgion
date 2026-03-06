@@ -451,7 +451,10 @@ fn create_testing_router() -> Router {
 /// Name format: "namespace/name" encoded as "namespace_name" in URL path.
 fn get_redis_client_by_name(
     name: &str,
-) -> Result<std::sync::Arc<crate::core::gateway::link_sys::providers::redis::RedisLinkClient>, Json<ApiResponse<serde_json::Value>>> {
+) -> Result<
+    std::sync::Arc<crate::core::gateway::link_sys::providers::redis::RedisLinkClient>,
+    Json<ApiResponse<serde_json::Value>>,
+> {
     // URL path uses underscore as separator: "default_redis-main" → "default/redis-main"
     let key = name.replacen('_', "/", 1);
     crate::core::gateway::link_sys::get_redis_client(&key).ok_or_else(|| {
@@ -742,7 +745,10 @@ async fn redis_lock(
 /// Helper to get an Etcd client by name, returning error response if not found.
 fn get_etcd_client_by_name(
     name: &str,
-) -> Result<std::sync::Arc<crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient>, Json<ApiResponse<serde_json::Value>>> {
+) -> Result<
+    std::sync::Arc<crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient>,
+    Json<ApiResponse<serde_json::Value>>,
+> {
     let key = name.replacen('_', "/", 1);
     crate::core::gateway::link_sys::get_etcd_client(&key).ok_or_else(|| {
         Json(ApiResponse::error(format!(
@@ -1013,7 +1019,10 @@ async fn etcd_info(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Val
 /// Helper to get an ES client by name, returning error response if not found.
 fn get_es_client_by_name(
     name: &str,
-) -> Result<std::sync::Arc<crate::core::gateway::link_sys::providers::elasticsearch::EsLinkClient>, Json<ApiResponse<serde_json::Value>>> {
+) -> Result<
+    std::sync::Arc<crate::core::gateway::link_sys::providers::elasticsearch::EsLinkClient>,
+    Json<ApiResponse<serde_json::Value>>,
+> {
     let key = name.replacen('_', "/", 1);
     crate::core::gateway::link_sys::get_es_client(&key).ok_or_else(|| {
         Json(ApiResponse::error(format!(

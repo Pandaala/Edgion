@@ -63,10 +63,7 @@ impl TriggerChain {
 
     /// Count how many times (kind, key) appears in the chain
     pub fn occurrence_count(&self, kind: &str, key: &str) -> usize {
-        self.sources
-            .iter()
-            .filter(|s| s.kind == kind && s.key == key)
-            .count()
+        self.sources.iter().filter(|s| s.kind == kind && s.key == key).count()
     }
 
     /// Total cascade depth
@@ -75,12 +72,7 @@ impl TriggerChain {
     }
 
     /// Check if enqueueing target would exceed the cycle limit
-    pub fn would_exceed_cycle_limit(
-        &self,
-        target_kind: &str,
-        target_key: &str,
-        max_cycles: usize,
-    ) -> bool {
+    pub fn would_exceed_cycle_limit(&self, target_kind: &str, target_key: &str, max_cycles: usize) -> bool {
         self.occurrence_count(target_kind, target_key) >= max_cycles
     }
 }

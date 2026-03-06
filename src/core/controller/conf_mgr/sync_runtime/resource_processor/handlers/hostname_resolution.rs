@@ -7,8 +7,8 @@
 
 use std::collections::HashSet;
 
-use crate::types::resources::common::ParentReference;
 use crate::types::prelude_resources::Gateway;
+use crate::types::resources::common::ParentReference;
 
 pub struct ResolvedHostnames {
     pub hostnames: Vec<String>,
@@ -132,10 +132,7 @@ fn collect_listener_hostnames(gateway: &Gateway, pr: &ParentReference) -> Vec<St
 
     let matching_listeners: Vec<_> = listeners
         .iter()
-        .filter(|l| {
-            pr.section_name.as_ref().is_none_or(|sn| l.name == *sn)
-                && pr.port.map_or(true, |p| l.port == p)
-        })
+        .filter(|l| pr.section_name.as_ref().is_none_or(|sn| l.name == *sn) && pr.port.is_none_or(|p| l.port == p))
         .collect();
 
     let mut hostnames = Vec::new();
@@ -238,14 +235,8 @@ mod tests {
 
     #[test]
     fn test_intersection_wildcard_listener_concrete_route_no_match() {
-        assert_eq!(
-            compute_hostname_intersection("*.wildcard.io", "wildcard.io"),
-            None
-        );
-        assert_eq!(
-            compute_hostname_intersection("*.bar.com", "foo.com"),
-            None
-        );
+        assert_eq!(compute_hostname_intersection("*.wildcard.io", "wildcard.io"), None);
+        assert_eq!(compute_hostname_intersection("*.bar.com", "foo.com"), None);
     }
 
     #[test]
@@ -258,10 +249,7 @@ mod tests {
 
     #[test]
     fn test_intersection_concrete_listener_wildcard_route_no_match() {
-        assert_eq!(
-            compute_hostname_intersection("specific.com", "*.specific.com"),
-            None
-        );
+        assert_eq!(compute_hostname_intersection("specific.com", "*.specific.com"), None);
     }
 
     #[test]
@@ -290,10 +278,7 @@ mod tests {
 
     #[test]
     fn test_intersection_both_wildcards_no_overlap() {
-        assert_eq!(
-            compute_hostname_intersection("*.bar.com", "*.foo.com"),
-            None
-        );
+        assert_eq!(compute_hostname_intersection("*.bar.com", "*.foo.com"), None);
     }
 
     #[test]

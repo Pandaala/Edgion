@@ -19,10 +19,10 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 };
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::Gateway;
+use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
     GatewayStatus, GatewayStatusAddress, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
-use crate::types::resources::common::is_core_api_group;
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
 
@@ -255,11 +255,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .spec
             .listeners
             .as_ref()
-            .map(|ls| {
-                ls.iter()
-                    .filter_map(|l| l.hostname.clone())
-                    .collect()
-            })
+            .map(|ls| ls.iter().filter_map(|l| l.hostname.clone()).collect())
             .unwrap_or_default();
 
         let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);

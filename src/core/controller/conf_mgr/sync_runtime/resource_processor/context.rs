@@ -84,7 +84,10 @@ impl HandlerContext {
     ///
     /// Uses the delay subsystem (`requeue_with_chain`) for coalescing.
     pub fn requeue(&self, kind: &str, key: String) {
-        if self.trigger_chain.would_exceed_cycle_limit(kind, &key, self.max_trigger_cycles) {
+        if self
+            .trigger_chain
+            .would_exceed_cycle_limit(kind, &key, self.max_trigger_cycles)
+        {
             tracing::error!(
                 target_kind = kind,
                 target_key = %key,

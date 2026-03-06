@@ -5,12 +5,12 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
-use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::common::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest, WatchResponse,
     WatchServerMetaRequest,
 };
+use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::types::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;

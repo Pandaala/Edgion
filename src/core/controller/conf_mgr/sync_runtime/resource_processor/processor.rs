@@ -35,9 +35,9 @@ pub enum WorkItemResult<K> {
     Skipped,
 }
 
+use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
-use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::controller::conf_sync::ServerCache;
 use crate::types::ResourceMeta;
 

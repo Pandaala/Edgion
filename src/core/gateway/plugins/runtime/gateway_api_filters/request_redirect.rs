@@ -42,7 +42,10 @@ impl RequestRedirectFilter {
         listener_port: u16,
     ) -> String {
         let scheme = self.config.scheme.as_deref().unwrap_or(original_scheme);
-        let hostname = self.config.hostname.as_deref()
+        let hostname = self
+            .config
+            .hostname
+            .as_deref()
             .or_else(|| original_host.map(|h| h.split(':').next().unwrap_or(h)))
             .unwrap_or("localhost");
 

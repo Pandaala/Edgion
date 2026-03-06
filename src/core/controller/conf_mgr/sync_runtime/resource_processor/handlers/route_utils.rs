@@ -164,9 +164,9 @@ pub fn validate_parent_ref_accepted(
     let listeners = gateway.spec.listeners.as_ref().unwrap_or(&empty_listeners);
 
     if let Some(section_name) = &parent_ref.section_name {
-        let has_listener = listeners.iter().any(|l| {
-            l.name == *section_name && parent_ref.port.map_or(true, |p| l.port == p)
-        });
+        let has_listener = listeners
+            .iter()
+            .any(|l| l.name == *section_name && parent_ref.port.is_none_or(|p| l.port == p));
         if !has_listener {
             errors.push(AcceptedError::NoMatchingParent {
                 section_name: section_name.clone(),
@@ -187,7 +187,7 @@ pub fn validate_parent_ref_accepted(
         .iter()
         .filter(|l| {
             parent_ref.section_name.as_ref().is_none_or(|sn| l.name == *sn)
-                && parent_ref.port.map_or(true, |p| l.port == p)
+                && parent_ref.port.is_none_or(|p| l.port == p)
         })
         .collect();
 
@@ -204,13 +204,11 @@ pub fn validate_parent_ref_accepted(
 
     if let Some(route_hs) = route_hostnames {
         if !route_hs.is_empty() {
-            let hostname_match = matching_listeners.iter().any(|listener| {
-                match &listener.hostname {
-                    None => true,
-                    Some(listener_hn) => route_hs
-                        .iter()
-                        .any(|route_hn| hostnames_intersect(listener_hn, route_hn)),
-                }
+            let hostname_match = matching_listeners.iter().any(|listener| match &listener.hostname {
+                None => true,
+                Some(listener_hn) => route_hs
+                    .iter()
+                    .any(|route_hn| hostnames_intersect(listener_hn, route_hn)),
             });
             if !hostname_match {
                 errors.push(AcceptedError::NoMatchingListenerHostname {
@@ -235,142 +233,6 @@ pub fn retain_current_parent_statuses(parents: &mut Vec<RouteParentStatus>, pare
                 && pr.port == ps.parent_ref.port
         })
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hostnames_intersect_concrete() {
-        assert!(hostnames_intersect("foo.com", "foo.com"));
-        assert!(!hostnames_intersect("foo.com", "bar.com"));
-    }
-
-    #[test]
-    fn test_hostnames_intersect_wildcard_listener_concrete_route() {
-        assert!(hostnames_intersect("*.wildcard.io", "foo.wildcard.io"));
-        assert!(hostnames_intersect("*.bar.com", "a.b.bar.com"));
-        assert!(!hostnames_intersect("*.wildcard.io", "wildcard.io"));
-        assert!(!hostnames_intersect("*.bar.com", "foo.com"));
-    }
-
-    #[test]
-    fn test_hostnames_intersect_concrete_listener_wildcard_route() {
-        assert!(hostnames_intersect("very.specific.com", "*.specific.com"));
-        assert!(!hostnames_intersect("specific.com", "*.specific.com"));
-    }
-
-    #[test]
-    fn test_hostnames_intersect_both_wildcards() {
-        assert!(hostnames_intersect("*.bar.com", "*.foo.bar.com"));
-        assert!(hostnames_intersect("*.foo.bar.com", "*.bar.com"));
-        assert!(hostnames_intersect("*.bar.com", "*.bar.com"));
-        assert!(!hostnames_intersect("*.bar.com", "*.foo.com"));
-    }
-
-    // ---- listener_allows_route_namespace tests ----
-
-    use crate::types::resources::gateway::{AllowedRoutes, RouteNamespaces};
-
-    #[test]
-    fn test_ns_policy_none_defaults_to_same() {
-        assert!(listener_allows_route_namespace(&None, "ns1", "ns1"));
-        assert!(!listener_allows_route_namespace(&None, "ns1", "ns2"));
-    }
-
-    #[test]
-    fn test_ns_policy_all() {
-        let allowed = Some(AllowedRoutes {
-            namespaces: Some(RouteNamespaces {
-                from: Some("All".into()),
-                selector: None,
-            }),
-            kinds: None,
-        });
-        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns"));
-    }
-
-    #[test]
-    fn test_ns_policy_same() {
-        let allowed = Some(AllowedRoutes {
-            namespaces: Some(RouteNamespaces {
-                from: Some("Same".into()),
-                selector: None,
-            }),
-            kinds: None,
-        });
-        assert!(listener_allows_route_namespace(&allowed, "ns1", "ns1"));
-        assert!(!listener_allows_route_namespace(&allowed, "ns1", "ns2"));
-    }
-
-    #[test]
-    fn test_ns_policy_selector_no_selector_field() {
-        // Selector mode but no selector specified → matches all
-        let allowed = Some(AllowedRoutes {
-            namespaces: Some(RouteNamespaces {
-                from: Some("Selector".into()),
-                selector: None,
-            }),
-            kinds: None,
-        });
-        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns"));
-    }
-
-    #[test]
-    fn test_ns_policy_selector_falls_back_to_same_when_labels_missing() {
-        // When namespace labels are unavailable (FileSystem / non-K8s mode),
-        // Selector falls back to Same: same-ns allowed, cross-ns denied.
-        let allowed = Some(AllowedRoutes {
-            namespaces: Some(RouteNamespaces {
-                from: Some("Selector".into()),
-                selector: Some(serde_json::json!({ "matchLabels": { "env": "prod" } })),
-            }),
-            kinds: None,
-        });
-        assert!(listener_allows_route_namespace(&allowed, "gw-ns", "gw-ns"));
-        assert!(!listener_allows_route_namespace(&allowed, "other-ns", "gw-ns"));
-    }
-
-    #[test]
-    fn test_ns_policy_selector_with_store() {
-        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store;
-        use std::collections::BTreeMap;
-
-        let store = get_namespace_store();
-        store.upsert(k8s_openapi::api::core::v1::Namespace {
-            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                name: Some("allowed-ns".into()),
-                labels: Some(BTreeMap::from([("env".into(), "prod".into())])),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-        store.upsert(k8s_openapi::api::core::v1::Namespace {
-            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                name: Some("denied-ns".into()),
-                labels: Some(BTreeMap::from([("env".into(), "dev".into())])),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-
-        let allowed = Some(AllowedRoutes {
-            namespaces: Some(RouteNamespaces {
-                from: Some("Selector".into()),
-                selector: Some(serde_json::json!({ "matchLabels": { "env": "prod" } })),
-            }),
-            kinds: None,
-        });
-
-        assert!(listener_allows_route_namespace(&allowed, "allowed-ns", "gw-ns"));
-        assert!(!listener_allows_route_namespace(&allowed, "denied-ns", "gw-ns"));
-        // unknown-ns: labels not in store → falls back to Same → denied (different ns)
-        assert!(!listener_allows_route_namespace(&allowed, "unknown-ns", "gw-ns"));
-
-        store.remove("allowed-ns");
-        store.remove("denied-ns");
-    }
 }
 
 /// Register Service backend references for a route.
@@ -421,4 +283,133 @@ pub fn lookup_gateway(namespace: &str, name: &str) -> Option<Gateway> {
         gw.metadata.namespace.as_deref().unwrap_or("default") == namespace
             && gw.metadata.name.as_deref().unwrap_or("") == name
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::gateway::{AllowedRoutes, RouteNamespaces};
+
+    #[test]
+    fn test_hostnames_intersect_concrete() {
+        assert!(hostnames_intersect("foo.com", "foo.com"));
+        assert!(!hostnames_intersect("foo.com", "bar.com"));
+    }
+
+    #[test]
+    fn test_hostnames_intersect_wildcard_listener_concrete_route() {
+        assert!(hostnames_intersect("*.wildcard.io", "foo.wildcard.io"));
+        assert!(hostnames_intersect("*.bar.com", "a.b.bar.com"));
+        assert!(!hostnames_intersect("*.wildcard.io", "wildcard.io"));
+        assert!(!hostnames_intersect("*.bar.com", "foo.com"));
+    }
+
+    #[test]
+    fn test_hostnames_intersect_concrete_listener_wildcard_route() {
+        assert!(hostnames_intersect("very.specific.com", "*.specific.com"));
+        assert!(!hostnames_intersect("specific.com", "*.specific.com"));
+    }
+
+    #[test]
+    fn test_hostnames_intersect_both_wildcards() {
+        assert!(hostnames_intersect("*.bar.com", "*.foo.bar.com"));
+        assert!(hostnames_intersect("*.foo.bar.com", "*.bar.com"));
+        assert!(hostnames_intersect("*.bar.com", "*.bar.com"));
+        assert!(!hostnames_intersect("*.bar.com", "*.foo.com"));
+    }
+
+    #[test]
+    fn test_ns_policy_none_defaults_to_same() {
+        assert!(listener_allows_route_namespace(&None, "ns1", "ns1"));
+        assert!(!listener_allows_route_namespace(&None, "ns1", "ns2"));
+    }
+
+    #[test]
+    fn test_ns_policy_all() {
+        let allowed = Some(AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("All".into()),
+                selector: None,
+            }),
+            kinds: None,
+        });
+        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns"));
+    }
+
+    #[test]
+    fn test_ns_policy_same() {
+        let allowed = Some(AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("Same".into()),
+                selector: None,
+            }),
+            kinds: None,
+        });
+        assert!(listener_allows_route_namespace(&allowed, "ns1", "ns1"));
+        assert!(!listener_allows_route_namespace(&allowed, "ns1", "ns2"));
+    }
+
+    #[test]
+    fn test_ns_policy_selector_no_selector_field() {
+        let allowed = Some(AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("Selector".into()),
+                selector: None,
+            }),
+            kinds: None,
+        });
+        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns"));
+    }
+
+    #[test]
+    fn test_ns_policy_selector_falls_back_to_same_when_labels_missing() {
+        let allowed = Some(AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("Selector".into()),
+                selector: Some(serde_json::json!({ "matchLabels": { "env": "prod" } })),
+            }),
+            kinds: None,
+        });
+        assert!(listener_allows_route_namespace(&allowed, "gw-ns", "gw-ns"));
+        assert!(!listener_allows_route_namespace(&allowed, "other-ns", "gw-ns"));
+    }
+
+    #[test]
+    fn test_ns_policy_selector_with_store() {
+        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store;
+        use std::collections::BTreeMap;
+
+        let store = get_namespace_store();
+        store.upsert(k8s_openapi::api::core::v1::Namespace {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("allowed-ns".into()),
+                labels: Some(BTreeMap::from([("env".into(), "prod".into())])),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        store.upsert(k8s_openapi::api::core::v1::Namespace {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("denied-ns".into()),
+                labels: Some(BTreeMap::from([("env".into(), "dev".into())])),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let allowed = Some(AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("Selector".into()),
+                selector: Some(serde_json::json!({ "matchLabels": { "env": "prod" } })),
+            }),
+            kinds: None,
+        });
+
+        assert!(listener_allows_route_namespace(&allowed, "allowed-ns", "gw-ns"));
+        assert!(!listener_allows_route_namespace(&allowed, "denied-ns", "gw-ns"));
+        assert!(!listener_allows_route_namespace(&allowed, "unknown-ns", "gw-ns"));
+
+        store.remove("allowed-ns");
+        store.remove("denied-ns");
+    }
 }

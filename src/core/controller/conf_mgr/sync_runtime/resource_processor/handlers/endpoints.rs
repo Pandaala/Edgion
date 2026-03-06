@@ -4,7 +4,9 @@
 
 use k8s_openapi::api::core::v1::Endpoints;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    HandlerContext, ProcessResult, ProcessorHandler,
+};
 
 /// Endpoints handler
 pub struct EndpointsHandler;

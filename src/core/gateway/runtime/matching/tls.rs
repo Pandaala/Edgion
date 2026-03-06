@@ -352,8 +352,11 @@ mod tests {
     fn test_rebuild_from_gateways() {
         let matcher = GatewayTlsMatcher::new();
 
-        let listener =
-            create_test_listener("https", Some("example.com"), Some(make_tls_config("test-cert", Some("default"))));
+        let listener = create_test_listener(
+            "https",
+            Some("example.com"),
+            Some(make_tls_config("test-cert", Some("default"))),
+        );
         let gateway = create_test_gateway("test-gw", "default", vec![listener]);
 
         matcher.rebuild_from_gateways(&[gateway]);
@@ -403,9 +406,14 @@ mod tests {
 
         matcher.rebuild_from_gateways(&[gateway]);
 
-        // Should not find any entry (no hostname to match)
+        // Hostname-less listeners act as catch-all entries.
         let result = matcher.match_sni("example.com");
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        let entry = result.unwrap();
+        assert_eq!(entry.gateway_name, "test-gw");
+        assert_eq!(entry.gateway_namespace, "default");
+        assert_eq!(entry.listener_name, "https");
+        assert_eq!(entry.hostname, "");
     }
 
     #[test]

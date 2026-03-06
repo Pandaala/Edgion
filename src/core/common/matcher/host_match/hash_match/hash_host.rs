@@ -193,10 +193,7 @@ mod tests {
         assert_eq!(host.wildcard_key_lens.len(), 1);
 
         // Even with a very deep hostname, only 1 HashMap probe for wildcard
-        assert_eq!(
-            host.get("a.b.c.d.e.f.g.example.com"),
-            Some(&"wc".to_string())
-        );
+        assert_eq!(host.get("a.b.c.d.e.f.g.example.com"), Some(&"wc".to_string()));
         // Non-matching deep hostname: still only 1 probe
         assert_eq!(host.get("a.b.c.d.e.f.g.other.com"), None);
     }

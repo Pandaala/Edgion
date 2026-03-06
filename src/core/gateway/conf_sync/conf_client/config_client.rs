@@ -1,7 +1,7 @@
-use crate::core::gateway::backends::{create_endpoint_handler, create_ep_slice_handler, create_service_handler};
-use crate::core::gateway::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::common::conf_sync::types::ListData;
+use crate::core::gateway::backends::{create_endpoint_handler, create_ep_slice_handler, create_service_handler};
+use crate::core::gateway::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::core::gateway::routes::create_route_manager_handler;
 use crate::types::prelude_resources::*;
 use crate::types::resource_defs::get_resource_info;

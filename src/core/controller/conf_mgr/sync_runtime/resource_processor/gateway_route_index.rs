@@ -275,12 +275,7 @@ mod tests {
             section_name: None,
             port: None,
         };
-        idx.update_route(
-            ResourceKind::HTTPRoute,
-            "default/r1",
-            &[non_gw_ref],
-            "default",
-        );
+        idx.update_route(ResourceKind::HTTPRoute, "default/r1", &[non_gw_ref], "default");
 
         assert!(idx.get_routes_for_gateway("default/svc1").is_empty());
     }

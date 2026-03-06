@@ -1,8 +1,8 @@
 use super::{get_global_service_store, ServiceStore};
+use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
-use crate::core::common::conf_sync::traits::ConfHandler;
 use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

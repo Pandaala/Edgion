@@ -36,9 +36,7 @@ impl NamespaceStore {
         let name = ns.name_any();
         let new_labels = ns.labels().clone();
         let mut map = self.store.write().unwrap();
-        let changed = map
-            .get(&name)
-            .map_or(true, |old| old.labels() != &new_labels);
+        let changed = map.get(&name).is_none_or(|old| old.labels() != &new_labels);
         map.insert(name, ns);
         changed
     }
@@ -50,12 +48,11 @@ impl NamespaceStore {
 
     /// Get labels for a namespace (extracted on demand from stored object).
     pub fn get_labels(&self, name: &str) -> Option<BTreeMap<String, String>> {
-        self.store.read().unwrap().get(name).map(|ns| {
-            ns.labels()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
+        self.store
+            .read()
+            .unwrap()
+            .get(name)
+            .map(|ns| ns.labels().iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
     /// Get the full namespace object.
@@ -65,10 +62,7 @@ impl NamespaceStore {
 
     /// Replace all entries atomically (used during init/full-sync).
     pub fn replace_all(&self, namespaces: Vec<Namespace>) {
-        let new_map: HashMap<String, Namespace> = namespaces
-            .into_iter()
-            .map(|ns| (ns.name_any(), ns))
-            .collect();
+        let new_map: HashMap<String, Namespace> = namespaces.into_iter().map(|ns| (ns.name_any(), ns)).collect();
         *self.store.write().unwrap() = new_map;
     }
 }
@@ -126,10 +120,7 @@ pub fn label_selector_matches(selector: &serde_json::Value, labels: &BTreeMap<St
 
 fn evaluate_expression(expr: &serde_json::Value, labels: &BTreeMap<String, String>) -> bool {
     let key = expr.get("key").and_then(|v| v.as_str()).unwrap_or("");
-    let operator = expr
-        .get("operator")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let operator = expr.get("operator").and_then(|v| v.as_str()).unwrap_or("");
     let values: Vec<&str> = expr
         .get("values")
         .and_then(|v| v.as_array())
@@ -137,12 +128,8 @@ fn evaluate_expression(expr: &serde_json::Value, labels: &BTreeMap<String, Strin
         .unwrap_or_default();
 
     match operator {
-        "In" => labels
-            .get(key)
-            .map_or(false, |v| values.contains(&v.as_str())),
-        "NotIn" => labels
-            .get(key)
-            .map_or(true, |v| !values.contains(&v.as_str())),
+        "In" => labels.get(key).is_some_and(|v| values.contains(&v.as_str())),
+        "NotIn" => labels.get(key).is_none_or(|v| !values.contains(&v.as_str())),
         "Exists" => labels.contains_key(key),
         "DoesNotExist" => !labels.contains_key(key),
         unknown => {
@@ -167,10 +154,7 @@ mod tests {
 
     #[test]
     fn test_match_labels() {
-        let labels = BTreeMap::from([
-            ("env".into(), "prod".into()),
-            ("team".into(), "platform".into()),
-        ]);
+        let labels = BTreeMap::from([("env".into(), "prod".into()), ("team".into(), "platform".into())]);
 
         let hit = serde_json::json!({ "matchLabels": { "env": "prod" } });
         assert!(label_selector_matches(&hit, &labels));
@@ -256,10 +240,7 @@ mod tests {
 
     #[test]
     fn test_combined_match_labels_and_expressions() {
-        let labels = BTreeMap::from([
-            ("env".into(), "prod".into()),
-            ("team".into(), "platform".into()),
-        ]);
+        let labels = BTreeMap::from([("env".into(), "prod".into()), ("team".into(), "platform".into())]);
         let selector = serde_json::json!({
             "matchLabels": { "env": "prod" },
             "matchExpressions": [{
@@ -268,10 +249,7 @@ mod tests {
         });
         assert!(label_selector_matches(&selector, &labels));
 
-        let wrong_team = BTreeMap::from([
-            ("env".into(), "prod".into()),
-            ("team".into(), "sales".into()),
-        ]);
+        let wrong_team = BTreeMap::from([("env".into(), "prod".into()), ("team".into(), "sales".into())]);
         assert!(!label_selector_matches(&selector, &wrong_team));
     }
 
@@ -292,11 +270,7 @@ mod tests {
         Namespace {
             metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
                 name: Some(name.to_string()),
-                labels: if labels.is_empty() {
-                    None
-                } else {
-                    Some(labels)
-                },
+                labels: if labels.is_empty() { None } else { Some(labels) },
                 ..Default::default()
             },
             ..Default::default()

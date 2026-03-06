@@ -1,8 +1,8 @@
 use crate::core::gateway::conf_sync::conf_client::ConfigClient;
-use crate::core::gateway::runtime::server::listener_builder;
-use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_port_gateway_infos};
 use crate::core::gateway::observe::access_log::get_access_logger_unchecked;
 use crate::core::gateway::observe::AccessLogger;
+use crate::core::gateway::runtime::server::listener_builder;
+use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_port_gateway_infos};
 use crate::types::{Gateway, ResourceMeta};
 use anyhow::{anyhow, Result};
 use kube::ResourceExt;

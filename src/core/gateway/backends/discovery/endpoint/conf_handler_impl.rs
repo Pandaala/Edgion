@@ -1,10 +1,10 @@
 use super::{
     get_endpoint_consistent_store, get_endpoint_ewma_store, get_endpoint_leastconn_store, get_endpoint_roundrobin_store,
 };
+use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
-use crate::core::common::conf_sync::traits::ConfHandler;
 use k8s_openapi::api::core::v1::Endpoints;
 use std::collections::{HashMap, HashSet};
 

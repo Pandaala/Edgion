@@ -23,7 +23,9 @@ use super::file_watcher::FileSystemWatcher;
 use super::resource_controller::FileSystemResourceController;
 use super::status::FileSystemStatusHandler;
 use crate::core::controller::conf_mgr::conf_center::EndpointMode;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor, SecretRefManager};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    ProcessorHandler, ResourceProcessor, SecretRefManager,
+};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::*;
