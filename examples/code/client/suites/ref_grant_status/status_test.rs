@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 pub struct RefGrantStatusTestSuite;
 
+const ROUTE_NAMESPACE: &str = "edgion-default";
+
 impl RefGrantStatusTestSuite {
     /// Helper to fetch HTTPRoute from configserver API
     async fn fetch_route_status(ctx: &TestContext, namespace: &str, name: &str) -> Result<Value, String> {
@@ -120,7 +122,7 @@ impl RefGrantStatusTestSuite {
                     // Wait a bit for status to be computed
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match Self::fetch_route_status(&ctx, "app", "cross-ns-route").await {
+                    match Self::fetch_route_status(&ctx, ROUTE_NAMESPACE, "cross-ns-route").await {
                         Ok(route) => {
                             if Self::has_resolved_refs_true(&route) {
                                 TestResult::passed_with_message(
@@ -156,7 +158,7 @@ impl RefGrantStatusTestSuite {
                     // Wait a bit for status to be computed
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match Self::fetch_route_status(&ctx, "app", "cross-ns-denied").await {
+                    match Self::fetch_route_status(&ctx, ROUTE_NAMESPACE, "cross-ns-denied").await {
                         Ok(route) => {
                             if Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
                                 TestResult::passed_with_message(
@@ -192,7 +194,7 @@ impl RefGrantStatusTestSuite {
                     // Wait a bit for status to be computed
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match Self::fetch_route_status(&ctx, "app", "multi-parent").await {
+                    match Self::fetch_route_status(&ctx, ROUTE_NAMESPACE, "multi-parent").await {
                         Ok(route) => {
                             if let Some(parents) = route["status"]["parents"].as_array() {
                                 if parents.len() >= 2 {
@@ -241,7 +243,7 @@ impl RefGrantStatusTestSuite {
                     // Wait a bit for status to be computed
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match Self::fetch_route_status(&ctx, "app", "cross-ns-route").await {
+                    match Self::fetch_route_status(&ctx, ROUTE_NAMESPACE, "cross-ns-route").await {
                         Ok(route) => {
                             let has_accepted = if let Some(parents) = route["status"]["parents"].as_array() {
                                 parents.iter().any(|p| {

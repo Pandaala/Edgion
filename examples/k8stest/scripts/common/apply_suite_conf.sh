@@ -75,6 +75,17 @@ fi
 
 while IFS= read -r f; do
   [[ -n "${f}" ]] || continue
+  case "${f}" in
+    */base/Secret_edgion-test_edge-tls.yaml|\
+    */EdgionTls/mTLS/Secret_edge_client-ca.yaml|\
+    */EdgionTls/mTLS/Secret_edge_ca-chain.yaml|\
+    */EdgionTls/mTLS/Secret_edge_mtls-server.yaml|\
+    */HTTPRoute/Backend/BackendTLS/Secret_backend-ca.yaml|\
+    */EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca.yaml)
+      echo "Skipping runtime-managed Secret template: ${f}"
+      continue
+      ;;
+  esac
   echo "Applying ${f}"
   ok=false
   for attempt in 1 2 3; do

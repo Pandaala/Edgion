@@ -22,6 +22,7 @@ metadata:
   name: edgion-test
   labels:
     name: edgion-test
+    env: prod
     app.kubernetes.io/name: edgion
     app.kubernetes.io/component: test
 ---

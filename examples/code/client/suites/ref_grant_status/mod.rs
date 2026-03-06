@@ -5,9 +5,9 @@
 //! Required config files (in examples/test/conf/ref-grant-status/):
 //! - Service_backend_cross-ns-svc.yaml
 //! - EndpointSlice_backend_cross-ns-svc.yaml
-//! - HTTPRoute_app_cross-ns-route.yaml
-//! - HTTPRoute_app_cross-ns-denied.yaml
-//! - HTTPRoute_app_multi-parent.yaml
+//! - HTTPRoute_app_cross-ns-route.yaml      (route namespace: edgion-default)
+//! - HTTPRoute_app_cross-ns-denied.yaml     (route namespace: edgion-default)
+//! - HTTPRoute_app_multi-parent.yaml        (route namespace: edgion-default)
 //! - ReferenceGrant_backend_allow-app.yaml
 
 mod status_test;

@@ -417,13 +417,13 @@ prompt_local_image_mode() {
     return 0
   fi
 
-  cat <<EOF
+  cat >&2 <<EOF
 Local cluster detected. Choose image mode:
   1) remote-pull          (default) use imagePullPolicy=Always and pull from registry
   2) build-import         build local images, docker save, import into local runtime, use IfNotPresent
   3) prepare-local-images run existing --prepare-local-images flow, use IfNotPresent
 EOF
-  read -r -p "Select [1/2/3] (default 1): " selected
+  read -r -p "Select [1/2/3] (default 1): " selected >&2
   case "${selected:-1}" in
     2) echo "build-import" ;;
     3) echo "prepare-local-images" ;;
@@ -574,7 +574,7 @@ apply_all_conf_with_fallback() {
   echo "[WARN] apply_all_conf_strict failed and python3-yaml is unavailable."
   echo "[WARN] Falling back to sorted recursive server-side apply under: ${CONF_ROOT}"
   local exclude_re
-  exclude_re='00-namespace\.ya?ml$|01-deployment\.ya?ml$|/Gateway/DynamicTest/(updates|delete)/|/base/Secret_edgion-test_edge-tls\.ya?ml$|/EdgionTls/mTLS/Secret_edge_client-ca\.ya?ml$|/EdgionTls/mTLS/Secret_edge_ca-chain\.ya?ml$|/EdgionTls/mTLS/Secret_edge_mtls-server\.ya?ml$|/HTTPRoute/Backend/BackendTLS/Secret_backend-ca\.ya?ml$|/Gateway/PortConflict/Gateway_internal_conflict\.ya?ml$'
+  exclude_re='00-namespace\.ya?ml$|01-deployment\.ya?ml$|/Gateway/DynamicTest/(updates|delete)/|/base/Secret_edgion-test_edge-tls\.ya?ml$|/EdgionTls/mTLS/Secret_edge_client-ca\.ya?ml$|/EdgionTls/mTLS/Secret_edge_ca-chain\.ya?ml$|/EdgionTls/mTLS/Secret_edge_mtls-server\.ya?ml$|/HTTPRoute/Backend/BackendTLS/Secret_backend-ca\.ya?ml$|/EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca\.ya?ml$|/Gateway/PortConflict/Gateway_internal_conflict\.ya?ml$'
   local file
   while IFS= read -r file; do
     if echo "${file}" | grep -Eq "${exclude_re}"; then

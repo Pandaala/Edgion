@@ -49,29 +49,21 @@ K8s 模式建议统一改为：
   - 或按指标验证分布（RR/CH）；
   - 或按 header/body 校验功能逻辑，不绑定实例地址。
 
-## 4. 当前仓库现状（已扫描）
+## 4. 当前仓库现状
 
-### 4.1 `examples/k8stest/conf` 覆盖缺口
+### 4.1 `examples/k8stest/conf` 已成为 K8s 测试基线
 
-当前 `examples/k8stest/conf` 缺失以下关键目录（相对 `examples/test/conf`）：
+当前 K8s 集成测试已经以 `examples/k8stest/conf` 作为唯一配置源，和 `examples/test/conf` 的共享 suite 基本保持同构。需要注意的是，K8s 目录里有一小类 **runtime-managed Secret 模板**，文件本身会保留空 `data: {}`，真实内容在 prepare 阶段生成到 `examples/k8stest/generated/secrets/` 后再 apply。
 
-- `EdgionPlugins/*`（整组缺失，含 `DebugAccessLog/JwtAuth/JweDecrypt/HmacAuth/HeaderCertAuth/...`）
-- `Gateway/PortConflict`
-- `Gateway/StreamPlugins`
-- `HTTPRoute/Backend/LBRoundRobin`
-- `HTTPRoute/Backend/LBConsistentHash`
-- `TCPRoute/StreamPlugins`
-- `ref-grant-status`
+当前需要特别记住的约束：
 
-并存在命名不一致：
+- `HeaderCertAuth` 的 `header-cert-ca` 属于 runtime-managed Secret，不能再被递归 apply 的静态模板覆盖。
+- `ref-grant-status` 已经复用现有测试 namespace，不再额外创建 `app` / `other`。
+- `HTTPRoute/Match` 的 wildcard host 需要和共享测试代码保持一致：`*.wc-match-test.example.com`。
 
-- `HTTPRoute/Backend/LBPolicy`（与原测试 `LBRoundRobin`/`LBConsistentHash` 不一致）
-- `Gateway/Plugins`（与 `EdgionPlugins/*`、`Gateway/StreamPlugins` 语义需明确拆分）
+### 4.2 执行链与配置源已经收口
 
-### 4.2 执行链与配置源不一致
-
-`/Users/caohao/ws1/Edgion/examples/k8stest/scripts/run_k8s_integration.sh` 只是 wrapper；
-当前实际执行脚本（deploy 仓库）仍优先读取 `examples/test/conf`，尚未切到 `examples/k8stest/conf` 作为唯一数据源。
+`/Users/caohao/ws1/Edgion/examples/k8stest/scripts/run_k8s_integration.sh` 现在就是 K8s 集成测试的主入口，prepare / conf apply / test-client batch 都围绕 `examples/k8stest/conf` 执行，不再依赖外部 deploy 仓库去加载 `examples/test/conf`。
 
 ## 5. 新的 conf 需要改哪些（落地清单）
 
@@ -89,20 +81,28 @@ K8s 模式建议统一改为：
 - 所有 backendRef 指向 Service（名称+端口）。
 - 为需要多实例测试的后端准备独立 Deployment（建议 3 副本）。
 - 保持 Gateway/Route 的非 backend 语义尽量不变（host/match/filter 保持一致）。
+- 对证书类测试使用 runtime-managed Secret 模板：模板保留空 `data: {}`，真实值在 prepare 阶段生成。
+- 递归 apply 全量 conf 时，必须排除 runtime-managed Secret 模板，避免覆盖 prepare 生成的真实证书。
 
 ### 5.3 命名空间与基础资源（P0）
 
-建议固定三套 namespace：
+建议固定四套测试 namespace：
 
 - `edgion-system`: controller/gateway/RBAC/CRD 相关
 - `edgion-default`: 路由与插件配置资源（默认测试配置）
 - `edgion-test`: test-server/test-client/service
+- `edgion-backend`: 跨 namespace backend / ReferenceGrant 场景
 
 并确保 base conf 最小集齐全：
 
 - `GatewayClass`
 - `EdgionGatewayConfig`
 - 测试所需 TLS Secret / ReferenceGrant
+
+额外约束：
+
+- `default` namespace 不应留下测试资源；cleanup 只允许保留 Kubernetes 自带的 `kubernetes` Service 等系统对象。
+- `ref-grant-status`、`AllowedRoutes/Selector` 这类场景应复用上述 4 个 namespace，不再引入额外测试 namespace。
 
 ### 5.4 K8s 依赖场景（P1）
 
@@ -145,6 +145,7 @@ K8s 模式建议统一改为：
 
 - 阶段 1：`prepare`
   - 校验 `k8stest/conf` 不含 Endpoint/EndpointSlice
+  - 生成 runtime Secret YAML（例如 `HeaderCertAuth` CA）
   - 严格 apply 全量配置（失败即退出）
   - apply 完成后统一重启 gateway 并等待 ready
 - 阶段 2：`run tests`

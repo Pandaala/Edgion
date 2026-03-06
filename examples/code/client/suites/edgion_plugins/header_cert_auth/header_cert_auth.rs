@@ -16,6 +16,8 @@ const COMPILE_TIME_SECRET_YAML: &str =
 
 const RUNTIME_SECRET_RELATIVE: &str =
     "generated-secrets/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml";
+const K8S_MOUNTED_CERT_PATH: &str = "/usr/local/edgion/examples/test/certs/mtls/valid-client.crt";
+const REPO_CERT_PATH: &str = "examples/test/certs/mtls/valid-client.crt";
 
 fn read_secret_data_field(yaml: &str, key: &str) -> Option<String> {
     let value: Value = serde_yaml::from_str(yaml).ok()?;
@@ -31,11 +33,28 @@ fn load_runtime_secret_yaml() -> Option<String> {
     std::fs::read_to_string(&path).ok()
 }
 
-fn load_client_cert_pem() -> Result<String, String> {
-    let yaml = load_runtime_secret_yaml().unwrap_or_else(|| COMPILE_TIME_SECRET_YAML.to_string());
+fn load_client_cert_from_known_paths() -> Option<String> {
+    [K8S_MOUNTED_CERT_PATH, REPO_CERT_PATH]
+        .into_iter()
+        .find_map(|path| std::fs::read_to_string(path).ok())
+}
 
-    let cert_b64 = read_secret_data_field(&yaml, "tls.crt")
-        .ok_or_else(|| "missing tls.crt in test fixture (runtime and compile-time)".to_string())?;
+fn load_client_cert_pem() -> Result<String, String> {
+    if let Some(yaml) = load_runtime_secret_yaml() {
+        let cert_b64 = read_secret_data_field(&yaml, "tls.crt")
+            .ok_or_else(|| "missing tls.crt in runtime-generated test fixture".to_string())?;
+        let cert_bytes = STANDARD
+            .decode(cert_b64.as_bytes())
+            .map_err(|e| format!("failed to decode tls.crt base64: {}", e))?;
+        return String::from_utf8(cert_bytes).map_err(|e| format!("tls.crt is not utf8 pem: {}", e));
+    }
+
+    if let Some(cert) = load_client_cert_from_known_paths() {
+        return Ok(cert);
+    }
+
+    let cert_b64 = read_secret_data_field(COMPILE_TIME_SECRET_YAML, "tls.crt")
+        .ok_or_else(|| "missing tls.crt in runtime, mounted, and compile-time fixtures".to_string())?;
     let cert_bytes = STANDARD
         .decode(cert_b64.as_bytes())
         .map_err(|e| format!("failed to decode tls.crt base64: {}", e))?;

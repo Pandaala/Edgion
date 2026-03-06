@@ -89,6 +89,36 @@ delete_k8stest_conf_resources() {
   fi
 }
 
+delete_legacy_default_namespace_resources() {
+  if [[ ! -d "${CONF_ROOT}" ]]; then
+    return 0
+  fi
+
+  echo "[cleanup] delete legacy default-namespace resources mirrored from edgion-default manifests"
+  local deleted_any=false
+  local file
+
+  while IFS= read -r -d '' file; do
+    if ! grep -Eq '^[[:space:]]*namespace:[[:space:]]*edgion-default([[:space:]]|$)' "${file}"; then
+      continue
+    fi
+
+    deleted_any=true
+    python3 - "${file}" <<'PY' | kubectl delete -f - --ignore-not-found=true >/dev/null 2>&1 || true
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+sys.stdout.write(text.replace("namespace: edgion-default", "namespace: default"))
+PY
+  done < <(find "${CONF_ROOT}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0)
+
+  if [[ "${deleted_any}" == "false" ]]; then
+    echo "[cleanup] no legacy edgion-default manifests found"
+  fi
+}
+
 delete_deploy_manifests() {
   echo "[cleanup] delete test workloads"
   kubectl delete -k "${K8S_DEPLOY_ROOT}/test/" --ignore-not-found=true >/dev/null 2>&1 || true
@@ -98,6 +128,8 @@ delete_deploy_manifests() {
   kubectl delete -f "${K8S_DEPLOY_ROOT}/controller/" --ignore-not-found=true >/dev/null 2>&1 || true
 
   echo "[cleanup] delete integration namespaces"
+  kubectl delete namespace app --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl delete namespace other --ignore-not-found=true >/dev/null 2>&1 || true
   kubectl delete namespace edgion-test --ignore-not-found=true >/dev/null 2>&1 || true
   kubectl delete namespace edgion-default --ignore-not-found=true >/dev/null 2>&1 || true
   kubectl delete namespace edgion-system --ignore-not-found=true >/dev/null 2>&1 || true
@@ -200,6 +232,7 @@ echo "[cleanup] delete prepare state ConfigMap"
 kubectl -n edgion-system delete configmap edgion-k8s-integration-state --ignore-not-found=true >/dev/null 2>&1 || true
 
 delete_k8stest_conf_resources
+delete_legacy_default_namespace_resources
 delete_generated_artifacts
 delete_deploy_manifests
 

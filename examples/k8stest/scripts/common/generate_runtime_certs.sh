@@ -267,6 +267,11 @@ write_opaque_ca_secret \
   "${TMP_DIR}/client-ca.crt"
 
 write_opaque_ca_secret \
+  "${SECRETS_DIR}/Secret_default_header-cert-ca.yaml" \
+  "header-cert-ca" "edgion-default" \
+  "${TMP_DIR}/client-ca.crt"
+
+write_opaque_ca_secret \
   "${SECRETS_DIR}/Secret_edge_ca-chain.yaml" \
   "ca-chain" "edgion-test" \
   "${TMP_DIR}/ca-chain.crt"

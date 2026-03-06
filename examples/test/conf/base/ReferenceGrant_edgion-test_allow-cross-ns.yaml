@@ -4,20 +4,14 @@ metadata:
   name: allow-cross-ns
   namespace: edgion-test
 spec:
-  # Allow HTTPRoutes from edgion-default and app namespaces to reference Services in edgion-test
+  # Allow routes from edgion-default to reference Services in edgion-test
   from:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       namespace: edgion-default
     - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      namespace: app
-    - group: gateway.networking.k8s.io
       kind: GRPCRoute
       namespace: edgion-default
-    - group: gateway.networking.k8s.io
-      kind: GRPCRoute
-      namespace: app
   to:
     - group: ""
       kind: Service

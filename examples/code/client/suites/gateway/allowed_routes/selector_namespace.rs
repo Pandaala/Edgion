@@ -2,9 +2,11 @@
 //
 // Tests the Selector namespace policy behavior.
 //
-// In FileSystem mode (used by integration tests), the NamespaceStore is empty
-// (no K8s Namespace watcher). When namespace labels are unavailable, both the
-// controller and data-plane fall back to Same policy for Selector:
+// This suite validates Selector namespace policy in both execution modes:
+// - FileSystem mode: missing namespace labels fall back to Same
+// - K8s mode: namespace labels are evaluated by the controller
+//
+// The shared expectation remains the same:
 //   - Same namespace route   → Accepted=True, compiled, allowed (200)
 //   - Cross namespace route  → Accepted=False, not compiled, denied (404)
 //
@@ -13,8 +15,8 @@
 //
 // Required config files:
 // - Gateway/AllowedRoutes/Selector/01_Gateway.yaml            # from: Selector with matchLabels
-// - Gateway/AllowedRoutes/Selector/HTTPRoute_same_ns.yaml     # Same ns route (allowed via Same fallback)
-// - Gateway/AllowedRoutes/Selector/HTTPRoute_cross_ns.yaml    # Cross ns route (denied via Same fallback)
+// - Gateway/AllowedRoutes/Selector/HTTPRoute_same_ns.yaml     # Same ns route (allowed)
+// - Gateway/AllowedRoutes/Selector/HTTPRoute_cross_ns.yaml    # Cross ns route (denied)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -22,12 +24,12 @@ use std::time::Instant;
 pub struct AllowedRoutesSelectorNamespaceTestSuite;
 
 impl AllowedRoutesSelectorNamespaceTestSuite {
-    /// Same-namespace route should be allowed: controller falls back to Same
-    /// when namespace labels are unavailable, so the route is Accepted and compiled.
-    fn test_same_namespace_allowed_via_fallback() -> TestCase {
+    /// Same-namespace route should be allowed, either via Selector label match
+    /// in K8s mode or Same fallback when labels are unavailable.
+    fn test_same_namespace_allowed() -> TestCase {
         TestCase::new(
             "selector_same_ns_allowed",
-            "Selector allows same-namespace route via Same fallback on data-plane",
+            "Selector allows same-namespace route on data-plane",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -46,7 +48,7 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
-                                        "Selector Same-fallback correctly allowed same-ns route (status: {})",
+                                        "Selector correctly allowed same-ns route (status: {})",
                                         resp.status()
                                     ),
                                 )
@@ -54,7 +56,7 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected 200 for same-ns route with Selector→Same fallback, got {}",
+                                        "Expected 200 for same-ns route under Selector policy, got {}",
                                         resp.status()
                                     ),
                                 )
@@ -67,12 +69,12 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
         )
     }
 
-    /// Cross-namespace route should be denied: controller falls back to Same
-    /// when labels are unavailable → Accepted=False → not compiled → 404.
-    fn test_cross_namespace_denied_via_fallback() -> TestCase {
+    /// Cross-namespace route should be denied when it does not match the
+    /// Selector policy. In FileSystem mode this is enforced by Same fallback.
+    fn test_cross_namespace_denied() -> TestCase {
         TestCase::new(
             "selector_cross_ns_denied",
-            "Selector denies cross-namespace route via Same fallback on data-plane",
+            "Selector denies cross-namespace route on data-plane",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -90,13 +92,13 @@ impl AllowedRoutesSelectorNamespaceTestSuite {
                             if resp.status() == 404 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Selector Same-fallback correctly denied cross-ns route".to_string(),
+                                    "Selector correctly denied cross-ns route".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected 404 for cross-ns route with Selector→Same fallback, got {}",
+                                        "Expected 404 for cross-ns route under Selector policy, got {}",
                                         resp.status()
                                     ),
                                 )
@@ -117,8 +119,8 @@ impl TestSuite for AllowedRoutesSelectorNamespaceTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            Self::test_same_namespace_allowed_via_fallback(),
-            Self::test_cross_namespace_denied_via_fallback(),
+            Self::test_same_namespace_allowed(),
+            Self::test_cross_namespace_denied(),
         ]
     }
 }

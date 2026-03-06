@@ -13,7 +13,7 @@
 - **通配符不匹配根域名**: `*.wildcard.example.com` 不匹配 `wildcard.example.com`
 - **无限制**: Listener 未指定 hostname，允许任意 HTTPRoute hostname
 
-**端口**: 31200-31202
+**端口**: 31240-31242
 **测试入口**: `./test_client -g -r Gateway -i ListenerHostname`
 
 ### 2. AllowedRoutes 测试 (`AllowedRoutes/`)
@@ -50,6 +50,22 @@
 **端口**: 31213
 **测试入口**: `./test_client -g -r Gateway -i AllowedRoutes/Kinds`
 
+#### 2.4 Selector (`AllowedRoutes/Selector/`)
+
+测试 `allowedRoutes.namespaces.from: Selector` 约束：
+
+- ✅ 带有匹配 label 的 namespace 中的 Route 允许访问
+- ❌ 不匹配 selector 的跨 namespace Route 被拒绝
+
+本仓库当前 fixture 中：
+- `edgion-test` namespace 带有 `env=prod`
+- Gateway 位于 `edgion-test`
+- `selector-same-ns-route` 允许访问
+- `selector-cross-ns-route` 位于 `edgion-default`，应返回 404
+
+**端口**: 31276
+**测试入口**: `./test_client -g -r Gateway -i AllowedRoutes/Selector`
+
 ### 3. 组合场景测试 (`Combined/`)
 
 测试多个约束条件的组合：
@@ -65,7 +81,7 @@
 - ✅ sectionName 匹配 + Hostname 匹配 → 允许
 - ❌ sectionName 匹配 + Hostname 不匹配 → 拒绝
 
-**端口**: 31220-31222
+**端口**: 31230-31232
 **测试入口**: `./test_client -g -r Gateway -i Combined`
 
 ## 边界场景说明
@@ -101,6 +117,9 @@ cd examples/test
 
 # AllowedRoutes Kinds 测试
 ./scripts/integration/run_integration.sh -r Gateway -i AllowedRoutes/Kinds
+
+# AllowedRoutes Selector 测试
+./scripts/integration/run_integration.sh -r Gateway -i AllowedRoutes/Selector
 
 # Combined 测试
 ./scripts/integration/run_integration.sh -r Gateway -i Combined
@@ -175,7 +194,7 @@ cd examples/test
 | Listener Hostname - 无限制 | ✅ 正面测试 | ✅ |
 | AllowedRoutes - Same Namespace | ✅ 正面测试 + ❌ 负面测试 | ✅ |
 | AllowedRoutes - All Namespaces | ✅ 正面测试（跨 namespace） | ✅ |
-| AllowedRoutes - Selector | ⚠️ 需要 namespace label，暂不实现 | ⏸️ |
+| AllowedRoutes - Selector | ✅ namespace label 正面测试 + ❌ 跨 namespace 负面测试 | ✅ |
 | AllowedRoutes - Kinds | ✅ HTTPRoute 允许 + ❌ GRPCRoute 拒绝 | ✅ |
 | 组合场景 - Hostname + AllowedRoutes | ✅ 正面测试 + ❌ 负面测试（2种） | ✅ |
 | 组合场景 - sectionName + Hostname | ✅ 正面测试 + ❌ 负面测试 | ✅ |

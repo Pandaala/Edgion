@@ -7,7 +7,7 @@ spec:
   from:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
-      namespace: app
+      namespace: edgion-default
   to:
     - group: ""
       kind: Service

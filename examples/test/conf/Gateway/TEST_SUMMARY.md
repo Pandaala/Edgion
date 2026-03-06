@@ -3,9 +3,8 @@
 ## 测试执行报告
 
 **执行时间**: 2026-01-13
-**测试模式**: 完整集成测试
-**总测试数**: 29 个
-**通过率**: 100%
+**文档范围**: ListenerHostname + AllowedRoutes + Combined 这组静态 Gateway 套件
+**通过率**: 100%（以本文覆盖范围为准）
 
 ## 新增测试套件详情
 
@@ -82,7 +81,25 @@
 
 ---
 
-### 5. Gateway_Combined ✅
+### 5. Gateway_AllowedRoutes_Selector ✅
+
+**测试场景数**: 2 个
+**通过率**: 100%
+**端口**: 31276
+
+| 测试用例 | 场景 | 结果 |
+|---------|------|------|
+| selector_same_namespace_allowed | namespace label 匹配的 Route 允许访问 | ✅ PASS |
+| selector_cross_namespace_denied | 不匹配 selector 的跨 namespace Route 被拒绝 | ✅ PASS |
+
+**关键验证点**:
+- ✓ `allowedRoutes.namespaces.from: Selector` 正常生效
+- ✓ namespace label 匹配时允许访问
+- ✓ 不匹配 selector 的 route 被正确拒绝（404）
+
+---
+
+### 6. Gateway_Combined ✅
 
 **测试场景数**: 5 个
 **通过率**: 100%
@@ -114,14 +131,15 @@
 | Listener Hostname - 无限制 | ✅ | - | - | ✅ |
 | AllowedRoutes - Same Namespace | ✅ | ✅ | ✅ | ✅ |
 | AllowedRoutes - All Namespaces | ✅ | - | - | ✅ |
+| AllowedRoutes - Selector | ✅ | ✅ | - | ✅ |
 | AllowedRoutes - Kinds | ✅ | ✅ | - | ✅ |
 | sectionName + Hostname | ✅ | ✅ | ✅ | ✅ |
 | Hostname + AllowedRoutes | ✅ | ✅ (2种) | ✅ | ✅ |
 
 ### 新增测试统计
 
-- **新增测试套件**: 5 个
-- **新增测试用例**: 16 个
+- **新增测试套件**: 6 个
+- **新增测试用例**: 18 个
 - **新增配置文件**: 18 个
 - **新增测试代码**: 10 个文件
 
@@ -130,7 +148,7 @@
 所有测试均验证了 Kubernetes Gateway API 规范的正确实现：
 - ✓ `ParentReference.sectionName` 绑定
 - ✓ `Listener.hostname` 约束
-- ✓ `AllowedRoutes.namespaces.from` (Same, All)
+- ✓ `AllowedRoutes.namespaces.from` (Same, All, Selector)
 - ✓ `AllowedRoutes.kinds` 类型限制
 - ✓ 多约束条件组合逻辑
 - ✓ 默认行为（parentRef 不指定 namespace 时默认为 Route 的 namespace）
@@ -154,7 +172,6 @@
 
 ### 可选扩展（未实现）
 
-- ⏸️ **AllowedRoutes Selector**: 基于 namespace label 的选择器（需要 namespace label 管理，测试环境不便）
 - 🔄 **动态更新测试**: 测试 Gateway 配置热更新场景
 - 🔀 **多 Gateway 多 parentRefs**: 验证 Route 同时绑定多个 Gateway
 

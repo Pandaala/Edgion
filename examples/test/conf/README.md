@@ -176,10 +176,12 @@ ReferenceGrant 和 Status 系统集成测试，验证跨命名空间引用的 st
 
 - **Service_backend_cross-ns-svc.yaml**: backend 命名空间的服务
 - **EndpointSlice_backend_cross-ns-svc.yaml**: 后端服务发现
-- **HTTPRoute_app_cross-ns-route.yaml**: app 命名空间的 HTTPRoute，跨命名空间引用 backend 的 Service
-- **HTTPRoute_app_cross-ns-denied.yaml**: 跨命名空间引用但无 ReferenceGrant（应被拒绝）
-- **HTTPRoute_app_multi-parent.yaml**: 多 parentRefs 测试
-- **ReferenceGrant_backend_allow-app.yaml**: 允许 app 命名空间的 HTTPRoute 引用 backend 的 Service
+- **HTTPRoute_app_cross-ns-route.yaml**: `edgion-default` 命名空间的 HTTPRoute，跨命名空间引用 `edgion-backend` 的 Service
+- **HTTPRoute_app_cross-ns-denied.yaml**: `edgion-default` 命名空间的 HTTPRoute，跨命名空间引用 `edgion-system` 的 Service（无 ReferenceGrant，应被拒绝）
+- **HTTPRoute_app_multi-parent.yaml**: `edgion-default` 命名空间的多 parentRefs 测试
+- **ReferenceGrant_backend_allow-app.yaml**: 允许 `edgion-default` 命名空间的 HTTPRoute 引用 `edgion-backend` 的 Service
+
+说明：文件名里的 `app` 仅为历史命名，当前测试不再创建额外的 `app` / `other` namespace。
 
 测试场景：
 1. 跨命名空间引用 + 有 ReferenceGrant → ResolvedRefs=True

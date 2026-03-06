@@ -81,6 +81,7 @@ build_exclude_patterns() {
   patterns+=('/EdgionTls/mTLS/Secret_edge_ca-chain\.ya?ml$')
   patterns+=('/EdgionTls/mTLS/Secret_edge_mtls-server\.ya?ml$')
   patterns+=('/HTTPRoute/Backend/BackendTLS/Secret_backend-ca\.ya?ml$')
+  patterns+=('/EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca\.ya?ml$')
   patterns+=('/Gateway/PortConflict/Gateway_internal_conflict\.ya?ml$')
 
   local combined
