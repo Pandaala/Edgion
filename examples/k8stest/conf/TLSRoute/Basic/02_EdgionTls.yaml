@@ -1,0 +1,16 @@
+# EdgionTls wildcard certificate for TLSRoute testing (K8s)
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: tls-route-basic-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-route-basic-gw
+      namespace: edgion-test
+      sectionName: tls-basic
+  hosts:
+    - "*.sandbox.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

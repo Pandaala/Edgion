@@ -16,6 +16,14 @@ pub mod edgion {
     /// Value format: YAML string.
     pub const HEALTH_CHECK: &str = "edgion.io/health-check";
 
+    /// Proxy Protocol version to send to upstream.
+    /// Value: "v2" to enable PP2.
+    pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
+
+    /// Whether to use TLS when connecting to upstream.
+    /// Value: "true" or "false" (default: "false").
+    pub const UPSTREAM_TLS: &str = "edgion.io/upstream-tls";
+
     // ========== Test metrics annotations ==========
     /// Test identifier for metrics filtering
     /// Example: edgion.io/metrics-test-key: "lb-test-001"

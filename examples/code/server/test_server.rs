@@ -67,6 +67,10 @@ struct Cli {
     #[arg(long, default_value = "30011")]
     udp_port: u16,
 
+    /// TCP server port with Proxy Protocol v2 parsing
+    #[arg(long)]
+    tcp_pp2_port: Option<u16>,
+
     /// Fake auth server port (for ForwardAuth plugin testing)
     #[arg(long)]
     auth_port: Option<u16>,
@@ -157,6 +161,12 @@ async fn main() -> Result<()> {
     // Start UDP server
     let handle = tokio::spawn(start_udp_server(cli.udp_port));
     handles.push(handle);
+
+    // Start TCP PP2 server (if configured)
+    if let Some(pp2_port) = cli.tcp_pp2_port {
+        let handle = tokio::spawn(start_tcp_pp2_server(pp2_port));
+        handles.push(handle);
+    }
 
     // Start Fake Auth server (if configured)
     if let Some(auth_port) = cli.auth_port {
@@ -766,6 +776,125 @@ async fn start_tcp_server(port: u16) -> Result<()> {
             }
             Err(e) => {
                 error!("TCP accept error: {}", e);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// TCP Server with Proxy Protocol v2 Parsing
+// ============================================================================
+
+async fn start_tcp_pp2_server(port: u16) -> Result<()> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let listener = TcpListener::bind(addr).await?;
+
+    info!("✓ TCP-PP2 server listening on tcp://{} (Proxy Protocol v2 aware)", addr);
+
+    loop {
+        match listener.accept().await {
+            Ok((mut socket, peer_addr)) => {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+
+                    // Read initial data (PP2 header + possibly app data)
+                    let mut total_read = match socket.read(&mut buf).await {
+                        Ok(0) => return,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+
+                    // Try to parse PP2 header
+                    match proxy_header::ProxyHeader::parse(
+                        &buf[..total_read],
+                        proxy_header::ParseConfig::default(),
+                    ) {
+                        Ok((header, consumed)) => {
+                            let (src_addr, dst_addr) = match header.proxied_address() {
+                                Some(addr) => (
+                                    addr.source.to_string(),
+                                    addr.destination.to_string(),
+                                ),
+                                None => ("local".to_string(), "local".to_string()),
+                            };
+
+                            let authority = header.authority().unwrap_or("").to_string();
+
+                            let response = serde_json::json!({
+                                "pp2": true,
+                                "src_addr": src_addr,
+                                "dst_addr": dst_addr,
+                                "authority": authority,
+                                "peer_addr": peer_addr.to_string(),
+                                "pp2_header_len": consumed,
+                            });
+
+                            let response_bytes = serde_json::to_vec(&response).unwrap();
+                            let _ = socket.write_all(&response_bytes).await;
+
+                            // If there was app data after the PP2 header, echo it too
+                            if consumed < total_read {
+                                let _ = socket.write_all(&buf[consumed..total_read]).await;
+                            }
+                        }
+                        Err(proxy_header::Error::BufferTooShort) => {
+                            // Need more data — read more and retry
+                            match socket.read(&mut buf[total_read..]).await {
+                                Ok(0) => {}
+                                Ok(n) => {
+                                    total_read += n;
+                                    if let Ok((header, consumed)) = proxy_header::ProxyHeader::parse(
+                                        &buf[..total_read],
+                                        proxy_header::ParseConfig::default(),
+                                    ) {
+                                        let (src_addr, dst_addr) = match header.proxied_address() {
+                                            Some(addr) => (
+                                                addr.source.to_string(),
+                                                addr.destination.to_string(),
+                                            ),
+                                            None => ("local".to_string(), "local".to_string()),
+                                        };
+                                        let authority = header.authority().unwrap_or("").to_string();
+                                        let response = serde_json::json!({
+                                            "pp2": true,
+                                            "src_addr": src_addr,
+                                            "dst_addr": dst_addr,
+                                            "authority": authority,
+                                            "peer_addr": peer_addr.to_string(),
+                                            "pp2_header_len": consumed,
+                                        });
+                                        let response_bytes = serde_json::to_vec(&response).unwrap();
+                                        let _ = socket.write_all(&response_bytes).await;
+                                        if consumed < total_read {
+                                            let _ = socket.write_all(&buf[consumed..total_read]).await;
+                                        }
+                                    } else {
+                                        let response = serde_json::json!({
+                                            "pp2": false,
+                                            "error": "failed to parse PP2 after retry",
+                                        });
+                                        let _ = socket.write_all(&serde_json::to_vec(&response).unwrap()).await;
+                                    }
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                        Err(_) => {
+                            // Not a PP2 connection — return error JSON + echo data
+                            let response = serde_json::json!({
+                                "pp2": false,
+                                "error": "no valid PP2 header",
+                                "peer_addr": peer_addr.to_string(),
+                            });
+                            let response_bytes = serde_json::to_vec(&response).unwrap();
+                            let _ = socket.write_all(&response_bytes).await;
+                            let _ = socket.write_all(&buf[..total_read]).await;
+                        }
+                    }
+                });
+            }
+            Err(e) => {
+                error!("TCP-PP2 accept error: {}", e);
             }
         }
     }

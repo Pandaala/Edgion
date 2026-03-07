@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,8 +13,12 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
+use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::AccessLogger;
+use crate::core::gateway::observe::{log_tls, TlsLogEntry};
+use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
+use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
 use crate::core::gateway::routes::tls::GatewayTlsRoutes;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 
@@ -29,6 +34,10 @@ pub struct TlsContext {
     pub bytes_received: u64,
     pub status: TlsStatus,
     pub connection_established: bool,
+    pub proxy_protocol_sent: bool,
+    pub upstream_protocol: String,
+    pub route_name: Option<String>,
+    pub gateway_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +51,7 @@ pub enum TlsStatus {
     DownstreamReadError,
     DownstreamWriteError,
     TlsHandshakeError,
+    DeniedByPlugin,
 }
 
 /// TLS proxy service that terminates TLS and forwards to TCP backend
@@ -58,8 +68,6 @@ pub struct EdgionTls {
 #[async_trait]
 impl ServerApp for EdgionTls {
     async fn process_new(self: &Arc<Self>, mut downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
-        // Reject new connections if the server is shutting down
-        // This stops the Listener from accepting new work while we drain existing connections.
         if *shutdown.borrow() {
             tracing::info!(
                 listener_port = self.listener_port,
@@ -67,14 +75,18 @@ impl ServerApp for EdgionTls {
             );
             return None;
         }
-        // Extract client address from the underlying socket
+
         let (client_addr, client_port) = downstream
             .get_socket_digest()
             .and_then(|d| d.peer_addr().cloned())
             .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
             .unwrap_or_else(|| ("unknown".to_string(), 0));
 
-        // Create context
+        let gateway_key = self
+            .gateway_namespace
+            .as_ref()
+            .map(|ns| format!("{}/{}", ns, self.gateway_name));
+
         let mut ctx = TlsContext {
             listener_port: self.listener_port,
             client_addr,
@@ -86,9 +98,12 @@ impl ServerApp for EdgionTls {
             bytes_received: 0,
             status: TlsStatus::Success,
             connection_established: false,
+            proxy_protocol_sent: false,
+            upstream_protocol: "TCP".to_string(),
+            route_name: None,
+            gateway_key,
         };
 
-        // Extract SNI from TLS stream
         let sni_hostname = match Self::extract_sni(&mut downstream) {
             Some(sni) => {
                 ctx.sni_hostname = Some(sni.clone());
@@ -96,18 +111,14 @@ impl ServerApp for EdgionTls {
             }
             None => {
                 ctx.status = TlsStatus::NoSniProvided;
-                self.log_connection(&ctx).await;
+                self.log_disconnect(&ctx).await;
                 return None;
             }
         };
 
-        // Handle connection (context will be updated regardless of success or failure)
         self.handle_connection(downstream, &mut ctx, &sni_hostname).await;
 
-        // Only log if connection was actually established
-        if ctx.connection_established {
-            self.log_connection(&ctx).await;
-        }
+        self.log_disconnect(&ctx).await;
 
         None
     }
@@ -115,15 +126,10 @@ impl ServerApp for EdgionTls {
 
 impl EdgionTls {
     /// Extract SNI hostname from TLS stream
-    ///
-    /// For Pingora's Stream type, if it's already TLS-terminated,
-    /// we can access the SSL context to get the SNI.
     fn extract_sni(#[allow(unused_variables)] stream: &mut Stream) -> Option<String> {
         #[cfg(any(feature = "boringssl", feature = "openssl"))]
         {
-            // Try to get SSL reference from the stream
             if let Some(ssl_ref) = stream.get_ssl() {
-                // Get the SNI (Server Name Indication) from SSL context
                 if let Some(sni) = ssl_ref.servername(NameType::HOST_NAME) {
                     return Some(sni.to_string());
                 }
@@ -147,22 +153,69 @@ impl EdgionTls {
             }
         };
 
-        // 2. Select backend
-        let backend_ref = match tls_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
-            Some(rule) => match rule.backend_finder.select() {
-                Ok(backend) => backend,
-                Err(_) => {
-                    ctx.status = TlsStatus::UpstreamConnectionFailed;
-                    return;
-                }
-            },
+        // Record route name for logging
+        ctx.route_name = tls_route
+            .metadata
+            .namespace
+            .as_ref()
+            .zip(tls_route.metadata.name.as_ref())
+            .map(|(ns, name)| format!("{}/{}", ns, name));
+
+        // 2. Get the first rule
+        let rule = match tls_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
+            Some(rule) => rule,
             None => {
                 ctx.status = TlsStatus::UpstreamConnectionFailed;
                 return;
             }
         };
 
-        // 3. Resolve backend address via EndpointSlice
+        // 3. Execute stream plugins (same pattern as EdgionTcp)
+        if let Some(store_key) = &rule.stream_plugin_store_key {
+            if let Ok(client_ip) = ctx.client_addr.parse() {
+                let store = get_global_stream_plugin_store();
+                if let Some(resource) = store.get(store_key) {
+                    let runtime = &resource.spec.stream_plugin_runtime;
+                    if !runtime.is_empty() {
+                        let stream_ctx = StreamContext::new(client_ip, self.listener_port);
+                        match runtime.run(&stream_ctx).await {
+                            StreamPluginResult::Allow => {
+                                tracing::debug!(
+                                    store_key = %store_key,
+                                    "Stream plugins allowed TLS connection"
+                                );
+                            }
+                            StreamPluginResult::Deny(reason) => {
+                                ctx.status = TlsStatus::DeniedByPlugin;
+                                tracing::info!(
+                                    sni = %sni_hostname,
+                                    store_key = %store_key,
+                                    reason = %reason,
+                                    "TLS connection denied by stream plugin"
+                                );
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        store_key = %store_key,
+                        "EdgionStreamPlugins resource not found in store, allowing connection"
+                    );
+                }
+            }
+        }
+
+        // 4. Select backend
+        let backend_ref = match rule.backend_finder.select() {
+            Ok(backend) => backend,
+            Err(_) => {
+                ctx.status = TlsStatus::UpstreamConnectionFailed;
+                return;
+            }
+        };
+
+        // 5. Resolve backend address via EndpointSlice
         let namespace = backend_ref
             .namespace
             .as_deref()
@@ -182,7 +235,7 @@ impl EdgionTls {
             }
         };
 
-        // 4. Build upstream address (using actual IP address)
+        // 6. Build upstream address
         let mut upstream_addr = backend.addr;
         if let Some(port) = backend_ref.port {
             upstream_addr.set_port(port as u16);
@@ -190,9 +243,10 @@ impl EdgionTls {
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
 
-        // 5. Connect to upstream TCP backend
+        // 7. Connect to upstream (TCP only; upstream TLS deferred)
+        ctx.upstream_protocol = "TCP".to_string();
         let peer = BasicPeer::new(&upstream_addr_str);
-        let upstream = match self.connector.new_stream(&peer).await {
+        let mut upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
             Err(e) => {
                 ctx.status = TlsStatus::UpstreamConnectionFailed;
@@ -205,21 +259,48 @@ impl EdgionTls {
             }
         };
 
-        // Mark connection as established
         ctx.connection_established = true;
+
+        // 8. Send Proxy Protocol v2 header if configured
+        if let Some(2) = rule.proxy_protocol_version {
+            if let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() {
+                let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
+                let dst_addr: std::net::SocketAddr = upstream_addr_str
+                    .parse()
+                    .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
+                let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
+                builder.add_authority(sni_hostname);
+                let pp2_header = builder.build();
+                if let Err(e) = upstream.write_all(&pp2_header).await {
+                    ctx.status = TlsStatus::UpstreamWriteError;
+                    tracing::warn!(
+                        upstream = %upstream_addr_str,
+                        error = %e,
+                        "Failed to send PP2 header to upstream"
+                    );
+                    return;
+                }
+                if upstream.flush().await.is_err() {
+                    ctx.status = TlsStatus::UpstreamWriteError;
+                    return;
+                }
+                ctx.proxy_protocol_sent = true;
+            }
+        }
+
+        // 9. Log connection establishment
+        self.log_connect(ctx).await;
 
         tracing::debug!(
             sni = %sni_hostname,
             upstream = %upstream_addr_str,
-            "TLS terminated, forwarding to TCP backend"
+            pp2 = ctx.proxy_protocol_sent,
+            "TLS terminated, forwarding to {} backend",
+            ctx.upstream_protocol
         );
 
-        // 6. Bidirectional data forwarding
+        // 10. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
-
-        // Note: TLS routes currently use RoundRobin only
-        // When LeastConnection support is added, increment/decrement should be called here
-        // based on the selected LB policy
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
@@ -280,16 +361,69 @@ impl EdgionTls {
         }
     }
 
-    /// Log access record
-    async fn log_connection(&self, ctx: &TlsContext) {
-        let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
+    /// Log connection establishment event
+    async fn log_connect(&self, ctx: &TlsContext) {
+        let protocol = format!("TLS-{}", ctx.upstream_protocol);
+        let entry = TlsLogEntry {
+            ts: chrono::Utc::now().timestamp_millis(),
+            event: "connect".to_string(),
+            protocol,
+            listener_port: ctx.listener_port,
+            client_addr: ctx.client_addr.clone(),
+            client_port: ctx.client_port,
+            sni_hostname: ctx.sni_hostname.clone(),
+            upstream_addr: ctx.upstream_addr.clone(),
+            duration_ms: None,
+            bytes_sent: None,
+            bytes_received: None,
+            status: format!("{:?}", ctx.status),
+            connection_established: ctx.connection_established,
+            proxy_protocol: if ctx.proxy_protocol_sent {
+                Some("v2".to_string())
+            } else {
+                None
+            },
+            route_name: ctx.route_name.clone(),
+            gateway_name: ctx.gateway_key.clone(),
+        };
+        log_tls(&entry).await;
+    }
 
+    /// Log connection disconnection event
+    async fn log_disconnect(&self, ctx: &TlsContext) {
+        let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
+        let protocol = format!("TLS-{}", ctx.upstream_protocol);
+        let entry = TlsLogEntry {
+            ts: chrono::Utc::now().timestamp_millis(),
+            event: "disconnect".to_string(),
+            protocol,
+            listener_port: ctx.listener_port,
+            client_addr: ctx.client_addr.clone(),
+            client_port: ctx.client_port,
+            sni_hostname: ctx.sni_hostname.clone(),
+            upstream_addr: ctx.upstream_addr.clone(),
+            duration_ms: Some(duration_ms),
+            bytes_sent: Some(ctx.bytes_sent),
+            bytes_received: Some(ctx.bytes_received),
+            status: format!("{:?}", ctx.status),
+            connection_established: ctx.connection_established,
+            proxy_protocol: if ctx.proxy_protocol_sent {
+                Some("v2".to_string())
+            } else {
+                None
+            },
+            route_name: ctx.route_name.clone(),
+            gateway_name: ctx.gateway_key.clone(),
+        };
+        log_tls(&entry).await;
+
+        // Also send to the per-listener access logger for backward compatibility
         let log_entry = serde_json::json!({
             "ts": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis(),
-            "protocol": "TLS-TCP",
+            "protocol": format!("TLS-{}", ctx.upstream_protocol),
             "listener_port": ctx.listener_port,
             "client_addr": &ctx.client_addr,
             "client_port": ctx.client_port,
@@ -300,7 +434,6 @@ impl EdgionTls {
             "bytes_received": ctx.bytes_received,
             "status": format!("{:?}", ctx.status),
         });
-
         self.access_logger.send(log_entry.to_string()).await;
     }
 }

@@ -8,6 +8,7 @@ pub mod http_route;
 pub mod ref_grant_status;
 pub mod services;
 pub mod tcp_route;
+pub mod tls_route;
 pub mod udp_route;
 
 // Re-export all test suites for convenience
@@ -20,6 +21,8 @@ pub use http_route::{
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
 
 pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
+
+pub use tls_route::{TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite};
 
 pub use udp_route::UdpTestSuite;
 

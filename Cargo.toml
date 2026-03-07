@@ -188,6 +188,7 @@ rcgen = { version = "0.14.7", features = ["x509-parser"] }
 sha1 = "0.10.6"
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+proxy-header = "0.1.2"
 
 [build-dependencies]
 tonic-build = "0.12"

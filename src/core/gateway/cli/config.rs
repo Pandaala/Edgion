@@ -55,6 +55,10 @@ pub struct EdgionGatewayConfig {
 
     #[arg(skip)]
     #[serde(default)]
+    pub tls_log: LogConfig,
+
+    #[arg(skip)]
+    #[serde(default)]
     pub udp_log: LogConfig,
 
     #[command(flatten)]

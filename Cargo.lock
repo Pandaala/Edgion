@@ -1352,6 +1352,7 @@ dependencies = [
  "pingora-load-balancing",
  "pingora-proxy",
  "prost 0.13.5",
+ "proxy-header",
  "rand 0.9.2",
  "rcgen",
  "regex",
@@ -3986,6 +3987,12 @@ name = "protobuf"
 version = "2.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
+
+[[package]]
+name = "proxy-header"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc1493f63ddddfba840c3169e997c2905d09538ace72d64e84af6324c6e0e065"
 
 [[package]]
 name = "pulldown-cmark"

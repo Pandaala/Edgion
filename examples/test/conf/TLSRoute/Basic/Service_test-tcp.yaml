@@ -1,0 +1,11 @@
+# Backend service for TLSRoute testing (reuses test-tcp echo server)
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-tcp
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30010
+      targetPort: 30010
+      protocol: TCP

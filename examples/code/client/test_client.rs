@@ -112,6 +112,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "security" => "Gateway/Security".to_string(),
             "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
             "tcp-stream-plugins" | "tcpstreamplugins" => "TCPRoute/StreamPlugins".to_string(),
+            "tls" | "tls-route" | "tlsroute" => "TLSRoute/Basic".to_string(),
+            "tls-pp2" | "tlspp2" | "tls-proxy-protocol" => "TLSRoute/ProxyProtocol".to_string(),
+            "tls-stream-plugins" | "tlsstreamplugins" => "TLSRoute/StreamPlugins".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
@@ -161,6 +164,10 @@ fn suite_to_port_key(suite: &str) -> &str {
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
+        // TLSRoute
+        "TLSRoute/Basic" | "TLSRoute" => "TLSRoute/Basic",
+        "TLSRoute/ProxyProtocol" => "TLSRoute/ProxyProtocol",
+        "TLSRoute/StreamPlugins" => "TLSRoute/StreamPlugins",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         // Gateway
@@ -354,6 +361,28 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TcpStreamPluginsTestSuite));
+        }
+        // TLSRoute
+        "TLSRoute" | "TLSRoute/Basic" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsRouteTestSuite));
+        }
+        "TLSRoute/ProxyProtocol" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/ProxyProtocol tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsProxyProtocolTestSuite));
+        }
+        "TLSRoute/StreamPlugins" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/StreamPlugins tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsStreamPluginsTestSuite));
         }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));

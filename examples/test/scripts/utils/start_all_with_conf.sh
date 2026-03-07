@@ -282,6 +282,7 @@ start_test_server() {
         --websocket-port 30005 \
         --tcp-port 30010 \
         --udp-port 30011 \
+        --tcp-pp2-port 30012 \
         --auth-port 30040 \
         --log-level info \
         $https_backend_args \

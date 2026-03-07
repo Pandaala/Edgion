@@ -1,5 +1,5 @@
 {
-  "current_max": 31276,
+  "current_max": 31283,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -97,6 +97,17 @@
     },
     "Gateway/AllowedRoutes/Selector": {
       "http": 31276
+    },
+    "TLSRoute/Basic": {
+      "tls": 31280
+    },
+    "TLSRoute/ProxyProtocol": {
+      "tls": 31280,
+      "tls_pp2": 31281
+    },
+    "TLSRoute/StreamPlugins": {
+      "tls": 31282,
+      "tls_filtered": 31283
     }
   }
 }

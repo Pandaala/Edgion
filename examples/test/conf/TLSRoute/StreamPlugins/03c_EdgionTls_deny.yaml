@@ -1,0 +1,16 @@
+# EdgionTls certificate for deny-all TLS listener
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: tls-sp-deny-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-stream-plugins-gw
+      namespace: edgion-test
+      sectionName: tls-deny-all
+  hosts:
+    - "*.sp-deny.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
