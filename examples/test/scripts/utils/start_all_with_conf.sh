@@ -390,6 +390,20 @@ start_gateway() {
         ((lb_waited++))
     done
     log_info "LB preload  (waited ${lb_waited}s)"
+
+    # Wait for Pingora server to finish binding all listener ports
+    # After LB preload, the server still needs time to process gateways and bind ports
+    local listener_wait=0
+    local listener_max=10
+    while ! grep -q "Listener configured\|Processing gateway.*listeners\b" "${LOG_DIR}/gateway.log" 2>/dev/null; do
+        if [ $listener_wait -ge $listener_max ]; then
+            break
+        fi
+        sleep 1
+        ((listener_wait++))
+    done
+    # Extra grace period for port binding after listeners are configured
+    sleep 2
     
     log_success "edgion-gateway Startsuccess (PID: $pid)"
 }

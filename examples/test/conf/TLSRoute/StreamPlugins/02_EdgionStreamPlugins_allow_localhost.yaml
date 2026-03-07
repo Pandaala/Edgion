@@ -10,5 +10,5 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: deny
-        allowList:
+        allow:
           - "127.0.0.0/8"

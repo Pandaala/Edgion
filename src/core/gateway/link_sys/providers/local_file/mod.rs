@@ -16,6 +16,7 @@ pub enum LogType {
     Access,
     Ssl,
     Tcp,
+    Tls,
     Udp,
 }
 

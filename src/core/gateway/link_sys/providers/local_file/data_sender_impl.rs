@@ -177,6 +177,7 @@ impl DataSender<String> for LocalFileWriter {
                     LogType::Access => global_metrics().access_log_dropped(),
                     LogType::Ssl => global_metrics().ssl_log_dropped(),
                     LogType::Tcp => global_metrics().tcp_log_dropped(),
+                    LogType::Tls => global_metrics().tcp_log_dropped(),
                     LogType::Udp => global_metrics().udp_log_dropped(),
                 }
             }
