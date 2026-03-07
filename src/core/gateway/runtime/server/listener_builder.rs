@@ -353,14 +353,13 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     // Create TLS settings with callback for certificate loading (with port for SNI lookup)
     let tls_settings = TlsCallback::new_tls_settings_with_callback(port, context.edgion_gateway_config.clone(), false)?;
 
-    // Create TLS service with Listeners
-    let mut tls_service =
-        Service::with_listeners(format!("TLS-TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tls);
+    let mut tls_service = Service::new(format!("TLS-TCP-{}", listener_name), edgion_tls);
 
     // Apply connection filter if configured via annotation
     apply_connection_filter(&mut tls_service, context);
 
-    // Add TLS settings to the service
+    // Only bind the TLS endpoint; Listeners::tcp() would bind a plain TCP socket
+    // on the same port, causing EEXIST when add_tls_with_settings tries to bind again.
     tls_service.add_tls_with_settings(&addr, None, tls_settings);
 
     // Add to server
