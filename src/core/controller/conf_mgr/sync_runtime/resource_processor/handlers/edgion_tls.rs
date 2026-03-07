@@ -7,6 +7,7 @@
 //! - SecretRefManager registration for cascading updates
 //! - Gateway API standard status management (per parent)
 
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::lookup_gateway;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
     get_secret, programmed_condition, ready_condition, update_condition, HandlerContext, ProcessResult,
@@ -133,6 +134,40 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                         "CA Secret not found yet, mTLS will be enabled when Secret arrives"
                     );
                 }
+            }
+        }
+
+        // 3. Resolve ports from parentRefs → Gateway → listener.port
+        if let Some(parent_refs) = &tls.spec.parent_refs {
+            let mut ports = Vec::new();
+            for parent_ref in parent_refs {
+                if let Some(port) = parent_ref.port {
+                    ports.push(port as u16);
+                } else if let Some(section_name) = &parent_ref.section_name {
+                    let gw_ns = parent_ref
+                        .namespace
+                        .as_deref()
+                        .or(tls.metadata.namespace.as_deref())
+                        .unwrap_or("default");
+                    if let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name) {
+                        if let Some(listeners) = &gateway.spec.listeners {
+                            if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
+                                ports.push(listener.port as u16);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !ports.is_empty() {
+                ports.sort_unstable();
+                ports.dedup();
+                tracing::debug!(
+                    edgion_tls = %resource_ref.key(),
+                    resolved_ports = ?ports,
+                    "Resolved ports from parentRefs"
+                );
+                tls.spec.resolved_ports = Some(ports);
             }
         }
 

@@ -191,19 +191,19 @@ impl TlsStore {
         // Lock is automatically released here
     }
 
-    /// Rebuild the TLS certificate matcher from provided data
-    /// This is called while holding a lock to prevent race conditions
+    /// Rebuild the TLS certificate matcher from provided data.
+    /// Port-specific certs go into `port_matcher`, global certs into `global_matcher`.
     ///
     /// # Arguments
     /// * `tls_data` - Reference to the TLS data map (already locked)
     fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) -> anyhow::Result<()> {
-        let mut host_map: HashMap<String, Vec<Arc<EdgionTls>>> = HashMap::new();
+        let mut port_host_map: HashMap<u16, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
+        let mut global_host_map: HashMap<String, Vec<Arc<EdgionTls>>> = HashMap::new();
         let mut total_hosts = 0;
         let mut valid_certs = 0;
         let mut invalid_certs = 0;
 
         for (key, entry) in tls_data.iter() {
-            // Skip invalid certificates (do not add to matcher)
             if !entry.validation.is_valid {
                 tracing::debug!(
                     component = "tls_store",
@@ -214,33 +214,44 @@ impl TlsStore {
                 continue;
             }
 
-            // Certificate is valid, add to matcher
             let tls = &entry.tls;
-            for host in &tls.spec.hosts {
-                // Note: host.clone() is necessary here as HashMap::entry() requires owned key
-                // Performance: String clone is relatively cheap for typical hostname lengths
-                // TODO(performance): Consider using Cow<str> or &str keys with custom lifetime
-                // management if profiling shows this is a bottleneck during high-frequency reloads
-                host_map.entry(host.clone()).or_default().push(tls.clone());
-                total_hosts += 1;
+
+            match &tls.spec.resolved_ports {
+                Some(ports) if !ports.is_empty() => {
+                    for &port in ports {
+                        let host_map = port_host_map.entry(port).or_default();
+                        for host in &tls.spec.hosts {
+                            host_map.entry(host.clone()).or_default().push(tls.clone());
+                            total_hosts += 1;
+                        }
+                    }
+                }
+                _ => {
+                    for host in &tls.spec.hosts {
+                        global_host_map.entry(host.clone()).or_default().push(tls.clone());
+                        total_hosts += 1;
+                    }
+                }
             }
             valid_certs += 1;
         }
 
-        // Build HashHost matcher
-        let mut matcher = HashHost::new();
-        for (host, tls_list) in host_map {
-            matcher.insert(&host, tls_list);
+        let mut port_matcher = HashMap::new();
+        for (port, host_map) in port_host_map {
+            let mut matcher = HashHost::new();
+            for (host, tls_list) in host_map {
+                matcher.insert(&host, tls_list);
+            }
+            port_matcher.insert(port, matcher);
         }
 
-        // Update global TlsCertMatcher
-        super::cert_matcher::set_tls_cert_matcher(matcher)?;
+        let mut global_matcher = HashHost::new();
+        for (host, tls_list) in global_host_map {
+            global_matcher.insert(&host, tls_list);
+        }
 
-        // TODO(observability): Add metrics for:
-        // - valid_certs_total gauge
-        // - invalid_certs_total gauge
-        // - total_hosts_total gauge
-        // - matcher_rebuild_duration_seconds histogram
+        super::cert_matcher::set_tls_cert_matcher(port_matcher, global_matcher)?;
+
         tracing::info!(
             component = "tls_store",
             valid_certs = valid_certs,

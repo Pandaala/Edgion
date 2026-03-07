@@ -395,6 +395,7 @@ mod tests {
                     data: Some(data),
                     ..Default::default()
                 }),
+                resolved_ports: None,
             },
             status: None,
         }

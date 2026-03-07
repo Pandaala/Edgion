@@ -3,7 +3,7 @@ use crate::core::gateway::observe::logs::ssl_log::{log_ssl, SslLogEntry};
 use crate::core::gateway::runtime::matching::{match_gateway_tls, match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
-use crate::core::gateway::tls::store::cert_matcher::match_sni;
+use crate::core::gateway::tls::store::cert_matcher::match_sni_with_port;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use crate::types::ctx::ClientCertInfo;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -69,7 +69,7 @@ impl TlsCallback {
     /// Extract mTLS client cert info when SNI-matched EdgionTls explicitly opts in.
     fn extract_client_cert_meta(&self, ssl: &TlsRef, sni: Option<&str>) -> Option<ClientCertInfo> {
         let sni = sni?;
-        let edgion_tls = match_sni(sni).ok()?;
+        let edgion_tls = match_sni_with_port(self.port, sni).ok()?;
         if !edgion_tls.is_mtls_enabled() || !edgion_tls.should_expose_client_cert() {
             return None;
         }
@@ -102,7 +102,7 @@ impl TlsCallback {
     /// Load certificate from SNI and populate log entry
     ///
     /// Uses a layered lookup strategy:
-    /// 1. First, try to match SNI against EdgionTls resources
+    /// 1. First, try to match SNI against EdgionTls resources (with port dimension)
     /// 2. If not found, fallback to Gateway Listener TLS configurations (with port dimension)
     async fn load_cert_from_sni(&self, ssl: &mut SslRef, entry: &mut SslLogEntry) {
         // Get SNI from SSL context, with fallback support
@@ -125,8 +125,8 @@ impl TlsCallback {
         };
         entry.sni(&sni);
 
-        // Layer 1: Try to match against EdgionTls resources (port-independent)
-        if let Ok(edgion_tls) = match_sni(&sni) {
+        // Layer 1: Try to match against EdgionTls resources (port-aware)
+        if let Ok(edgion_tls) = match_sni_with_port(self.port, &sni) {
             self.apply_edgion_tls_cert(ssl, &edgion_tls, entry);
             return;
         }
@@ -175,7 +175,7 @@ impl TlsCallback {
         };
         entry.sni(&sni);
 
-        if let Ok(edgion_tls) = match_sni(&sni) {
+        if let Ok(edgion_tls) = match_sni_with_port(self.port, &sni) {
             let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
             let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
             entry.cert(format!("EdgionTls:{}/{}", ns, name));
