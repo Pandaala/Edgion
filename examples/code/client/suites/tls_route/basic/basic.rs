@@ -83,65 +83,41 @@ impl TlsRouteTestSuite {
                     let sni = ServerName::try_from("test-443.sandbox.example.com").unwrap();
 
                     match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(tcp_stream)) => {
-                            match connector.connect(sni, tcp_stream).await {
-                                Ok(mut tls_stream) => {
-                                    let test_data = b"Hello TLSRoute";
-                                    if let Err(e) = tls_stream.write_all(test_data).await {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("TLS write failed: {}", e),
-                                        );
-                                    }
-
-                                    let mut buf = vec![0u8; 1024];
-                                    match tokio::time::timeout(
-                                        Duration::from_secs(3),
-                                        tls_stream.read(&mut buf),
-                                    )
-                                    .await
-                                    {
-                                        Ok(Ok(n)) if n > 0 => {
-                                            if &buf[..n] == test_data {
-                                                TestResult::passed_with_message(
-                                                    start.elapsed(),
-                                                    "TLS terminated, echo via TCP backend succeeded"
-                                                        .to_string(),
-                                                )
-                                            } else {
-                                                TestResult::passed_with_message(
-                                                    start.elapsed(),
-                                                    format!(
-                                                        "TLS connection established, received {} bytes",
-                                                        n
-                                                    ),
-                                                )
-                                            }
-                                        }
-                                        Ok(Ok(_)) => TestResult::failed(
-                                            start.elapsed(),
-                                            "Connection closed immediately (0 bytes)".to_string(),
-                                        ),
-                                        Ok(Err(e)) => TestResult::failed(
-                                            start.elapsed(),
-                                            format!("TLS read failed: {}", e),
-                                        ),
-                                        Err(_) => TestResult::failed(
-                                            start.elapsed(),
-                                            "Read timed out".to_string(),
-                                        ),
-                                    }
+                        Ok(Ok(tcp_stream)) => match connector.connect(sni, tcp_stream).await {
+                            Ok(mut tls_stream) => {
+                                let test_data = b"Hello TLSRoute";
+                                if let Err(e) = tls_stream.write_all(test_data).await {
+                                    return TestResult::failed(start.elapsed(), format!("TLS write failed: {}", e));
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("TLS handshake failed: {}", e),
-                                ),
+
+                                let mut buf = vec![0u8; 1024];
+                                match tokio::time::timeout(Duration::from_secs(3), tls_stream.read(&mut buf)).await {
+                                    Ok(Ok(n)) if n > 0 => {
+                                        if &buf[..n] == test_data {
+                                            TestResult::passed_with_message(
+                                                start.elapsed(),
+                                                "TLS terminated, echo via TCP backend succeeded".to_string(),
+                                            )
+                                        } else {
+                                            TestResult::passed_with_message(
+                                                start.elapsed(),
+                                                format!("TLS connection established, received {} bytes", n),
+                                            )
+                                        }
+                                    }
+                                    Ok(Ok(_)) => TestResult::failed(
+                                        start.elapsed(),
+                                        "Connection closed immediately (0 bytes)".to_string(),
+                                    ),
+                                    Ok(Err(e)) => {
+                                        TestResult::failed(start.elapsed(), format!("TLS read failed: {}", e))
+                                    }
+                                    Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
+                                }
                             }
-                        }
-                        Ok(Err(e)) => TestResult::failed(
-                            start.elapsed(),
-                            format!("TCP connection failed: {}", e),
-                        ),
+                            Err(e) => TestResult::failed(start.elapsed(), format!("TLS handshake failed: {}", e)),
+                        },
+                        Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("TCP connection failed: {}", e)),
                         Err(_) => TestResult::failed(start.elapsed(), "Connection timed out".to_string()),
                     }
                 })
@@ -162,51 +138,37 @@ impl TlsRouteTestSuite {
                     let sni = ServerName::try_from("nomatch.other.com").unwrap();
 
                     match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(tcp_stream)) => {
-                            match connector.connect(sni, tcp_stream).await {
-                                Ok(mut tls_stream) => {
-                                    let test_data = b"Hello";
-                                    let _ = tls_stream.write_all(test_data).await;
+                        Ok(Ok(tcp_stream)) => match connector.connect(sni, tcp_stream).await {
+                            Ok(mut tls_stream) => {
+                                let test_data = b"Hello";
+                                let _ = tls_stream.write_all(test_data).await;
 
-                                    let mut buf = vec![0u8; 1024];
-                                    match tokio::time::timeout(
-                                        Duration::from_secs(2),
-                                        tls_stream.read(&mut buf),
-                                    )
-                                    .await
-                                    {
-                                        Ok(Ok(0)) => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "Connection closed — no matching TLSRoute for SNI"
-                                                .to_string(),
-                                        ),
-                                        Ok(Err(_)) => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "Connection rejected — no matching TLSRoute".to_string(),
-                                        ),
-                                        Ok(Ok(n)) => TestResult::failed(
-                                            start.elapsed(),
-                                            format!(
-                                                "Expected rejection but received {} bytes",
-                                                n
-                                            ),
-                                        ),
-                                        Err(_) => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "Read timed out — treated as rejection".to_string(),
-                                        ),
-                                    }
+                                let mut buf = vec![0u8; 1024];
+                                match tokio::time::timeout(Duration::from_secs(2), tls_stream.read(&mut buf)).await {
+                                    Ok(Ok(0)) => TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Connection closed — no matching TLSRoute for SNI".to_string(),
+                                    ),
+                                    Ok(Err(_)) => TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Connection rejected — no matching TLSRoute".to_string(),
+                                    ),
+                                    Ok(Ok(n)) => TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Expected rejection but received {} bytes", n),
+                                    ),
+                                    Err(_) => TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Read timed out — treated as rejection".to_string(),
+                                    ),
                                 }
-                                Err(_e) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "TLS handshake failed for mismatched SNI".to_string(),
-                                ),
                             }
-                        }
-                        Ok(Err(e)) => TestResult::failed(
-                            start.elapsed(),
-                            format!("TCP connection failed: {}", e),
-                        ),
+                            Err(_e) => TestResult::passed_with_message(
+                                start.elapsed(),
+                                "TLS handshake failed for mismatched SNI".to_string(),
+                            ),
+                        },
+                        Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("TCP connection failed: {}", e)),
                         Err(_) => TestResult::failed(start.elapsed(), "Connection timed out".to_string()),
                     }
                 })

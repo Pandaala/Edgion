@@ -4,6 +4,7 @@
 //! It holds a HashMap<kind, Arc<dyn WatchObj>> registered by ResourceProcessors.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::sync::mpsc;
@@ -47,6 +48,8 @@ pub struct ConfigSyncServer {
     client_registry: Arc<ClientRegistry>,
 }
 
+static LAST_SERVER_ID_MS: AtomicU64 = AtomicU64::new(0);
+
 impl ConfigSyncServer {
     /// Create a new ConfigSyncServer
     pub fn new() -> Self {
@@ -73,13 +76,19 @@ impl ConfigSyncServer {
 
     /// Generate a new server ID using millisecond timestamp
     fn generate_server_id() -> String {
-        format!(
-            "{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        )
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let mut last = LAST_SERVER_ID_MS.load(Ordering::SeqCst);
+        loop {
+            let next = if now_ms > last { now_ms } else { last + 1 };
+            match LAST_SERVER_ID_MS.compare_exchange(last, next, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return next.to_string(),
+                Err(current) => last = current,
+            }
+        }
     }
 
     /// Get the current server ID

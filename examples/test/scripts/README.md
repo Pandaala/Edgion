@@ -1,109 +1,110 @@
-# Edgion 测试脚本
+# Edgion Test Scripts
 
-本目录包含 Edgion 项目的各类测试和构建脚本。
+This directory contains the test and build scripts used by the Edgion project.
 
-## 目录结构
+## Directory Layout
 
-```
+```text
 scripts/
-├── ci/                 # CI/CD 相关脚本
-│   └── check.sh        # fmt/clippy/单元测试检查
-├── integration/        # 集成测试脚本
-│   ├── run_direct.sh   # 直接测试（不通过 Gateway）
-│   └── run_integration.sh  # 集成测试（通过 Gateway）
-└── utils/              # 工具脚本
-    ├── prepare.sh      # 预编译测试组件
-    ├── start_all.sh    # 启动所有测试服务
-    └── kill_all.sh     # 停止所有测试服务
+├── ci/                 # CI/CD scripts
+│   └── check.sh        # fmt/clippy/unit test checks
+├── integration/        # Integration test scripts
+│   ├── run_direct.sh   # Direct tests without the Gateway
+│   └── run_integration.sh  # End-to-end tests through the Gateway
+└── utils/              # Utility scripts
+    ├── prepare.sh      # Prebuild test components
+    ├── start_all.sh    # Start all test services
+    └── kill_all.sh     # Stop all test services
 ```
 
-## CI 脚本
+## CI Scripts
 
-### check.sh
+### `check.sh`
 
-运行代码质量检查（格式、lint、单元测试）。
+Runs code quality checks such as formatting, linting, and unit tests.
 
 ```bash
-# 运行所有检查
+# Run all checks
 ./scripts/ci/check.sh
 
-# 只检查格式
+# Check formatting only
 ./scripts/ci/check.sh -f
 
-# 只运行 clippy
+# Run clippy only
 ./scripts/ci/check.sh -c
 
-# 只运行单元测试
+# Run unit tests only
 ./scripts/ci/check.sh -t
 
-# 自动修复问题
+# Auto-fix issues
 ./scripts/ci/check.sh --fix
 
-# 显示详细输出
+# Show verbose output
 ./scripts/ci/check.sh -v
 ```
 
-## 集成测试脚本
+## Integration Test Scripts
 
-### run_direct.sh
+### `run_direct.sh`
 
-直接测试 test_client 与 test_server 的连通性（不通过 Gateway）。
+Tests connectivity between `test_client` and `test_server` directly, without passing through the Gateway.
 
 ```bash
 ./scripts/integration/run_direct.sh
 ```
 
-测试项：
-- `http` - HTTP 基础连接
-- `grpc` - gRPC 基础连接
-- `websocket` - WebSocket 连接
-- `tcp` - TCP 连接
-- `udp` - UDP 连接
+Covered protocols:
+- `http`
+- `grpc`
+- `websocket`
+- `tcp`
+- `udp`
 
-### run_integration.sh
+### `run_integration.sh`
 
-通过 Gateway 进行完整链路集成测试。
+Runs full end-to-end integration tests through the Gateway.
 
 ```bash
-# 运行所有集成测试
+# Run all integration tests
 ./scripts/integration/run_integration.sh
 
-# 运行指定测试
+# Run a specific test
 ./scripts/integration/run_integration.sh --test http-match
 
-# 跳过某些测试
+# Skip selected tests
 ./scripts/integration/run_integration.sh --skip "mtls,backend-tls"
 ```
 
-测试项：
-- 基础协议：`http`, `https`, `grpc`, `grpc-tls`, `websocket`, `tcp`, `udp`
-- 路由匹配：`http-match`, `grpc-match`
-- HTTP 功能：`http-redirect`, `http-security`
-- TLS：`mtls`, `backend-tls`
-- 负载均衡：`lb-rr` (RoundRobin), `lb-ch` (ConsistentHash), `weighted-backend`
-- 高级功能：`timeout`, `real-ip`, `security`, `plugin-logs`
+Covered areas:
+- Basic protocols: `http`, `https`, `grpc`, `grpc-tls`, `websocket`, `tcp`, `udp`
+- Route matching: `http-match`, `grpc-match`
+- HTTP features: `http-redirect`, `http-security`
+- TLS: `mtls`, `backend-tls`
+- Load balancing: `lb-rr` (RoundRobin), `lb-ch` (ConsistentHash), `weighted-backend`
+- Advanced features: `timeout`, `real-ip`, `security`, `plugin-logs`
 
-## 工具脚本
+## Utility Scripts
 
-### prepare.sh
+### `prepare.sh`
 
-预编译所有测试所需的组件（debug 模式）。
+Prebuilds all binaries required by the test environment in debug mode.
 
 ```bash
-# 编译所有组件
+# Build all components
 ./scripts/utils/prepare.sh
 ```
 
-编译的组件：
-- `edgion-controller` - 配置控制器
-- `edgion-gateway` - 网关服务
-- `edgion-ctl` - 命令行工具
-- `test_server` - 测试后端服务器
-- `test_client` - 集成测试客户端
-- `test_client_direct` - 直接测试客户端
+Built artifacts:
+- `edgion-controller`: configuration controller
+- `edgion-gateway`: gateway service
+- `edgion-ctl`: command-line tool
+- `test_server`: backend test server
+- `test_client`: integration test client
+- `test_client_direct`: direct test client
 
-编译产物位置：
-```
+Output location:
+
+```text
 target/debug/
 ├── edgion-controller
 ├── edgion-gateway
@@ -113,25 +114,20 @@ target/debug/
     └── test_client
 ```
 
-### start_all.sh
+### `start_all.sh`
 
-启动所有测试服务（test_server、controller、gateway）。
+Starts all local test services, including `test_server`, `controller`, and `gateway`.
 
 ```bash
-# 启动所有服务
+# Start all services
 ./scripts/utils/start_all.sh
 ```
 
-启动的服务：
-- `test_server` - 测试后端服务器（HTTP/gRPC/WebSocket/TCP/UDP）
-- `edgion-controller` - 配置控制器
-- `edgion-gateway` - 网关服务
+### `kill_all.sh`
 
-### kill_all.sh
-
-停止所有 Edgion 相关进程。
+Stops all Edgion-related processes.
 
 ```bash
-# 停止所有服务
+# Stop all services
 ./scripts/utils/kill_all.sh
 ```

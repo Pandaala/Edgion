@@ -120,11 +120,7 @@ mod ssl_ctx_ex_data {
                 return None;
             }
             let ctx = Box::from_raw(ptr as *mut SslCtx);
-            boring_sys::SSL_set_ex_data(
-                ssl_ptr as *mut boring_sys::SSL,
-                idx,
-                std::ptr::null_mut(),
-            );
+            boring_sys::SSL_set_ex_data(ssl_ptr as *mut boring_sys::SSL, idx, std::ptr::null_mut());
             Some(*ctx)
         }
     }
@@ -189,8 +185,7 @@ impl TlsAccept for TlsCallback {
         entry.sni(&sni);
 
         // 2. Match & apply certificate — done ONCE per connection
-        let (cert_source, matched_edgion_tls, is_mtls) =
-            self.match_and_apply_cert(ssl, &sni, &mut entry);
+        let (cert_source, matched_edgion_tls, is_mtls) = self.match_and_apply_cert(ssl, &sni, &mut entry);
 
         // 3. Write ssl.log immediately (no re-matching needed)
         log_ssl(&entry);
@@ -209,10 +204,7 @@ impl TlsAccept for TlsCallback {
         }
     }
 
-    async fn handshake_complete_callback(
-        &self,
-        ssl: &TlsRef,
-    ) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+    async fn handshake_complete_callback(&self, ssl: &TlsRef) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
         if let Some(mut ssl_ctx) = take_ssl_ctx(ssl) {
             // Extract client cert info now that handshake is complete (mTLS verified)
             if let Some(ref edgion_tls) = ssl_ctx.matched_edgion_tls {
@@ -305,28 +297,11 @@ impl TlsCallback {
     ) -> (CertSource, Option<Arc<EdgionTls>>, bool) {
         // Layer 1: EdgionTls (port-aware)
         if let Ok(edgion_tls) = match_sni_with_port(self.port, sni) {
-            let ns = edgion_tls
-                .metadata
-                .namespace
-                .as_deref()
-                .unwrap_or("-")
-                .to_string();
-            let name = edgion_tls
-                .metadata
-                .name
-                .as_deref()
-                .unwrap_or("-")
-                .to_string();
+            let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-").to_string();
+            let name = edgion_tls.metadata.name.as_deref().unwrap_or("-").to_string();
             let is_mtls = edgion_tls.spec.client_auth.is_some();
             self.apply_edgion_tls_cert(ssl, &edgion_tls, entry);
-            return (
-                CertSource::EdgionTls {
-                    namespace: ns,
-                    name,
-                },
-                Some(edgion_tls),
-                is_mtls,
-            );
+            return (CertSource::EdgionTls { namespace: ns, name }, Some(edgion_tls), is_mtls);
         }
 
         // Layer 2: Gateway TLS (port-aware)
@@ -356,10 +331,7 @@ impl TlsCallback {
             return (source, None, false);
         }
 
-        entry.error(format!(
-            "Certificate not found for port={}, SNI={}",
-            self.port, sni
-        ));
+        entry.error(format!("Certificate not found for port={}, SNI={}", self.port, sni));
         (CertSource::NotFound, None, false)
     }
 
@@ -464,18 +436,12 @@ impl TlsCallback {
             }
         };
 
-        let secret_namespace = cert_ref
-            .namespace
-            .as_deref()
-            .unwrap_or(&gateway_tls.gateway_namespace);
+        let secret_namespace = cert_ref.namespace.as_deref().unwrap_or(&gateway_tls.gateway_namespace);
 
         match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
             Some(s) => s,
             None => {
-                entry.error(format!(
-                    "Secret not found: {}/{}",
-                    secret_namespace, cert_ref.name
-                ));
+                entry.error(format!("Secret not found: {}/{}", secret_namespace, cert_ref.name));
                 k8s_openapi::api::core::v1::Secret::default()
             }
         }

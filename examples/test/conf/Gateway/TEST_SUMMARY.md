@@ -1,188 +1,177 @@
-# Gateway 集成测试总结
+# Gateway Integration Test Summary
 
-## 测试执行报告
+## Execution Report
 
-**执行时间**: 2026-01-13
-**文档范围**: ListenerHostname + AllowedRoutes + Combined 这组静态 Gateway 套件
-**通过率**: 100%（以本文覆盖范围为准）
+**Run date:** `2026-01-13`  
+**Document scope:** Static Gateway suites for `ListenerHostname`, `AllowedRoutes`, and `Combined`  
+**Pass rate:** `100%` within the scope of this report
 
-## 新增测试套件详情
+## New Suite Details
 
-### 1. Gateway_ListenerHostname ✅
+### 1. `Gateway_ListenerHostname`
 
-**测试场景数**: 5 个
-**通过率**: 100%
-**端口**: 31240-31242
+**Scenario count:** `5`  
+**Pass rate:** `100%`  
+**Ports:** `31240-31242`
 
-| 测试用例 | 场景 | 结果 |
-|---------|------|------|
-| exact_hostname_match | 精确 hostname 匹配 (api.example.com) | ✅ PASS |
-| hostname_mismatch | Hostname 不匹配 (负面测试) | ✅ PASS |
-| wildcard_hostname_match | 通配符匹配 (*.wildcard.example.com) | ✅ PASS |
-| wildcard_root_mismatch | 通配符不匹配根域名 (负面测试) | ✅ PASS |
-| no_hostname_restriction | 无 hostname 限制 | ✅ PASS |
+| Test Case | Scenario | Result |
+|-----------|----------|--------|
+| `exact_hostname_match` | Exact hostname match (`api.example.com`) | `PASS` |
+| `hostname_mismatch` | Hostname mismatch (negative test) | `PASS` |
+| `wildcard_hostname_match` | Wildcard hostname match (`*.wildcard.example.com`) | `PASS` |
+| `wildcard_root_mismatch` | Wildcard does not match the root domain (negative test) | `PASS` |
+| `no_hostname_restriction` | Listener without hostname restriction | `PASS` |
 
-**关键验证点**:
-- ✓ Listener hostname 精确匹配生效
-- ✓ 通配符 hostname 正确匹配子域名
-- ✓ 通配符正确拒绝根域名
-- ✓ 无 hostname 限制时允许任意域名
+Key checks:
+- Exact listener hostname matching works.
+- Wildcard matching works for subdomains.
+- Wildcards correctly reject the root domain.
+- Listeners without hostname restrictions accept any compatible hostname.
 
----
+### 2. `Gateway_AllowedRoutes_Same`
 
-### 2. Gateway_AllowedRoutes_Same ✅
+**Scenario count:** `2`  
+**Pass rate:** `100%`  
+**Port:** `31210`
 
-**测试场景数**: 2 个
-**通过率**: 100%
-**端口**: 31210
+| Test Case | Scenario | Result |
+|-----------|----------|--------|
+| `same_namespace_allowed` | Same-namespace route is allowed | `PASS` |
+| `diff_namespace_denied` | Cross-namespace route is rejected | `PASS` |
 
-| 测试用例 | 场景 | 结果 |
-|---------|------|------|
-| same_namespace_allowed | 同 namespace Route 允许访问 | ✅ PASS |
-| diff_namespace_denied | 不同 namespace Route 被拒绝 | ✅ PASS |
+Key checks:
+- `allowedRoutes.namespaces.from: Same` correctly limits access by namespace.
+- Cross-namespace traffic is rejected with `404`.
 
-**关键验证点**:
-- ✓ `allowedRoutes.namespaces.from: Same` 正确限制 namespace
-- ✓ 跨 namespace 访问被正确拒绝（404）
+### 3. `Gateway_AllowedRoutes_All`
 
----
+**Scenario count:** `2`  
+**Pass rate:** `100%`  
+**Port:** `31211`
 
-### 3. Gateway_AllowedRoutes_All ✅
+| Test Case | Scenario | Result |
+|-----------|----------|--------|
+| `all_same_namespace_allowed` | Same-namespace route is allowed | `PASS` |
+| `all_cross_namespace_allowed` | Cross-namespace route is allowed | `PASS` |
 
-**测试场景数**: 2 个
-**通过率**: 100%
-**端口**: 31211
+Key checks:
+- `allowedRoutes.namespaces.from: All` allows every namespace.
+- Cross-namespace traffic works as expected.
 
-| 测试用例 | 场景 | 结果 |
-|---------|------|------|
-| all_same_namespace_allowed | 同 namespace Route 允许访问 | ✅ PASS |
-| all_cross_namespace_allowed | 跨 namespace Route 允许访问 | ✅ PASS |
+### 4. `Gateway_AllowedRoutes_Kinds`
 
-**关键验证点**:
-- ✓ `allowedRoutes.namespaces.from: All` 允许所有 namespace
-- ✓ 跨 namespace 访问正常工作
+**Scenario count:** `2`  
+**Pass rate:** `100%`  
+**Port:** `31213`
 
----
+| Test Case | Scenario | Result |
+|-----------|----------|--------|
+| `http_route_allowed` | `HTTPRoute` is allowed by `kinds` | `PASS` |
+| `grpc_route_denied` | `GRPCRoute` is rejected by `kinds` | `PASS` |
 
-### 4. Gateway_AllowedRoutes_Kinds ✅
+Key checks:
+- `allowedRoutes.kinds` correctly limits route types.
+- Unsupported route kinds are rejected with `404`.
 
-**测试场景数**: 2 个
-**通过率**: 100%
-**端口**: 31213
+### 5. `Gateway_AllowedRoutes_Selector`
 
-| 测试用例 | 场景 | 结果 |
-|---------|------|------|
-| http_route_allowed | HTTPRoute 在 kinds 中被允许 | ✅ PASS |
-| grpc_route_denied | GRPCRoute 不在 kinds 中被拒绝 | ✅ PASS |
+**Scenario count:** `2`  
+**Pass rate:** `100%`  
+**Port:** `31276`
 
-**关键验证点**:
-- ✓ `allowedRoutes.kinds` 正确限制 Route 类型
-- ✓ 不允许的 Route 类型被正确拒绝（404）
+| Test Case | Scenario | Result |
+|-----------|----------|--------|
+| `selector_same_namespace_allowed` | Route in a namespace with matching labels is allowed | `PASS` |
+| `selector_cross_namespace_denied` | Cross-namespace route without a matching selector is rejected | `PASS` |
 
----
+Key checks:
+- `allowedRoutes.namespaces.from: Selector` works correctly.
+- Matching namespace labels allow access.
+- Non-matching cross-namespace routes are rejected with `404`.
 
-### 5. Gateway_AllowedRoutes_Selector ✅
+### 6. `Gateway_Combined`
 
-**测试场景数**: 2 个
-**通过率**: 100%
-**端口**: 31276
+**Scenario count:** `5`  
+**Pass rate:** `100%`  
+**Ports:** `31230-31232`
 
-| 测试用例 | 场景 | 结果 |
-|---------|------|------|
-| selector_same_namespace_allowed | namespace label 匹配的 Route 允许访问 | ✅ PASS |
-| selector_cross_namespace_denied | 不匹配 selector 的跨 namespace Route 被拒绝 | ✅ PASS |
+| Test Case | Scenario | Result |
+|-----------|----------|--------|
+| `hostname_and_same_ns_match` | Hostname match plus same namespace | `PASS` |
+| `hostname_match_diff_ns` | Hostname matches but namespace differs (negative test) | `PASS` |
+| `same_ns_hostname_mismatch` | Same namespace but hostname mismatch (negative test) | `PASS` |
+| `section_and_hostname_match` | `sectionName` and hostname both match | `PASS` |
+| `section_match_hostname_mismatch` | `sectionName` matches but hostname does not (negative test) | `PASS` |
 
-**关键验证点**:
-- ✓ `allowedRoutes.namespaces.from: Selector` 正常生效
-- ✓ namespace label 匹配时允许访问
-- ✓ 不匹配 selector 的 route 被正确拒绝（404）
+Key checks:
+- Multiple listener constraints combine correctly.
+- Any failed constraint results in a rejection.
+- `sectionName` and hostname rules work together as expected.
 
----
+## Coverage Summary
 
-### 6. Gateway_Combined ✅
+### Feature Matrix
 
-**测试场景数**: 5 个
-**通过率**: 100%
-**端口**: 31230-31232
+| Feature | Positive Coverage | Negative Coverage | Combined Coverage | Status |
+|---------|-------------------|-------------------|-------------------|--------|
+| Listener hostname exact match | Yes | Yes | No | Complete |
+| Listener hostname wildcard match | Yes | Yes | No | Complete |
+| Listener without hostname | Yes | No | No | Complete |
+| AllowedRoutes Same Namespace | Yes | Yes | Yes | Complete |
+| AllowedRoutes All Namespaces | Yes | No | No | Complete |
+| AllowedRoutes Selector | Yes | Yes | No | Complete |
+| AllowedRoutes Kinds | Yes | Yes | No | Complete |
+| `sectionName` + hostname | Yes | Yes | Yes | Complete |
+| Hostname + AllowedRoutes | Yes | Yes (2 cases) | Yes | Complete |
 
-| 测试用例 | 场景 | 结果 |
-|---------|------|------|
-| hostname_and_same_ns_match | Hostname 匹配 + Same Namespace | ✅ PASS |
-| hostname_match_diff_ns | Hostname 匹配但 Namespace 不同 (负面) | ✅ PASS |
-| same_ns_hostname_mismatch | Same Namespace 但 Hostname 不匹配 (负面) | ✅ PASS |
-| section_and_hostname_match | sectionName + Hostname 双匹配 | ✅ PASS |
-| section_match_hostname_mismatch | sectionName 匹配但 Hostname 不匹配 (负面) | ✅ PASS |
+### Added Test Assets
 
-**关键验证点**:
-- ✓ 多重约束条件正确组合生效
-- ✓ 任一约束失败即拒绝访问
-- ✓ sectionName 和 Hostname 约束正确联合工作
+- New suites: `6`
+- New test cases: `18`
+- New configuration files: `18`
+- New test code files: `10`
 
----
+### Gateway API Specification Coverage
 
-## 测试覆盖总结
+These tests validate the following Gateway API behaviors:
 
-### 功能覆盖矩阵
+- `ParentReference.sectionName` binding
+- `Listener.hostname` constraints
+- `AllowedRoutes.namespaces.from` for `Same`, `All`, and `Selector`
+- `AllowedRoutes.kinds` route-type filtering
+- Combined constraint logic
+- Default namespace behavior when `parentRef.namespace` is omitted
 
-| 功能 | 正面测试 | 负面测试 | 组合测试 | 状态 |
-|------|---------|---------|---------|------|
-| Listener Hostname - 精确匹配 | ✅ | ✅ | - | ✅ |
-| Listener Hostname - 通配符 | ✅ | ✅ | - | ✅ |
-| Listener Hostname - 无限制 | ✅ | - | - | ✅ |
-| AllowedRoutes - Same Namespace | ✅ | ✅ | ✅ | ✅ |
-| AllowedRoutes - All Namespaces | ✅ | - | - | ✅ |
-| AllowedRoutes - Selector | ✅ | ✅ | - | ✅ |
-| AllowedRoutes - Kinds | ✅ | ✅ | - | ✅ |
-| sectionName + Hostname | ✅ | ✅ | ✅ | ✅ |
-| Hostname + AllowedRoutes | ✅ | ✅ (2种) | ✅ | ✅ |
+## Technical Notes
 
-### 新增测试统计
+### Configuration Loading
 
-- **新增测试套件**: 6 个
-- **新增测试用例**: 18 个
-- **新增配置文件**: 18 个
-- **新增测试代码**: 10 个文件
+1. Gateway manifests use the `01_Gateway.yaml` prefix to guarantee load order.
+2. The suite waits 2 seconds after loading to allow dependent resources to settle.
+3. Test ports avoid conflicts with existing suites.
 
-### 符合 Gateway API 规范验证
+### Coverage Focus
 
-所有测试均验证了 Kubernetes Gateway API 规范的正确实现：
-- ✓ `ParentReference.sectionName` 绑定
-- ✓ `Listener.hostname` 约束
-- ✓ `AllowedRoutes.namespaces.from` (Same, All, Selector)
-- ✓ `AllowedRoutes.kinds` 类型限制
-- ✓ 多约束条件组合逻辑
-- ✓ 默认行为（parentRef 不指定 namespace 时默认为 Route 的 namespace）
+1. Hostname constraint behavior for exact and wildcard matching.
+2. Namespace isolation for cross-namespace access control.
+3. Route-type restrictions across different route kinds.
+4. Interactions between multiple listener constraints.
 
-## 技术要点
+## Suggested Next Steps
 
-### 配置加载优化
+### Optional Extensions
 
-1. **文件命名**: Gateway 配置使用 `01_Gateway.yaml` 前缀确保优先加载
-2. **等待时间**: 配置加载后等待 2 秒确保依赖处理完成
-3. **端口分配**: 避免与现有测试端口冲突
+- Add dynamic update coverage for Gateway hot-reload scenarios.
+- Add multi-Gateway and multi-parentRef scenarios.
 
-### 测试覆盖重点
+### Already Covered Implicitly
 
-1. **Hostname 约束**: 验证精确匹配和通配符匹配逻辑
-2. **Namespace 隔离**: 验证跨 namespace 访问控制
-3. **Route 类型限制**: 验证不同 Route 类型的访问控制
-4. **组合场景**: 验证多个约束条件的正确组合
+- Default `parentRef.namespace`
+- Routes without `hostnames`
+- Listeners without `hostname` in `no_hostname_restriction`
 
-## 下一步建议
-
-### 可选扩展（未实现）
-
-- 🔄 **动态更新测试**: 测试 Gateway 配置热更新场景
-- 🔀 **多 Gateway 多 parentRefs**: 验证 Route 同时绑定多个 Gateway
-
-### 已隐含覆盖的场景
-
-- ✅ **parentRef namespace 默认值**: 在多个测试中隐含验证
-- ✅ **Route 无 hostnames**: 在现有测试中隐含验证
-- ✅ **Listener 无 hostname**: 在 `no_hostname_restriction` 测试中验证
-
-## 参考文档
+## References
 
 - [Kubernetes Gateway API Specification](https://gateway-api.sigs.k8s.io/)
-- 实现代码: [`src/core/gateway/runtime/matching/route.rs`](../../../src/core/gateway/runtime/matching/route.rs)
-- 测试框架: [`examples/code/client/framework.rs`](../../code/client/framework.rs)
+- Implementation: [`src/core/gateway/runtime/matching/route.rs`](../../../src/core/gateway/runtime/matching/route.rs)
+- Test framework: [`examples/code/client/framework.rs`](../../code/client/framework.rs)

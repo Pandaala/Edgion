@@ -45,7 +45,8 @@ impl TlsProxyProtocolTestSuite {
                     let sni_hostname = "test-443.pp2.example.com";
                     let sni = ServerName::try_from(sni_hostname).unwrap();
 
-                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await
+                    {
                         Ok(Ok(s)) => s,
                         Ok(Err(e)) => {
                             return TestResult::failed(start.elapsed(), format!("TCP connect failed: {}", e));
@@ -88,10 +89,7 @@ impl TlsProxyProtocolTestSuite {
                     let json_str = if let Some(end) = response_str.find('}') {
                         &response_str[..=end]
                     } else {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("No JSON in response: {}", response_str),
-                        );
+                        return TestResult::failed(start.elapsed(), format!("No JSON in response: {}", response_str));
                     };
 
                     let parsed: serde_json::Value = match serde_json::from_str(json_str) {
@@ -161,7 +159,8 @@ impl TlsProxyProtocolTestSuite {
                     let connector = make_tls_connector();
                     let sni = ServerName::try_from("test-443.sandbox.example.com").unwrap();
 
-                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await
+                    {
                         Ok(Ok(s)) => s,
                         Ok(Err(e)) => {
                             return TestResult::failed(start.elapsed(), format!("TCP connect failed: {}", e));
@@ -193,7 +192,8 @@ impl TlsProxyProtocolTestSuite {
                                     "No PP2 header — plain echo matches sent data".to_string(),
                                 )
                             } else {
-                                let pp2_sig: &[u8] = &[0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A];
+                                let pp2_sig: &[u8] =
+                                    &[0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A];
                                 if n >= 12 && buf[..12] == *pp2_sig {
                                     TestResult::failed(
                                         start.elapsed(),
@@ -224,9 +224,6 @@ impl TestSuite for TlsProxyProtocolTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_pp2_header_parsed(),
-            Self::test_no_pp2_without_annotation(),
-        ]
+        vec![Self::test_pp2_header_parsed(), Self::test_no_pp2_without_annotation()]
     }
 }

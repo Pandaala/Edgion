@@ -5,7 +5,9 @@ use crate::core::gateway::cli::pingora::{create_and_configure_server, run_server
 use crate::core::gateway::conf_sync::{ConfigClient, ConfigSyncClient};
 use crate::core::gateway::lb::leastconn::BackendCleaner;
 use crate::core::gateway::observe::access_log::init_access_logger;
-use crate::core::gateway::observe::logs::{init_logging, init_ssl_logger, init_tcp_logger, init_tls_logger, init_udp_logger};
+use crate::core::gateway::observe::logs::{
+    init_logging, init_ssl_logger, init_tcp_logger, init_tls_logger, init_udp_logger,
+};
 use crate::core::gateway::observe::metrics;
 use crate::types::{init_work_dir, work_dir};
 use anyhow::{anyhow, Result};

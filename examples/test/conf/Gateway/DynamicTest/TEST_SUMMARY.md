@@ -1,97 +1,97 @@
-# Gateway 动态配置测试总结
+# Gateway Dynamic Configuration Test Summary
 
-## 测试目标
+## Goal
 
-验证 Gateway 和 HTTPRoute 的动态配置更新功能，证明配置可以在运行时动态修改并立即生效。
+Validate that Gateway and `HTTPRoute` configuration can be updated at runtime and take effect immediately.
 
-## 测试场景
+## Test Scenarios
 
-### 场景 1: Gateway Hostname 动态移除
+### Scenario 1: Dynamic Gateway Hostname Removal
 
-**目标**: 验证 Gateway Listener 的 hostname 约束可以动态移除
+**Goal:** Verify that a Gateway listener hostname constraint can be removed dynamically.
 
-- **初始状态**: Listener `http-with-hostname` (31250) 有 `hostname: api.example.com` 限制
-- **初始验证**: 访问 `other.example.com` 被拒绝 (404)
-- **动态更新**: 通过 API 移除 hostname 字段
-- **更新后验证**: 访问 `other.example.com` 现在成功 (200/502)
+- Initial state: listener `http-with-hostname` on port `31250` is restricted to `hostname: api.example.com`
+- Initial check: requests to `other.example.com` are rejected with `404`
+- Dynamic update: remove the hostname field through the API
+- Final check: requests to `other.example.com` now succeed with `200/502`
 
-**验证点**: Gateway 配置的动态性（hostname 约束）
+**Key point:** Gateway runtime updates correctly apply hostname changes.
 
-### 场景 2: HTTPRoute 方法动态修改
+### Scenario 2: Dynamic `HTTPRoute` Method Update
 
-**目标**: 验证 HTTPRoute 的匹配规则可以动态修改
+**Goal:** Verify that an `HTTPRoute` match rule can be changed dynamically.
 
-- **初始状态**: HTTPRoute 匹配 `GET /api/v1`
-- **初始验证**: GET 请求成功 (200/502)
-- **动态更新**: 通过 API 修改为匹配 `POST /api/v1`
-- **更新后验证**: GET 失败 (404)，POST 成功 (200/502)
+- Initial state: the `HTTPRoute` matches `GET /api/v1`
+- Initial check: `GET` succeeds with `200/502`
+- Dynamic update: switch the route to `POST /api/v1`
+- Final check: `GET` fails with `404`, `POST` succeeds with `200/502`
 
-**验证点**: HTTPRoute 配置的动态性（方法匹配）
+**Key point:** `HTTPRoute` match rules update correctly at runtime.
 
-## 配置文件结构
+## File Layout
 
-```
+```text
 DynamicTest/
-├── initial/              # 初始配置
-│   ├── 01_Gateway.yaml                 # Gateway: 2 个 Listener
-│   ├── HTTPRoute_hostname_match.yaml   # 用于 hostname 测试
-│   └── HTTPRoute_method.yaml           # 匹配 GET /api/v1
-└── updates/              # 动态更新配置
-    ├── Gateway_remove_hostname.yaml    # 移除 hostname
-    └── HTTPRoute_method_update.yaml    # 修改为 POST /api/v1
+├── initial/              # Initial configuration
+│   ├── 01_Gateway.yaml                 # Gateway with 2 listeners
+│   ├── HTTPRoute_hostname_match.yaml   # Hostname-focused route
+│   └── HTTPRoute_method.yaml           # Matches GET /api/v1
+└── updates/              # Runtime updates
+    ├── Gateway_remove_hostname.yaml    # Removes hostname
+    └── HTTPRoute_method_update.yaml    # Switches to POST /api/v1
 ```
 
-## 测试流程
+## Test Flow
 
-1. **启动服务**: Gateway + Controller
-2. **加载初始配置**: 通过 API 加载 `initial/` 目录
-3. **初始阶段测试**: 
-   - ✓ Hostname 限制生效 (other.example.com → 404)
-   - ✓ GET 方法匹配 (GET /api/v1 → 200/502)
-4. **动态更新**: 通过 `edgion-ctl apply` 加载 `updates/` 目录
-5. **等待生效**: 2 秒
-6. **更新阶段测试**:
-   - ✓ Hostname 限制移除 (other.example.com → 200/502)
-   - ✓ 方法修改生效 (GET → 404, POST → 200/502)
-7. **资源同步验证**: resource_diff
+1. Start the Gateway and Controller.
+2. Load the `initial/` directory through the API.
+3. Run the initial checks:
+   `other.example.com -> 404` because the hostname restriction is active.
+   `GET /api/v1 -> 200/502` because the original method rule matches.
+4. Apply `updates/` with `edgion-ctl apply`.
+5. Wait 2 seconds.
+6. Run the update-phase checks:
+   `other.example.com -> 200/502` after removing the hostname restriction.
+   `GET -> 404` and `POST -> 200/502` after updating the method rule.
+7. Verify configuration sync with `resource_diff`.
 
-## 运行测试
+## Running the Test
 
 ```bash
 cd /Users/caohao/ws1/Edgion
 ./examples/test/scripts/integration/run_integration.sh -r Gateway --dynamic-test
 ```
 
-## 预期结果
+## Expected Output
 
-```
+```text
 [✓] Initial Phase Tests (2/2 passed)
 [✓] Dynamic Update Applied
 [✓] Update Phase Tests (2/2 passed)
 [✓] Resource Sync Verified
 ```
 
-## 技术细节
+## Technical Details
 
-### Gateway 动态性
+### Gateway Runtime Behavior
 
-- **静态部分**: Listener 端口和协议（需要重启）
-- **动态部分**: hostname、allowedRoutes 等配置（ArcSwap 实现）
+- Static parts: listener ports and protocols still require a restart.
+- Dynamic parts: `hostname`, `allowedRoutes`, and similar fields are swapped in place through `ArcSwap`.
 
-### HTTPRoute 动态性
+### `HTTPRoute` Runtime Behavior
 
-- **完全动态**: 所有配置都可以动态更新
-- **生效时间**: 立即生效（< 1 秒）
+- All route fields are designed to update dynamically.
+- Changes are expected to become visible in under one second.
 
-### 实现机制
+### Implementation Pieces
 
-1. `GatewayConfigStore` - 全局配置存储（ArcSwap）
-2. `ConfHandler<Gateway>` - 监听配置变更事件
-3. Controller API - 支持 Gateway/HTTPRoute 的创建和更新
+1. `GatewayConfigStore`: global runtime configuration store backed by `ArcSwap`
+2. `ConfHandler<Gateway>`: reacts to configuration change events
+3. Controller API: supports create and update operations for `Gateway` and `HTTPRoute`
 
-## 关键文件
+## Key Files
 
-- `/src/core/gateway/runtime/store/config.rs` - 配置存储
-- `/src/core/gateway/runtime/handler.rs` - Gateway 处理器
-- `/src/core/controller/api/namespaced_handlers.rs` - Controller API
-- `/examples/test/scripts/utils/load_conf.sh` - 配置加载脚本
+- `/src/core/gateway/runtime/store/config.rs`: configuration store
+- `/src/core/gateway/runtime/handler.rs`: Gateway handler
+- `/src/core/controller/api/namespaced_handlers.rs`: Controller API
+- `/examples/test/scripts/utils/load_conf.sh`: configuration loader

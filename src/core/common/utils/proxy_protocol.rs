@@ -7,9 +7,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 /// PP2 12-byte signature that starts every v2 header
-pub const PP2_SIGNATURE: [u8; 12] = [
-    0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A,
-];
+pub const PP2_SIGNATURE: [u8; 12] = [0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A];
 
 pub const PP2_VERSION: u8 = 0x20;
 pub const PP2_CMD_PROXY: u8 = 0x01;
@@ -303,18 +301,12 @@ mod tests {
             // Signature
             0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A,
             // ver_cmd: 0x21 (version 2, PROXY)
-            0x21,
-            // fam: 0x11 (AF_INET, STREAM)
-            0x11,
-            // length: 12
-            0x00, 0x0C,
-            // src IP: 127.0.0.1
-            127, 0, 0, 1,
-            // dst IP: 127.0.0.1
-            127, 0, 0, 1,
-            // src port: 1000 = 0x03E8
-            0x03, 0xE8,
-            // dst port: 2000 = 0x07D0
+            0x21, // fam: 0x11 (AF_INET, STREAM)
+            0x11, // length: 12
+            0x00, 0x0C, // src IP: 127.0.0.1
+            127, 0, 0, 1, // dst IP: 127.0.0.1
+            127, 0, 0, 1, // src port: 1000 = 0x03E8
+            0x03, 0xE8, // dst port: 2000 = 0x07D0
             0x07, 0xD0,
         ];
 

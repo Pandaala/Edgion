@@ -38,65 +38,40 @@ impl TlsStreamPluginsTestSuite {
                     let sni = ServerName::try_from("test.sp-allow.example.com").unwrap();
 
                     match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(tcp_stream)) => {
-                            match connector.connect(sni, tcp_stream).await {
-                                Ok(mut tls_stream) => {
-                                    let test_data = b"Hello TLS StreamPlugin";
-                                    if let Err(e) = tls_stream.write_all(test_data).await {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Write failed: {}", e),
-                                        );
-                                    }
-
-                                    let mut buf = vec![0u8; 1024];
-                                    match tokio::time::timeout(
-                                        Duration::from_secs(3),
-                                        tls_stream.read(&mut buf),
-                                    )
-                                    .await
-                                    {
-                                        Ok(Ok(n)) if n > 0 => {
-                                            if &buf[..n] == test_data {
-                                                TestResult::passed_with_message(
-                                                    start.elapsed(),
-                                                    "TLS echo succeeded — stream plugin allowed localhost".to_string(),
-                                                )
-                                            } else {
-                                                TestResult::passed_with_message(
-                                                    start.elapsed(),
-                                                    format!("Connection allowed, received {} bytes", n),
-                                                )
-                                            }
-                                        }
-                                        Ok(Ok(_)) => TestResult::failed(
-                                            start.elapsed(),
-                                            "Connection closed immediately — stream plugin may be denying".to_string(),
-                                        ),
-                                        Ok(Err(e)) => TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Read failed: {}", e),
-                                        ),
-                                        Err(_) => TestResult::failed(
-                                            start.elapsed(),
-                                            "Read timed out".to_string(),
-                                        ),
-                                    }
+                        Ok(Ok(tcp_stream)) => match connector.connect(sni, tcp_stream).await {
+                            Ok(mut tls_stream) => {
+                                let test_data = b"Hello TLS StreamPlugin";
+                                if let Err(e) = tls_stream.write_all(test_data).await {
+                                    return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
                                 }
-                                Err(e) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("TLS handshake failed: {}", e),
-                                ),
+
+                                let mut buf = vec![0u8; 1024];
+                                match tokio::time::timeout(Duration::from_secs(3), tls_stream.read(&mut buf)).await {
+                                    Ok(Ok(n)) if n > 0 => {
+                                        if &buf[..n] == test_data {
+                                            TestResult::passed_with_message(
+                                                start.elapsed(),
+                                                "TLS echo succeeded — stream plugin allowed localhost".to_string(),
+                                            )
+                                        } else {
+                                            TestResult::passed_with_message(
+                                                start.elapsed(),
+                                                format!("Connection allowed, received {} bytes", n),
+                                            )
+                                        }
+                                    }
+                                    Ok(Ok(_)) => TestResult::failed(
+                                        start.elapsed(),
+                                        "Connection closed immediately — stream plugin may be denying".to_string(),
+                                    ),
+                                    Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("Read failed: {}", e)),
+                                    Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
+                                }
                             }
-                        }
-                        Ok(Err(e)) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Connection refused: {}", e),
-                        ),
-                        Err(_) => TestResult::failed(
-                            start.elapsed(),
-                            "Connection timed out".to_string(),
-                        ),
+                            Err(e) => TestResult::failed(start.elapsed(), format!("TLS handshake failed: {}", e)),
+                        },
+                        Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("Connection refused: {}", e)),
+                        Err(_) => TestResult::failed(start.elapsed(), "Connection timed out".to_string()),
                     }
                 })
             },
@@ -116,43 +91,36 @@ impl TlsStreamPluginsTestSuite {
                     let sni = ServerName::try_from("test.sp-deny.example.com").unwrap();
 
                     match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(tcp_stream)) => {
-                            match connector.connect(sni, tcp_stream).await {
-                                Ok(mut tls_stream) => {
-                                    let test_data = b"Hello";
-                                    let _ = tls_stream.write_all(test_data).await;
+                        Ok(Ok(tcp_stream)) => match connector.connect(sni, tcp_stream).await {
+                            Ok(mut tls_stream) => {
+                                let test_data = b"Hello";
+                                let _ = tls_stream.write_all(test_data).await;
 
-                                    let mut buf = vec![0u8; 1024];
-                                    match tokio::time::timeout(
-                                        Duration::from_secs(2),
-                                        tls_stream.read(&mut buf),
-                                    )
-                                    .await
-                                    {
-                                        Ok(Ok(0)) => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "Connection closed by stream plugin (EOF) after TLS handshake".to_string(),
-                                        ),
-                                        Ok(Ok(n)) => TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Expected denial but received {} bytes", n),
-                                        ),
-                                        Ok(Err(_e)) => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "Connection rejected by stream plugin (read error)".to_string(),
-                                        ),
-                                        Err(_) => TestResult::failed(
-                                            start.elapsed(),
-                                            "Read timed out — stream plugin did not deny".to_string(),
-                                        ),
-                                    }
+                                let mut buf = vec![0u8; 1024];
+                                match tokio::time::timeout(Duration::from_secs(2), tls_stream.read(&mut buf)).await {
+                                    Ok(Ok(0)) => TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Connection closed by stream plugin (EOF) after TLS handshake".to_string(),
+                                    ),
+                                    Ok(Ok(n)) => TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Expected denial but received {} bytes", n),
+                                    ),
+                                    Ok(Err(_e)) => TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Connection rejected by stream plugin (read error)".to_string(),
+                                    ),
+                                    Err(_) => TestResult::failed(
+                                        start.elapsed(),
+                                        "Read timed out — stream plugin did not deny".to_string(),
+                                    ),
                                 }
-                                Err(_e) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "TLS handshake rejected (before stream plugin)".to_string(),
-                                ),
                             }
-                        }
+                            Err(_e) => TestResult::passed_with_message(
+                                start.elapsed(),
+                                "TLS handshake rejected (before stream plugin)".to_string(),
+                            ),
+                        },
                         Ok(Err(_e)) => TestResult::passed_with_message(
                             start.elapsed(),
                             "Connection refused by stream plugin".to_string(),
@@ -180,36 +148,29 @@ impl TlsStreamPluginsTestSuite {
                     let sni = ServerName::try_from("test.sp-deny.example.com").unwrap();
 
                     match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(tcp_stream)) => {
-                            match connector.connect(sni, tcp_stream).await {
-                                Ok(mut tls_stream) => {
-                                    let mut buf = vec![0u8; 16];
-                                    match tokio::time::timeout(
-                                        Duration::from_secs(2),
-                                        tls_stream.read(&mut buf),
-                                    )
-                                    .await
-                                    {
-                                        Ok(Ok(0)) | Ok(Err(_)) => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "Short name annotation resolved — connection denied".to_string(),
-                                        ),
-                                        Ok(Ok(n)) => TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Expected denial but received {} bytes", n),
-                                        ),
-                                        Err(_) => TestResult::failed(
-                                            start.elapsed(),
-                                            "Read timed out — short name may not be resolved".to_string(),
-                                        ),
-                                    }
+                        Ok(Ok(tcp_stream)) => match connector.connect(sni, tcp_stream).await {
+                            Ok(mut tls_stream) => {
+                                let mut buf = vec![0u8; 16];
+                                match tokio::time::timeout(Duration::from_secs(2), tls_stream.read(&mut buf)).await {
+                                    Ok(Ok(0)) | Ok(Err(_)) => TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Short name annotation resolved — connection denied".to_string(),
+                                    ),
+                                    Ok(Ok(n)) => TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Expected denial but received {} bytes", n),
+                                    ),
+                                    Err(_) => TestResult::failed(
+                                        start.elapsed(),
+                                        "Read timed out — short name may not be resolved".to_string(),
+                                    ),
                                 }
-                                Err(_) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Short name annotation resolved — TLS handshake rejected".to_string(),
-                                ),
                             }
-                        }
+                            Err(_) => TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Short name annotation resolved — TLS handshake rejected".to_string(),
+                            ),
+                        },
                         Ok(Err(_)) | Err(_) => TestResult::passed_with_message(
                             start.elapsed(),
                             "Short name annotation resolved — connection refused/dropped".to_string(),

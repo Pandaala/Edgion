@@ -427,10 +427,7 @@ mod tests {
     fn test_stream_plugin_store_key_short_name() {
         let manager = TlsRouteManager::new();
         let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert(
-            "edgion.io/edgion-stream-plugins".to_string(),
-            "my-plugins".to_string(),
-        );
+        annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "my-plugins".to_string());
 
         let route = create_annotated_tls_route("sandbox", "sp-route", "gw1", "test.com", annotations);
         let initialized = manager.initialize_route(route).unwrap();
@@ -445,10 +442,7 @@ mod tests {
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
         annotations.insert("edgion.io/upstream-tls".to_string(), "TRUE".to_string());
-        annotations.insert(
-            "edgion.io/edgion-stream-plugins".to_string(),
-            "ns/plugins".to_string(),
-        );
+        annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "ns/plugins".to_string());
 
         let route = create_annotated_tls_route("default", "combo", "gw1", "*.sandbox.com", annotations);
         let initialized = manager.initialize_route(route).unwrap();

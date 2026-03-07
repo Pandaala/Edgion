@@ -1,100 +1,100 @@
-# RequestRestriction 集成测试
+# RequestRestriction Integration Tests
 
-## 测试用例
+## Test Cases
 
-### 1. Header 拒绝列表 (header-deny)
+### 1. Header Deny List (`header-deny`)
 
-阻止包含 Bot/Spider/Crawler 的 User-Agent：
+Blocks requests whose `User-Agent` contains `Bot`, `Spider`, or `Crawler`.
 
 ```bash
-# 正常请求 - 应该通过 (200)
+# Normal request, should pass (200)
 curl -H "Host: request-restriction.example.com" \
      -H "User-Agent: Mozilla/5.0" \
      http://localhost:8080/test/header-deny/api
 
-# Bot 请求 - 应该被拒绝 (403)
+# Bot request, should be rejected (403)
 curl -H "Host: request-restriction.example.com" \
      -H "User-Agent: Googlebot/2.1" \
      http://localhost:8080/test/header-deny/api
 ```
 
-### 2. Path 允许列表 (path-allow)
+### 2. Path Allow List (`path-allow`)
 
-只允许 /api/* 和 /health 路径：
+Allows only `/api/*` and `/health`.
 
 ```bash
-# 允许的路径 - 应该通过 (200)
+# Allowed paths, should pass (200)
 curl -H "Host: request-restriction.example.com" \
      http://localhost:8080/test/path-allow/api/users
 
 curl -H "Host: request-restriction.example.com" \
      http://localhost:8080/test/path-allow/health
 
-# 不允许的路径 - 应该被拒绝 (404)
+# Disallowed path, should be rejected (404)
 curl -H "Host: request-restriction.example.com" \
      http://localhost:8080/test/path-allow/admin/users
 ```
 
-### 3. Method 允许列表 (method-allow)
+### 3. Method Allow List (`method-allow`)
 
-只允许 GET/HEAD/OPTIONS 方法：
+Allows only `GET`, `HEAD`, and `OPTIONS`.
 
 ```bash
-# GET 请求 - 应该通过 (200)
+# GET request, should pass (200)
 curl -X GET -H "Host: request-restriction.example.com" \
      http://localhost:8080/test/method-allow/api
 
-# POST 请求 - 应该被拒绝 (405)
+# POST request, should be rejected (405)
 curl -X POST -H "Host: request-restriction.example.com" \
      http://localhost:8080/test/method-allow/api
 ```
 
-### 4. Header 必须存在 (header-required)
+### 4. Required Header (`header-required`)
 
-要求 X-Auth-Token 头存在且不是 invalid/expired：
+Requires `X-Auth-Token` to exist and rejects `invalid` or `expired`.
 
 ```bash
-# 有效 Token - 应该通过 (200)
+# Valid token, should pass (200)
 curl -H "Host: request-restriction.example.com" \
      -H "X-Auth-Token: valid-token-123" \
      http://localhost:8080/test/header-required/api
 
-# 无 Token - 应该被拒绝 (401)
+# Missing token, should be rejected (401)
 curl -H "Host: request-restriction.example.com" \
      http://localhost:8080/test/header-required/api
 
-# 无效 Token - 应该被拒绝 (401)
+# Invalid token, should be rejected (401)
 curl -H "Host: request-restriction.example.com" \
      -H "X-Auth-Token: invalid" \
      http://localhost:8080/test/header-required/api
 ```
 
-### 5. 综合测试 (combined)
+### 5. Combined Rules (`combined`)
 
-多规则组合，任一规则触发即拒绝：
+Combines multiple rules and rejects the request when any rule matches.
 
 ```bash
-# 正常请求 - 应该通过 (200)
+# Normal request, should pass (200)
 curl -H "Host: request-restriction.example.com" \
      -H "User-Agent: Mozilla/5.0" \
      http://localhost:8080/test/combined/api/users
 
-# Bot UA - 应该被拒绝 (403)
+# Bot UA, should be rejected (403)
 curl -H "Host: request-restriction.example.com" \
      -H "User-Agent: Googlebot" \
      http://localhost:8080/test/combined/api/users
 
-# Admin 路径 - 应该被拒绝 (403)
+# Admin path, should be rejected (403)
 curl -H "Host: request-restriction.example.com" \
      http://localhost:8080/test/combined/admin/users
 
-# Debug Cookie - 应该被拒绝 (403)
+# Debug cookie, should be rejected (403)
 curl -H "Host: request-restriction.example.com" \
      -H "Cookie: debug=true" \
      http://localhost:8080/test/combined/api/users
 ```
 
-## 运行测试
+## Running the Tests
 
 ```bash
 cd examples/test

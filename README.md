@@ -27,9 +27,8 @@ A high-performance Kubernetes Gateway built on [Pingora](https://github.com/clou
 
 ## 📚 Documentation
 
-- 🇨🇳 [中文文档 (Chinese)](docs/zh-CN/README.md)
+- 🇨🇳 [Chinese Documentation](docs/zh-CN/README.md)
 - 🇬🇧 [English Documentation](docs/en/README.md) *(Coming soon)*
-- 🇯🇵 [日本語ドキュメント](docs/ja/README.md) *(Coming soon)*
 
 ## 🚀 Quick Start
 

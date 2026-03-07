@@ -1,73 +1,77 @@
-# ResponseRewrite 集成测试
+# ResponseRewrite Integration Tests
 
-## 测试场景
+## Test Scenarios
 
-### 1. 状态码修改 (`/status-code`)
+### 1. Status Code Rewrite (`/status-code`)
 
-测试将响应状态码从默认值修改为 201。
+Changes the upstream response status code to `201`.
 
-**配置**：`01_EdgionPlugins_status-code.yaml`
+**Configuration:** `01_EdgionPlugins_status-code.yaml`
 
-**验证**：
+**Verification:**
+
 ```bash
 curl -i http://response-rewrite.example.com/status-code
-# 期望: HTTP/1.1 201 Created
+# Expect: HTTP/1.1 201 Created
 ```
 
-### 2. 响应头设置 (`/headers-set`)
+### 2. Response Header Updates (`/headers-set`)
 
-测试响应头的 set、add、remove 操作。
+Verifies `set`, `add`, and `remove` operations on response headers.
 
-**配置**：`02_EdgionPlugins_headers-set.yaml`
+**Configuration:** `02_EdgionPlugins_headers-set.yaml`
 
-**验证**：
+**Verification:**
+
 ```bash
 curl -i http://response-rewrite.example.com/headers-set
-# 期望:
+# Expect:
 # - X-Custom-Header: custom-value
 # - Cache-Control: no-cache, no-store
 # - X-Powered-By: Edgion
-# - Server 头被删除
+# - The Server header is removed
 ```
 
-### 3. 响应头重命名 (`/headers-rename`)
+### 3. Response Header Rename (`/headers-rename`)
 
-测试响应头重命名功能。
+Verifies response header rename behavior.
 
-**配置**：`03_EdgionPlugins_headers-rename.yaml`
+**Configuration:** `03_EdgionPlugins_headers-rename.yaml`
 
-**验证**：
+**Verification:**
+
 ```bash
 curl -i http://response-rewrite.example.com/headers-rename
-# 期望:
-# - X-Request-Id: <原 X-Internal-Id 的值>
-# - X-Trace-Info: <原 X-Debug-Info 的值>
+# Expect:
+# - X-Request-Id: <value copied from X-Internal-Id>
+# - X-Trace-Info: <value copied from X-Debug-Info>
 ```
 
-### 4. 综合功能 (`/combined`)
+### 4. Combined Flow (`/combined`)
 
-测试状态码 + 响应头综合操作。
+Verifies status code and response header operations together.
 
-**配置**：`04_EdgionPlugins_combined.yaml`
+**Configuration:** `04_EdgionPlugins_combined.yaml`
 
-**验证**：
+**Verification:**
+
 ```bash
 curl -i http://response-rewrite.example.com/combined
-# 期望:
+# Expect:
 # - HTTP/1.1 200 OK
-# - X-Request-Id: <原 X-Internal-Id 的值>
+# - X-Request-Id: <value copied from X-Internal-Id>
 # - Cache-Control: no-cache
 # - X-API-Version: v2
 # - X-Powered-By: Edgion
-# - Server 和 X-Debug 头被删除
+# - Server and X-Debug headers are removed
 ```
 
-## 运行测试
+## Running the Tests
 
 ```bash
-# 应用配置
+# Apply the manifests
 kubectl apply -f .
 
-# 运行集成测试
+# Run the integration suite
 cd ../../script && ./run_integration_test.sh ResponseRewrite
 ```

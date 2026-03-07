@@ -805,16 +805,10 @@ async fn start_tcp_pp2_server(port: u16) -> Result<()> {
                     };
 
                     // Try to parse PP2 header
-                    match proxy_header::ProxyHeader::parse(
-                        &buf[..total_read],
-                        proxy_header::ParseConfig::default(),
-                    ) {
+                    match proxy_header::ProxyHeader::parse(&buf[..total_read], proxy_header::ParseConfig::default()) {
                         Ok((header, consumed)) => {
                             let (src_addr, dst_addr) = match header.proxied_address() {
-                                Some(addr) => (
-                                    addr.source.to_string(),
-                                    addr.destination.to_string(),
-                                ),
+                                Some(addr) => (addr.source.to_string(), addr.destination.to_string()),
                                 None => ("local".to_string(), "local".to_string()),
                             };
 
@@ -848,10 +842,7 @@ async fn start_tcp_pp2_server(port: u16) -> Result<()> {
                                         proxy_header::ParseConfig::default(),
                                     ) {
                                         let (src_addr, dst_addr) = match header.proxied_address() {
-                                            Some(addr) => (
-                                                addr.source.to_string(),
-                                                addr.destination.to_string(),
-                                            ),
+                                            Some(addr) => (addr.source.to_string(), addr.destination.to_string()),
                                             None => ("local".to_string(), "local".to_string()),
                                         };
                                         let authority = header.authority().unwrap_or("").to_string();

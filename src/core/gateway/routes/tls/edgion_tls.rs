@@ -287,9 +287,9 @@ impl EdgionTls {
         if let Some(2) = rule.proxy_protocol_version {
             if let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() {
                 let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
-                let dst_addr: std::net::SocketAddr = upstream_addr_str
-                    .parse()
-                    .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
+                let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
+                    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
+                });
                 let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
                 builder.add_authority(sni_hostname);
                 let pp2_header = builder.build();
@@ -388,7 +388,7 @@ impl EdgionTls {
             .spec
             .security_protect
             .as_ref()
-            .map_or(true, |sp| sp.tls_proxy_log_record)
+            .is_none_or(|sp| sp.tls_proxy_log_record)
     }
 
     /// Log connection establishment event
