@@ -54,7 +54,7 @@ pub struct EdgionGatewayConfig {
     pub tcp_log: LogConfig,
 
     #[arg(skip)]
-    #[serde(default)]
+    #[serde(default = "default_tls_log_config")]
     pub tls_log: LogConfig,
 
     #[arg(skip)]
@@ -107,6 +107,10 @@ fn default_access_log_config() -> LogConfig {
 
 fn default_ssl_log_config() -> LogConfig {
     LogConfig::enabled_default("logs/ssl.log")
+}
+
+fn default_tls_log_config() -> LogConfig {
+    LogConfig::enabled_default("logs/tls.log")
 }
 
 /// Pingora server configuration

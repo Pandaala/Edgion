@@ -20,7 +20,9 @@ use crate::core::gateway::observe::{log_tls, TlsLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
 use crate::core::gateway::routes::tls::GatewayTlsRoutes;
+use crate::types::ctx::ClientCertInfo;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use crate::types::TlsConnMeta;
 
 /// TLS connection context
 pub struct TlsContext {
@@ -38,6 +40,10 @@ pub struct TlsContext {
     pub upstream_protocol: String,
     pub route_name: Option<String>,
     pub gateway_key: Option<String>,
+    /// Correlation ID from ssl.log (set via TlsConnMeta from handshake)
+    pub tls_id: Option<String>,
+    /// Client certificate info from mTLS handshake
+    pub client_cert_info: Option<ClientCertInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,19 +108,35 @@ impl ServerApp for EdgionTls {
             upstream_protocol: "TCP".to_string(),
             route_name: None,
             gateway_key,
+            tls_id: None,
+            client_cert_info: None,
         };
 
-        let sni_hostname = match Self::extract_sni(&mut downstream) {
-            Some(sni) => {
-                ctx.sni_hostname = Some(sni.clone());
-                sni
+        // Read TlsConnMeta from SslDigest extension (set by handshake_complete_callback)
+        let tls_meta: Option<TlsConnMeta> = downstream
+            .get_ssl_digest()
+            .and_then(|d| d.extension.get::<TlsConnMeta>().cloned());
+
+        let (sni_hostname, tls_id, client_cert_info) = match tls_meta {
+            Some(meta) => (meta.sni, Some(meta.tls_id), meta.client_cert_info),
+            None => {
+                // Defensive fallback (should not happen in normal operation)
+                (Self::extract_sni(&mut downstream), None, None)
             }
+        };
+
+        let sni_hostname = match sni_hostname {
+            Some(sni) => sni,
             None => {
                 ctx.status = TlsStatus::NoSniProvided;
                 self.log_disconnect(&ctx).await;
                 return None;
             }
         };
+
+        ctx.sni_hostname = Some(sni_hostname.clone());
+        ctx.tls_id = tls_id;
+        ctx.client_cert_info = client_cert_info;
 
         self.handle_connection(downstream, &mut ctx, &sni_hostname).await;
 
@@ -361,8 +383,19 @@ impl EdgionTls {
         }
     }
 
+    fn is_tls_proxy_log_enabled(&self) -> bool {
+        self.edgion_gateway_config
+            .spec
+            .security_protect
+            .as_ref()
+            .map_or(true, |sp| sp.tls_proxy_log_record)
+    }
+
     /// Log connection establishment event
     async fn log_connect(&self, ctx: &TlsContext) {
+        if !self.is_tls_proxy_log_enabled() {
+            return;
+        }
         let protocol = format!("TLS-{}", ctx.upstream_protocol);
         let entry = TlsLogEntry {
             ts: chrono::Utc::now().timestamp_millis(),
@@ -371,6 +404,7 @@ impl EdgionTls {
             listener_port: ctx.listener_port,
             client_addr: ctx.client_addr.clone(),
             client_port: ctx.client_port,
+            tls_id: ctx.tls_id.clone(),
             sni_hostname: ctx.sni_hostname.clone(),
             upstream_addr: ctx.upstream_addr.clone(),
             duration_ms: None,
@@ -391,6 +425,9 @@ impl EdgionTls {
 
     /// Log connection disconnection event
     async fn log_disconnect(&self, ctx: &TlsContext) {
+        if !self.is_tls_proxy_log_enabled() {
+            return;
+        }
         let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
         let protocol = format!("TLS-{}", ctx.upstream_protocol);
         let entry = TlsLogEntry {
@@ -400,6 +437,7 @@ impl EdgionTls {
             listener_port: ctx.listener_port,
             client_addr: ctx.client_addr.clone(),
             client_port: ctx.client_port,
+            tls_id: ctx.tls_id.clone(),
             sni_hostname: ctx.sni_hostname.clone(),
             upstream_addr: ctx.upstream_addr.clone(),
             duration_ms: Some(duration_ms),
@@ -427,6 +465,7 @@ impl EdgionTls {
             "listener_port": ctx.listener_port,
             "client_addr": &ctx.client_addr,
             "client_port": ctx.client_port,
+            "tls_id": &ctx.tls_id,
             "sni_hostname": &ctx.sni_hostname,
             "upstream_addr": &ctx.upstream_addr,
             "duration_ms": duration_ms,
