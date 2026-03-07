@@ -1,5 +1,6 @@
 # Rust build artifacts (keep target/release for local builds)
 target/debug/
+target/release/
 target/.rustc_info.json
 target/.cargo-lock
 **/*.rs.bk
@@ -73,4 +74,3 @@ LICENSE-*
 *.bak
 *.backup
 *.old
-

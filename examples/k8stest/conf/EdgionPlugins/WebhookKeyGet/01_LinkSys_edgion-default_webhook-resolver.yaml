@@ -1,0 +1,19 @@
+# LinkSys Webhook resource for integration testing
+# Defines connection to test_server's /webhook/resolve endpoint
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: webhook-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    uri: "http://edgion-test-server.edgion-test.svc.cluster.local:30001/webhook/resolve"
+    requestMethod: GET
+    timeoutMs: 5000
+    requestHeaders:
+      - X-Tenant-Id
+      - X-Request-ID
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096

@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::lb::BackendSelector;
-use crate::core::plugins::{PluginRuntime, StreamPluginRuntime};
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::{PluginRuntime, StreamPluginRuntime};
 
 /// API group for UDPRoute
 pub const UDP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";

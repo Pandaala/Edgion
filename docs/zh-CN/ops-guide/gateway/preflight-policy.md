@@ -143,6 +143,5 @@ grep "OPTIONS" logs/access.log
 
 ## 相关文档
 
-- [CORS 插件配置](./cors-user-guide.md)
-- [EdgionGatewayConfig 配置说明](../resource-architecture-overview.md)
-
+- [CORS 插件配置](../../user-guide/http-route/filters/edgion-plugins/cors.md)
+- [资源架构总览（开发指南）](../../dev-guide/resource-architecture-overview.md)

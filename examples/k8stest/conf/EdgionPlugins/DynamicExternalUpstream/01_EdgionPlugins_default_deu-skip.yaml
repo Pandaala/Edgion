@@ -1,0 +1,35 @@
+# DynamicExternalUpstream - Skip mode (default behavior)
+# Maps X-Target-Region header values to external domains
+# onMissing: skip → no header = normal backend
+# onNoMatch: skip → unmatched key = normal backend
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: deu-skip
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: DynamicExternalUpstream
+      config:
+        from:
+          type: header
+          name: X-Target-Region
+        domainMap:
+          "us":
+            domain: localhost
+            port: 30001
+            tls: false
+            overrideHost: localhost
+          "eu":
+            domain: localhost
+            port: 30002
+            tls: false
+            overrideHost: localhost
+          "ap":
+            domain: localhost
+            port: 30003
+            tls: false
+            overrideHost: localhost
+        onMissing: skip
+        onNoMatch: skip
+        debugHeader: true

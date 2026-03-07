@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::common::{Condition, ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::lb::BackendSelector;
-use crate::core::plugins::PluginRuntime;
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::PluginRuntime;
 
 /// API group for HTTPRoute
 pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -39,6 +39,11 @@ pub struct HTTPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostnames: Option<Vec<String>>,
 
+    /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
+    /// Set by the controller ProcessorHandler; the data plane uses these directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_hostnames: Option<Vec<String>>,
+
     /// Rules defines the HTTP routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HTTPRouteRule>>,
@@ -47,6 +52,11 @@ pub struct HTTPRouteSpec {
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteRule {
+    /// Name identifies this rule for observability and status correlation
+    /// Support: Extended
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     /// Matches define conditions used for matching the rule against requests
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<HTTPRouteMatch>>,
@@ -102,6 +112,7 @@ pub struct HTTPRouteRule {
 impl Clone for HTTPRouteRule {
     fn clone(&self) -> Self {
         Self {
+            name: self.name.clone(),
             matches: self.matches.clone(),
             filters: self.filters.clone(),
             backend_refs: self.backend_refs.clone(),
@@ -121,6 +132,7 @@ impl Clone for HTTPRouteRule {
 impl fmt::Debug for HTTPRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HTTPRouteRule")
+            .field("name", &self.name)
             .field("matches", &self.matches)
             .field("plugins", &self.filters)
             .field("backend_refs", &self.backend_refs)
@@ -405,6 +417,59 @@ pub struct HTTPRequestMirrorFilter {
     /// Support: Extended
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<Fraction>,
+
+    /// Connection timeout for mirror backend in milliseconds.
+    #[serde(default = "default_mirror_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+
+    /// Write/send timeout for mirror backend in milliseconds.
+    #[serde(default = "default_mirror_write_timeout_ms")]
+    pub write_timeout_ms: u64,
+
+    /// Maximum number of body chunks buffered for mirror when mirror is slower.
+    #[serde(default = "default_mirror_max_buffered_chunks")]
+    pub max_buffered_chunks: usize,
+
+    /// Whether mirror should emit a dedicated access log line.
+    #[serde(default = "default_mirror_log_enabled")]
+    pub mirror_log: bool,
+
+    /// Maximum number of concurrent mirror tasks per gateway process.
+    #[serde(default = "default_mirror_max_concurrent")]
+    pub max_concurrent: usize,
+
+    /// Maximum milliseconds to wait for channel space when the mirror body channel is full,
+    /// before abandoning the mirror entirely.
+    ///
+    /// - `0` (default): immediately abandon — zero impact on main request latency.
+    /// - `> 0`: brief back-pressure window — the request body filter will await channel
+    ///   drain for at most this many milliseconds before giving up. Recommended range:
+    ///   100–500ms. Beyond this the mirror is abandoned and main request continues normally.
+    ///
+    /// This is a trade-off: a small value gives the mirror backend a chance to catch up
+    /// without immediately discarding valuable traffic.
+    #[serde(default)]
+    pub channel_full_timeout_ms: u64,
+}
+
+fn default_mirror_connect_timeout_ms() -> u64 {
+    1000
+}
+
+fn default_mirror_write_timeout_ms() -> u64 {
+    1000
+}
+
+fn default_mirror_max_buffered_chunks() -> usize {
+    5
+}
+
+fn default_mirror_log_enabled() -> bool {
+    true
+}
+
+fn default_mirror_max_concurrent() -> usize {
+    1024
 }
 
 /// BackendObjectReference identifies an API object within the namespace of the referrer
@@ -588,7 +653,7 @@ impl ParsedRouteTimeouts {
     /// Parse route timeouts from HTTPRouteTimeouts
     /// Returns None if no timeouts are configured
     pub fn from_config(config: &HTTPRouteTimeouts) -> Option<Self> {
-        use crate::core::utils::parse_duration;
+        use crate::core::common::utils::parse_duration;
 
         // Parse request timeout (end-to-end, Gateway API v1.4 standard)
         let request_timeout = config.request.as_ref().and_then(|s| {

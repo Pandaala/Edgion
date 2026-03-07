@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-mirror-with-timeout
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        # Small buffer (1 chunk) to make it easy to trigger channel-full
+        maxBufferedChunks: 1
+        # Wait up to 200ms for channel to drain before abandoning
+        channelFullTimeoutMs: 200
+        connectTimeoutMs: 500
+        writeTimeoutMs: 2000
+        mirrorLog: true

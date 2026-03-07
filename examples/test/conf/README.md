@@ -1,194 +1,196 @@
-# Edgion 集成测试配置
+# Edgion Integration Test Configurations
 
-本目录包含集成测试所需的 Kubernetes Gateway API 配置文件。
+This directory contains the Kubernetes Gateway API manifests used by the integration test suites.
 
-## 目录结构
+## Directory Layout
 
-```
+```text
 conf/
-├── base/                   # 基础配置（所有测试共用）
+├── base/                   # Shared base configuration for all suites
 │   ├── GatewayClass.yaml
 │   ├── Gateway.yaml
 │   ├── EdgionGatewayConfig.yaml
 │   ├── EdgionTls_edge_edge-tls.yaml
 │   └── Secret_edgion-test_edge-tls.yaml
-├── http/                   # HTTP 基础测试
-├── grpc/                   # gRPC 基础测试
-├── tcp/                    # TCP 测试
-├── udp/                    # UDP 测试
-├── http-match/             # HTTP 匹配规则测试
-├── grpc-match/             # gRPC 匹配规则测试
-├── grpc-tls/               # gRPC TLS 测试
-├── lb-roundrobin/          # RoundRobin 负载均衡测试
-├── lb-consistenthash/      # ConsistentHash 一致性哈希测试
-├── weighted-backend/       # 权重后端测试
-├── timeout/                # 超时测试
-├── plugins/                # 插件测试
-├── redirect/               # HTTP 重定向测试
-├── stream-plugins/         # 流式插件测试
-├── mtls/                   # 双向 TLS (mTLS) 测试
-├── backend-tls/            # 后端 TLS 测试
+├── http/                   # Basic HTTP tests
+├── grpc/                   # Basic gRPC tests
+├── tcp/                    # TCP tests
+├── udp/                    # UDP tests
+├── http-match/             # HTTP matching tests
+├── grpc-match/             # gRPC matching tests
+├── grpc-tls/               # gRPC over TLS tests
+├── lb-roundrobin/          # RoundRobin load-balancing tests
+├── lb-consistenthash/      # ConsistentHash load-balancing tests
+├── weighted-backend/       # Weighted backend tests
+├── timeout/                # Timeout tests
+├── plugins/                # Plugin tests
+├── redirect/               # HTTP redirect tests
+├── stream-plugins/         # Stream plugin tests
+├── mtls/                   # Mutual TLS tests
+├── backend-tls/            # Backend TLS tests
 └── EdgionTls/
-    └── cipher/             # TLS cipher 加密算法测试
+    └── cipher/             # TLS cipher suite tests
 ```
 
-## 加载顺序
+## Load Order
 
-1. **base/** - 必须首先加载，包含 GatewayClass、Gateway 等基础资源
-2. **各 suite 目录** - 按需加载测试所需的配置
+1. `base/` must be loaded first because it contains shared resources such as `GatewayClass` and `Gateway`.
+2. Load individual suite directories as needed.
 
-## 使用方法
+## Usage
 
 ```bash
-# 使用 start_all_with_conf.sh 启动并加载配置
+# Start the full local test stack and load configuration
 ./examples/test/scripts/utils/start_all_with_conf.sh
 
-# 启动并只加载特定 suite
+# Start the stack and load only selected suites
 ./examples/test/scripts/utils/start_all_with_conf.sh --suites http,grpc
 
-# 单独加载配置（需要 controller 已运行）
+# Load a single suite after the controller is already running
 ./examples/test/scripts/utils/load_conf.sh http
 
-# 加载所有配置
+# Load every suite
 ./examples/test/scripts/utils/load_conf.sh all
 ```
 
-## 配置说明
+## Configuration Reference
 
-### base/
+### `base/`
 
-- **GatewayClass.yaml**: 定义 Gateway 类型，关联 EdgionGatewayConfig
-- **Gateway.yaml**: 定义监听器（HTTP:10080, HTTPS:10443, TCP:19000, UDP:19002, gRPC:18443）
-- **EdgionGatewayConfig.yaml**: Edgion 特定配置（超时、Real IP、安全防护等）
-- **EdgionTls_edge_edge-tls.yaml**: TLS 配置，关联 Secret
-- **Secret_edgion-test_edge-tls.yaml**: TLS 证书 Secret
+- `GatewayClass.yaml`: Defines the Gateway class and links it to `EdgionGatewayConfig`.
+- `Gateway.yaml`: Defines listeners (HTTP:10080, HTTPS:10443, TCP:19000, UDP:19002, gRPC:18443).
+- `EdgionGatewayConfig.yaml`: Edgion-specific settings such as timeouts, Real IP, and security options.
+- `EdgionTls_edge_edge-tls.yaml`: TLS configuration that references a Secret.
+- `Secret_edgion-test_edge-tls.yaml`: TLS certificate Secret.
 
-### http/
+### `http/`
 
-- **Service_test-http.yaml**: HTTP 测试服务定义
-- **EndpointSlice_test-http.yaml**: 后端服务发现（指向 127.0.0.1:30001）
-- **HTTPRoute.yaml**: HTTP 路由规则（Host: test.example.com）
-- **Service_test-websocket.yaml**: WebSocket 服务定义
-- **EndpointSlice_test-websocket.yaml**: WebSocket 后端服务发现
+- `Service_test-http.yaml`: HTTP test service.
+- `EndpointSlice_test-http.yaml`: Backend discovery for `127.0.0.1:30001`.
+- `HTTPRoute.yaml`: HTTP routing rules for `test.example.com`.
+- `Service_test-websocket.yaml`: WebSocket service.
+- `EndpointSlice_test-websocket.yaml`: WebSocket backend discovery.
 
-### http-match/
+### `http-match/`
 
-- **HTTPRoute_default_match-test.yaml**: HTTP 匹配规则测试路由
-- **HTTPRoute_section-test.yaml**: Section name 匹配测试
-- **HTTPRoute_wildcard.yaml**: 通配符主机名测试
+- `HTTPRoute_default_match-test.yaml`: HTTP route matching tests.
+- `HTTPRoute_section-test.yaml`: `sectionName` matching tests.
+- `HTTPRoute_wildcard.yaml`: Wildcard hostname tests.
 
-### grpc/
+### `grpc/`
 
-- **Service_test-grpc.yaml**: gRPC 服务定义
-- **EndpointSlice_test-grpc.yaml**: gRPC 后端服务发现
-- **GRPCRoute.yaml**: gRPC 路由规则
+- `Service_test-grpc.yaml`: gRPC test service.
+- `EndpointSlice_test-grpc.yaml`: gRPC backend discovery.
+- `GRPCRoute.yaml`: gRPC routing rules.
 
-### grpc-match/
+### `grpc-match/`
 
-- **GRPCRoute_edge_match-test.yaml**: gRPC 匹配规则测试
-- **GRPCRoute_edge_match-test-wrong-section.yaml**: 错误 section 测试
+- `GRPCRoute_edge_match-test.yaml`: gRPC matching tests.
+- `GRPCRoute_edge_match-test-wrong-section.yaml`: Invalid `sectionName` test.
 
-### grpc-tls/
+### `grpc-tls/`
 
-- **GRPCRoute_edge_test-grpc-https.yaml**: gRPC over TLS 路由
+- `GRPCRoute_edge_test-grpc-https.yaml`: gRPC over TLS route.
 
-### lb-roundrobin/
+### `lb-roundrobin/`
 
-RoundRobin 轮询负载均衡测试，验证请求均匀分布到所有后端。
+RoundRobin load-balancing tests verify that requests are evenly distributed across backends.
 
-- **Gateway.yaml**: RoundRobin 测试网关（端口 31120）
-- **Service_default_lb-rr.yaml**: 负载均衡服务定义
-- **EndpointSlice_default_lb-rr.yaml**: 单 slice 后端（3 endpoints）
-- **Endpoints_default_lb-rr.yaml**: Endpoints 资源（用于 EP 模式测试）
-- **HTTPRoute_default_lb-rr-eps.yaml**: EndpointSlice 模式路由
-- **HTTPRoute_default_lb-rr-ep.yaml**: Endpoints 模式路由（kind: ServiceEndpoint）
-- **Service_default_lb-rr-multi.yaml**: 多 slice 测试服务
-- **EndpointSlice_default_lb-rr-multi-1/2.yaml**: 多 slice 后端（2 slices, 4 endpoints）
-- **HTTPRoute_default_lb-rr-multi.yaml**: 多 slice 测试路由
+- `Gateway.yaml`: RoundRobin test gateway on port `31120`.
+- `Service_default_lb-rr.yaml`: Load-balancing service definition.
+- `EndpointSlice_default_lb-rr.yaml`: Single-slice backend with 3 endpoints.
+- `Endpoints_default_lb-rr.yaml`: `Endpoints` resource for EP mode tests.
+- `HTTPRoute_default_lb-rr-eps.yaml`: EndpointSlice mode route.
+- `HTTPRoute_default_lb-rr-ep.yaml`: Endpoints mode route using `kind: ServiceEndpoint`.
+- `Service_default_lb-rr-multi.yaml`: Multi-slice service.
+- `EndpointSlice_default_lb-rr-multi-1/2.yaml`: Multi-slice backend with 4 endpoints across 2 slices.
+- `HTTPRoute_default_lb-rr-multi.yaml`: Multi-slice route.
 
-测试场景：
-1. EndpointSlice 模式（默认）- 单 slice，验证轮询分布
-2. Endpoints 模式 - 使用 ServiceEndpoint kind
-3. 多 slice 模式 - 跨多个 EndpointSlice 的轮询
+Test scenarios:
+1. EndpointSlice mode with a single slice.
+2. Endpoints mode using `ServiceEndpoint`.
+3. Round-robin behavior across multiple EndpointSlices.
 
-### lb-consistenthash/
+### `lb-consistenthash/`
 
-ConsistentHash 一致性哈希测试，验证相同 key 始终路由到相同后端。
+ConsistentHash tests verify that the same key is consistently routed to the same backend.
 
-- **Gateway.yaml**: ConsistentHash 测试网关（端口 31121）
-- **Service_default_lb-ch.yaml**: 服务定义
-- **EndpointSlice_default_lb-ch.yaml**: 单 slice 后端
-- **Endpoints_default_lb-ch.yaml**: Endpoints 资源
-- **HTTPRoute_default_lb-ch-header-eps.yaml**: Header 哈希 + EndpointSlice
-- **HTTPRoute_default_lb-ch-header-ep.yaml**: Header 哈希 + Endpoints
-- **HTTPRoute_default_lb-ch-cookie.yaml**: Cookie 哈希
-- **HTTPRoute_default_lb-ch-arg.yaml**: Query 参数哈希
-- **Service_default_lb-ch-multi.yaml**: 多 slice 测试服务
-- **EndpointSlice_default_lb-ch-multi-1/2.yaml**: 多 slice 后端
-- **HTTPRoute_default_lb-ch-multi.yaml**: 多 slice 一致性哈希
+- `Gateway.yaml`: ConsistentHash test gateway on port `31121`.
+- `Service_default_lb-ch.yaml`: Service definition.
+- `EndpointSlice_default_lb-ch.yaml`: Single-slice backend.
+- `Endpoints_default_lb-ch.yaml`: `Endpoints` resource.
+- `HTTPRoute_default_lb-ch-header-eps.yaml`: Header hash with EndpointSlice mode.
+- `HTTPRoute_default_lb-ch-header-ep.yaml`: Header hash with Endpoints mode.
+- `HTTPRoute_default_lb-ch-cookie.yaml`: Cookie hash route.
+- `HTTPRoute_default_lb-ch-arg.yaml`: Query-parameter hash route.
+- `Service_default_lb-ch-multi.yaml`: Multi-slice test service.
+- `EndpointSlice_default_lb-ch-multi-1/2.yaml`: Multi-slice backend.
+- `HTTPRoute_default_lb-ch-multi.yaml`: Multi-slice consistent-hash route.
 
-测试场景：
-1. Header 哈希 - 基于 x-user-id header
-2. Cookie 哈希 - 基于 session-id cookie
-3. Query 参数哈希 - 基于 user_id 参数
-4. EPS vs EP 模式对比
-5. 多 slice 一致性验证
+Test scenarios:
+1. Header hash using `x-user-id`.
+2. Cookie hash using `session-id`.
+3. Query-parameter hash using `user_id`.
+4. EndpointSlice versus Endpoints mode.
+5. Consistency across multiple slices.
 
-### weighted-backend/
+### `weighted-backend/`
 
-- **Service_edge_backend-*.yaml**: 权重后端服务定义
-- **EndpointSlice_edge_backend-*.yaml**: 多后端服务发现
-- **HTTPRoute_default_weighted-backend.yaml**: 权重路由规则
+- `Service_edge_backend-*.yaml`: Weighted backend services.
+- `EndpointSlice_edge_backend-*.yaml`: Backend discovery for multiple services.
+- `HTTPRoute_default_weighted-backend.yaml`: Weighted routing rules.
 
-### timeout/
+### `timeout/`
 
-- **EdgionPlugins_default_timeout-debug.yaml**: 超时调试插件
-- **HTTPRoute_default_timeout-backend.yaml**: 超时测试路由
+- `EdgionPlugins_default_timeout-debug.yaml`: Timeout debugging plugin.
+- `HTTPRoute_default_timeout-backend.yaml`: Timeout test route.
 
-### mtls/
+### `mtls/`
 
-- **Gateway_edge_mtls-test-gateway.yaml**: mTLS 测试网关
-- **EdgionTls_edge_mtls-test-*.yaml**: 各种 mTLS 配置
-- **HTTPRoute_edge_mtls-test.yaml**: mTLS 测试路由
+- `Gateway_edge_mtls-test-gateway.yaml`: mTLS test gateway.
+- `EdgionTls_edge_mtls-test-*.yaml`: Various mTLS configurations.
+- `HTTPRoute_edge_mtls-test.yaml`: mTLS test route.
 
-### EdgionTls/cipher/
+### `EdgionTls/cipher/`
 
-TLS cipher（加密算法）配置测试，验证 EdgionTls 在 TLS 1.2 时支持自定义 cipher 列表。
+These tests verify that `EdgionTls` supports custom TLS 1.2 cipher lists.
 
-- **Gateway.yaml**: cipher 测试网关（端口 31195/31196）
-- **HTTPRoute.yaml**: cipher 测试路由
-- **EdgionTls_cipher_legacy.yaml**: TLS 1.2 + 弱算法配置（AES128-SHA, AES256-SHA 等）
-- **EdgionTls_cipher_modern.yaml**: TLS 1.2 + 现代算法配置（ECDHE-RSA-AES256-GCM-SHA384 等）
+- `Gateway.yaml`: Cipher test gateway on ports `31195/31196`.
+- `HTTPRoute.yaml`: Cipher test route.
+- `EdgionTls_cipher_legacy.yaml`: TLS 1.2 with legacy ciphers such as `AES128-SHA`.
+- `EdgionTls_cipher_modern.yaml`: TLS 1.2 with modern ciphers such as `ECDHE-RSA-AES256-GCM-SHA384`.
 
-测试用例使用 `openssl s_client` 验证服务端协商的 cipher 是否符合配置。
+The test cases use `openssl s_client` to verify the negotiated server cipher.
 
-### backend-tls/
+### `backend-tls/`
 
-- **BackendTLSPolicy_edge_backend-tls.yaml**: 后端 TLS 策略
-- **Service_edge_test-backend-tls.yaml**: 后端 TLS 服务
-- **EndpointSlice_edge_test-backend-tls.yaml**: 后端 TLS 服务发现
-- **HTTPRoute_edge_backend-tls.yaml**: 后端 TLS 路由
-- **Secret_backend-ca.yaml**: 后端 CA 证书
+- `BackendTLSPolicy_edge_backend-tls.yaml`: Backend TLS policy.
+- `Service_edge_test-backend-tls.yaml`: Backend TLS service.
+- `EndpointSlice_edge_test-backend-tls.yaml`: Backend TLS discovery.
+- `HTTPRoute_edge_backend-tls.yaml`: Backend TLS route.
+- `Secret_backend-ca.yaml`: Backend CA certificate.
 
-### ref-grant-status/
+### `ref-grant-status/`
 
-ReferenceGrant 和 Status 系统集成测试，验证跨命名空间引用的 status 更新。
+ReferenceGrant and status integration tests verify status updates for cross-namespace references.
 
-- **Service_backend_cross-ns-svc.yaml**: backend 命名空间的服务
-- **EndpointSlice_backend_cross-ns-svc.yaml**: 后端服务发现
-- **HTTPRoute_app_cross-ns-route.yaml**: app 命名空间的 HTTPRoute，跨命名空间引用 backend 的 Service
-- **HTTPRoute_app_cross-ns-denied.yaml**: 跨命名空间引用但无 ReferenceGrant（应被拒绝）
-- **HTTPRoute_app_multi-parent.yaml**: 多 parentRefs 测试
-- **ReferenceGrant_backend_allow-app.yaml**: 允许 app 命名空间的 HTTPRoute 引用 backend 的 Service
+- `Service_backend_cross-ns-svc.yaml`: Service in the `backend` namespace.
+- `EndpointSlice_backend_cross-ns-svc.yaml`: Backend service discovery.
+- `HTTPRoute_app_cross-ns-route.yaml`: `HTTPRoute` in `edgion-default` that references a Service in `edgion-backend`.
+- `HTTPRoute_app_cross-ns-denied.yaml`: `HTTPRoute` in `edgion-default` that references a Service in `edgion-system` without a `ReferenceGrant`.
+- `HTTPRoute_app_multi-parent.yaml`: Multiple `parentRefs` test in `edgion-default`.
+- `ReferenceGrant_backend_allow-app.yaml`: Allows `HTTPRoute` in `edgion-default` to reference the Service in `edgion-backend`.
 
-测试场景：
-1. 跨命名空间引用 + 有 ReferenceGrant → ResolvedRefs=True
-2. 跨命名空间引用 + 无 ReferenceGrant → ResolvedRefs=False (RefNotPermitted)
-3. ReferenceGrant 后到 → HTTPRoute 自动 requeue 并更新 status
-4. 多 parentRefs → 每个 parent 独立 status
+Note: the `app` segment in filenames is historical and the current test setup no longer creates additional `app` or `other` namespaces.
 
-## 添加新 suite
+Test scenarios:
+1. Cross-namespace reference with a `ReferenceGrant` results in `ResolvedRefs=True`.
+2. Cross-namespace reference without a `ReferenceGrant` results in `ResolvedRefs=False (RefNotPermitted)`.
+3. A late `ReferenceGrant` automatically requeues the `HTTPRoute` and updates status.
+4. Each `parentRef` gets an independent status entry.
 
-1. 创建对应目录
-2. 添加所需配置文件（Service、EndpointSlice、Route 等）
-3. 配置会自动被扫描和加载（目录名即为 suite 名）
+## Adding a New Suite
+
+1. Create the suite directory.
+2. Add the required resources such as `Service`, `EndpointSlice`, and `Route`.
+3. The loader will discover and load the suite automatically based on the directory name.

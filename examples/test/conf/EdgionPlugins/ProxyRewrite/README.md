@@ -1,89 +1,89 @@
-# ProxyRewrite 插件集成测试
+# ProxyRewrite Integration Tests
 
-## 文件结构
+## File Layout
 
-```
+```text
 ProxyRewrite/
-├── EdgionPlugins_default_proxy-rewrite.yaml  # 插件配置 (所有场景)
-├── HTTPRoute_default_proxy-rewrite.yaml      # 路由配置 (所有场景)
+├── EdgionPlugins_default_proxy-rewrite.yaml  # Plugin configuration for all scenarios
+├── HTTPRoute_default_proxy-rewrite.yaml      # Route configuration for all scenarios
 └── README.md
 ```
 
-## 测试场景
+## Test Scenarios
 
-### 1. URI 重写 (`/uri/*`)
+### 1. URI Rewrite (`/uri/*`)
 
-| 路径 | 测试内容 |
+| Path | Coverage |
 |------|----------|
-| `/uri/simple/*` | 简单替换为固定值 |
-| `/uri/var/*` | 使用 `$uri` 变量 |
-| `/uri/arg/*` | 使用 `$arg_xxx` 变量 |
+| `/uri/simple/*` | Replace the URI with a fixed value |
+| `/uri/var/*` | Use the `$uri` variable |
+| `/uri/arg/*` | Use `$arg_xxx` variables |
 
-### 2. Regex URI 重写 (`/regex/*`)
+### 2. Regex URI Rewrite (`/regex/*`)
 
-| 路径 | 测试内容 |
+| Path | Coverage |
 |------|----------|
-| `/regex/users/:id` | 单捕获组 `$1` |
-| `/regex/api/:type/:id/:action` | 多捕获组 |
-| `/regex/profile/:id` | 捕获组用于 Header |
+| `/regex/users/:id` | Single capture group `$1` |
+| `/regex/api/:type/:id/:action` | Multiple capture groups |
+| `/regex/profile/:id` | Reuse a capture group in a header |
 
-### 3. Host/Method 重写
+### 3. Host and Method Rewrite
 
-| 路径 | 测试内容 |
+| Path | Coverage |
 |------|----------|
-| `/host/rewrite/*` | Host 重写 |
-| `/method/to-post/*` | GET -> POST |
-| `/combo/full/*` | URI + Host + Method |
+| `/host/rewrite/*` | Rewrite the `Host` header |
+| `/method/to-post/*` | Convert `GET` to `POST` |
+| `/combo/full/*` | Rewrite URI, host, and method together |
 
-### 4. Headers 操作 (`/headers/*`)
+### 4. Header Operations (`/headers/*`)
 
-| 路径 | 测试内容 |
+| Path | Coverage |
 |------|----------|
-| `/headers/add/*` | 添加 Header |
-| `/headers/set/*` | 设置 Header |
-| `/headers/remove/*` | 删除 Header |
-| `/headers/combo/*` | add + set + remove |
+| `/headers/add/*` | Add headers |
+| `/headers/set/*` | Set headers |
+| `/headers/remove/*` | Remove headers |
+| `/headers/combo/*` | Combine add, set, and remove |
 
-### 5. 路径参数变量 (`/params/*`)
+### 5. Path Parameter Variables (`/params/*`)
 
-| 路由 Pattern | 测试内容 |
-|--------------|----------|
-| `/params/uri/:uid` | `$uid` 用于 URI |
-| `/params/header/:uid/:action` | 多参数用于 Header |
-| `/params/mixed/:service/:resource` | 路径参数 + Query 参数 |
+| Route Pattern | Coverage |
+|---------------|----------|
+| `/params/uri/:uid` | Use `$uid` in the URI |
+| `/params/header/:uid/:action` | Use multiple path params in headers |
+| `/params/mixed/:service/:resource` | Combine path params with query params |
 
-### 6. 综合测试 (`/full/*`)
+### 6. Combined Tests (`/full/*`)
 
-| 路由 Pattern | 测试内容 |
-|--------------|----------|
-| `/full/api/:uid` | 完整 API 网关重写 |
-| `/full/query/*` | Query String 保留 |
+| Route Pattern | Coverage |
+|---------------|----------|
+| `/full/api/:uid` | Full API gateway rewrite flow |
+| `/full/query/*` | Preserve the query string |
 
-## 变量支持
+## Supported Variables
 
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `$uri` | 原始请求路径 | `/api/v1/users` |
-| `$arg_<name>` | Query 参数 | `$arg_keyword` |
-| `$1-$9` | Regex 捕获组 | `$1`, `$2` |
-| `$<name>` | 路径参数 | `$uid`, `$service` |
+| Variable | Meaning | Example |
+|----------|---------|---------|
+| `$uri` | Original request path | `/api/v1/users` |
+| `$arg_<name>` | Query parameter | `$arg_keyword` |
+| `$1-$9` | Regex capture groups | `$1`, `$2` |
+| `$<name>` | Path parameter | `$uid`, `$service` |
 
-## 测试命令
+## Test Commands
 
 ```bash
 # Host: proxy-rewrite.example.com
 
-# URI 重写
+# URI rewrite
 curl -H "Host: proxy-rewrite.example.com" http://localhost:31180/uri/simple/test
 curl -H "Host: proxy-rewrite.example.com" http://localhost:31180/uri/arg/test?keyword=hello&lang=en
 
-# Regex 重写
+# Regex rewrite
 curl -H "Host: proxy-rewrite.example.com" http://localhost:31180/regex/users/123
 
-# 路径参数
+# Path parameters
 curl -H "Host: proxy-rewrite.example.com" http://localhost:31180/params/uri/456/data
 curl -H "Host: proxy-rewrite.example.com" http://localhost:31180/params/header/789/edit
 
-# 综合测试
+# Combined flow
 curl -H "Host: proxy-rewrite.example.com" http://localhost:31180/full/api/999/profile?trace_id=abc123
 ```

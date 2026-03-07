@@ -103,6 +103,17 @@ pub struct ForwardAuthConfig {
     /// Comparable to APISIX's `status_on_error`.
     #[serde(default = "default_status_on_error")]
     pub status_on_error: u16,
+
+    /// Remove Authorization header from the upstream request after successful auth.
+    /// Default: false.
+    #[serde(default)]
+    pub hide_credentials: bool,
+
+    /// Delay in milliseconds before returning an authentication failure response.
+    /// Increases the time cost for brute-force / credential-stuffing attacks.
+    /// Default: 0 (no delay).
+    #[serde(default)]
+    pub auth_failure_delay_ms: u64,
 }
 
 fn default_method() -> String {
@@ -129,6 +140,8 @@ impl Default for ForwardAuthConfig {
             success_status_codes: None,
             allow_degradation: false,
             status_on_error: default_status_on_error(),
+            hide_credentials: false,
+            auth_failure_delay_ms: 0,
         }
     }
 }

@@ -1,0 +1,13 @@
+# EdgionTls HTTPS  Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-http
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

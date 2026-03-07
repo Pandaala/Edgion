@@ -24,6 +24,9 @@ DO_CLEANUP=true
 # Whether to run full tests including slow tests (default: false for faster iteration)
 FULL_TEST=false
 
+# Required open files limit for integration run.
+REQUIRED_NOFILE=65535
+
 # Report file path (will be set after WORK_DIR is determined)
 REPORT_FILE=""
 
@@ -66,6 +69,7 @@ log_section() {
 # Slow tests list (skipped by default, run with --full-test)
 SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
+    "HTTPRoute_Backend_HealthCheckTransition"
     "EdgionPlugins_AllEndpointStatus"
     "EdgionPlugins_LdapAuth"
 )
@@ -111,6 +115,50 @@ check_docker_environment_ready() {
     fi
 
     log_success "Docker environment is ready"
+    return 0
+}
+
+ensure_nofile_limit() {
+    local required="${1:-65535}"
+    local soft hard
+
+    soft=$(ulimit -Sn 2>/dev/null || true)
+    hard=$(ulimit -Hn 2>/dev/null || true)
+
+    if [ -z "$soft" ] || [ -z "$hard" ]; then
+        log_error "Cannot read current ulimit -n (soft/hard). Please run in a shell that supports ulimit."
+        return 1
+    fi
+
+    if [ "$soft" = "unlimited" ]; then
+        log_success "ulimit -n is unlimited"
+        return 0
+    fi
+
+    if [ "$soft" -ge "$required" ]; then
+        log_success "ulimit -n is sufficient (current: $soft, required: $required)"
+        return 0
+    fi
+
+    log_info "Current ulimit -n is too low (soft=$soft hard=$hard), trying to set soft limit to $required"
+    if ! ulimit -Sn "$required" 2>/dev/null; then
+        log_error "Failed to set ulimit -n to $required (current soft=$soft hard=$hard)"
+        echo "Please increase your shell file descriptor limit and rerun:"
+        echo "  ulimit -n $required"
+        return 1
+    fi
+
+    soft=$(ulimit -Sn 2>/dev/null || true)
+    if [ -z "$soft" ]; then
+        log_error "ulimit -n is still below required value after setting (current: ${soft:-unknown}, required: $required)"
+        return 1
+    fi
+    if [ "$soft" != "unlimited" ] && [ "$soft" -lt "$required" ]; then
+        log_error "ulimit -n is still below required value after setting (current: ${soft:-unknown}, required: $required)"
+        return 1
+    fi
+
+    log_success "ulimit -n set successfully (current: $soft)"
     return 0
 }
 
@@ -166,29 +214,29 @@ finalize_report() {
 # Dynamic Test function
 # =============================================================================
 run_dynamic_tests() {
-    local stage=${1:-0}  # 0=完整，1=仅初始，2=仅更新后
+    local stage=${1:-0}  # 0=，1=，2=
     local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
     local conf_dir="${PROJECT_ROOT}/examples/test/conf"
     local controller_url="http://127.0.0.1:5800"
     local gateway_url="http://127.0.0.1:5900"
     
-    log_section "🔄 Gateway 动态性测试"
+    log_section "🔄 Gateway "
     
     if [ $stage -eq 0 ] || [ $stage -eq 1 ]; then
-        log_info ">>> 阶段 1/2: 初始配置验证"
+        log_info ">>>  1/2: "
         
-        # 运行初始阶段测试（验证约束生效）
+        # （）
         run_test "Dynamic_Initial_Phase" \
             "${PROJECT_ROOT}/target/debug/examples/test_client \
              -g -r Gateway -i Dynamic --phase initial" || test_failed=true
         
-        log_success "初始阶段测试完成"
+        log_success ""
     fi
     
     if [ $stage -eq 0 ]; then
-        log_section "📦 加载动态更新配置"
+        log_section "📦 "
         
-        # 1. 加载更新配置
+        # 1. 
         log_info "Applying updates from DynamicTest/updates/..."
         "${edgion_ctl}" --server "${controller_url}" \
             apply -f "${conf_dir}/Gateway/DynamicTest/updates/" || {
@@ -196,12 +244,12 @@ run_dynamic_tests() {
             return 1
         }
         
-        # 2. 处理删除操作
+        # 2. 
         if [ -f "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt" ]; then
             log_info "Deleting resources..."
             while IFS= read -r resource; do
                 [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
-                # 解析格式: Kind/Namespace/Name
+                # : Kind/Namespace/Name
                 IFS='/' read -r kind namespace name <<< "$resource"
                 if [ -n "$kind" ] && [ -n "$namespace" ] && [ -n "$name" ]; then
                     log_info "Deleting: $kind/$namespace/$name"
@@ -210,7 +258,7 @@ run_dynamic_tests() {
             done < "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt"
         fi
         
-        # 3. 验证资源同步（不阻止阶段2执行）
+        # 3. （2）
         log_info "Verifying resource synchronization..."
         run_test "Resource_Diff_After_Dynamic_Update" \
             "${PROJECT_ROOT}/target/debug/examples/resource_diff \
@@ -219,25 +267,25 @@ run_dynamic_tests() {
             log_info "Resource sync has some issues (non-blocking, continuing...)"
         }
         
-        # 4. 等待配置生效
+        # 4. 
         log_info "Waiting 3s for configuration to take effect..."
         sleep 3
         
-        log_success "动态配置加载完成"
+        log_success ""
     fi
     
     if [ $stage -eq 0 ] || [ $stage -eq 2 ]; then
-        log_info ">>> 阶段 2/2: 动态更新后验证"
+        log_info ">>>  2/2: "
         
-        # 运行更新后测试（验证约束变更生效）
+        # （）
         run_test "Dynamic_After_Update_Phase" \
             "${PROJECT_ROOT}/target/debug/examples/test_client \
              -g -r Gateway -i Dynamic --phase update" || test_failed=true
         
-        log_success "更新阶段测试完成"
+        log_success ""
     fi
     
-    log_section "✅ 动态性测试完成"
+    log_section "✅ "
 }
 
 # =============================================================================
@@ -487,11 +535,17 @@ run_all_tests() {
                     run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Basic" || test_failed=true
                     run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Match" || test_failed=true
                     run_test "HTTPRoute_Backend" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend" || test_failed=true
+                    if ! should_skip_test "HTTPRoute_Backend_HealthCheckTransition"; then
+                        run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check-transition" || test_failed=true
+                    else
+                        log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
+                    fi
                     run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
                     run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
                 else
                     # Run specified sub-item test
-                    run_test "HTTPRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "HTTPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             GRPCRoute)
@@ -499,7 +553,8 @@ run_all_tests() {
                     run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
                     run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
                 else
-                    run_test "GRPCRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "GRPCRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             TCPRoute)
@@ -507,7 +562,18 @@ run_all_tests() {
                     run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
                     run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
                 else
-                    run_test "TCPRoute_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "TCPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            TLSRoute)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Basic" || test_failed=true
+                    run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
+                    run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
+                else
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "TLSRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             UDPRoute)
@@ -523,6 +589,7 @@ run_all_tests() {
                     run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
                     run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
                     run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
                     run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
                     run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
                 else
@@ -542,6 +609,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
                     run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
                     run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+                    run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_LdapAuth"; then
                         run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
                     else
@@ -550,6 +618,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
+                    run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
@@ -582,7 +651,8 @@ run_all_tests() {
                     run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
                     run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
                 else
-                    run_test "EdgionTls_${G_ITEM}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "EdgionTls_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             ReferenceGrant)
@@ -616,10 +686,16 @@ run_all_tests() {
         run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-rr" || test_failed=true
         run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-ch" || test_failed=true
         run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
+        run_test "HTTPRoute_Backend_HealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check" || test_failed=true
         if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
             run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
         else
             log_info "Skipping slow test: HTTPRoute_Backend_Timeout (use --full-test to run)"
+        fi
+        if ! should_skip_test "HTTPRoute_Backend_HealthCheckTransition"; then
+            run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check-transition" || test_failed=true
+        else
+            log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
         fi
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
@@ -632,6 +708,11 @@ run_all_tests() {
         # TCPRoute Tests
         run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
         run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
+        
+        # TLSRoute Tests
+        run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Basic" || test_failed=true
+        run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
+        run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
         
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
@@ -650,6 +731,7 @@ run_all_tests() {
         run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
         run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
         run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+        run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
         if ! should_skip_test "EdgionPlugins_LdapAuth"; then
             run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
         else
@@ -658,6 +740,7 @@ run_all_tests() {
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
         run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
+        run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
@@ -678,6 +761,7 @@ run_all_tests() {
         run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
         run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
         run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
         run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
         run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
         
@@ -781,7 +865,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth"
                 fi
@@ -835,6 +919,11 @@ main() {
     echo ""
     
     cd "$PROJECT_ROOT"
+
+    if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
+        log_error "File descriptor limit check failed"
+        exit 1
+    fi
 
     if ! check_docker_environment_ready; then
         log_error "Docker environment check failed"
@@ -896,6 +985,7 @@ main() {
         
         # Set environment variables
         export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
+        export EDGION_WORK_DIR="${WORK_DIR}"
         
         log_success "All services started, config loaded"
         log_info "Work directory: ${WORK_DIR}"
@@ -904,6 +994,7 @@ main() {
         if [ -f "${PROJECT_ROOT}/integration_testing/.current" ]; then
             WORK_DIR=$(cat "${PROJECT_ROOT}/integration_testing/.current")
             export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
+            export EDGION_WORK_DIR="${WORK_DIR}"
             log_info "Using existing work directory: ${WORK_DIR}"
         fi
     fi

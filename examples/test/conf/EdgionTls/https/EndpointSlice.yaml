@@ -1,4 +1,4 @@
-# EdgionTls HTTPS 测试 EndpointSlice
+# EdgionTls HTTPS  EndpointSlice
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:

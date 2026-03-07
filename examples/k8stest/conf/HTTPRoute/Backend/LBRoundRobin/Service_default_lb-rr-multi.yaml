@@ -1,0 +1,13 @@
+# LB RoundRobin  Slice 
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-rr-multi-service
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server-multi
+  ports:
+    - port: 8080
+      targetPort: 30001
+      protocol: TCP

@@ -20,20 +20,15 @@ pub const EDGION_ACME_KIND: &str = "EdgionAcme";
 // ============================================================================
 
 /// ACME challenge type
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 pub enum AcmeChallengeType {
     /// HTTP-01 challenge: ACME server validates domain ownership via HTTP request
     #[serde(rename = "http-01")]
+    #[default]
     Http01,
     /// DNS-01 challenge: ACME server validates domain ownership via DNS TXT record
     #[serde(rename = "dns-01")]
     Dns01,
-}
-
-impl Default for AcmeChallengeType {
-    fn default() -> Self {
-        Self::Http01
-    }
 }
 
 /// HTTP-01 challenge configuration
@@ -98,20 +93,15 @@ pub struct AcmeChallengeConfig {
 // ============================================================================
 
 /// Certificate key algorithm
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 pub enum AcmeKeyType {
     /// ECDSA P-256 (recommended, smaller and faster)
     #[serde(rename = "ecdsa-p256")]
+    #[default]
     EcdsaP256,
     /// ECDSA P-384
     #[serde(rename = "ecdsa-p384")]
     EcdsaP384,
-}
-
-impl Default for AcmeKeyType {
-    fn default() -> Self {
-        Self::EcdsaP256
-    }
 }
 
 // ============================================================================
@@ -312,9 +302,10 @@ fn default_acme_server() -> String {
 // ============================================================================
 
 /// ACME certificate status phase
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 pub enum AcmeCertPhase {
     /// No certificate yet, waiting for initial issuance
+    #[default]
     Pending,
     /// ACME order in progress (challenge validation, certificate issuance)
     Issuing,
@@ -324,12 +315,6 @@ pub enum AcmeCertPhase {
     Renewing,
     /// Last operation failed
     Failed,
-}
-
-impl Default for AcmeCertPhase {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 /// EdgionAcme resource status

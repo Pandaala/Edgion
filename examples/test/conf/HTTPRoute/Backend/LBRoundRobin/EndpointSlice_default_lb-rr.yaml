@@ -1,4 +1,4 @@
-# 单 EndpointSlice, 3 个 endpoints - RoundRobin 测试
+#  EndpointSlice, 3  endpoints - RoundRobin 
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:

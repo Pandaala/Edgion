@@ -1,5 +1,5 @@
 use clap::Parser;
-use edgion::core::cli::edgion_ctl::Cli;
+use edgion::core::ctl::Cli;
 
 #[tokio::main]
 async fn main() {

@@ -1,0 +1,13 @@
+# WebSocket 
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-websocket
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - port: 30005
+      targetPort: 30005
+      protocol: TCP

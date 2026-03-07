@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edgion-test-openldap-seed
+  namespace: edgion-test
+data:
+  10-users.ldif: |
+    dn: ou=people,dc=example,dc=org
+    objectClass: organizationalUnit
+    ou: people
+
+    dn: uid=alice,ou=people,dc=example,dc=org
+    objectClass: inetOrgPerson
+    cn: Alice
+    sn: User
+    uid: alice
+    userPassword: password123
+
+    dn: uid=bob,ou=people,dc=example,dc=org
+    objectClass: inetOrgPerson
+    cn: Bob
+    sn: User
+    uid: bob
+    userPassword: password456

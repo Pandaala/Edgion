@@ -1,0 +1,21 @@
+# ForwardAuth with authFailureDelayMs = 300ms
+# When auth service returns 401/403, response is delayed 300ms before being returned
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-delay
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        uri: "http://edgion-test-server.edgion-test.svc.cluster.local:30040/verify"
+        requestMethod: GET
+        timeoutMs: 5000
+        authFailureDelayMs: 300
+        upstreamHeaders:
+          - X-User-ID
+          - X-User-Role
+        clientHeaders:
+          - WWW-Authenticate

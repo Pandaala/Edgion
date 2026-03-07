@@ -1,0 +1,14 @@
+# EdgionTls gRPC TLS  Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-grpc-tls
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: grpc
+      port: 30022
+      targetPort: 30022
+      protocol: TCP

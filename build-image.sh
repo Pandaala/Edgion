@@ -27,6 +27,7 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
+CONF_ENV_FILE="${CONF_ENV_FILE:-${PROJECT_DIR}/examples/k8stest/scripts/conf.env}"
 
 # Binaries to build
 BINARIES="gateway controller"
@@ -49,23 +50,35 @@ get_arch_info() {
     esac
 }
 
-# Auto-detect version from git tag
+# Load defaults from conf.env if present.
+# Explicit env vars passed by caller still take precedence.
+if [[ -f "${CONF_ENV_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONF_ENV_FILE}"
+fi
+
+# Respect IMAGE_VERSION from conf/env as VERSION default.
+if [[ -z "${VERSION:-}" ]] && [[ -n "${IMAGE_VERSION:-}" ]]; then
+    VERSION="${IMAGE_VERSION}"
+fi
+
+# Auto-detect version from git tag when VERSION is still unset.
 if [[ -z "${VERSION:-}" ]]; then
     if git rev-parse --git-dir > /dev/null 2>&1; then
         GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
         if [[ -n "${GIT_TAG}" ]]; then
             VERSION="${GIT_TAG}"
         else
-            VERSION="dev"
+            VERSION="dev1"
         fi
     else
-        VERSION="dev"
+        VERSION="dev1"
     fi
 fi
 
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-RUST_VERSION="${RUST_VERSION:-1.92}"
+RUST_VERSION="${RUST_VERSION:-1.87}"
 FEATURES="${FEATURES:-default}"
 BUILDER_IMAGE="edgion-builder"
 
@@ -110,15 +123,17 @@ Options:
                         Available: arm64, amd64
     --push              Push images and create multi-arch manifest
     --rebuild           Force rebuild binaries (ignore cache)
-    --version TAG       Specify version tag (default: git tag or "dev")
+    --version TAG       Specify version tag (default: git tag or "dev1")
     --compile-only      Only compile binaries, don't build images
     --with-examples     Also build test_server and test_client images
+    --with-example      Alias of --with-examples
     -h, --help          Show this help message
 
 Environment Variables:
+    CONF_ENV_FILE       Path to env config file (default: examples/k8stest/scripts/conf.env)
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
-    VERSION             Image version (overrides git tag detection)
+    VERSION             Image version (overrides conf.env and git tag detection)
     RUST_VERSION        Rust version for builder (default: 1.87)
     FEATURES            Cargo features (default: default)
 
@@ -250,31 +265,25 @@ compile_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local output_dir="${PROJECT_DIR}/target/${target}/release"
     local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
-
-    # Check if binaries already exist
-    local need_build=false
-    if [[ "${force_rebuild}" == "true" ]]; then
-        need_build=true
-        log_info "Force rebuild requested for ${arch}"
-    elif [[ ! -f "${output_dir}/edgion-gateway" ]] || \
-         [[ ! -f "${output_dir}/edgion-controller" ]] || \
-         [[ ! -f "${output_dir}/edgion-ctl" ]]; then
-        need_build=true
-        log_info "Missing binaries for ${arch}, will compile"
-    fi
-
-    if [[ "${need_build}" == "false" ]]; then
-        log_success "Binaries for ${arch} already exist (use --rebuild to recompile)"
-        return 0
-    fi
 
     log_info "Compiling binaries for ${arch} (${target})..."
     log_info "This may take several minutes on first build..."
 
     # Ensure builder image exists
     ensure_builder_image "${platform}"
+
+    local build_cmd="cargo build --release \
+            --target \"${target}\" \
+            --bin edgion-gateway \
+            --bin edgion-controller \
+            --bin edgion-ctl \
+            --features \"${FEATURES}\""
+
+    if [[ "${force_rebuild}" == "true" ]]; then
+        log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
+        build_cmd="cargo clean --target \"${target}\" && ${build_cmd}"
+    fi
 
     # Run compilation in Docker
     docker run --rm \
@@ -284,12 +293,7 @@ compile_binaries() {
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
         -w /project \
         "${builder_tag}" \
-        cargo build --release \
-            --target "${target}" \
-            --bin edgion-gateway \
-            --bin edgion-controller \
-            --bin edgion-ctl \
-            --features "${FEATURES}"
+        bash -c "${build_cmd}"
         
         if [[ $? -ne 0 ]]; then
         log_error "Compilation failed for ${arch}"
@@ -310,29 +314,22 @@ compile_examples() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local output_dir="${PROJECT_DIR}/target/${target}/release/examples"
     local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
-
-    # Check if examples already exist
-    local need_build=false
-    if [[ "${force_rebuild}" == "true" ]]; then
-        need_build=true
-        log_info "Force rebuild requested for examples (${arch})"
-    elif [[ ! -f "${output_dir}/test_server" ]] || \
-         [[ ! -f "${output_dir}/test_client" ]]; then
-        need_build=true
-        log_info "Missing examples for ${arch}, will compile"
-    fi
-
-    if [[ "${need_build}" == "false" ]]; then
-        log_success "Examples for ${arch} already exist (use --rebuild to recompile)"
-        return 0
-    fi
 
     log_info "Compiling examples for ${arch} (${target})..."
 
     # Ensure builder image exists
     ensure_builder_image "${platform}"
+
+    local build_cmd="cargo build --release \
+            --target \"${target}\" \
+            --examples \
+            --features \"${FEATURES}\""
+
+    if [[ "${force_rebuild}" == "true" ]]; then
+        # Do not clean here: binaries compiled in Stage 2 are needed by Stage 3 image packaging.
+        log_info "Force rebuild requested for examples (${arch}): rebuilding examples without target clean"
+    fi
 
     # Run compilation in Docker
     docker run --rm \
@@ -342,10 +339,7 @@ compile_examples() {
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
         -w /project \
         "${builder_tag}" \
-        cargo build --release \
-            --target "${target}" \
-            --examples \
-            --features "${FEATURES}"
+        bash -c "${build_cmd}"
 
     if [[ $? -ne 0 ]]; then
         log_error "Examples compilation failed for ${arch}"
@@ -443,9 +437,18 @@ build_example_images() {
         local image_name="${example//_/-}"
         local image_base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
         local image_tag="${image_base}:${version}_${suffix}"
+        local runtime_base="debian:bookworm-slim"
+        local extra_packages=""
+
+        # test_client image should include debug/test tools.
+        if [[ "${example}" == "test_client" ]]; then
+            runtime_base="ubuntu:24.04"
+            extra_packages="curl bash"
+        fi
 
         log_info "Building ${example} image for ${arch}..."
         log_info "  Tag: ${image_tag}"
+        log_info "  Runtime base: ${runtime_base}"
 
         local build_cmd=(
             docker buildx build
@@ -453,6 +456,8 @@ build_example_images() {
             --build-arg "BINARY=${example}"
             --build-arg "BUILD_TYPE=example"
             --build-arg "BINARY_PATH=${bin_path}"
+            --build-arg "RUNTIME_BASE=${runtime_base}"
+            --build-arg "EXTRA_PACKAGES=${extra_packages}"
             --platform "${platform}"
             --tag "${image_tag}"
         )
@@ -646,7 +651,7 @@ main() {
                 compile_only=true
                 shift
                 ;;
-            --with-examples)
+            --with-examples|--with-example)
                 with_examples=true
                 shift
                 ;;

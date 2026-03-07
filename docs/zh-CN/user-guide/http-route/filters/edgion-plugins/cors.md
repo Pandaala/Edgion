@@ -490,7 +490,7 @@ spec:
 
 - [MDN: CORS 详细说明](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)
 - [WHATWG Fetch Standard](https://fetch.spec.whatwg.org/)
-- Edgion 网关文档：[插件系统](./plugins.md)
+- [过滤器总览](../overview.md)
 
 ---
 
@@ -504,4 +504,3 @@ spec:
 4. 提交 Issue 到 GitHub
 
 **记住**：CORS 是浏览器的安全机制，服务端配置正确后，由浏览器负责验证和执行。
-

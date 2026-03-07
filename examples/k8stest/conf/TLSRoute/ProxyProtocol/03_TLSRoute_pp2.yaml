@@ -1,0 +1,20 @@
+# TLSRoute with Proxy Protocol v2 enabled (K8s)
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: tls-pp2-route
+  namespace: edgion-test
+  annotations:
+    edgion.io/proxy-protocol: "v2"
+spec:
+  parentRefs:
+    - name: tls-route-pp2-gw
+      namespace: edgion-test
+      sectionName: tls-pp2
+  hostnames:
+    - "*.pp2.example.com"
+  rules:
+    - backendRefs:
+        - name: test-tcp-pp2
+          port: 30012
+          weight: 100

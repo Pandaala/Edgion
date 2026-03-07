@@ -1,19 +1,19 @@
 #!/bin/bash
 # =============================================================================
 # Edgion CI Checkscript
-# ForRun fmt、clippy 和unitTest
+# ForRun fmtclippy unitTest
 # =============================================================================
 
 set -e
 
-# 颜色定义
+# 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# project根directory
+# projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
@@ -34,19 +34,19 @@ usage() {
     echo "  -f, --fmt-only      OnlyRun fmt Check"
     echo "  -c, --clippy-only   OnlyRun clippy Check"
     echo "  -t, --test-only     OnlyRununitTest"
-    echo "  --fix               autofix fmt 和 clippy issues"
+    echo "  --fix               autofix fmt  clippy issues"
     echo "  -v, --verbose       Showdetailedoutput"
     echo "  -h, --help          Showhelpinfo"
     echo ""
     echo "Examples:"
     echo "  $0                  # RunallCheck"
-    echo "  $0 --fix            # RunallCheck并autofix"
+    echo "  $0 --fix            # RunallCheckautofix"
     echo "  $0 -f               # OnlyCheckformat"
     echo "  $0 -c -v            # OnlyRun clippy，Showdetailedoutput"
 }
 
 # =============================================================================
-# log函数
+# log
 # =============================================================================
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -114,7 +114,7 @@ parse_args() {
 }
 
 # =============================================================================
-# Check函数
+# Check
 # =============================================================================
 
 # Run cargo fmt
@@ -146,7 +146,7 @@ run_clippy() {
     
     cd "$PROJECT_ROOT"
     
-    # Note:不use --all-features，因为 TLS after端（boringssl/openssl/rustls）mutually exclusive
+    # Note:use --all-features， TLS after（boringssl/openssl/rustls）mutually exclusive
     local clippy_args="--all-targets"
     
     if $FIX_MODE; then
@@ -166,7 +166,7 @@ run_clippy() {
                 return 1
             fi
         else
-            # captureoutput，Only在failed时Show
+            # captureoutput，OnlyfailedShow
             if output=$(cargo clippy $clippy_args -- -D warnings 2>&1); then
                 log_success "Clippy check passed"
                 return 0
@@ -202,7 +202,7 @@ run_tests() {
 }
 
 # =============================================================================
-# 主函数
+# 
 # =============================================================================
 main() {
     parse_args "$@"
@@ -215,7 +215,7 @@ main() {
     echo -e "Project: ${PROJECT_ROOT}"
     echo -e "Mode: $(if $FIX_MODE; then echo 'Fix'; else echo 'Check'; fi)"
     
-    # Run各项Check
+    # RunCheck
     if $RUN_FMT; then
         if ! run_fmt; then
             failed=true
@@ -234,7 +234,7 @@ main() {
         fi
     fi
     
-    # 总结
+    # 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     

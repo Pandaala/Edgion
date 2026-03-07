@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: backend-tls-test
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: backend-tls-gateway
+      namespace: edgion-test
+  hostnames:
+    - "test.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /backend-tls/
+      backendRefs:
+        - name: test-backend-tls
+          port: 30051
+

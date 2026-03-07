@@ -1,0 +1,15 @@
+# Backend service for PP2-aware TCP echo server (K8s)
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-tcp-pp2
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: tcp-pp2
+      port: 30012
+      protocol: TCP
+      targetPort: 30012
+  type: ClusterIP

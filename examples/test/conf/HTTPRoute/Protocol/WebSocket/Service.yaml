@@ -1,4 +1,4 @@
-# WebSocket 测试套件服务
+# WebSocket 
 apiVersion: v1
 kind: Service
 metadata:

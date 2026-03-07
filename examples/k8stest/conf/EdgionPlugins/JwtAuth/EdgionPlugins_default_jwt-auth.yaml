@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: jwt-auth-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JwtAuth
+      config:
+        secretRef:
+          name: jwt-secret
+          namespace: edgion-default
+        algorithm: HS256
+        header: authorization
+        query: jwt
+        cookie: jwt
+        keyClaimName: key
+        hideCredentials: false
+

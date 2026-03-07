@@ -1,0 +1,37 @@
+# EdgionGatewayConfig for conformance testing.
+# Referenced by GatewayClass 'edgion' via parametersRef.
+# Cluster-scoped resource (no namespace).
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: conformance-gateway
+spec:
+  server:
+    threads: 2
+    workStealing: true
+    gracePeriodSeconds: 10
+    gracefulShutdownTimeoutS: 5
+    upstreamKeepalivePoolSize: 64
+
+  realIp:
+    trustedIps:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+      - "127.0.0.0/8"
+    realIpHeader: "X-Forwarded-For"
+
+  securityProtect:
+    xForwardedForLimit: 500
+    requireSniHostMatch: false
+
+  httpTimeout:
+    client:
+      readTimeout: 60s
+      writeTimeout: 60s
+      keepaliveTimeout: 75s
+    backend:
+      defaultConnectTimeout: 5s
+      defaultRequestTimeout: 60s
+      defaultIdleTimeout: 300s
+      defaultMaxRetries: 3

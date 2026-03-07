@@ -261,9 +261,9 @@ kubectl get edgionstreamplugins <name> -o yaml
 
 ## 下一步
 
-- 📖 [完整 Annotations 参考](../../../dev-guide/annotations-guide.md)
-- 🔧 [添加自定义插件](../../../dev-guide/add-new-resource-guide.md)
-- 🏗️ [架构设计](../../../dev-guide/architecture-overview.md)
+- 📖 [完整 Annotations 参考](../../dev-guide/annotations-guide.md)
+- 🔧 [添加自定义插件](../../dev-guide/add-new-resource-guide.md)
+- 🏗️ [架构设计](../../dev-guide/architecture-overview.md)
 
 ---
 

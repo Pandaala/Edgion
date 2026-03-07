@@ -1,0 +1,25 @@
+# KeyAuth with hideCredentials enabled
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: key-auth-hide-creds
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        # Enable hiding credentials
+        hideCredentials: true
+        realm: "Test API"
+        keyField: "key"
+        secretRefs:
+          - name: api-keys
+            namespace: edgion-default
+        upstreamHeaderFields:
+          - "X-Consumer-Username"
+          - "X-Customer-ID"
+

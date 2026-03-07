@@ -25,108 +25,6 @@ spec:
               description: "EdgionPlugins specification"
               properties:
                 # ============================================
-                # Reusable Schema Definitions (YAML Anchors)
-                # ============================================
-                # KeyGet schema - reusable key accessor definition
-                x-definitions:
-                  keyGet: &keyGetSchema
-                    type: object
-                    description: "Key accessor (KeyGet) - source for reading values"
-                    properties:
-                      type:
-                        type: string
-                        description: "Key source type"
-                        enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath, webhook]
-                      name:
-                        type: string
-                        description: "Key name (required for header, cookie, query, ctx)"
-                      webhookRef:
-                        type: string
-                        description: "Reference to LinkSys Webhook resource: 'namespace/name' (required for webhook type)"
-                      extract:
-                        type: object
-                        description: "How to extract key value from webhook response (required for webhook type)"
-                        properties:
-                          source:
-                            type: string
-                            description: "Extraction source"
-                            enum: [header, cookie, body, bodyText]
-                          name:
-                            type: string
-                            description: "Header or cookie name (required for header/cookie source)"
-                          path:
-                            type: string
-                            description: "JSON dot-path (required for body source)"
-
-                  # KeyGet array schema - for multiple keys (e.g., RateLimit composite key)
-                  keyGetArray: &keyGetArraySchema
-                    type: array
-                    description: "Array of key accessors, combined with '_' separator"
-                    items: *keyGetSchema
-
-                  # Single condition schema
-                  condition: &conditionSchema
-                    type: object
-                    description: "A single condition (tagged union with 'type' field)"
-                    properties:
-                      type:
-                        type: string
-                        description: "Condition type"
-                        enum: [keyExist, keyMatch, timeRange, probability, include, exclude]
-                      # KeyGet for key-based conditions
-                      key: *keyGetSchema
-                      # keyMatch specific fields
-                      value:
-                        type: string
-                        description: "Exact value to match (keyMatch)"
-                      values:
-                        type: array
-                        description: "Multiple values to match (keyMatch, include, exclude)"
-                        items:
-                          type: string
-                      regex:
-                        type: array
-                        description: "Regex patterns to match (keyMatch, include, exclude)"
-                        items:
-                          type: string
-                      # timeRange specific fields
-                      after:
-                        type: string
-                        description: "Time after which condition is true (RFC3339)"
-                      before:
-                        type: string
-                        description: "Time before which condition is true (RFC3339)"
-                      # probability specific fields
-                      ratio:
-                        type: number
-                        description: "Probability ratio 0.0-1.0"
-                        minimum: 0.0
-                        maximum: 1.0
-
-                  # Conditions object (skip/run arrays)
-                  conditions: &conditionsSchema
-                    type: object
-                    description: "Advanced plugin conditions for conditional execution"
-                    properties:
-                      skip:
-                        type: array
-                        description: "Conditions that will skip plugin execution (OR logic)"
-                        items: *conditionSchema
-                      run:
-                        type: array
-                        description: "Conditions that must be satisfied to run (AND logic)"
-                        items: *conditionSchema
-
-                  # Condition enable (legacy)
-                  conditionEnable: &conditionEnableSchema
-                    type: object
-                    description: "Simple conditional enable (legacy)"
-                    properties:
-                      timeBefore:
-                        type: string
-                        description: "Plugin enabled before this time (RFC3339)"
-
-                # ============================================
                 # Request Stage Plugins (async)
                 # ============================================
                 requestPlugins:
@@ -139,8 +37,86 @@ spec:
                         type: boolean
                         description: "Whether this plugin is enabled (default: true)"
                         default: true
-                      conditionEnable: *conditionEnableSchema
-                      conditions: *conditionsSchema
+                      # --- conditionEnable: define anchor here, reuse below ---
+                      conditionEnable: &conditionEnableSchema
+                        type: object
+                        description: "Simple conditional enable (legacy)"
+                        properties:
+                          timeBefore:
+                            type: string
+                            description: "Plugin enabled before this time (RFC3339)"
+                      # --- conditions: define anchor here, reuse below ---
+                      conditions: &conditionsSchema
+                        type: object
+                        description: "Advanced plugin conditions for conditional execution"
+                        properties:
+                          skip:
+                            type: array
+                            description: "Conditions that will skip plugin execution (OR logic)"
+                            items: &conditionSchema
+                              type: object
+                              description: "A single condition (tagged union with 'type' field)"
+                              properties:
+                                type:
+                                  type: string
+                                  description: "Condition type"
+                                  enum: [keyExist, keyMatch, timeRange, probability, include, exclude]
+                                key: &keyGetSchema
+                                  type: object
+                                  description: "Key accessor (KeyGet) - source for reading values"
+                                  properties:
+                                    type:
+                                      type: string
+                                      description: "Key source type"
+                                      enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath, webhook]
+                                    name:
+                                      type: string
+                                      description: "Key name (required for header, cookie, query, ctx)"
+                                    webhookRef:
+                                      type: string
+                                      description: "Reference to LinkSys Webhook resource: 'namespace/name' (required for webhook type)"
+                                    extract:
+                                      type: object
+                                      description: "How to extract key value from webhook response (required for webhook type)"
+                                      properties:
+                                        source:
+                                          type: string
+                                          description: "Extraction source"
+                                          enum: [header, cookie, body, bodyText]
+                                        name:
+                                          type: string
+                                          description: "Header or cookie name (required for header/cookie source)"
+                                        path:
+                                          type: string
+                                          description: "JSON dot-path (required for body source)"
+                                value:
+                                  type: string
+                                  description: "Exact value to match (keyMatch)"
+                                values:
+                                  type: array
+                                  description: "Multiple values to match (keyMatch, include, exclude)"
+                                  items:
+                                    type: string
+                                regex:
+                                  type: array
+                                  description: "Regex patterns to match (keyMatch, include, exclude)"
+                                  items:
+                                    type: string
+                                after:
+                                  type: string
+                                  description: "Time after which condition is true (RFC3339)"
+                                before:
+                                  type: string
+                                  description: "Time before which condition is true (RFC3339)"
+                                ratio:
+                                  type: number
+                                  description: "Probability ratio 0.0-1.0"
+                                  minimum: 0.0
+                                  maximum: 1.0
+                          run:
+                            type: array
+                            description: "Conditions that must be satisfied to run (AND logic)"
+                            items: *conditionSchema
                       type:
                         type: string
                         description: "Plugin type"
@@ -175,6 +151,8 @@ spec:
                           - DynamicExternalUpstream
                           - AllEndpointStatus
                           - Dsl
+                          - RequestMirror
+                          - WebhookKeyGet
                       config:
                         type: object
                         description: "Plugin-specific configuration"

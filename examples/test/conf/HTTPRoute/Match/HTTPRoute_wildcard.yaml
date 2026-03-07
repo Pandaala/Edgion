@@ -8,7 +8,7 @@ spec:
     - name: http-match-gateway
       namespace: edgion-test
   hostnames:
-    - "*.wildcard.example.com"  # Wildcard hostname
+    - "*.wc-match-test.example.com"  # Wildcard hostname (unique to avoid conflict with ListenerHostname suite)
   rules:
     - matches:
         - path:

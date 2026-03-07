@@ -1,0 +1,22 @@
+# Same namespace HTTPRoute for Selector test.
+# In K8s mode this route is allowed because the namespace label matches the selector.
+# In FileSystem mode the controller falls back to Same policy.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: selector-same-ns-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: allowed-routes-selector-gateway
+      namespace: edgion-test
+  hostnames:
+    - "selector-same-ns.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001

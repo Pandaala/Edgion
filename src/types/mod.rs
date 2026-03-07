@@ -35,15 +35,16 @@ pub mod link_sys {
 pub use self::resource::ResourceKind;
 pub use self::resource::ResourceMeta;
 pub use self::resource::{
-    all_resource_type_names, base_conf_resource_names, get_resource_metadata, ResourceTypeMetadata,
-    DEFAULT_NO_SYNC_KINDS, RESOURCE_TYPES,
+    all_resource_type_names, base_conf_resource_names, default_capacity_for_kind, get_resource_metadata,
+    ResourceTypeMetadata, DEFAULT_NO_SYNC_KINDS, RESOURCE_TYPES,
 };
 
 // Re-export from other modules
 pub use self::constants::app::*;
 pub use self::ctx::{
-    BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset,
-    MatchInfo, RequestInfo, TlsConnId, TlsConnMeta, UpstreamInfo,
+    gen_tls_id, BackendContext, BackendTlsInfo, CertSource, DirectEndpointPreset, EdgionHttpContext,
+    ExternalJumpPreset, InternalJumpPreset, MatchInfo, MirrorConfig, MirrorState, RequestInfo, TlsConnId, TlsConnMeta,
+    UpstreamInfo,
 };
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{
@@ -57,7 +58,7 @@ pub use self::schema::*;
 pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
 
 // Re-export from conf_mgr for backward compatibility
-pub use crate::core::conf_mgr::{
+pub use crate::core::controller::conf_mgr::{
     CenterApi as ResourceStore, ConfEntry as ResourceEntry, ConfStoreError as ResourceStoreError,
 };
 

@@ -1,0 +1,240 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-gateway
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: edgion-gateway
+  ports:
+  - name: admin-5900
+    port: 5900
+    targetPort: 5900
+    protocol: TCP
+  - name: metrics-5901
+    port: 5901
+    targetPort: 5901
+    protocol: TCP
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 443
+    protocol: TCP
+  - name: http-10080
+    port: 10080
+    targetPort: 10080
+    protocol: TCP
+  - name: https-10443
+    port: 10443
+    targetPort: 10443
+    protocol: TCP
+  - name: grpc-18443
+    port: 18443
+    targetPort: 18443
+    protocol: TCP
+  - name: p31000
+    port: 31000
+    targetPort: 31000
+    protocol: TCP
+  - name: p31020
+    port: 31020
+    targetPort: 31020
+    protocol: TCP
+  - name: p31021
+    port: 31021
+    targetPort: 31021
+    protocol: TCP
+  - name: p31030
+    port: 31030
+    targetPort: 31030
+    protocol: TCP
+  - name: p31040
+    port: 31040
+    targetPort: 31040
+    protocol: TCP
+  - name: p31045
+    port: 31045
+    targetPort: 31045
+    protocol: TCP
+  - name: p31050
+    port: 31050
+    targetPort: 31050
+    protocol: TCP
+  - name: p31060
+    port: 31060
+    targetPort: 31060
+    protocol: TCP
+  - name: p31061
+    port: 31061
+    targetPort: 31061
+    protocol: TCP
+  - name: p31080
+    port: 31080
+    targetPort: 31080
+    protocol: TCP
+  - name: p31090
+    port: 31090
+    targetPort: 31090
+    protocol: TCP
+  - name: p31091
+    port: 31091
+    targetPort: 31091
+    protocol: TCP
+  - name: p31100-udp
+    port: 31100
+    targetPort: 31100
+    protocol: UDP
+  - name: p31110
+    port: 31110
+    targetPort: 31110
+    protocol: TCP
+  - name: p31120
+    port: 31120
+    targetPort: 31120
+    protocol: TCP
+  - name: p31121
+    port: 31121
+    targetPort: 31121
+    protocol: TCP
+  - name: p31130
+    port: 31130
+    targetPort: 31130
+    protocol: TCP
+  - name: p31140
+    port: 31140
+    targetPort: 31140
+    protocol: TCP
+  - name: p31150
+    port: 31150
+    targetPort: 31150
+    protocol: TCP
+  - name: p31160
+    port: 31160
+    targetPort: 31160
+    protocol: TCP
+  - name: p31170
+    port: 31170
+    targetPort: 31170
+    protocol: TCP
+  - name: p31180
+    port: 31180
+    targetPort: 31180
+    protocol: TCP
+  - name: p31190
+    port: 31190
+    targetPort: 31190
+    protocol: TCP
+  - name: p31195
+    port: 31195
+    targetPort: 31195
+    protocol: TCP
+  - name: p31196
+    port: 31196
+    targetPort: 31196
+    protocol: TCP
+  - name: p31200
+    port: 31200
+    targetPort: 31200
+    protocol: TCP
+  - name: p31210
+    port: 31210
+    targetPort: 31210
+    protocol: TCP
+  - name: p31211
+    port: 31211
+    targetPort: 31211
+    protocol: TCP
+  - name: p31213
+    port: 31213
+    targetPort: 31213
+    protocol: TCP
+  - name: p31220
+    port: 31220
+    targetPort: 31220
+    protocol: TCP
+  - name: p31230
+    port: 31230
+    targetPort: 31230
+    protocol: TCP
+  - name: p31231
+    port: 31231
+    targetPort: 31231
+    protocol: TCP
+  - name: p31232
+    port: 31232
+    targetPort: 31232
+    protocol: TCP
+  - name: p31240
+    port: 31240
+    targetPort: 31240
+    protocol: TCP
+  - name: p31241
+    port: 31241
+    targetPort: 31241
+    protocol: TCP
+  - name: p31242
+    port: 31242
+    targetPort: 31242
+    protocol: TCP
+  - name: p31250
+    port: 31250
+    targetPort: 31250
+    protocol: TCP
+  - name: p31251
+    port: 31251
+    targetPort: 31251
+    protocol: TCP
+  - name: p31260
+    port: 31260
+    targetPort: 31260
+    protocol: TCP
+  - name: p31261
+    port: 31261
+    targetPort: 31261
+    protocol: TCP
+  - name: p31262
+    port: 31262
+    targetPort: 31262
+    protocol: TCP
+  - name: p31270
+    port: 31270
+    targetPort: 31270
+    protocol: TCP
+  - name: p31271
+    port: 31271
+    targetPort: 31271
+    protocol: TCP
+  - name: p31272
+    port: 31272
+    targetPort: 31272
+    protocol: TCP
+  - name: p31274
+    port: 31274
+    targetPort: 31274
+    protocol: TCP
+  - name: p31275
+    port: 31275
+    targetPort: 31275
+    protocol: TCP
+  - name: p31276
+    port: 31276
+    targetPort: 31276
+    protocol: TCP
+  - name: p31900
+    port: 31900
+    targetPort: 31900
+    protocol: TCP
+  - name: p31901
+    port: 31901
+    targetPort: 31901
+    protocol: TCP
+  - name: p31902
+    port: 31902
+    targetPort: 31902
+    protocol: TCP

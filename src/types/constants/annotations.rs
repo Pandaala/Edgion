@@ -12,6 +12,17 @@ pub mod edgion {
     pub const HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
     /// Expose mTLS client certificate info to plugin layer via TLS digest extension
     pub const EXPOSE_CLIENT_CERT: &str = "edgion.io/expose-client-cert";
+    /// Active health check configuration for backend endpoints.
+    /// Value format: YAML string.
+    pub const HEALTH_CHECK: &str = "edgion.io/health-check";
+
+    /// Proxy Protocol version to send to upstream.
+    /// Value: "v2" to enable PP2.
+    pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
+
+    /// Whether to use TLS when connecting to upstream.
+    /// Value: "true" or "false" (default: "false").
+    pub const UPSTREAM_TLS: &str = "edgion.io/upstream-tls";
 
     // ========== Test metrics annotations ==========
     /// Test identifier for metrics filtering

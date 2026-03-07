@@ -1,0 +1,231 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-test-client
+  namespace: edgion-test
+  labels:
+    app: edgion-test-client
+    app.kubernetes.io/name: edgion-test-client
+    app.kubernetes.io/component: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edgion-test-client
+  template:
+    metadata:
+      labels:
+        app: edgion-test-client
+        app.kubernetes.io/name: edgion-test-client
+        app.kubernetes.io/component: test
+    spec:
+      containers:
+      - name: test-client
+        image: docker.io/pandaala/edgion-test-client:dev
+        imagePullPolicy: Always
+        # Keep container running for manual test execution
+        command: ["sleep", "infinity"]
+        env:
+        - name: RUST_LOG
+          value: "info"
+        # Test server endpoints (direct mode)
+        - name: TEST_SERVER_HOST
+          value: "edgion-test-server.edgion-test.svc.cluster.local"
+        - name: TEST_HTTP_PORT
+          value: "30001"
+        - name: TEST_GRPC_PORT
+          value: "30021"
+        - name: TEST_WEBSOCKET_PORT
+          value: "30005"
+        - name: TEST_TCP_PORT
+          value: "30010"
+        - name: TEST_UDP_PORT
+          value: "30011"
+        # Gateway endpoints (gateway mode)
+        - name: GATEWAY_HOST
+          value: "edgion-gateway.edgion-system.svc.cluster.local"
+        - name: GATEWAY_HTTP_PORT
+          value: "80"
+        - name: GATEWAY_HTTPS_PORT
+          value: "443"
+        - name: GATEWAY_GRPC_PORT
+          value: "31050"
+        # Pod info
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: test-conf
+          mountPath: /usr/local/edgion/conf
+          readOnly: true
+        - name: test-certs
+          mountPath: /usr/local/edgion/examples/test/certs
+          readOnly: true
+        - name: test-mtls-certs
+          mountPath: /usr/local/edgion/examples/test/certs/mtls
+          readOnly: true
+      volumes:
+      - name: test-conf
+        configMap:
+          name: edgion-test-config
+      - name: test-certs
+        secret:
+          secretName: edge-tls
+          optional: true
+          items:
+          - key: tls.crt
+            path: ca.pem
+      - name: test-mtls-certs
+        configMap:
+          name: edgion-test-client-mtls-certs
+          optional: true
+---
+# ConfigMap for test configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edgion-test-config
+  namespace: edgion-test
+  labels:
+    app: edgion-test-client
+data:
+  # Test configuration
+  test-config.yaml: |
+    # Direct mode test endpoints
+    direct:
+      http:
+        host: edgion-test-server.edgion-test.svc.cluster.local
+        port: 30001
+      grpc:
+        host: edgion-test-server.edgion-test.svc.cluster.local
+        port: 30021
+      websocket:
+        host: edgion-test-server.edgion-test.svc.cluster.local
+        port: 30005
+      tcp:
+        host: edgion-test-server.edgion-test.svc.cluster.local
+        port: 30010
+      udp:
+        host: edgion-test-server.edgion-test.svc.cluster.local
+        port: 30011
+    
+    # Gateway mode test endpoints
+    gateway:
+      http:
+        host: edgion-gateway.edgion-system.svc.cluster.local
+        port: 80
+      https:
+        host: edgion-gateway.edgion-system.svc.cluster.local
+        port: 443
+      grpc:
+        host: edgion-gateway.edgion-system.svc.cluster.local
+        port: 31050
+  ports.json: |
+    {
+      "current_max": 31276,
+      "suites": {
+        "HTTPRoute/Basic": {
+          "http": 31000
+        },
+        "HTTPRoute/Match": {
+          "http": 31020,
+          "https": 31021
+        },
+        "HTTPRoute/Backend/LBRoundRobin": {
+          "http": 31120
+        },
+        "HTTPRoute/Backend/LBConsistentHash": {
+          "http": 31121
+        },
+        "HTTPRoute/Backend/WeightedBackend": {
+          "http": 31130
+        },
+        "HTTPRoute/Backend/Timeout": {
+          "http": 31140
+        },
+        "HTTPRoute/Filters/Redirect": {
+          "http": 31040
+        },
+        "HTTPRoute/Filters/Security": {
+          "http": 31030
+        },
+        "HTTPRoute/Filters/HeaderModifier": {
+          "http": 31045
+        },
+        "HTTPRoute/Protocol/WebSocket": {
+          "http": 31080
+        },
+        "GRPCRoute/Basic": {
+          "grpc": 31050
+        },
+        "GRPCRoute/Match": {
+          "grpc": 31060
+        },
+        "TCPRoute/Basic": {
+          "tcp": 31090,
+          "tcp_filtered": 31091
+        },
+        "UDPRoute/Basic": {
+          "udp": 31100
+        },
+        "Gateway/Security": {
+          "http": 31150
+        },
+        "Gateway/RealIP": {
+          "http": 31160
+        },
+        "Gateway/TLS/BackendTLS": {
+          "http": 31170
+        },
+        "EdgionPlugins": {
+          "http": 31180
+        },
+        "EdgionTls/https": {
+          "https": 31190
+        },
+        "EdgionTls/grpctls": {
+          "grpc_tls": 31200
+        },
+        "EdgionTls/mTLS": {
+          "https": 31110
+        },
+        "EdgionTls/cipher": {
+          "https": 31195
+        },
+        "Gateway/TLS/GatewayTLS": {
+          "https": 31220
+        },
+        "Gateway/Dynamic": {
+          "http": 31250
+        },
+        "Gateway/PortConflict": {
+          "internal_conflict": 31260,
+          "cross_conflict": 31261,
+          "no_conflict_hostname": 31262
+        },
+        "Gateway/StreamPlugins": {
+          "http": 31270,
+          "tcp": 31271,
+          "tcp_filtered": 31272
+        },
+        "TCPRoute/StreamPlugins": {
+          "tcp": 31274,
+          "tcp_filtered": 31275
+        },
+        "Gateway/AllowedRoutes/Selector": {
+          "http": 31276
+        }
+      }
+    }

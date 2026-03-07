@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: bandwidth-limit-metrics
+  namespace: edgion-default
+  annotations:
+    edgion.io/metrics-test-type: "latency"
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: /echo
+  upstreamResponseBodyFilterPlugins:
+    - enable: true
+      type: BandwidthLimit
+      config:
+        rate: "50kb" # 50KB/s

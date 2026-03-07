@@ -1,30 +1,30 @@
 #!/bin/bash
 # =============================================================================
 # Startall Edgion Testservice
-# Start顺序: test_server -> controller -> gateway
+# Start: test_server -> controller -> gateway
 # =============================================================================
 
 set -e
 
-# 颜色定义
+# 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# project根directory
+# projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
-# 创建时间戳Workdirectory
+# Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/integration_testing/testing_${TIMESTAMP}"
 
-# 导出 WORK_DIR 供其他scriptuse
+#  WORK_DIR scriptuse
 export EDGION_WORK_DIR="$WORK_DIR"
 
-# 子directory
+# directory
 LOG_DIR="${WORK_DIR}/logs"
 PID_DIR="${WORK_DIR}/pids"
 CONFIG_DIR="${WORK_DIR}/config"
@@ -39,7 +39,7 @@ CONTROLLER_ADMIN_PORT=5800
 GATEWAY_HTTP_PORT=10080
 
 # =============================================================================
-# log函数
+# log
 # =============================================================================
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -61,40 +61,40 @@ log_section() {
 }
 
 # =============================================================================
-# Cleanupall旧process (第一步)
+# Cleanupallprocess ()
 # =============================================================================
 kill_all_processes() {
-    log_section "Cleanupall旧process"
+    log_section "Cleanupallprocess"
     
-    # 强制 kill all相关process
+    #  kill allprocess
     pkill -9 -f "edgion-controller" 2>/dev/null && log_info "alreadyStop edgion-controller" || true
     pkill -9 -f "edgion-gateway" 2>/dev/null && log_info "alreadyStop edgion-gateway" || true
     pkill -9 -f "test_server" 2>/dev/null && log_info "alreadyStop test_server" || true
     
-    # 确保portrelease
+    # portrelease
     sleep 2
     
     # verifyportalreadyrelease
     local ports_busy=false
     if nc -z 127.0.0.1 $TEST_SERVER_HTTP_PORT 2>/dev/null; then
-        log_error "port $TEST_SERVER_HTTP_PORT 仍occupied"
+        log_error "port $TEST_SERVER_HTTP_PORT occupied"
         ports_busy=true
     fi
     if nc -z 127.0.0.1 $CONTROLLER_ADMIN_PORT 2>/dev/null; then
-        log_error "port $CONTROLLER_ADMIN_PORT 仍occupied"
+        log_error "port $CONTROLLER_ADMIN_PORT occupied"
         ports_busy=true
     fi
     if nc -z 127.0.0.1 $GATEWAY_HTTP_PORT 2>/dev/null; then
-        log_error "port $GATEWAY_HTTP_PORT 仍occupied"
+        log_error "port $GATEWAY_HTTP_PORT occupied"
         ports_busy=true
     fi
     
     if $ports_busy; then
-        log_error "无法releaseport，Please手动Check"
+        log_error "releaseport，PleaseCheck"
         exit 1
     fi
     
-    log_success "all旧processalreadyCleanup，portalreadyrelease"
+    log_success "allprocessalreadyCleanup，portalreadyrelease"
 }
 
 # =============================================================================
@@ -106,22 +106,22 @@ check_binaries() {
     local missing=false
     
     if [ ! -f "${PROJECT_ROOT}/target/debug/edgion-controller" ]; then
-        log_error "edgion-controller 未Build"
+        log_error "edgion-controller Build"
         missing=true
     fi
     
     if [ ! -f "${PROJECT_ROOT}/target/debug/edgion-gateway" ]; then
-        log_error "edgion-gateway 未Build"
+        log_error "edgion-gateway Build"
         missing=true
     fi
     
     if [ ! -f "${PROJECT_ROOT}/target/debug/examples/test_server" ]; then
-        log_error "test_server 未Build"
+        log_error "test_server Build"
         missing=true
     fi
     
     if $missing; then
-        log_error "Please先Run prepare.sh Build"
+        log_error "PleaseRun prepare.sh Build"
         exit 1
     fi
     
@@ -129,7 +129,7 @@ check_binaries() {
 }
 
 # =============================================================================
-# Waitport可用
+# Waitport
 # =============================================================================
 wait_for_port() {
     local port=$1
@@ -141,9 +141,9 @@ wait_for_port() {
     log_info "Wait $service_name (port $port)..."
     
     while [ $elapsed -lt $timeout ]; do
-        # Checkprocess是否存活
+        # Checkprocess
         if ! kill -0 $pid 2>/dev/null; then
-            log_error "$service_name processalready退出 (PID: $pid)"
+            log_error "$service_name processalready (PID: $pid)"
             return 1
         fi
         
@@ -157,7 +157,7 @@ wait_for_port() {
         elapsed=$((elapsed + 1))
     done
     
-    log_error "$service_name 在 ${timeout}s 内未能Start"
+    log_error "$service_name  ${timeout}s Start"
     return 1
 }
 
@@ -295,20 +295,20 @@ prepare_config() {
                 log_info "copy $(basename "$file")"
             fi
         done
-        log_success "基础configPreparecompleted"
+        log_success "configPreparecompleted"
     else
-        log_info "无基础configdirectory，Skip"
+        log_info "configdirectory，Skip"
     fi
 }
 
 # =============================================================================
-# 保存Workdirectoryinfo
+# Workdirectoryinfo
 # =============================================================================
 save_info() {
-    # 保存currentWorkdirectorypath
+    # currentWorkdirectorypath
     echo "$WORK_DIR" > "${PROJECT_ROOT}/integration_testing/.current"
     
-    # 保存环境info
+    # info
     cat > "${WORK_DIR}/info.txt" << EOF
 Edgion Integration Testing
 ===========================
@@ -331,7 +331,7 @@ EOF
 }
 
 # =============================================================================
-# 主函数
+# 
 # =============================================================================
 main() {
     echo ""
@@ -342,35 +342,35 @@ main() {
     echo -e "Work Dir: ${WORK_DIR}"
     echo -e "Test Mode: ${GREEN}enabled${NC} (Both endpoint mode + metrics test)"
     
-    # 第一步: Cleanupall旧process
+    # : Cleanupallprocess
     kill_all_processes
     
-    # 第二步: Checkbinaryfile
+    # : Checkbinaryfile
     check_binaries
     
-    # 第三步: 创建Workdirectory
-    log_section "创建Workdirectory"
+    # : Workdirectory
+    log_section "Workdirectory"
     mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
-    log_success "Workdirectory创建completed: $WORK_DIR"
+    log_success "Workdirectorycompleted: $WORK_DIR"
     
-    # 第三步半: 复制 CRD schemas 到工作目录
+    # :  CRD schemas 
     if [ -d "${PROJECT_ROOT}/config/crd" ]; then
         cp -r "${PROJECT_ROOT}/config/crd" "$CONFIG_DIR/"
-        log_success "CRD schemas 复制completed"
+        log_success "CRD schemas completed"
     else
-        log_error "CRD schemas 目录不存在: ${PROJECT_ROOT}/config/crd"
+        log_error "CRD schemas : ${PROJECT_ROOT}/config/crd"
         exit 1
     fi
     
-    # 第四步: Prepareconfigfile
+    # : Prepareconfigfile
     prepare_config
     
-    # 第五步: 按顺序Startservice
+    # : Startservice
     start_test_server
     start_controller
     start_gateway
     
-    # 保存info
+    # info
     save_info
     
     # completed
@@ -390,7 +390,7 @@ main() {
     echo "Stopservice: ./examples/test/scripts/utils/kill_all.sh"
     echo ""
     
-    # 返回Workdirectorypath（供其他script获取）
+    # Workdirectorypath（script）
     echo "$WORK_DIR"
 }
 

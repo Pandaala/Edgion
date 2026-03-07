@@ -84,7 +84,7 @@ use crate::types::common::KeyGet;
 /// CtxSet plugin configuration
 ///
 /// Sets context variables that can be accessed by downstream plugins.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CtxSetConfig {
     /// List of context variable rules
@@ -99,16 +99,6 @@ pub struct CtxSetConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_patterns: HashMap<usize, Regex>,
-}
-
-impl Default for CtxSetConfig {
-    fn default() -> Self {
-        Self {
-            vars: Vec::new(),
-            validation_error: None,
-            compiled_patterns: HashMap::new(),
-        }
-    }
 }
 
 /// Rule for setting a single context variable

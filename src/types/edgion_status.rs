@@ -98,4 +98,7 @@ pub enum EdgionStatus {
 
     /// Cross-namespace reference denied (no matching ReferenceGrant)
     RefDenied = 503_12,
+
+    /// Backend kind not supported (Gateway API conformance: return 500)
+    BackendUnsupportedKind = 500_15,
 }

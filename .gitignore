@@ -23,12 +23,12 @@ Thumbs.db
 *.lib
 logs/
 
-# 集成测试工作目录（运行时生成，不要提交）
+# Integration test workspace (generated at runtime, do not commit)
 integration_testing/
 
 # Cross-compilation config (personal dev workflow)
 Cross.toml
 Dockerfile.cross
 
-# K8s 测试配置（运行时生成）
+# K8s test configuration (generated at runtime)
 examples/test/k8s-conf/

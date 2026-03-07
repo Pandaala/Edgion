@@ -819,9 +819,9 @@ See `src/types/resources/grpc_route.rs` for complete implementation.
 ## Related Documentation
 
 - [Kubernetes Gateway API Specification](https://gateway-api.sigs.k8s.io/)
-- [HTTPRoute Reference](../src/types/resources/http_route.rs)
-- [GRPCRoute Reference](../src/types/resources/grpc_route.rs)
-- [Load Balancing Policy Usage](../user-guide/advanced/lb-algorithms.md)
+- [HTTPRoute Reference](../../../src/types/resources/http_route.rs)
+- [GRPCRoute Reference](../../../src/types/resources/grpc_route.rs)
+- [负载均衡算法使用](../user-guide/http-route/lb-algorithms.md)
 
 ## Conclusion
 
@@ -833,4 +833,3 @@ Key benefits:
 - **Efficiency**: Incremental updates via watch streams
 - **Reliability**: Version tracking and validation at every step
 - **Observability**: Structured logging throughout the pipeline
-

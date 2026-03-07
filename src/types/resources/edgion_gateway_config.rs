@@ -256,6 +256,12 @@ pub struct SecurityProtectConfig {
     /// If not set, requests without SNI will fail with certificate error
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_sni: Option<String>,
+
+    /// Enable TLS proxy connection logging (connect/disconnect events in tls.log).
+    /// When false, only ssl.log (handshake) is written; tls.log and per-listener
+    /// access log entries for TLS proxy connections are suppressed. (default: true)
+    #[serde(default = "default_tls_proxy_log_record")]
+    pub tls_proxy_log_record: bool,
 }
 
 fn default_xff_limit() -> usize {
@@ -263,6 +269,10 @@ fn default_xff_limit() -> usize {
 }
 
 fn default_require_sni_host_match() -> bool {
+    true
+}
+
+fn default_tls_proxy_log_record() -> bool {
     true
 }
 

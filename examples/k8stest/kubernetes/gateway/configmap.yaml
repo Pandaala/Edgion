@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edgion-gateway-config
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+    app.kubernetes.io/name: edgion-gateway
+    app.kubernetes.io/component: gateway
+data:
+  edgion-gateway.toml: |
+    # Edgion Gateway Configuration for Kubernetes Integration Testing
+    work_dir = "/usr/local/edgion"
+
+    [gateway]
+    # Controller gRPC server address (use K8s service DNS)
+    server_addr = "http://edgion-controller.edgion-system.svc.cluster.local:50051"
+    admin_listen = "0.0.0.0:5900"
+
+    [logging]
+    log_dir = "logs"
+    log_prefix = "edgion-gateway"
+    log_level = "debug,pingora_proxy=error,pingora_core=error"
+    json_format = true
+    console = false
+    buffer_size = 10000
+
+    [server]
+    # threads = 4
+    # work_stealing = true
+    # grace_period_seconds = 30
+    # graceful_shutdown_timeout_seconds = 10
+    # upstream_keepalive_pool_size = 128
+
+    [access_log]
+    enabled = true
+
+    [access_log.output.localFile]
+    path = "logs/edgion_access.log"
+
+    [access_log.output.localFile.rotation]
+    strategy = "daily"
+    max_files = 7
+    check_interval_secs = 60
+
+    [ssl_log]
+    enabled = true
+
+    [ssl_log.output.localFile]
+    path = "logs/ssl.log"
+
+    [ssl_log.output.localFile.rotation]
+    strategy = { size = 104857600 }
+    max_files = 5
+    check_interval_secs = 60
+
+    [tcp_log]
+    enabled = false
+
+    [tcp_log.output.localFile]
+    path = "logs/tcp.log"
+
+    [udp_log]
+    enabled = false
+
+    [udp_log.output.localFile]
+    path = "logs/udp.log"

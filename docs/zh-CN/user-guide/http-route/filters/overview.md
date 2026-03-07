@@ -12,7 +12,7 @@
 | ResponseHeaderModifier | 修改响应头 | [详情](./gateway-api/response-header-modifier.md) |
 | RequestRedirect | 请求重定向 | [详情](./gateway-api/request-redirect.md) |
 | URLRewrite | URL 重写 | [详情](./gateway-api/url-rewrite.md) |
-| RequestMirror | 请求镜像 | [详情](./gateway-api/request-mirror.md) |
+| RequestMirror | 请求镜像 | 即将推出 |
 
 ### Edgion 扩展过滤器
 
@@ -25,7 +25,7 @@
 | 插件 | 说明 | 文档 |
 |------|------|------|
 | BasicAuth | HTTP 基础认证 | [详情](./edgion-plugins/basic-auth.md) |
-| LdapAuth | LDAP 目录认证 | [详情](../../../edgion-plugins/ldap-auth.md) |
+| LdapAuth | LDAP 目录认证 | [详情](../../edgion-plugins/ldap-auth.md) |
 | CORS | 跨域资源共享 | [详情](./edgion-plugins/cors.md) |
 | CSRF | CSRF 防护 | [详情](./edgion-plugins/csrf.md) |
 | IpRestriction | IP 黑白名单 | [详情](./edgion-plugins/ip-restriction.md) |
@@ -65,4 +65,4 @@ filters:
 ## 相关文档
 
 - [HTTPRoute 总览](../overview.md)
-- [后端配置](../backends/)
+- [后端配置](../backends/README.md)

@@ -52,4 +52,5 @@ pub fn allocator_name() -> &'static str {
 pub mod core;
 pub mod types;
 
-pub use crate::core::cli::{EdgionControllerCli, EdgionGatewayCli};
+pub use crate::core::controller::EdgionControllerCli;
+pub use crate::core::gateway::EdgionGatewayCli;

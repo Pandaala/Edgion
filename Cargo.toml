@@ -22,27 +22,27 @@ path = "src/bin/edgion_ctl.rs"
 
 [[example]]
 name = "build_test_proto"
-path = "examples/test/code/build_test_proto.rs"
+path = "examples/code/build_test_proto.rs"
 
 [[example]]
 name = "test_server"
-path = "examples/test/code/server/test_server.rs"
+path = "examples/code/server/test_server.rs"
 
 [[example]]
 name = "test_client"
-path = "examples/test/code/client/test_client.rs"
+path = "examples/code/client/test_client.rs"
 
 [[example]]
 name = "test_client_direct"
-path = "examples/test/code/client_direct/test_client_direct.rs"
+path = "examples/code/client_direct/test_client_direct.rs"
 
 [[example]]
 name = "resource_diff"
-path = "examples/test/code/validator/resource_diff.rs"
+path = "examples/code/validator/resource_diff.rs"
 
 [[example]]
 name = "config_load_validator"
-path = "examples/test/code/validator/config_load_validator.rs"
+path = "examples/code/validator/config_load_validator.rs"
 
 [features]
 # Default features
@@ -99,7 +99,7 @@ schemars = { version = "1" }
 
 # gRPC (config sync)
 tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
-# rustls 加密后端（tonic TLS 需要）
+# rustls （tonic TLS ）
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2.2"
@@ -186,7 +186,9 @@ cookie = "0.18.1"
 instant-acme = "0.8.4"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 sha1 = "0.10.6"
-ldap3 = "0.12"
+# Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+proxy-header = "0.1.2"
 
 [build-dependencies]
 tonic-build = "0.12"

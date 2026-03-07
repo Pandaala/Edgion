@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-test-optional
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: mtls-test-gateway
+      namespace: edgion-test
+      sectionName: https-mtls
+  hosts:
+    - mtls-optional.example.com
+  secretRef:
+    name: mtls-server
+    namespace: edgion-test
+  clientAuth:
+    mode: OptionalMutual
+    caSecretRef:
+      name: client-ca
+      namespace: edgion-test
+    verifyDepth: 1
+

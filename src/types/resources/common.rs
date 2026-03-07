@@ -6,6 +6,20 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Per Gateway API spec, `""` and `"core"` both represent the Kubernetes core API group.
+#[inline]
+pub fn is_core_api_group(group: &str) -> bool {
+    group.is_empty() || group == "core"
+}
+
+/// Check if two API groups are equivalent, treating `""` and `"core"` as the same.
+pub fn api_groups_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    is_core_api_group(a) && is_core_api_group(b)
+}
+
 /// ParentReference identifies a parent resource (usually Gateway)
 ///
 /// This type is shared across all route resources and follows the

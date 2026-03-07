@@ -1,0 +1,87 @@
+# DEV ONLY — DO NOT USE IN PRODUCTION
+# Uses IfNotPresent + shell restart loop for hot-reload during development.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-gateway
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+    app.kubernetes.io/name: edgion-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edgion-gateway
+  template:
+    metadata:
+      labels:
+        app: edgion-gateway
+        app.kubernetes.io/name: edgion-gateway
+        app.kubernetes.io/component: gateway
+    spec:
+      containers:
+      - name: edgion-gateway
+        image: docker.io/pandaala/edgion-gateway:dev
+        imagePullPolicy: IfNotPresent
+        command:
+        - "/bin/sh"
+        - "-c"
+        - |
+          while true; do
+            if [ -f /usr/local/edgion/edgion-gateway ]; then
+              BINARY=/usr/local/edgion/edgion-gateway
+            else
+              BINARY=/usr/local/bin/edgion-gateway
+            fi
+            "$BINARY" --config-file /usr/local/edgion/config/edgion-gateway.toml --integration-testing-mode || true
+            echo "[restart] edgion-gateway exited, restarting in 2s..."
+            sleep 2
+          done
+        ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+        - name: https
+          containerPort: 443
+          protocol: TCP
+        - name: http-alt
+          containerPort: 10080
+          protocol: TCP
+        - name: https-alt
+          containerPort: 10443
+          protocol: TCP
+        - name: grpc
+          containerPort: 18443
+          protocol: TCP
+        - name: admin
+          containerPort: 5900
+          protocol: TCP
+        - name: metrics
+          containerPort: 5901
+          protocol: TCP
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: EDGION_CONTROLLER_ADDR
+          value: "edgion-controller.edgion-system.svc.cluster.local:50051"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        volumeMounts:
+        - name: config
+          mountPath: /usr/local/edgion/config
+          readOnly: true
+        - name: logs
+          mountPath: /usr/local/edgion/logs
+      volumes:
+      - name: config
+        configMap:
+          name: edgion-gateway-config
+      - name: logs
+        emptyDir: {}

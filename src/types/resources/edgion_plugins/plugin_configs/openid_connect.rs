@@ -157,6 +157,22 @@ pub struct OpenidConnectConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_session_secret: Option<String>,
+
+    // Security extras
+    /// Remove Authorization header from the upstream request after successful bearer-token auth.
+    /// In bearer_only mode: removes the original Authorization header.
+    /// In session-cookie mode: no-op (credentials are in cookies, not Authorization header).
+    /// Note: if `access_token_in_authorization_header` is also true, the original header is
+    /// removed first, then a new Authorization: Bearer <token> header is set for upstream.
+    /// Default: false.
+    #[serde(default)]
+    pub hide_credentials: bool,
+
+    /// Delay in milliseconds before returning an authentication failure response.
+    /// Increases the time cost for brute-force / credential-stuffing attacks.
+    /// Default: 0 (no delay).
+    #[serde(default)]
+    pub auth_failure_delay_ms: u64,
 }
 
 fn default_true() -> bool {
@@ -268,6 +284,8 @@ impl Default for OpenidConnectConfig {
             timeout: default_timeout_seconds(),
             resolved_client_secret: None,
             resolved_session_secret: None,
+            hide_credentials: false,
+            auth_failure_delay_ms: 0,
         }
     }
 }

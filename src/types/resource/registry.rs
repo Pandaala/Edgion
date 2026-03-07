@@ -10,8 +10,8 @@
 use std::sync::LazyLock;
 
 use super::{registry_resource_names, ALL_RESOURCE_INFOS};
-use crate::core::backends::try_get_global_endpoint_mode;
-use crate::core::conf_mgr::conf_center::EndpointMode;
+use crate::core::controller::conf_mgr::conf_center::EndpointMode;
+use crate::core::gateway::backends::try_get_global_endpoint_mode;
 
 /// Metadata for a resource type
 ///

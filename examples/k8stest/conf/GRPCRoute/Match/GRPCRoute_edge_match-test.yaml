@@ -1,0 +1,43 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: match-test
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-match-gateway
+      namespace: edgion-test
+      sectionName: grpc
+
+  hostnames:
+    - "grpc-match.example.com"
+
+  rules:
+    # Rule 1: Exact match for test.TestService.SayHello with header match
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+          headers:
+            - name: x-test-header
+              value: test-value
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+
+    # Rule 2: Service-level match for test.TestService (no method specified)
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+
+    # Rule 3: Default/fallback route (no method match = catch all for this hostname)
+    # Note: Without 'matches', this rule matches all requests for the hostname
+    - backendRefs:
+        - name: test-grpc
+          port: 30021
+

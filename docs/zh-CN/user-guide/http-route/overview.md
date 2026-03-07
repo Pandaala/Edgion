@@ -61,7 +61,7 @@ spec:
 
 ## 相关文档
 
-- [匹配规则](./matches/)
-- [过滤器](./filters/)
-- [后端配置](./backends/)
-- [弹性配置](./resilience/)
+- [匹配规则](./matches/README.md)
+- [过滤器](./filters/README.md)
+- [后端配置](./backends/README.md)
+- [弹性配置](./resilience/README.md)

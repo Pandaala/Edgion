@@ -735,8 +735,8 @@ match &config.output {
 
 ### 用户文档
 
-- `docs/user-guide/access-log-guide.md` - Access Log 用户指南
-- `docs/user-guide/edgiontls-user-guide.md` - TLS 配置指南（包含 SSL Log 说明）
+- `docs/zh-CN/ops-guide/observability/access-log.md` - Access Log 运维指南
+- `docs/zh-CN/ops-guide/gateway/tls/edgion-tls.md` - TLS 配置指南（包含 SSL Log 说明）
 
 ## 最佳实践
 
@@ -802,4 +802,3 @@ match &config.output {
 
 **最后更新**：2025-01-05  
 **版本**：Edgion v0.1.0
-

@@ -30,7 +30,7 @@
 //! recursive: false
 //! ```
 
-use crate::core::matcher::ip_radix_tree::IpRadixMatcher;
+use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -49,6 +49,7 @@ pub struct RealIpConfig {
     /// Only requests from these IPs will trigger real IP extraction.
     ///
     /// Examples: ["10.0.0.0/8", "192.168.1.1", "2001:db8::/32"]
+    #[serde(default)]
     pub trusted_ips: Vec<String>,
 
     /// Header name to extract real IP from
@@ -229,7 +230,7 @@ mod tests {
         let config = RealIpConfig::default();
         assert_eq!(config.trusted_ips.len(), 0);
         assert_eq!(config.real_ip_header, "X-Forwarded-For");
-        assert_eq!(config.recursive, true);
+        assert!(config.recursive);
     }
 
     #[test]
@@ -334,7 +335,7 @@ mod tests {
         };
         assert!(config.validate_and_init().is_ok());
         assert_eq!(config.real_ip_header, "CF-Connecting-IP");
-        assert_eq!(config.recursive, false);
+        assert!(!config.recursive);
     }
 
     #[test]
@@ -351,7 +352,7 @@ mod tests {
 
         assert_eq!(deserialized.trusted_ips, config.trusted_ips);
         assert_eq!(deserialized.real_ip_header, "X-Real-IP");
-        assert_eq!(deserialized.recursive, false);
+        assert!(!deserialized.recursive);
     }
 
     #[test]

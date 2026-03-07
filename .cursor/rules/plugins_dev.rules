@@ -1,5 +1,0 @@
-- 必须要有关键节点的插件日志，让网关行为完全可观测。
-- 插件日志务必简单务实。
-- 插件prepare()已经在event_dispatch.rs统一处理。
-- example/test/conf下面的单元测试是以资源命名为单位的
- - EdgionPlugins没个新插件都在下面单独建文件夹。有一个统一的base的Gateway，避免插件太多开太多Gateway.

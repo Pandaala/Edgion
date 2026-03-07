@@ -1,24 +1,24 @@
 #!/bin/bash
 # =============================================================================
 # Edgion TestPreparescript
-# 预BuildallTest所需的组件（debug 模式）
+# BuildallTest（debug ）
 # =============================================================================
 
 set -e
 
-# 颜色定义
+# 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# project根directory
+# projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # =============================================================================
-# log函数
+# log
 # =============================================================================
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -40,7 +40,7 @@ log_section() {
 }
 
 # =============================================================================
-# Build函数
+# Build
 # =============================================================================
 
 # Buildbinaryfile
@@ -60,13 +60,13 @@ build_binary() {
 }
 
 # =============================================================================
-# 主函数
+# 
 # =============================================================================
 main() {
     local start_time=$(date +%s)
     
     echo ""
-    echo -e "${BLUE}Edgion TestPrepare - 预Build组件${NC}"
+    echo -e "${BLUE}Edgion TestPrepare - Build${NC}"
     echo -e "Project: ${PROJECT_ROOT}"
     echo -e "Mode: Debug"
     
@@ -128,13 +128,13 @@ main() {
         exit 1
     fi
     
-    # 总结
+    # 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     
     log_section "Summary"
     echo "Duration: ${duration}s"
-    log_success "all组件Buildsuccess!"
+    log_success "allBuildsuccess!"
     exit 0
 }
 

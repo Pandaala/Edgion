@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::lb::BackendSelector;
-use crate::core::plugins::PluginRuntime;
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::PluginRuntime;
 
 /// API group for TLSRoute
 pub const TLS_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -62,6 +62,24 @@ pub struct TLSRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub plugin_runtime: Arc<PluginRuntime>,
+
+    /// Proxy Protocol version to send to upstream (runtime only, from annotation).
+    /// None = disabled, Some(2) = PP2.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub proxy_protocol_version: Option<u8>,
+
+    /// Whether to use TLS when connecting to upstream (runtime only, from annotation).
+    /// false = plain TCP (default), true = TLS.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub upstream_tls: bool,
+
+    /// Store key for dynamic stream plugin lookup (runtime only, from annotation).
+    /// Format: "namespace/name" referencing an EdgionStreamPlugins resource.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub stream_plugin_store_key: Option<String>,
 }
 
 impl Clone for TLSRouteRule {
@@ -70,6 +88,9 @@ impl Clone for TLSRouteRule {
             backend_refs: self.backend_refs.clone(),
             backend_finder: BackendSelector::new(),
             plugin_runtime: self.plugin_runtime.clone(),
+            proxy_protocol_version: self.proxy_protocol_version,
+            upstream_tls: self.upstream_tls,
+            stream_plugin_store_key: self.stream_plugin_store_key.clone(),
         }
     }
 }
@@ -80,6 +101,9 @@ impl fmt::Debug for TLSRouteRule {
             .field("backend_refs", &self.backend_refs)
             .field("backend_finder", &"<skipped>")
             .field("plugin_runtime", &self.plugin_runtime)
+            .field("proxy_protocol_version", &self.proxy_protocol_version)
+            .field("upstream_tls", &self.upstream_tls)
+            .field("stream_plugin_store_key", &self.stream_plugin_store_key)
             .finish()
     }
 }

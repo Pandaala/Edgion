@@ -63,11 +63,12 @@ use serde::{Deserialize, Serialize};
 ///   type: cookie
 ///   name: "session_id"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum KeyGet {
     /// Client IP address (after real IP extraction)
     /// No additional parameters needed.
+    #[default]
     ClientIp,
 
     /// HTTP request header value
@@ -177,12 +178,6 @@ pub enum WebhookExtract {
 
     /// Use entire response body as the key value (trimmed)
     BodyText,
-}
-
-impl Default for KeyGet {
-    fn default() -> Self {
-        KeyGet::ClientIp
-    }
 }
 
 impl KeyGet {

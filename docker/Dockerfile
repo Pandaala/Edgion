@@ -49,14 +49,18 @@ RUN cargo chef prepare --recipe-path recipe.json
 # =============================================================================
 # Stage 3: Builder - Build dependencies and application
 # =============================================================================
-FROM rust:${RUST_VERSION} AS builder
+FROM rust:${RUST_VERSION}-slim AS builder
 
 WORKDIR /app
 
 # Install additional build dependencies
 RUN apt-get update && apt-get install -y \
+    g++ \
     cmake \
+    git \
     libclang-dev \
+    perl \
+    pkg-config \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
@@ -98,7 +102,7 @@ RUN if [ "$BUILD_TYPE" = "example" ]; then \
 # =============================================================================
 # Stage 4: Runtime - Minimal runtime environment
 # =============================================================================
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 # Build arguments
 ARG BINARY
@@ -114,12 +118,8 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -g 1000 edgion && \
     useradd -r -u 1000 -g edgion edgion
 
-# Create necessary directories
-RUN mkdir -p /usr/local/edgion/{config,logs,runtime} && \
-    chown -R edgion:edgion /usr/local/edgion
-
-# Set working directory
 WORKDIR /usr/local/edgion
+RUN chown -R edgion:edgion /usr/local/edgion
 
 # Copy binaries from builder
 COPY --from=builder /app/edgion-binary /usr/local/bin/${BINARY}
