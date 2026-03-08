@@ -30,6 +30,8 @@ data:
     controller_name = "edgion.io/gateway-controller"
     watch_namespaces = ["edgion-system", "edgion-default", "edgion-test", "edgion-backend"]
     endpoint_mode = "both"
+    # HA mode: "leader-only" (default) or "all-serve"
+    ha_mode = "leader-only"
 
     [conf_center.leader_election]
     lease_name = "edgion-controller-leader"

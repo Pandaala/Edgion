@@ -102,7 +102,6 @@ tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
 # rustls （tonic TLS ）
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
-rustls-pemfile = "2.2"
 x509-parser = { version = "0.18", features = ["verify"] }  # Certificate parsing and signature verification
 tonic-reflection = "0.12"
 prost = "0.13"
@@ -119,7 +118,7 @@ rust-embed = { version = "8.11" }  # For embedding frontend
 mime_guess = "2.0"
 
 # Utilities
-bytes = "1.11"
+bytes = "1.11.1"
 base64 = "0.22"
 chrono = "0.4"
 parking_lot = "0.12"
@@ -138,11 +137,11 @@ hex = "0.4"
 jsonwebtoken = "9"
 
 # Pingora
-pingora-core = { version = "0.7.0", features = ["connection_filter"] }
-pingora-http = "0.7.0"
-pingora-limits = "0.7.0"
-pingora-load-balancing = "0.7.0"
-pingora-proxy = { version = "0.7.0" }
+pingora-core = { version = "0.8.0", features = ["connection_filter"] }
+pingora-http = "0.8.0"
+pingora-limits = "0.8.0"
+pingora-load-balancing = "0.8.0"
+pingora-proxy = { version = "0.8.0" }
 etcd-client = { version = "0.18", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)
@@ -181,7 +180,7 @@ tabled = "0.20"
 # Unix Socket support for HTTP
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 tower = "0.5"
-htpasswd-verify = "0.3.0"
+md-5 = "0.10"
 cookie = "0.18.1"
 instant-acme = "0.8.4"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }

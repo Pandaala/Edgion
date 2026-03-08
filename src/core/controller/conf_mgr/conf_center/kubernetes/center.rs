@@ -15,7 +15,7 @@
 //! ```
 
 use super::super::common::EndpointMode;
-use super::config::KubernetesConfig;
+use super::config::{HaMode, KubernetesConfig};
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::storage::KubernetesStorage;
@@ -51,10 +51,20 @@ enum LifecycleEvent {
     CachesTimeout,
     /// Lost leadership
     LeadershipLost,
+    /// Acquired leadership (all-serve mode only)
+    LeadershipAcquired,
     /// Controller exited
     ControllerExit(ControllerExitReason),
     /// Manual reload requested via Admin API
     ReloadRequested,
+}
+
+/// Exit reason from all-serve serving flow
+enum ServingFlowExit {
+    /// Normal shutdown requested
+    Shutdown,
+    /// Relink requested (410 GONE or manual reload)
+    RelinkRequested,
 }
 
 /// Handles for all watcher tasks
@@ -307,6 +317,9 @@ impl KubernetesCenter {
                         tracing::warn!(component = "kubernetes_center", mode = "kubernetes", "Lost leadership");
                         break ControllerExitReason::LostLeadership;
                     }
+                    Some(LifecycleEvent::LeadershipAcquired) => {
+                        // Not expected in leader-only mode, ignore
+                    }
                     Some(LifecycleEvent::ControllerExit(reason)) => {
                         tracing::info!(
                             component = "kubernetes_center",
@@ -461,8 +474,9 @@ impl KubernetesCenter {
         let config_sync_server = Arc::new(ConfigSyncServer::new());
         config_sync_server.set_endpoint_mode(resolved_mode);
 
-        // 3. Create Controller with resolved endpoint mode (no ConfigServer dependency)
-        let controller = self.create_k8s_controller(client, resolved_mode)?;
+        // 3. Create Controller with resolved endpoint mode and leader handle
+        let controller = self.create_k8s_controller(client, resolved_mode)?
+            .with_leader_handle(leader_handle.clone());
 
         // 4. Spawn controller.run task
         let shutdown_signal = shutdown_handle.signal();
@@ -572,9 +586,328 @@ impl KubernetesCenter {
         ))
     }
 
+    /// Leader-only lifecycle: identical to pre-HA behavior.
+    /// Wait for leadership -> run_main_flow -> handle exit.
+    async fn run_leader_only_lifecycle(
+        &self,
+        client: &Client,
+        leader_handle: &LeaderHandle,
+        shutdown_handle: &ShutdownHandle,
+    ) -> Result<()> {
+        loop {
+            tracing::info!(
+                component = "kubernetes_center",
+                ha_mode = "leader-only",
+                "Waiting for leadership..."
+            );
+
+            if !leader_handle
+                .wait_until_leader_with_shutdown(shutdown_handle.signal())
+                .await
+            {
+                tracing::info!(
+                    component = "kubernetes_center",
+                    ha_mode = "leader-only",
+                    "Shutdown requested before acquiring leadership"
+                );
+                return Ok(());
+            }
+
+            tracing::info!(
+                component = "kubernetes_center",
+                ha_mode = "leader-only",
+                "Acquired leadership, entering main flow"
+            );
+
+            let exit_reason = self.run_main_flow(client, leader_handle, shutdown_handle).await;
+
+            match exit_reason {
+                MainFlowExit::Shutdown => {
+                    tracing::info!(component = "kubernetes_center", ha_mode = "leader-only", "Normal shutdown");
+                    crate::core::controller::services::acme::stop_acme_service();
+                    PROCESSOR_REGISTRY.clear_registry();
+                    return Ok(());
+                }
+                MainFlowExit::LostLeadership => {
+                    tracing::warn!(
+                        component = "kubernetes_center",
+                        ha_mode = "leader-only",
+                        "Lost leadership, will wait for re-election"
+                    );
+                    crate::core::controller::services::acme::stop_acme_service();
+                    PROCESSOR_REGISTRY.clear_registry();
+                    continue;
+                }
+            }
+        }
+    }
+
     /// Calculate exponential backoff duration
     fn backoff(failures: u32) -> Duration {
         Duration::from_secs(1 << failures.min(6))
+    }
+
+    // ==================== All-Serve Mode Methods ====================
+
+    /// All-serve lifecycle: all replicas run watchers + gRPC.
+    /// Leader-only services (status writes, ACME) start/stop dynamically.
+    async fn run_all_serve_lifecycle(
+        &self,
+        client: &Client,
+        leader_handle: &LeaderHandle,
+        shutdown_handle: &ShutdownHandle,
+    ) -> Result<()> {
+        loop {
+            let exit = self.run_serving_flow(client, leader_handle, shutdown_handle).await;
+            match exit {
+                ServingFlowExit::Shutdown => return Ok(()),
+                ServingFlowExit::RelinkRequested => {
+                    PROCESSOR_REGISTRY.clear_registry();
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            }
+        }
+    }
+
+    /// Core event loop for all-serve mode.
+    /// All replicas start watchers immediately (no wait_until_leader).
+    /// Leader services start/stop dynamically based on leadership state.
+    async fn run_serving_flow(
+        &self,
+        client: &Client,
+        leader_handle: &LeaderHandle,
+        shutdown_handle: &ShutdownHandle,
+    ) -> ServingFlowExit {
+        let (event_tx, mut event_rx) = mpsc::channel::<LifecycleEvent>(32);
+
+        let (watchers, config_sync_server) = match self
+            .start_event_watchers_all_serve(client, shutdown_handle, leader_handle, event_tx)
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(
+                    component = "kubernetes_center",
+                    error = %e,
+                    "Failed to start event watchers (all-serve)"
+                );
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                return ServingFlowExit::RelinkRequested;
+            }
+        };
+
+        let mut caches_ready = false;
+        let mut leader_services_running = false;
+
+        let exit_reason = loop {
+            match event_rx.recv().await {
+                Some(LifecycleEvent::CachesReady) => {
+                    caches_ready = true;
+                    self.set_config_sync_server(Some(config_sync_server.clone()));
+                    tracing::info!(
+                        component = "kubernetes_center",
+                        ha_mode = "all-serve",
+                        "ConfigSyncServer is ready"
+                    );
+
+                    if leader_handle.is_leader() && !leader_services_running {
+                        self.start_leader_services(client).await;
+                        leader_services_running = true;
+                    }
+                }
+                Some(LifecycleEvent::LeadershipAcquired) => {
+                    tracing::info!(
+                        component = "kubernetes_center",
+                        ha_mode = "all-serve",
+                        "Leadership acquired"
+                    );
+                    if caches_ready && !leader_services_running {
+                        self.start_leader_services(client).await;
+                        leader_services_running = true;
+                    }
+                }
+                Some(LifecycleEvent::LeadershipLost) => {
+                    tracing::info!(
+                        component = "kubernetes_center",
+                        ha_mode = "all-serve",
+                        "Leadership lost, stopping leader services but continuing gRPC"
+                    );
+                    if leader_services_running {
+                        self.stop_leader_services().await;
+                        leader_services_running = false;
+                    }
+                }
+                Some(LifecycleEvent::CachesTimeout) => {
+                    break ControllerExitReason::AllControllersStopped;
+                }
+                Some(LifecycleEvent::ControllerExit(reason)) => {
+                    break reason;
+                }
+                Some(LifecycleEvent::ReloadRequested) => {
+                    break ControllerExitReason::RelinkRequested(
+                        super::resource_controller::RelinkReason::ReloadRequested,
+                    );
+                }
+                None => {
+                    break ControllerExitReason::AllControllersStopped;
+                }
+            }
+        };
+
+        // Cleanup
+        watchers.abort_and_wait().await;
+        if caches_ready {
+            self.set_config_sync_server(None);
+        }
+        if leader_services_running {
+            self.stop_leader_services().await;
+        }
+        PROCESSOR_REGISTRY.clear_registry();
+
+        match exit_reason {
+            ControllerExitReason::Shutdown => ServingFlowExit::Shutdown,
+            _ => ServingFlowExit::RelinkRequested,
+        }
+    }
+
+    /// Start event watchers for all-serve mode.
+    /// Differs from leader-only: no ACME in caches task, leadership sends bidirectional events.
+    async fn start_event_watchers_all_serve(
+        &self,
+        client: &Client,
+        shutdown_handle: &ShutdownHandle,
+        leader_handle: &LeaderHandle,
+        event_tx: mpsc::Sender<LifecycleEvent>,
+    ) -> Result<(WatcherHandles, Arc<ConfigSyncServer>)> {
+        let resolved_mode = if crate::core::common::config::is_test_mode() {
+            EndpointMode::Both
+        } else {
+            resolve_endpoint_mode(client, self.config.endpoint_mode()).await?
+        };
+
+        crate::core::gateway::backends::init_global_endpoint_mode(resolved_mode);
+
+        let config_sync_server = Arc::new(ConfigSyncServer::new());
+        config_sync_server.set_endpoint_mode(resolved_mode);
+
+        // Create controller with leader_handle for status write gating
+        let mut controller = self.create_k8s_controller(client, resolved_mode)?;
+        controller = controller.with_leader_handle(leader_handle.clone());
+
+        let shutdown_signal = shutdown_handle.signal();
+        let tx = event_tx.clone();
+        let controller_handle = tokio::spawn(async move {
+            let reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
+                tracing::error!(
+                    component = "kubernetes_center",
+                    error = %e,
+                    "Controller run error (all-serve)"
+                );
+                ControllerExitReason::AllControllersStopped
+            });
+            let _ = tx.send(LifecycleEvent::ControllerExit(reason)).await;
+        });
+
+        // Caches ready watcher — no ACME start here (moved to start_leader_services)
+        let css = config_sync_server.clone();
+        let tx = event_tx.clone();
+        let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
+        let caches_handle = tokio::spawn(async move {
+            const CACHE_READY_TIMEOUT_SECS: u64 = 30;
+            let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
+            let start = Instant::now();
+            let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+
+            let pending_sync_kinds = || -> Vec<&'static str> {
+                PROCESSOR_REGISTRY
+                    .not_ready_kinds()
+                    .into_iter()
+                    .filter(|k| !no_sync_refs.contains(k))
+                    .collect()
+            };
+
+            while !pending_sync_kinds().is_empty() && start.elapsed() < timeout {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+
+            if pending_sync_kinds().is_empty() {
+                css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
+                let _ = tx.send(LifecycleEvent::CachesReady).await;
+            } else {
+                let not_ready: Vec<String> = pending_sync_kinds().into_iter().map(|s| s.to_string()).collect();
+                tracing::warn!(
+                    component = "kubernetes_center",
+                    ha_mode = "all-serve",
+                    not_ready = ?not_ready,
+                    "Timeout waiting for processors"
+                );
+                let _ = tx.send(LifecycleEvent::CachesTimeout).await;
+            }
+        });
+
+        // Leadership watcher — bidirectional events (acquired + lost)
+        let lh = leader_handle.clone();
+        let tx_leader = event_tx.clone();
+        let leader_watcher_handle = tokio::spawn(async move {
+            let mut current_leader = lh.is_leader();
+            if current_leader
+                && tx_leader.send(LifecycleEvent::LeadershipAcquired).await.is_err()
+            {
+                return;
+            }
+            loop {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let now_leader = lh.is_leader();
+                if now_leader != current_leader {
+                    current_leader = now_leader;
+                    let event = if now_leader {
+                        LifecycleEvent::LeadershipAcquired
+                    } else {
+                        LifecycleEvent::LeadershipLost
+                    };
+                    if tx_leader.send(event).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Reload channel
+        let (reload_tx, mut reload_rx) = mpsc::channel::<()>(1);
+        self.set_reload_tx(Some(reload_tx));
+
+        let tx = event_tx;
+        let reload_watcher_handle = tokio::spawn(async move {
+            if reload_rx.recv().await.is_some() {
+                let _ = tx.send(LifecycleEvent::ReloadRequested).await;
+            }
+        });
+
+        Ok((
+            WatcherHandles {
+                controller: controller_handle,
+                caches: caches_handle,
+                leader: leader_watcher_handle,
+                reload: reload_watcher_handle,
+            },
+            config_sync_server,
+        ))
+    }
+
+    /// Start leader-only services (ACME + status reconciliation)
+    async fn start_leader_services(&self, client: &Client) {
+        tracing::info!(component = "kubernetes_center", "Starting leader-only services");
+        crate::core::controller::services::acme::start_acme_service(client.clone());
+        PROCESSOR_REGISTRY.requeue_all();
+    }
+
+    /// Stop leader-only services
+    async fn stop_leader_services(&self) {
+        tracing::info!(component = "kubernetes_center", "Stopping leader-only services");
+        crate::core::controller::services::acme::stop_acme_service();
     }
 }
 
@@ -662,23 +995,24 @@ impl CenterLifeCycle for KubernetesCenter {
     /// The shutdown_handle is provided by the caller (main program) to enable
     /// coordinated graceful shutdown across all components.
     async fn start(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
-        // Store shutdown handle
         self.set_shutdown_handle(shutdown_handle.clone());
 
-        // 1. Create K8s Client
         let client = Client::try_default().await?;
         tracing::info!(
             component = "kubernetes_center",
             mode = "kubernetes",
+            ha_mode = %self.config.ha_mode(),
             "K8s client initialized"
         );
 
-        // 2. Initialize Leader Election
         let leader_config = self.create_leader_election_config()?;
         let leader_election = LeaderElection::new(client.clone(), leader_config);
         let leader_handle = leader_election.handle();
 
-        // 3. Spawn leader election background task with shutdown signal
+        // Fail-fast on startup if leader-election prerequisites are missing
+        // (lease access / pod label patch permissions).
+        leader_election.preflight_check().await?;
+
         let le = leader_election.clone();
         let le_shutdown = shutdown_handle.signal();
         tokio::spawn(async move {
@@ -691,57 +1025,14 @@ impl CenterLifeCycle for KubernetesCenter {
             }
         });
 
-        // 4. Main lifecycle loop
-        loop {
-            // === Phase 1: Wait for leadership ===
-            tracing::info!(
-                component = "kubernetes_center",
-                mode = "kubernetes",
-                "Waiting for leadership..."
-            );
-
-            if !leader_handle
-                .wait_until_leader_with_shutdown(shutdown_handle.signal())
-                .await
-            {
-                tracing::info!(
-                    component = "kubernetes_center",
-                    mode = "kubernetes",
-                    "Shutdown requested before acquiring leadership"
-                );
-                return Ok(());
+        match self.config.ha_mode() {
+            HaMode::LeaderOnly => {
+                self.run_leader_only_lifecycle(&client, &leader_handle, &shutdown_handle)
+                    .await
             }
-
-            tracing::info!(
-                component = "kubernetes_center",
-                mode = "kubernetes",
-                "Acquired leadership, entering main flow"
-            );
-
-            // === Phase 2: Run main flow (only leader executes) ===
-            let exit_reason = self.run_main_flow(&client, &leader_handle, &shutdown_handle).await;
-
-            // === Phase 3: Handle exit reason ===
-            match exit_reason {
-                MainFlowExit::Shutdown => {
-                    tracing::info!(component = "kubernetes_center", mode = "kubernetes", "Normal shutdown");
-                    // Stop ACME service and clear PROCESSOR_REGISTRY
-                    crate::core::controller::services::acme::stop_acme_service();
-                    PROCESSOR_REGISTRY.clear_registry();
-                    return Ok(());
-                }
-                MainFlowExit::LostLeadership => {
-                    tracing::warn!(
-                        component = "kubernetes_center",
-                        mode = "kubernetes",
-                        "Lost leadership, will wait for re-election"
-                    );
-                    // Stop ACME service and clear PROCESSOR_REGISTRY for re-election
-                    crate::core::controller::services::acme::stop_acme_service();
-                    PROCESSOR_REGISTRY.clear_registry();
-                    // Loop back to wait for leadership
-                    continue;
-                }
+            HaMode::AllServe => {
+                self.run_all_serve_lifecycle(&client, &leader_handle, &shutdown_handle)
+                    .await
             }
         }
     }

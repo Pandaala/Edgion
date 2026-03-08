@@ -11,7 +11,7 @@ use pingora_core::listeners::Listeners;
 use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::Server;
 use pingora_core::services::listening::Service;
-use pingora_proxy::http_proxy_service;
+use pingora_proxy::{http_proxy_service, ProxyServiceBuilder};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::UdpSocket;
@@ -165,25 +165,43 @@ pub fn add_http_listener(
         preflight_handler,
     };
 
-    // Create HTTP proxy service
-    let mut http_service = http_proxy_service(&context.server_conf, edgion_http);
+    // Build HttpServerOptions: h2c + downstream keepalive request limit
+    let mut opts = HttpServerOptions::default();
+
+    if !enable_tls && enable_http2 {
+        opts.h2c = true;
+        tracing::info!(
+            gateway=%context.gateway_key,
+            listener=%listener_name,
+            "Enabled h2c (HTTP/2 Cleartext) support"
+        );
+    }
+
+    // Downstream keepalive request limit (per-connection, HTTP/1.1 only)
+    // 0 means unlimited; non-zero sets the limit
+    let limit = context
+        .edgion_gateway_config
+        .spec
+        .server
+        .as_ref()
+        .map(|s| s.downstream_keepalive_request_limit)
+        .unwrap_or(1000);
+    if limit > 0 {
+        opts.keepalive_request_limit = Some(limit);
+        tracing::info!(
+            gateway=%context.gateway_key,
+            listener=%listener_name,
+            limit=%limit,
+            "Downstream keepalive request limit configured"
+        );
+    }
+
+    let mut http_service = ProxyServiceBuilder::new(&context.server_conf, edgion_http)
+        .server_options(opts)
+        .build();
 
     // Apply connection filter if configured via annotation
     apply_connection_filter(&mut http_service, context);
-
-    // Enable h2c (HTTP/2 Cleartext) for non-TLS listeners if enable_http2 is true
-    if !enable_tls && enable_http2 {
-        if let Some(http_logic) = http_service.app_logic_mut() {
-            let mut http_server_options = HttpServerOptions::default();
-            http_server_options.h2c = true; // Enable HTTP/2 without TLS
-            http_logic.server_options = Some(http_server_options);
-            tracing::info!(
-                gateway=%context.gateway_key,
-                listener=%listener_name,
-                "Enabled h2c (HTTP/2 Cleartext) support"
-            );
-        }
-    }
 
     // Add listener with or without TLS
     if enable_tls {
@@ -353,14 +371,13 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     // Create TLS settings with callback for certificate loading (with port for SNI lookup)
     let tls_settings = TlsCallback::new_tls_settings_with_callback(port, context.edgion_gateway_config.clone(), false)?;
 
-    // Create TLS service with Listeners
-    let mut tls_service =
-        Service::with_listeners(format!("TLS-TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tls);
+    let mut tls_service = Service::new(format!("TLS-TCP-{}", listener_name), edgion_tls);
 
     // Apply connection filter if configured via annotation
     apply_connection_filter(&mut tls_service, context);
 
-    // Add TLS settings to the service
+    // Only bind the TLS endpoint; Listeners::tcp() would bind a plain TCP socket
+    // on the same port, causing EEXIST when add_tls_with_settings tries to bind again.
     tls_service.add_tls_with_settings(&addr, None, tls_settings);
 
     // Add to server

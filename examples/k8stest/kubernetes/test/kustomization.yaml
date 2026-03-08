@@ -15,6 +15,6 @@ labels:
 
 images:
 - name: docker.io/pandaala/edgion-test-server
-  newTag: "dev"
+  newTag: "v0.1.1"
 - name: docker.io/pandaala/edgion-test-client
-  newTag: "dev"
+  newTag: "v0.1.1"

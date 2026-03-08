@@ -26,7 +26,7 @@
 Client Request
   │
   ▼
-early_request_filter()     ← ACME HTTP-01 challenge handling
+early_request_filter()     ← ACME HTTP-01 challenge, client timeouts, keepalive
   │
   ▼
 request_filter()           ← Core: metadata extraction, route matching,

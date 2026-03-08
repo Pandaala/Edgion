@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
       - name: test-server
-        image: docker.io/pandaala/edgion-test-server:dev
+        image: docker.io/pandaala/edgion-test-server:v0.1.1
         imagePullPolicy: Always
         command: ["/usr/local/bin/test_server"]
         args:
@@ -142,7 +142,7 @@ spec:
     spec:
       containers:
       - name: test-server
-        image: docker.io/pandaala/edgion-test-server:dev
+        image: docker.io/pandaala/edgion-test-server:v0.1.1
         imagePullPolicy: Always
         command: ["/usr/local/bin/test_server"]
         args:
@@ -238,7 +238,7 @@ spec:
     spec:
       containers:
       - name: test-server
-        image: docker.io/pandaala/edgion-test-server:dev
+        image: docker.io/pandaala/edgion-test-server:v0.1.1
         imagePullPolicy: Always
         command: ["/usr/local/bin/test_server"]
         args:

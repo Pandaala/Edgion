@@ -8,7 +8,7 @@
 | 文件 | 主题 | 推荐阅读场景 |
 |------|------|-------------|
 | [00-overview.md](00-overview.md) | 项目总览与代码组织 | 首次接触项目、需要全局视角 |
-| [01-config-center.md](01-config-center.md) | 配置中心（Controller 核心） | 修改资源处理流程、理解 Workqueue |
+| [01-config-center/](01-config-center/) | 配置中心（Controller 核心） | 修改资源处理流程、Workqueue、K8s HA |
 | [02-grpc-sync.md](02-grpc-sync.md) | gRPC 配置同步 | 调试 Controller↔Gateway 同步问题 |
 | [03-data-plane.md](03-data-plane.md) | 基于 Pingora 的数据面 | 修改请求处理流程、理解代理生命周期 |
 | [04-route-matching.md](04-route-matching.md) | 路由匹配引擎 | 修改路由逻辑、排查路由不匹配 |

@@ -194,23 +194,9 @@ impl BasicAuth {
         // Verify password - OFF-LOADED TO BLOCKING THREAD
         // This prevents blocking the async runtime with expensive crypto operations (bcrypt/scrypt etc.)
         let password_clone = password.clone();
-        let username_clone = username.clone();
 
         let is_valid = tokio::task::spawn_blocking(move || {
-            // 2.1 Try generic htpasswd verification (supports apr1, sha1, bcrypt, etc.)
-            // Construct a temporary htpasswd line for verification
-            let htpasswd_line = format!("{}:{}", username_clone, stored_hash);
-            let htpasswd = htpasswd_verify::Htpasswd::from(htpasswd_line.as_str());
-            if htpasswd.check(&username_clone, &password_clone) {
-                return true;
-            }
-
-            // 2.2 Fallback for pure bcrypt crate hashes that might differ slightly or if htpasswd lib fails
-            if stored_hash.starts_with("$2") {
-                return bcrypt::verify(&password_clone, &stored_hash).unwrap_or(false);
-            }
-
-            false
+            super::htpasswd::verify(&password_clone, &stored_hash)
         })
         .await
         .map_err(|e| AuthFailure::BadCredentials(format!("Password verification task failed: {}", e).into()))?;

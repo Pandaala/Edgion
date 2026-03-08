@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use k8s_openapi::api::coordination::v1::Lease;
+use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
 use k8s_openapi::chrono::Utc;
 use kube::api::{Api, Patch, PatchParams, PostParams};
@@ -29,6 +30,8 @@ pub struct LeaderElectionConfig {
     pub lease_name: String,
     /// Lease namespace
     pub lease_namespace: String,
+    /// Current Pod namespace (used for patching pod labels)
+    pub pod_namespace: String,
     /// Identity of this instance (usually pod name)
     pub identity: String,
     /// Lease duration in seconds
@@ -48,6 +51,9 @@ impl LeaderElectionConfig {
     /// # Errors
     /// Returns error if neither `POD_NAME` nor `HOSTNAME` environment variable is set.
     pub fn new(lease_name: impl Into<String>, lease_namespace: impl Into<String>) -> Result<Self> {
+        let lease_namespace = lease_namespace.into();
+        let pod_namespace = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| lease_namespace.clone());
+
         // Try to get pod name from environment
         let identity = std::env::var("POD_NAME")
             .or_else(|_| std::env::var("HOSTNAME"))
@@ -60,7 +66,8 @@ impl LeaderElectionConfig {
 
         Ok(Self {
             lease_name: lease_name.into(),
-            lease_namespace: lease_namespace.into(),
+            lease_namespace,
+            pod_namespace,
             identity,
             lease_duration_secs: DEFAULT_LEASE_DURATION_SECS,
             renew_period_secs: DEFAULT_RENEW_DEADLINE_SECS,
@@ -113,7 +120,7 @@ impl LeaderElection {
 
     /// Check if this instance is the leader
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::Relaxed)
+        self.is_leader.load(Ordering::Acquire)
     }
 
     /// Get a handle that can be cloned and used to check leader status
@@ -121,6 +128,18 @@ impl LeaderElection {
         LeaderHandle {
             is_leader: self.is_leader.clone(),
         }
+    }
+
+    /// Perform strict startup checks required by leader-based routing.
+    ///
+    /// This validates:
+    /// - Lease resource can be created/read in `lease_namespace`
+    /// - Current Pod label can be patched in `pod_namespace`
+    pub async fn preflight_check(&self) -> Result<()> {
+        let lease_api: Api<Lease> = Api::namespaced(self.client.clone(), &self.config.lease_namespace);
+        self.ensure_lease_exists(&lease_api).await?;
+        self.ensure_pod_label_patch_ready().await?;
+        Ok(())
     }
 
     /// Run the leader election loop
@@ -137,16 +156,14 @@ impl LeaderElection {
             component = "leader_election",
             lease_name = %self.config.lease_name,
             lease_namespace = %self.config.lease_namespace,
+            pod_namespace = %self.config.pod_namespace,
             identity = %self.config.identity,
             "Starting leader election"
         );
 
-        // Ensure lease exists
-        self.ensure_lease_exists(&lease_api).await?;
-
         loop {
             // Use different intervals: leader renews more frequently, non-leader retries slower
-            let sleep_duration = if self.is_leader.load(Ordering::Relaxed) {
+            let sleep_duration = if self.is_leader.load(Ordering::Acquire) {
                 Duration::from_secs(self.config.renew_period_secs)
             } else {
                 Duration::from_secs(self.config.retry_period_secs)
@@ -162,9 +179,9 @@ impl LeaderElection {
                             identity = %self.config.identity,
                             "Shutdown signal received, stopping leader election"
                         );
-                        // Release leadership so other pods can take over faster
-                        if self.is_leader.swap(false, Ordering::Relaxed) {
+                        if self.is_leader.swap(false, Ordering::Release) {
                             controller_metrics().set_leader(false);
+                            self.update_pod_leader_label(false).await;
                         }
                         return Ok(());
                     }
@@ -175,23 +192,25 @@ impl LeaderElection {
 
             match self.try_acquire_or_renew(&lease_api).await {
                 Ok(true) => {
-                    if !self.is_leader.swap(true, Ordering::Relaxed) {
+                    if !self.is_leader.swap(true, Ordering::Release) {
                         tracing::info!(
                             component = "leader_election",
                             identity = %self.config.identity,
                             "Acquired leadership"
                         );
                         controller_metrics().set_leader(true);
+                        self.update_pod_leader_label(true).await;
                     }
                 }
                 Ok(false) => {
-                    if self.is_leader.swap(false, Ordering::Relaxed) {
+                    if self.is_leader.swap(false, Ordering::Release) {
                         tracing::info!(
                             component = "leader_election",
                             identity = %self.config.identity,
                             "Lost leadership"
                         );
                         controller_metrics().set_leader(false);
+                        self.update_pod_leader_label(false).await;
                     }
                 }
                 Err(e) => {
@@ -200,9 +219,9 @@ impl LeaderElection {
                         error = %e,
                         "Failed to acquire/renew lease"
                     );
-                    // On error, assume we lost leadership to be safe
-                    if self.is_leader.swap(false, Ordering::Relaxed) {
+                    if self.is_leader.swap(false, Ordering::Release) {
                         controller_metrics().set_leader(false);
+                        self.update_pod_leader_label(false).await;
                     }
                 }
             }
@@ -254,6 +273,64 @@ impl LeaderElection {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Patch the current Pod's `edgion.io/leader` label.
+    /// Fire-and-forget on error: logged but does not block the election loop.
+    async fn update_pod_leader_label(&self, is_leader: bool) {
+        match self.try_patch_pod_leader_label(is_leader).await {
+            Ok(_) => {
+                tracing::info!(
+                    component = "leader_election",
+                    identity = %self.config.identity,
+                    pod_namespace = %self.config.pod_namespace,
+                    is_leader = is_leader,
+                    "Updated pod leader label"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    component = "leader_election",
+                    identity = %self.config.identity,
+                    pod_namespace = %self.config.pod_namespace,
+                    is_leader = is_leader,
+                    error = %e,
+                    "Failed to update pod leader label"
+                );
+            }
+        }
+    }
+
+    /// Strict startup validation for pod label patch capability.
+    async fn ensure_pod_label_patch_ready(&self) -> Result<()> {
+        self.try_patch_pod_leader_label(false).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed startup pod label permission check: cannot patch pod '{}' in namespace '{}': {}",
+                self.config.identity,
+                self.config.pod_namespace,
+                e
+            )
+        })
+    }
+
+    async fn try_patch_pod_leader_label(&self, is_leader: bool) -> Result<()> {
+        let pod_api: Api<Pod> = Api::namespaced(self.client.clone(), &self.config.pod_namespace);
+        let label_value = if is_leader { "true" } else { "false" };
+        let patch = serde_json::json!({
+            "metadata": {
+                "labels": {
+                    "edgion.io/leader": label_value
+                }
+            }
+        });
+        pod_api
+            .patch(
+                &self.config.identity,
+                &PatchParams::default(),
+                &Patch::Merge(&patch),
+            )
+            .await?;
+        Ok(())
     }
 
     /// Try to acquire or renew the lease
@@ -331,7 +408,7 @@ pub struct LeaderHandle {
 impl LeaderHandle {
     /// Check if this instance is the leader
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::Relaxed)
+        self.is_leader.load(Ordering::Acquire)
     }
 
     /// Wait until this instance becomes leader

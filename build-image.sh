@@ -22,19 +22,26 @@
 set -eo pipefail
 
 # =============================================================================
-# Configuration
+# Configuration  (edit these variables to customise the build)
+# =============================================================================
+
+DEFAULT_VERSION="v0.1.1"
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
+IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
+RUST_VERSION="${RUST_VERSION:-1.87}"
+FEATURES="${FEATURES:-default}"
+BINARIES="gateway controller"
+EXAMPLES="test_server test_client"
+
+# =============================================================================
+# Internal variables  (no need to change unless you know what you're doing)
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
 CONF_ENV_FILE="${CONF_ENV_FILE:-${PROJECT_DIR}/examples/k8stest/scripts/conf.env}"
+BUILDER_IMAGE="edgion-builder"
 
-# Binaries to build
-BINARIES="gateway controller"
-# Examples to build (only with --with-examples flag)
-EXAMPLES="test_server test_client"
-
-# Get architecture info: returns "platform:target:suffix"
 get_arch_info() {
     local arch=$1
     case "${arch}" in
@@ -69,18 +76,12 @@ if [[ -z "${VERSION:-}" ]]; then
         if [[ -n "${GIT_TAG}" ]]; then
             VERSION="${GIT_TAG}"
         else
-            VERSION="dev1"
+            VERSION="${DEFAULT_VERSION}"
         fi
     else
-        VERSION="dev1"
+        VERSION="${DEFAULT_VERSION}"
     fi
 fi
-
-IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
-IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-RUST_VERSION="${RUST_VERSION:-1.87}"
-FEATURES="${FEATURES:-default}"
-BUILDER_IMAGE="edgion-builder"
 
 # =============================================================================
 # Colors and Logging
@@ -123,7 +124,7 @@ Options:
                         Available: arm64, amd64
     --push              Push images and create multi-arch manifest
     --rebuild           Force rebuild binaries (ignore cache)
-    --version TAG       Specify version tag (default: git tag or "dev1")
+    --version TAG       Specify version tag (default: git tag or "${DEFAULT_VERSION}")
     --compile-only      Only compile binaries, don't build images
     --with-examples     Also build test_server and test_client images
     --with-example      Alias of --with-examples
@@ -133,7 +134,7 @@ Environment Variables:
     CONF_ENV_FILE       Path to env config file (default: examples/k8stest/scripts/conf.env)
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
-    VERSION             Image version (overrides conf.env and git tag detection)
+    VERSION             Image version (overrides conf.env and git tag; default: ${DEFAULT_VERSION})
     RUST_VERSION        Rust version for builder (default: 1.87)
     FEATURES            Cargo features (default: default)
 

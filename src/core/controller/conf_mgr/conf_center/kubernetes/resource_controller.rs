@@ -20,6 +20,7 @@
 //! - Graceful shutdown support via ShutdownSignal
 
 use super::controller_metrics;
+use super::leader_election::LeaderHandle;
 use super::namespace::NamespaceWatchMode;
 use super::InitSyncTimer;
 use super::ShutdownSignal;
@@ -87,6 +88,9 @@ where
 
     /// Optional relink signal sender for notifying when 410 Gone is detected
     relink_signal: Option<RelinkSignalSender>,
+
+    /// Leader handle for gating status writes (Phase 2 HA support)
+    leader_handle: Option<LeaderHandle>,
 }
 
 /// API scope for resource (namespaced or cluster-scoped)
@@ -137,6 +141,7 @@ where
             namespace_filter,
             shutdown_signal: None,
             relink_signal: None,
+            leader_handle: None,
         }
     }
 
@@ -149,6 +154,12 @@ where
     /// Set relink signal sender
     pub fn with_relink_signal(mut self, sender: RelinkSignalSender) -> Self {
         self.relink_signal = Some(sender);
+        self
+    }
+
+    /// Set leader handle for gating status writes
+    pub fn with_leader_handle(mut self, handle: LeaderHandle) -> Self {
+        self.leader_handle = Some(handle);
         self
     }
 
@@ -250,20 +261,17 @@ where
                             }
                         }
                         Event::InitApply(obj) => {
-                            // Init phase: process directly via processor
-                            // K8s mode: pass None for existing_status_json (status is already in obj from K8s API)
                             if passes_namespace_filter(&obj, &self.namespace_filter) {
                                 let result = self.processor.on_init_apply(obj, None);
 
-                                // Handle status persistence (same as runtime)
                                 if let WorkItemResult::Processed { obj, status_changed } = result {
                                     init_count += 1;
-                                    if status_changed {
+                                    let can_write_status = self.leader_handle.as_ref().is_none_or(|h| h.is_leader());
+                                    if status_changed && can_write_status {
                                         if let Some(status_value) = extract_status_value(&obj) {
                                             let name = obj.meta().name.as_deref().unwrap_or("");
                                             let namespace = obj.meta().namespace.as_deref();
 
-                                            // Persist status to K8s API
                                             if let Err(e) = persist_k8s_status::<K>(
                                                 &self.client,
                                                 &self.api_scope,
@@ -309,6 +317,7 @@ where
                                 self.shutdown_signal.clone(),
                                 self.client.clone(),
                                 self.api_scope.clone(),
+                                self.leader_handle.clone(),
                             ));
 
                             tracing::info!(
@@ -319,7 +328,6 @@ where
                         }
                         Event::Apply(obj) => {
                             if !init_done {
-                                // During init phase, treat as InitApply
                                 tracing::warn!(
                                     component = "resource_controller",
                                     kind = kind,
@@ -330,7 +338,8 @@ where
 
                                     if let WorkItemResult::Processed { obj, status_changed } = result {
                                         init_count += 1;
-                                        if status_changed {
+                                        let can_write_status = self.leader_handle.as_ref().is_none_or(|h| h.is_leader());
+                                        if status_changed && can_write_status {
                                             if let Some(status_value) = extract_status_value(&obj) {
                                                 let name = obj.meta().name.as_deref().unwrap_or("");
                                                 let namespace = obj.meta().namespace.as_deref();
@@ -453,6 +462,7 @@ where
 /// - Dequeue key from workqueue
 /// - Check store (K8s state) and call processor.process_work_item()
 /// - Persist status to K8s API when status changes
+#[allow(clippy::too_many_arguments)]
 fn spawn_worker<K>(
     processor: Arc<ResourceProcessor<K>>,
     store: Store<K>,
@@ -461,6 +471,7 @@ fn spawn_worker<K>(
     shutdown_signal: Option<ShutdownSignal>,
     client: Client,
     api_scope: ApiScope,
+    leader_handle: Option<LeaderHandle>,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -511,9 +522,9 @@ where
                             work_item.trigger_chain.clone(),
                         );
 
-                        // Persist status to K8s API when status changes
                         if let WorkItemResult::Processed { obj, status_changed } = result {
-                            if status_changed {
+                            let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
+                            if status_changed && can_write_status {
                                 let name = obj.meta().name.as_deref().unwrap_or("");
                                 let namespace = obj.meta().namespace.as_deref();
 
@@ -533,7 +544,6 @@ where
                                         }
                                     }
                                     None => {
-                                        // Status changed but extraction failed - log warning
                                         tracing::warn!(
                                             component = "resource_controller",
                                             kind = kind,

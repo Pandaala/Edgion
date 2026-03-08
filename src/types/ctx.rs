@@ -212,6 +212,9 @@ pub struct UpstreamInfo {
     /// Elapsed time in milliseconds (total time for this upstream attempt)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub et: Option<u64>,
+    /// Write pending time in milliseconds (HTTP/1.x only, upstream backpressure)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wpt: Option<u64>,
     /// Upstream response body size in bytes (payload only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_body_size: Option<usize>,
@@ -491,6 +494,7 @@ impl EdgionHttpContext {
                 ht: None,
                 bt: None,
                 et: None,
+                wpt: None,
                 response_body_size: None,
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),

@@ -14,7 +14,7 @@ data:
 
     [gateway]
     # Controller gRPC server address (use K8s service DNS)
-    server_addr = "http://edgion-controller.edgion-system.svc.cluster.local:50051"
+    server_addr = "http://edgion-controller-leader.edgion-system.svc.cluster.local:50051"
     admin_listen = "0.0.0.0:5900"
 
     [logging]

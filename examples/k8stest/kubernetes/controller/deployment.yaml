@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/name: edgion-controller
     app.kubernetes.io/component: controller
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: edgion-controller
@@ -24,7 +24,7 @@ spec:
       serviceAccountName: edgion-controller
       containers:
       - name: edgion-controller
-        image: docker.io/pandaala/edgion-controller:dev
+        image: docker.io/pandaala/edgion-controller:v0.1.1
         imagePullPolicy: IfNotPresent
         command:
         - "/bin/sh"

@@ -93,6 +93,17 @@ pub struct ServerConfig {
     /// Enable downstream response compression (default: false)
     #[serde(default)]
     pub enable_compression: bool,
+
+    /// Maximum number of requests a downstream connection can serve before being closed.
+    /// Per-connection limit, similar to Nginx's `keepalive_requests`.
+    /// Helps with memory management and load balancing distribution.
+    /// Default: 1000. Set to 0 to disable the limit.
+    #[serde(default = "default_downstream_keepalive_request_limit")]
+    pub downstream_keepalive_request_limit: u32,
+}
+
+fn default_downstream_keepalive_request_limit() -> u32 {
+    1000
 }
 
 fn default_work_stealing() -> bool {
