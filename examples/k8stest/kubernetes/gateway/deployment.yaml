@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
       - name: edgion-gateway
-        image: docker.io/pandaala/edgion-gateway:dev
+        image: docker.io/pandaala/edgion-gateway:v0.1.1
         imagePullPolicy: IfNotPresent
         command:
         - "/bin/sh"

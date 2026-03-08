@@ -69,12 +69,14 @@ if [[ -z "${VERSION:-}" ]]; then
         if [[ -n "${GIT_TAG}" ]]; then
             VERSION="${GIT_TAG}"
         else
-            VERSION="dev1"
+            VERSION="${DEFAULT_VERSION}"
         fi
     else
-        VERSION="dev1"
+        VERSION="${DEFAULT_VERSION}"
     fi
 fi
+
+DEFAULT_VERSION="v0.1.1"
 
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
@@ -123,7 +125,7 @@ Options:
                         Available: arm64, amd64
     --push              Push images and create multi-arch manifest
     --rebuild           Force rebuild binaries (ignore cache)
-    --version TAG       Specify version tag (default: git tag or "dev1")
+    --version TAG       Specify version tag (default: git tag or "${DEFAULT_VERSION}")
     --compile-only      Only compile binaries, don't build images
     --with-examples     Also build test_server and test_client images
     --with-example      Alias of --with-examples
@@ -133,7 +135,7 @@ Environment Variables:
     CONF_ENV_FILE       Path to env config file (default: examples/k8stest/scripts/conf.env)
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
-    VERSION             Image version (overrides conf.env and git tag detection)
+    VERSION             Image version (overrides conf.env and git tag; default: ${DEFAULT_VERSION})
     RUST_VERSION        Rust version for builder (default: 1.87)
     FEATURES            Cargo features (default: default)
 
