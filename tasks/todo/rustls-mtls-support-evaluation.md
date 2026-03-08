@@ -1,25 +1,25 @@
-# Rustls mTLS 支持评估 — 基于 Pingora 0.8.0 变更分析
+# Rustls mTLS Support Evaluation — Analysis Based on Pingora 0.8.0 Changes
 
-> 来源：Pingora 0.8.0 升级过程中对 mTLS 原生支持的深入调研（06-mtls-native-support）。
-> 本文档记录调研结论，作为未来 Rustls 后端支持的参考依据。
+> Source: in-depth investigation of native mTLS support during the Pingora 0.8.0 upgrade (`06-mtls-native-support`).
+> This document records the conclusions of that investigation as reference material for future Rustls backend support.
 
-## 背景
+## Background
 
-Pingora 0.8.0 release notes 提到：
+The Pingora 0.8.0 release notes state:
 
 > Add support for client certificate verification in mTLS configuration.
 
-经源码 diff 验证，**此变更仅影响 Rustls 后端**，BoringSSL/OpenSSL 和 s2n 路径在 0.7.0 → 0.8.0 之间零变更。
+Source diff verification shows that **this change only affects the Rustls backend**. There were zero changes on the BoringSSL/OpenSSL and s2n paths between 0.7.0 and 0.8.0.
 
-## mTLS 方向
+## mTLS Scope
 
-**Downstream（客户端 → 网关）**，即 listener 端验证连接进来的客户端证书。不涉及 upstream（网关 → 后端）。
+**Downstream (client -> gateway)**, meaning client certificate verification on the listener side for incoming connections. This does not involve upstream (gateway -> backend).
 
-## 变更内容
+## What Changed
 
-### Rustls 后端：从不可用到基本可用
+### Rustls Backend: From Unsupported to Basically Usable
 
-**0.7.0** — 硬编码 `with_no_client_auth()`，完全无法验证客户端证书：
+**0.7.0** — hardcoded `with_no_client_auth()`, making client certificate verification completely unavailable:
 
 ```rust
 // pingora-core-0.7.0/src/listeners/tls/rustls/mod.rs L57-60
@@ -29,7 +29,7 @@ let mut config = ServerConfig::builder_with_protocol_versions(&[&version::TLS12,
     .with_single_cert(certs, key)
 ```
 
-**0.8.0** — 新增 `client_cert_verifier` 字段，支持注入自定义 `ClientCertVerifier`：
+**0.8.0** — adds the `client_cert_verifier` field, allowing injection of a custom `ClientCertVerifier`:
 
 ```rust
 // pingora-core-0.8.0/src/listeners/tls/rustls/mod.rs L59-65
@@ -41,7 +41,7 @@ let builder = if let Some(verifier) = self.client_cert_verifier {
 };
 ```
 
-新增 API：
+New API:
 
 ```rust
 // pingora-core-0.8.0/src/listeners/tls/rustls/mod.rs L93-96
@@ -50,54 +50,51 @@ pub fn set_client_cert_verifier(&mut self, verifier: Arc<dyn ClientCertVerifier>
 }
 ```
 
-### BoringSSL/OpenSSL 路径：零变更
+### BoringSSL/OpenSSL Path: No Changes
 
-`boringssl_openssl/mod.rs` 在 0.7.0 和 0.8.0 完全相同。Edgion 当前使用 `boringssl` feature，
-走此路径，因此 **0.8.0 的 mTLS 变更对 Edgion 当前版本没有任何影响**。
+`boringssl_openssl/mod.rs` is identical in 0.7.0 and 0.8.0. Edgion currently uses the `boringssl` feature and follows this path, so **the 0.8.0 mTLS change has no effect on the current Edgion version**.
 
-## 对 Edgion 的意义
+## Impact on Edgion
 
-### 当前（BoringSSL）：无需操作
+### Current State (BoringSSL): No Action Required
 
-Edgion 的 mTLS 全部基于 BoringSSL 自定义实现，该路径 API 在 0.8.0 中无任何破坏性变更，
-现有代码完全兼容。
+Edgion's mTLS implementation is entirely based on custom BoringSSL logic. That path has no breaking API changes in 0.8.0, so the existing code remains fully compatible.
 
-### 未来（若支持 Rustls）：这是前置条件
+### Future State (If Rustls Support Is Added): This Is a Prerequisite
 
-0.8.0 的 `set_client_cert_verifier()` 是 Rustls 后端支持 mTLS 的**必要条件**。
-但要完整移植 Edgion 的 mTLS 功能到 Rustls，还需解决以下差距：
+The `set_client_cert_verifier()` API in 0.8.0 is a **necessary prerequisite** for mTLS support on the Rustls backend. However, fully porting Edgion's mTLS capabilities to Rustls still requires addressing the following gaps:
 
-## Edgion mTLS 功能 vs Rustls 路径能力对比
+## Edgion mTLS Features vs. Rustls Path Capabilities
 
-| Edgion 功能 | BoringSSL（当前） | Rustls（0.8.0） | 差距说明 |
-|-------------|-------------------|-----------------|---------|
-| CA 证书验证 | `ssl.set_verify_cert_store()` | `ClientCertVerifier` | ✅ 可通过 `WebPkiClientVerifier` 实现 |
-| Mutual 模式 | `PEER \| FAIL_IF_NO_PEER_CERT` | verifier 决定 | ✅ 可实现 |
-| OptionalMutual 模式 | `PEER` | verifier 决定 | ✅ 可通过 `allow_unauthenticated()` 实现 |
-| verify_depth | `ssl.set_verify_depth()` | 未暴露 | ⚠️ 需在 `ClientCertVerifier` 中自行实现深度限制 |
-| SAN/CN 白名单 | BoringSSL FFI verify callback | 不提供 | ⚠️ 需在自定义 `ClientCertVerifier` trait 中实现 |
-| SAN 通配符匹配 | `matches_pattern()` | 不提供 | ⚠️ 验证逻辑可复用，但需包装在 `ClientCertVerifier` 中 |
-| per-SNI+port 配置 | `certificate_callback` 按 SNI 分发 | **不支持** | ❌ Rustls 的 `with_callbacks()` 直接返回错误 |
-| 动态证书加载 | `TlsAcceptCallbacks` | **不支持** | ❌ 同上，Rustls 不支持 certificate callbacks |
-| 客户端证书信息透传 | `handshake_complete_callback` → `ClientCertInfo` | **不支持** | ❌ Rustls 无法在握手后将信息写入 `digest.extension` |
+| Edgion Feature | BoringSSL (Current) | Rustls (0.8.0) | Gap Analysis |
+|----------------|---------------------|----------------|--------------|
+| CA certificate verification | `ssl.set_verify_cert_store()` | `ClientCertVerifier` | ✅ Can be implemented through `WebPkiClientVerifier` |
+| Mutual mode | `PEER \| FAIL_IF_NO_PEER_CERT` | Determined by verifier | ✅ Feasible |
+| OptionalMutual mode | `PEER` | Determined by verifier | ✅ Can be implemented through `allow_unauthenticated()` |
+| verify_depth | `ssl.set_verify_depth()` | Not exposed | ⚠️ Depth limit must be implemented manually in `ClientCertVerifier` |
+| SAN/CN allowlist | BoringSSL FFI verify callback | Not provided | ⚠️ Must be implemented in a custom `ClientCertVerifier` trait implementation |
+| SAN wildcard matching | `matches_pattern()` | Not provided | ⚠️ Validation logic can be reused, but must be wrapped in `ClientCertVerifier` |
+| per-SNI+port config | `certificate_callback` dispatches by SNI | **Unsupported** | ❌ Rustls `with_callbacks()` returns an error directly |
+| Dynamic certificate loading | `TlsAcceptCallbacks` | **Unsupported** | ❌ Same limitation; Rustls does not support certificate callbacks |
+| Client certificate info propagation | `handshake_complete_callback` -> `ClientCertInfo` | **Unsupported** | ❌ Rustls cannot write this information into `digest.extension` after the handshake |
 
-## Rustls mTLS 适配方案（未来参考）
+## Rustls mTLS Adaptation Approach (Future Reference)
 
-如果未来决定支持 Rustls 后端，mTLS 适配需分两层：
+If support for the Rustls backend is added in the future, the mTLS adaptation will need to be handled in two layers:
 
-### 第一层：可直接实现（依赖 0.8.0 API）
+### Layer 1: Directly Implementable (Depends on 0.8.0 API)
 
-通过实现 `rustls::server::danger::ClientCertVerifier` trait：
+By implementing the `rustls::server::danger::ClientCertVerifier` trait:
 
 ```rust
 use rustls::server::WebPkiClientVerifier;
 
-// 基础 CA 验证
+// Basic CA verification
 let roots = Arc::new(load_ca_roots(ca_pem)?);
 let verifier = WebPkiClientVerifier::builder(roots)
     .build()?;
 
-// 或自定义 verifier 实现 SAN/CN 白名单 + verify_depth
+// Or a custom verifier for SAN/CN allowlist + verify_depth
 struct EdgionClientCertVerifier {
     inner: Arc<dyn ClientCertVerifier>,
     allowed_sans: Option<Vec<String>>,
@@ -107,39 +104,37 @@ struct EdgionClientCertVerifier {
 
 impl ClientCertVerifier for EdgionClientCertVerifier {
     fn verify_client_cert(&self, ...) -> Result<...> {
-        // 1. 调用 inner 做基础 CA 链验证
-        // 2. 检查证书链深度
-        // 3. 提取 SAN/CN 做白名单匹配（复用现有 mtls.rs 逻辑）
+        // 1. Use inner for basic CA chain validation
+        // 2. Check certificate chain depth
+        // 3. Extract SAN/CN and perform allowlist matching (reuse existing mtls.rs logic)
     }
 }
 ```
 
-### 第二层：受阻于 Pingora Rustls 限制
+### Layer 2: Blocked by Pingora Rustls Limitations
 
-以下功能需要等 Pingora 上游支持或 Edgion 自行适配：
+The following features require either upstream Pingora support or custom adaptation by Edgion:
 
-1. **动态证书 + per-SNI 配置** — Rustls 的 `with_callbacks()` 当前返回错误。
-   需要 Pingora 上游为 Rustls 实现 `TlsAcceptCallbacks`，或 Edgion 使用 rustls 的
-   `ResolvesServerCert` trait 自行实现 SNI 路由。
+1. **Dynamic certificate loading + per-SNI configuration** — Rustls `with_callbacks()` currently returns an error.
+   Pingora upstream would need to add `TlsAcceptCallbacks` support for Rustls, or Edgion would need to implement SNI routing itself using the rustls `ResolvesServerCert` trait.
 
-2. **客户端证书信息透传** — 无 `handshake_complete_callback`。
-   需要在请求处理层（如 `request_filter`）通过 rustls 的 `ServerConnection::peer_certificates()`
-   提取证书信息，而非在握手回调中完成。
+2. **Client certificate info propagation** — there is no `handshake_complete_callback`.
+   The certificate information would need to be extracted at request-processing time (for example in `request_filter`) using rustls `ServerConnection::peer_certificates()` instead of handling it in a handshake callback.
 
-## 行动项
+## Action Items
 
-- [ ] 持续关注 Pingora 后续版本是否为 Rustls 补上 `TlsAcceptCallbacks` 支持
-- [ ] 若启动 Rustls 后端支持项目，优先评估 SNI 动态路由方案（`ResolvesServerCert`）
-- [ ] 评估是否将 `mtls.rs` 中的验证逻辑抽象为 TLS-backend-agnostic 的公共模块
-- [ ] 评估 rustls `ServerConnection::peer_certificates()` 作为证书信息透传的替代方案
+- [ ] Continue tracking whether future Pingora versions add `TlsAcceptCallbacks` support for Rustls
+- [ ] If a Rustls backend support project starts, prioritize evaluating an SNI-based dynamic routing approach (`ResolvesServerCert`)
+- [ ] Evaluate whether the validation logic in `mtls.rs` can be abstracted into a TLS-backend-agnostic shared module
+- [ ] Evaluate rustls `ServerConnection::peer_certificates()` as an alternative approach for propagating certificate information
 
-## 相关文件
+## Related Files
 
-| 文件 | 说明 |
-|------|------|
-| `tasks/working/pingora-0.8.0-upgrade/06-mtls-native-support.md` | 原始 task（已完成，无需操作） |
+| File | Description |
+|------|-------------|
+| `tasks/working/pingora-0.8.0-upgrade/06-mtls-native-support.md` | Original task (already completed, no action needed) |
 | `src/core/gateway/tls/boringssl/mtls_verify_callback.rs` | BoringSSL FFI verify callback |
-| `src/core/gateway/tls/validation/mtls.rs` | SAN/CN 白名单验证（可复用） |
-| `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | mTLS 配置入口 |
-| `src/types/resources/edgion_tls.rs` | `ClientAuthConfig` 配置结构 |
-| `src/types/ctx.rs` | `ClientCertInfo` 定义 |
+| `src/core/gateway/tls/validation/mtls.rs` | SAN/CN allowlist validation (reusable) |
+| `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | mTLS configuration entry point |
+| `src/types/resources/edgion_tls.rs` | `ClientAuthConfig` configuration struct |
+| `src/types/ctx.rs` | `ClientCertInfo` definition |
