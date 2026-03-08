@@ -22,19 +22,26 @@
 set -eo pipefail
 
 # =============================================================================
-# Configuration
+# Configuration  (edit these variables to customise the build)
+# =============================================================================
+
+DEFAULT_VERSION="v0.1.1"
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
+IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
+RUST_VERSION="${RUST_VERSION:-1.87}"
+FEATURES="${FEATURES:-default}"
+BINARIES="gateway controller"
+EXAMPLES="test_server test_client"
+
+# =============================================================================
+# Internal variables  (no need to change unless you know what you're doing)
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
 CONF_ENV_FILE="${CONF_ENV_FILE:-${PROJECT_DIR}/examples/k8stest/scripts/conf.env}"
+BUILDER_IMAGE="edgion-builder"
 
-# Binaries to build
-BINARIES="gateway controller"
-# Examples to build (only with --with-examples flag)
-EXAMPLES="test_server test_client"
-
-# Get architecture info: returns "platform:target:suffix"
 get_arch_info() {
     local arch=$1
     case "${arch}" in
@@ -75,14 +82,6 @@ if [[ -z "${VERSION:-}" ]]; then
         VERSION="${DEFAULT_VERSION}"
     fi
 fi
-
-DEFAULT_VERSION="v0.1.1"
-
-IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
-IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-RUST_VERSION="${RUST_VERSION:-1.87}"
-FEATURES="${FEATURES:-default}"
-BUILDER_IMAGE="edgion-builder"
 
 # =============================================================================
 # Colors and Logging
