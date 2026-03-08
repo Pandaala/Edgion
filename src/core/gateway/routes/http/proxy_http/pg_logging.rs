@@ -16,6 +16,10 @@ pub async fn logging(
 ) {
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.set_response_body_size(session.upstream_body_bytes_received());
+        let wpt = session.upstream_write_pending_time();
+        if !wpt.is_zero() {
+            upstream.wpt = Some(wpt.as_millis() as u64);
+        }
     }
     // Record proxied request bytes for bandwidth monitoring
     global_metrics().add_request_bytes(session.body_bytes_read() as u64);

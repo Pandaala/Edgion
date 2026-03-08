@@ -145,6 +145,11 @@ pub struct ServerConfig {
     #[arg(long = "error-log", value_name = "FILE")]
     #[serde(default)]
     pub error_log: Option<String>,
+
+    /// Maximum requests per downstream connection before close (default: 1000, 0 = unlimited)
+    #[arg(long = "downstream-keepalive-request-limit", value_name = "NUM")]
+    #[serde(default)]
+    pub downstream_keepalive_request_limit: Option<u32>,
 }
 
 /// Logging configuration

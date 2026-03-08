@@ -138,11 +138,11 @@ hex = "0.4"
 jsonwebtoken = "9"
 
 # Pingora
-pingora-core = { version = "0.7.0", features = ["connection_filter"] }
-pingora-http = "0.7.0"
-pingora-limits = "0.7.0"
-pingora-load-balancing = "0.7.0"
-pingora-proxy = { version = "0.7.0" }
+pingora-core = { version = "0.8.0", features = ["connection_filter"] }
+pingora-http = "0.8.0"
+pingora-limits = "0.8.0"
+pingora-load-balancing = "0.8.0"
+pingora-proxy = { version = "0.8.0" }
 etcd-client = { version = "0.18", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)

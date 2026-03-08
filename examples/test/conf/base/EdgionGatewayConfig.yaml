@@ -10,6 +10,7 @@ spec:
     gracePeriodSeconds: 30
     gracefulShutdownTimeoutS: 10
     upstreamKeepalivePoolSize: 128
+    downstreamKeepaliveRequestLimit: 1000  # per-connection, HTTP/1.1 only, 0 = unlimited
 
   # Real IP 
   realIp:
