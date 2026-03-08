@@ -17,7 +17,7 @@ pub fn get_global_plugin_store() -> Arc<PluginStore> {
 type PluginMap = HashMap<String, EdgionPlugins>;
 
 pub struct PluginStore {
-    plugins: ArcSwap<Arc<PluginMap>>,
+    plugins: ArcSwap<PluginMap>,
 }
 
 impl Default for PluginStore {
@@ -29,7 +29,7 @@ impl Default for PluginStore {
 impl PluginStore {
     pub fn new() -> Self {
         Self {
-            plugins: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            plugins: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -56,7 +56,7 @@ impl PluginStore {
 
     /// Replace all edgion_plugins atomically
     pub fn replace_all(&self, plugins: HashMap<String, EdgionPlugins>) {
-        self.plugins.store(Arc::new(Arc::new(plugins)));
+        self.plugins.store(Arc::new(plugins));
     }
 
     /// Update edgion_plugins atomically (clone map + modify + swap)
@@ -72,7 +72,7 @@ impl PluginStore {
             new_map.insert(key, plugin);
         }
 
-        self.plugins.store(Arc::new(Arc::new(new_map)));
+        self.plugins.store(Arc::new(new_map));
     }
 
     /// Get total count of edgion_plugins

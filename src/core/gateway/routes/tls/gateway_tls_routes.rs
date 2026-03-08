@@ -10,14 +10,14 @@ use std::sync::Arc;
 pub struct GatewayTlsRoutes {
     /// hostname -> Vec<Arc<TLSRoute>> mapping
     /// Multiple routes can match the same hostname (with different priorities or conditions)
-    hostname_routes_map: ArcSwap<Arc<HashMap<String, Vec<Arc<TLSRoute>>>>>,
+    hostname_routes_map: ArcSwap<HashMap<String, Vec<Arc<TLSRoute>>>>,
 }
 
 impl GatewayTlsRoutes {
     /// Create a new empty GatewayTlsRoutes
     pub fn new() -> Self {
         Self {
-            hostname_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            hostname_routes_map: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -54,9 +54,7 @@ impl GatewayTlsRoutes {
 
     /// Update the routes map (called by TlsRouteManager during config sync)
     pub(crate) fn update_routes(&self, new_routes: HashMap<String, Vec<Arc<TLSRoute>>>) {
-        // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
-        // This double-Arc is needed for lock-free atomic pointer swapping
-        self.hostname_routes_map.store(Arc::new(Arc::new(new_routes)));
+        self.hostname_routes_map.store(Arc::new(new_routes));
     }
 
     /// Get all hostnames that have routes
