@@ -10,14 +10,14 @@ use std::sync::Arc;
 pub struct GatewayTcpRoutes {
     /// listener_name -> Vec<Arc<TCPRoute>> mapping
     /// Routes are indexed by listener name (sectionName) for proper Gateway API compliance
-    listener_routes_map: ArcSwap<Arc<HashMap<String, Vec<Arc<TCPRoute>>>>>,
+    listener_routes_map: ArcSwap<HashMap<String, Vec<Arc<TCPRoute>>>>,
 }
 
 impl GatewayTcpRoutes {
     /// Create a new empty GatewayTcpRoutes
     pub fn new() -> Self {
         Self {
-            listener_routes_map: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            listener_routes_map: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -47,9 +47,7 @@ impl GatewayTcpRoutes {
 
     /// Update the routes map (called by TcpRouteManager during config sync)
     pub(crate) fn update_routes(&self, new_routes: HashMap<String, Vec<Arc<TCPRoute>>>) {
-        // Note: ArcSwap<Arc<T>> requires Arc<Arc<T>> for store() method
-        // This double-Arc is needed for lock-free atomic pointer swapping
-        self.listener_routes_map.store(Arc::new(Arc::new(new_routes)));
+        self.listener_routes_map.store(Arc::new(new_routes));
     }
 
     /// Incrementally update routes for specified listener names only (fine-grained update)
@@ -60,11 +58,10 @@ impl GatewayTcpRoutes {
     /// # Arguments
     /// * `listener_routes` - Map of listener_name -> routes to update. Empty Vec means clear that listener.
     pub(crate) fn update_listeners_incremental(&self, listener_routes: HashMap<String, Vec<Arc<TCPRoute>>>) {
-        // Load current map (Arc<Arc<HashMap>>)
         let current_arc = self.listener_routes_map.load();
 
         // Clone inner HashMap and apply incremental updates
-        let mut new_map = (***current_arc).clone();
+        let mut new_map = (**current_arc).clone();
 
         for (listener_name, routes) in listener_routes {
             if routes.is_empty() {
@@ -76,8 +73,7 @@ impl GatewayTcpRoutes {
             }
         }
 
-        // Atomically swap to new map (double-Arc for ArcSwap<Arc<T>>)
-        self.listener_routes_map.store(Arc::new(Arc::new(new_map)));
+        self.listener_routes_map.store(Arc::new(new_map));
     }
 
     /// Check if there are any routes

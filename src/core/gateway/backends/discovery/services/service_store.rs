@@ -14,7 +14,7 @@ pub fn get_global_service_store() -> Arc<ServiceStore> {
 type ServiceMap = HashMap<String, Service>;
 
 pub struct ServiceStore {
-    services: ArcSwap<Arc<ServiceMap>>,
+    services: ArcSwap<ServiceMap>,
 }
 
 impl Default for ServiceStore {
@@ -26,7 +26,7 @@ impl Default for ServiceStore {
 impl ServiceStore {
     pub fn new() -> Self {
         Self {
-            services: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            services: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -53,7 +53,7 @@ impl ServiceStore {
 
     /// Replace all services atomically
     pub fn replace_all(&self, services: HashMap<String, Service>) {
-        self.services.store(Arc::new(Arc::new(services)));
+        self.services.store(Arc::new(services));
     }
 
     /// Update services atomically (clone map + modify + swap)
@@ -69,6 +69,6 @@ impl ServiceStore {
             new_map.insert(key, service);
         }
 
-        self.services.store(Arc::new(Arc::new(new_map)));
+        self.services.store(Arc::new(new_map));
     }
 }

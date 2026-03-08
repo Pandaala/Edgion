@@ -30,7 +30,7 @@ type LinkSysMap = HashMap<String, LinkSys>;
 // ============================================================
 
 pub struct LinkSysStore {
-    resources: ArcSwap<Arc<LinkSysMap>>,
+    resources: ArcSwap<LinkSysMap>,
 }
 
 impl Default for LinkSysStore {
@@ -42,7 +42,7 @@ impl Default for LinkSysStore {
 impl LinkSysStore {
     pub fn new() -> Self {
         Self {
-            resources: ArcSwap::from_pointee(Arc::new(HashMap::new())),
+            resources: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -78,7 +78,7 @@ impl LinkSysStore {
             });
         }
 
-        self.resources.store(Arc::new(Arc::new(data)));
+        self.resources.store(Arc::new(data));
     }
 
     /// Update LinkSys resources atomically (incremental sync).
@@ -106,7 +106,7 @@ impl LinkSysStore {
             });
         }
 
-        self.resources.store(Arc::new(Arc::new(new_map)));
+        self.resources.store(Arc::new(new_map));
     }
 }
 

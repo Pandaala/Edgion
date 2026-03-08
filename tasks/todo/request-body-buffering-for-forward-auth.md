@@ -1,19 +1,20 @@
-# Request Body Buffering — ForwardAuth Body 转发支持
+# Request Body Buffering — ForwardAuth Body Forwarding Support
 
-> ForwardAuth 插件当前不支持将请求 body 转发到认证服务。需要实现 body buffering 机制，
-> 使 body 可以先发给 auth 服务验证，验证通过后再转发给 upstream。
+> The ForwardAuth plugin currently does not support forwarding the request body to the authentication service.
+> A body buffering mechanism is needed so the body can be sent to the auth service first for validation,
+> and then forwarded to the upstream only after authentication succeeds.
 
-## 背景
+## Background
 
-### 当前限制
+### Current Limitation
 
-Edgion 的 ForwardAuth 插件只转发 headers，不转发 body：
+Edgion's ForwardAuth plugin forwards headers only, not the body:
 
-| 特性 | Edgion | Traefik | APISIX | nginx |
-|------|--------|---------|--------|-------|
-| 转发 Body | ❌ | ✅ `forwardBody` | ❌ | ❌ |
+| Feature | Edgion | Traefik | APISIX | nginx |
+|---------|--------|---------|--------|-------|
+| Forward body | ❌ | ✅ `forwardBody` | ❌ | ❌ |
 
-当前实现在 `run_request` 阶段用 reqwest 发送认证请求，无 body：
+The current implementation sends the auth request with reqwest during the `run_request` phase, without a body:
 
 ```rust
 // src/core/gateway/plugins/http/forward_auth/plugin.rs L214
@@ -25,92 +26,92 @@ let resp = client.request(method, &self.config.uri)
     .await;
 ```
 
-### 使用场景
+### Use Cases
 
-- 认证服务需要检查请求 body 内容（如签名验证、payload 校验）
-- Webhook 验证场景：需要 body 计算 HMAC 签名
-- API 请求审计：auth 服务需要完整请求内容做合规检查
+- The authentication service needs to inspect the request body content, such as signature verification or payload validation
+- Webhook validation scenarios where the body is required to compute an HMAC signature
+- API request auditing where the auth service needs the full request content for compliance checks
 
-### 为什么不用 Pingora Pipe Subrequest
+### Why Not Use Pingora Pipe Subrequest
 
-Pingora 0.8.0 新增的 pipe subrequest API 提供了 `SavedBody` 机制可以捕获和复用 body，
-但经评估不适合此场景（详见 `tasks/working/pingora-0.8.0-upgrade/09-pipe-subrequests.md`）：
+The pipe subrequest API introduced in Pingora 0.8.0 provides a `SavedBody` mechanism that can capture and reuse the body,
+but it is not suitable for this scenario after evaluation (see `tasks/working/pingora-0.8.0-upgrade/09-pipe-subrequests.md`):
 
-1. **调用层级不匹配**：pipe_subrequest 需要 Pingora `&mut Session`，插件运行在 `PluginSession` 抽象层
-2. **Upstream 变成 subrequest**：body 被 pipe 消费后，正常 proxy 流程读不到 body，upstream 也必须用 subrequest 处理
-3. **插件递归**：subrequest 重新执行所有插件，ForwardAuth 会无限递归
-4. **API 不稳定**：pipe subrequest 明确标注为 alpha，API 随时可能变更
+1. **Call-layer mismatch**: `pipe_subrequest` requires Pingora `&mut Session`, while plugins run on the `PluginSession` abstraction layer
+2. **Upstream becomes a subrequest**: once the body is consumed by the pipe, the normal proxy flow can no longer read it, so the upstream must also be handled through a subrequest
+3. **Plugin recursion**: the subrequest re-executes all plugins, causing ForwardAuth to recurse infinitely
+4. **Unstable API**: pipe subrequest is explicitly marked alpha, and the API may change at any time
 
-## 设计方案
+## Design
 
-### 核心思路：Body Buffer + 延迟转发
+### Core Idea: Body Buffer + Delayed Forwarding
 
-在 `request_body_filter` 阶段缓存 body，auth 完成后释放给 upstream。
+Buffer the body during the `request_body_filter` phase, then release it to the upstream after auth completes.
 
-### 数据流
+### Data Flow
 
 ```
 Client → [body chunk 1] → request_body_filter
                             ↓
-                          ctx.body_buffer 存在？
+                          ctx.body_buffer exists?
                             ↓ Yes
-                          追加到 buffer，抑制 chunk（不发 upstream）
+                          append to buffer, suppress chunk (do not send upstream)
                             ↓
          [body chunk N] → end_of_stream = true
                             ↓
-                          reqwest POST auth_uri (带完整 body)
+                          reqwest POST auth_uri (with full body)
                             ↓
-                          auth 返回 2xx？
-                         /          \
-                       Yes           No
-                        ↓             ↓
-                  释放 buffer      返回错误 response
-                  发给 upstream    终止请求
+                          auth returns 2xx?
+                         /            \
+                       Yes             No
+                        ↓               ↓
+                release buffer      return error response
+                send to upstream    terminate request
 ```
 
-### 涉及的改动
+### Required Changes
 
-1. **ForwardAuthConfig** — 新增配置项：
-   - `forward_body: bool` — 是否转发 body（默认 false）
-   - `max_body_size: usize` — body 缓存上限（默认 1MB）
+1. **ForwardAuthConfig**: add new configuration fields:
+   - `forward_body: bool` — whether to forward the body (default `false`)
+   - `max_body_size: usize` — body buffering size limit (default 1 MB)
 
-2. **EdgionHttpContext** — 新增 body buffer 状态：
-   - 类似 `MirrorState` 的模式，在 ctx 中维护 buffer 状态机
-   - 状态：`Buffering` → `AuthPending` → `Releasing` / `Rejected`
+2. **EdgionHttpContext**: add body buffer state:
+   - Follow a pattern similar to `MirrorState`, maintaining a buffer state machine in the context
+   - States: `Buffering` → `AuthPending` → `Releasing` / `Rejected`
 
-3. **ForwardAuth plugin `run_request`** — 如果 `forward_body: true`，在 ctx 中初始化 body buffer
+3. **ForwardAuth plugin `run_request`**: initialize the body buffer in the context when `forward_body: true`
 
-4. **`pg_request_body_filter`** — 检测 body buffer 状态：
-   - `Buffering`：缓存 chunk，抑制发送
-   - `Releasing`：释放缓存的 chunks 给 upstream
-   - body 超过 `max_body_size` 时返回 413
+4. **`pg_request_body_filter`**: detect and handle the body buffer state:
+   - `Buffering`: buffer the chunk and suppress forwarding
+   - `Releasing`: release buffered chunks to the upstream
+   - Return `413` if the body exceeds `max_body_size`
 
-5. **Auth 调用时机** — body 全部读完后，在 body filter 中触发 auth 调用
+5. **Auth trigger timing**: trigger the auth call inside the body filter after the full body has been read
 
-### 关键约束
+### Key Constraints
 
-- Body buffer 占用内存，必须有大小上限
-- Auth 调用阻塞了 body 到 upstream 的转发，增加了请求延迟
-- 大文件上传场景不适合开启此功能
-- `forward_body: false`（默认）时不影响现有行为
+- Body buffering consumes memory, so a strict size limit is required
+- The auth call blocks body forwarding to the upstream, increasing request latency
+- This feature is not suitable for large file uploads
+- Existing behavior remains unchanged when `forward_body: false` (default)
 
-## 涉及文件
+## Files Involved
 
 - `src/core/gateway/plugins/http/forward_auth/plugin.rs`
 - `src/core/gateway/routes/http/proxy_http/pg_request_body_filter.rs`
-- `src/types/ctx.rs` — body buffer 状态
-- `src/types/resources/edgion_plugins/plugin_configs/forward_auth.rs` — 配置项
+- `src/types/ctx.rs` — body buffer state
+- `src/types/resources/edgion_plugins/plugin_configs/forward_auth.rs` — configuration fields
 
-## 优先级
+## Priority
 
-P3 — 功能增强，非阻塞性需求
+P3 — Feature enhancement, non-blocking requirement
 
-## 行动项
+## Action Items
 
-- [ ] 设计 body buffer 状态机（参考 MirrorState 模式）
-- [ ] ForwardAuthConfig 新增 `forward_body` / `max_body_size` 配置
-- [ ] 实现 `pg_request_body_filter` 中的 buffer 逻辑
-- [ ] ForwardAuth plugin 支持带 body 发送认证请求
-- [ ] 添加 body 超限保护（413 response）
-- [ ] 集成测试
-- [ ] 更新文档
+- [ ] Design the body buffer state machine (refer to the `MirrorState` pattern)
+- [ ] Add `forward_body` / `max_body_size` to `ForwardAuthConfig`
+- [ ] Implement buffering logic in `pg_request_body_filter`
+- [ ] Add support in the ForwardAuth plugin for sending auth requests with the body
+- [ ] Add size limit protection for oversized bodies (`413` response)
+- [ ] Add integration tests
+- [ ] Update documentation
