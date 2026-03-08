@@ -74,6 +74,7 @@ struct SpawnContext {
     relink_tx: RelinkSignalSender,
     secret_ref_manager: Arc<SecretRefManager>,
     metadata_filter: Option<MetadataFilterConfig>,
+    leader_handle: Option<super::leader_election::LeaderHandle>,
 }
 
 /// Spawn a namespaced ResourceController with the given handler
@@ -114,7 +115,7 @@ where
     PROCESSOR_REGISTRY.register(processor.clone());
 
     // 4. Create and run ResourceController
-    let rc = ResourceController::new(
+    let mut rc = ResourceController::new(
         kind,
         controller.client.clone(),
         processor,
@@ -123,6 +124,10 @@ where
     )
     .with_shutdown(ctx.shutdown.clone())
     .with_relink_signal(ctx.relink_tx.clone());
+
+    if let Some(ref lh) = ctx.leader_handle {
+        rc = rc.with_leader_handle(lh.clone());
+    }
 
     tokio::spawn(async move { rc.run_namespaced().await })
 }
@@ -165,7 +170,7 @@ where
     PROCESSOR_REGISTRY.register(processor.clone());
 
     // 4. Create and run ResourceController
-    let rc = ResourceController::new(
+    let mut rc = ResourceController::new(
         kind,
         controller.client.clone(),
         processor,
@@ -174,6 +179,10 @@ where
     )
     .with_shutdown(ctx.shutdown.clone())
     .with_relink_signal(ctx.relink_tx.clone());
+
+    if let Some(ref lh) = ctx.leader_handle {
+        rc = rc.with_leader_handle(lh.clone());
+    }
 
     tokio::spawn(async move { rc.run_cluster_scoped().await })
 }
@@ -288,6 +297,8 @@ pub struct KubernetesController {
     metadata_filter: Option<MetadataFilterConfig>,
     /// Resolved endpoint mode (Auto should be resolved before controller creation)
     endpoint_mode: EndpointMode,
+    /// Leader handle for gating status writes in all-serve HA mode
+    leader_handle: Option<super::leader_election::LeaderHandle>,
 }
 
 impl KubernetesController {
@@ -350,7 +361,14 @@ impl KubernetesController {
             label_selector,
             metadata_filter: Some(metadata_filter),
             endpoint_mode,
+            leader_handle: None,
         })
+    }
+
+    /// Set leader handle for gating status writes in all-serve HA mode
+    pub fn with_leader_handle(mut self, handle: super::leader_election::LeaderHandle) -> Self {
+        self.leader_handle = Some(handle);
+        self
     }
 
     /// Create watcher configuration with optional label selector
@@ -400,6 +418,7 @@ impl KubernetesController {
             relink_tx: relink_tx.clone(),
             secret_ref_manager: secret_ref_manager.clone(),
             metadata_filter: self.metadata_filter.clone(),
+            leader_handle: self.leader_handle.clone(),
         };
 
         let mut h = Vec::new();

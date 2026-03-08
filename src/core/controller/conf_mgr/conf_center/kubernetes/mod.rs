@@ -50,7 +50,7 @@ mod storage;
 mod version_detection;
 
 pub use center::KubernetesCenter;
-pub use config::{KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig};
+pub use config::{HaMode, KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig};
 pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderHandle};
 pub use namespace::NamespaceWatchMode;

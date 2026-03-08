@@ -59,3 +59,27 @@ subjects:
 - kind: ServiceAccount
   name: edgion-controller
   namespace: edgion-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: edgion-controller-pod-label
+  namespace: edgion-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: edgion-controller-pod-label
+  namespace: edgion-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: edgion-controller-pod-label
+subjects:
+- kind: ServiceAccount
+  name: edgion-controller
+  namespace: edgion-system

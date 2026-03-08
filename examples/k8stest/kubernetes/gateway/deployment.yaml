@@ -65,7 +65,7 @@ spec:
         - name: RUST_LOG
           value: "info"
         - name: EDGION_CONTROLLER_ADDR
-          value: "edgion-controller.edgion-system.svc.cluster.local:50051"
+          value: "edgion-controller-leader.edgion-system.svc.cluster.local:50051"
         resources:
           requests:
             cpu: 250m

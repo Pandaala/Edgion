@@ -154,6 +154,9 @@ pub trait ProcessorObj: Send + Sync {
 
     /// Check if a resource exists in cache by key
     fn contains_key(&self, key: &str) -> bool;
+
+    /// Requeue all keys in cache (used for leader status reconciliation)
+    fn requeue_all_keys(&self) -> usize;
 }
 
 /// Enhanced ResourceProcessor that holds ServerCache<T>
@@ -653,6 +656,18 @@ where
 
     fn contains_key(&self, key: &str) -> bool {
         self.cache.get_by_key(key).is_some()
+    }
+
+    fn requeue_all_keys(&self) -> usize {
+        let keys = self.cache.list_keys();
+        let count = keys.len();
+        let workqueue = self.workqueue.clone();
+        tokio::spawn(async move {
+            for key in keys {
+                workqueue.enqueue(key).await;
+            }
+        });
+        count
     }
 }
 

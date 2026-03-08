@@ -162,6 +162,21 @@ impl ProcessorRegistry {
         }
     }
 
+    /// Requeue all resources across all kinds.
+    /// Used on leader transition to trigger full status reconciliation.
+    pub fn requeue_all(&self) {
+        let processors = self.processors.read().unwrap();
+        for (kind, processor) in processors.iter() {
+            let count = processor.requeue_all_keys();
+            tracing::info!(
+                component = "processor_registry",
+                kind = kind,
+                count = count,
+                "Requeued all resources for leader status reconciliation"
+            );
+        }
+    }
+
     /// Clear all registered processors and related global state
     ///
     /// Used when:

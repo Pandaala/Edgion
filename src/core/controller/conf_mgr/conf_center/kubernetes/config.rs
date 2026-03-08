@@ -9,6 +9,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
 
+/// HA mode for controller replicas
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HaMode {
+    /// Only the leader runs watchers and serves gRPC (default)
+    #[default]
+    LeaderOnly,
+    /// All replicas run watchers and serve gRPC; leader handles status + ACME
+    AllServe,
+}
+
+impl std::fmt::Display for HaMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HaMode::LeaderOnly => write!(f, "leader-only"),
+            HaMode::AllServe => write!(f, "all-serve"),
+        }
+    }
+}
+
 /// Kubernetes configuration center settings
 ///
 /// Used when running in Kubernetes mode where configuration is read from
@@ -66,6 +86,12 @@ pub struct KubernetesConfig {
     /// Useful for conformance testing or single-gateway deployments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_address: Option<String>,
+
+    /// HA mode for multi-replica deployments.
+    /// - "leader-only" (default): only the leader runs watchers + gRPC
+    /// - "all-serve": all replicas run watchers + gRPC; leader handles status + ACME
+    #[serde(default)]
+    pub ha_mode: HaMode,
 }
 
 impl KubernetesConfig {
@@ -80,6 +106,7 @@ impl KubernetesConfig {
             leader_election: LeaderElectionConfig::default(),
             endpoint_mode: EndpointMode::default(),
             gateway_address: None,
+            ha_mode: HaMode::default(),
         }
     }
 
@@ -157,6 +184,11 @@ impl KubernetesConfig {
     /// Get leader election config
     pub fn leader_election(&self) -> &LeaderElectionConfig {
         &self.leader_election
+    }
+
+    /// Get HA mode
+    pub fn ha_mode(&self) -> HaMode {
+        self.ha_mode
     }
 }
 
@@ -381,5 +413,40 @@ remove_managed_fields: false
         assert!(!filter.remove_managed_fields);
         assert_eq!(filter.blocked_annotations.len(), 1);
         assert_eq!(filter.blocked_annotations[0], "custom.annotation/to-remove");
+    }
+
+    #[test]
+    fn test_ha_mode_default() {
+        assert_eq!(HaMode::default(), HaMode::LeaderOnly);
+    }
+
+    #[test]
+    fn test_ha_mode_serde() {
+        let toml_str = r#"
+gateway_class = "edgion"
+ha_mode = "all-serve"
+"#;
+        let config: KubernetesConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ha_mode, HaMode::AllServe);
+
+        let toml_str = r#"
+gateway_class = "edgion"
+ha_mode = "leader-only"
+"#;
+        let config: KubernetesConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ha_mode, HaMode::LeaderOnly);
+
+        // Default (no ha_mode specified) should be LeaderOnly
+        let toml_str = r#"
+gateway_class = "edgion"
+"#;
+        let config: KubernetesConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ha_mode, HaMode::LeaderOnly);
+    }
+
+    #[test]
+    fn test_ha_mode_display() {
+        assert_eq!(format!("{}", HaMode::LeaderOnly), "leader-only");
+        assert_eq!(format!("{}", HaMode::AllServe), "all-serve");
     }
 }
