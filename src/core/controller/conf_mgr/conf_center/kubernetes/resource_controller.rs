@@ -214,6 +214,11 @@ where
         let mut worker_handle: Option<JoinHandle<()>> = None;
         let mut shutdown = self.shutdown_signal.clone();
 
+        // Exponential backoff for consecutive watcher errors (prevents log storms
+        // when CRD is missing or API server is unreachable)
+        let mut consecutive_errors: u32 = 0;
+        const MAX_ERROR_BACKOFF_SECS: u64 = 60;
+
         // Main event loop
         loop {
             let event = if let Some(ref mut signal) = shutdown {
@@ -234,6 +239,7 @@ where
 
             match event {
                 Some(Ok(event)) => {
+                    consecutive_errors = 0;
                     match event {
                         Event::Init => {
                             // Start of init phase (LIST)
@@ -389,12 +395,36 @@ where
                     }
                 }
                 Some(Err(e)) => {
-                    tracing::error!(
-                        component = "resource_controller",
-                        kind = kind,
-                        error = %e,
-                        "Watcher error"
-                    );
+                    consecutive_errors += 1;
+                    let backoff_secs = (1u64 << consecutive_errors.min(6)).min(MAX_ERROR_BACKOFF_SECS);
+                    let err_str = e.to_string();
+
+                    // Detect fatal errors that won't self-heal (e.g. CRD not installed)
+                    let is_404 = err_str.contains("404") || err_str.contains("page not found");
+
+                    if consecutive_errors <= 3 || consecutive_errors % 10 == 0 {
+                        // Log first few errors and then every 10th to avoid flooding
+                        tracing::error!(
+                            component = "resource_controller",
+                            kind = kind,
+                            error = %e,
+                            consecutive_errors = consecutive_errors,
+                            backoff_secs = backoff_secs,
+                            "Watcher error, backing off"
+                        );
+                    }
+
+                    if is_404 && consecutive_errors >= 3 {
+                        tracing::warn!(
+                            component = "resource_controller",
+                            kind = kind,
+                            "Resource type likely not installed (CRD missing). \
+                             Will keep retrying with backoff. \
+                             Install the CRD and restart controller to resolve."
+                        );
+                    }
+
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 }
                 None => {
                     tracing::warn!(
