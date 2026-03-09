@@ -4,18 +4,29 @@
 > 
 > Configuring load balancing algorithms via `ExtensionRef` is an Edgion extension feature.
 
-This document explains how to configure optional load balancing algorithms through the HTTPRoute `extensionRef`.
+This document explains how to configure load balancing algorithms through the HTTPRoute `extensionRef`.
 
 ## Overview
 
-Edgion uses the RoundRobin load balancing algorithm by default. You can enable additional algorithms for specific services through the following options:
-- **Ketama**: Consistent hashing algorithm
-- **FnvHash**: FNV hashing algorithm
-- **LeastConnection**: Least connections algorithm
+Edgion uses **RoundRobin (weighted round-robin)** as the default load balancing algorithm. You can enable other algorithms for specific services:
 
-## Configuration Method
+- **ConsistentHash (Ketama)**: Consistent hashing, suitable for caching scenarios
+- **LeastConnection**: Least connections, suitable for long-lived connection scenarios
+- **EWMA**: Latency-aware algorithm based on exponential weighted moving average
 
-Specify the load balancing algorithm directly in the HTTPRoute filter via `extensionRef.name`. The algorithm configuration is automatically applied to all backendRefs in that rule.
+## Supported Algorithms
+
+| Algorithm Name | Aliases | Description | Use Case |
+|---------------|---------|-------------|----------|
+| `ketama` | `consistent-hash`, `consistent` | Consistent hashing (Ketama), routes same key to same backend | Caching, session affinity |
+| `leastconn` | `least-connection`, `leastconnection`, `least_connection` | Selects the backend with fewest active connections | gRPC streaming, WebSocket, long connections |
+| `ewma` | - | Selects the backend with lowest EWMA latency | Heterogeneous backends, mixed hardware |
+
+When not configured, the default is **RoundRobin** with weight support.
+
+## Configuration
+
+Specify the load balancing algorithm in the HTTPRoute filter via `extensionRef.name`. The algorithm configuration is automatically applied to all backendRefs in that rule.
 
 ### Basic Example
 
@@ -34,19 +45,54 @@ spec:
     - filters:
         - type: ExtensionRef
           extensionRef:
-            name: ketama  # Single algorithm
+            name: ketama
       backendRefs:
         - name: my-service
           port: 8080
 ```
 
-## Supported Algorithms
+## Algorithm Details
 
-| Algorithm Name | Aliases | Description |
-|---------------|---------|-------------|
-| `ketama` | `consistent-hash` | Consistent hashing, suitable for caching scenarios |
-| `fnvhash` | `fnv-hash` | FNV hashing algorithm |
-| `leastconn` | `least-connection`, `leastconnection`, `least_connection` | Least connections algorithm |
+### RoundRobin (Default)
+
+- Weighted round-robin: higher `weight` means higher selection probability
+- Single atomic counter increment, lock-free selection
+- Supports backend health filtering and fallback
+
+### ConsistentHash
+
+- Ketama-based consistent hash ring
+- Same hash key always maps to the same backend when backend list is unchanged
+- When backends change, only ~1/N of keys remap
+- Hash key extracted from Header / Cookie / Query / Source IP
+- Falls back to RoundRobin when hash key cannot be extracted
+
+**ConsistentHash hashOn configuration**:
+
+```yaml
+extensionRef:
+  name: ketama:header:X-User-Id    # Hash by header
+  # or: ketama:cookie:session_id   # Hash by cookie
+  # or: ketama:query:user_id       # Hash by query parameter
+  # or: ketama:source_ip           # Hash by source IP
+  # or: ketama                     # Default: hash by source IP
+```
+
+### LeastConnection
+
+- Selects the backend with the fewest active connections
+- Service-scoped isolation: same IP under different services counts independently
+- Increments on request start, decrements on completion
+- New backends are preferred (connection count = 0)
+- Removed backends drain gracefully: no new requests, existing ones complete normally
+
+### EWMA
+
+- Selects the backend with the lowest EWMA latency
+- Formula: `new = alpha × latency + (1 - alpha) × old`, default alpha = 10%
+- Latency updated after each request completes
+- New backends default to 1ms latency, briefly preferred, then converge to actual latency
+- Service-scoped isolation
 
 ## How It Works
 
@@ -54,32 +100,14 @@ spec:
 2. **Algorithm Parsing**: Parses the algorithm name from `extensionRef.name`
 3. **Service Mapping**: Applies the algorithm to all services specified by backendRefs in that rule
 4. **Policy Storage**: Stores the service-to-algorithm mapping in the global PolicyStore
-5. **On-Demand Loading**: When an EndpointSlice is created, the corresponding load balancer is initialized on demand based on the service's policy
+5. **On-Demand Loading**: When a request arrives, the corresponding LB algorithm is selected based on the service's policy
 
 ## Lifecycle Management
 
 - **Reference Counting**: PolicyStore tracks how many HTTPRoutes reference each service
 - **Automatic Cleanup**: When the last HTTPRoute referencing a service is deleted, the corresponding policy is automatically cleaned up
-- **Update Handling**: When an HTTPRoute is updated, the related policy configuration is automatically refreshed
-
-### Manual Policy Deletion
-
-In addition to automatic cleanup, you can also manually delete load balancing policies for a specific HTTPRoute:
-
-```rust
-use edgion::core::lb::optional_lb::get_global_policy_store;
-
-// Get the global policy store
-let store = get_global_policy_store();
-
-// Delete policies by resource key
-store.delete_lb_policies_by_resource_key("default/my-route");
-```
-
-**Notes:**
-- This operation deletes all policy references from the specified HTTPRoute to all services
-- If a service is only referenced by this HTTPRoute, its policy will be completely removed
-- If a service is also referenced by other HTTPRoutes, its policy is retained
+- **Cache Management**: When the backend list changes, the LB cache (RR selector, CH hash ring) is automatically cleared and rebuilt on next request
+- **Runtime State Cleanup**: When a Service is deleted, all runtime state (connection counts, EWMA values) is automatically cleaned up
 
 ## Example Scenarios
 
@@ -98,7 +126,7 @@ spec:
     - filters:
         - type: ExtensionRef
           extensionRef:
-            name: ketama  # Consistent hashing
+            name: ketama:header:X-Cache-Key
       backendRefs:
         - name: redis-cache
           port: 6379
@@ -125,22 +153,35 @@ spec:
       filters:
         - type: ExtensionRef
           extensionRef:
-            name: leastconn  # Least connections
+            name: leastconn
       backendRefs:
         - name: user-api
           port: 8080
-    
+```
+
+### Scenario 3: gRPC Service with EWMA
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-route
+  namespace: prod
+spec:
+  parentRefs:
+    - name: api-gateway
+  rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /orders
+            value: /grpc
       filters:
         - type: ExtensionRef
           extensionRef:
-            name: leastconn
+            name: ewma
       backendRefs:
-        - name: order-api
-          port: 8080
+        - name: grpc-service
+          port: 50051
 ```
 
 ## Notes
@@ -148,7 +189,9 @@ spec:
 1. **Algorithm format**: Algorithm names in `extensionRef.name` are case-insensitive
 2. **Single configuration**: Each rule can only have one load balancing algorithm configured
 3. **Scope**: The algorithm configuration applies to all backendRefs within the same rule
-4. **Default behavior**: Services without a configured policy continue to use the default RoundRobin algorithm
+4. **Default behavior**: Services without a configured policy use the default RoundRobin algorithm
+5. **Backend weight**: All algorithms support `weight` configuration
+6. **Health check integration**: All algorithms automatically integrate health check filtering
 
 ## Troubleshooting
 
@@ -163,9 +206,16 @@ kubectl logs <edgion-pod> | grep "Added LB policies"
 
 # View policy cleanup logs
 kubectl logs <edgion-pod> | grep "Removed LB policies"
+
+# View backend draining logs
+kubectl logs <edgion-pod> | grep "Backend marked as draining"
+
+# View service runtime state cleanup logs
+kubectl logs <edgion-pod> | grep "Removed service runtime state"
 ```
 
 Common issues:
 
 - **Policy not taking effect**: Check that the algorithm name in `extensionRef.name` is correct
 - **Incorrect algorithm name**: Use supported algorithm names or aliases (see the algorithm table above)
+- **ConsistentHash instability**: Check if the hash key is empty (falls back to RR when empty)

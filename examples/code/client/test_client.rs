@@ -115,6 +115,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "tls" | "tls-route" | "tlsroute" => "TLSRoute/Basic".to_string(),
             "tls-pp2" | "tlspp2" | "tls-proxy-protocol" => "TLSRoute/ProxyProtocol".to_string(),
             "tls-stream-plugins" | "tlsstreamplugins" => "TLSRoute/StreamPlugins".to_string(),
+            "tls-multi-sni" | "tlsmultisni" | "multi-sni" => "TLSRoute/MultiSNI".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
@@ -168,6 +169,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "TLSRoute/Basic" | "TLSRoute" => "TLSRoute/Basic",
         "TLSRoute/ProxyProtocol" => "TLSRoute/ProxyProtocol",
         "TLSRoute/StreamPlugins" => "TLSRoute/StreamPlugins",
+        "TLSRoute/MultiSNI" => "TLSRoute/MultiSNI",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         // Gateway
@@ -383,6 +385,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TlsStreamPluginsTestSuite));
+        }
+        "TLSRoute/MultiSNI" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/MultiSNI tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsMultiSniTestSuite));
         }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));

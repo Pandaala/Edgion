@@ -1,0 +1,21 @@
+# Gateway for TLSRoute MultiSNI testing
+# Single TLS listener serving multiple SNI domains via separate EdgionTls + TLSRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-route-multi-sni-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/backend-protocol: "tcp"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls-multi
+      protocol: TLS
+      port: 31284
+      hostname: "*.sandbox.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test

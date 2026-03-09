@@ -1291,6 +1291,7 @@ dependencies = [
  "percent-encoding",
  "pingora-core",
  "pingora-http",
+ "pingora-ketama",
  "pingora-limits",
  "pingora-load-balancing",
  "pingora-proxy",

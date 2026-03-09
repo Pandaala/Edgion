@@ -224,9 +224,19 @@ pub struct UpstreamInfo {
     /// Error messages collected during upstream attempts
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub err: Vec<String>,
-    /// Backend socket address for connection counting (used by LeastConnection LB)
+    /// Backend socket address used for the actual peer connection (may be
+    /// rewritten by resolve_target_port for multi-port Services).
     #[serde(skip)]
     pub backend_addr: Option<SocketAddr>,
+    /// Canonical backend address used by the LB selection algorithm, before
+    /// any target-port rewrite. Runtime-state accounting must use this key
+    /// so that selection reads and request-completion writes are consistent.
+    #[serde(skip)]
+    pub lb_backend_addr: Option<SocketAddr>,
+    /// Service key (`"namespace/name"`) that owns this backend, needed by
+    /// service-scoped LB runtime state.
+    #[serde(skip)]
+    pub service_key: Option<String>,
     /// LB policy used for this upstream selection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lb_policy: Option<ParsedLBPolicy>,
@@ -499,6 +509,8 @@ impl EdgionHttpContext {
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),
                 backend_addr: None,
+                lb_backend_addr: None,
+                service_key: None,
                 lb_policy: None,
                 tls: None,
             });

@@ -189,9 +189,19 @@ impl GatewayTlsMatcher {
                     None => continue,
                 };
 
-                // Skip listeners without certificate refs
+                // For listeners using EdgionTls cert-provider, certificate_refs may be
+                // absent because certs are loaded dynamically via the EdgionTls CRD.
+                // We still need to register these listeners so that TLS termination
+                // and route matching work on the correct port.
+                let has_edgion_tls_provider = tls_config
+                    .options
+                    .as_ref()
+                    .and_then(|opts| opts.get("edgion.io/cert-provider"))
+                    .map_or(false, |v| v.as_str() == Some("EdgionTls"));
+
                 let cert_refs = match &tls_config.certificate_refs {
                     Some(refs) if !refs.is_empty() => refs.clone(),
+                    _ if has_edgion_tls_provider => Vec::new(),
                     _ => continue,
                 };
 

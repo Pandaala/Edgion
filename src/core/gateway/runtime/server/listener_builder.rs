@@ -20,7 +20,7 @@ use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
 use crate::core::gateway::routes::http::{EdgionHttp, EdgionHttpRedirect};
 use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, EdgionTcp};
-use crate::core::gateway::routes::tls::{get_global_tls_route_manager, EdgionTls};
+use crate::core::gateway::routes::tls::EdgionTls;
 use crate::core::gateway::routes::udp::{get_global_udp_route_manager, EdgionUdp};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
@@ -352,17 +352,17 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    // Get TLS routes for this gateway
-    let tls_route_manager = get_global_tls_route_manager();
-    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
-    let gateway_tls_routes = tls_route_manager.get_or_create_gateway_tls_routes(namespace_str, &context.gateway_name);
+    let gateway_key = context
+        .gateway_namespace
+        .as_ref()
+        .map(|ns| format!("{}/{}", ns, context.gateway_name))
+        .unwrap_or_else(|| context.gateway_name.clone());
 
-    // Create EdgionTls service
     let edgion_tls = EdgionTls {
         gateway_name: context.gateway_name.clone(),
         gateway_namespace: context.gateway_namespace.clone(),
+        gateway_key,
         listener_port: port,
-        gateway_tls_routes,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),

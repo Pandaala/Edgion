@@ -22,7 +22,7 @@ pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
 
 pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
 
-pub use tls_route::{TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite};
+pub use tls_route::{TlsMultiSniTestSuite, TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite};
 
 pub use udp_route::UdpTestSuite;
 

@@ -24,8 +24,9 @@ impl ServerHeaderOpts {
         Self::default()
     }
 
-    pub fn add_header<S: Into<String>>(mut self, key: S, value: S) {
+    pub fn add_header<S: Into<String>>(mut self, key: S, value: S) -> Self {
         self.headers.insert(key.into(), value.into());
+        self
     }
 
     pub fn set_strict_transport_security(&mut self, value: impl Into<String>) {

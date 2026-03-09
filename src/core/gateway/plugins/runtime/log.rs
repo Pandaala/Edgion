@@ -12,6 +12,9 @@ const BUFFER_CAPACITY: usize = 100;
 /// Max log entries in fixed buffer
 const MAX_LOG_ENTRIES: usize = 20;
 
+/// Max buffer size (bytes) for unbounded ULogBuffer
+const ULOG_MAX_BUFFER: usize = 512;
+
 /// Fixed-size log buffer (stack-allocated, zero heap allocation)
 #[derive(Debug, Clone)]
 pub struct LogBuffer {
@@ -78,9 +81,13 @@ impl ULogBuffer {
     }
 
     #[inline]
-    fn push(&mut self, log: &str) {
+    fn push(&mut self, log: &str) -> bool {
+        if self.buffer.len() + log.len() > ULOG_MAX_BUFFER {
+            return false;
+        }
         self.buffer.push_str(log);
         self.positions.push(self.buffer.len());
+        true
     }
 }
 
@@ -161,10 +168,10 @@ impl PluginLog {
         result
     }
 
-    /// Push to unlimited buffer (for special plugins like debug/trace)
+    /// Push to unbounded buffer (for debug/trace plugins). Returns false if buffer limit reached.
     #[inline]
-    pub fn u_push(&mut self, log: &str) {
-        self.ulog.get_or_insert_with(ULogBuffer::new).push(log);
+    pub fn u_push(&mut self, log: &str) -> bool {
+        self.ulog.get_or_insert_with(ULogBuffer::new).push(log)
     }
 
     /// Helper method for tests: checks if log buffer contains a substring

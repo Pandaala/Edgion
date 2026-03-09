@@ -68,3 +68,11 @@ Access Log、Metrics、控制面日志的设计原则与操作规范。
 | [00-local-build.md](04-cicd/00-local-build.md) | 本地编译：Cargo 命令、Feature 组合、常见编译问题 |
 | [01-docker-build.md](04-cicd/01-docker-build.md) | Docker 编译：多阶段构建、cargo-chef、多架构支持 |
 | [02-github-workflow.md](04-cicd/02-github-workflow.md) | GitHub Workflow：CI 流水线、Release 发布、镜像推送 |
+
+### 05 [review/](review/SKILL.md) — Review 知识沉淀
+代码审查中的项目特定结论、常见误报、可直接复用的判定标准。
+
+| 文件 | 主题 |
+|------|------|
+| [SKILL.md](review/SKILL.md) | Review 目录总览与使用方式 |
+| [memory-leak/not-a-memory-leak.md](review/memory-leak/not-a-memory-leak.md) | 非内存泄漏场景判定，避免重复误报 |

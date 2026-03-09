@@ -571,6 +571,7 @@ run_all_tests() {
                     run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Basic" || test_failed=true
                     run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
                     run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
+                    run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TLSRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
@@ -713,6 +714,7 @@ run_all_tests() {
         run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Basic" || test_failed=true
         run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
         run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
+        run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
         
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
