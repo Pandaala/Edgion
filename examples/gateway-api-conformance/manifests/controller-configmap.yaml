@@ -47,22 +47,4 @@ data:
 
     [conf_sync]
     no_sync_kinds = ["ReferenceGrant", "Secret"]
-    gateway_classes_capacity = 50
-    gateways_capacity = 200
-    edgion_gateway_configs_capacity = 50
-    routes_capacity = 500
-    grpc_routes_capacity = 200
-    tcp_routes_capacity = 200
-    udp_routes_capacity = 200
-    tls_routes_capacity = 200
-    link_sys_capacity = 200
-    services_capacity = 500
-    endpoint_slices_capacity = 500
-    edgion_tls_capacity = 200
-    edgion_plugins_capacity = 200
-    edgion_stream_plugins_capacity = 200
-    reference_grants_capacity = 200
-    backend_tls_policies_capacity = 200
-    plugin_metadata_capacity = 200
-    secrets_capacity = 200
-    edgion_acme_capacity = 50
+    default_capacity = 200  

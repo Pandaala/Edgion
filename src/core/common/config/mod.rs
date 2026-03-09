@@ -248,7 +248,7 @@ fn default_reference_grant_validation() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct ConfSyncConfig {
     /// Default EventStore capacity for all resource types
-    /// This is used when no specific override is configured
+    /// This is used for all resource types unless a specific override is configured
     #[arg(skip)]
     #[serde(default = "default_cache_capacity")]
     pub default_capacity: u32,
@@ -282,8 +282,7 @@ impl ConfSyncConfig {
     ///
     /// Resolution order:
     /// 1. `capacity_overrides` map (explicit per-resource override from config)
-    /// 2. Per-resource default from `define_resources!` macro (small=50, normal=200, large=1000)
-    /// 3. `default_capacity` (global fallback, default 1000)
+    /// 2. `default_capacity` (global default, default 200)
     pub fn get_capacity(&self, kind_name: &str) -> u32 {
         if let Some(v) = self
             .capacity_overrides
@@ -292,7 +291,7 @@ impl ConfSyncConfig {
         {
             return *v;
         }
-        crate::types::default_capacity_for_kind(kind_name).unwrap_or(self.default_capacity)
+        self.default_capacity
     }
 }
 
@@ -330,9 +329,8 @@ fn default_debug_enabled() -> bool {
 }
 
 /// Default cache capacity for ResourceProcessor EventStore
-/// This matches the DEFAULT_CACHE_CAPACITY in controllers
 fn default_cache_capacity() -> u32 {
-    1000
+    200
 }
 
 impl Default for LoggingConfig {
@@ -489,14 +487,13 @@ impl EdgionControllerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resource::macros::{CAPACITY_NORMAL, CAPACITY_SMALL};
 
     #[test]
     fn test_get_capacity_override_wins() {
         let mut overrides = HashMap::new();
         overrides.insert("HTTPRoute".to_string(), 999);
         let config = ConfSyncConfig {
-            default_capacity: 1000,
+            default_capacity: 200,
             capacity_overrides: Some(overrides),
             no_sync_kinds: None,
         };
@@ -504,32 +501,32 @@ mod tests {
     }
 
     #[test]
-    fn test_get_capacity_falls_back_to_macro_default() {
+    fn test_get_capacity_falls_back_to_global_default() {
         let config = ConfSyncConfig {
-            default_capacity: 1000,
+            default_capacity: 200,
             capacity_overrides: None,
             no_sync_kinds: None,
         };
-        assert_eq!(config.get_capacity("GatewayClass"), CAPACITY_SMALL);
-        assert_eq!(config.get_capacity("HTTPRoute"), CAPACITY_NORMAL);
-        assert_eq!(config.get_capacity("EdgionAcme"), CAPACITY_SMALL);
-        assert_eq!(config.get_capacity("Service"), CAPACITY_NORMAL);
+        assert_eq!(config.get_capacity("GatewayClass"), 200);
+        assert_eq!(config.get_capacity("HTTPRoute"), 200);
+        assert_eq!(config.get_capacity("EdgionAcme"), 200);
+        assert_eq!(config.get_capacity("Service"), 200);
     }
 
     #[test]
     fn test_get_capacity_unknown_falls_back_to_global() {
         let config = ConfSyncConfig {
-            default_capacity: 1000,
+            default_capacity: 200,
             capacity_overrides: None,
             no_sync_kinds: None,
         };
-        assert_eq!(config.get_capacity("SomeUnknownKind"), 1000);
+        assert_eq!(config.get_capacity("SomeUnknownKind"), 200);
     }
 
     #[test]
     fn test_conf_sync_default() {
         let config = ConfSyncConfig::default();
-        assert_eq!(config.default_capacity, 1000);
+        assert_eq!(config.default_capacity, 200);
         assert!(config.capacity_overrides.is_none());
     }
 

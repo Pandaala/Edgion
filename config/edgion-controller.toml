@@ -129,32 +129,6 @@ conf_dir = "examples/test/conf"
 enabled = true
 
 [conf_sync]
-# EventStore 
-# 
-# 
-# 
-# 
-
-# Base conf （）
-gateway_classes_capacity = 50          # GatewayClass
-gateways_capacity = 200                # Gateway
-edgion_gateway_configs_capacity = 50   # EdgionGatewayConfig
-
-# Route 
-routes_capacity = 200      # HTTPRoute
-grpc_routes_capacity = 200 # GRPCRoute
-tcp_routes_capacity = 200  # TCPRoute
-udp_routes_capacity = 200  # UDPRoute
-tls_routes_capacity = 200  # TLSRoute
-
-# 
-link_sys_capacity = 200        # LinkSys
-services_capacity = 200        # Service
-endpoint_slices_capacity = 200 # EndpointSlice
-edgion_tls_capacity = 200              # EdgionTls
-edgion_plugins_capacity = 200          # EdgionPlugins
-edgion_stream_plugins_capacity = 200   # EdgionStreamPlugins
-reference_grants_capacity = 200        # ReferenceGrant
-backend_tls_policies_capacity = 200    # BackendTLSPolicy
-plugin_metadata_capacity = 200         # PluginMetadata
-secrets_capacity = 200         # Secret
+no_sync_kinds = ["ReferenceGrant", "Secret"]
+# EventStore ring buffer default capacity for all resource types
+default_capacity = 200

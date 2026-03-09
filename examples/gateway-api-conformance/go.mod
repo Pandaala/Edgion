@@ -1,8 +1,11 @@
 module edgion.com/gateway-api-conformance
 
-go 1.24.4
+go 1.25.8
 
-require sigs.k8s.io/gateway-api v1.4.0
+require (
+	k8s.io/apimachinery v0.34.1
+	sigs.k8s.io/gateway-api v1.4.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -52,7 +55,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/api v0.34.1 // indirect
 	k8s.io/apiextensions-apiserver v0.34.1 // indirect
-	k8s.io/apimachinery v0.34.1 // indirect
 	k8s.io/client-go v0.34.1 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250814151709-d7b6acb124c3 // indirect

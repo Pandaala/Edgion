@@ -25,7 +25,7 @@ set -eo pipefail
 # Configuration  (edit these variables to customise the build)
 # =============================================================================
 
-DEFAULT_VERSION="v0.1.1"
+DEFAULT_VERSION="0.1.3"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.87}"
@@ -39,7 +39,6 @@ EXAMPLES="test_server test_client"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
-CONF_ENV_FILE="${CONF_ENV_FILE:-${PROJECT_DIR}/examples/k8stest/scripts/conf.env}"
 BUILDER_IMAGE="edgion-builder"
 
 get_arch_info() {
@@ -56,18 +55,6 @@ get_arch_info() {
             ;;
     esac
 }
-
-# Load defaults from conf.env if present.
-# Explicit env vars passed by caller still take precedence.
-if [[ -f "${CONF_ENV_FILE}" ]]; then
-    # shellcheck disable=SC1090
-    source "${CONF_ENV_FILE}"
-fi
-
-# Respect IMAGE_VERSION from conf/env as VERSION default.
-if [[ -z "${VERSION:-}" ]] && [[ -n "${IMAGE_VERSION:-}" ]]; then
-    VERSION="${IMAGE_VERSION}"
-fi
 
 # Auto-detect version from git tag when VERSION is still unset.
 if [[ -z "${VERSION:-}" ]]; then
@@ -131,10 +118,9 @@ Options:
     -h, --help          Show this help message
 
 Environment Variables:
-    CONF_ENV_FILE       Path to env config file (default: examples/k8stest/scripts/conf.env)
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
-    VERSION             Image version (overrides conf.env and git tag; default: ${DEFAULT_VERSION})
+    VERSION             Image version (overrides git tag; default: ${DEFAULT_VERSION})
     RUST_VERSION        Rust version for builder (default: 1.87)
     FEATURES            Cargo features (default: default)
 
