@@ -1,47 +1,23 @@
 use super::discovery_impl::{EndpointExt, EndpointLoadBalancer};
-use crate::core::gateway::lb::ewma::Ewma;
-use crate::core::gateway::lb::leastconn::LeastConnection;
 use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Endpoints;
-use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
+use pingora_load_balancing::selection::{BackendSelection, RoundRobin};
 use pingora_load_balancing::Backend;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-/// Store for RoundRobin LoadBalancers (primary, always present)
+/// Store for RoundRobin LoadBalancers (primary data layer + LB)
 static ROUNDROBIN_STORE: LazyLock<Arc<EndpointStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));
-
-/// Store for Consistent LoadBalancers (optional)
-static CONSISTENT_STORE: LazyLock<Arc<EndpointStore<Consistent>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));
-
-/// Store for LeastConnection LoadBalancers (optional)
-static LEASTCONN_STORE: LazyLock<Arc<EndpointStore<LeastConnection>>> =
-    LazyLock::new(|| Arc::new(EndpointStore::new()));
-
-/// Store for EWMA LoadBalancers (optional)
-static EWMA_STORE: LazyLock<Arc<EndpointStore<Ewma>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));
 
 pub fn get_endpoint_roundrobin_store() -> Arc<EndpointStore<RoundRobin>> {
     ROUNDROBIN_STORE.clone()
 }
 
-pub fn get_endpoint_consistent_store() -> Arc<EndpointStore<Consistent>> {
-    CONSISTENT_STORE.clone()
-}
-
-pub fn get_endpoint_leastconn_store() -> Arc<EndpointStore<LeastConnection>> {
-    LEASTCONN_STORE.clone()
-}
-
-pub fn get_endpoint_ewma_store() -> Arc<EndpointStore<Ewma>> {
-    EWMA_STORE.clone()
-}
-
 /// Generic store for endpoint load balancers
 ///
-/// Design: Only RoundRobin store maintains the data layer (ep_data).
-/// Other algorithm stores (Consistent/LeastConn/Ewma) only maintain the LB layer and
-/// fetch data from RoundRobin store when creating LBs via DCL pattern.
+/// Design: RoundRobin store maintains both the data layer (ep_data) and the
+/// Pingora LoadBalancer<RoundRobin>. LeastConn/EWMA/ConsistentHash algorithms
+/// use `get_backends_for_service()` to read the backend list at selection time.
 pub struct EndpointStore<S>
 where
     S: BackendSelection + 'static,
@@ -173,8 +149,7 @@ where
         self.ep_data.read().unwrap().get(service_key).cloned()
     }
 
-    /// DCL pattern: Get existing LB or create new one using external data source
-    /// Used by Consistent/LeastConn/Ewma stores to fetch data from RoundRobin store
+    /// DCL pattern: Get existing LB or create new one using external data source.
     pub fn get_or_create_with_provider<F>(
         &self,
         service_key: &str,
@@ -336,8 +311,7 @@ where
         endpoint.build_backends(port).into_iter().collect()
     }
 
-    /// Update LB if it exists, using external data source
-    /// Used by Consistent/LeastConn/Ewma stores to update LBs with data from RoundRobin store
+    /// Update LB if it exists, using external data source.
     ///
     /// # Arguments
     /// * `service_key` - The service key to update

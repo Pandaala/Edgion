@@ -25,18 +25,18 @@ pub async fn logging(
     global_metrics().add_request_bytes(session.body_bytes_read() as u64);
     // Record proxied response bytes for bandwidth monitoring
     global_metrics().add_response_bytes(session.upstream_body_bytes_received() as u64);
-    // Update LB metrics based on policy type
     if let Some(upstream) = ctx.get_current_upstream() {
-        if let Some(addr) = &upstream.backend_addr {
+        if let (Some(service_key), Some(addr)) = (
+            upstream.service_key.as_deref(),
+            upstream.lb_backend_addr.as_ref(),
+        ) {
             match &upstream.lb_policy {
                 Some(crate::types::ParsedLBPolicy::LeastConn) => {
-                    // Decrement connection count for LeastConnection LB
-                    crate::core::gateway::lb::leastconn::decrement(addr);
+                    crate::core::gateway::lb::runtime_state::decrement(service_key, addr);
                 }
                 Some(crate::types::ParsedLBPolicy::Ewma) => {
-                    // Update EWMA with response latency
                     let latency_us = upstream.start_time.elapsed().as_micros() as u64;
-                    crate::core::gateway::lb::ewma::update(addr, latency_us);
+                    crate::core::gateway::lb::runtime_state::update_ewma(service_key, addr, latency_us);
                 }
                 _ => {}
             }

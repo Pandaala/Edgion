@@ -1,20 +1,42 @@
-use super::{
-    get_endpoint_consistent_store, get_endpoint_ewma_store, get_endpoint_leastconn_store, get_endpoint_roundrobin_store,
-};
+use super::get_endpoint_roundrobin_store;
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
+use crate::core::gateway::lb::runtime_state;
 use k8s_openapi::api::core::v1::Endpoints;
+use pingora_core::protocols::l4::socket::SocketAddr;
 use std::collections::{HashMap, HashSet};
+
+fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &HashSet<SocketAddr>) {
+    let removed: Vec<SocketAddr> = old.difference(new).cloned().collect();
+    let added: Vec<SocketAddr> = new.difference(old).cloned().collect();
+
+    if !removed.is_empty() || !added.is_empty() {
+        runtime_state::invalidate_selector_cache(service_key);
+    }
+
+    if !removed.is_empty() {
+        tracing::debug!(
+            service_key = %service_key,
+            removed_count = removed.len(),
+            "Cleaning stale backend runtime state"
+        );
+        for addr in &removed {
+            if runtime_state::get_count(service_key, addr) > 0 {
+                runtime_state::mark_backend_draining(service_key, addr);
+            } else {
+                runtime_state::remove_backend(service_key, addr);
+            }
+        }
+    }
+}
 
 /// Handler for Endpoints configuration updates
 ///
-/// Design: Uses shared data layer architecture
-/// - Only RoundRobin store maintains the data layer
-/// - Other algorithm stores (Consistent/LeastConn/Ewma) only maintain LB layer
-/// - LBs are created on-demand via DCL pattern in data plane
-/// - This handler only updates data layer and refreshes existing LBs
+/// Design: Only the RoundRobin store maintains data + LB.
+/// LeastConn/EWMA/ConsistentHash read backends from RR at selection time,
+/// so this handler only updates the RR data layer and refreshes existing RR LBs.
 pub struct EndpointHandler;
 
 impl EndpointHandler {
@@ -22,65 +44,33 @@ impl EndpointHandler {
         Self
     }
 
-    /// Update all existing LBs in all stores (used after full_set/relist)
+    /// Update all existing RoundRobin LBs (used after full_set/relist).
     fn update_all_existing_lbs(&self) {
         let roundrobin_store = get_endpoint_roundrobin_store();
-
-        // Update RoundRobin store (uses its own data layer)
         for service_key in roundrobin_store.get_existing_service_keys() {
             roundrobin_store.update_lb_if_exists(&service_key);
         }
-
-        // Update Consistent store (uses RoundRobin's data layer)
-        let consistent_store = get_endpoint_consistent_store();
-        for service_key in consistent_store.get_existing_service_keys() {
-            consistent_store
-                .update_lb_if_exists_with_provider(&service_key, |key| roundrobin_store.get_endpoint_for_service(key));
-        }
-
-        // Update LeastConn store (uses RoundRobin's data layer)
-        let leastconn_store = get_endpoint_leastconn_store();
-        for service_key in leastconn_store.get_existing_service_keys() {
-            leastconn_store
-                .update_lb_if_exists_with_provider(&service_key, |key| roundrobin_store.get_endpoint_for_service(key));
-        }
-
-        // Update EWMA store (uses RoundRobin's data layer)
-        let ewma_store = get_endpoint_ewma_store();
-        for service_key in ewma_store.get_existing_service_keys() {
-            ewma_store
-                .update_lb_if_exists_with_provider(&service_key, |key| roundrobin_store.get_endpoint_for_service(key));
-        }
     }
 
-    /// Update affected LBs in all stores (used after partial_update)
+    /// Update affected RoundRobin LBs and clean stale runtime state.
     fn update_affected_lbs(&self, affected_services: &HashSet<String>) {
         let roundrobin_store = get_endpoint_roundrobin_store();
 
-        // Update RoundRobin store (uses its own data layer)
         for service_key in affected_services {
+            let old_addrs: HashSet<SocketAddr> = roundrobin_store
+                .get_backends_for_service(service_key)
+                .into_iter()
+                .map(|b| b.addr)
+                .collect();
+
             roundrobin_store.update_lb_if_exists(service_key);
-        }
 
-        // Update Consistent store (uses RoundRobin's data layer)
-        let consistent_store = get_endpoint_consistent_store();
-        for service_key in affected_services {
-            consistent_store
-                .update_lb_if_exists_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key));
-        }
-
-        // Update LeastConn store (uses RoundRobin's data layer)
-        let leastconn_store = get_endpoint_leastconn_store();
-        for service_key in affected_services {
-            leastconn_store
-                .update_lb_if_exists_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key));
-        }
-
-        // Update EWMA store (uses RoundRobin's data layer)
-        let ewma_store = get_endpoint_ewma_store();
-        for service_key in affected_services {
-            ewma_store
-                .update_lb_if_exists_with_provider(service_key, |key| roundrobin_store.get_endpoint_for_service(key));
+            let new_addrs: HashSet<SocketAddr> = roundrobin_store
+                .get_backends_for_service(service_key)
+                .into_iter()
+                .map(|b| b.addr)
+                .collect();
+            cleanup_removed_backends(service_key, &old_addrs, &new_addrs);
         }
     }
 
@@ -138,12 +128,18 @@ impl ConfHandler<Endpoints> for EndpointHandler {
         // 3. Sync Endpoints-level health check config
         self.sync_health_check_configs_for_services(&all_services);
 
-        // 4. Clear stale Endpoints-level config
+        // 4. Invalidate selector caches for all services (data may have changed)
+        for service_key in &all_services {
+            runtime_state::invalidate_selector_cache(service_key);
+        }
+
+        // 5. Clear stale services (removed by full_set)
         let stale_services: HashSet<String> = old_keys.difference(&all_services).cloned().collect();
         if !stale_services.is_empty() {
             for service_key in &stale_services {
                 config_store.set_endpoint_config(service_key, None);
                 get_health_check_manager().reconcile_service(service_key);
+                runtime_state::remove_service(service_key);
             }
         }
 

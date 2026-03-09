@@ -126,9 +126,9 @@ impl GrpcRouteManager {
             parsed_routes.insert(key, route);
         }
 
-        *self.grpc_routes.lock().unwrap() = parsed_routes.clone();
-
         let new_route_rules = self.build_global_routes(&parsed_routes);
+
+        *self.grpc_routes.lock().unwrap() = parsed_routes;
         let new_domain = DomainGrpcRouteRules::new();
         new_domain.grpc_routes.store(new_route_rules);
         self.global_grpc_routes.store(Arc::new(new_domain));

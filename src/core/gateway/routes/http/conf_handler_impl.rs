@@ -175,6 +175,7 @@ impl RouteManager {
             .ok_or_else(|| "Regex path must have value".to_string())?;
 
         let regex = Regex::new(path_value).map_err(|e| format!("Invalid regex '{}': {}", path_value, e))?;
+        let (compiled_header_regexes, compiled_query_regexes) = HttpRouteRuleUnit::compile_match_regexes(match_item);
 
         Ok(HttpRouteRuleUnit {
             resource_key: resource_key.to_string(),
@@ -188,6 +189,8 @@ impl RouteManager {
             rule,
             path_regex: Some(regex),
             parent_refs,
+            compiled_header_regexes,
+            compiled_query_regexes,
         })
     }
 }
@@ -298,6 +301,7 @@ impl RouteManager {
                                 regex_routes_list.push(Arc::new(regex_unit));
                             }
                         } else {
+                            let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(match_item);
                             let rule_unit = HttpRouteRuleUnit {
                                 resource_key: resource_key.clone(),
                                 matched_info: MatchInfo::new(
@@ -310,6 +314,8 @@ impl RouteManager {
                                 rule: rule_arc.clone(),
                                 path_regex: None,
                                 parent_refs: accepted_refs_opt.clone(),
+                                compiled_header_regexes: chr,
+                                compiled_query_regexes: cqr,
                             };
                             route_rules_list.push(Arc::new(rule_unit));
                         }
@@ -465,6 +471,7 @@ impl RouteManager {
                                     regex_routes_list.push(Arc::new(regex_unit));
                                 }
                             } else {
+                                let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(match_item);
                                 let rule_unit = HttpRouteRuleUnit {
                                     resource_key: resource_key.clone(),
                                     matched_info: MatchInfo::new(
@@ -477,6 +484,8 @@ impl RouteManager {
                                     rule: rule_arc.clone(),
                                     path_regex: None,
                                     parent_refs: accepted_refs_opt.clone(),
+                                    compiled_header_regexes: chr,
+                                    compiled_query_regexes: cqr,
                                 };
                                 route_rules_list.push(Arc::new(rule_unit));
                             }
@@ -607,6 +616,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             }
                         }
                     } else {
+                        let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(match_item);
                         let rule_unit = HttpRouteRuleUnit {
                             resource_key: route.key_name(),
                             matched_info: MatchInfo::new(
@@ -619,6 +629,8 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             rule: rule_arc.clone(),
                             path_regex: None,
                             parent_refs: accepted_refs_opt.clone(),
+                            compiled_header_regexes: chr,
+                            compiled_query_regexes: cqr,
                         };
                         split.0.push(Arc::new(rule_unit));
                     }

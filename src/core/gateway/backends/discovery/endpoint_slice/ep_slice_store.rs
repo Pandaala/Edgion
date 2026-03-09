@@ -1,42 +1,19 @@
 use super::discovery_impl::{EndpointSliceExt, EndpointSliceLoadBalancer};
-use crate::core::gateway::lb::ewma::Ewma;
-use crate::core::gateway::lb::leastconn::LeastConnection;
 use crate::types::constants::labels::k8s::SERVICE_NAME;
 use arc_swap::ArcSwap;
 use futures::FutureExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use pingora_load_balancing::selection::{BackendSelection, Consistent, RoundRobin};
+use pingora_load_balancing::selection::{BackendSelection, RoundRobin};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 
-/// Store for RoundRobin LoadBalancers (primary, always present)
+/// Store for RoundRobin LoadBalancers (primary data layer + LB)
 static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
-
-/// Store for Consistent LoadBalancers (optional)
-static CONSISTENT_STORE: LazyLock<Arc<EpSliceStore<Consistent>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
-
-/// Store for LeastConnection LoadBalancers (optional)
-static LEASTCONN_STORE: LazyLock<Arc<EpSliceStore<LeastConnection>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
-
-/// Store for EWMA LoadBalancers (optional)
-static EWMA_STORE: LazyLock<Arc<EpSliceStore<Ewma>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
 
 pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
     ROUNDROBIN_STORE.clone()
-}
-
-pub fn get_consistent_store() -> Arc<EpSliceStore<Consistent>> {
-    CONSISTENT_STORE.clone()
-}
-
-pub fn get_leastconn_store() -> Arc<EpSliceStore<LeastConnection>> {
-    LEASTCONN_STORE.clone()
-}
-
-pub fn get_ewma_store() -> Arc<EpSliceStore<Ewma>> {
-    EWMA_STORE.clone()
 }
 
 /// Generic store for endpoint slice load balancers
@@ -44,9 +21,9 @@ pub fn get_ewma_store() -> Arc<EpSliceStore<Ewma>> {
 /// This store aggregates multiple EndpointSlices per Service and maintains
 /// the mapping from service_key to LoadBalancer.
 ///
-/// Design: Only RoundRobin store maintains the data layer (ep_slices + service_to_slices).
-/// Other algorithm stores (Consistent/LeastConn/Ewma) only maintain the LB layer and
-/// fetch data from RoundRobin store when creating LBs via DCL pattern.
+/// Design: RoundRobin store maintains both the data layer (ep_slices + service_to_slices)
+/// and the Pingora LoadBalancer<RoundRobin>. LeastConn/EWMA/ConsistentHash algorithms
+/// use `get_backends_for_service()` to read the backend list at selection time.
 pub struct EpSliceStore<S>
 where
     S: BackendSelection + 'static,
@@ -380,8 +357,7 @@ where
         backends.into_iter().collect()
     }
 
-    /// Update LB if it exists, using external data source (in-place update)
-    /// Used by Consistent/LeastConn/Ewma stores to update LBs with data from RoundRobin store
+    /// Update LB if it exists, using external data source (in-place update).
     ///
     /// # Arguments
     /// * `service_key` - The service key to update
@@ -423,8 +399,7 @@ where
         }
     }
 
-    /// DCL pattern: Get existing LB or create new one using external data source
-    /// Used by Consistent/LeastConn/Ewma stores to fetch data from RoundRobin store
+    /// DCL pattern: Get existing LB or create new one using external data source.
     ///
     /// # Arguments
     /// * `service_key` - The service key to look up

@@ -182,11 +182,13 @@ fn preload_lb(service_key: &str, lb_type: &Option<LbPolicyType>, mode: EndpointM
 }
 
 fn preload_eps_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> bool {
-    use crate::core::gateway::backends::discovery::endpoint_slice::*;
+    use crate::core::gateway::backends::discovery::endpoint_slice::get_roundrobin_store;
 
     let rr_store = get_roundrobin_store();
 
-    // Always preload RoundRobin first (data layer)
+    // Preload the RoundRobin LB which owns the data layer.
+    // LeastConn/EWMA/ConsistentHash read from the RR backend list at
+    // selection time, so no separate LB instances needed.
     let rr_lb = rr_store.get_or_create(service_key);
     if rr_lb.is_none() {
         tracing::debug!(
@@ -195,20 +197,6 @@ fn preload_eps_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> bool {
             "Skipping: no EndpointSlice data available"
         );
         return false;
-    }
-
-    // Additionally preload specific LB if configured
-    match lb_type {
-        Some(LbPolicyType::ConsistentHash) => {
-            get_consistent_store().get_or_create_with_provider(service_key, |key| rr_store.get_slices_for_service(key));
-        }
-        Some(LbPolicyType::LeastConn) => {
-            get_leastconn_store().get_or_create_with_provider(service_key, |key| rr_store.get_slices_for_service(key));
-        }
-        Some(LbPolicyType::Ewma) => {
-            get_ewma_store().get_or_create_with_provider(service_key, |key| rr_store.get_slices_for_service(key));
-        }
-        None => {} // RoundRobin already preloaded
     }
 
     tracing::trace!(
@@ -221,11 +209,10 @@ fn preload_eps_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> bool {
 }
 
 fn preload_endpoint_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> bool {
-    use crate::core::gateway::backends::discovery::endpoint::*;
+    use crate::core::gateway::backends::discovery::endpoint::get_endpoint_roundrobin_store;
 
     let rr_store = get_endpoint_roundrobin_store();
 
-    // Always preload RoundRobin first (data layer)
     let rr_lb = rr_store.get_or_create(service_key);
     if rr_lb.is_none() {
         tracing::debug!(
@@ -234,23 +221,6 @@ fn preload_endpoint_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> boo
             "Skipping: no Endpoint data available"
         );
         return false;
-    }
-
-    // Additionally preload specific LB if configured
-    match lb_type {
-        Some(LbPolicyType::ConsistentHash) => {
-            get_endpoint_consistent_store()
-                .get_or_create_with_provider(service_key, |key| rr_store.get_endpoint_for_service(key));
-        }
-        Some(LbPolicyType::LeastConn) => {
-            get_endpoint_leastconn_store()
-                .get_or_create_with_provider(service_key, |key| rr_store.get_endpoint_for_service(key));
-        }
-        Some(LbPolicyType::Ewma) => {
-            get_endpoint_ewma_store()
-                .get_or_create_with_provider(service_key, |key| rr_store.get_endpoint_for_service(key));
-        }
-        None => {} // RoundRobin already preloaded
     }
 
     tracing::trace!(

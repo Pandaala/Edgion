@@ -19,7 +19,7 @@ use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::observe::{log_tls, TlsLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
-use crate::core::gateway::routes::tls::GatewayTlsRoutes;
+use crate::core::gateway::routes::tls::get_global_tls_route_manager;
 use crate::types::ctx::ClientCertInfo;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::TlsConnMeta;
@@ -60,12 +60,17 @@ pub enum TlsStatus {
     DeniedByPlugin,
 }
 
-/// TLS proxy service that terminates TLS and forwards to TCP backend
+/// TLS proxy service that terminates TLS and forwards to TCP backend.
+///
+/// Route lookup uses the global `TlsRouteManager` per-connection (via
+/// `load_route_table()`) instead of caching an Arc at startup. This
+/// eliminates the stale-Arc problem where rebuild could orphan the
+/// reference held by a long-lived EdgionTls instance.
 pub struct EdgionTls {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
+    pub gateway_key: String,
     pub listener_port: u16,
-    pub gateway_tls_routes: Arc<GatewayTlsRoutes>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub connector: TransportConnector,
@@ -162,13 +167,15 @@ impl EdgionTls {
 
     /// Core logic for handling TLS-terminated connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni_hostname: &str) {
-        // 1. Match TLSRoute based on SNI
-        let tls_route = match self.gateway_tls_routes.match_route(sni_hostname) {
+        // 1. Match TLSRoute based on SNI — load fresh snapshot per-connection
+        let route_table = get_global_tls_route_manager().load_route_table();
+        let tls_route = match route_table.match_route(&self.gateway_key, sni_hostname) {
             Some(route) => route,
             None => {
                 ctx.status = TlsStatus::NoMatchingRoute;
                 tracing::warn!(
                     sni = %sni_hostname,
+                    gateway_key = %self.gateway_key,
                     "No matching TLSRoute found"
                 );
                 return;

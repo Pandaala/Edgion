@@ -272,33 +272,32 @@ mod tests {
 
         manager.full_set(&data);
 
-        // Test via GatewayTlsRoutes
-        let gateway_routes = manager.get_or_create_gateway_tls_routes("default", "gateway1");
-        assert!(gateway_routes.match_route("test.example.com").is_some());
-        assert!(gateway_routes.match_route("api.example.com").is_some());
-        assert!(gateway_routes.match_route("other.example.com").is_none());
+        let table = manager.load_route_table();
+        assert!(table.match_route("default/gateway1", "test.example.com").is_some());
+        assert!(table.match_route("default/gateway1", "api.example.com").is_some());
+        assert!(table.match_route("default/gateway1", "other.example.com").is_none());
     }
 
     #[test]
     fn test_tls_route_partial_update() {
         let manager = TlsRouteManager::new();
 
-        // Add a route
         let mut add = HashMap::new();
         let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
         add.insert("default/route1".to_string(), route1);
 
         manager.partial_update(add, HashMap::new(), HashSet::new());
 
-        // Test via GatewayTlsRoutes
-        let gateway_routes = manager.get_or_create_gateway_tls_routes("default", "gateway1");
-        assert!(gateway_routes.match_route("test.example.com").is_some());
+        let table = manager.load_route_table();
+        assert!(table.match_route("default/gateway1", "test.example.com").is_some());
 
-        // Remove the route
+        // Remove the route — load a fresh snapshot to see the update
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
         manager.partial_update(HashMap::new(), HashMap::new(), remove);
-        assert!(gateway_routes.match_route("test.example.com").is_none());
+
+        let table = manager.load_route_table();
+        assert!(table.match_route("default/gateway1", "test.example.com").is_none());
     }
 
     fn create_annotated_tls_route(

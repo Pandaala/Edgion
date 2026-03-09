@@ -1,76 +1,67 @@
 use crate::types::resources::TLSRoute;
-use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Gateway-level TLS routes collection
+/// Global TLS route table — immutable snapshot shared via ArcSwap.
 ///
-/// Stores all TLSRoutes associated with a specific Gateway, indexed by SNI hostname
-/// Uses ArcSwap for lock-free concurrent access
-pub struct GatewayTlsRoutes {
-    /// hostname -> Vec<Arc<TLSRoute>> mapping
-    /// Multiple routes can match the same hostname (with different priorities or conditions)
-    hostname_routes_map: ArcSwap<HashMap<String, Vec<Arc<TLSRoute>>>>,
+/// Routes are indexed by (gateway_key, hostname) for O(1) lookup.
+/// A new snapshot is built and atomically swapped on every route change,
+/// ensuring all readers (EdgionTls instances) always see consistent data
+/// without caching stale Arc references.
+pub struct TlsRouteTable {
+    /// gateway_key -> hostname -> Vec<Arc<TLSRoute>>
+    gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TLSRoute>>>>,
 }
 
-impl GatewayTlsRoutes {
-    /// Create a new empty GatewayTlsRoutes
+impl TlsRouteTable {
     pub fn new() -> Self {
         Self {
-            hostname_routes_map: ArcSwap::from_pointee(HashMap::new()),
+            gateway_routes: HashMap::new(),
         }
     }
 
-    /// Match a TLSRoute by SNI hostname
+    pub fn from_gateway_routes(
+        gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TLSRoute>>>>,
+    ) -> Self {
+        Self { gateway_routes }
+    }
+
+    /// Match a TLSRoute by gateway key and SNI hostname.
     ///
-    /// Returns the first matching route for the given hostname.
-    /// In case of multiple routes for the same hostname, returns the first one
-    /// (prioritization logic can be added later if needed).
-    pub fn match_route(&self, sni_hostname: &str) -> Option<Arc<TLSRoute>> {
-        let hostname_routes = self.hostname_routes_map.load();
+    /// Priority: exact hostname > wildcard hostname.
+    pub fn match_route(&self, gateway_key: &str, sni_hostname: &str) -> Option<Arc<TLSRoute>> {
+        let hostname_routes = self.gateway_routes.get(gateway_key)?;
 
         // Exact match first
         if let Some(routes) = hostname_routes.get(sni_hostname) {
-            return routes.first().cloned();
+            if let Some(route) = routes.first() {
+                return Some(route.clone());
+            }
         }
 
-        // Wildcard matching
-        // For example, *.example.com matches test.example.com
+        // Wildcard matching: *.example.com matches test.example.com
         if let Some(dot_pos) = sni_hostname.find('.') {
             let wildcard = format!("*{}", &sni_hostname[dot_pos..]);
             if let Some(routes) = hostname_routes.get(&wildcard) {
-                return routes.first().cloned();
+                if let Some(route) = routes.first() {
+                    return Some(route.clone());
+                }
             }
         }
 
         None
     }
 
-    /// Get all routes for a specific hostname
-    pub fn get_routes_for_hostname(&self, hostname: &str) -> Vec<Arc<TLSRoute>> {
-        let hostname_routes = self.hostname_routes_map.load();
-        hostname_routes.get(hostname).cloned().unwrap_or_default()
+    pub fn gateway_count(&self) -> usize {
+        self.gateway_routes.len()
     }
 
-    /// Update the routes map (called by TlsRouteManager during config sync)
-    pub(crate) fn update_routes(&self, new_routes: HashMap<String, Vec<Arc<TLSRoute>>>) {
-        self.hostname_routes_map.store(Arc::new(new_routes));
-    }
-
-    /// Get all hostnames that have routes
-    pub fn get_all_hostnames(&self) -> Vec<String> {
-        let hostname_routes = self.hostname_routes_map.load();
-        hostname_routes.keys().cloned().collect()
-    }
-
-    /// Check if there are any routes
-    pub fn is_empty(&self) -> bool {
-        let hostname_routes = self.hostname_routes_map.load();
-        hostname_routes.is_empty()
+    pub fn total_hostname_count(&self) -> usize {
+        self.gateway_routes.values().map(|h| h.len()).sum()
     }
 }
 
-impl Default for GatewayTlsRoutes {
+impl Default for TlsRouteTable {
     fn default() -> Self {
         Self::new()
     }
@@ -106,43 +97,47 @@ mod tests {
     }
 
     #[test]
-    fn test_gateway_tls_routes_exact_match() {
-        let gateway_routes = GatewayTlsRoutes::new();
-
+    fn test_exact_match() {
         let route1 = Arc::new(create_test_tls_route("default", "route1", "test.example.com"));
         let route2 = Arc::new(create_test_tls_route("default", "route2", "api.example.com"));
 
-        let mut routes_map = HashMap::new();
-        routes_map.insert("test.example.com".to_string(), vec![route1.clone()]);
-        routes_map.insert("api.example.com".to_string(), vec![route2.clone()]);
+        let mut hostname_routes = HashMap::new();
+        hostname_routes.insert("test.example.com".to_string(), vec![route1]);
+        hostname_routes.insert("api.example.com".to_string(), vec![route2]);
 
-        gateway_routes.update_routes(routes_map);
+        let mut gateway_routes = HashMap::new();
+        gateway_routes.insert("default/test-gateway".to_string(), hostname_routes);
 
-        assert!(gateway_routes.match_route("test.example.com").is_some());
-        assert!(gateway_routes.match_route("api.example.com").is_some());
-        assert!(gateway_routes.match_route("other.example.com").is_none());
+        let table = TlsRouteTable::from_gateway_routes(gateway_routes);
+
+        assert!(table.match_route("default/test-gateway", "test.example.com").is_some());
+        assert!(table.match_route("default/test-gateway", "api.example.com").is_some());
+        assert!(table.match_route("default/test-gateway", "other.example.com").is_none());
+        assert!(table.match_route("default/other-gateway", "test.example.com").is_none());
     }
 
     #[test]
-    fn test_gateway_tls_routes_wildcard_match() {
-        let gateway_routes = GatewayTlsRoutes::new();
-
+    fn test_wildcard_match() {
         let route = Arc::new(create_test_tls_route("default", "route1", "*.example.com"));
 
-        let mut routes_map = HashMap::new();
-        routes_map.insert("*.example.com".to_string(), vec![route.clone()]);
+        let mut hostname_routes = HashMap::new();
+        hostname_routes.insert("*.example.com".to_string(), vec![route]);
 
-        gateway_routes.update_routes(routes_map);
+        let mut gateway_routes = HashMap::new();
+        gateway_routes.insert("default/test-gateway".to_string(), hostname_routes);
 
-        assert!(gateway_routes.match_route("test.example.com").is_some());
-        assert!(gateway_routes.match_route("api.example.com").is_some());
-        assert!(gateway_routes.match_route("example.com").is_none());
+        let table = TlsRouteTable::from_gateway_routes(gateway_routes);
+
+        assert!(table.match_route("default/test-gateway", "test.example.com").is_some());
+        assert!(table.match_route("default/test-gateway", "api.example.com").is_some());
+        assert!(table.match_route("default/test-gateway", "example.com").is_none());
     }
 
     #[test]
-    fn test_gateway_tls_routes_empty() {
-        let gateway_routes = GatewayTlsRoutes::new();
-        assert!(gateway_routes.is_empty());
-        assert!(gateway_routes.match_route("test.example.com").is_none());
+    fn test_empty_table() {
+        let table = TlsRouteTable::new();
+        assert!(table.match_route("any/gateway", "test.example.com").is_none());
+        assert_eq!(table.gateway_count(), 0);
+        assert_eq!(table.total_hostname_count(), 0);
     }
 }

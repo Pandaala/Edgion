@@ -21,11 +21,12 @@ pub async fn connected_to_upstream(
         let ct = upstream.start_time.elapsed().as_millis() as u64;
         upstream.ct = Some(ct);
 
-        // Increment connection count for LeastConnection LB
-        if let (Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) =
-            (&upstream.backend_addr, &upstream.lb_policy)
-        {
-            crate::core::gateway::lb::leastconn::increment(addr);
+        if let (Some(service_key), Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) = (
+            upstream.service_key.as_deref(),
+            upstream.lb_backend_addr.as_ref(),
+            &upstream.lb_policy,
+        ) {
+            crate::core::gateway::lb::runtime_state::increment(service_key, addr);
         }
     }
 

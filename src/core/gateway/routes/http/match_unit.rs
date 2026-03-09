@@ -27,9 +27,38 @@ pub struct HttpRouteRuleUnit {
     pub path_regex: Option<Regex>,
     /// Parent references for sectionName matching
     pub parent_refs: Option<Vec<ParentReference>>,
+    /// Pre-compiled regexes for header RegularExpression matchers (aligned with headers vec)
+    pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
+    /// Pre-compiled regexes for query param RegularExpression matchers (aligned with query_params vec)
+    pub compiled_query_regexes: Vec<Option<Arc<Regex>>>,
 }
 
 impl HttpRouteRuleUnit {
+    /// Pre-compile RegularExpression regexes for header and query param matchers.
+    /// Call once at route creation time; the returned vecs are positionally aligned
+    /// with the `headers` / `query_params` slices in `HTTPRouteMatch`.
+    pub fn compile_match_regexes(match_item: &crate::types::HTTPRouteMatch) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
+        let header_regexes = match_item.headers.as_ref().map_or_else(Vec::new, |headers| {
+            headers.iter().map(|hm| {
+                if hm.match_type.as_deref() == Some("RegularExpression") {
+                    Regex::new(&hm.value).ok().map(|r| Arc::new(r))
+                } else {
+                    None
+                }
+            }).collect()
+        });
+        let query_regexes = match_item.query_params.as_ref().map_or_else(Vec::new, |params| {
+            params.iter().map(|qm| {
+                if qm.match_type.as_deref() == Some("RegularExpression") {
+                    Regex::new(&qm.value).ok().map(|r| Arc::new(r))
+                } else {
+                    None
+                }
+            }).collect()
+        });
+        (header_regexes, query_regexes)
+    }
+
     /// Check if this is a regex route
     pub fn is_regex_route(&self) -> bool {
         self.path_regex.is_some()
@@ -59,7 +88,15 @@ impl HttpRouteRuleUnit {
         gateway_infos: &[GatewayInfo],
     ) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
-        Self::deep_match_common(&self.matched_info, req_header, &self.parent_refs, ctx, gateway_infos)
+        Self::deep_match_common(
+            &self.matched_info,
+            req_header,
+            &self.parent_refs,
+            ctx,
+            gateway_infos,
+            &self.compiled_header_regexes,
+            &self.compiled_query_regexes,
+        )
     }
 
     /// Get route identifier
@@ -121,10 +158,12 @@ impl HttpRouteRuleUnit {
         result
     }
 
-    /// Match HTTP header
+    /// Match HTTP header.
+    /// `compiled_regex`: pre-compiled regex for this header matcher (if RegularExpression).
     pub(crate) fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &crate::types::HTTPHeaderMatch,
+        compiled_regex: Option<&Arc<Regex>>,
     ) -> Result<bool, EdError> {
         let header_value = match req_header.headers.get(&header_match.name) {
             Some(value) => value.to_str().unwrap_or(""),
@@ -136,6 +175,9 @@ impl HttpRouteRuleUnit {
         match match_type {
             "Exact" => Ok(header_value == header_match.value),
             "RegularExpression" => {
+                if let Some(re) = compiled_regex {
+                    return Ok(re.is_match(header_value));
+                }
                 let re = Regex::new(&header_match.value)
                     .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
                 Ok(re.is_match(header_value))
@@ -150,10 +192,12 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Match query parameter
+    /// Match query parameter.
+    /// `compiled_regex`: pre-compiled regex for this query matcher (if RegularExpression).
     pub(crate) fn match_query_param(
         query_params: &HashMap<String, String>,
         query_param_match: &crate::types::HTTPQueryParamMatch,
+        compiled_regex: Option<&Arc<Regex>>,
     ) -> Result<bool, EdError> {
         let param_value = match query_params.get(&query_param_match.name) {
             Some(value) => value,
@@ -165,6 +209,9 @@ impl HttpRouteRuleUnit {
         match match_type {
             "Exact" => Ok(param_value == &query_param_match.value),
             "RegularExpression" => {
+                if let Some(re) = compiled_regex {
+                    return Ok(re.is_match(param_value));
+                }
                 let re = Regex::new(&query_param_match.value)
                     .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
                 Ok(re.is_match(param_value))
@@ -188,6 +235,8 @@ impl HttpRouteRuleUnit {
         parent_refs: &Option<Vec<ParentReference>>,
         ctx: &EdgionHttpContext,
         gateway_infos: &[GatewayInfo],
+        compiled_header_regexes: &[Option<Arc<Regex>>],
+        compiled_query_regexes: &[Option<Arc<Regex>>],
     ) -> Result<Option<GatewayInfo>, EdError> {
         let method = req_header.method.as_str();
         let match_item = &matched_info.m;
@@ -220,8 +269,9 @@ impl HttpRouteRuleUnit {
 
         // 2. Check Headers (if specified) - ALL must match (AND logic)
         if let Some(header_matches) = &match_item.headers {
-            for header_match in header_matches {
-                if !Self::match_header(req_header, header_match)? {
+            for (idx, header_match) in header_matches.iter().enumerate() {
+                let pre = compiled_header_regexes.get(idx).and_then(|r| r.as_ref());
+                if !Self::match_header(req_header, header_match, pre)? {
                     return Ok(None);
                 }
             }
@@ -229,8 +279,9 @@ impl HttpRouteRuleUnit {
 
         // 3. Check Query Parameters (if specified) - ALL must match (AND logic)
         if let Some(query_param_matches) = &match_item.query_params {
-            for query_param_match in query_param_matches {
-                if !Self::match_query_param(&query_params, query_param_match)? {
+            for (idx, query_param_match) in query_param_matches.iter().enumerate() {
+                let pre = compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
+                if !Self::match_query_param(&query_params, query_param_match, pre)? {
                     return Ok(None);
                 }
             }

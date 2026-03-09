@@ -1,21 +1,27 @@
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::core::gateway::routes::tls::GatewayTlsRoutes;
+use crate::core::gateway::routes::tls::gateway_tls_routes::TlsRouteTable;
 use crate::types::resources::TLSRoute;
 use crate::types::ResourceMeta;
 
-/// TLS route manager
+/// TLS route manager — stores all TLSRoute resources and provides
+/// an atomically-swappable global route table for lock-free lookups.
+///
+/// Design follows the same pattern as HTTP `RouteManager`:
+/// - A single `ArcSwap<TlsRouteTable>` holds the current snapshot.
+/// - Consumers (EdgionTls) call `load_route_table()` per-connection.
+/// - Route updates build a new `TlsRouteTable` and swap atomically.
+/// - No per-gateway Arc caching — eliminates the stale-Arc problem.
 pub struct TlsRouteManager {
-    /// resource_key -> Arc<TLSRoute> mapping
-    /// For quick lookup and updates
+    /// resource_key -> Arc<TLSRoute> mapping for quick lookup and updates
     routes_by_key: Arc<DashMap<String, Arc<TLSRoute>>>,
 
-    /// gateway_key -> GatewayTlsRoutes mapping
-    /// Each gateway has its own set of TLS routes
-    gateway_tls_routes_map: Arc<DashMap<String, Arc<GatewayTlsRoutes>>>,
+    /// Global TLS route table — atomically swapped on every route change
+    global_tls_routes: ArcSwap<TlsRouteTable>,
 }
 
 impl Default for TlsRouteManager {
@@ -28,141 +34,79 @@ impl TlsRouteManager {
     pub fn new() -> Self {
         Self {
             routes_by_key: Arc::new(DashMap::new()),
-            gateway_tls_routes_map: Arc::new(DashMap::new()),
+            global_tls_routes: ArcSwap::from_pointee(TlsRouteTable::new()),
         }
     }
 
-    /// Get or create GatewayTlsRoutes for a specific gateway
+    /// Load the current route table snapshot.
     ///
-    /// This method returns a cached GatewayTlsRoutes for the given gateway.
-    /// If it doesn't exist, creates a new empty one.
-    pub fn get_or_create_gateway_tls_routes(&self, namespace: &str, name: &str) -> Arc<GatewayTlsRoutes> {
-        let gateway_key = format!("{}/{}", namespace, name);
-
-        let entry = self.gateway_tls_routes_map.entry(gateway_key.clone());
-        let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
-
-        let gateway_routes = entry
-            .or_insert_with(|| Arc::new(GatewayTlsRoutes::new()))
-            .value()
-            .clone();
-
-        if is_new {
-            tracing::debug!(
-                gateway_key = %gateway_key,
-                "Created new GatewayTlsRoutes"
-            );
-        }
-
-        gateway_routes
+    /// Called by EdgionTls on every connection — returns an Arc guard
+    /// that is always up-to-date (no stale references).
+    pub fn load_route_table(&self) -> arc_swap::Guard<Arc<TlsRouteTable>> {
+        self.global_tls_routes.load()
     }
 
-    /// Rebuild gateway routes maps after route changes
+    /// Rebuild and atomically swap the global route table.
     ///
-    /// This method should be called after add_route, remove_route, or replace_all
-    /// to update the GatewayTlsRoutes for affected gateways.
-    fn rebuild_gateway_routes_map(&self) {
-        // Group routes by gateway and hostname
-        let mut gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TLSRoute>>>> = HashMap::new();
+    /// Groups all routes by gateway_key and hostname, then builds
+    /// a new immutable `TlsRouteTable` snapshot.
+    fn rebuild_route_table(&self) {
+        let mut gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TLSRoute>>>> =
+            HashMap::new();
 
         for entry in self.routes_by_key.iter() {
             let route = entry.value();
-            let gateway_keys = self.extract_gateway_keys_from_route(route);
-            let hostnames = self.extract_hostnames_from_route(route);
+            let gateway_keys = Self::extract_gateway_keys(route);
+            let hostnames = Self::extract_hostnames(route);
 
             for gateway_key in gateway_keys {
                 let gateway_map = gateway_routes.entry(gateway_key).or_default();
-
                 for hostname in &hostnames {
-                    gateway_map.entry(hostname.clone()).or_default().push(route.clone());
+                    gateway_map
+                        .entry(hostname.clone())
+                        .or_default()
+                        .push(route.clone());
                 }
             }
         }
 
-        // Update all gateways in the map
-        // First, update gateways that have routes
-        for (gateway_key, hostname_routes) in &gateway_routes {
-            let hostnames_count = hostname_routes.len();
-            let gateway_tls_routes = self
-                .gateway_tls_routes_map
-                .entry(gateway_key.clone())
-                .or_insert_with(|| Arc::new(GatewayTlsRoutes::new()))
-                .clone();
+        let gw_count = gateway_routes.len();
+        let hostname_count: usize = gateway_routes.values().map(|h| h.len()).sum();
 
-            gateway_tls_routes.update_routes(hostname_routes.clone());
-            tracing::debug!(
-                gateway_key = %gateway_key,
-                hostnames = hostnames_count,
-                "Updated GatewayTlsRoutes"
-            );
-        }
+        let new_table = TlsRouteTable::from_gateway_routes(gateway_routes);
+        self.global_tls_routes.store(Arc::new(new_table));
 
-        // Remove stale gateway entries that no longer have any routes
-        // This prevents memory leaks after relist
-        // First clear the routes data (for any existing Arc references), then remove from map
-        let new_gateway_keys: HashSet<&String> = gateway_routes.keys().collect();
-        let stale_keys: Vec<String> = self
-            .gateway_tls_routes_map
-            .iter()
-            .filter(|entry| !new_gateway_keys.contains(entry.key()))
-            .map(|entry| entry.key().clone())
-            .collect();
-
-        for key in &stale_keys {
-            // Clear routes first (for any existing Arc references)
-            if let Some(entry) = self.gateway_tls_routes_map.get(key) {
-                entry.value().update_routes(HashMap::new());
-            }
-            // Then remove from map
-            self.gateway_tls_routes_map.remove(key);
-            tracing::debug!(gateway_key = %key, "Removed stale GatewayTlsRoutes");
-        }
-
-        if !stale_keys.is_empty() {
-            tracing::info!(
-                component = "tls_route_manager",
-                stale = stale_keys.len(),
-                "cleaned up stale gateway entries"
-            );
-        }
+        tracing::debug!(
+            component = "tls_route_manager",
+            gateways = gw_count,
+            hostnames = hostname_count,
+            "Rebuilt global TLS route table"
+        );
     }
 
     /// Add or update a TLSRoute
     pub fn add_route(&self, route: Arc<TLSRoute>) {
         let resource_key = route.key_name();
-
-        // Store by resource key
         self.routes_by_key.insert(resource_key, route);
-
-        // Rebuild gateway routes map
-        self.rebuild_gateway_routes_map();
+        self.rebuild_route_table();
     }
 
     /// Remove a TLSRoute by resource key
     pub fn remove_route(&self, resource_key: &str) {
-        // Remove from routes_by_key
         self.routes_by_key.remove(resource_key);
-
-        // Rebuild gateway routes map
-        self.rebuild_gateway_routes_map();
+        self.rebuild_route_table();
     }
 
     /// Replace all routes (used in full_set)
     pub fn replace_all(&self, routes: HashMap<String, Arc<TLSRoute>>) {
-        // Clear and rebuild routes_by_key
         self.routes_by_key.clear();
-
         for (key, route) in routes {
             self.routes_by_key.insert(key, route);
         }
-
-        // Rebuild gateway routes map
-        self.rebuild_gateway_routes_map();
+        self.rebuild_route_table();
     }
 
-    // Private helper methods
-
-    fn extract_hostnames_from_route(&self, route: &TLSRoute) -> HashSet<String> {
+    fn extract_hostnames(route: &TLSRoute) -> HashSet<String> {
         let mut hostnames = HashSet::new();
         if let Some(route_hostnames) = &route.spec.hostnames {
             for hostname in route_hostnames {
@@ -172,7 +116,7 @@ impl TlsRouteManager {
         hostnames
     }
 
-    fn extract_gateway_keys_from_route(&self, route: &TLSRoute) -> HashSet<String> {
+    fn extract_gateway_keys(route: &TLSRoute) -> HashSet<String> {
         let mut gateway_keys = HashSet::new();
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {

@@ -3,6 +3,7 @@ use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
+use crate::core::gateway::lb::runtime_state;
 use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -36,6 +37,7 @@ impl ConfHandler<Service> for ServiceStore {
             if !incoming_keys.contains(&old_key) {
                 config_store.set_service_config(&old_key, None);
                 hc_manager.reconcile_service(&old_key);
+                runtime_state::remove_service(&old_key);
             }
         }
 
@@ -67,6 +69,7 @@ impl ConfHandler<Service> for ServiceStore {
         for key in &remove {
             config_store.set_service_config(key, None);
             hc_manager.reconcile_service(key);
+            runtime_state::remove_service(key);
         }
 
         // Merge add and update for storage

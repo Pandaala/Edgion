@@ -162,12 +162,15 @@ mod tests {
 
         let regex = Regex::new(regex_pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", regex_pattern));
 
+        let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(&match_item);
         Arc::new(HttpRouteRuleUnit {
             resource_key: format!("{}/{}", namespace, name),
             matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item),
             rule,
             path_regex: Some(regex),
             parent_refs: None,
+            compiled_header_regexes: chr,
+            compiled_query_regexes: cqr,
         })
     }
 
