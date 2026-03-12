@@ -8,7 +8,7 @@ use crate::core::gateway::tls::store::cert_matcher::match_sni_with_port;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
-use crate::types::{TlsConnMeta, TlsMatchedInfo};
+use crate::types::{MatchedInfo, TlsConnMeta};
 use anyhow::anyhow;
 use anyhow::Result;
 use pingora_core::listeners::tls::TlsSettings;
@@ -344,7 +344,7 @@ impl TlsCallback {
     fn apply_edgion_tls_cert(&self, ssl: &mut SslRef, edgion_tls: &Arc<EdgionTls>, ssl_ctx: &mut SslCtx) {
         let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
         let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
-        ssl_ctx.meta.matched = Some(TlsMatchedInfo {
+        ssl_ctx.meta.matched = Some(MatchedInfo {
             kind: "EdgionTls".to_string(),
             ns: ns.to_string(),
             name: name.to_string(),
@@ -416,7 +416,7 @@ impl TlsCallback {
 
     /// Apply certificate from Gateway Listener TLS configuration (from Secret)
     fn apply_gateway_tls_cert(&self, ssl: &mut SslRef, gateway_tls: &GatewayTlsEntry, ssl_ctx: &mut SslCtx) {
-        ssl_ctx.meta.matched = Some(TlsMatchedInfo {
+        ssl_ctx.meta.matched = Some(MatchedInfo {
             kind: "Gateway".to_string(),
             ns: gateway_tls.gateway_namespace.clone(),
             name: gateway_tls.gateway_name.clone(),

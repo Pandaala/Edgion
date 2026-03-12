@@ -16,48 +16,92 @@ use pingora_core::upstreams::peer::BasicPeer;
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::AccessLogger;
-use crate::core::gateway::observe::{log_tls, TlsLogEntry};
+use crate::core::gateway::observe::log_tls;
+use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
+use crate::core::gateway::runtime::store::get_port_gateway_info_store;
 use crate::core::gateway::routes::tls::get_global_tls_route_manager;
-use crate::types::ctx::ClientCertInfo;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::TlsConnMeta;
+use crate::types::{MatchedInfo, TlsConnMeta};
+use serde::Serialize;
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TlsUpstreamInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<MatchedInfo>,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub bytes_sent: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub bytes_received: u64,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub connection_established: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub proxy_protocol_sent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_protocol: Option<String>,
+}
 
 /// TLS connection context
+#[derive(Debug, Clone, Serialize)]
 pub struct TlsContext {
+    pub ts: i64,
+    #[serde(skip_serializing)]
+    pub start_at: Instant,
+    pub event: String,
     pub listener_port: u16,
     pub client_addr: String,
     pub client_port: u16,
-    pub sni_hostname: Option<String>,
-    pub upstream_addr: Option<String>,
-    pub start_time: Instant,
-    pub bytes_sent: u64,
-    pub bytes_received: u64,
-    pub status: TlsStatus,
-    pub connection_established: bool,
-    pub proxy_protocol_sent: bool,
-    pub upstream_protocol: String,
-    pub route_name: Option<String>,
-    pub gateway_key: Option<String>,
-    /// Correlation ID from ssl.log (set via TlsConnMeta from handshake)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_id: Option<String>,
-    /// Client certificate info from mTLS handshake
-    pub client_cert_info: Option<ClientCertInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sni: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched: Option<MatchedInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub upstream_info: Vec<TlsUpstreamInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log: Option<LogBuffer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub err_log: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub enum TlsStatus {
-    Success,
-    NoSniProvided,
-    NoMatchingRoute,
-    UpstreamConnectionFailed,
-    UpstreamReadError,
-    UpstreamWriteError,
-    DownstreamReadError,
-    DownstreamWriteError,
-    TlsHandshakeError,
-    DeniedByPlugin,
+impl TlsContext {
+    fn new(listener_port: u16, client_addr: String, client_port: u16) -> Self {
+        Self {
+            ts: chrono::Utc::now().timestamp_millis(),
+            start_at: Instant::now(),
+            event: "connect".to_string(),
+            listener_port,
+            client_addr,
+            client_port,
+            tls_id: None,
+            sni: None,
+            matched: None,
+            duration_ms: None,
+            upstream_info: Vec::new(),
+            log: None,
+            err_log: None,
+        }
+    }
+
+    fn push_log(&mut self, message: &str) {
+        let _ = self.log.get_or_insert_with(LogBuffer::new).push(message);
+    }
+
+    fn current_upstream_mut(&mut self) -> Option<&mut TlsUpstreamInfo> {
+        self.upstream_info.last_mut()
+    }
 }
 
 /// TLS-to-TCP proxy service for Gateway TLS listeners.
@@ -67,9 +111,6 @@ pub enum TlsStatus {
 /// eliminates the stale-Arc problem where rebuild could orphan the
 /// reference held by a long-lived TLS proxy instance.
 pub struct EdgionTlsTcpProxy {
-    pub gateway_name: String,
-    pub gateway_namespace: Option<String>,
-    pub gateway_key: String,
     pub listener_port: u16,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
@@ -79,73 +120,47 @@ pub struct EdgionTlsTcpProxy {
 #[async_trait]
 impl ServerApp for EdgionTlsTcpProxy {
     async fn process_new(self: &Arc<Self>, mut downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
-        if *shutdown.borrow() {
-            tracing::info!(
-                listener_port = self.listener_port,
-                "Rejecting new TLS connection during shutdown"
-            );
-            return None;
-        }
-
         let (client_addr, client_port) = downstream
             .get_socket_digest()
             .and_then(|d| d.peer_addr().cloned())
             .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
             .unwrap_or_else(|| ("unknown".to_string(), 0));
 
-        let gateway_key = self
-            .gateway_namespace
-            .as_ref()
-            .map(|ns| format!("{}/{}", ns, self.gateway_name));
+        let mut ctx = TlsContext::new(self.listener_port, client_addr, client_port);
 
-        let mut ctx = TlsContext {
-            listener_port: self.listener_port,
-            client_addr,
-            client_port,
-            sni_hostname: None,
-            upstream_addr: None,
-            start_time: Instant::now(),
-            bytes_sent: 0,
-            bytes_received: 0,
-            status: TlsStatus::Success,
-            connection_established: false,
-            proxy_protocol_sent: false,
-            upstream_protocol: "TCP".to_string(),
-            route_name: None,
-            gateway_key,
-            tls_id: None,
-            client_cert_info: None,
-        };
+        if *shutdown.borrow() {
+            let msg = "Rejecting new TLS connection during shutdown";
+            ctx.event = "reject".to_string();
+            ctx.err_log = Some(msg.to_string());
+            self.log_disconnect(&mut ctx).await;
+            return None;
+        }
 
         // Read TlsConnMeta from SslDigest extension (set by handshake_complete_callback)
-        let tls_meta: Option<TlsConnMeta> = downstream
+        let tls_meta = downstream
             .get_ssl_digest()
             .and_then(|d| d.extension.get::<TlsConnMeta>().cloned());
 
-        let (sni_hostname, tls_id, client_cert_info) = match tls_meta {
-            Some(meta) => (meta.sni, meta.tls_id, meta.client_cert_info),
-            None => {
-                // Defensive fallback (should not happen in normal operation)
-                (Self::extract_sni(&mut downstream), None, None)
-            }
-        };
+        if let Some(meta) = tls_meta.as_ref() {
+            ctx.tls_id = meta.tls_id.clone();
+            ctx.sni = meta.sni.clone();
+            ctx.matched = meta.matched.clone();
+        }
+        if ctx.sni.is_none() {
+            ctx.sni = Self::extract_sni(&mut downstream);
+        }
 
-        let sni_hostname = match sni_hostname {
-            Some(sni) => sni,
+        let sni = match ctx.sni.as_deref() {
+            Some(sni) => sni.to_string(),
             None => {
-                ctx.status = TlsStatus::NoSniProvided;
-                self.log_disconnect(&ctx).await;
+                ctx.err_log = Some("No SNI provided".to_string());
+                self.log_disconnect(&mut ctx).await;
                 return None;
             }
         };
 
-        ctx.sni_hostname = Some(sni_hostname.clone());
-        ctx.tls_id = tls_id;
-        ctx.client_cert_info = client_cert_info;
-
-        self.handle_connection(downstream, &mut ctx, &sni_hostname).await;
-
-        self.log_disconnect(&ctx).await;
+        self.handle_connection(downstream, &mut ctx, &sni).await;
+        self.log_disconnect(&mut ctx).await;
 
         None
     }
@@ -166,35 +181,41 @@ impl EdgionTlsTcpProxy {
     }
 
     /// Core logic for handling TLS-terminated connections
-    async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni_hostname: &str) {
+    async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str) {
         // 1. Match TLSRoute based on SNI — load fresh snapshot per-connection
         let route_table = get_global_tls_route_manager().load_route_table();
-        let tls_route = match route_table.match_route(&self.gateway_key, sni_hostname) {
-            Some(route) => route,
+        let gateway_infos = get_port_gateway_info_store().get(self.listener_port);
+        let matched = gateway_infos
+            .iter()
+            .find_map(|gateway_info| {
+                let gateway_key = gateway_info.gateway_key();
+                route_table.match_route(&gateway_key, sni)
+            });
+
+        let tls_route = match matched {
+            Some(matched) => matched,
             None => {
-                ctx.status = TlsStatus::NoMatchingRoute;
+                ctx.err_log = Some("No matching TLSRoute found".to_string());
                 tracing::warn!(
-                    sni = %sni_hostname,
-                    gateway_key = %self.gateway_key,
+                    sni = %sni,
+                    listener_port = self.listener_port,
                     "No matching TLSRoute found"
                 );
                 return;
             }
         };
-
-        // Record route name for logging
-        ctx.route_name = tls_route
-            .metadata
-            .namespace
-            .as_ref()
-            .zip(tls_route.metadata.name.as_ref())
-            .map(|(ns, name)| format!("{}/{}", ns, name));
+        ctx.matched = Some(MatchedInfo {
+            kind: "TLSRoute".to_string(),
+            ns: tls_route.metadata.namespace.clone().unwrap_or_else(|| "default".to_string()),
+            name: tls_route.metadata.name.clone().unwrap_or_else(|| "-".to_string()),
+            section: None,
+        });
 
         // 2. Get the first rule
         let rule = match tls_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
             Some(rule) => rule,
             None => {
-                ctx.status = TlsStatus::UpstreamConnectionFailed;
+                ctx.err_log = Some("TLSRoute has no rules".to_string());
                 return;
             }
         };
@@ -209,15 +230,16 @@ impl EdgionTlsTcpProxy {
                         let stream_ctx = StreamContext::new(client_ip, self.listener_port);
                         match runtime.run(&stream_ctx).await {
                             StreamPluginResult::Allow => {
+                                ctx.push_log("Stream plugins allowed TLS connection");
                                 tracing::debug!(
                                     store_key = %store_key,
                                     "Stream plugins allowed TLS connection"
                                 );
                             }
                             StreamPluginResult::Deny(reason) => {
-                                ctx.status = TlsStatus::DeniedByPlugin;
+                                ctx.err_log = Some(format!("TLS connection denied by stream plugin: {reason}"));
                                 tracing::info!(
-                                    sni = %sni_hostname,
+                                    sni = %sni,
                                     store_key = %store_key,
                                     reason = %reason,
                                     "TLS connection denied by stream plugin"
@@ -227,6 +249,7 @@ impl EdgionTlsTcpProxy {
                         }
                     }
                 } else {
+                    ctx.push_log("EdgionStreamPlugins resource not found in store, allowing connection");
                     tracing::warn!(
                         store_key = %store_key,
                         "EdgionStreamPlugins resource not found in store, allowing connection"
@@ -239,7 +262,7 @@ impl EdgionTlsTcpProxy {
         let backend_ref = match rule.backend_finder.select() {
             Ok(backend) => backend,
             Err(_) => {
-                ctx.status = TlsStatus::UpstreamConnectionFailed;
+                ctx.err_log = Some("Failed to select backend".to_string());
                 return;
             }
         };
@@ -255,7 +278,7 @@ impl EdgionTlsTcpProxy {
         let backend = match select_roundrobin_backend(&service_key) {
             Some(backend) => backend,
             None => {
-                ctx.status = TlsStatus::UpstreamConnectionFailed;
+                ctx.err_log = Some(format!("No healthy backend endpoint found for {service_key}"));
                 tracing::warn!(
                     service = %service_key,
                     "No healthy backend endpoint found"
@@ -270,15 +293,29 @@ impl EdgionTlsTcpProxy {
             upstream_addr.set_port(port as u16);
         }
         let upstream_addr_str = upstream_addr.to_string();
-        ctx.upstream_addr = Some(upstream_addr_str.clone());
+        let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
+        ctx.upstream_info.push(TlsUpstreamInfo {
+            addr: parsed_upstream_addr.as_ref().map(|addr| addr.ip().to_string()),
+            port: parsed_upstream_addr.as_ref().map(|addr| addr.port()),
+            backend: Some(MatchedInfo {
+                kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
+                ns: namespace.to_string(),
+                name: backend_ref.name.clone(),
+                section: None,
+            }),
+            bytes_sent: 0,
+            bytes_received: 0,
+            connection_established: false,
+            proxy_protocol_sent: false,
+            upstream_protocol: Some("TCP".to_string()),
+        });
 
         // 7. Connect to upstream (TCP only; upstream TLS deferred)
-        ctx.upstream_protocol = "TCP".to_string();
         let peer = BasicPeer::new(&upstream_addr_str);
         let mut upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
             Err(e) => {
-                ctx.status = TlsStatus::UpstreamConnectionFailed;
+                ctx.err_log = Some(format!("Failed to connect to upstream: {e}"));
                 tracing::warn!(
                     upstream = %upstream_addr_str,
                     error = %e,
@@ -288,7 +325,9 @@ impl EdgionTlsTcpProxy {
             }
         };
 
-        ctx.connection_established = true;
+        if let Some(upstream_info) = ctx.current_upstream_mut() {
+            upstream_info.connection_established = true;
+        }
 
         // 8. Send Proxy Protocol v2 header if configured
         if let Some(2) = rule.proxy_protocol_version {
@@ -298,10 +337,10 @@ impl EdgionTlsTcpProxy {
                     std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
                 });
                 let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
-                builder.add_authority(sni_hostname);
+                builder.add_authority(sni);
                 let pp2_header = builder.build();
                 if let Err(e) = upstream.write_all(&pp2_header).await {
-                    ctx.status = TlsStatus::UpstreamWriteError;
+                    ctx.err_log = Some(format!("Failed to send PP2 header to upstream: {e}"));
                     tracing::warn!(
                         upstream = %upstream_addr_str,
                         error = %e,
@@ -310,10 +349,13 @@ impl EdgionTlsTcpProxy {
                     return;
                 }
                 if upstream.flush().await.is_err() {
-                    ctx.status = TlsStatus::UpstreamWriteError;
+                    ctx.err_log = Some("Failed to flush PP2 header to upstream".to_string());
                     return;
                 }
-                ctx.proxy_protocol_sent = true;
+                if let Some(upstream_info) = ctx.current_upstream_mut() {
+                    upstream_info.proxy_protocol_sent = true;
+                }
+                ctx.push_log("Sent Proxy Protocol v2 header to upstream");
             }
         }
 
@@ -321,15 +363,15 @@ impl EdgionTlsTcpProxy {
         self.log_connect(ctx).await;
 
         tracing::debug!(
-            sni = %sni_hostname,
+            sni = %sni,
             upstream = %upstream_addr_str,
-            pp2 = ctx.proxy_protocol_sent,
+            pp2 = ctx.current_upstream_mut().map(|u| u.proxy_protocol_sent).unwrap_or(false),
             "TLS terminated, forwarding to {} backend",
-            ctx.upstream_protocol
+            "TCP"
         );
 
         // 10. Bidirectional data forwarding
-        self.duplex(downstream, upstream, ctx).await;
+        self.duplex(downstream, upstream, ctx).await
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
@@ -347,19 +389,21 @@ impl EdgionTlsTcpProxy {
                             break;
                         }
                         Ok(n) => {
-                            ctx.bytes_sent += n as u64;
+                            if let Some(upstream_info) = ctx.current_upstream_mut() {
+                                upstream_info.bytes_sent += n as u64;
+                            }
                             if (upstream.write_all(&upstream_buf[0..n]).await).is_err() {
-                                ctx.status = TlsStatus::UpstreamWriteError;
-                                break;
+                                ctx.err_log = Some("Failed writing downstream data to upstream".to_string());
+                                return;
                             }
                             if (upstream.flush().await).is_err() {
-                                ctx.status = TlsStatus::UpstreamWriteError;
-                                break;
+                                ctx.err_log = Some("Failed flushing downstream data to upstream".to_string());
+                                return;
                             }
                         }
                         Err(_) => {
-                            ctx.status = TlsStatus::DownstreamReadError;
-                            break;
+                            ctx.err_log = Some("Failed reading from downstream".to_string());
+                            return;
                         }
                     }
                 }
@@ -370,19 +414,21 @@ impl EdgionTlsTcpProxy {
                             break;
                         }
                         Ok(n) => {
-                            ctx.bytes_received += n as u64;
+                            if let Some(upstream_info) = ctx.current_upstream_mut() {
+                                upstream_info.bytes_received += n as u64;
+                            }
                             if (downstream.write_all(&downstream_buf[0..n]).await).is_err() {
-                                ctx.status = TlsStatus::DownstreamWriteError;
-                                break;
+                                ctx.err_log = Some("Failed writing upstream data to downstream".to_string());
+                                return;
                             }
                             if (downstream.flush().await).is_err() {
-                                ctx.status = TlsStatus::DownstreamWriteError;
-                                break;
+                                ctx.err_log = Some("Failed flushing upstream data to downstream".to_string());
+                                return;
                             }
                         }
                         Err(_) => {
-                            ctx.status = TlsStatus::UpstreamReadError;
-                            break;
+                            ctx.err_log = Some("Failed reading from upstream".to_string());
+                            return;
                         }
                     }
                 }
@@ -399,86 +445,39 @@ impl EdgionTlsTcpProxy {
     }
 
     /// Log connection establishment event
-    async fn log_connect(&self, ctx: &TlsContext) {
+    async fn log_connect(&self, ctx: &mut TlsContext) {
         if !self.is_tls_proxy_log_enabled() {
             return;
         }
-        let protocol = format!("TLS-{}", ctx.upstream_protocol);
-        let entry = TlsLogEntry {
-            ts: chrono::Utc::now().timestamp_millis(),
-            event: "connect".to_string(),
-            protocol,
-            listener_port: ctx.listener_port,
-            client_addr: ctx.client_addr.clone(),
-            client_port: ctx.client_port,
-            tls_id: ctx.tls_id.clone(),
-            sni_hostname: ctx.sni_hostname.clone(),
-            upstream_addr: ctx.upstream_addr.clone(),
-            duration_ms: None,
-            bytes_sent: None,
-            bytes_received: None,
-            status: format!("{:?}", ctx.status),
-            connection_established: ctx.connection_established,
-            proxy_protocol: if ctx.proxy_protocol_sent {
-                Some("v2".to_string())
-            } else {
-                None
-            },
-            route_name: ctx.route_name.clone(),
-            gateway_name: ctx.gateway_key.clone(),
-        };
-        log_tls(&entry).await;
+        ctx.event = "connect".to_string();
+        ctx.ts = chrono::Utc::now().timestamp_millis();
+        ctx.duration_ms = None;
+        log_tls(ctx).await;
     }
 
     /// Log connection disconnection event
-    async fn log_disconnect(&self, ctx: &TlsContext) {
+    async fn log_disconnect(&self, ctx: &mut TlsContext) {
         if !self.is_tls_proxy_log_enabled() {
             return;
         }
-        let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
-        let protocol = format!("TLS-{}", ctx.upstream_protocol);
-        let entry = TlsLogEntry {
-            ts: chrono::Utc::now().timestamp_millis(),
-            event: "disconnect".to_string(),
-            protocol,
-            listener_port: ctx.listener_port,
-            client_addr: ctx.client_addr.clone(),
-            client_port: ctx.client_port,
-            tls_id: ctx.tls_id.clone(),
-            sni_hostname: ctx.sni_hostname.clone(),
-            upstream_addr: ctx.upstream_addr.clone(),
-            duration_ms: Some(duration_ms),
-            bytes_sent: Some(ctx.bytes_sent),
-            bytes_received: Some(ctx.bytes_received),
-            status: format!("{:?}", ctx.status),
-            connection_established: ctx.connection_established,
-            proxy_protocol: if ctx.proxy_protocol_sent {
-                Some("v2".to_string())
-            } else {
-                None
-            },
-            route_name: ctx.route_name.clone(),
-            gateway_name: ctx.gateway_key.clone(),
-        };
-        log_tls(&entry).await;
+        ctx.event = "disconnect".to_string();
+        ctx.ts = chrono::Utc::now().timestamp_millis();
+        ctx.duration_ms = Some(ctx.start_at.elapsed().as_millis() as u64);
+        log_tls(ctx).await;
 
         // Also send to the per-listener access logger for backward compatibility
         let log_entry = serde_json::json!({
-            "ts": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-            "protocol": format!("TLS-{}", ctx.upstream_protocol),
+            "ts": ctx.ts,
+            "event": &ctx.event,
             "listener_port": ctx.listener_port,
             "client_addr": &ctx.client_addr,
             "client_port": ctx.client_port,
             "tls_id": &ctx.tls_id,
-            "sni_hostname": &ctx.sni_hostname,
-            "upstream_addr": &ctx.upstream_addr,
-            "duration_ms": duration_ms,
-            "bytes_sent": ctx.bytes_sent,
-            "bytes_received": ctx.bytes_received,
-            "status": format!("{:?}", ctx.status),
+            "sni": &ctx.sni,
+            "duration_ms": ctx.duration_ms,
+            "upstream_info": &ctx.upstream_info,
+            "log": &ctx.log,
+            "err_log": &ctx.err_log,
         });
         self.access_logger.send(log_entry.to_string()).await;
     }

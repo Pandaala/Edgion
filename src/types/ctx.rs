@@ -76,7 +76,7 @@ pub struct ClientCertInfo {
 pub struct TlsConnId(pub u64);
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TlsMatchedInfo {
+pub struct MatchedInfo {
     pub kind: String,
     pub ns: String,
     pub name: String,
@@ -109,7 +109,7 @@ pub struct TlsConnMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<LogBuffer>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub matched: Option<TlsMatchedInfo>,
+    pub matched: Option<MatchedInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub err_log: Option<String>,
     /// mTLS client cert info (only when annotation gate is enabled).

@@ -352,16 +352,7 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    let gateway_key = context
-        .gateway_namespace
-        .as_ref()
-        .map(|ns| format!("{}/{}", ns, context.gateway_name))
-        .unwrap_or_else(|| context.gateway_name.clone());
-
     let edgion_tls = EdgionTlsTcpProxy {
-        gateway_name: context.gateway_name.clone(),
-        gateway_namespace: context.gateway_namespace.clone(),
-        gateway_key,
         listener_port: port,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
