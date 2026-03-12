@@ -31,7 +31,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// handshake_complete_callback and finally moved into Pingora's digest.
 #[derive(Debug, Clone)]
 struct SslCtx {
-    start_at: Instant,
     meta: TlsConnMeta,
     matched_edgion_tls: Option<Arc<EdgionTls>>,
 }
@@ -39,12 +38,12 @@ struct SslCtx {
 impl SslCtx {
     fn new(port: u16) -> Self {
         Self {
-            start_at: Instant::now(),
             meta: TlsConnMeta {
                 ts: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as i64,
+                start_at: Instant::now(),
                 handshake_complete_time: None,
                 port: Some(port),
                 tls_id: None,
@@ -245,7 +244,7 @@ impl TlsAccept for TlsCallback {
                 }
             }
 
-            ssl_ctx.meta.handshake_complete_time = Some(ssl_ctx.start_at.elapsed().as_millis() as u64);
+            ssl_ctx.meta.handshake_complete_time = Some(ssl_ctx.meta.start_at.elapsed().as_millis() as u64);
             log_ssl(&ssl_ctx.meta);
 
             return Some(Arc::new(ssl_ctx.meta));
@@ -257,6 +256,7 @@ impl TlsAccept for TlsCallback {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as i64,
+            start_at: Instant::now(),
             handshake_complete_time: None,
             port: Some(self.port),
             tls_id: None,

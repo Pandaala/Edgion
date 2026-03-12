@@ -6,89 +6,15 @@
 //! - Metrics integration for dropped logs
 //! - Non-blocking guarantee for TLS callbacks
 
-use serde::Serialize;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
 
 use crate::core::gateway::link_sys::{DataSender, LocalFileWriter};
 use crate::core::gateway::observe::logs::create_sync_logger;
+use crate::types::TlsConnMeta;
 
 /// Global SSL logger instance
 static SSL_LOGGER: OnceLock<SslLogger> = OnceLock::new();
-
-/// SSL callback log entry
-#[derive(Serialize, Default)]
-pub struct SslLogEntry {
-    /// Timestamp in milliseconds
-    pub ts: i64,
-    /// TLS connection id for correlation with access log
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_id: Option<String>,
-    /// Server Name Indication from client
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sni: Option<String>,
-    /// Matched certificate name (namespace/name)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cert: Option<String>,
-    /// Whether mTLS is enabled
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mtls: Option<bool>,
-    /// Error message if any
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl SslLogEntry {
-    /// Create a new entry with current timestamp
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            ts: chrono::Utc::now().timestamp_millis(),
-            ..Default::default()
-        }
-    }
-
-    /// Set TLS connection id
-    #[inline]
-    pub fn tls_id(&mut self, tls_id: impl ToString) -> &mut Self {
-        self.tls_id = Some(tls_id.to_string());
-        self
-    }
-
-    /// Set SNI
-    #[inline]
-    pub fn sni(&mut self, sni: impl Into<String>) -> &mut Self {
-        self.sni = Some(sni.into());
-        self
-    }
-
-    /// Set matched certificate
-    #[inline]
-    pub fn cert(&mut self, cert: impl Into<String>) -> &mut Self {
-        self.cert = Some(cert.into());
-        self
-    }
-
-    /// Set mTLS flag
-    #[inline]
-    pub fn mtls(&mut self, enabled: bool) -> &mut Self {
-        self.mtls = Some(enabled);
-        self
-    }
-
-    /// Set error message
-    #[inline]
-    pub fn error(&mut self, msg: impl Into<String>) -> &mut Self {
-        self.error = Some(msg.into());
-        self
-    }
-
-    /// Serialize to JSON
-    #[inline]
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
-    }
-}
 
 /// SSL logger with enhanced features via LocalFileWriter
 pub struct SslLogger {
@@ -127,10 +53,12 @@ impl SslLogger {
 
     /// Log an entry (guaranteed non-blocking, always safe to call from TLS callback)
     #[inline]
-    pub fn log(&self, entry: &SslLogEntry) {
+    pub fn log(&self, entry: &TlsConnMeta) {
         // UnboundedSender::send() never blocks
         // If the receiver is dropped, this will silently fail (acceptable for logs)
-        let _ = self.tx.send(entry.to_json());
+        let _ = self
+            .tx
+            .send(serde_json::to_string(entry).unwrap_or_else(|_| "{}".to_string()));
     }
 }
 
@@ -152,7 +80,7 @@ pub async fn init_ssl_logger(config: &crate::types::LogConfig) -> anyhow::Result
 /// This function is safe to call from any context, including TLS callbacks.
 /// It uses an unbounded channel internally to ensure no blocking occurs.
 #[inline]
-pub fn log_ssl(entry: &SslLogEntry) {
+pub fn log_ssl(entry: &TlsConnMeta) {
     if let Some(logger) = SSL_LOGGER.get() {
         logger.log(entry);
     }

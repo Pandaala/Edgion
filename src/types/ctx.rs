@@ -94,6 +94,8 @@ pub struct TlsMatchedInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct TlsConnMeta {
     pub ts: i64,
+    #[serde(skip_serializing)]
+    pub start_at: Instant,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handshake_complete_time: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
