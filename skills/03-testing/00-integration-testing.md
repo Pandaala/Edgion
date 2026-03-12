@@ -31,7 +31,7 @@ Step 2: Start      →  start_all_with_conf.sh
   ├─ 2b: Check binaries exist
   ├─ 2c: Create work dir (integration_testing/testing_YYYYMMDD_HHMMSS/)
   ├─ 2d: Copy CRD schemas to work dir
-  ├─ 2e: Generate TLS certs (scripts/certs/*.sh)
+  ├─ 2e: Generate TLS certs (scripts/gen_certs/*.sh)
   ├─ 2f: Write runtime Secret YAMLs (WORK_DIR/generated-secrets/, not conf/)
   ├─ 2g: Start test_server → wait health
   ├─ 2h: Start controller  → wait health + ConfigServer ready
@@ -532,13 +532,13 @@ Certificate-bearing Secret YAMLs are **runtime-generated only**:
 
 | Script | Output | Used by |
 |---|---|---|
-| `scripts/certs/generate_tls_certs.sh` | `examples/test/certs/` + `WORK_DIR/generated-secrets/base/` | HTTPS, GatewayTLS tests |
-| `scripts/certs/generate_backend_certs.sh` | `examples/test/certs/backend/` + `WORK_DIR/generated-secrets/HTTPRoute/Backend/BackendTLS/` | Backend TLS tests |
-| `scripts/certs/generate_mtls_certs.sh` | `examples/test/certs/mtls/` + `WORK_DIR/generated-secrets/{EdgionTls,HTTPRoute,EdgionPlugins}/` | mTLS tests |
+| `scripts/gen_certs/generate_tls_certs.sh` | `examples/test/certs/` + `WORK_DIR/generated-secrets/base/` | HTTPS, GatewayTLS tests |
+| `scripts/gen_certs/generate_backend_certs.sh` | `examples/test/certs/backend/` + `WORK_DIR/generated-secrets/HTTPRoute/Backend/BackendTLS/` | Backend TLS tests |
+| `scripts/gen_certs/generate_mtls_certs.sh` | `examples/test/certs/mtls/` + `WORK_DIR/generated-secrets/{EdgionTls,HTTPRoute,EdgionPlugins}/` | mTLS tests |
 
 If your plugin needs TLS (e.g., calling external HTTPS endpoints), either:
 - Reuse existing certs from `examples/test/certs/`
-- Add a new generator script in `scripts/certs/` and call it from `start_all_with_conf.sh` → `generate_certs()`
+- Add a new generator script in `scripts/gen_certs/` and call it from `start_all_with_conf.sh` → `generate_certs()`
 
 ## Debugging Failed Tests
 

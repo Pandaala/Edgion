@@ -19,7 +19,7 @@ NC='\033[0m'
 # projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-CERTS_DIR="${SCRIPT_DIR}/../certs"
+CERTS_DIR="${SCRIPT_DIR}/../gen_certs"
 
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
