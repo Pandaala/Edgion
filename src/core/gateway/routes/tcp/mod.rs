@@ -19,4 +19,4 @@ pub use conf_handler_impl::create_tcp_route_handler;
 pub use gateway_tcp_routes::GatewayTcpRoutes;
 
 // Export TCP proxy types
-pub use edgion_tcp::{EdgionTcp, TcpContext, TcpStatus};
+pub use edgion_tcp::{EdgionTcpProxy, TcpContext, TcpStatus};

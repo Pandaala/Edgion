@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::types::EdgionHttpContext;
 use pingora_proxy::Session;
@@ -12,7 +12,7 @@ use pingora_proxy::Session;
 /// - `Ok(Some(duration))` - rate limit for the given duration (for bandwidth throttling)
 #[inline]
 pub fn upstream_response_body_filter(
-    _edgion_http: &EdgionHttp,
+    _edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     body: &mut Option<bytes::Bytes>,
     end_of_stream: bool,

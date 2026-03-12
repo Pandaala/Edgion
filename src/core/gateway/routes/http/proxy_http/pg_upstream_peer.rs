@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::core::gateway::backends::get_peer;
 use crate::core::gateway::end_response_500;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
@@ -14,7 +14,7 @@ use pingora_proxy::Session;
 
 #[inline]
 pub async fn upstream_peer(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
@@ -60,7 +60,7 @@ pub async fn upstream_peer(
 /// Handle gRPC upstream peer selection
 #[inline]
 pub async fn upstream_peer_grpc(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
@@ -112,7 +112,7 @@ pub async fn upstream_peer_grpc(
 /// Handle HTTP upstream peer selection
 #[inline]
 pub async fn upstream_peer_http(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
@@ -195,7 +195,7 @@ pub async fn upstream_peer_http(
 /// Select HTTP backend from route (extracted from upstream_peer)
 #[inline]
 pub async fn select_http_backend(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
@@ -331,7 +331,7 @@ pub async fn select_http_backend(
 
 /// Configure peer timeouts from global and route-level configs (inline for performance)
 #[inline]
-pub fn configure_peer_timeouts(edgion_http: &EdgionHttp, peer: &mut Box<HttpPeer>, ctx: &EdgionHttpContext) {
+pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &EdgionHttpContext) {
     let backend_timeout = &edgion_http.parsed_timeouts.backend;
     let route_timeouts = ctx
         .route_unit
@@ -359,7 +359,7 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttp, peer: &mut Box<HttpPeer
 
 /// Update peer address info and metrics (inline for performance)
 #[inline]
-pub fn update_peer_metrics(_edgion_http: &EdgionHttp, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
+pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
     // Increment try count
     ctx.try_cnt += 1;
 

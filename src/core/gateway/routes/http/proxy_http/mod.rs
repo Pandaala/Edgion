@@ -36,8 +36,8 @@ mod pg_upstream_response_filter;
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 pub use preflight_handler::PreflightHandler;
 
-/// EdgionHttp proxy structure
-pub struct EdgionHttp {
+/// HTTP proxy service for Gateway HTTP/HTTPS listeners.
+pub struct EdgionHttpProxy {
     pub gateway_class_name: Option<String>,
 
     pub listener: Listener,
@@ -66,7 +66,7 @@ pub struct EdgionHttp {
 }
 
 #[async_trait]
-impl ProxyHttp for EdgionHttp {
+impl ProxyHttp for EdgionHttpProxy {
     type CTX = EdgionHttpContext;
 
     fn new_ctx(&self) -> Self::CTX {

@@ -30,8 +30,8 @@ struct ClientSession {
     bytes_received: Arc<AtomicU64>,
 }
 
-/// UDP proxy service
-pub struct EdgionUdp {
+/// UDP proxy service for Gateway UDP listeners.
+pub struct EdgionUdpProxy {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
     pub listener_name: String, // Listener name (sectionName in UDPRoute)
@@ -44,7 +44,7 @@ pub struct EdgionUdp {
     client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
 }
 
-impl EdgionUdp {
+impl EdgionUdpProxy {
     /// Create a new UDP proxy service
     pub fn new(
         gateway_name: String,

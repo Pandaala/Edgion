@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
@@ -7,7 +7,7 @@ use pingora_proxy::Session;
 /// fail_to_connect - called when connection to upstream fails
 #[inline]
 pub fn fail_to_connect(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     _session: &mut Session,
     _peer: &HttpPeer,
     ctx: &mut EdgionHttpContext,

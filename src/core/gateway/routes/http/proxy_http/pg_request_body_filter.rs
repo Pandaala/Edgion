@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::types::{EdgionHttpContext, MirrorState};
 use bytes::Bytes;
 use pingora_proxy::Session;
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 /// Mirror is sidecar logic and must NEVER affect the main request path.
 #[inline]
 pub async fn request_body_filter(
-    _edgion_http: &EdgionHttp,
+    _edgion_http: &EdgionHttpProxy,
     _session: &mut Session,
     body: &mut Option<Bytes>,
     end_of_stream: bool,

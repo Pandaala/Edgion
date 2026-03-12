@@ -6,7 +6,7 @@ use std::sync::Arc;
 ///
 /// Routes are indexed by (gateway_key, hostname) for O(1) lookup.
 /// A new snapshot is built and atomically swapped on every route change,
-/// ensuring all readers (EdgionTls instances) always see consistent data
+/// ensuring all readers (`EdgionTlsTcpProxy` instances) always see consistent data
 /// without caching stale Arc references.
 pub struct TlsRouteTable {
     /// gateway_key -> hostname -> Vec<Arc<TLSRoute>>

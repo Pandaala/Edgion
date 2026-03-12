@@ -19,4 +19,4 @@ pub use conf_handler_impl::create_udp_route_handler;
 pub use gateway_udp_routes::GatewayUdpRoutes;
 
 // Export UDP proxy type
-pub use edgion_udp::EdgionUdp;
+pub use edgion_udp::EdgionUdpProxy;

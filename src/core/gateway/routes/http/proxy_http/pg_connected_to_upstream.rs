@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::core::gateway::observe::AccessLogEntry;
 use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
@@ -7,7 +7,7 @@ use pingora_proxy::Session;
 
 #[inline]
 pub async fn connected_to_upstream(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     _session: &mut Session,
     _reused: bool,
     _peer: &HttpPeer,

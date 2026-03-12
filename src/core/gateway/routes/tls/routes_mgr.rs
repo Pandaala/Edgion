@@ -13,7 +13,7 @@ use crate::types::ResourceMeta;
 ///
 /// Design follows the same pattern as HTTP `RouteManager`:
 /// - A single `ArcSwap<TlsRouteTable>` holds the current snapshot.
-/// - Consumers (EdgionTls) call `load_route_table()` per-connection.
+/// - Consumers (`EdgionTlsTcpProxy`) call `load_route_table()` per-connection.
 /// - Route updates build a new `TlsRouteTable` and swap atomically.
 /// - No per-gateway Arc caching — eliminates the stale-Arc problem.
 pub struct TlsRouteManager {
@@ -40,7 +40,7 @@ impl TlsRouteManager {
 
     /// Load the current route table snapshot.
     ///
-    /// Called by EdgionTls on every connection — returns an Arc guard
+    /// Called by `EdgionTlsTcpProxy` on every connection — returns an Arc guard
     /// that is always up-to-date (no stale references).
     pub fn load_route_table(&self) -> arc_swap::Guard<Arc<TlsRouteTable>> {
         self.global_tls_routes.load()

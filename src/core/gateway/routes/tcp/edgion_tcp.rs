@@ -40,8 +40,8 @@ pub enum TcpStatus {
     DownstreamWriteError,
 }
 
-/// TCP proxy service
-pub struct EdgionTcp {
+/// TCP proxy service for Gateway TCP listeners.
+pub struct EdgionTcpProxy {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
     pub listener_name: String, // Listener name (sectionName in TCPRoute)
@@ -52,7 +52,7 @@ pub struct EdgionTcp {
 }
 
 #[async_trait]
-impl ServerApp for EdgionTcp {
+impl ServerApp for EdgionTcpProxy {
     async fn process_new(self: &Arc<Self>, downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
         // Reject new connections if the server is shutting down
         // This stops the Listener from accepting new work while we drain existing connections.
@@ -95,7 +95,7 @@ impl ServerApp for EdgionTcp {
     }
 }
 
-impl EdgionTcp {
+impl EdgionTcpProxy {
     /// Core logic for handling TCP connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
         // 1. Match TCPRoute by listener_name and port

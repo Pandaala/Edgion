@@ -60,13 +60,13 @@ pub enum TlsStatus {
     DeniedByPlugin,
 }
 
-/// TLS proxy service that terminates TLS and forwards to TCP backend.
+/// TLS-to-TCP proxy service for Gateway TLS listeners.
 ///
 /// Route lookup uses the global `TlsRouteManager` per-connection (via
 /// `load_route_table()`) instead of caching an Arc at startup. This
 /// eliminates the stale-Arc problem where rebuild could orphan the
-/// reference held by a long-lived EdgionTls instance.
-pub struct EdgionTls {
+/// reference held by a long-lived TLS proxy instance.
+pub struct EdgionTlsTcpProxy {
     pub gateway_name: String,
     pub gateway_namespace: Option<String>,
     pub gateway_key: String,
@@ -77,7 +77,7 @@ pub struct EdgionTls {
 }
 
 #[async_trait]
-impl ServerApp for EdgionTls {
+impl ServerApp for EdgionTlsTcpProxy {
     async fn process_new(self: &Arc<Self>, mut downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
         if *shutdown.borrow() {
             tracing::info!(
@@ -151,7 +151,7 @@ impl ServerApp for EdgionTls {
     }
 }
 
-impl EdgionTls {
+impl EdgionTlsTcpProxy {
     /// Extract SNI hostname from TLS stream
     fn extract_sni(#[allow(unused_variables)] stream: &mut Stream) -> Option<String> {
         #[cfg(any(feature = "boringssl", feature = "openssl"))]
@@ -199,7 +199,7 @@ impl EdgionTls {
             }
         };
 
-        // 3. Execute stream plugins (same pattern as EdgionTcp)
+        // 3. Execute stream plugins (same pattern as EdgionTcpProxy)
         if let Some(store_key) = &rule.stream_plugin_store_key {
             if let Ok(client_ip) = ctx.client_addr.parse() {
                 let store = get_global_stream_plugin_store();

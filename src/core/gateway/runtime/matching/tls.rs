@@ -289,7 +289,7 @@ mod tests {
 
         // Test exact match
         let result = matcher.match_sni_with_port(443, "example.com");
-        assert!(result.is_ok());
+        assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "test-gw");
         assert_eq!(entry.gateway_namespace, "default");
@@ -308,7 +308,7 @@ mod tests {
 
         // Should not find any entry
         let result = matcher.match_sni_with_port(443, "example.com");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -334,7 +334,7 @@ mod tests {
 
         // Hostname-less listeners are ignored for TLS certificate matching.
         let result = matcher.match_sni_with_port(443, "example.com");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -361,18 +361,18 @@ mod tests {
 
         // Test wildcard match - subdomain should match
         let result = matcher.match_sni_with_port(443, "api.example.com");
-        assert!(result.is_ok(), "api.example.com should match *.example.com");
+        assert!(result.is_some(), "api.example.com should match *.example.com");
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "wildcard-gw");
         assert_eq!(entry.certificate_refs[0].name, "wildcard-cert");
 
         // Another subdomain should also match
         let result = matcher.match_sni_with_port(443, "www.example.com");
-        assert!(result.is_ok(), "www.example.com should match *.example.com");
+        assert!(result.is_some(), "www.example.com should match *.example.com");
 
         // Root domain should NOT match wildcard
         let result = matcher.match_sni_with_port(443, "example.com");
-        assert!(result.is_err(), "example.com should NOT match *.example.com");
+        assert!(result.is_none(), "example.com should NOT match *.example.com");
     }
 
     #[test]
@@ -425,14 +425,14 @@ mod tests {
 
         // Test api.example.com
         let result = matcher.match_sni_with_port(443, "api.example.com");
-        assert!(result.is_ok());
+        assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "api-gateway");
         assert_eq!(entry.certificate_refs[0].name, "api-cert");
 
         // Test www.example.com
         let result = matcher.match_sni_with_port(443, "www.example.com");
-        assert!(result.is_ok());
+        assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "web-gateway");
         assert_eq!(entry.listener_name, "www-https");
@@ -440,7 +440,7 @@ mod tests {
 
         // Test admin.example.com
         let result = matcher.match_sni_with_port(443, "admin.example.com");
-        assert!(result.is_ok());
+        assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "web-gateway");
         assert_eq!(entry.listener_name, "admin-https");
@@ -448,7 +448,7 @@ mod tests {
 
         // Test unknown domain
         let result = matcher.match_sni_with_port(443, "unknown.example.com");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -474,7 +474,7 @@ mod tests {
         matcher.rebuild_from_gateways(&[gateway]);
 
         let result = matcher.match_sni_with_port(443, "test.example.com");
-        assert!(result.is_ok());
+        assert!(result.is_some());
         let entry = result.unwrap();
 
         // Verify Gateway namespace is captured for later Secret lookup
@@ -492,8 +492,7 @@ mod tests {
 
         // Match should fail immediately without HashMap lookup
         let result = matcher.match_sni_with_port(443, "example.com");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not configured"));
+        assert!(result.is_none());
 
         // Rebuild with empty gateway list
         matcher.rebuild_from_gateways(&[]);
@@ -507,7 +506,7 @@ mod tests {
 
         // Match should still fail fast
         let result = matcher.match_sni_with_port(443, "example.com");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -590,21 +589,21 @@ mod tests {
 
         // Test port 443
         let result = matcher.match_sni_with_port(443, "api.example.com");
-        assert!(result.is_ok(), "Should find cert for port 443");
+        assert!(result.is_some(), "Should find cert for port 443");
         let entry = result.unwrap();
         assert_eq!(entry.port, 443);
         assert_eq!(entry.certificate_refs[0].name, "cert-443");
 
         // Test port 8443
         let result = matcher.match_sni_with_port(8443, "api.example.com");
-        assert!(result.is_ok(), "Should find cert for port 8443");
+        assert!(result.is_some(), "Should find cert for port 8443");
         let entry = result.unwrap();
         assert_eq!(entry.port, 8443);
         assert_eq!(entry.certificate_refs[0].name, "cert-8443");
 
         // Test non-existent port
         let result = matcher.match_sni_with_port(9443, "api.example.com");
-        assert!(result.is_err(), "Should not find cert for port 9443");
+        assert!(result.is_none(), "Should not find cert for port 9443");
 
     }
 
@@ -649,20 +648,20 @@ mod tests {
 
         // api.example.com on port 443
         let result = matcher.match_sni_with_port(443, "api.example.com");
-        assert!(result.is_ok());
+        assert!(result.is_some());
         assert_eq!(result.unwrap().certificate_refs[0].name, "api-cert");
 
         // admin.example.com on port 8443
         let result = matcher.match_sni_with_port(8443, "admin.example.com");
-        assert!(result.is_ok());
+        assert!(result.is_some());
         assert_eq!(result.unwrap().certificate_refs[0].name, "admin-cert");
 
         // api.example.com on port 8443 should fail (wrong port)
         let result = matcher.match_sni_with_port(8443, "api.example.com");
-        assert!(result.is_err());
+        assert!(result.is_none());
 
         // admin.example.com on port 443 should fail (wrong port)
         let result = matcher.match_sni_with_port(443, "admin.example.com");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 }

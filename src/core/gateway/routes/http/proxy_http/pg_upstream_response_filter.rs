@@ -1,11 +1,11 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::types::EdgionHttpContext;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
 #[inline]
 pub fn upstream_response_filter(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     upstream_response: &mut ResponseHeader,
     ctx: &mut EdgionHttpContext,

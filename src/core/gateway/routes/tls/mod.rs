@@ -19,4 +19,4 @@ pub use conf_handler_impl::create_tls_route_handler;
 pub use gateway_tls_routes::TlsRouteTable;
 
 // Export TLS proxy type
-pub use edgion_tls::EdgionTls;
+pub use edgion_tls::EdgionTlsTcpProxy;

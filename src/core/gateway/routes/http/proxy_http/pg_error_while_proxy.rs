@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::Error;
@@ -6,7 +6,7 @@ use pingora_proxy::Session;
 
 #[inline]
 pub fn error_while_proxy(
-    _edgion_http: &EdgionHttp,
+    _edgion_http: &EdgionHttpProxy,
     peer: &HttpPeer,
     session: &mut Session,
     e: Box<Error>,

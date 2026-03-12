@@ -21,12 +21,12 @@ pub struct RedirectContext;
 ///
 /// Request: `GET http://example.com/path?query=1`
 /// Response: `301 Moved Permanently` with `Location: https://example.com/path?query=1`
-pub struct EdgionHttpRedirect {
+pub struct EdgionHttpRedirectProxy {
     /// Target HTTPS port (default: 443)
     pub https_port: u16,
 }
 
-impl EdgionHttpRedirect {
+impl EdgionHttpRedirectProxy {
     /// Create a new HTTP to HTTPS redirect handler
     pub fn new(https_port: u16) -> Self {
         Self { https_port }
@@ -69,7 +69,7 @@ impl EdgionHttpRedirect {
 }
 
 #[async_trait]
-impl ProxyHttp for EdgionHttpRedirect {
+impl ProxyHttp for EdgionHttpRedirectProxy {
     type CTX = RedirectContext;
 
     fn new_ctx(&self) -> Self::CTX {
@@ -115,16 +115,16 @@ mod tests {
 
     #[test]
     fn test_redirect_creation() {
-        let redirect = EdgionHttpRedirect::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443);
         assert_eq!(redirect.https_port, 443);
 
-        let redirect = EdgionHttpRedirect::new(8443);
+        let redirect = EdgionHttpRedirectProxy::new(8443);
         assert_eq!(redirect.https_port, 8443);
     }
 
     #[test]
     fn test_build_redirect_url_default_port() {
-        let redirect = EdgionHttpRedirect::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443);
 
         // Simple path
         assert_eq!(
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_custom_port() {
-        let redirect = EdgionHttpRedirect::new(8443);
+        let redirect = EdgionHttpRedirectProxy::new(8443);
 
         // Simple path
         assert_eq!(
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_special_cases() {
-        let redirect = EdgionHttpRedirect::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443);
 
         // IPv4 address
         assert_eq!(
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_new_ctx() {
-        let redirect = EdgionHttpRedirect::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443);
         let _ctx = redirect.new_ctx(); // Should not panic
     }
 }

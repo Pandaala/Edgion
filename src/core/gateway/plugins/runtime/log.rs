@@ -196,16 +196,23 @@ mod tests {
     #[test]
     fn test_unlimited_buffer() {
         let mut log = PluginLog::new("debug");
+        let mut accepted = 0usize;
 
         for i in 0..100 {
-            log.u_push(&format!("entry {}; ", i));
+            if log.u_push(&format!("entry {}; ", i)) {
+                accepted += 1;
+            }
         }
 
         let json = serde_json::to_string(&log).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed["ulog"].as_array().unwrap().len(), 100);
+        let entries = parsed["ulog"].as_array().unwrap();
+        assert_eq!(entries.len(), accepted);
+        assert!(accepted > 0);
+        assert!(accepted < 100, "ULogBuffer now has a byte limit and should truncate");
         assert!(parsed.get("log").is_none());
+        assert!(!log.u_push(&"x".repeat(1024)));
     }
 
     #[test]
