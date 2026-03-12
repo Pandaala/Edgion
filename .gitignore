@@ -21,7 +21,6 @@ Thumbs.db
 *.dll
 *.a
 *.lib
-logs/
 
 # Integration test workspace (generated at runtime, do not commit)
 integration_testing/
