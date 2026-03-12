@@ -123,7 +123,7 @@ impl ServerApp for EdgionTls {
             .and_then(|d| d.extension.get::<TlsConnMeta>().cloned());
 
         let (sni_hostname, tls_id, client_cert_info) = match tls_meta {
-            Some(meta) => (meta.sni, Some(meta.tls_id), meta.client_cert_info),
+            Some(meta) => (meta.sni, meta.tls_id, meta.client_cert_info),
             None => {
                 // Defensive fallback (should not happen in normal operation)
                 (Self::extract_sni(&mut downstream), None, None)

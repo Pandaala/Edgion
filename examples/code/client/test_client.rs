@@ -177,6 +177,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
+        "Gateway/TLS/NoHostnameListener" => "Gateway/TLS/NoHostnameListener",
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
@@ -211,6 +212,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionTls/grpctls" => "EdgionTls/grpctls",
         "EdgionTls/mTLS" => "EdgionTls/mTLS",
         "EdgionTls/cipher" => "EdgionTls/cipher",
+        "EdgionTls/port_only" => "EdgionTls/port_only",
         _ => suite,
     }
 }
@@ -434,12 +436,26 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GatewayTlsTestSuite));
         }
+        "Gateway/TLS/NoHostnameListener" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/NoHostnameListener tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GatewayTlsNoHostnameListenerTestSuite));
+        }
         "EdgionPlugins/DebugAccessLog" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/DebugAccessLog tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PluginLogsTestSuite));
+        }
+        "EdgionTls/port_only" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/port_only tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
         }
         "EdgionPlugins/PluginCondition" => {
             if !gateway {
@@ -705,6 +721,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::HttpsTestSuite));
             runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
             runner.add_suite(Box::new(suites::MtlsTestSuite));
+            runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
         }
         "EdgionTls/https" => {
             if !gateway {
@@ -823,6 +840,8 @@ async fn main() -> Result<()> {
                 // Select http_host based on suite
                 let http_host = match suite.as_str() {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
+                    "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+                    "EdgionTls/port_only" => "port-only.example.com",
                     _ => "test.example.com",
                 };
                 let http_port = ports.http.unwrap_or(cli.http_port);
@@ -841,6 +860,12 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 eprintln!("Warning: Failed to load ports.json: {}. Using CLI/default ports.", e);
+                let http_host = match suite.as_str() {
+                    "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
+                    "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+                    "EdgionTls/port_only" => "port-only.example.com",
+                    _ => "test.example.com",
+                };
                 (
                     cli.http_port,
                     cli.grpc_port,
@@ -850,7 +875,7 @@ async fn main() -> Result<()> {
                     cli.websocket_port,
                     cli.https_port,
                     cli.grpc_https_port,
-                    Some("test.example.com".to_string()),
+                    Some(http_host.to_string()),
                     Some("grpc.example.com".to_string()),
                 )
             }

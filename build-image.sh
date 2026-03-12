@@ -25,7 +25,7 @@ set -eo pipefail
 # Configuration  (edit these variables to customise the build)
 # =============================================================================
 
-DEFAULT_VERSION="0.1.3"
+DEFAULT_VERSION="0.1.5"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.87}"

@@ -192,16 +192,16 @@ impl TlsStore {
     }
 
     /// Rebuild the TLS certificate matcher from provided data.
-    /// Port-specific certs go into `port_matcher`, global certs into `global_matcher`.
+    /// Only port-resolved certs are admitted into the matcher.
     ///
     /// # Arguments
     /// * `tls_data` - Reference to the TLS data map (already locked)
     fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) -> anyhow::Result<()> {
         let mut port_host_map: HashMap<u16, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
-        let mut global_host_map: HashMap<String, Vec<Arc<EdgionTls>>> = HashMap::new();
         let mut total_hosts = 0;
         let mut valid_certs = 0;
         let mut invalid_certs = 0;
+        let mut skipped_unbound_certs = 0;
 
         for (key, entry) in tls_data.iter() {
             if !entry.validation.is_valid {
@@ -225,15 +225,19 @@ impl TlsStore {
                             total_hosts += 1;
                         }
                     }
+                    valid_certs += 1;
                 }
                 _ => {
-                    for host in &tls.spec.hosts {
-                        global_host_map.entry(host.clone()).or_default().push(tls.clone());
-                        total_hosts += 1;
-                    }
+                    skipped_unbound_certs += 1;
+                    tracing::warn!(
+                        component = "tls_store",
+                        key = %key,
+                        hosts = ?tls.spec.hosts,
+                        parent_refs = ?tls.spec.parent_refs,
+                        "Skipping EdgionTls from matcher because no listener ports were resolved"
+                    );
                 }
             }
-            valid_certs += 1;
         }
 
         let mut port_matcher = HashMap::new();
@@ -245,17 +249,13 @@ impl TlsStore {
             port_matcher.insert(port, matcher);
         }
 
-        let mut global_matcher = HashHost::new();
-        for (host, tls_list) in global_host_map {
-            global_matcher.insert(&host, tls_list);
-        }
-
-        super::cert_matcher::set_tls_cert_matcher(port_matcher, global_matcher)?;
+        super::cert_matcher::set_tls_cert_matcher(port_matcher)?;
 
         tracing::info!(
             component = "tls_store",
             valid_certs = valid_certs,
             invalid_certs = invalid_certs,
+            skipped_unbound_certs = skipped_unbound_certs,
             total_hosts = total_hosts,
             "TLS matcher rebuilt successfully"
         );

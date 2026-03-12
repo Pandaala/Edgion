@@ -1,111 +1,10 @@
+use crate::core::gateway::observe::logs::{LogBuffer, ULogBuffer};
 use serde::Serialize;
-use smallvec::SmallVec;
 
 // LocalObjectReference no longer needed - refer_to is now just a String
 
 /// Default capacity for plugin name string.
 pub const NAME_CAPACITY: usize = 36;
-
-/// Fixed buffer capacity (bytes)
-const BUFFER_CAPACITY: usize = 100;
-
-/// Max log entries in fixed buffer
-const MAX_LOG_ENTRIES: usize = 20;
-
-/// Max buffer size (bytes) for unbounded ULogBuffer
-const ULOG_MAX_BUFFER: usize = 512;
-
-/// Fixed-size log buffer (stack-allocated, zero heap allocation)
-#[derive(Debug, Clone)]
-pub struct LogBuffer {
-    buffer: SmallVec<[u8; BUFFER_CAPACITY]>,
-    positions: SmallVec<[usize; MAX_LOG_ENTRIES]>,
-}
-
-impl LogBuffer {
-    fn new() -> Self {
-        Self {
-            buffer: SmallVec::new(),
-            positions: SmallVec::new(),
-        }
-    }
-
-    #[inline]
-    fn push(&mut self, log: &str) -> bool {
-        // Check capacity limits
-        if self.positions.len() >= MAX_LOG_ENTRIES {
-            return false;
-        }
-        if self.buffer.len() + log.len() > BUFFER_CAPACITY {
-            return false;
-        }
-
-        // Write to buffer
-        self.buffer.extend_from_slice(log.as_bytes());
-        self.positions.push(self.buffer.len());
-        true
-    }
-}
-
-impl Serialize for LogBuffer {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(self.positions.len()))?;
-        let mut start = 0;
-        for &end in &self.positions {
-            let slice = &self.buffer[start..end];
-            let s = std::str::from_utf8(slice).map_err(serde::ser::Error::custom)?;
-            seq.serialize_element(s)?;
-            start = end;
-        }
-        seq.end()
-    }
-}
-
-/// Unlimited log buffer (heap-allocated, unlimited)
-#[derive(Debug, Clone)]
-pub struct ULogBuffer {
-    buffer: String,
-    positions: Vec<usize>,
-}
-
-impl ULogBuffer {
-    fn new() -> Self {
-        Self {
-            buffer: String::with_capacity(256),
-            positions: Vec::with_capacity(32),
-        }
-    }
-
-    #[inline]
-    fn push(&mut self, log: &str) -> bool {
-        if self.buffer.len() + log.len() > ULOG_MAX_BUFFER {
-            return false;
-        }
-        self.buffer.push_str(log);
-        self.positions.push(self.buffer.len());
-        true
-    }
-}
-
-impl Serialize for ULogBuffer {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(self.positions.len()))?;
-        let mut start = 0;
-        for &end in &self.positions {
-            seq.serialize_element(&self.buffer[start..end])?;
-            start = end;
-        }
-        seq.end()
-    }
-}
 
 /// Plugin log entry
 /// Fixed structure for plugin execution logging
@@ -178,18 +77,14 @@ impl PluginLog {
     #[cfg(test)]
     pub fn contains(&self, substr: &str) -> bool {
         if let Some(ref log_buf) = self.log {
-            // Check in fixed-size buffer
-            if let Ok(content) = std::str::from_utf8(&log_buf.buffer) {
-                if content.contains(substr) {
-                    return true;
-                }
+            if log_buf.contains(substr) {
+                return true;
             }
         }
         if let Some(ref ulog_buf) = self.ulog {
-            // Check in unlimited buffer
-            if ulog_buf.buffer.contains(substr) {
+            if ulog_buf.contains(substr) {
                 return true;
-            }
+            };
         }
         false
     }

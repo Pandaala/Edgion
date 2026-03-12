@@ -141,7 +141,7 @@ pub struct EdgionTlsSpec {
 
     /// Resolved ports from parentRefs (filled by controller, not from YAML).
     /// Derived from parentRef → Gateway → listener.port.
-    /// None = global (matches all ports, backward compatible).
+    /// None = not yet bound to any listener port, so it must not enter the matcher.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub resolved_ports: Option<Vec<u16>>,
 }

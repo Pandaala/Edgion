@@ -40,6 +40,7 @@ LDAP_COMPOSE_DIR=""
 LDAP_COMPOSE_FILE=""
 LDAP_SERVICE_REQUIRED=false
 LDAP_SERVICE_STARTED=false
+CONTROLLER_GRPC_PORT=50051
 
 # =============================================================================
 # Log functions
@@ -489,6 +490,7 @@ show_help() {
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
     echo "  --dynamic-test         Run Gateway dynamic configuration tests"
     echo "  --dynamic-stage <NUM>  Dynamic test stage: 1=initial, 2=update, 0=both (default: 0)"
+    echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 50051)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
     echo "  -h, --help             Show help"
@@ -500,6 +502,7 @@ show_help() {
     echo "  $0 -r HTTPRoute -i Backend          # Run HTTPRoute/Backend test"
     echo "  $0 --no-prepare -r HTTPRoute        # Skip build, run HTTPRoute test"
     echo "  $0 --with-reload                    # Run all tests, reload, verify server_id changed, run again"
+    echo "  $0 --controller-grpc-port 40051    # Run integration with alternate controller/gateway gRPC port"
 }
 
 # =============================================================================
@@ -835,6 +838,10 @@ main() {
                 G_DYNAMIC_STAGE=$2
                 shift 2
                 ;;
+            --controller-grpc-port)
+                CONTROLLER_GRPC_PORT="$2"
+                shift 2
+                ;;
             --suites)
                 suites="$2"
                 shift 2
@@ -953,12 +960,14 @@ main() {
     # Step 2: Start services (including config load)
     if $do_start; then
         log_section "Step 2: Start all services and load config"
+        export EDGION_TEST_CONTROLLER_GRPC_PORT="${CONTROLLER_GRPC_PORT}"
         
         # Build start command
         local start_cmd="${UTILS_DIR}/start_all_with_conf.sh"
         if [ -n "$suites" ]; then
             start_cmd="$start_cmd --suites $suites"
         fi
+        start_cmd="$start_cmd --controller-grpc-port ${CONTROLLER_GRPC_PORT}"
         
         # Execute start script
         # NOTE: Must separate 'local' from command substitution, because

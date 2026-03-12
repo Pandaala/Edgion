@@ -27,14 +27,14 @@ pub use tls_route::{TlsMultiSniTestSuite, TlsProxyProtocolTestSuite, TlsRouteTes
 pub use udp_route::UdpTestSuite;
 
 // EdgionTls tests
-pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite};
+pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite, PortOnlyEdgionTlsTestSuite};
 
 // Gateway tests
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
-    AllowedRoutesSelectorNamespaceTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite, GatewayTlsTestSuite,
-    InitialPhaseTestSuite, ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite,
-    StreamPluginsTestSuite, UpdatePhaseTestSuite,
+    AllowedRoutesSelectorNamespaceTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite,
+    GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite, ListenerHostnameTestSuite,
+    PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite, UpdatePhaseTestSuite,
 };
 
 // EdgionPlugins tests

@@ -7,8 +7,8 @@ pub mod store;
 pub use gateway_info::GatewayInfo;
 pub use handler::create_gateway_handler;
 pub use matching::{
-    check_gateway_listener_match, get_gateway_tls_matcher, hostname_matches_listener, match_gateway_tls,
-    match_gateway_tls_with_port, rebuild_gateway_tls_matcher, GatewayTlsEntry, GatewayTlsMatcher,
+    check_gateway_listener_match, get_gateway_tls_matcher, hostname_matches_listener, match_gateway_tls_with_port,
+    rebuild_gateway_tls_matcher, GatewayTlsEntry, GatewayTlsMatcher,
 };
 pub use server::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_503, GatewayBase,

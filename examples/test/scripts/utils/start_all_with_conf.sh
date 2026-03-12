@@ -42,6 +42,7 @@ GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
 # serviceport
 TEST_SERVER_HTTP_PORT=30001
 CONTROLLER_ADMIN_PORT=5800
+CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-50051}"
 # Gateway portuse http Testsuiteport（31000）
 GATEWAY_HTTP_PORT=31000
 GATEWAY_ADMIN_PORT=5900
@@ -85,6 +86,7 @@ show_help() {
     echo ""
     echo "OPTIONS:"
     echo "  --suites <list>    specifyLoadTestsuite（comma separated）"
+    echo "  --controller-grpc-port <port>  override controller/gateway gRPC sync port"
     echo "                     default：Loadall (http,grpc,tcp,udp,http-match,...)"
     echo "  -h, --help         Showhelp"
     echo ""
@@ -115,6 +117,10 @@ kill_all_processes() {
     fi
     if nc -z 127.0.0.1 $CONTROLLER_ADMIN_PORT 2>/dev/null; then
         log_error "port $CONTROLLER_ADMIN_PORT occupied"
+        ports_busy=true
+    fi
+    if nc -z 127.0.0.1 $CONTROLLER_GRPC_PORT 2>/dev/null; then
+        log_error "port $CONTROLLER_GRPC_PORT occupied"
         ports_busy=true
     fi
     if nc -z 127.0.0.1 $GATEWAY_HTTP_PORT 2>/dev/null; then
@@ -248,6 +254,26 @@ wait_for_ready() {
     return 1
 }
 
+check_port_conflict() {
+    local port=$1
+    local label=$2
+
+    if command -v lsof >/dev/null 2>&1; then
+        local port_usage
+        port_usage=$(lsof -n -P -iTCP:"${port}" 2>/dev/null || true)
+        if [ -n "$port_usage" ]; then
+            log_error "$label port $port occupied"
+            echo "$port_usage"
+            return 1
+        fi
+    elif nc -z 127.0.0.1 "$port" 2>/dev/null; then
+        log_error "$label port $port occupied"
+        return 1
+    fi
+
+    return 0
+}
+
 # =============================================================================
 # Start test_server
 # =============================================================================
@@ -313,6 +339,11 @@ start_test_server() {
 # =============================================================================
 start_controller() {
     log_section "Start edgion-controller"
+
+    if ! check_port_conflict "$CONTROLLER_GRPC_PORT" "edgion-controller gRPC"; then
+        log_error "Please release controller gRPC port before starting tests"
+        exit 1
+    fi
     
     # Start controller with --test-mode to enable:
     # - Both endpoint mode (sync both Endpoints and EndpointSlice)
@@ -321,6 +352,7 @@ start_controller() {
         -c "$CONTROLLER_CONFIG" \
         --work-dir "${WORK_DIR}" \
         --conf-dir "$CONFIG_DIR" \
+        --grpc-listen "0.0.0.0:${CONTROLLER_GRPC_PORT}" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
         --test-mode \
         > "${LOG_DIR}/controller.log" 2>&1 &
@@ -340,6 +372,12 @@ start_controller() {
         log_error "edgion-controller healthCheckfailed"
         exit 1
     fi
+
+    if ! wait_for_port $CONTROLLER_GRPC_PORT "edgion-controller gRPC" $pid 30; then
+        log_error "edgion-controller gRPC Startfailed，viewlog: ${LOG_DIR}/controller.log"
+        tail -20 "${LOG_DIR}/controller.log" 2>/dev/null || true
+        exit 1
+    fi
     
     log_success "edgion-controller Startsuccess (PID: $pid)"
 }
@@ -357,6 +395,7 @@ start_gateway() {
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --work-dir "${WORK_DIR}" \
+        --server-addr "http://127.0.0.1:${CONTROLLER_GRPC_PORT}" \
         --integration-testing-mode \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
@@ -704,13 +743,17 @@ main() {
     # Parseargs
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --suites)
-                SUITES="$2"
-                shift 2
-                ;;
-            -h|--help)
-                show_help
-                exit 0
+        --suites)
+            SUITES="$2"
+            shift 2
+            ;;
+        --controller-grpc-port)
+            CONTROLLER_GRPC_PORT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
                 ;;
             *)
                 log_error "unknownoptions: $1"

@@ -1,5 +1,5 @@
 {
-  "current_max": 31284,
+  "current_max": 31286,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -75,8 +75,14 @@
     "EdgionTls/cipher": {
       "https": 31195
     },
+    "EdgionTls/port_only": {
+      "https": 31285
+    },
     "Gateway/TLS/GatewayTLS": {
       "https": 31220
+    },
+    "Gateway/TLS/NoHostnameListener": {
+      "https": 31286
     },
     "Gateway/Dynamic": {
       "http": 31250

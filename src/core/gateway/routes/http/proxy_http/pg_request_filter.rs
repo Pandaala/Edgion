@@ -250,7 +250,7 @@ async fn build_request_metadata(
     if let Some(digest) = session.as_downstream().digest() {
         if let Some(ssl_digest) = digest.ssl_digest.as_ref() {
             if let Some(meta) = ssl_digest.extension.get::<TlsConnMeta>() {
-                ctx.request_info.tls_id = Some(meta.tls_id.clone());
+                ctx.request_info.tls_id = meta.tls_id.clone();
                 ctx.request_info.sni = meta.sni.clone();
                 ctx.request_info.client_cert_info = meta.client_cert_info.clone();
             } else if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {

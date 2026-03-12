@@ -1,0 +1,16 @@
+# EdgionTls bound by parentRef.port without sectionName
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: edgiontls-port-only
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-port-only-gateway
+      namespace: edgion-test
+      port: 31285
+  hosts:
+    - port-only.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

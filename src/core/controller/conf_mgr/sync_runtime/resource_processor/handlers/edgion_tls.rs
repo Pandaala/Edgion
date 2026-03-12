@@ -189,6 +189,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
     fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, _validation_errors: &[String]) {
         let generation = tls.metadata.generation;
+        let ports_resolved = tls
+            .spec
+            .resolved_ports
+            .as_ref()
+            .map(|ports| !ports.is_empty())
+            .unwrap_or(false);
 
         // Check Secret resolution: if Secret is not found, set ResolvedRefs=False
         let secret_ns = tls
@@ -220,8 +226,30 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
                 let update_conditions = |conditions: &mut Vec<_>| {
                     update_condition(conditions, accepted_condition(generation));
-                    update_condition(conditions, programmed_condition(generation));
-                    update_condition(conditions, ready_condition(generation));
+                    if ports_resolved {
+                        update_condition(conditions, programmed_condition(generation));
+                        update_condition(conditions, ready_condition(generation));
+                    } else {
+                        let parent_desc = if let Some(section_name) = &parent_ref.section_name {
+                            format!("parentRef '{}' section '{}'", parent_ref.name, section_name)
+                        } else {
+                            format!("parentRef '{}'", parent_ref.name)
+                        };
+                        let msg = format!("No listener ports resolved for {}", parent_desc);
+                        update_condition(
+                            conditions,
+                            condition_false(
+                                condition_types::PROGRAMMED,
+                                condition_reasons::INVALID,
+                                msg.clone(),
+                                generation,
+                            ),
+                        );
+                        update_condition(
+                            conditions,
+                            condition_false(condition_types::READY, condition_reasons::PENDING, msg, generation),
+                        );
+                    }
                     if resolved_refs_errors.is_empty() {
                         update_condition(
                             conditions,
