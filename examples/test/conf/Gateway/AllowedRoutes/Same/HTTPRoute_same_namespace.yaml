@@ -1,0 +1,21 @@
+#  namespace  HTTPRoute（）
+# Route  Gateway  edgion-test namespace
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: same-namespace-route
+  namespace: edgion-test  #  Gateway  namespace
+spec:
+  parentRefs:
+    - name: allowed-routes-same-gateway
+      namespace: edgion-test
+  hostnames:
+    - "same-ns.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001

@@ -1,0 +1,24 @@
+# KeyAuth with anonymous access enabled
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: key-auth-anonymous
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        # Enable anonymous access
+        anonymous: "anonymous-user"
+        realm: "Test API"
+        keyField: "key"
+        secretRefs:
+          - name: api-keys
+            namespace: edgion-default
+        upstreamHeaderFields:
+          - "X-Consumer-Username"
+

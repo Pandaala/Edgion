@@ -1,0 +1,18 @@
+# LinkSys Webhook resource for body-text extraction testing
+# Points to test_server's /webhook/resolve-body endpoint which returns plain text
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: webhook-body-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    uri: "http://127.0.0.1:30001/webhook/resolve-body"
+    requestMethod: GET
+    timeoutMs: 5000
+    requestHeaders:
+      - X-Tenant-Id
+    successStatusCodes: [200]
+    allowDegradation: true
+    maxResponseBytes: 1024

@@ -1,0 +1,198 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    tags:
+      - "v*" # matches v1.0.0, v0.1.0-beta, etc.
+
+env:
+  IMAGE_REGISTRY: docker.io
+  IMAGE_NAMESPACE: pandaala
+  RUST_VERSION: "1.92"
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+jobs:
+  prepare-cargo-cache:
+    runs-on: ubuntu-latest
+    name: Prepare Cargo registry cache
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.92"
+          install-deps: "false"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-registry"
+          cache-path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+  build-binaries:
+    needs: prepare-cargo-cache
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+
+    name: Build binaries (${{ matrix.arch }})
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.92"
+          install-deps: "true"
+          cache-enabled: "false"
+          cache-key-prefix: "cargo-build"
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install AArch64 cross compiler
+        if: matrix.arch == 'arm64'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-
+
+      - name: Cache target
+        uses: actions/cache@v5
+        with:
+          path: target
+          key: target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            target-${{ matrix.target }}-
+
+      - name: Build binaries
+        run: cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-ctl --target ${{ matrix.target }}
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: edgion-binaries-${{ matrix.arch }}
+          path: |
+            target/${{ matrix.target }}/release/edgion-gateway
+            target/${{ matrix.target }}/release/edgion-controller
+            target/${{ matrix.target }}/release/edgion-ctl
+
+  build-and-push-images:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+
+    name: Build images (${{ matrix.arch }})
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: edgion-binaries-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release
+
+      - name: Prepare binaries
+        run: |
+          chmod +x target/${{ matrix.target }}/release/edgion-gateway
+          chmod +x target/${{ matrix.target }}/release/edgion-controller
+          chmod +x target/${{ matrix.target }}/release/edgion-ctl
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        run: |
+          for binary in gateway controller; do
+            docker buildx build \
+              --file ./docker/Dockerfile.runtime \
+              --build-arg BINARY=$binary \
+              --build-arg BINARY_PATH=target/${{ matrix.target }}/release \
+              --platform linux/${{ matrix.arch }} \
+              --push \
+              -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ github.ref_name }}_${{ matrix.arch }} \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
+              .
+          done
+
+  merge-manifests:
+    needs: build-and-push-images
+    runs-on: ubuntu-latest
+
+    name: Merge manifests
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Extract semver components
+          VERSION_NO_V=${VERSION#v}
+          echo "version_no_v=$VERSION_NO_V" >> $GITHUB_OUTPUT
+          MAJOR=$(echo $VERSION_NO_V | cut -d. -f1)
+          MINOR=$(echo $VERSION_NO_V | cut -d. -f1-2)
+          echo "major=$MAJOR" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+
+      - name: Create and push manifest
+        run: |
+          for binary in gateway controller; do
+            docker buildx imagetools create \
+              -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ steps.version.outputs.version_no_v }} \
+              -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ steps.version.outputs.minor }} \
+              -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ steps.version.outputs.major }} \
+              -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:latest \
+              ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ steps.version.outputs.version }}_amd64 \
+              ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ steps.version.outputs.version }}_arm64
+          done

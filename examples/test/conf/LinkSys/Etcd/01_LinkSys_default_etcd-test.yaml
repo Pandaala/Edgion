@@ -1,0 +1,15 @@
+# LinkSys Etcd resource for integration testing.
+# Connects to the Docker Etcd instance started by run_etcd_test.sh.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: etcd-test
+  namespace: default
+spec:
+  type: etcd
+  config:
+    endpoints:
+      - "http://127.0.0.1:12379"
+    timeout:
+      dial: 5000
+      request: 10000

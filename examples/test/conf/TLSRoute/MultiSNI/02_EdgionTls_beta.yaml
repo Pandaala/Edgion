@@ -1,0 +1,16 @@
+# EdgionTls certificate for beta.sandbox.example.com
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: multi-sni-beta
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-route-multi-sni-gw
+      namespace: edgion-test
+      sectionName: tls-multi
+  hosts:
+    - "beta.sandbox.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

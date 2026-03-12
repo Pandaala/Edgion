@@ -1,0 +1,22 @@
+# （）
+# *.wildcard.example.com  wildcard.example.com（）
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wildcard-root-mismatch-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: hostname-test-gateway
+      namespace: edgion-test
+      sectionName: http-wildcard
+  hostnames:
+    - "wildcard.example.com"  # ， *.wildcard.example.com
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001

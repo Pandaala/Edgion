@@ -1,0 +1,7 @@
+# Go test binary
+conformance-test
+conformance-test.exe
+*.test
+
+# Conformance report (generated)
+conformance-report.yaml

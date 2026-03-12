@@ -1,0 +1,23 @@
+#  namespace  HTTPRoute（）
+# Route  edgion-default namespace，Gateway  edgion-test namespace
+#  Gateway  allowedRoutes.namespaces.from: All
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: all-cross-ns-route
+  namespace: edgion-default  #  Gateway  namespace
+spec:
+  parentRefs:
+    - name: allowed-routes-all-gateway
+      namespace: edgion-test
+  hostnames:
+    - "all-cross-ns.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

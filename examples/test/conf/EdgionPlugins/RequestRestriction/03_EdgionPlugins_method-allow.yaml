@@ -1,0 +1,21 @@
+# 3. Method  -  GET/HEAD
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-method-allow
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        rules:
+          - name: "readonly-api"
+            source: Method
+            allow:
+              - "GET"
+              - "HEAD"
+              - "OPTIONS"
+        status: 405
+        message: "Method not allowed"
+

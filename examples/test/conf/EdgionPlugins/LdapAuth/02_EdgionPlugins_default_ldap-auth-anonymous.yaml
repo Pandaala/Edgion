@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ldap-auth-anonymous
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: LdapAuth
+      config:
+        ldapHost: "127.0.0.1"
+        ldapPort: 33890
+        baseDn: "ou=people,dc=example,dc=org"
+        attribute: "uid"
+        headerType: "ldap"
+        anonymous: "guest-user"
+        hideCredentials: true
+        timeout: 3000

@@ -1,0 +1,21 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: section-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: http-match-gateway
+      namespace: edgion-test
+      sectionName: http  #  HTTP listener
+  hostnames:
+    - "section-test.example.com"
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

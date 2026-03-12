@@ -1,0 +1,38 @@
+# Edgion Controller Configuration for Kubernetes
+
+# Working directory (container path)
+work_dir = "/usr/local/edgion"
+
+[server]
+# gRPC server for Gateway config sync
+grpc_listen = "0.0.0.0:50051"
+
+# Admin HTTP server for health check and dashboard
+admin_listen = "0.0.0.0:5800"
+
+# Configuration Center - Use Kubernetes mode in K8s deployment
+[conf_center]
+type = "kubernetes"
+# Gateway class name that this controller will handle
+gateway_class = "public-gateway"
+# Gateway API controllerName used in status and GatewayClass matching
+controller_name = "edgion.io/gateway-controller"
+# Watch all namespaces (empty array means all)
+watch_namespaces = []
+# Optional: label_selector = "app.kubernetes.io/managed-by=edgion"
+
+[logging]
+# Log directory (relative to work_dir)
+log_dir = "logs"
+log_prefix = "edgion-controller"
+log_level = "info"
+json_format = false
+buffer_size = 10000
+
+[debug]
+# Disable debug mode in production
+enabled = false
+
+[conf_sync]
+# EventStore ring buffer default capacity for all resource types
+default_capacity = 200

@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: test-udp
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: udp-test-gateway
+      namespace: edgion-test
+      sectionName: udp
+      port: 31100
+  rules:
+    - backendRefs:
+        - name: test-udp
+          port: 30011
+          weight: 100
+

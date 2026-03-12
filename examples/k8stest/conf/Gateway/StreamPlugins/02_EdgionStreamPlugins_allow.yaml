@@ -1,0 +1,14 @@
+# EdgionStreamPlugins: allow all IPs (for ConnectionFilter positive testing)
+# Verifies that a filter with allow-all policy does NOT block connections
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: allow-all-ips
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        allow:
+          - "0.0.0.0/0"
+        defaultAction: allow

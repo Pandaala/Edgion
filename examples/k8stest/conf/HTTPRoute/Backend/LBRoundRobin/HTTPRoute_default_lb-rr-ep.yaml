@@ -1,0 +1,26 @@
+# RoundRobin + Endpoints  (kind: ServiceEndpoint)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-rr-ep
+  namespace: edgion-default
+  annotations:
+    edgion.io/max-retries: "0"
+spec:
+  parentRefs:
+    - name: lb-rr-gateway
+      namespace: edgion-test
+  hostnames:
+    - "lb-rr-ep.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test
+      timeouts:
+        request: 2s
+        backendRequest: 1s
+      backendRefs:
+        - name: lb-rr-service
+          kind: ServiceEndpoint
+          port: 8080

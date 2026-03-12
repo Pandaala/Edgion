@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-websocket
+  namespace: edgion-test
+spec:
+  ports:
+    - name: ws-30005
+      port: 30005
+      protocol: TCP
+      targetPort: 30005
+  type: ClusterIP

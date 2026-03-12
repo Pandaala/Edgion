@@ -1,0 +1,15 @@
+# Weighted Backend  Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: weighted-backend-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31130
+      allowedRoutes:
+        namespaces:
+          from: All

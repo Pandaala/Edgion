@@ -1,0 +1,20 @@
+# DSL Plugin - Path Deny 
+#  "/admin"， 403；
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-deny-path
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "deny-path"
+        source: |
+          let path = req.path()
+          if path.contains("/admin") {
+            return deny(403, "admin access denied")
+          }
+        maxSteps: 5000
+        errorPolicy: deny

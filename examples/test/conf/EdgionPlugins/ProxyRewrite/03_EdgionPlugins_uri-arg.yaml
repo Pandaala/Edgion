@@ -1,0 +1,13 @@
+# 3. URI + $arg_xxx 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-uri-arg
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: "/search/$arg_keyword/$arg_lang"
+

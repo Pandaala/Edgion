@@ -1,0 +1,128 @@
+# Header Modifier 
+#  RequestHeaderModifier  ResponseHeaderModifier  set/add/remove 
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: header-modifier-test
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: filters-test-gateway
+      namespace: edgion-test
+  hostnames:
+    - "header-test.example.com"
+  rules:
+    # 1: RequestHeaderModifier -  set/add/remove
+    - matches:
+        - path:
+            type: Exact
+            value: /request-header-test
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: "X-Set-Header"
+                value: "set-value"
+            add:
+              - name: "X-Add-Header"
+                value: "add-value"
+            remove:
+              - "X-Remove-Me"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 2: ResponseHeaderModifier -  set/add/remove
+    - matches:
+        - path:
+            type: Exact
+            value: /response-header-test
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: "X-Response-Set"
+                value: "resp-set-value"
+            add:
+              - name: "X-Response-Add"
+                value: "resp-add-value"
+            remove:
+              - "X-Upstream-Internal"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 3: 
+    - matches:
+        - path:
+            type: Exact
+            value: /both-headers-test
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            add:
+              - name: "X-Request-Id"
+                value: "test-request-123"
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            add:
+              - name: "X-Processed-By"
+                value: "edgion-gateway"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 4: （）
+    - matches:
+        - path:
+            type: Exact
+            value: /multi-request-headers
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: "X-Custom-Auth"
+                value: "Bearer token123"
+              - name: "X-Request-Source"
+                value: "gateway"
+            add:
+              - name: "X-Trace-Id"
+                value: "trace-abc"
+              - name: "X-Span-Id"
+                value: "span-xyz"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 5: （）
+    - matches:
+        - path:
+            type: Exact
+            value: /multi-response-headers
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: "Cache-Control"
+                value: "no-cache, no-store"
+              - name: "X-Content-Type-Options"
+                value: "nosniff"
+            add:
+              - name: "X-Custom-Header-1"
+                value: "value1"
+              - name: "X-Custom-Header-2"
+                value: "value2"
+            remove:
+              - "X-Powered-By"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 6: （ filter）
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-http
+          port: 30001

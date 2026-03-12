@@ -1,0 +1,28 @@
+# HTTPRoute for condition-all-types tests
+#  PluginCondition 
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: condition-all-types-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "condition-all-types.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: condition-all-types
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

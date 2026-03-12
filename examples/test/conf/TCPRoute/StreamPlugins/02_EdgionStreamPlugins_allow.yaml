@@ -1,0 +1,13 @@
+# EdgionStreamPlugins: allow all IPs (for TCPRoute stream plugin positive testing)
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-allow-all
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        allow:
+          - "0.0.0.0/0"
+        defaultAction: allow

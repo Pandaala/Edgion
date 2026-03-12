@@ -1,0 +1,22 @@
+# Hostname （）
+# HTTPRoute hostname  Listener hostname， 404
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mismatch-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: hostname-test-gateway
+      namespace: edgion-test
+      sectionName: http-exact
+  hostnames:
+    - "other.example.com"  #  listener hostname (api.example.com)
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001

@@ -1,0 +1,50 @@
+# CtxSet  - 
+# 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ctx-setter-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    # CtxSet 
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          # 1.  Header 
+          - name: tenant_id
+            from:
+              type: header
+              name: X-Tenant-Id
+            default: "default-tenant"
+
+          # 2. 
+          - name: rate_key
+            template: "${header:X-Tenant-Id}_${clientIp}"
+
+          # 3. 
+          - name: method_lower
+            from:
+              type: method
+            transform:
+              case: lower
+
+          # 4. 
+          - name: tier
+            from:
+              type: header
+              name: X-Plan
+            mapping:
+              values:
+                premium: "tier_1"
+                enterprise: "tier_1"
+                basic: "tier_2"
+              default: "tier_3"
+
+          # 5.  path 
+          - name: api_version
+            from:
+              type: path
+
+

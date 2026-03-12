@@ -1,0 +1,16 @@
+# Gateway for TCPRoute StreamPlugins testing
+# 2 listeners: allow-localhost filter, deny-all filter
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-stream-plugins-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp-allow-localhost
+      protocol: TCP
+      port: 31274
+    - name: tcp-deny-all
+      protocol: TCP
+      port: 31275

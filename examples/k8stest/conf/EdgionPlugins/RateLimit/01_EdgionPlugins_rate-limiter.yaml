@@ -1,0 +1,40 @@
+# RateLimit  -  Header 
+#  X-Rate-Key header ， key 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rate-limit-header-key
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    #  key 
+    - enable: true
+      type: RateLimit
+      config:
+        rate: 5              #  5 
+        interval: "10s"      # 10 
+        key:                 #  key  key 
+          - type: header
+            name: "X-Rate-Key"
+        onMissingKey: Allow  #  key 
+        rejectStatus: 429
+        rejectMessage: "Rate limit exceeded - try again later"
+        showLimitHeaders: true
+
+    #  key （ IP + API Key + Path ）
+    - enable: false          # ，
+      type: RateLimit
+      config:
+        rate: 100
+        interval: "1m"
+        key:                 #  key ， "_" 
+          - type: clientIp
+          - type: header
+            name: "X-API-Key"
+          - type: path
+        onMissingKey: Allow
+        rejectStatus: 429
+        rejectMessage: "API rate limit exceeded"
+        showLimitHeaders: true
+
+

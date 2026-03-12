@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-edgion-default-routes-to-edgion-test-services
+  namespace: edgion-test
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: edgion-default
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      namespace: edgion-default
+    - group: gateway.networking.k8s.io
+      kind: TCPRoute
+      namespace: edgion-default
+    - group: gateway.networking.k8s.io
+      kind: UDPRoute
+      namespace: edgion-default
+  to:
+    - group: ""
+      kind: Service

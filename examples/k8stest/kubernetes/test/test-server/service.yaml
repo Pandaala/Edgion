@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-test-server
+  namespace: edgion-test
+  labels:
+    app: edgion-test-server
+    app.kubernetes.io/name: edgion-test-server
+    app.kubernetes.io/component: test
+spec:
+  type: ClusterIP
+  selector:
+    app: edgion-test-server
+  ports:
+  # HTTP ports
+  - name: http-1
+    port: 30001
+    targetPort: 30001
+    protocol: TCP
+  - name: http-2
+    port: 30002
+    targetPort: 30002
+    protocol: TCP
+  - name: http-3
+    port: 30003
+    targetPort: 30003
+    protocol: TCP
+  - name: http-4
+    port: 30004
+    targetPort: 30004
+    protocol: TCP
+  # gRPC ports
+  - name: grpc-1
+    port: 30021
+    targetPort: 30021
+    protocol: TCP
+  - name: grpc-2
+    port: 30022
+    targetPort: 30022
+    protocol: TCP
+  # WebSocket port
+  - name: websocket
+    port: 30005
+    targetPort: 30005
+    protocol: TCP
+  # Fake auth / OIDC helper endpoint
+  - name: auth
+    port: 30040
+    targetPort: 30040
+    protocol: TCP
+  # TCP port
+  - name: tcp
+    port: 30010
+    targetPort: 30010
+    protocol: TCP
+---
+# Separate service for UDP (UDP and TCP cannot share the same Service in some cases)
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-test-server-udp
+  namespace: edgion-test
+  labels:
+    app: edgion-test-server
+    app.kubernetes.io/name: edgion-test-server
+    app.kubernetes.io/component: test
+spec:
+  type: ClusterIP
+  selector:
+    app: edgion-test-server
+  ports:
+  - name: udp
+    port: 30011
+    targetPort: 30011
+    protocol: UDP

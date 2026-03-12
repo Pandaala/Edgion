@@ -1,0 +1,15 @@
+# EdgionStreamPlugins: deny all IPs (for ConnectionFilter testing)
+# This resource is referenced by the Gateway annotation to block connections at TCP level
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: deny-all-ips
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        deny:
+          - "0.0.0.0/0"
+        defaultAction: deny
+        message: "Blocked by ConnectionFilter at TCP level"

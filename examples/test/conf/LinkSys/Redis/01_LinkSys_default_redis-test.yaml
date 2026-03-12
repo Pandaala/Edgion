@@ -1,0 +1,21 @@
+# LinkSys Redis resource for integration testing.
+# Connects to the Docker Redis instance started by run_redis_test.sh.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-test
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "redis://127.0.0.1:16379"
+    db: 0
+    auth:
+      password: "edgion-test-pwd"
+    pool:
+      size: 4
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

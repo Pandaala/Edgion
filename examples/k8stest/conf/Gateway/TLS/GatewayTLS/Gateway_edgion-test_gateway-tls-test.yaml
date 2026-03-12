@@ -1,0 +1,22 @@
+# Gateway TLS  -  Gateway Listener  TLS 
+#  Kubernetes Gateway API ， certificateRefs  Secret
+#  EdgionTls CRD ， Gateway Listener 
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway-tls-test
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # HTTPS  -  certificateRefs  Secret 
+    - name: https
+      protocol: HTTPS
+      port: 31220
+      hostname: gateway-tls.test.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          #  edge-tls Secret（ generate_tls_certs.sh ）
+          - name: edge-tls
+            namespace: edgion-test

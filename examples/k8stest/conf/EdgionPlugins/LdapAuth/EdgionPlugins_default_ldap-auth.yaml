@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ldap-auth-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: LdapAuth
+      config:
+        ldapHost: "edgion-test-openldap.edgion-test.svc.cluster.local"
+        ldapPort: 389
+        baseDn: "ou=people,dc=example,dc=org"
+        attribute: "uid"
+        headerType: "ldap"
+        realm: "LDAP Test"
+        cacheTtl: 60
+        timeout: 3000
+        hideCredentials: false

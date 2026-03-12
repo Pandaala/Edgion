@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-test-openldap
+  namespace: edgion-test
+  labels:
+    app: edgion-test-openldap
+spec:
+  selector:
+    app: edgion-test-openldap
+  ports:
+    - name: ldap
+      port: 389
+      protocol: TCP
+      targetPort: 389

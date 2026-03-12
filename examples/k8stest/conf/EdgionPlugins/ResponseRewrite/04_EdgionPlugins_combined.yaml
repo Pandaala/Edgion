@@ -1,0 +1,26 @@
+# ResponseRewrite - 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: response-rewrite-combined
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - type: ResponseRewrite
+      config:
+        statusCode: 200
+        headers:
+          rename:
+            - from: X-Internal-Id
+              to: X-Request-Id
+          set:
+            - name: Cache-Control
+              value: "no-cache"
+            - name: X-API-Version
+              value: "v2"
+          add:
+            - name: X-Powered-By
+              value: "Edgion"
+          remove:
+            - Server
+            - X-Debug

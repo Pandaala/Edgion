@@ -1,0 +1,15 @@
+# Backend service for TLSRoute StreamPlugins testing (K8s)
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-tcp
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: tcp-30010
+      port: 30010
+      protocol: TCP
+      targetPort: 30010
+  type: ClusterIP

@@ -1,0 +1,25 @@
+# TLS 1.2 Legacy Cipher 
+# （）
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: cipher-legacy
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: cipher-gateway
+      namespace: edgion-test
+      sectionName: https-legacy
+  hosts:
+    - cipher-legacy.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  #  TLS 
+  minTlsVersion: TLS1_2
+  # （OpenSSL ）
+  ciphers:
+    - "AES128-SHA"
+    - "AES256-SHA"
+    - "ECDHE-RSA-AES128-SHA"
+    - "ECDHE-RSA-AES256-SHA"

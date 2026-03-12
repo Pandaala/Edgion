@@ -1,0 +1,25 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: openid-connect-jwks-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: OpenidConnect
+      config:
+        discovery: "http://edgion-test-server.edgion-test.svc.cluster.local:30040/oidc/.well-known/openid-configuration"
+        clientId: "test-client"
+        bearerOnly: true
+        unauthAction: Deny
+        verificationMode: JwksOnly
+        useJwks: true
+        tokenSigningAlg: "RS256"
+        allowedSigningAlgs:
+          - "RS256"
+        requiredScopes:
+          - "api:read"
+        claimsToHeaders:
+          sub: "X-User-ID"
+        setAccessTokenHeader: true
+        timeout: 3

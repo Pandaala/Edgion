@@ -1,0 +1,24 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mtls-test-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: mtls-test-gateway
+      namespace: edgion-test
+      sectionName: https-mtls
+  hostnames:
+    - "mtls.example.com"
+    - "mtls-optional.example.com"
+    - "mtls-san.example.com"
+    - "mtls-chain.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-http
+          port: 30001
+

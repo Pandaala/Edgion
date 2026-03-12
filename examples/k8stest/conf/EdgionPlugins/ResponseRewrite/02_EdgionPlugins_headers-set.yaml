@@ -1,0 +1,21 @@
+# ResponseRewrite - 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: response-rewrite-headers-set
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - type: ResponseRewrite
+      config:
+        headers:
+          set:
+            - name: X-Custom-Header
+              value: "custom-value"
+            - name: Cache-Control
+              value: "no-cache, no-store"
+          add:
+            - name: X-Powered-By
+              value: "Edgion"
+          remove:
+            - Server

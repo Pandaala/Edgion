@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/Pandaala/Edgion/discussions
+    about: Ask questions and discuss ideas here
+  - name: Documentation
+    url: https://github.com/Pandaala/Edgion/tree/main/docs
+    about: Check the documentation for guides and references
+

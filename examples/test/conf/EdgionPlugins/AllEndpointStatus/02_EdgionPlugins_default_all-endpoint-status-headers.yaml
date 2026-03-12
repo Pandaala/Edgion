@@ -1,0 +1,18 @@
+# AllEndpointStatus plugin - with includeResponseHeaders enabled
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: all-endpoint-status-headers
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: AllEndpointStatus
+      config:
+        timeoutMs: 3000
+        wallTimeoutMs: 8000
+        maxEndpoints: 10
+        maxBodySize: 8192
+        concurrencyLimit: 5
+        includeResponseHeaders: true
+        pathOverride: "/health"

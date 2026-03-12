@@ -1,0 +1,6 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: timeout-debug
+  namespace: edgion-default
+spec: {}

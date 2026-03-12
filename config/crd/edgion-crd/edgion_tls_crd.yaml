@@ -1,0 +1,262 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgiontls.edgion.io
+spec:
+  group: edgion.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - hosts
+                - secretRef
+              properties:
+                parentRefs:
+                  type: array
+                  description: "References to Gateway(s) that this TLS configuration belongs to"
+                  items:
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      group:
+                        type: string
+                        description: "Group of the referent"
+                      kind:
+                        type: string
+                        description: "Kind of the referent"
+                      namespace:
+                        type: string
+                        description: "Namespace of the referent"
+                      name:
+                        type: string
+                        description: "Name of the referent"
+                        minLength: 1
+                      sectionName:
+                        type: string
+                        description: "Name of a section within the target Gateway (listener name)"
+                      port:
+                        type: integer
+                        description: "Port of the referent"
+                        format: int32
+                hosts:
+                  type: array
+                  description: "List of hostnames/domains for TLS certificates. Supports wildcard prefix (e.g., *.example.com)"
+                  items:
+                    type: string
+                    pattern: '^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                  minItems: 1
+                secretRef:
+                  type: object
+                  description: "Reference to a Kubernetes Secret containing TLS certificate"
+                  required:
+                    - name
+                  properties:
+                    group:
+                      type: string
+                      description: "Group of the referent"
+                    kind:
+                      type: string
+                      description: "Kind of the referent"
+                    name:
+                      type: string
+                      description: "Name of the Secret"
+                      minLength: 1
+                    namespace:
+                      type: string
+                      description: "Namespace of the Secret. If not specified, defaults to the same namespace as EdgionTls"
+                clientAuth:
+                  type: object
+                  description: "mTLS client certificate authentication configuration (optional)"
+                  properties:
+                    mode:
+                      type: string
+                      description: "TLS authentication mode"
+                      enum: ["Terminate", "Mutual", "OptionalMutual"]
+                      default: "Terminate"
+                    caSecretRef:
+                      type: object
+                      description: "Reference to CA certificate Secret (required when mode is Mutual or OptionalMutual)"
+                      properties:
+                        group:
+                          type: string
+                        kind:
+                          type: string
+                        name:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                    verifyDepth:
+                      type: integer
+                      description: "Certificate chain verification depth (1-9, default: 1)"
+                      minimum: 1
+                      maximum: 9
+                      default: 1
+                    allowedSans:
+                      type: array
+                      description: "Optional Subject Alternative Names whitelist"
+                      items:
+                        type: string
+                    allowedCns:
+                      type: array
+                      description: "Optional Common Name whitelist"
+                      items:
+                        type: string
+                minTlsVersion:
+                  type: string
+                  description: "Minimum TLS version (similar to Cloudflare's Minimum TLS Version)"
+                  enum: ["TLS1_0", "TLS1_1", "TLS1_2", "TLS1_3"]
+                ciphers:
+                  type: array
+                  description: "Cipher list in OpenSSL format (affects TLS 1.0/1.1/1.2, TLS 1.3 ciphers are hardcoded in BoringSSL)"
+                  items:
+                    type: string
+                extend:
+                  type: object
+                  description: "Extended/experimental TLS features (reserved)"
+                  properties:
+                    preferServerCiphers:
+                      type: boolean
+                      description: "Prefer server cipher order"
+                      default: false
+                    ocspStapling:
+                      type: object
+                      description: "OCSP stapling configuration"
+                      properties:
+                        enabled:
+                          type: boolean
+                          description: "Enable OCSP stapling"
+                          default: false
+                        refreshIntervalSeconds:
+                          type: integer
+                          description: "Refresh interval seconds for OCSP responses (recommended: 900-3600)"
+                          format: int64
+                        failOpen:
+                          type: boolean
+                          description: "Fail-open behavior when OCSP response is unavailable/expired"
+                          default: false
+                    sessionTicket:
+                      type: object
+                      description: "Session ticket configuration"
+                      properties:
+                        enabled:
+                          type: boolean
+                          description: "Enable session tickets"
+                          default: false
+                        lifetimeSeconds:
+                          type: integer
+                          description: "Ticket lifetime in seconds"
+                          format: int64
+                        rotationIntervalSeconds:
+                          type: integer
+                          description: "Key rotation interval in seconds"
+                          format: int64
+                        keySecretRef:
+                          type: object
+                          description: "Secret reference for ticket keys"
+                          properties:
+                            group:
+                              type: string
+                            kind:
+                              type: string
+                            name:
+                              type: string
+                              minLength: 1
+                            namespace:
+                              type: string
+                    sessionCache:
+                      type: object
+                      description: "Session cache configuration"
+                      properties:
+                        enabled:
+                          type: boolean
+                          description: "Enable session cache"
+                          default: false
+                        maxEntries:
+                          type: integer
+                          description: "Maximum entries in cache"
+                          format: int64
+                        ttlSeconds:
+                          type: integer
+                          description: "Entry TTL in seconds"
+                          format: int64
+                    revocationCheck:
+                      type: object
+                      description: "Revocation check configuration"
+                      properties:
+                        mode:
+                          type: string
+                          description: "Revocation check mode"
+                          enum: ["off", "ocsp", "crl"]
+                          default: "off"
+                        failOpen:
+                          type: boolean
+                          description: "Fail open if revocation data unavailable/expired"
+                          default: false
+                    earlyData:
+                      type: object
+                      description: "Early data (0-RTT) configuration"
+                      properties:
+                        enabled:
+                          type: boolean
+                          description: "Enable early data (0-RTT)"
+                          default: false
+                        rejectOnReplay:
+                          type: boolean
+                          description: "Reject on replay risk"
+                          default: false
+            status:
+              type: object
+              properties:
+                condition:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Gateway
+          type: string
+          jsonPath: .spec.parentRefs[0].name
+          description: First parent Gateway name
+        - name: Hosts
+          type: string
+          jsonPath: .spec.hosts[0]
+          description: First hostname in the list
+        - name: Secret
+          type: string
+          jsonPath: .spec.secretRef.name
+          description: Referenced secret name
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: edgiontls
+    singular: edgiontls
+    kind: EdgionTls
+    shortNames:
+      - etls

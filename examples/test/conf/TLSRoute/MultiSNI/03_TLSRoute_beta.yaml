@@ -1,0 +1,18 @@
+# TLSRoute for *.beta.example.com -> TCP echo server
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: multi-sni-route-beta
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-route-multi-sni-gw
+      namespace: edgion-test
+      sectionName: tls-multi
+  hostnames:
+    - "beta.sandbox.example.com"
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

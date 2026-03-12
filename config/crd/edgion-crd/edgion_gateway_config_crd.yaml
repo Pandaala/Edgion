@@ -1,0 +1,224 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgiongatewayclassconfigs.edgion.io
+spec:
+  group: edgion.io
+  names:
+    kind: EdgionGatewayConfig
+    listKind: EdgionGatewayConfigList
+    plural: edgiongatewayclassconfigs
+    singular: edgiongatewayclassconfig
+    shortNames:
+      - edgwcfg
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                # ============================================
+                # Server Configuration
+                # ============================================
+                server:
+                  type: object
+                  description: "Server configuration for Pingora"
+                  properties:
+                    threads:
+                      type: integer
+                      description: "Number of worker threads (default: number of CPU cores)"
+                      format: int32
+                    workStealing:
+                      type: boolean
+                      description: "Enable work stealing (default: true)"
+                      default: true
+                    gracePeriodSeconds:
+                      type: integer
+                      description: "Grace period for shutdown in seconds (default: 30)"
+                      format: int64
+                    gracefulShutdownTimeoutS:
+                      type: integer
+                      description: "Graceful shutdown timeout in seconds (default: 10)"
+                      format: int64
+                    upstreamKeepalivePoolSize:
+                      type: integer
+                      description: "Upstream keepalive pool size (default: 128)"
+                      format: int32
+                    errorLog:
+                      type: string
+                      description: "Error log file path"
+                    enableCompression:
+                      type: boolean
+                      description: "Enable downstream response compression (default: false)"
+                      default: false
+
+                # ============================================
+                # HTTP Timeout Configuration
+                # ============================================
+                httpTimeout:
+                  type: object
+                  description: "HTTP timeout configuration"
+                  properties:
+                    client:
+                      type: object
+                      description: "Client-side timeout settings"
+                      properties:
+                        readTimeout:
+                          type: string
+                          description: "Timeout for reading request from client (e.g., '60s', '1m')"
+                          default: "60s"
+                        writeTimeout:
+                          type: string
+                          description: "Timeout for writing response to client"
+                          default: "60s"
+                        keepaliveTimeout:
+                          type: string
+                          description: "HTTP keepalive timeout"
+                          default: "75s"
+                    backend:
+                      type: object
+                      description: "Backend-side timeout settings"
+                      properties:
+                        defaultConnectTimeout:
+                          type: string
+                          description: "Timeout for connecting to upstream backend"
+                          default: "5s"
+                        defaultRequestTimeout:
+                          type: string
+                          description: "Total request timeout including retries"
+                          default: "60s"
+                        defaultIdleTimeout:
+                          type: string
+                          description: "Idle timeout for backend connection pool"
+                          default: "300s"
+                        defaultMaxRetries:
+                          type: integer
+                          description: "Maximum number of retries"
+                          format: int32
+                          default: 3
+
+                # ============================================
+                # Max Retries
+                # ============================================
+                maxRetries:
+                  type: integer
+                  description: "Maximum number of retries for upstream connections (default: 3)"
+                  format: int32
+                  default: 3
+
+                # ============================================
+                # Real IP Configuration
+                # ============================================
+                realIp:
+                  type: object
+                  description: "Real IP extraction configuration"
+                  properties:
+                    trustedIps:
+                      type: array
+                      description: "Trusted IP addresses or CIDR ranges (e.g., ['10.0.0.0/8', '172.16.0.0/12'])"
+                      items:
+                        type: string
+                    realIpHeader:
+                      type: string
+                      description: "Header to extract real IP from (default: 'X-Forwarded-For')"
+                      default: "X-Forwarded-For"
+
+                # ============================================
+                # Security Protection Configuration
+                # ============================================
+                securityProtect:
+                  type: object
+                  description: "Security protection configuration"
+                  properties:
+                    xForwardedForLimit:
+                      type: integer
+                      description: "Maximum length of X-Forwarded-For header in bytes (default: 200)"
+                      format: int64
+                      default: 200
+                    requireSniHostMatch:
+                      type: boolean
+                      description: "Require SNI and Host header to match for HTTPS requests (default: true)"
+                      default: true
+                    fallbackSni:
+                      type: string
+                      description: "Fallback SNI hostname when client doesn't provide SNI"
+
+                # ============================================
+                # Global Plugins Reference
+                # ============================================
+                globalPluginsRef:
+                  type: array
+                  description: "Global plugins references that apply to all routes using this GatewayClass"
+                  items:
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      name:
+                        type: string
+                        description: "Name of the EdgionPlugins resource"
+                        minLength: 1
+                      namespace:
+                        type: string
+                        description: "Namespace of the EdgionPlugins resource (defaults to 'default')"
+
+                # ============================================
+                # Preflight Policy Configuration
+                # ============================================
+                preflightPolicy:
+                  type: object
+                  description: "Preflight request handling policy"
+                  properties:
+                    mode:
+                      type: string
+                      description: "Preflight detection mode"
+                      enum: ["cors-standard", "all-options"]
+                      default: "cors-standard"
+                    statusCode:
+                      type: integer
+                      description: "Status code to return when no CORS plugin is configured (default: 204)"
+                      format: int32
+                      default: 204
+                      minimum: 100
+                      maximum: 599
+
+                # ============================================
+                # ReferenceGrant Validation
+                # ============================================
+                enableReferenceGrantValidation:
+                  type: boolean
+                  description: "Enable ReferenceGrant validation for cross-namespace references (default: false)"
+                  default: false
+
+            status:
+              type: object
+              description: "Status of the gateway config"
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

@@ -1,0 +1,17 @@
+# GRPCRoute（）
+# Gateway  allowedRoutes.kinds  GRPCRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: kinds-grpc-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: allowed-routes-kinds-gateway
+      namespace: edgion-test
+  hostnames:
+    - "kinds-grpc.example.com"
+  rules:
+    - backendRefs:
+        - name: test-grpc
+          port: 30021

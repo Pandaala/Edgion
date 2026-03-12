@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hc-unhealthy
+  namespace: edgion-default
+  annotations:
+    edgion.io/health-check: |
+      active:
+        type: http
+        path: /status/503
+        interval: 1s
+        timeout: 1s
+        healthyThreshold: 1
+        unhealthyThreshold: 1
+        expectedStatuses:
+          - 200
+spec:
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

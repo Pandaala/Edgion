@@ -1,0 +1,30 @@
+#  Gateway
+#  Listener Hostname + AllowedRoutes 
+#  sectionName + Listener Hostname 
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: combined-test-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # Listener 1: hostname + allowedRoutes.namespaces.from: Same
+    - name: http-hostname-same-ns
+      protocol: HTTP
+      port: 31230
+      hostname: "*.combined.example.com"
+      allowedRoutes:
+        namespaces:
+          from: Same
+    
+    # Listener 2: secure listener with hostname (for sectionName + hostname test)
+    - name: http-secure
+      protocol: HTTP
+      port: 31231
+      hostname: "secure.combined.example.com"
+    
+    # Listener 3: open listener without hostname (for sectionName contrast)
+    - name: http-open
+      protocol: HTTP
+      port: 31232

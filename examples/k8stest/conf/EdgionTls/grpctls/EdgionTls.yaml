@@ -1,0 +1,16 @@
+# EdgionTls gRPC TLS 
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: edgiontls-grpctls
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-grpctls-gateway
+      namespace: edgion-test
+      sectionName: grpctls
+  hosts:
+    - grpc.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

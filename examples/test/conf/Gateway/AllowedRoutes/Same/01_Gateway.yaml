@@ -1,0 +1,17 @@
+# AllowedRoutes Same Namespace 
+# Gateway  allowedRoutes.namespaces.from: Same
+#  namespace  Route 
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: allowed-routes-same-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31210
+      allowedRoutes:
+        namespaces:
+          from: Same  #  namespace  Route

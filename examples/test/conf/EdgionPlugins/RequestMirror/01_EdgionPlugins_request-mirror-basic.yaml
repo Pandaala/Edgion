@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-mirror-basic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        # Mirror 100% of requests (no fraction = mirror all)
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100

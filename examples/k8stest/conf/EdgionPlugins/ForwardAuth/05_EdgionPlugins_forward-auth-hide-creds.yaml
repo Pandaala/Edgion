@@ -1,0 +1,21 @@
+# ForwardAuth with hideCredentials = true
+# After successful auth, the original Authorization header is removed from the upstream request
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-hide-creds
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        uri: "http://edgion-test-server.edgion-test.svc.cluster.local:30040/verify"
+        requestMethod: GET
+        timeoutMs: 5000
+        hideCredentials: true
+        upstreamHeaders:
+          - X-User-ID
+          - X-User-Role
+        clientHeaders:
+          - WWW-Authenticate

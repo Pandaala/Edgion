@@ -1,0 +1,216 @@
+# ================================================================================
+# Edgion Gateway Configuration File
+# ================================================================================
+# 
+# :
+#   1. :
+#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml
+#   
+#   2.  ( --config):
+#      ./edgion-gateway --server-addr http://127.0.0.1:50051
+#   
+#   3. :
+#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml --server-addr http://192.168.1.100:50051
+#
+# ================================================================================
+
+# ============================================================================
+# Working Directory Configuration
+# ============================================================================
+# All relative paths in this configuration file will be relative to work_dir.
+# Absolute paths will be used as-is.
+#
+# Priority order:
+#   1. Command line: --work-dir /path
+#   2. Environment:  EDGION_WORK_DIR=/path
+#   3. Config file:  work_dir = "/path"
+#   4. Default:      "." (current directory)
+#
+# Standard directory layout:
+#   work_dir/
+#   ├── logs/        # Log files
+#   ├── runtime/     # Runtime state
+#   └── config/      # Configuration files
+#
+# Examples:
+#   Development:  work_dir = "."
+#   Production:   work_dir = "/usr/local/edgion"
+#   Container:    work_dir = "/usr/local/edgion"
+# ============================================================================
+work_dir = "."
+
+[gateway]
+# Operator gRPC server address
+# Gateway 
+# : http://host:port  https://host:port
+server_addr = "http://127.0.0.1:50051"
+
+# Admin HTTP server listen address (optional)
+# 
+# admin_listen = "0.0.0.0:8081"
+
+[logging]
+# 
+log_dir = "logs"
+
+# 
+# : {log_prefix}.{date}.log
+log_prefix = "edgion-gateway"
+
+# : trace, debug, info, warn, error
+# - trace: ，
+# - debug: ，
+# - info:  ，
+# - warn:  
+# - error: 
+log_level = "debug,pingora_proxy=error,pingora_core=error"
+
+#  JSON 
+# true:   JSON ，
+# false: 
+json_format = false
+
+# 
+console = true
+
+# 
+# 
+buffer_size = 10000
+
+# ================================================================================
+# Pingora Server Configuration
+# ================================================================================
+[server]
+# Number of worker threads (default: number of CPU cores)
+# ， CPU 
+# threads = 4
+
+# Enable work stealing (default: true)
+# ，
+# work_stealing = true
+
+# Grace period for shutdown in seconds (default: 30)
+# ，
+# grace_period_seconds = 30
+
+# Graceful shutdown timeout in seconds (default: 10)
+# ，
+# graceful_shutdown_timeout_seconds = 10
+
+# Upstream keepalive pool size (default: 128)
+# ，
+# upstream_keepalive_pool_size = 128
+
+# Error log file path (optional)
+# Pingora 
+# error_log = "logs/pingora_error.log"
+
+# ================================================================================
+# Access Log Configuration (HTTP/gRPC)
+# ================================================================================
+# Access log  HTTP  gRPC 
+# ：LocalFile, Elasticsearch, Kafka 
+
+[access_log]
+#  Access  (default: true)
+enabled = true
+
+[access_log.output.localFile]
+# Access log （ work_dir，）
+path = "logs/edgion_access.log"
+
+# ：
+# ， cpu_cores * 10_000
+# queue_size = 100000
+
+# ：
+# [access_log.output.localFile.rotation]
+# strategy = "daily"  # : "daily", "hourly", "never",  { size = 104857600 }
+# max_files = 10
+# check_interval_secs = 30
+
+# ：
+# [access_log.output.es]
+# endpoint = "http://localhost:9200"
+# index = "edgion-access"
+# 
+# [access_log.output.kafka]
+# brokers = ["localhost:9092"]
+# topic = "edgion-access"
+
+# ================================================================================
+# SSL/TLS Callback Log Configuration
+# ================================================================================
+# SSL log  TLS ，
+#  access log （metrics）
+
+[ssl_log]
+#  SSL  (default: true)
+enabled = true
+
+[ssl_log.output.localFile]
+# SSL log （ work_dir，）
+path = "logs/ssl.log"
+
+# ：
+# ， cpu_cores * 10_000
+# queue_size = 100000
+
+# ：
+# ， SSL ，
+[ssl_log.output.localFile.rotation]
+strategy = { size = 104857600 }  # 100MB per file
+max_files = 10                    #  10 
+check_interval_secs = 30          #  30 
+
+# （ access log ）
+# [ssl_log.output.es]
+# endpoint = "http://localhost:9200"
+# index = "edgion-ssl"
+
+# ================================================================================
+# TCP Connection Log Configuration
+# ================================================================================
+# TCP log  TCP ，
+# ，
+
+[tcp_log]
+#  TCP  (default: false)
+enabled = false
+
+[tcp_log.output.localFile]
+# TCP log （ work_dir，）
+path = "logs/tcp.log"
+
+# ：
+# queue_size = 50000
+
+# ：
+# [tcp_log.output.localFile.rotation]
+# strategy = "daily"  # 
+# max_files = 10
+# check_interval_secs = 30
+
+# ================================================================================
+# UDP Session Log Configuration
+# ================================================================================
+# UDP log  UDP ，
+# ，
+
+[udp_log]
+#  UDP  (default: false)
+enabled = false
+
+[udp_log.output.localFile]
+# UDP log （ work_dir，）
+path = "logs/udp.log"
+
+# ：
+# queue_size = 50000
+
+# ：
+# [udp_log.output.localFile.rotation]
+# strategy = "daily"  # 
+# max_files = 10
+# check_interval_secs = 30
+

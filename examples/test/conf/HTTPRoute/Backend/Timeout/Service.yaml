@@ -1,0 +1,11 @@
+# Timeout  Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-http
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

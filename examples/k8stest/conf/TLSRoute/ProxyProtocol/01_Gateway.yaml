@@ -1,0 +1,20 @@
+# Gateway for TLSRoute Proxy Protocol v2 testing (K8s)
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-route-pp2-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/backend-protocol: "tcp"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls-pp2
+      protocol: TLS
+      port: 31281
+      hostname: "*.pp2.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test

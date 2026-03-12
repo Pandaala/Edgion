@@ -1,0 +1,11 @@
+# ResponseRewrite - 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: response-rewrite-status-code
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - type: ResponseRewrite
+      config:
+        statusCode: 201

@@ -1,0 +1,169 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgionacmes.edgion.io
+spec:
+  group: edgion.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              description: "Manages automatic TLS certificate issuance and renewal via the ACME protocol"
+              required:
+                - email
+                - domains
+                - challenge
+                - storage
+              properties:
+                server:
+                  type: string
+                  description: "ACME server directory URL (default: Let's Encrypt production)"
+                email:
+                  type: string
+                  description: "Contact email for ACME account registration"
+                domains:
+                  type: array
+                  description: "Domain names to obtain certificates for"
+                  items:
+                    type: string
+                keyType:
+                  type: string
+                  description: "Certificate key algorithm"
+                  enum: ["ecdsa-p256", "ecdsa-p384"]
+                challenge:
+                  type: object
+                  description: "ACME challenge configuration"
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    type:
+                      type: string
+                      description: "Challenge type"
+                      enum: ["http-01", "dns-01"]
+                    http01:
+                      type: object
+                      description: "HTTP-01 challenge configuration"
+                      x-kubernetes-preserve-unknown-fields: true
+                    dns01:
+                      type: object
+                      description: "DNS-01 challenge configuration"
+                      x-kubernetes-preserve-unknown-fields: true
+                renewal:
+                  type: object
+                  description: "Certificate renewal configuration"
+                  properties:
+                    renewBeforeDays:
+                      type: integer
+                      description: "Days before expiry to trigger renewal (default: 30)"
+                    checkInterval:
+                      type: integer
+                      description: "Interval between renewal checks in seconds (default: 86400)"
+                    failBackoff:
+                      type: integer
+                      description: "Backoff duration in seconds after failed renewal (default: 300)"
+                externalAccountBinding:
+                  type: object
+                  description: "External Account Binding for ACME providers that require it"
+                  properties:
+                    keyId:
+                      type: string
+                    hmacKey:
+                      type: string
+                storage:
+                  type: object
+                  description: "Certificate storage configuration"
+                  required:
+                    - secretName
+                  properties:
+                    secretName:
+                      type: string
+                      description: "Name of the K8s Secret to store the certificate"
+                    secretNamespace:
+                      type: string
+                      description: "Namespace for the certificate Secret"
+                autoEdgionTls:
+                  type: object
+                  description: "Auto-create EdgionTls resource for the issued certificate"
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Whether to auto-create EdgionTls (default: true)"
+                    name:
+                      type: string
+                      description: "Name for the auto-created EdgionTls resource"
+                    parentRefs:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                activeChallenges:
+                  type: array
+                  description: "Active HTTP-01 challenges (filled by Controller at runtime)"
+                  items:
+                    type: object
+                    properties:
+                      domain:
+                        type: string
+                      token:
+                        type: string
+                      keyAuthorization:
+                        type: string
+                      expireAt:
+                        type: integer
+                        format: int64
+                dnsCredentialSecret:
+                  type: object
+                  description: "DNS provider credential Secret (resolved by Controller)"
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              description: "EdgionAcme resource status"
+              properties:
+                phase:
+                  type: string
+                  description: "Current phase of the ACME certificate lifecycle"
+                  enum: ["Pending", "Issuing", "Ready", "Renewing", "Failed"]
+                certificateSerial:
+                  type: string
+                certificateNotAfter:
+                  type: string
+                lastRenewalTime:
+                  type: string
+                lastFailureReason:
+                  type: string
+                lastFailureTime:
+                  type: string
+                secretName:
+                  type: string
+                edgionTlsName:
+                  type: string
+                accountUri:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Domains
+          type: string
+          jsonPath: .spec.domains
+          priority: 1
+        - name: Expires
+          type: string
+          jsonPath: .status.certificateNotAfter
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: edgionacmes
+    singular: edgionacme
+    kind: EdgionAcme
+    shortNames:
+      - eacme

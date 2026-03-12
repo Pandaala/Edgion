@@ -1,0 +1,22 @@
+# LinkSys Elasticsearch resource for integration testing.
+# Connects to the Docker Elasticsearch instance started by run_es_test.sh.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-test
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "http://127.0.0.1:19200"
+    timeout:
+      connect: 5000
+      request: 30000
+    bulk:
+      batchSize: 100
+      flushInterval: 2000
+      maxRetries: 3
+    index:
+      prefix: "edgion-test"
+      datePattern: "%Y.%m.%d"

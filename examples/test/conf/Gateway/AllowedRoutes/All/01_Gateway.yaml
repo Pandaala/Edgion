@@ -1,0 +1,17 @@
+# AllowedRoutes All Namespaces 
+# Gateway  allowedRoutes.namespaces.from: All
+#  namespace  Route 
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: allowed-routes-all-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31211
+      allowedRoutes:
+        namespaces:
+          from: All  #  namespace  Route

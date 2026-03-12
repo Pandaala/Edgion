@@ -1,0 +1,21 @@
+# DSL Plugin - Header Rewrite 
+#  X-User-Id ， X-Processed-By  X-User-Upper
+#  resp.set_header 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-header-rewrite
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "header-rewrite"
+        source: |
+          let user_id = req.header("X-User-Id")
+          if user_id != nil {
+            resp.set_header("X-Processed-By", "edgion-dsl")
+            let upper = to_upper(user_id)
+            resp.set_header("X-User-Upper", upper)
+          }

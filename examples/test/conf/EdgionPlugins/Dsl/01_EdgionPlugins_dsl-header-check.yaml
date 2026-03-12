@@ -1,0 +1,19 @@
+# DSL Plugin - Header Check 
+#  X-Api-Token ， 403
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-header-check
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "header-check"
+        source: |
+          let token = req.header("X-Api-Token")
+          if token == nil {
+            return deny(403, "missing X-Api-Token header")
+          }
+        errorPolicy: deny

@@ -1,0 +1,26 @@
+# Listener Hostname  Gateway
+#  Gateway Listener  hostname 
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: hostname-test-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # Listener 1:  hostname - api.example.com
+    - name: http-exact
+      protocol: HTTP
+      port: 31240
+      hostname: "api.example.com"
+    
+    # Listener 2:  hostname - *.wildcard.example.com
+    - name: http-wildcard
+      protocol: HTTP
+      port: 31241
+      hostname: "*.wildcard.example.com"
+    
+    # Listener 3:  hostname （）
+    - name: http-no-restriction
+      protocol: HTTP
+      port: 31242

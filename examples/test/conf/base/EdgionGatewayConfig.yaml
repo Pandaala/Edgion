@@ -1,0 +1,41 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: example-gateway
+spec:
+  # Server （Pingora ）
+  server:
+    threads: 4
+    workStealing: true
+    gracePeriodSeconds: 30
+    gracefulShutdownTimeoutS: 10
+    upstreamKeepalivePoolSize: 128
+    downstreamKeepaliveRequestLimit: 1000  # per-connection, HTTP/1.1 only, 0 = unlimited
+
+  # Real IP 
+  realIp:
+    trustedIps:
+      - "127.0.0.0/8"
+      - "198.51.100.0/24"
+      - "192.168.0.0/16"
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+    realIpHeader: "X-Forwarded-For"
+
+  # 
+  securityProtect:
+    xForwardedForLimit: 200
+    requireSniHostMatch: true
+    fallbackSni: "default.example.com"
+
+  # HTTP 
+  httpTimeout:
+    client:
+      readTimeout: 60s
+      writeTimeout: 60s
+      keepaliveTimeout: 75s
+    backend:
+      defaultConnectTimeout: 5s
+      defaultRequestTimeout: 60s
+      defaultIdleTimeout: 300s
+      defaultMaxRetries: 3

@@ -1,0 +1,30 @@
+# EdgionTls port-only binding HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: edgiontls-port-only-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-port-only-gateway
+      namespace: edgion-test
+      sectionName: https
+  hostnames:
+    - port-only.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /secure
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

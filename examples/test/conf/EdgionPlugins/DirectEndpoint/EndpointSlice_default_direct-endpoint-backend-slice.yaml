@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: direct-endpoint-backend-slice
+  namespace: default
+  labels:
+    kubernetes.io/service-name: direct-endpoint-backend
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1" # Valid allowed endpoint
+    conditions:
+      ready: true

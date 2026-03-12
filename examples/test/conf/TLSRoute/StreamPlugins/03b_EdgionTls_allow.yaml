@@ -1,0 +1,16 @@
+# EdgionTls certificate for allow-localhost TLS listener
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: tls-sp-allow-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-stream-plugins-gw
+      namespace: edgion-test
+      sectionName: tls-allow-localhost
+  hosts:
+    - "*.sp-allow.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

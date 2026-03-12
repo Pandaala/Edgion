@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lb-multi-test-server
+  namespace: edgion-default
+  labels:
+    app: edgion-test-server-multi
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: edgion-test-server-multi
+  template:
+    metadata:
+      labels:
+        app: edgion-test-server-multi
+    spec:
+      containers:
+        - name: test-server
+          image: docker.io/pandaala/edgion-test-server:v0.1.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/test_server
+          args:
+            - --http-ports=30001,30002,30003,30004
+            - --grpc-ports=30021,30022
+            - --websocket-port=30005
+            - --tcp-port=30010
+            - --udp-port=30011
+            - --auth-port=30040
+            - --log-level=info
+          env:
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

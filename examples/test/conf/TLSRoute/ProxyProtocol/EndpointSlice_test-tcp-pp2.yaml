@@ -1,0 +1,17 @@
+# EndpointSlice for PP2-aware TCP echo server
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-tcp-pp2-slice
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: test-tcp-pp2
+addressType: IPv4
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+ports:
+  - port: 30012
+    protocol: TCP

@@ -1,0 +1,200 @@
+[package]
+name = "edgion"
+version = "0.1.0"
+edition = "2021"
+authors = ["pandalaa"]
+
+[lib]
+name = "edgion"
+path = "src/lib.rs"
+
+[[bin]]
+name = "edgion-gateway"
+path = "src/bin/edgion_gateway.rs"
+
+[[bin]]
+name = "edgion-controller"
+path = "src/bin/edgion_controller.rs"
+
+[[bin]]
+name = "edgion-ctl"
+path = "src/bin/edgion_ctl.rs"
+
+[[example]]
+name = "build_test_proto"
+path = "examples/code/build_test_proto.rs"
+
+[[example]]
+name = "test_server"
+path = "examples/code/server/test_server.rs"
+
+[[example]]
+name = "test_client"
+path = "examples/code/client/test_client.rs"
+
+[[example]]
+name = "test_client_direct"
+path = "examples/code/client_direct/test_client_direct.rs"
+
+[[example]]
+name = "resource_diff"
+path = "examples/code/validator/resource_diff.rs"
+
+[[example]]
+name = "config_load_validator"
+path = "examples/code/validator/config_load_validator.rs"
+
+[features]
+# Default features
+default = ["allocator-jemalloc", "boringssl"]
+
+# Memory allocator selection (mutually exclusive)
+allocator-jemalloc = ["tikv-jemallocator"]
+allocator-mimalloc = ["mimalloc"]
+allocator-system = []
+
+# TLS backend selection (mutually exclusive)
+boringssl = [
+    "pingora-core/boringssl",
+    "pingora-proxy/boringssl",
+    "dep:boring-sys",
+]
+
+openssl = [
+    "pingora-core/openssl",
+    "pingora-proxy/openssl",
+]
+
+rustls = [
+    "pingora-core/rustls",
+    "pingora-proxy/rustls",
+]
+
+# Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
+legacy_route_tests = []
+
+[dependencies]
+# Memory allocators (optional, controlled by features)
+tikv-jemallocator = { version = "0.6", optional = true }
+mimalloc = { version = "0.1", default-features = false, optional = true }
+
+# Core async runtime and error handling
+tokio = { version = "1.49", features = ["full"] }
+tokio-stream = "0.1"
+anyhow = "1.0"
+async-trait = "0.1"
+thiserror = "2.0.18"
+
+# Serialization/Deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+toml = "0.9"
+jsonschema = { version = "0.40", default-features = false }
+
+# Kubernetes conf_client and types
+kube = { version = "2.0.1", features = ["runtime", "derive"] }
+k8s-openapi = { version = "0.26.1", features = ["latest", "schemars"] }
+schemars = { version = "1" }
+
+# gRPC (config sync)
+tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
+# rustls （tonic TLS ）
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
+x509-parser = { version = "0.18", features = ["verify"] }  # Certificate parsing and signature verification
+tonic-reflection = "0.12"
+prost = "0.13"
+
+# File system monitoring
+notify = "8.2"
+futures = "0.3.31"
+
+# HTTP server
+axum = { version = "0.8.8", features = ["macros", "ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+tower-http = { version = "0.6", features = ["fs"] }  # Only for static files
+rust-embed = { version = "8.11" }  # For embedding frontend
+mime_guess = "2.0"
+
+# Utilities
+bytes = "1.11.1"
+base64 = "0.22"
+chrono = "0.4"
+parking_lot = "0.12"
+uuid = { version = "1.19", features = ["v4"] }
+arc-swap = "1.8"
+dashmap = "6.1"
+regex = "1.12"
+rand = "0.9"
+smallvec = "1.15"
+nom = "7"
+bcrypt = "0.18"
+sha2 = "0.10"
+hmac = "0.12"
+aes-gcm = "0.10"
+hex = "0.4"
+jsonwebtoken = "9"
+
+# Pingora
+pingora-core = { version = "0.8.0", features = ["connection_filter"] }
+pingora-http = "0.8.0"
+pingora-limits = "0.8.0"
+pingora-load-balancing = "0.8.0"
+pingora-proxy = { version = "0.8.0" }
+etcd-client = { version = "0.18", features = ["tls"] }
+fred = { version = "10", default-features = false, features = [
+    "enable-rustls",       # TLS via rustls (consistent with Edgion)
+    "i-std",               # Standard data structures (GET, SET, lists, etc.)
+    "i-keys",              # Key commands (EXPIRE, TTL, EXISTS, etc.)
+    "i-hashes",            # Hash commands (HGET, HSET, HGETALL, etc.)
+    "i-scripts",           # Lua scripting (for distributed locks)
+    "i-lists",             # List commands (RPUSH, LPOP, LLEN, LTRIM)
+    "partial-tracing",     # Tracing integration
+] }
+
+# BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
+boring-sys = { version = "4", optional = true }
+
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+http = "1.4.0"
+percent-encoding = "2.3"
+mockall = "0.14.0"
+
+# Test client dependencies
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
+console = "0.16"
+colored = "2.2"
+
+# CLI table formatting
+tabled = "0.20"
+
+# Unix Socket support for HTTP
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+tower = "0.5"
+md-5 = "0.10"
+cookie = "0.18.1"
+instant-acme = "0.8.4"
+rcgen = { version = "0.14.7", features = ["x509-parser"] }
+sha1 = "0.10.6"
+# Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+proxy-header = "0.1.2"
+pingora-ketama = "0.8.0"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.28"
+base64 = "0.22"
+tonic-build = "0.12"

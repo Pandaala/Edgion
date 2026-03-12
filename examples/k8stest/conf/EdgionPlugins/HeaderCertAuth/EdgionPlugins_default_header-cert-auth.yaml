@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: header-cert-auth-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: HeaderCertAuth
+      config:
+        mode: Header
+        certificateHeaderName: X-Client-Cert
+        certificateHeaderFormat: urlEncoded
+        caSecretRefs:
+          - name: header-cert-ca
+            namespace: edgion-default
+        verifyDepth: 2
+        skipConsumerLookup: false
+        consumerBy: sanOrCn
+        hideCredentials: true
+        allowAnonymous: false

@@ -1,0 +1,141 @@
+#!/bin/bash
+# =============================================================================
+# Edgion TestPreparescript
+# BuildallTest（debug ）
+# =============================================================================
+
+set -e
+
+# 
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# projectdirectory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+
+# =============================================================================
+# log
+# =============================================================================
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[✓]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[✗]${NC} $1"
+}
+
+log_section() {
+    echo ""
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}$1${NC}"
+    echo -e "${BLUE}========================================${NC}"
+}
+
+# =============================================================================
+# Build
+# =============================================================================
+
+# Buildbinaryfile
+build_binary() {
+    local name=$1
+    local target=$2
+    
+    log_info "Build $name..."
+    
+    if cargo build $target 2>&1; then
+        log_success "$name Buildsuccess"
+        return 0
+    else
+        log_error "$name Buildfailed"
+        return 1
+    fi
+}
+
+# =============================================================================
+# 
+# =============================================================================
+main() {
+    local start_time=$(date +%s)
+    
+    echo ""
+    echo -e "${BLUE}Edgion TestPrepare - Build${NC}"
+    echo -e "Project: ${PROJECT_ROOT}"
+    echo -e "Mode: Debug"
+    
+    cd "$PROJECT_ROOT"
+    
+    # Build Controller (exit immediately on failure)
+    log_section "Build edgion-controller"
+    if ! build_binary "edgion-controller" "--bin edgion-controller"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # Build Gateway
+    log_section "Build edgion-gateway"
+    if ! build_binary "edgion-gateway" "--bin edgion-gateway"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # Build edgion-ctl
+    log_section "Build edgion-ctl"
+    if ! build_binary "edgion-ctl" "--bin edgion-ctl"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # Build test_server
+    log_section "Build test_server"
+    if ! build_binary "test_server" "--example test_server"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # Build test_client
+    log_section "Build test_client"
+    if ! build_binary "test_client" "--example test_client"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # Build test_client_direct
+    log_section "Build test_client_direct"
+    if ! build_binary "test_client_direct" "--example test_client_direct"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # Build resource_diff
+    log_section "Build resource_diff"
+    if ! build_binary "resource_diff" "--example resource_diff"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # Build config_load_validator
+    log_section "Build config_load_validator"
+    if ! build_binary "config_load_validator" "--example config_load_validator"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+    
+    # 
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    log_section "Summary"
+    echo "Duration: ${duration}s"
+    log_success "allBuildsuccess!"
+    exit 0
+}
+
+main "$@"

@@ -1,0 +1,63 @@
+TODO List - Link External Systems
+==================================
+
+## Implemented
+- [x] DataSender trait
+- [x] LocalFileWriter (file-based log writer with rotation)
+
+## Planned Senders
+
+### ES (Elasticsearch) Sender
+- [ ] Direct log shipping to Elasticsearch
+- [ ] Bulk API support for batch writes
+- [ ] Auto retry with exponential backoff
+- [ ] FailedCache integration:
+  - When ES is unavailable, cache failed logs to:
+    - LocalFileWriter (file system)
+    - Redis
+    - Other cache backends
+  - Auto replay cached logs when ES recovers
+
+### Kafka Sender
+- [ ] Async log shipping to Kafka
+- [ ] Partition key support (e.g., by trace_id)
+
+### ClickHouse Sender
+- [ ] Direct insertion to ClickHouse
+- [ ] Batch insert optimization
+
+## CRD Design (EdgionLinkConfig)
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionLinkConfig
+metadata:
+  name: access-log-es
+spec:
+  type: elasticsearch
+  endpoint: https://es.example.com:9200
+  auth:
+    type: basic  # basic / apikey / none
+    secretRef:
+      name: es-credentials
+  tls:
+    enabled: true
+    caSecretRef:
+      name: es-ca-cert
+  failedCache:
+    type: file  # file / redis
+    config:
+      path: /var/log/edgion/failed-cache
+      # or for redis:
+      # endpoint: redis://localhost:6379
+```
+
+## Architecture
+```
+AccessLogger
+    └── senders: Vec<Box<dyn DataSender>>
+            ├── LocalFileWriter (current)
+            ├── EsSender (planned)
+            │       └── failedCache: Option<Box<dyn DataSender>>
+            ├── KafkaSender (planned)
+            └── ClickHouseSender (planned)
+```

@@ -1,0 +1,29 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: openid-connect-auto-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: OpenidConnect
+      config:
+        discovery: "http://127.0.0.1:30040/oidc/.well-known/openid-configuration"
+        clientId: "test-client"
+        clientSecretRef:
+          name: oidc-client-secret
+          namespace: edgion-default
+        bearerOnly: true
+        unauthAction: Deny
+        verificationMode: Auto
+        useJwks: true
+        tokenSigningAlg: "RS256"
+        allowedSigningAlgs:
+          - "RS256"
+        requiredScopes:
+          - "api:read"
+        claimsToHeaders:
+          sub: "X-User-ID"
+        setAccessTokenHeader: true
+        introspectionEndpointAuthMethod: client_secret_basic
+        timeout: 3

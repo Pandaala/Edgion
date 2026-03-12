@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: basic-auth-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: BasicAuth
+      config:
+        realm: "Test Realm"
+        hideCredentials: false
+        secretRefs:
+          - name: basic-auth-alice
+            namespace: edgion-default
+          - name: basic-auth-bob
+            namespace: edgion-default

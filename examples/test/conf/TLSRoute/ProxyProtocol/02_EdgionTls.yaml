@@ -1,0 +1,16 @@
+# EdgionTls certificate for PP2 listener
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: tls-pp2-gw-pp2-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-route-pp2-gw
+      namespace: edgion-test
+      sectionName: tls-pp2
+  hosts:
+    - "*.pp2.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

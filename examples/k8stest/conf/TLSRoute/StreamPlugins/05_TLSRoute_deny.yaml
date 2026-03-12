@@ -1,0 +1,20 @@
+# TLSRoute with deny-all stream plugin (K8s, short name format)
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: tls-sp-deny-all
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tls-deny-all"
+spec:
+  parentRefs:
+    - name: tls-stream-plugins-gw
+      namespace: edgion-test
+      sectionName: tls-deny-all
+  hostnames:
+    - "*.sp-deny.example.com"
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

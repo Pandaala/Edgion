@@ -1,0 +1,122 @@
+{
+  "current_max": 31286,
+  "suites": {
+    "HTTPRoute/Basic": {
+      "http": 31000
+    },
+    "HTTPRoute/Match": {
+      "http": 31020,
+      "https": 31021
+    },
+    "HTTPRoute/Backend/LBRoundRobin": {
+      "http": 31120
+    },
+    "HTTPRoute/Backend/LBConsistentHash": {
+      "http": 31121
+    },
+    "HTTPRoute/Backend/WeightedBackend": {
+      "http": 31130
+    },
+    "HTTPRoute/Backend/Timeout": {
+      "http": 31140
+    },
+    "HTTPRoute/Backend/HealthCheck": {
+      "http": 31141
+    },
+    "HTTPRoute/Backend/HealthCheckTransition": {
+      "http": 31142
+    },
+    "HTTPRoute/Filters/Redirect": {
+      "http": 31040
+    },
+    "HTTPRoute/Filters/Security": {
+      "http": 31030
+    },
+    "HTTPRoute/Filters/HeaderModifier": {
+      "http": 31045
+    },
+    "HTTPRoute/Protocol/WebSocket": {
+      "http": 31080
+    },
+    "GRPCRoute/Basic": {
+      "grpc": 31050
+    },
+    "GRPCRoute/Match": {
+      "grpc": 31060
+    },
+    "TCPRoute/Basic": {
+      "tcp": 31090,
+      "tcp_filtered": 31091
+    },
+    "UDPRoute/Basic": {
+      "udp": 31100
+    },
+    "Gateway/Security": {
+      "http": 31150
+    },
+    "Gateway/RealIP": {
+      "http": 31160
+    },
+    "Gateway/TLS/BackendTLS": {
+      "http": 31170
+    },
+    "EdgionPlugins": {
+      "http": 31180
+    },
+    "EdgionTls/https": {
+      "https": 31190
+    },
+    "EdgionTls/grpctls": {
+      "grpc_tls": 31200
+    },
+    "EdgionTls/mTLS": {
+      "https": 31110
+    },
+    "EdgionTls/cipher": {
+      "https": 31195
+    },
+    "EdgionTls/port_only": {
+      "https": 31285
+    },
+    "Gateway/TLS/GatewayTLS": {
+      "https": 31220
+    },
+    "Gateway/TLS/NoHostnameListener": {
+      "https": 31286
+    },
+    "Gateway/Dynamic": {
+      "http": 31250
+    },
+    "Gateway/PortConflict": {
+      "internal_conflict": 31260,
+      "cross_conflict": 31261,
+      "no_conflict_hostname": 31262
+    },
+    "Gateway/StreamPlugins": {
+      "http": 31270,
+      "tcp": 31271,
+      "tcp_filtered": 31272
+    },
+    "TCPRoute/StreamPlugins": {
+      "tcp": 31274,
+      "tcp_filtered": 31275
+    },
+    "Gateway/AllowedRoutes/Selector": {
+      "http": 31276
+    },
+    "TLSRoute/Basic": {
+      "tls": 31280
+    },
+    "TLSRoute/ProxyProtocol": {
+      "tls": 31280,
+      "tls_pp2": 31281
+    },
+    "TLSRoute/StreamPlugins": {
+      "tls": 31282,
+      "tls_filtered": 31283
+    },
+    "TLSRoute/MultiSNI": {
+      "tls": 31284
+    }
+  }
+}

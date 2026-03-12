@@ -1,0 +1,10 @@
+# LB ConsistentHash  Slice 
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-ch-multi-service
+  namespace: edgion-default
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP

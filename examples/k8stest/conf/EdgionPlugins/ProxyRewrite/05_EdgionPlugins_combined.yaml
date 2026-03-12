@@ -1,0 +1,26 @@
+# 5. ：Host + Headers 
+# ：Method  test_server  POST，
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-combined
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        host: "backend.internal.svc"
+        headers:
+          add:
+            - name: X-Gateway
+              value: "edgion"
+          set:
+            - name: X-Original-Path
+              value: "$uri"
+            - name: X-Request-Id
+              value: "req-12345"
+          remove:
+            - X-Debug
+            - X-Internal-Token
+

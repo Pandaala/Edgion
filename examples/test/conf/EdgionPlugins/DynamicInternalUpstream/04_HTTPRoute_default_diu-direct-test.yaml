@@ -1,0 +1,28 @@
+# HTTPRoute for DynamicInternalUpstream direct mode test
+# Three backends accessible by name
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: diu-direct-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "diu-direct-test.example.com"
+  rules:
+    - backendRefs:
+        - name: diu-backend-stable
+          port: 30001
+          weight: 50
+        - name: diu-backend-canary
+          port: 30002
+          weight: 50
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: diu-direct

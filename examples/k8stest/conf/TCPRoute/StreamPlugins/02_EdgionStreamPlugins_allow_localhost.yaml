@@ -1,0 +1,22 @@
+# EdgionStreamPlugins: allow localhost only
+# Key regression test: proves real client IP is extracted (not hardcoded "0.0.0.0")
+# - Old code (0.0.0.0): does NOT match 127.0.0.0/8 → DENY (bug)
+# - Fixed code (127.0.0.1): matches 127.0.0.0/8 → ALLOW (correct)
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-allow-localhost
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        defaultAction: deny
+        allow:
+          # Keep localhost for non-k8s environments.
+          - "127.0.0.0/8"
+          # K8s test-client source IP is typically Pod CIDR/private ranges.
+          # This still rejects 0.0.0.0, preserving the original regression intent.
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"

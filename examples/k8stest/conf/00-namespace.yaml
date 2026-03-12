@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edgion-test
+  labels:
+    app.kubernetes.io/name: edgion-test
+    app.kubernetes.io/component: test

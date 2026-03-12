@@ -1,0 +1,16 @@
+# ResponseRewrite - 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: response-rewrite-headers-rename
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - type: ResponseRewrite
+      config:
+        headers:
+          rename:
+            - from: X-Internal-Id
+              to: X-Request-Id
+            - from: X-Debug-Info
+              to: X-Trace-Info

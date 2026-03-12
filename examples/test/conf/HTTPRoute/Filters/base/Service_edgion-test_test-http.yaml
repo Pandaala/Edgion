@@ -1,0 +1,13 @@
+# HTTP Filters 
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-http
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http-30001
+      port: 30001
+      protocol: TCP
+      targetPort: 30001
+  type: ClusterIP

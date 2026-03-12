@@ -1,0 +1,12 @@
+# EdgionTls port-only binding Gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edgiontls-port-only-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 31285
