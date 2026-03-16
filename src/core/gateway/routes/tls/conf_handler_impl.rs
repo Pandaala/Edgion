@@ -1,11 +1,11 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::core::gateway::routes::tls::{get_global_tls_route_manager, TlsRouteManager};
+use crate::core::gateway::routes::tls::routes_mgr::resolved_ports_for_route;
+use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
 use crate::types::{ResourceMeta, TLSRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Implement ConfHandler for Arc<TlsRouteManager>
-impl ConfHandler<TLSRoute> for Arc<TlsRouteManager> {
+impl ConfHandler<TLSRoute> for &'static GlobalTlsRouteManagers {
     fn full_set(&self, data: &HashMap<String, TLSRoute>) {
         (**self).full_set(data)
     }
@@ -20,49 +20,37 @@ impl ConfHandler<TLSRoute> for Arc<TlsRouteManager> {
     }
 }
 
-/// Implement ConfHandler for &'static TlsRouteManager
-impl ConfHandler<TLSRoute> for &'static TlsRouteManager {
-    fn full_set(&self, data: &HashMap<String, TLSRoute>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, TLSRoute>,
-        update: HashMap<String, TLSRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
-
-/// Create a TlsRouteManager handler for registration with ConfigClient
+/// Create a TLS route handler for registration with ConfigClient.
 pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync> {
-    Box::new(get_global_tls_route_manager())
+    Box::new(get_global_tls_route_managers())
 }
 
-impl ConfHandler<TLSRoute> for TlsRouteManager {
+impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
     fn full_set(&self, data: &HashMap<String, TLSRoute>) {
-        tracing::info!(component = "tls_route_manager", cnt = data.len(), "full set");
+        tracing::info!(
+            component = "global_tls_route_managers",
+            cnt = data.len(),
+            "full set"
+        );
 
-        // Initialize all routes
-        let mut processed_routes = HashMap::new();
+        self.clear_route_cache();
+
         for (key, route) in data {
             match self.initialize_route(route.clone()) {
-                Ok(initialized_route) => {
-                    processed_routes.insert(key.clone(), initialized_route);
+                Ok(initialized) => {
+                    self.insert_route(initialized);
                 }
                 Err(e) => {
                     tracing::error!(
                         resource_key = %key,
                         error = %e,
-                        "Failed to initialize TLSRoute"
+                        "Failed to initialize TLSRoute during full_set"
                     );
                 }
             }
         }
 
-        self.replace_all(processed_routes);
+        self.rebuild_all_port_managers();
     }
 
     fn partial_update(
@@ -72,18 +60,31 @@ impl ConfHandler<TLSRoute> for TlsRouteManager {
         remove: HashSet<String>,
     ) {
         tracing::info!(
-            component = "tls_route_manager",
+            component = "global_tls_route_managers",
             add = add.len(),
             update = update.len(),
             rm = remove.len(),
             "partial update"
         );
 
-        // Process additions
+        let mut affected_ports: HashSet<u16> = HashSet::new();
+
+        // Collect old ports from routes being removed or updated BEFORE modifying the cache
+        for key in remove.iter().chain(update.keys()) {
+            if let Some(entry) = self.get_route(key) {
+                for &port in resolved_ports_for_route(&entry) {
+                    affected_ports.insert(port);
+                }
+            }
+        }
+
         for (key, route) in add {
             match self.initialize_route(route) {
-                Ok(initialized_route) => {
-                    self.add_route(initialized_route);
+                Ok(initialized) => {
+                    for &port in resolved_ports_for_route(&initialized) {
+                        affected_ports.insert(port);
+                    }
+                    self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Added TLSRoute");
                 }
                 Err(e) => {
@@ -96,39 +97,39 @@ impl ConfHandler<TLSRoute> for TlsRouteManager {
             }
         }
 
-        // Process updates
         for (key, route) in update {
+            self.remove_route(&key);
             match self.initialize_route(route) {
-                Ok(initialized_route) => {
-                    // Remove old version first
-                    self.remove_route(&key);
-                    // Add new version
-                    self.add_route(initialized_route);
+                Ok(initialized) => {
+                    for &port in resolved_ports_for_route(&initialized) {
+                        affected_ports.insert(port);
+                    }
+                    self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Updated TLSRoute");
                 }
                 Err(e) => {
                     tracing::error!(
                         resource_key = %key,
                         error = %e,
-                        "Failed to update TLSRoute"
+                        "Failed to update TLSRoute, old version removed"
                     );
                 }
             }
         }
 
-        // Process removals
         for key in remove {
             self.remove_route(&key);
             tracing::debug!(resource_key = %key, "Removed TLSRoute");
         }
+
+        self.rebuild_affected_port_managers(&affected_ports);
     }
 }
 
 /// Annotation key for referencing EdgionStreamPlugins from TLSRoute.
-/// Same annotation as Gateway-level and TCPRoute: `edgion.io/edgion-stream-plugins`.
 const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
 
-impl TlsRouteManager {
+impl GlobalTlsRouteManagers {
     /// Initialize a TLSRoute by setting up BackendSelector, proxy protocol,
     /// upstream TLS, and stream plugin store key from annotations.
     fn initialize_route(&self, mut route: TLSRoute) -> Result<Arc<TLSRoute>, String> {
@@ -149,6 +150,12 @@ impl TlsRouteManager {
 
         let store_key = Self::resolve_stream_plugin_store_key(&route);
 
+        let max_connect_retries = annotations
+            .and_then(|a| a.get(crate::types::constants::annotations::edgion::MAX_CONNECT_RETRIES))
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .map(|v| v.max(1))
+            .unwrap_or(1);
+
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 if let Some(backend_refs) = &rule.backend_refs {
@@ -167,6 +174,7 @@ impl TlsRouteManager {
 
                 rule.proxy_protocol_version = proxy_protocol_version;
                 rule.upstream_tls = upstream_tls;
+                rule.max_connect_retries = max_connect_retries;
 
                 if let Some(ref key) = store_key {
                     rule.stream_plugin_store_key = Some(key.clone());
@@ -180,11 +188,12 @@ impl TlsRouteManager {
             }
         }
 
-        if proxy_protocol_version.is_some() || upstream_tls {
+        if proxy_protocol_version.is_some() || upstream_tls || max_connect_retries > 1 {
             tracing::info!(
                 route = %route_key,
                 proxy_protocol = ?proxy_protocol_version,
                 upstream_tls,
+                max_connect_retries,
                 "TLSRoute configured with extended options"
             );
         }
@@ -192,7 +201,6 @@ impl TlsRouteManager {
         Ok(Arc::new(route))
     }
 
-    /// Resolve the stream plugin store key from the TLSRoute's annotation.
     fn resolve_stream_plugin_store_key(route: &TLSRoute) -> Option<String> {
         let annotations = route.metadata.annotations.as_ref()?;
         let annotation_value = annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS)?;
@@ -233,7 +241,7 @@ mod tests {
                     namespace: Some(namespace.to_string()),
                     name: gateway.to_string(),
                     section_name: None,
-                    port: None,
+                    port: Some(443),
                 }]),
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![TLSRouteRule {
@@ -253,51 +261,12 @@ mod tests {
                     proxy_protocol_version: None,
                     upstream_tls: false,
                     stream_plugin_store_key: None,
+                    max_connect_retries: 1,
                 }]),
+                resolved_ports: Some(vec![443]),
             },
             status: None,
         }
-    }
-
-    #[test]
-    fn test_tls_route_full_set() {
-        let manager = TlsRouteManager::new();
-
-        let mut data = HashMap::new();
-        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
-        let route2 = create_test_tls_route("default", "route2", "gateway1", "api.example.com");
-
-        data.insert("default/route1".to_string(), route1);
-        data.insert("default/route2".to_string(), route2);
-
-        manager.full_set(&data);
-
-        let table = manager.load_route_table();
-        assert!(table.match_route("default/gateway1", "test.example.com").is_some());
-        assert!(table.match_route("default/gateway1", "api.example.com").is_some());
-        assert!(table.match_route("default/gateway1", "other.example.com").is_none());
-    }
-
-    #[test]
-    fn test_tls_route_partial_update() {
-        let manager = TlsRouteManager::new();
-
-        let mut add = HashMap::new();
-        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
-        add.insert("default/route1".to_string(), route1);
-
-        manager.partial_update(add, HashMap::new(), HashSet::new());
-
-        let table = manager.load_route_table();
-        assert!(table.match_route("default/gateway1", "test.example.com").is_some());
-
-        // Remove the route — load a fresh snapshot to see the update
-        let mut remove = HashSet::new();
-        remove.insert("default/route1".to_string());
-        manager.partial_update(HashMap::new(), HashMap::new(), remove);
-
-        let table = manager.load_route_table();
-        assert!(table.match_route("default/gateway1", "test.example.com").is_none());
     }
 
     fn create_annotated_tls_route(
@@ -323,7 +292,7 @@ mod tests {
                     namespace: Some(namespace.to_string()),
                     name: gateway.to_string(),
                     section_name: None,
-                    port: None,
+                    port: Some(443),
                 }]),
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![TLSRouteRule {
@@ -343,20 +312,64 @@ mod tests {
                     proxy_protocol_version: None,
                     upstream_tls: false,
                     stream_plugin_store_key: None,
+                    max_connect_retries: 1,
                 }]),
+                resolved_ports: Some(vec![443]),
             },
             status: None,
         }
     }
 
     #[test]
+    fn test_tls_route_full_set() {
+        let managers = GlobalTlsRouteManagers::new();
+
+        let mut data = HashMap::new();
+        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
+        let route2 = create_test_tls_route("default", "route2", "gateway1", "api.example.com");
+
+        data.insert("default/route1".to_string(), route1);
+        data.insert("default/route2".to_string(), route2);
+
+        managers.full_set(&data);
+
+        let mgr = managers.get_or_create_port_manager(443);
+        let table = mgr.load_route_table();
+        assert!(table.match_route("test.example.com").is_some());
+        assert!(table.match_route("api.example.com").is_some());
+        assert!(table.match_route("other.example.com").is_none());
+    }
+
+    #[test]
+    fn test_tls_route_partial_update() {
+        let managers = GlobalTlsRouteManagers::new();
+
+        let mut add = HashMap::new();
+        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
+        add.insert("default/route1".to_string(), route1);
+
+        managers.partial_update(add, HashMap::new(), HashSet::new());
+
+        let mgr = managers.get_or_create_port_manager(443);
+        let table = mgr.load_route_table();
+        assert!(table.match_route("test.example.com").is_some());
+
+        let mut remove = HashSet::new();
+        remove.insert("default/route1".to_string());
+        managers.partial_update(HashMap::new(), HashMap::new(), remove);
+
+        let table = mgr.load_route_table();
+        assert!(table.match_route("test.example.com").is_none());
+    }
+
+    #[test]
     fn test_proxy_protocol_annotation_v2() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
 
         let route = create_annotated_tls_route("default", "pp2-route", "gw1", "*.sandbox.com", annotations);
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, Some(2));
@@ -366,12 +379,12 @@ mod tests {
 
     #[test]
     fn test_proxy_protocol_annotation_invalid() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v1".to_string());
 
         let route = create_annotated_tls_route("default", "pp1-route", "gw1", "*.sandbox.com", annotations);
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, None);
@@ -379,12 +392,12 @@ mod tests {
 
     #[test]
     fn test_upstream_tls_annotation() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/upstream-tls".to_string(), "true".to_string());
 
         let route = create_annotated_tls_route("default", "tls-up", "gw1", "test.com", annotations);
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert!(rule.upstream_tls);
@@ -392,12 +405,12 @@ mod tests {
 
     #[test]
     fn test_upstream_tls_annotation_false() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/upstream-tls".to_string(), "false".to_string());
 
         let route = create_annotated_tls_route("default", "tls-up-false", "gw1", "test.com", annotations);
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert!(!rule.upstream_tls);
@@ -405,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_stream_plugin_store_key_full_path() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert(
             "edgion.io/edgion-stream-plugins".to_string(),
@@ -413,7 +426,7 @@ mod tests {
         );
 
         let route = create_annotated_tls_route("default", "sp-route", "gw1", "test.com", annotations);
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(
@@ -424,12 +437,12 @@ mod tests {
 
     #[test]
     fn test_stream_plugin_store_key_short_name() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "my-plugins".to_string());
 
         let route = create_annotated_tls_route("sandbox", "sp-route", "gw1", "test.com", annotations);
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.stream_plugin_store_key, Some("sandbox/my-plugins".to_string()));
@@ -437,14 +450,14 @@ mod tests {
 
     #[test]
     fn test_combined_annotations() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
         annotations.insert("edgion.io/upstream-tls".to_string(), "TRUE".to_string());
         annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "ns/plugins".to_string());
 
         let route = create_annotated_tls_route("default", "combo", "gw1", "*.sandbox.com", annotations);
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, Some(2));
@@ -454,9 +467,9 @@ mod tests {
 
     #[test]
     fn test_no_annotations() {
-        let manager = TlsRouteManager::new();
+        let managers = GlobalTlsRouteManagers::new();
         let route = create_test_tls_route("default", "plain", "gw1", "test.com");
-        let initialized = manager.initialize_route(route).unwrap();
+        let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, None);

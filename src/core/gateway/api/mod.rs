@@ -309,10 +309,149 @@ async fn clear_access_logs() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("All access logs cleared".to_string()))
 }
 
+// ==================== Debug Store Stats Endpoint ====================
+
+/// Response for /api/v1/debug/store-stats
+#[derive(Serialize)]
+struct StoreStatsResponse {
+    http_routes: crate::core::gateway::routes::http::HttpRouteManagerStats,
+    grpc_routes: crate::core::gateway::routes::grpc::GrpcRouteManagerStats,
+    tcp_routes: crate::core::gateway::routes::tcp::TcpRouteManagerStats,
+    udp_routes: crate::core::gateway::routes::udp::UdpRouteManagerStats,
+    tls_routes: crate::core::gateway::routes::tls::TlsRouteManagerStats,
+    gateway_config: GatewayConfigStats,
+    port_gateway_info: crate::core::gateway::runtime::store::port_gateway_info::PortGatewayInfoStats,
+    gateway_tls_matcher: crate::core::gateway::runtime::matching::tls::GatewayTlsMatcherStats,
+    tls_store: TlsStoreStats,
+    tls_cert_matcher: TlsCertMatcherStats,
+    plugin_store: PluginStoreStats,
+    stream_plugin_store: StreamPluginStoreStats,
+    link_sys_store: LinkSysStoreStats,
+    policy_store: crate::core::gateway::lb::lb_policy::PolicyStoreStats,
+    backend_tls_policy: crate::core::gateway::backends::policy::BackendTLSPolicyStoreStats,
+    gateway_class_store: SimpleCountStats,
+    edgion_gateway_config_store: SimpleCountStats,
+}
+
+#[derive(Serialize)]
+struct GatewayConfigStats {
+    gateways: usize,
+}
+
+#[derive(Serialize)]
+struct TlsStoreStats {
+    entries: usize,
+    valid: usize,
+    invalid: usize,
+}
+
+#[derive(Serialize)]
+struct TlsCertMatcherStats {
+    port_count: usize,
+}
+
+#[derive(Serialize)]
+struct PluginStoreStats {
+    plugins: usize,
+}
+
+#[derive(Serialize)]
+struct StreamPluginStoreStats {
+    plugins: usize,
+}
+
+#[derive(Serialize)]
+struct LinkSysStoreStats {
+    resources: usize,
+}
+
+#[derive(Serialize)]
+struct SimpleCountStats {
+    count: usize,
+}
+
+/// Collect statistics from all derived stores for config-sync leak detection.
+async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
+    let http_routes = crate::core::gateway::routes::http::get_global_route_manager().stats();
+    let grpc_routes = crate::core::gateway::routes::grpc::get_global_grpc_route_manager().stats();
+    let tcp_routes = crate::core::gateway::routes::tcp::get_global_tcp_route_manager().stats();
+    let udp_routes = crate::core::gateway::routes::udp::get_global_udp_route_manager().stats();
+    let tls_routes = crate::core::gateway::routes::tls::get_global_tls_route_managers().stats();
+
+    let gateway_config = GatewayConfigStats {
+        gateways: crate::core::gateway::runtime::store::config::get_global_gateway_config_store().gateway_count(),
+    };
+    let port_gateway_info = crate::core::gateway::runtime::store::port_gateway_info::get_port_gateway_info_store().stats();
+    let gateway_tls_matcher = crate::core::gateway::runtime::matching::tls::get_gateway_tls_matcher().stats();
+
+    let tls = crate::core::gateway::tls::store::tls_store::get_global_tls_store();
+    let (valid, invalid) = tls.get_cert_stats();
+    let tls_store = TlsStoreStats {
+        entries: tls.entry_count(),
+        valid,
+        invalid,
+    };
+
+    let tls_cert_matcher = TlsCertMatcherStats {
+        port_count: crate::core::gateway::tls::store::cert_matcher::get_tls_cert_matcher().port_count(),
+    };
+
+    let plugin_store = PluginStoreStats {
+        plugins: crate::core::gateway::plugins::http::get_global_plugin_store().count(),
+    };
+
+    let stream_plugin_store = StreamPluginStoreStats {
+        plugins: crate::core::gateway::plugins::stream::get_global_stream_plugin_store().count(),
+    };
+
+    let link_sys_store = LinkSysStoreStats {
+        resources: crate::core::gateway::link_sys::runtime::store::get_global_link_sys_store().count(),
+    };
+
+    let policy_store = crate::core::gateway::lb::lb_policy::get_global_policy_store().stats();
+
+    let backend_tls_policy =
+        crate::core::gateway::backends::policy::get_global_backend_tls_policy_store().stats();
+
+    let gateway_class_store = SimpleCountStats {
+        count: crate::core::gateway::config::gateway_class::get_gateway_class_store()
+            .read()
+            .unwrap()
+            .len(),
+    };
+    let edgion_gateway_config_store = SimpleCountStats {
+        count: crate::core::gateway::config::edgion_gateway::get_edgion_gateway_config_store()
+            .read()
+            .unwrap()
+            .len(),
+    };
+
+    Json(ApiResponse::success(StoreStatsResponse {
+        http_routes,
+        grpc_routes,
+        tcp_routes,
+        udp_routes,
+        tls_routes,
+        gateway_config,
+        port_gateway_info,
+        gateway_tls_matcher,
+        tls_store,
+        tls_cert_matcher,
+        plugin_store,
+        stream_plugin_store,
+        link_sys_store,
+        policy_store,
+        backend_tls_policy,
+        gateway_class_store,
+        edgion_gateway_config_store,
+    }))
+}
+
 /// Create testing-specific router (only added when integration testing mode is enabled)
 fn create_testing_router() -> Router {
     Router::new()
         .route("/api/v1/testing/status", get(testing_status))
+        .route("/api/v1/debug/store-stats", get(store_stats))
         .route(
             "/api/v1/testing/access-log/{trace_id}",
             get(get_access_log).delete(delete_access_log),

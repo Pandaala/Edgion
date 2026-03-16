@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::core::gateway::services::acme::challenge_store::get_global_challenge_store;
 use crate::types::EdgionHttpContext;
 use pingora_http::ResponseHeader;
@@ -9,7 +9,7 @@ const ACME_CHALLENGE_PREFIX: &str = "/.well-known/acme-challenge/";
 
 #[inline]
 pub async fn early_request_filter(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     _ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
@@ -27,7 +27,6 @@ pub async fn early_request_filter(
     // which helps in draining traffic away from this instance.
     if session.is_process_shutting_down() {
         session.set_keepalive(None);
-        tracing::debug!("Process shutting down, disabling keepalive for new request");
     } else {
         session.set_keepalive(Some(client_timeout.keepalive_timeout));
     }
@@ -71,8 +70,6 @@ async fn try_serve_acme_challenge(session: &mut Session) -> pingora_core::Result
         Some(v) => v,
         None => return Ok(()),
     };
-
-    tracing::info!(token = token, host = host, "Serving ACME HTTP-01 challenge response");
 
     let mut resp = ResponseHeader::build(200, None)?;
     resp.insert_header("Content-Type", "text/plain")?;

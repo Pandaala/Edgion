@@ -61,6 +61,13 @@ impl TlsCertMatcher {
     }
 }
 
+impl TlsCertMatcher {
+    /// Number of ports with certificate matchers configured.
+    pub fn port_count(&self) -> usize {
+        self.data.load().port_matcher.len()
+    }
+}
+
 pub static TLS_CERT_MATCHER: LazyLock<TlsCertMatcher> = LazyLock::new(TlsCertMatcher::new);
 
 pub fn get_tls_cert_matcher() -> &'static TlsCertMatcher {

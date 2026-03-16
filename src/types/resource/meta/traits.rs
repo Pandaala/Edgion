@@ -27,6 +27,10 @@ pub trait ResourceMeta: DeserializeOwned + Send + Sync + 'static {
     /// Returns "namespace/name" for namespaced resources, or "name" for cluster-scoped resources
     fn key_name(&self) -> String;
 
+    /// Get the sync_version injected via `edgion.io/sync-version` annotation.
+    /// Returns 0 if the annotation is absent or cannot be parsed.
+    fn get_sync_version(&self) -> u64;
+
     /// Pre-parse hook for populating runtime-only fields after deserialization
     ///
     /// This method is called after a resource is deserialized from YAML/JSON
@@ -46,6 +50,28 @@ pub fn extract_version(metadata: &ObjectMeta) -> u64 {
         .as_ref()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0)
+}
+
+/// Extract the sync_version stored in `edgion.io/sync-version` annotation.
+/// Returns 0 if the annotation is absent or cannot be parsed.
+pub fn extract_sync_version(metadata: &ObjectMeta) -> u64 {
+    metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(crate::types::constants::annotations::edgion::SYNC_VERSION))
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+/// Inject sync_version into a resource's `edgion.io/sync-version` annotation.
+pub fn set_sync_version(metadata: &mut ObjectMeta, sv: u64) {
+    metadata
+        .annotations
+        .get_or_insert_with(Default::default)
+        .insert(
+            crate::types::constants::annotations::edgion::SYNC_VERSION.to_string(),
+            sv.to_string(),
+        );
 }
 
 /// Helper function to generate key_name from ObjectMeta
@@ -87,6 +113,10 @@ macro_rules! impl_resource_meta {
                 $crate::types::resource::meta::extract_version(&self.metadata)
             }
 
+            fn get_sync_version(&self) -> u64 {
+                $crate::types::resource::meta::extract_sync_version(&self.metadata)
+            }
+
             fn resource_kind() -> $crate::types::ResourceKind {
                 $crate::types::ResourceKind::$kind
             }
@@ -106,6 +136,10 @@ macro_rules! impl_resource_meta {
         impl $crate::types::ResourceMeta for $type {
             fn get_version(&self) -> u64 {
                 $crate::types::resource::meta::extract_version(&self.metadata)
+            }
+
+            fn get_sync_version(&self) -> u64 {
+                $crate::types::resource::meta::extract_sync_version(&self.metadata)
             }
 
             fn resource_kind() -> $crate::types::ResourceKind {
@@ -130,6 +164,10 @@ macro_rules! impl_resource_meta {
                 $crate::types::resource::meta::extract_version(&self.metadata)
             }
 
+            fn get_sync_version(&self) -> u64 {
+                $crate::types::resource::meta::extract_sync_version(&self.metadata)
+            }
+
             fn resource_kind() -> $crate::types::ResourceKind {
                 $crate::types::ResourceKind::$kind
             }
@@ -151,6 +189,10 @@ macro_rules! impl_resource_meta {
         impl $crate::types::ResourceMeta for $type {
             fn get_version(&self) -> u64 {
                 $crate::types::resource::meta::extract_version(&self.metadata)
+            }
+
+            fn get_sync_version(&self) -> u64 {
+                $crate::types::resource::meta::extract_sync_version(&self.metadata)
             }
 
             fn resource_kind() -> $crate::types::ResourceKind {

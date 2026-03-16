@@ -71,11 +71,6 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
 
         // Look up the referenced EdgionStreamPlugins resource from the store
         let Some(stream_plugins) = self.store.get(&self.store_key) else {
-            // Resource not found (not yet synced or deleted), allow by default
-            tracing::debug!(
-                store_key = %self.store_key,
-                "ConnectionFilter: EdgionStreamPlugins resource not found, allowing connection"
-            );
             return true;
         };
 
@@ -88,16 +83,7 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
         let ctx = StreamContext::new(addr.ip(), self.listener_port);
         match runtime.run(&ctx).await {
             StreamPluginResult::Allow => true,
-            StreamPluginResult::Deny(reason) => {
-                tracing::info!(
-                    client_ip = %addr.ip(),
-                    listener_port = self.listener_port,
-                    plugin_ref = %self.store_key,
-                    reason = %reason,
-                    "ConnectionFilter: connection denied at TCP level"
-                );
-                false
-            }
+            StreamPluginResult::Deny(_) => false,
         }
     }
 }

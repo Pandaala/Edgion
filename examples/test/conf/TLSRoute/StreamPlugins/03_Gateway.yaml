@@ -1,5 +1,5 @@
 # Gateway for TLSRoute StreamPlugins testing
-# 2 listeners: allow-localhost filter, deny-all filter
+# 3 listeners: allow-localhost filter, deny-all filter, tls-route-plugins deny
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -23,6 +23,15 @@ spec:
       protocol: TLS
       port: 31283
       hostname: "*.sp-deny.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test
+    - name: tls-route-plugins-deny
+      protocol: TLS
+      port: 31287
+      hostname: "*.sp-route-deny.example.com"
       tls:
         mode: Terminate
         certificateRefs:

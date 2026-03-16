@@ -1,6 +1,10 @@
 //! EdgionStreamPlugins custom resource definition
 //!
-//! EdgionStreamPlugins defines reusable plugin configurations for stream routes (TCP/UDP)
+//! EdgionStreamPlugins defines reusable plugin configurations for stream routes (TCP/UDP/TLS).
+//!
+//! Two-stage plugin model:
+//! - `plugins` (Stage 1): ConnectionFilter — pre-TLS, IP-only
+//! - `tls_route_plugins` (Stage 2): TlsRoute — post-handshake, post-route-match
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
@@ -8,14 +12,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::gateway::plugins::StreamPluginRuntime;
+use crate::core::gateway::plugins::{StreamPluginRuntime, TlsRoutePluginRuntime};
 
 // Submodules
 pub mod stream_plugins;
+pub mod tls_route_plugins;
 
 // Re-exports from edgion_plugins
 pub use crate::types::resources::edgion_plugins::PluginEntry;
 pub use stream_plugins::EdgionStreamPlugin;
+pub use tls_route_plugins::TlsRouteStreamPlugin;
 
 // Re-export plugin configs
 pub use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
@@ -39,15 +45,23 @@ pub const EDGION_STREAM_PLUGINS_KIND: &str = "EdgionStreamPlugins";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionStreamPluginsSpec {
-    /// Plugin configurations
+    /// Stage 1 (ConnectionFilter) plugin configurations — pre-TLS, IP-only
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<StreamPluginEntry>>,
 
-    /// Plugin runtime (runtime only, not serialized)
-    /// This is computed from plugins at runtime
+    /// Stage 1 runtime (computed from `plugins` at preparse time)
     #[serde(skip)]
     #[schemars(skip)]
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
+
+    /// Stage 2 (TlsRoute) plugin configurations — post-handshake, post-route-match
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_route_plugins: Option<Vec<TlsRoutePluginEntry>>,
+
+    /// Stage 2 runtime (computed from `tls_route_plugins` at preparse time)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub tls_route_plugin_runtime: Arc<TlsRoutePluginRuntime>,
 }
 
 /// Stream plugin entry with enable switch
@@ -79,6 +93,27 @@ impl StreamPluginEntry {
     }
 
     /// Get the plugin type name
+    pub fn type_name(&self) -> &'static str {
+        self.plugin.type_name()
+    }
+}
+
+/// TLS route stage plugin entry with enable switch
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsRoutePluginEntry {
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enable: bool,
+
+    #[serde(flatten)]
+    pub plugin: TlsRouteStreamPlugin,
+}
+
+impl TlsRoutePluginEntry {
+    pub fn is_enabled(&self) -> bool {
+        self.enable
+    }
+
     pub fn type_name(&self) -> &'static str {
         self.plugin.type_name()
     }
@@ -126,11 +161,17 @@ impl EdgionStreamPlugins {
             .unwrap_or_default()
     }
 
-    /// Initialize plugin runtime from plugins
-    /// This should be called after deserialization to populate the runtime field
+    /// Initialize Stage 1 (ConnectionFilter) plugin runtime from `plugins`.
     pub fn init_stream_plugin_runtime(&mut self) {
         if let Some(plugins) = &self.spec.plugins {
             self.spec.stream_plugin_runtime = Arc::new(StreamPluginRuntime::from_stream_plugins(plugins));
+        }
+    }
+
+    /// Initialize Stage 2 (TlsRoute) plugin runtime from `tls_route_plugins`.
+    pub fn init_tls_route_plugin_runtime(&mut self) {
+        if let Some(entries) = &self.spec.tls_route_plugins {
+            self.spec.tls_route_plugin_runtime = Arc::new(TlsRoutePluginRuntime::from_entries(entries));
         }
     }
 }

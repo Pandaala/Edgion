@@ -1,0 +1,16 @@
+# EdgionStreamPlugins: deny all via tlsRoutePlugins (Stage 2)
+# Tests the new tls_route_plugins field instead of the legacy plugins field.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tls-route-deny-all
+  namespace: edgion-test
+spec:
+  tlsRoutePlugins:
+    - type: IpRestriction
+      config:
+        deny:
+          - "0.0.0.0/0"
+          - "::/0"
+        defaultAction: deny
+        message: "Blocked by TLS route plugin (Stage 2)"

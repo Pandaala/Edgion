@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::routes::grpc::get_global_grpc_route_manager;
 use crate::core::gateway::routes::grpc::try_match_grpc_route;
@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 #[inline]
 pub async fn request_filter(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
@@ -79,15 +79,10 @@ pub async fn request_filter(
             .await
         {
             Ok(true) => {
-                // Preflight handled, terminate request
-                tracing::debug!("Preflight request handled, terminating");
                 return Ok(true);
             }
-            Ok(false) => {
-                // Continue to plugin chain (shouldn't happen with current implementation)
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to handle preflight request");
+            Ok(false) => {}
+            Err(_) => {
                 end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true);
             }
@@ -148,7 +143,7 @@ pub async fn request_filter(
 /// Returns Ok(true) if response has been sent (due to validation failure), Ok(false) to continue.
 #[inline]
 async fn build_request_metadata(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
@@ -294,7 +289,7 @@ async fn build_request_metadata(
 }
 
 #[inline]
-fn should_enforce_listener_isolation(edgion_http: &EdgionHttp) -> bool {
+fn should_enforce_listener_isolation(edgion_http: &EdgionHttpProxy) -> bool {
     let require_sni_host_match = edgion_http
         .edgion_gateway_config
         .spec

@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: leak-http
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: leak-test-gateway
+      namespace: edgion-test
+      sectionName: http
+  hostnames:
+    - "leak-http.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: leak-svc
+          port: 30001

@@ -40,6 +40,9 @@ pub struct GatewayRouteIndex {
     /// Cached sorted listener hostnames per gateway, used for change detection
     /// so that route requeue only fires when listener hostnames actually change.
     gateway_hostnames: RwLock<HashMap<String, Vec<String>>>,
+    /// Cached sorted listener ports per gateway for change detection.
+    /// Port changes must requeue TLSRoute/EdgionTls that reference sectionName.
+    gateway_ports: RwLock<HashMap<String, Vec<i32>>>,
 }
 
 impl GatewayRouteIndex {
@@ -48,6 +51,7 @@ impl GatewayRouteIndex {
             forward: RwLock::new(HashMap::new()),
             reverse: RwLock::new(HashMap::new()),
             gateway_hostnames: RwLock::new(HashMap::new()),
+            gateway_ports: RwLock::new(HashMap::new()),
         }
     }
 
@@ -68,6 +72,25 @@ impl GatewayRouteIndex {
     /// Remove cached hostnames for a deleted Gateway.
     pub fn remove_gateway_hostnames(&self, gateway_key: &str) {
         self.gateway_hostnames.write().unwrap().remove(gateway_key);
+    }
+
+    /// Update the cached listener ports for a Gateway.
+    /// Returns true if the ports actually changed (i.e., routes need requeue).
+    pub fn update_gateway_ports(&self, gateway_key: &str, mut ports: Vec<i32>) -> bool {
+        ports.sort();
+        let mut cache = self.gateway_ports.write().unwrap();
+        match cache.get(gateway_key) {
+            Some(old) if *old == ports => false,
+            _ => {
+                cache.insert(gateway_key.to_string(), ports);
+                true
+            }
+        }
+    }
+
+    /// Remove cached ports for a deleted Gateway.
+    pub fn remove_gateway_ports(&self, gateway_key: &str) {
+        self.gateway_ports.write().unwrap().remove(gateway_key);
     }
 
     /// Update the index for a route based on its parentRefs.
@@ -161,6 +184,7 @@ impl GatewayRouteIndex {
         self.forward.write().unwrap().clear();
         self.reverse.write().unwrap().clear();
         self.gateway_hostnames.write().unwrap().clear();
+        self.gateway_ports.write().unwrap().clear();
     }
 }
 

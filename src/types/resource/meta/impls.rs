@@ -80,6 +80,7 @@ impl_resource_meta!(
     "EdgionStreamPlugins",
     |self| {
         self.init_stream_plugin_runtime();
+        self.init_tls_route_plugin_runtime();
     }
 );
 

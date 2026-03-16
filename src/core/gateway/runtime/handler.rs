@@ -63,15 +63,13 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
         // Rebuild port → GatewayInfo mapping (for dynamic route matching)
         rebuild_port_gateway_infos(&gateways);
-
-        // Hostname resolution is handled by the controller via resolved_hostnames.
-        // Gateway changes trigger route requeue at the controller level.
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
         let global_store = get_global_gateway_store();
         let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
         let config_store = get_global_gateway_config_store();
+        let mut needs_rebuild = false;
 
         if !add.is_empty() {
             tracing::info!(
@@ -96,6 +94,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     tracing::warn!(key = %key, error = %e, "Failed to add gateway");
                 }
             }
+            needs_rebuild = true;
         }
 
         if !update.is_empty() {
@@ -119,6 +118,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
                 store.update_gateway(gateway);
             }
+            needs_rebuild = true;
         }
 
         if !remove.is_empty() {
@@ -133,7 +133,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     "Gateway removed"
                 );
 
-                // Parse key to get namespace and name
                 let parts: Vec<&str> = key.split('/').collect();
                 let (namespace, name) = if parts.len() == 2 {
                     (parts[0], parts[1])
@@ -141,21 +140,20 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     ("", key.as_str())
                 };
 
-                // Remove from GatewayConfigStore
                 config_store.remove_gateway(namespace, name);
 
                 if let Err(e) = store.remove_gateway(key) {
                     tracing::warn!(key = %key, error = %e, "Failed to remove gateway");
                 }
             }
-
-            // Note: Physical listener cleanup requires Pingora restart
+            needs_rebuild = true;
         }
 
-        // Rebuild Gateway TLS matcher and port GatewayInfo store
-        let gateways = store.list_gateways();
-        rebuild_gateway_tls_matcher(&gateways);
-        rebuild_port_gateway_infos(&gateways);
+        if needs_rebuild {
+            let gateways = store.list_gateways();
+            rebuild_gateway_tls_matcher(&gateways);
+            rebuild_port_gateway_infos(&gateways);
+        }
     }
 }
 

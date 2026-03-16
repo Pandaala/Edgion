@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: leak-plugins
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config:
+        allowOrigins: "*"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"

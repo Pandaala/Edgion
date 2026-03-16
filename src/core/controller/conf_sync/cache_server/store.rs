@@ -241,17 +241,17 @@ mod tests {
 
     impl ResourceMeta for TestResource {
         fn get_version(&self) -> u64 {
-            0 // Test resource doesn't track versions
+            0
         }
-
+        fn get_sync_version(&self) -> u64 {
+            0
+        }
         fn resource_kind() -> ResourceKind {
             ResourceKind::Unspecified
         }
-
         fn kind_name() -> &'static str {
             "TestResource"
         }
-
         fn key_name(&self) -> String {
             "TestResource".to_string()
         }

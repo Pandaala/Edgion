@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::core::gateway::observe::metrics::{
     global_metrics, record_backend_request, status_group, TestData, TestType,
 };
@@ -9,7 +9,7 @@ use pingora_proxy::Session;
 
 #[inline]
 pub async fn logging(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     _e: Option<&PingoraError>,
     ctx: &mut EdgionHttpContext,

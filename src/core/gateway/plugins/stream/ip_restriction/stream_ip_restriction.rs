@@ -51,14 +51,6 @@ impl StreamPlugin for StreamIpRestriction {
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
         let client_ip = ctx.client_ip;
 
-        tracing::debug!(
-            plugin = self.name,
-            client_ip = %client_ip,
-            listener_port = ctx.listener_port,
-            "Checking IP restriction for stream connection"
-        );
-
-        // Check access using config's check_ip_access method
         if !self.config.check_ip_access(&client_ip) {
             let reason = self
                 .config
@@ -67,20 +59,8 @@ impl StreamPlugin for StreamIpRestriction {
                 .unwrap_or("IP address not allowed")
                 .to_string();
 
-            tracing::info!(
-                plugin = self.name,
-                client_ip = %client_ip,
-                "Access DENIED for stream connection"
-            );
-
             return StreamPluginResult::Deny(reason);
         }
-
-        tracing::debug!(
-            plugin = self.name,
-            client_ip = %client_ip,
-            "Access ALLOWED for stream connection"
-        );
 
         StreamPluginResult::Allow
     }

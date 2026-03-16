@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: leak-orphan
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: nonexistent-gateway
+      namespace: edgion-test
+      sectionName: http
+  hostnames:
+    - "leak-orphan.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: nonexistent-svc
+          port: 9999

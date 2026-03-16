@@ -6,6 +6,7 @@ This directory contains the test and build scripts used by the Edgion project.
 
 ```text
 scripts/
+├── gen_certs/          # Runtime certificate generation scripts
 ├── ci/                 # CI/CD scripts
 │   └── check.sh        # fmt/clippy/unit test checks
 ├── integration/        # Integration test scripts

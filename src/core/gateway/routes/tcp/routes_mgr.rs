@@ -310,6 +310,22 @@ impl TcpRouteManager {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TcpRouteManagerStats {
+    pub routes_by_key: usize,
+    pub gateway_tcp_routes_map: usize,
+}
+
+impl TcpRouteManager {
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> TcpRouteManagerStats {
+        TcpRouteManagerStats {
+            routes_by_key: self.routes_by_key.len(),
+            gateway_tcp_routes_map: self.gateway_tcp_routes_map.len(),
+        }
+    }
+}
+
 /// Global TCP route manager
 static GLOBAL_TCP_ROUTE_MANAGER: OnceLock<TcpRouteManager> = OnceLock::new();
 

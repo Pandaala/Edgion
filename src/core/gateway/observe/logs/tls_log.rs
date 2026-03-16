@@ -1,7 +1,7 @@
 //! TLS connection logging
 //!
-//! Provides structured logging for TLS-terminated connections with two log events
-//! per connection: "connect" (upstream established) and "disconnect" (session ended).
+//! Provides an async logger for TLS proxy events. Callers pass their own
+//! serializable context instead of converting into a dedicated log entry type.
 
 use anyhow::{anyhow, Result};
 use serde::Serialize;
@@ -12,43 +12,6 @@ use crate::core::gateway::observe::AccessLogger;
 
 /// Global TLS logger instance
 static TLS_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
-
-/// TLS connection log entry
-#[derive(Serialize)]
-pub struct TlsLogEntry {
-    pub ts: i64,
-    pub event: String,
-    pub protocol: String,
-    pub listener_port: u16,
-    pub client_addr: String,
-    pub client_port: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sni_hostname: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_addr: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bytes_sent: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bytes_received: Option<u64>,
-    pub status: String,
-    pub connection_established: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_protocol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub route_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gateway_name: Option<String>,
-}
-
-impl TlsLogEntry {
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
-    }
-}
 
 /// Initialize the global TLS logger from configuration
 pub async fn init_tls_logger(config: &crate::types::LogConfig) -> Result<()> {
@@ -69,8 +32,9 @@ pub fn get_tls_logger() -> Option<&'static Arc<AccessLogger>> {
 }
 
 /// Log a TLS connection entry (async)
-pub async fn log_tls(entry: &TlsLogEntry) {
+pub async fn log_tls<T: Serialize>(entry: &T) {
     if let Some(logger) = TLS_LOGGER.get() {
-        let _ = logger.send(entry.to_json()).await;
+        let payload = serde_json::to_string(entry).unwrap_or_else(|_| "{}".to_string());
+        let _ = logger.send(payload).await;
     }
 }

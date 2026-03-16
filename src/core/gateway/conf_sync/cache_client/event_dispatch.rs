@@ -92,9 +92,9 @@ where
             tonic::Status::internal(format!("Failed to parse list response: {}", e))
         })?;
 
-        // Pre-parse all resources to populate runtime-only fields
         for resource in resources.iter_mut() {
             resource.pre_parse();
+            crate::types::resource::meta::set_sync_version(resource.meta_mut(), list_data.sync_version);
         }
 
         tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
@@ -285,7 +285,7 @@ where
                                     break 'watch_block; // Return to outer loop to re-list
                                 }
 
-                                let _ = watch_response.sync_version; // Track version from response
+                                let response_sv = watch_response.sync_version;
 
                                 let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
                                     Ok(events) => events,
@@ -298,12 +298,17 @@ where
                                 for event in events {
                                     if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
                                         if let Some(event_data) = event.get("data") {
+                                            let event_sv = event
+                                                .get("sync_version")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(response_sv);
+
                                             match serde_json::from_value::<T>(event_data.clone()) {
                                                 Ok(mut resource) => {
-                                                    // Pre-parse to populate runtime-only fields
                                                     resource.pre_parse();
+                                                    crate::types::resource::meta::set_sync_version(resource.meta_mut(), event_sv);
 
-                                                    tracing::info!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), version = resource.get_version(), "Received resource from watch event");
+                                                    tracing::info!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
                                                     let change = match event_type {
                                                         "add" => ResourceChange::EventAdd,
                                                         "update" => ResourceChange::EventUpdate,

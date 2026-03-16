@@ -11,7 +11,7 @@ use crate::core::gateway::observe::metrics::TestType;
 /// Used to pass gateway context during route matching to support
 /// both sectionName-based and hostname-based lookup strategies.
 ///
-/// This struct should be created once when EdgionHttp is constructed,
+/// This struct should be created once when the HTTP proxy listener is constructed,
 /// not per-request, to avoid allocation overhead.
 ///
 /// Note: Listener configuration (hostname, allowedRoutes) is queried dynamically

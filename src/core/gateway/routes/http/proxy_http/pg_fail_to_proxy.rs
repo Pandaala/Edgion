@@ -1,12 +1,10 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::types::EdgionHttpContext;
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
-use tracing::log::error;
-
 #[inline]
 pub async fn fail_to_proxy(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     e: &Error,
     ctx: &mut EdgionHttpContext,
@@ -67,9 +65,7 @@ pub async fn fail_to_proxy(
         session
             .write_error_response(resp, bytes::Bytes::default())
             .await
-            .unwrap_or_else(|e| {
-                error!("failed to send error response to downstream: {e}");
-            });
+            .unwrap_or_else(|_| {});
     }
 
     FailToProxy {

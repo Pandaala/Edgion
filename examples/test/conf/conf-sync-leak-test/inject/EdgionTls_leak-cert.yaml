@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: leak-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: leak-test-gateway
+      namespace: edgion-test
+      sectionName: tls
+  hosts:
+    - "*.leak-test.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::types::{EdgionHttpContext, MirrorState};
 use bytes::Bytes;
 use pingora_proxy::Session;
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 /// Mirror is sidecar logic and must NEVER affect the main request path.
 #[inline]
 pub async fn request_body_filter(
-    _edgion_http: &EdgionHttp,
+    _edgion_http: &EdgionHttpProxy,
     _session: &mut Session,
     body: &mut Option<Bytes>,
     end_of_stream: bool,
@@ -75,7 +75,6 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, end_of_stream: bool, ctx: &mu
                             // Set the shared flag so the mirror task can correctly report
                             // "channel_full" instead of guessing from the error kind.
                             channel_full_flag.store(true, Ordering::Relaxed);
-                            tracing::warn!(channel_full_timeout_ms, "Mirror channel full, abandoning mirror",);
                             // Drop body_tx to close the channel → mirror task's ReceiverStream
                             // yields None → reqwest body ends → send() completes (possibly ok).
                             // Drop writer_handle to detach (NOT abort) the task; it will finish

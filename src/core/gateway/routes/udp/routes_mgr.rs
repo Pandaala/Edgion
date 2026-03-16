@@ -310,6 +310,22 @@ impl UdpRouteManager {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UdpRouteManagerStats {
+    pub routes_by_key: usize,
+    pub gateway_udp_routes_map: usize,
+}
+
+impl UdpRouteManager {
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> UdpRouteManagerStats {
+        UdpRouteManagerStats {
+            routes_by_key: self.routes_by_key.len(),
+            gateway_udp_routes_map: self.gateway_udp_routes_map.len(),
+        }
+    }
+}
+
 /// Global UDP route manager
 static GLOBAL_UDP_ROUTE_MANAGER: OnceLock<UdpRouteManager> = OnceLock::new();
 

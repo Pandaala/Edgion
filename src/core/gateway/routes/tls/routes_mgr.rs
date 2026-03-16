@@ -8,20 +8,16 @@ use crate::core::gateway::routes::tls::gateway_tls_routes::TlsRouteTable;
 use crate::types::resources::TLSRoute;
 use crate::types::ResourceMeta;
 
-/// TLS route manager — stores all TLSRoute resources and provides
-/// an atomically-swappable global route table for lock-free lookups.
+/// Per-port TLS route manager.
 ///
-/// Design follows the same pattern as HTTP `RouteManager`:
-/// - A single `ArcSwap<TlsRouteTable>` holds the current snapshot.
-/// - Consumers (EdgionTls) call `load_route_table()` per-connection.
-/// - Route updates build a new `TlsRouteTable` and swap atomically.
-/// - No per-gateway Arc caching — eliminates the stale-Arc problem.
+/// Each instance owns an atomically-swappable `TlsRouteTable` snapshot.
+/// `EdgionTlsTcpProxy` holds an `Arc<TlsRouteManager>` and calls
+/// `load_route_table()` per-connection for lock-free lookups.
+///
+/// Route data is owned by `GlobalTlsRouteManagers`; this struct only
+/// holds the compiled hostname-index snapshot for one port.
 pub struct TlsRouteManager {
-    /// resource_key -> Arc<TLSRoute> mapping for quick lookup and updates
-    routes_by_key: Arc<DashMap<String, Arc<TLSRoute>>>,
-
-    /// Global TLS route table — atomically swapped on every route change
-    global_tls_routes: ArcSwap<TlsRouteTable>,
+    route_table: ArcSwap<TlsRouteTable>,
 }
 
 impl Default for TlsRouteManager {
@@ -33,109 +29,217 @@ impl Default for TlsRouteManager {
 impl TlsRouteManager {
     pub fn new() -> Self {
         Self {
-            routes_by_key: Arc::new(DashMap::new()),
-            global_tls_routes: ArcSwap::from_pointee(TlsRouteTable::new()),
+            route_table: ArcSwap::from_pointee(TlsRouteTable::new()),
         }
     }
 
-    /// Load the current route table snapshot.
-    ///
-    /// Called by EdgionTls on every connection — returns an Arc guard
-    /// that is always up-to-date (no stale references).
+    /// Load the current route table snapshot (hot path, per-connection).
     pub fn load_route_table(&self) -> arc_swap::Guard<Arc<TlsRouteTable>> {
-        self.global_tls_routes.load()
+        self.route_table.load()
     }
 
-    /// Rebuild and atomically swap the global route table.
+    /// Rebuild the route table from routes belonging to this port.
+    /// Called by `GlobalTlsRouteManagers` during rebuild.
+    pub fn rebuild(&self, routes: &HashMap<String, Arc<TLSRoute>>) {
+        let new_table = TlsRouteTable::from_routes(routes);
+
+        tracing::debug!(
+            component = "tls_route_manager",
+            routes = routes.len(),
+            catch_all = new_table.has_catch_all(),
+            "Rebuilt per-port TLS route table"
+        );
+
+        self.route_table.store(Arc::new(new_table));
+    }
+}
+
+/// Global wrapper managing `port -> Arc<TlsRouteManager>`.
+///
+/// Owns the canonical route cache (`resource_key -> Arc<TLSRoute>`) and
+/// implements `ConfHandler<TLSRoute>`.  On every change it rebuilds all
+/// per-port managers by resolving each route's target ports from its
+/// `parentRefs`.
+pub struct GlobalTlsRouteManagers {
+    /// Canonical route store: resource_key -> initialized Arc<TLSRoute>
+    route_cache: DashMap<String, Arc<TLSRoute>>,
+
+    /// port -> per-port manager (stable Arc held by listeners)
+    by_port: DashMap<u16, Arc<TlsRouteManager>>,
+}
+
+impl Default for GlobalTlsRouteManagers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GlobalTlsRouteManagers {
+    pub fn new() -> Self {
+        Self {
+            route_cache: DashMap::new(),
+            by_port: DashMap::new(),
+        }
+    }
+
+    /// Get or create a per-port `TlsRouteManager`.
     ///
-    /// Groups all routes by gateway_key and hostname, then builds
-    /// a new immutable `TlsRouteTable` snapshot.
-    fn rebuild_route_table(&self) {
-        let mut gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TLSRoute>>>> =
-            HashMap::new();
+    /// Called by `listener_builder` at startup. The returned `Arc` is stable;
+    /// route updates only swap the inner `ArcSwap<TlsRouteTable>`.
+    pub fn get_or_create_port_manager(&self, port: u16) -> Arc<TlsRouteManager> {
+        self.by_port
+            .entry(port)
+            .or_insert_with(|| Arc::new(TlsRouteManager::new()))
+            .value()
+            .clone()
+    }
 
-        for entry in self.routes_by_key.iter() {
-            let route = entry.value();
-            let gateway_keys = Self::extract_gateway_keys(route);
-            let hostnames = Self::extract_hostnames(route);
+    /// Insert an initialized route into the cache.
+    pub fn insert_route(&self, route: Arc<TLSRoute>) {
+        let key = route.key_name();
+        self.route_cache.insert(key, route);
+    }
 
-            for gateway_key in gateway_keys {
-                let gateway_map = gateway_routes.entry(gateway_key).or_default();
-                for hostname in &hostnames {
-                    gateway_map
-                        .entry(hostname.clone())
-                        .or_default()
-                        .push(route.clone());
+    /// Get a route from the cache by key.
+    pub fn get_route(&self, key: &str) -> Option<Arc<TLSRoute>> {
+        self.route_cache.get(key).map(|entry| entry.value().clone())
+    }
+
+    /// Remove a route from the cache by resource key.
+    pub fn remove_route(&self, resource_key: &str) {
+        self.route_cache.remove(resource_key);
+    }
+
+    /// Clear all routes from the cache.
+    pub fn clear_route_cache(&self) {
+        self.route_cache.clear();
+    }
+
+    /// Rebuild all per-port managers from the current route cache.
+    ///
+    /// 1. Bucket each route by its target ports (from parentRef)
+    /// 2. For each port that has routes: rebuild the manager
+    /// 3. For ports that no longer have routes: rebuild with empty set
+    pub fn rebuild_all_port_managers(&self) {
+        let port_buckets = self.bucket_routes_by_port();
+
+        let mut rebuilt_ports = 0u32;
+
+        for (port, routes) in &port_buckets {
+            let manager = self.get_or_create_port_manager(*port);
+            manager.rebuild(routes);
+            rebuilt_ports += 1;
+        }
+
+        for entry in self.by_port.iter() {
+            let port = *entry.key();
+            if !port_buckets.contains_key(&port) {
+                entry.value().rebuild(&HashMap::new());
+                rebuilt_ports += 1;
+            }
+        }
+
+        let total_routes: usize = port_buckets.values().map(|r| r.len()).sum();
+        tracing::info!(
+            component = "global_tls_route_managers",
+            ports = port_buckets.len(),
+            total_route_entries = total_routes,
+            rebuilt_ports,
+            "Rebuilt all per-port TLS route managers"
+        );
+    }
+
+    /// Rebuild only the per-port managers for the given set of affected ports.
+    ///
+    /// Single-pass: iterates route_cache once, bucketing routes into only the
+    /// affected ports. Ports in `affected_ports` that end up with no routes
+    /// are rebuilt with an empty set (clearing stale entries).
+    pub fn rebuild_affected_port_managers(&self, affected_ports: &HashSet<u16>) {
+        if affected_ports.is_empty() {
+            return;
+        }
+
+        let mut port_buckets: HashMap<u16, HashMap<String, Arc<TLSRoute>>> = HashMap::new();
+        for &port in affected_ports {
+            port_buckets.insert(port, HashMap::new());
+        }
+
+        for entry in self.route_cache.iter() {
+            let route_ports = resolved_ports_for_route(entry.value());
+            for &port in route_ports {
+                if let Some(bucket) = port_buckets.get_mut(&port) {
+                    bucket.insert(entry.key().clone(), entry.value().clone());
                 }
             }
         }
 
-        let gw_count = gateway_routes.len();
-        let hostname_count: usize = gateway_routes.values().map(|h| h.len()).sum();
+        for (port, routes) in &port_buckets {
+            let manager = self.get_or_create_port_manager(*port);
+            manager.rebuild(routes);
+        }
 
-        let new_table = TlsRouteTable::from_gateway_routes(gateway_routes);
-        self.global_tls_routes.store(Arc::new(new_table));
-
-        tracing::debug!(
-            component = "tls_route_manager",
-            gateways = gw_count,
-            hostnames = hostname_count,
-            "Rebuilt global TLS route table"
+        tracing::info!(
+            component = "global_tls_route_managers",
+            affected = affected_ports.len(),
+            "Rebuilt affected per-port TLS route managers"
         );
     }
 
-    /// Add or update a TLSRoute
-    pub fn add_route(&self, route: Arc<TLSRoute>) {
-        let resource_key = route.key_name();
-        self.routes_by_key.insert(resource_key, route);
-        self.rebuild_route_table();
-    }
+    /// Bucket all cached routes by their resolved ports.
+    fn bucket_routes_by_port(&self) -> HashMap<u16, HashMap<String, Arc<TLSRoute>>> {
+        let mut port_buckets: HashMap<u16, HashMap<String, Arc<TLSRoute>>> = HashMap::new();
 
-    /// Remove a TLSRoute by resource key
-    pub fn remove_route(&self, resource_key: &str) {
-        self.routes_by_key.remove(resource_key);
-        self.rebuild_route_table();
-    }
+        for entry in self.route_cache.iter() {
+            let route_key = entry.key().clone();
+            let route = entry.value().clone();
+            let ports = resolved_ports_for_route(&route);
 
-    /// Replace all routes (used in full_set)
-    pub fn replace_all(&self, routes: HashMap<String, Arc<TLSRoute>>) {
-        self.routes_by_key.clear();
-        for (key, route) in routes {
-            self.routes_by_key.insert(key, route);
-        }
-        self.rebuild_route_table();
-    }
+            if ports.is_empty() {
+                tracing::warn!(
+                    route = %route_key,
+                    "TLSRoute has no resolved_ports, skipping port assignment"
+                );
+                continue;
+            }
 
-    fn extract_hostnames(route: &TLSRoute) -> HashSet<String> {
-        let mut hostnames = HashSet::new();
-        if let Some(route_hostnames) = &route.spec.hostnames {
-            for hostname in route_hostnames {
-                hostnames.insert(hostname.clone());
+            for &port in ports {
+                port_buckets
+                    .entry(port)
+                    .or_default()
+                    .insert(route_key.clone(), route.clone());
             }
         }
-        hostnames
-    }
 
-    fn extract_gateway_keys(route: &TLSRoute) -> HashSet<String> {
-        let mut gateway_keys = HashSet::new();
-        if let Some(parent_refs) = &route.spec.parent_refs {
-            for parent_ref in parent_refs {
-                let namespace = parent_ref
-                    .namespace
-                    .as_deref()
-                    .or(route.metadata.namespace.as_deref())
-                    .unwrap_or("default");
-                let gateway_key = format!("{}/{}", namespace, parent_ref.name);
-                gateway_keys.insert(gateway_key);
-            }
-        }
-        gateway_keys
+        port_buckets
     }
 }
 
-/// Global TLS route manager
-static GLOBAL_TLS_ROUTE_MANAGER: OnceLock<TlsRouteManager> = OnceLock::new();
+/// Get the resolved listener ports for a TLSRoute.
+///
+/// Uses `spec.resolved_ports` which is pre-computed by the controller
+/// from parentRef.port / parentRef.sectionName → Gateway listener.port.
+pub(crate) fn resolved_ports_for_route(route: &TLSRoute) -> &[u16] {
+    route.spec.resolved_ports.as_deref().unwrap_or_default()
+}
 
-pub fn get_global_tls_route_manager() -> &'static TlsRouteManager {
-    GLOBAL_TLS_ROUTE_MANAGER.get_or_init(TlsRouteManager::new)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TlsRouteManagerStats {
+    pub route_cache: usize,
+    pub port_count: usize,
+}
+
+impl GlobalTlsRouteManagers {
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> TlsRouteManagerStats {
+        TlsRouteManagerStats {
+            route_cache: self.route_cache.len(),
+            port_count: self.by_port.len(),
+        }
+    }
+}
+
+static GLOBAL_TLS_ROUTE_MANAGERS: OnceLock<GlobalTlsRouteManagers> = OnceLock::new();
+
+pub fn get_global_tls_route_managers() -> &'static GlobalTlsRouteManagers {
+    GLOBAL_TLS_ROUTE_MANAGERS.get_or_init(GlobalTlsRouteManagers::new)
 }

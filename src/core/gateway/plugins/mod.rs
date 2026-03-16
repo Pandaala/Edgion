@@ -10,4 +10,7 @@ pub use runtime::{
     EdgionPluginsLog, PluginLog, PluginRuntime, PluginSession, PluginSessionError, PluginSessionResult, RequestFilter,
     StageLogs, UpstreamResponse, UpstreamResponseFilter,
 };
-pub use stream::{StreamContext, StreamPlugin, StreamPluginResult, StreamPluginRuntime};
+pub use stream::{
+    StreamContext, StreamPlugin, StreamPluginResult, StreamPluginRuntime, TlsRouteContext, TlsRoutePlugin,
+    TlsRoutePluginRuntime,
+};

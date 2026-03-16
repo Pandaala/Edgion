@@ -88,6 +88,11 @@ impl StreamPluginStore {
     pub fn get_all(&self) -> Arc<StreamPluginMap> {
         self.plugins.load_full()
     }
+
+    /// Get total count of stream plugins
+    pub fn count(&self) -> usize {
+        self.plugins.load().len()
+    }
 }
 
 impl Default for StreamPluginStore {

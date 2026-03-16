@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: leak-grpc
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: leak-test-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "leak-grpc.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: leak.TestService
+      backendRefs:
+        - name: leak-svc
+          port: 30001

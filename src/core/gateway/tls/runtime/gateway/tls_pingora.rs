@@ -8,7 +8,7 @@ use crate::core::gateway::tls::store::cert_matcher::match_sni_with_port;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
-use crate::types::{TlsConnMeta, TlsMatchedInfo};
+use crate::types::{MatchedInfo, ResourceMeta, TlsConnMeta};
 use anyhow::anyhow;
 use anyhow::Result;
 use pingora_core::listeners::tls::TlsSettings;
@@ -117,7 +117,7 @@ mod ssl_ctx_ex_data {
                 let _ = log_meta
                     .log
                     .get_or_insert_with(LogBuffer::new)
-                    .push("Failed to initialize SslCtx ex_data index");
+                    .push("exdata init failed");
                 crate::core::gateway::observe::logs::ssl_log::log_ssl(&log_meta);
                 return false;
             }
@@ -131,7 +131,7 @@ mod ssl_ctx_ex_data {
                 let _ = log_meta
                     .log
                     .get_or_insert_with(LogBuffer::new)
-                    .push("SSL_set_ex_data failed for SslCtx");
+                    .push("exdata store failed");
                 crate::core::gateway::observe::logs::ssl_log::log_ssl(&log_meta);
                 return false;
             }
@@ -171,7 +171,7 @@ mod ssl_ctx_ex_data {
         let _ = log_meta
             .log
             .get_or_insert_with(LogBuffer::new)
-            .push("SslCtx ex_data is unavailable without boringssl");
+                    .push("no boringssl exdata");
         crate::core::gateway::observe::logs::ssl_log::log_ssl(&log_meta);
         false
     }
@@ -209,10 +209,10 @@ impl TlsAccept for TlsCallback {
             .as_ref()
             .and_then(|sp| sp.fallback_sni.clone())
         {
-            let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("Use Fallback");
+            let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("fallback SNI");
             fallback_sni
         } else {
-            ssl_ctx.meta.err_log = Some("No sni, No FallBack".to_string());
+            ssl_ctx.meta.err_log = Some("no SNI".to_string());
             log_ssl(&ssl_ctx.meta);
             return;
         };
@@ -231,7 +231,7 @@ impl TlsAccept for TlsCallback {
 
         // 3. Store SslCtx for handshake_complete_callback
         if !store_ssl_ctx(ssl, &ssl_ctx) {
-            let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("Failed to store SslCtx");
+            let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("store ctx failed");
         }
     }
 
@@ -250,7 +250,9 @@ impl TlsAccept for TlsCallback {
             return Some(Arc::new(ssl_ctx.meta));
         }
 
-        // todo, Do we Need FallBack if no SslCtx?  (non-BoringSSL or store failed)
+        // Fallback: non-BoringSSL or ex_data store failed.
+        // Still return Some so downstream consumers (TLS proxy, HTTP proxy)
+        // can read TlsConnMeta from the digest extension.
         let meta = TlsConnMeta {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -263,7 +265,7 @@ impl TlsAccept for TlsCallback {
             sni: ssl.servername(NameType::HOST_NAME).map(|s| s.to_string()),
             log: Some({
                 let mut buf = LogBuffer::new();
-                let _ = buf.push("No SslCtx in handshake_complete_callback");
+                let _ = buf.push("no ssl ctx");
                 buf
             }),
             matched: None,
@@ -272,7 +274,7 @@ impl TlsAccept for TlsCallback {
             is_mtls: false,
         };
         log_ssl(&meta);
-        None
+        Some(Arc::new(meta))
     }
 }
 
@@ -336,7 +338,7 @@ impl TlsCallback {
             return true;
         }
 
-        ssl_ctx.meta.err_log = Some("Certificate not found".to_string());
+        ssl_ctx.meta.err_log = Some("cert not found".to_string());
         false
     }
 
@@ -344,61 +346,62 @@ impl TlsCallback {
     fn apply_edgion_tls_cert(&self, ssl: &mut SslRef, edgion_tls: &Arc<EdgionTls>, ssl_ctx: &mut SslCtx) {
         let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
         let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
-        ssl_ctx.meta.matched = Some(TlsMatchedInfo {
+        ssl_ctx.meta.matched = Some(MatchedInfo {
             kind: "EdgionTls".to_string(),
             ns: ns.to_string(),
             name: name.to_string(),
             section: None,
+            sv: edgion_tls.get_sync_version(),
         });
 
         let cert_pem = match edgion_tls.cert_pem() {
             Ok(pem) => pem,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("Failed to get cert: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("et: cert read: {e}"));
                 return;
             }
         };
         let cert = match X509::from_pem(cert_pem.as_bytes()) {
             Ok(c) => c,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("Invalid cert PEM: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("et: bad cert: {e}"));
                 return;
             }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
-            ssl_ctx.meta.err_log = Some(format!("Failed to use cert: {}", e));
+            ssl_ctx.meta.err_log = Some(format!("et: set cert: {e}"));
             return;
         }
 
         let key_pem = match edgion_tls.key_pem() {
             Ok(pem) => pem,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("Failed to get key: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("et: key read: {e}"));
                 return;
             }
         };
         let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
             Ok(k) => k,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("Invalid key PEM: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("et: bad key: {e}"));
                 return;
             }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
-            ssl_ctx.meta.err_log = Some(format!("Failed to use key: {}", e));
+            ssl_ctx.meta.err_log = Some(format!("et: set key: {e}"));
             return;
         }
 
         if let Some(ref client_auth) = edgion_tls.spec.client_auth {
             if let Err(e) = self.configure_mtls(ssl, client_auth, edgion_tls) {
-                ssl_ctx.meta.err_log = Some(format!("mTLS config failed: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("mtls config: {e}"));
                 return;
             }
         }
 
         if let Some(min_version) = edgion_tls.spec.min_tls_version {
             if let Err(e) = self.configure_min_tls_version(ssl, min_version) {
-                ssl_ctx.meta.err_log = Some(format!("TLS version config failed: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("min ver: {e}"));
                 return;
             }
         }
@@ -409,18 +412,19 @@ impl TlsCallback {
                     .meta
                     .log
                     .get_or_insert_with(LogBuffer::new)
-                    .push(&format!("[err] Cipher config failed: {}", e));
+                    .push(&format!("[err] cipher: {e}"));
             }
         }
     }
 
     /// Apply certificate from Gateway Listener TLS configuration (from Secret)
     fn apply_gateway_tls_cert(&self, ssl: &mut SslRef, gateway_tls: &GatewayTlsEntry, ssl_ctx: &mut SslCtx) {
-        ssl_ctx.meta.matched = Some(TlsMatchedInfo {
+        ssl_ctx.meta.matched = Some(MatchedInfo {
             kind: "Gateway".to_string(),
             ns: gateway_tls.gateway_namespace.clone(),
             name: gateway_tls.gateway_name.clone(),
             section: Some(gateway_tls.listener_name.clone()),
+            sv: 0,
         });
 
         let secret = if let Some(secrets) = &gateway_tls.secrets {
@@ -445,7 +449,7 @@ impl TlsCallback {
         let cert_ref = match gateway_tls.certificate_refs.first() {
             Some(r) => r,
             None => {
-                ssl_ctx.meta.err_log = Some("No certificate refs in Gateway TLS config".to_string());
+                ssl_ctx.meta.err_log = Some("no cert refs".to_string());
                 return k8s_openapi::api::core::v1::Secret::default();
             }
         };
@@ -455,7 +459,7 @@ impl TlsCallback {
         match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
             Some(s) => s,
             None => {
-                ssl_ctx.meta.err_log = Some(format!("Secret not found: {}/{}", secret_namespace, cert_ref.name));
+                ssl_ctx.meta.err_log = Some(format!("secret missing: {}/{}", secret_namespace, cert_ref.name));
                 k8s_openapi::api::core::v1::Secret::default()
             }
         }
@@ -471,7 +475,7 @@ impl TlsCallback {
         let data = match &secret.data {
             Some(d) => d,
             None => {
-                ssl_ctx.meta.err_log = Some("Secret has no data".to_string());
+                ssl_ctx.meta.err_log = Some("secret empty".to_string());
                 return;
             }
         };
@@ -480,12 +484,12 @@ impl TlsCallback {
             Some(bytes) => match String::from_utf8(bytes.0.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    ssl_ctx.meta.err_log = Some(format!("Invalid {} encoding: {}", CERT, e));
+                    ssl_ctx.meta.err_log = Some(format!("gw: bad {CERT}: {e}"));
                     return;
                 }
             },
             None => {
-                ssl_ctx.meta.err_log = Some(format!("Secret missing {}", CERT));
+                ssl_ctx.meta.err_log = Some(format!("gw: no {CERT}"));
                 return;
             }
         };
@@ -494,12 +498,12 @@ impl TlsCallback {
             Some(bytes) => match String::from_utf8(bytes.0.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    ssl_ctx.meta.err_log = Some(format!("Invalid {} encoding: {}", KEY, e));
+                    ssl_ctx.meta.err_log = Some(format!("gw: bad {KEY}: {e}"));
                     return;
                 }
             },
             None => {
-                ssl_ctx.meta.err_log = Some(format!("Secret missing {}", KEY));
+                ssl_ctx.meta.err_log = Some(format!("gw: no {KEY}"));
                 return;
             }
         };
@@ -507,33 +511,27 @@ impl TlsCallback {
         let cert = match X509::from_pem(cert_pem.as_bytes()) {
             Ok(c) => c,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("Invalid cert PEM from Secret: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("gw: bad cert: {e}"));
                 return;
             }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
-            ssl_ctx.meta.err_log = Some(format!("Failed to use cert: {}", e));
+            ssl_ctx.meta.err_log = Some(format!("gw: set cert: {e}"));
             return;
         }
 
         let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
             Ok(k) => k,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("Invalid key PEM from Secret: {}", e));
+                ssl_ctx.meta.err_log = Some(format!("gw: bad key: {e}"));
                 return;
             }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
-            ssl_ctx.meta.err_log = Some(format!("Failed to use key: {}", e));
+            ssl_ctx.meta.err_log = Some(format!("gw: set key: {e}"));
             return;
         }
 
-        if let Some(name) = &secret.metadata.name {
-            tracing::debug!(
-                secret_name = %name,
-                "Applied certificate from Secret"
-            );
-        }
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification
@@ -543,8 +541,6 @@ impl TlsCallback {
         client_auth: &ClientAuthConfig,
         edgion_tls: &Arc<EdgionTls>,
     ) -> Result<(), Box<PingoraError>> {
-        tracing::debug!("Configuring mTLS with mode: {:?}", client_auth.mode);
-
         let ca_pem = edgion_tls.ca_cert_pem().map_err(|e| {
             PingoraError::explain(
                 ErrorType::InvalidCert,
@@ -569,18 +565,9 @@ impl TlsCallback {
             .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
 
         let verify_mode = match client_auth.mode {
-            ClientAuthMode::Terminate => {
-                tracing::debug!("mTLS mode: Terminate (single-way TLS)");
-                return Ok(());
-            }
-            ClientAuthMode::Mutual => {
-                tracing::debug!("mTLS mode: Mutual (client cert required)");
-                SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT
-            }
-            ClientAuthMode::OptionalMutual => {
-                tracing::debug!("mTLS mode: OptionalMutual (client cert optional)");
-                SslVerifyMode::PEER
-            }
+            ClientAuthMode::Terminate => return Ok(()),
+            ClientAuthMode::Mutual => SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
+            ClientAuthMode::OptionalMutual => SslVerifyMode::PEER,
         };
 
         // SAFETY: verify_depth is validated to be in range 1-9 by cert_validator
@@ -588,42 +575,22 @@ impl TlsCallback {
         #[cfg(feature = "boringssl")]
         {
             ssl.set_verify_depth(client_auth.verify_depth as u32);
-            tracing::debug!("Set mTLS verification depth: {}", client_auth.verify_depth);
         }
         #[cfg(not(feature = "boringssl"))]
         {
-            tracing::debug!(
-                "Verify depth configuration: {} (using backend default, explicit setting requires boringssl)",
-                client_auth.verify_depth
-            );
+            let _ = client_auth.verify_depth;
         }
 
         if client_auth.allowed_sans.is_some() || client_auth.allowed_cns.is_some() {
-            tracing::debug!("Setting custom verify callback for SAN/CN whitelist");
-
             if let Err(e) = set_mtls_verify_callback(ssl, verify_mode, edgion_tls) {
-                tracing::error!(
-                    "Failed to set mTLS verify callback: {}. \
-                    Make sure you're using a compatible TLS backend (BoringSSL).",
-                    e
-                );
                 return Err(PingoraError::explain(
                     ErrorType::InternalError,
                     format!("Failed to set verify callback: {}", e),
                 ));
             }
-
-            tracing::info!("Custom verify callback configured for SAN/CN whitelist");
         } else {
             ssl.set_verify(verify_mode);
-            tracing::debug!("Set mTLS verify mode (no whitelist): {:?}", verify_mode);
         }
-
-        tracing::info!(
-            "mTLS configured successfully for SNI with mode: {:?}, verify_depth: {}",
-            client_auth.mode,
-            client_auth.verify_depth
-        );
 
         Ok(())
     }
@@ -637,12 +604,7 @@ impl TlsCallback {
         use crate::types::resources::edgion_tls::TlsVersion;
         use pingora_core::tls::ssl::SslVersion;
 
-        if matches!(min_version, TlsVersion::Tls10 | TlsVersion::Tls11) {
-            tracing::warn!(
-                min_version = ?min_version,
-                "TLS 1.0/1.1 are deprecated and have known vulnerabilities. Consider using TLS 1.2+"
-            );
-        }
+        // TLS 1.0/1.1 deprecation warnings are surfaced at the controller level
 
         let ssl_version = match min_version {
             TlsVersion::Tls10 => SslVersion::TLS1,
@@ -658,7 +620,6 @@ impl TlsCallback {
             )
         })?;
 
-        tracing::debug!(min_version = ?min_version, "Configured minimum TLS version");
         Ok(())
     }
 
@@ -681,13 +642,7 @@ impl TlsCallback {
 
             let cipher_cstr = match CString::new(cipher_list.as_str()) {
                 Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Invalid cipher list (contains null byte), using default ciphers"
-                    );
-                    return Ok(());
-                }
+                Err(_) => return Ok(()),
             };
 
             // SAFETY: SslRef -> SSL* conversion for FFI call
@@ -697,24 +652,14 @@ impl TlsCallback {
                 let ret = boring_sys::SSL_set_strict_cipher_list(ssl_ptr, cipher_cstr.as_ptr());
 
                 if ret != 1 {
-                    tracing::warn!(
-                        cipher_list = %cipher_list,
-                        "Failed to set cipher list, using default ciphers. \
-                         Check if cipher names are valid for BoringSSL."
-                    );
                     return Ok(());
                 }
             }
 
-            tracing::debug!(cipher_list = %cipher_list, "Configured cipher list");
         }
 
         #[cfg(not(feature = "boringssl"))]
         {
-            tracing::warn!(
-                cipher_list = %cipher_list,
-                "Cipher configuration requires BoringSSL backend"
-            );
             let _ = ssl;
         }
 

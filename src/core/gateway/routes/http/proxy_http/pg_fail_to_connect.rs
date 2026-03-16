@@ -1,4 +1,4 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
@@ -7,7 +7,7 @@ use pingora_proxy::Session;
 /// fail_to_connect - called when connection to upstream fails
 #[inline]
 pub fn fail_to_connect(
-    edgion_http: &EdgionHttp,
+    edgion_http: &EdgionHttpProxy,
     _session: &mut Session,
     _peer: &HttpPeer,
     ctx: &mut EdgionHttpContext,
@@ -47,12 +47,6 @@ pub fn fail_to_connect(
     if let Some(timeout) = request_timeout {
         let elapsed = ctx.start_time.elapsed();
         if elapsed >= timeout {
-            tracing::warn!(
-                total_attempts = ctx.try_cnt,
-                elapsed_secs = elapsed.as_secs_f64(),
-                timeout_secs = timeout.as_secs_f64(),
-                "Request timeout exceeded, blocking retry"
-            );
             // Set 504 status for timeout
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);

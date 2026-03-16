@@ -11,6 +11,7 @@
 | [01-k8s-integration-testing.md](01-k8s-integration-testing.md) | K8s 环境测试差异、改造清单、执行阶段 | ✅ 完整 |
 | [02-link-sys-testing.md](02-link-sys-testing.md) | LinkSys 集成测试（bash + Docker Compose + Admin API） | ✅ 完整 |
 | [03-debugging.md](03-debugging.md) | 日常开发调试、Admin API、edgion-ctl、问题速查 | TODO |
+| [04-conf-sync-leak-testing.md](04-conf-sync-leak-testing.md) | 配置同步泄漏检测（基础循环 + 高级边界场景） | ✅ 完整 |
 
 ## 快速入门
 

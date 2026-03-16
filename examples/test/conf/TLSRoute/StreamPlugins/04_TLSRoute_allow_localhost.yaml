@@ -11,6 +11,7 @@ spec:
     - name: tls-stream-plugins-gw
       namespace: edgion-test
       sectionName: tls-allow-localhost
+      port: 31282
   hostnames:
     - "*.sp-allow.example.com"
   rules:

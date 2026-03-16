@@ -43,6 +43,11 @@ pub struct TLSRouteSpec {
     /// Rules defines the TLS routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<TLSRouteRule>>,
+
+    /// Resolved listener ports from parentRefs (computed by controller).
+    /// Derived from parentRef.port or parentRef.sectionName → Gateway listener.port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_ports: Option<Vec<u16>>,
 }
 
 /// TLSRouteRule defines TLS routing rules
@@ -80,6 +85,12 @@ pub struct TLSRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub stream_plugin_store_key: Option<String>,
+
+    /// Max upstream connect attempts (runtime only, from annotation).
+    /// 1 = no retry (default). Values > 1 enable retry with next-backend selection.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub max_connect_retries: u32,
 }
 
 impl Clone for TLSRouteRule {
@@ -91,6 +102,7 @@ impl Clone for TLSRouteRule {
             proxy_protocol_version: self.proxy_protocol_version,
             upstream_tls: self.upstream_tls,
             stream_plugin_store_key: self.stream_plugin_store_key.clone(),
+            max_connect_retries: self.max_connect_retries,
         }
     }
 }
@@ -104,6 +116,7 @@ impl fmt::Debug for TLSRouteRule {
             .field("proxy_protocol_version", &self.proxy_protocol_version)
             .field("upstream_tls", &self.upstream_tls)
             .field("stream_plugin_store_key", &self.stream_plugin_store_key)
+            .field("max_connect_retries", &self.max_connect_retries)
             .finish()
     }
 }

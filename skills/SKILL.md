@@ -18,7 +18,7 @@
 | 文件 | 主题 |
 |------|------|
 | [00-overview.md](00-architecture/00-overview.md) | 项目总览：高层架构图、Crate 结构、代码组织、EdgionHttpContext、edgion-ctl、关键依赖 |
-| [01-config-center.md](00-architecture/01-config-center.md) | 配置中心：ConfCenter、Workqueue、ResourceProcessor、跨资源 Requeue、DAG 约束 |
+| [01-config-center/](00-architecture/01-config-center/SKILL.md) | 配置中心：ConfCenter、Workqueue、ResourceProcessor、K8s HA、文件系统模式 |
 | [02-grpc-sync.md](00-architecture/02-grpc-sync.md) | gRPC 配置同步：Proto 定义、同步流程、Server/Client 端实现 |
 | [03-data-plane.md](00-architecture/03-data-plane.md) | 数据面：Gateway 启动流程、Pingora ProxyHttp 生命周期、ConnectionFilter |
 | [04-route-matching.md](00-architecture/04-route-matching.md) | 路由匹配：匹配流水线、RadixPath/Regex 引擎、优先级、多 Gateway 端口共享 |
@@ -26,6 +26,7 @@
 | [06-load-balancing.md](00-architecture/06-load-balancing.md) | 负载均衡：EWMA、LeastConn、WeightedSelector、健康检查、后端发现 |
 | [07-gateway-api.md](00-architecture/07-gateway-api.md) | Gateway API：v1.4.0 支持范围、资源映射、一致性测试、Edgion 扩展点 |
 | [08-resource-system.md](00-architecture/08-resource-system.md) | 资源系统：define_resources! 宏、ResourceMeta trait、ResourceKind、Preparse 机制 |
+| [09-core-layout.md](00-architecture/09-core-layout.md) | Core 分层定版：模块放置规范，避免回到旧目录结构 |
 
 ### 01 [01-development/](01-development/SKILL.md) — 开发指南
 功能开发、插件编写、资源添加、配置参考等开发者日常所需。
@@ -40,6 +41,7 @@
 | [05-annotations-reference.md](01-development/05-annotations-reference.md) | `edgion.io/*` 注解参考 |
 | [06-feature-flags.md](01-development/06-feature-flags.md) | Cargo Feature Flags 参考 |
 | [07-documentation-writing.md](01-development/07-documentation-writing.md) | 文档编写规范 |
+| [08-conf-handler-guidelines.md](01-development/08-conf-handler-guidelines.md) | ConfHandler 开发规范：分类、增量更新、ArcSwap、配置泄漏防护 |
 
 ### 02 [02-observability/](02-observability/SKILL.md) — 可观测性
 Access Log、Metrics、控制面日志的设计原则与操作规范。
@@ -59,6 +61,7 @@ Access Log、Metrics、控制面日志的设计原则与操作规范。
 | [01-k8s-integration-testing.md](03-testing/01-k8s-integration-testing.md) | K8s 集成测试：与本地测试差异、改造清单、执行阶段 |
 | [02-link-sys-testing.md](03-testing/02-link-sys-testing.md) | LinkSys 集成测试：bash 测试流程、Admin API 验证、Docker Compose |
 | [03-debugging.md](03-testing/03-debugging.md) | 调试与排错：本地环境、Admin API、edgion-ctl、常见问题速查 |
+| [04-conf-sync-leak-testing.md](03-testing/04-conf-sync-leak-testing.md) | 配置同步泄漏检测：基础循环测试 + 高级边界场景（wildcard/乱序/并发/orphan 等） |
 
 ### 04 [04-cicd/](04-cicd/SKILL.md) — CI/CD 与构建
 编译、Docker 镜像、GitHub Actions、发布流程。
@@ -69,10 +72,44 @@ Access Log、Metrics、控制面日志的设计原则与操作规范。
 | [01-docker-build.md](04-cicd/01-docker-build.md) | Docker 编译：多阶段构建、cargo-chef、多架构支持 |
 | [02-github-workflow.md](04-cicd/02-github-workflow.md) | GitHub Workflow：CI 流水线、Release 发布、镜像推送 |
 
-### 05 [review/](review/SKILL.md) — Review 知识沉淀
+### 05 [05-coding-standards/](05-coding-standards/SKILL.md) — 编码规范
+日志 ID 传播、敏感信息防泄漏、控制面/数据面日志分离等通用编码规范。
+
+| 文件 | 主题 |
+|------|------|
+| [00-logging-and-tracing-ids.md](05-coding-standards/00-logging-and-tracing-ids.md) | 日志 ID 传播：rv / sv / key_name 三元组，确保控制面→数据面可关联 |
+| [01-log-safety.md](05-coding-standards/01-log-safety.md) | 日志安全：敏感信息不入日志、配置不泄漏、数据面禁用 tracing |
+
+### 06 [review/](review/SKILL.md) — Review 知识沉淀
 代码审查中的项目特定结论、常见误报、可直接复用的判定标准。
 
 | 文件 | 主题 |
 |------|------|
 | [SKILL.md](review/SKILL.md) | Review 目录总览与使用方式 |
 | [memory-leak/not-a-memory-leak.md](review/memory-leak/not-a-memory-leak.md) | 非内存泄漏场景判定，避免重复误报 |
+
+### 07 [task/](task/SKILL.md) — 任务记录规范
+任务如何在 `tasks/` 下组织、拆 step、记录状态，以及各阶段如何关联到对应的 skills 知识。
+
+| 文件 | 主题 |
+|------|------|
+| [SKILL.md](task/SKILL.md) | 任务流程规范：目录规则、step 命名、状态约定、各阶段 skills 关联、完成后检查清单 |
+
+### 08 [gateway-api/](gateway-api/SKILL.md) — Gateway API 兼容性备忘
+Gateway API 实现中的有意偏差和边界决策。
+
+| 文件 | 主题 |
+|------|------|
+| [SKILL.md](gateway-api/SKILL.md) | TLS 证书选择策略：不支持 hostname-less catch-all、不支持 cross-port fallback |
+
+### misc [mis/](mis/) — 杂项知识
+不属于上述分类的诊断指南和临时记录。
+
+| 文件 | 主题 |
+|------|------|
+| [debugging-tls-gateway.md](mis/debugging-tls-gateway.md) | TLS Gateway 路由问题排查流程 |
+
+## 用户文档
+
+用户文档位于 `docs/` 目录，按语言分目录（en、zh-CN、ja）。
+完整目录树见 [docs/DIRECTORY.md](../docs/DIRECTORY.md)。

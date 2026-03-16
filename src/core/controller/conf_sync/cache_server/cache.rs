@@ -476,15 +476,15 @@ mod tests {
         fn get_version(&self) -> u64 {
             self.version
         }
-
+        fn get_sync_version(&self) -> u64 {
+            0
+        }
         fn resource_kind() -> ResourceKind {
             ResourceKind::Unspecified
         }
-
         fn kind_name() -> &'static str {
             "TestResource"
         }
-
         fn key_name(&self) -> String {
             "test".to_string()
         }

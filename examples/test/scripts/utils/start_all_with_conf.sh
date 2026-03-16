@@ -19,7 +19,7 @@ NC='\033[0m'
 # projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-CERTS_DIR="${SCRIPT_DIR}/../certs"
+CERTS_DIR="${SCRIPT_DIR}/../gen_certs"
 
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -260,7 +260,9 @@ check_port_conflict() {
 
     if command -v lsof >/dev/null 2>&1; then
         local port_usage
-        port_usage=$(lsof -n -P -iTCP:"${port}" 2>/dev/null || true)
+        # Only treat an active listener as a port conflict. macOS can show
+        # stale CLOSED connections for a port that is not actually bound.
+        port_usage=$(lsof -n -P -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)
         if [ -n "$port_usage" ]; then
             log_error "$label port $port occupied"
             echo "$port_usage"

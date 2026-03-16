@@ -29,19 +29,28 @@ pub struct MatchInfo {
     /// Match id at rule id,
     pub match_id: usize,
 
+    /// sync_version from gRPC sync (0 = not set)
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sv: u64,
+
     /// match item
     #[serde(skip)]
     pub m: HTTPRouteMatch,
 }
 
+pub fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
 impl MatchInfo {
-    pub fn new(rns: String, rn: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch) -> Self {
+    pub fn new(rns: String, rn: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch, sv: u64) -> Self {
         Self {
             rns,
             rn,
             m,
             rule_id,
             match_id,
+            sv,
         }
     }
 }
@@ -76,12 +85,15 @@ pub struct ClientCertInfo {
 pub struct TlsConnId(pub u64);
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TlsMatchedInfo {
+pub struct MatchedInfo {
     pub kind: String,
     pub ns: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// sync_version from gRPC sync (0 = not set)
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sv: u64,
 }
 
 /// TLS handshake metadata stored in SslDigestExtension.
@@ -109,7 +121,7 @@ pub struct TlsConnMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<LogBuffer>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub matched: Option<TlsMatchedInfo>,
+    pub matched: Option<MatchedInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub err_log: Option<String>,
     /// mTLS client cert info (only when annotation gate is enabled).

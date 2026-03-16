@@ -18,10 +18,10 @@ use tokio::net::UdpSocket;
 
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
-use crate::core::gateway::routes::http::{EdgionHttp, EdgionHttpRedirect};
-use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, EdgionTcp};
-use crate::core::gateway::routes::tls::EdgionTls;
-use crate::core::gateway::routes::udp::{get_global_udp_route_manager, EdgionUdp};
+use crate::core::gateway::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
+use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, EdgionTcpProxy};
+use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsTcpProxy};
+use crate::core::gateway::routes::udp::{get_global_udp_route_manager, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -73,7 +73,7 @@ pub struct ListenerContext {
 
 /// Add an HTTP or HTTPS listener to the Pingora server
 ///
-/// This function creates an EdgionHttp proxy service and adds it to the server
+/// This function creates an HTTP proxy service and adds it to the server
 /// with or without TLS based on the enable_tls parameter.
 ///
 /// # Parameters
@@ -105,7 +105,7 @@ pub fn add_http_listener(
             .and_then(|v| v.parse().ok())
             .unwrap_or(443);
 
-        let redirect_handler = EdgionHttpRedirect::new(https_port);
+        let redirect_handler = EdgionHttpRedirectProxy::new(https_port);
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
         http_service.add_tcp(&addr);
@@ -152,7 +152,7 @@ pub fn add_http_listener(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
 
-    let edgion_http = EdgionHttp {
+    let edgion_http = EdgionHttpProxy {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),
         server_start_time: SystemTime::now(),
@@ -263,8 +263,8 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
     let gateway_tcp_routes = tcp_route_manager.get_or_create_gateway_tcp_routes(namespace_str, &context.gateway_name);
 
-    // Create EdgionTcp
-    let edgion_tcp = EdgionTcp {
+    // Create TCP proxy service
+    let edgion_tcp = EdgionTcpProxy {
         gateway_name: context.gateway_name.clone(),
         gateway_namespace: context.gateway_namespace.clone(),
         listener_name: listener_name.clone(), // Pass listener name for sectionName matching
@@ -314,8 +314,8 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
     socket.set_nonblocking(true)?;
     let socket = UdpSocket::from_std(socket)?;
 
-    // Create EdgionUdp service
-    let edgion_udp = Arc::new(EdgionUdp::new(
+    // Create UDP proxy service
+    let edgion_udp = Arc::new(EdgionUdpProxy::new(
         context.gateway_name.clone(),
         context.gateway_namespace.clone(),
         listener_name.clone(), // Pass listener name for sectionName matching
@@ -352,17 +352,11 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    let gateway_key = context
-        .gateway_namespace
-        .as_ref()
-        .map(|ns| format!("{}/{}", ns, context.gateway_name))
-        .unwrap_or_else(|| context.gateway_name.clone());
+    let tls_route_manager = get_global_tls_route_managers().get_or_create_port_manager(port);
 
-    let edgion_tls = EdgionTls {
-        gateway_name: context.gateway_name.clone(),
-        gateway_namespace: context.gateway_namespace.clone(),
-        gateway_key,
+    let edgion_tls = EdgionTlsTcpProxy {
         listener_port: port,
+        tls_route_manager,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),

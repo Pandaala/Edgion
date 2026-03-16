@@ -1,0 +1,21 @@
+# TLSRoute referencing EdgionStreamPlugins with tlsRoutePlugins (Stage 2)
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: tls-sp-route-deny-all
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/tls-route-deny-all"
+spec:
+  parentRefs:
+    - name: tls-stream-plugins-gw
+      namespace: edgion-test
+      sectionName: tls-route-plugins-deny
+      port: 31287
+  hostnames:
+    - "*.sp-route-deny.example.com"
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

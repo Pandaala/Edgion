@@ -1,10 +1,10 @@
-use super::EdgionHttp;
+use super::EdgionHttpProxy;
 use pingora_core::modules::http::compression::ResponseCompressionBuilder;
 use pingora_core::modules::http::grpc_web::GrpcWeb;
 use pingora_core::modules::http::HttpModules;
 
 #[inline]
-pub fn init_downstream_modules(edgion_http: &EdgionHttp, modules: &mut HttpModules) {
+pub fn init_downstream_modules(edgion_http: &EdgionHttpProxy, modules: &mut HttpModules) {
     // Configure downstream compression based on global config (default: disabled)
     let enable_compression = edgion_http
         .edgion_gateway_config

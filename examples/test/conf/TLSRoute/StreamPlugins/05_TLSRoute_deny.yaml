@@ -11,6 +11,7 @@ spec:
     - name: tls-stream-plugins-gw
       namespace: edgion-test
       sectionName: tls-deny-all
+      port: 31283
   hostnames:
     - "*.sp-deny.example.com"
   rules:

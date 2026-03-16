@@ -13,7 +13,9 @@ mod routes_mgr;
 pub use conf_handler_impl::create_grpc_route_handler;
 pub use match_engine::GrpcMatchEngine;
 pub use match_unit::{GrpcMatchInfo, GrpcRouteInfo, GrpcRouteRuleUnit};
-pub use routes_mgr::{get_global_grpc_route_manager, DomainGrpcRouteRules, GrpcRouteManager, GrpcRouteRules};
+pub use routes_mgr::{
+    get_global_grpc_route_manager, DomainGrpcRouteRules, GrpcRouteManager, GrpcRouteManagerStats, GrpcRouteRules,
+};
 
 // Export integration interface for the HTTP pipeline to call.
 pub use integration::{handle_grpc_upstream, is_grpc_protocol, try_match_grpc_route};

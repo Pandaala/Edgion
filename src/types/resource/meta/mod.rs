@@ -6,4 +6,4 @@
 mod impls;
 mod traits;
 
-pub use traits::{extract_version, key_name_from_metadata, ResourceMeta};
+pub use traits::{extract_sync_version, extract_version, key_name_from_metadata, set_sync_version, ResourceMeta};
