@@ -67,13 +67,6 @@ impl StreamPluginRuntime {
                     continue;
                 }
                 StreamPluginResult::Deny(reason) => {
-                    // First denial stops execution
-                    tracing::info!(
-                        plugin = plugin.name(),
-                        client_ip = %ctx.client_ip,
-                        reason = %reason,
-                        "Stream plugin denied connection"
-                    );
                     return StreamPluginResult::Deny(reason);
                 }
             }

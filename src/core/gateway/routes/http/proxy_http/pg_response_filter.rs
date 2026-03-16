@@ -25,7 +25,6 @@ pub async fn response_filter(
     // This helps in draining connections gracefully during rolling updates.
     if session.is_process_shutting_down() {
         let _ = upstream_response.insert_header("Connection", "close");
-        tracing::debug!("Process shutting down, adding Connection: close header");
     }
 
     // Run rule-level response edgion_plugins (async)

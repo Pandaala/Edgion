@@ -326,6 +326,22 @@ impl BackendTLSPolicyStore {
     pub fn count(&self) -> usize {
         self.policies.read().map(|policies| policies.len()).unwrap_or(0)
     }
+
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> BackendTLSPolicyStoreStats {
+        let policies_count = self.policies.read().map(|p| p.len()).unwrap_or(0);
+        let reverse_index = self.reverse_index.load();
+        BackendTLSPolicyStoreStats {
+            policies: policies_count,
+            reverse_index_targets: reverse_index.len(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BackendTLSPolicyStoreStats {
+    pub policies: usize,
+    pub reverse_index_targets: usize,
 }
 
 impl Default for BackendTLSPolicyStore {

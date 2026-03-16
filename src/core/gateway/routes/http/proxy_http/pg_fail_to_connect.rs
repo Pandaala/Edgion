@@ -47,12 +47,6 @@ pub fn fail_to_connect(
     if let Some(timeout) = request_timeout {
         let elapsed = ctx.start_time.elapsed();
         if elapsed >= timeout {
-            tracing::warn!(
-                total_attempts = ctx.try_cnt,
-                elapsed_secs = elapsed.as_secs_f64(),
-                timeout_secs = timeout.as_secs_f64(),
-                "Request timeout exceeded, blocking retry"
-            );
             // Set 504 status for timeout
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);

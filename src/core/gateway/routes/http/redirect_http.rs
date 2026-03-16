@@ -90,12 +90,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     {
         let redirect_url = self.build_redirect_url(session);
 
-        tracing::debug!(
-            component = "http_redirect",
-            redirect_url = %redirect_url,
-            "Redirecting HTTP to HTTPS"
-        );
-
         // Build 301 response
         let mut resp = ResponseHeader::build(StatusCode::MOVED_PERMANENTLY, Some(3))?;
         resp.insert_header("Location", &redirect_url)?;

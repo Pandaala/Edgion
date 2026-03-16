@@ -66,15 +66,11 @@ impl PreflightHandler {
             // Run CORS plugin logic (this will set headers and may terminate request)
             let _result = cors_plugin.run_request(&mut adapter, &mut plugin_log).await;
 
-            // CORS plugin handles preflight, request is terminated
-            tracing::debug!("Preflight handled by CORS plugin");
             return Ok(true);
         }
 
         // No CORS config: return simple empty response
         let status = self.policy.as_ref().map(|p| p.status_code).unwrap_or(204);
-
-        tracing::debug!(status = status, "Preflight handled without CORS config");
 
         let resp = ResponseHeader::build(status, None)?;
         session.write_response_header(Box::new(resp), true).await?;

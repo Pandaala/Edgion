@@ -24,7 +24,7 @@ pub mod proxy_http;
 pub use conf_handler_impl::create_route_manager_handler;
 pub use match_unit::HttpRouteRuleUnit;
 pub use redirect_http::EdgionHttpRedirectProxy;
-pub use routes_mgr::{get_global_route_manager, DomainRouteRules, RouteManager};
+pub use routes_mgr::{get_global_route_manager, DomainRouteRules, HttpRouteManagerStats, RouteManager};
 
 // Re-export HTTP proxy types
 pub use proxy_http::EdgionHttpProxy;

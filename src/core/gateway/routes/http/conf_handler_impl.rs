@@ -185,6 +185,7 @@ impl RouteManager {
                 rule_id,
                 match_id,
                 match_item.clone(),
+                0,
             ),
             rule,
             path_regex: Some(regex),
@@ -264,6 +265,7 @@ impl RouteManager {
             }
 
             let route_name = route.metadata.name.as_deref().unwrap_or("");
+            let route_sv = route.get_sync_version();
             let accepted_refs_opt = Some(accepted_refs.clone());
 
             if let Some(rules) = &route.spec.rules {
@@ -288,7 +290,7 @@ impl RouteManager {
 
                     for (match_id, match_item) in matches.iter().enumerate() {
                         if Self::is_regex_path(match_item) {
-                            if let Ok(regex_unit) = Self::create_regex_route_unit(
+                            if let Ok(mut regex_unit) = Self::create_regex_route_unit(
                                 route_namespace,
                                 route_name,
                                 rule_id,
@@ -298,6 +300,7 @@ impl RouteManager {
                                 rule_arc.clone(),
                                 accepted_refs_opt.clone(),
                             ) {
+                                regex_unit.matched_info.sv = route_sv;
                                 regex_routes_list.push(Arc::new(regex_unit));
                             }
                         } else {
@@ -310,6 +313,7 @@ impl RouteManager {
                                     rule_id,
                                     match_id,
                                     match_item.clone(),
+                                    route_sv,
                                 ),
                                 rule: rule_arc.clone(),
                                 path_regex: None,
@@ -434,6 +438,7 @@ impl RouteManager {
                 }
 
                 let route_name = route.metadata.name.as_deref().unwrap_or("");
+                let route_sv = route.get_sync_version();
                 let accepted_refs_opt = Some(accepted_refs.clone());
 
                 if let Some(rules) = &route.spec.rules {
@@ -458,7 +463,7 @@ impl RouteManager {
 
                         for (match_id, match_item) in matches.iter().enumerate() {
                             if Self::is_regex_path(match_item) {
-                                if let Ok(regex_unit) = Self::create_regex_route_unit(
+                                if let Ok(mut regex_unit) = Self::create_regex_route_unit(
                                     route_namespace,
                                     route_name,
                                     rule_id,
@@ -468,6 +473,7 @@ impl RouteManager {
                                     rule_arc.clone(),
                                     accepted_refs_opt.clone(),
                                 ) {
+                                    regex_unit.matched_info.sv = route_sv;
                                     regex_routes_list.push(Arc::new(regex_unit));
                                 }
                             } else {
@@ -480,6 +486,7 @@ impl RouteManager {
                                         rule_id,
                                         match_id,
                                         match_item.clone(),
+                                        route_sv,
                                     ),
                                     rule: rule_arc.clone(),
                                     path_regex: None,
@@ -571,6 +578,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
         };
 
         let accepted_refs_opt = Some(accepted_refs.clone());
+        let route_sv = route.get_sync_version();
 
         let effective_hostnames = get_effective_hostnames(route);
         for hostname in &effective_hostnames {
@@ -608,7 +616,8 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             rule_arc.clone(),
                             accepted_refs_opt.clone(),
                         ) {
-                            Ok(regex_unit) => {
+                            Ok(mut regex_unit) => {
+                                regex_unit.matched_info.sv = route_sv;
                                 split.1.push(Arc::new(regex_unit));
                             }
                             Err(e) => {
@@ -625,6 +634,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                                 rule_id,
                                 match_id,
                                 match_item.clone(),
+                                route_sv,
                             ),
                             rule: rule_arc.clone(),
                             path_regex: None,

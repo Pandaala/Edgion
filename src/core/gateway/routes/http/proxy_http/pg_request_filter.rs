@@ -79,15 +79,10 @@ pub async fn request_filter(
             .await
         {
             Ok(true) => {
-                // Preflight handled, terminate request
-                tracing::debug!("Preflight request handled, terminating");
                 return Ok(true);
             }
-            Ok(false) => {
-                // Continue to plugin chain (shouldn't happen with current implementation)
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to handle preflight request");
+            Ok(false) => {}
+            Err(_) => {
                 end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true);
             }

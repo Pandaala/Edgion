@@ -194,7 +194,7 @@ mod tests {
         });
         let route1 = Arc::new(GrpcRouteRuleUnit {
             resource_key: "default/route1".to_string(),
-            matched_info: GrpcMatchInfo::new("default".to_string(), "route1".to_string(), 0, 0, match1),
+            matched_info: GrpcMatchInfo::new("default".to_string(), "route1".to_string(), 0, 0, match1, 0),
             rule: rule1.clone(),
             route_info: route_info1,
         });
@@ -214,7 +214,7 @@ mod tests {
         });
         let route2 = Arc::new(GrpcRouteRuleUnit {
             resource_key: "default/route2".to_string(),
-            matched_info: GrpcMatchInfo::new("default".to_string(), "route2".to_string(), 0, 0, match2),
+            matched_info: GrpcMatchInfo::new("default".to_string(), "route2".to_string(), 0, 0, match2, 0),
             rule: rule1,
             route_info: route_info2,
         });

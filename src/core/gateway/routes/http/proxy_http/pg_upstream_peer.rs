@@ -35,12 +35,6 @@ pub async fn upstream_peer(
     if let Some(timeout) = request_timeout {
         let elapsed = ctx.start_time.elapsed();
         if elapsed >= timeout {
-            tracing::warn!(
-                total_attempts = ctx.try_cnt,
-                elapsed_secs = elapsed.as_secs_f64(),
-                timeout_secs = timeout.as_secs_f64(),
-                "Request timeout exceeded before upstream_peer"
-            );
             ctx.add_error(EdgionStatus::Unknown);
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);
@@ -66,19 +60,13 @@ pub async fn upstream_peer_grpc(
 ) -> pingora_core::Result<Box<HttpPeer>> {
     // 1. Handle gRPC upstream selection
     match handle_grpc_upstream(session, ctx).await {
-        Ok(Some(())) => {
-            tracing::debug!("gRPC backend selected");
-        }
+        Ok(Some(())) => {}
         Ok(None) => {
-            // No gRPC route found - this shouldn't happen as route matching
-            // should be done in request_filter stage
-            tracing::error!("No gRPC route found at upstream_peer stage");
             ctx.add_error(EdgionStatus::GrpcUpstreamNotRouteMatched);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Err(PingoraError::new(ErrorType::InternalError));
         }
-        Err(e) => {
-            tracing::error!("Failed to handle gRPC upstream: {:?}", e);
+        Err(_) => {
             ctx.add_error(EdgionStatus::GrpcUpstreamNotBackendRefs);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Err(PingoraError::new(ErrorType::InternalError));
@@ -149,15 +137,6 @@ pub async fn upstream_peer_http(
 
     // 1. Check for ExternalJump (external domain, second priority)
     if let Some(ref external) = ctx.external_jump {
-        tracing::debug!(
-            domain = %external.domain,
-            port = %external.port,
-            use_tls = %external.use_tls,
-            try_cnt = ctx.try_cnt,
-            "Using external jump peer"
-        );
-
-        // Async DNS resolution (re-resolves on each attempt, including retries)
         let addr = resolve_domain(&external.domain, external.port).await?;
 
         // Build HttpPeer from resolved address
@@ -210,11 +189,6 @@ pub async fn select_http_backend(
 
     // ===== DynamicInternalUpstream: select specific backend_ref by name =====
     let mut backend_ref = if let Some(ref jump) = ctx.internal_jump {
-        tracing::debug!(
-            target_name = %jump.backend_ref_name,
-            target_namespace = ?jump.backend_ref_namespace,
-            "DynamicInternalUpstream: selecting backend by name"
-        );
         match RouteRules::find_backend_by_name(
             &route_unit.rule,
             &jump.backend_ref_name,
@@ -222,35 +196,14 @@ pub async fn select_http_backend(
             &route_unit.matched_info.rns,
         ) {
             Ok(backend) => backend,
-            Err(e) => {
-                // This shouldn't happen because plugin already pre-validated,
-                // but handle gracefully (e.g., race condition on route reload)
-                tracing::error!(
-                    target_name = %jump.backend_ref_name,
-                    error = ?e,
-                    "DynamicInternalUpstream: backend_ref not found (fallback to weighted selection)"
-                );
-                // Fall through to normal weighted selection
+            Err(_) => {
                 match RouteRules::select_backend(&route_unit.rule) {
                     Ok(backend) => backend,
                     Err(e) => {
-                        tracing::error!("Failed to select backend after internal jump fallback: {:?}", e);
                         ctx.add_error(match &e {
                             EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
                             EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                            EdError::RefDenied {
-                                target_namespace,
-                                target_name,
-                                reason,
-                            } => {
-                                tracing::warn!(
-                                    target_namespace = %target_namespace,
-                                    target_name = %target_name,
-                                    reason = %reason,
-                                    "Cross-namespace reference denied"
-                                );
-                                EdgionStatus::RefDenied
-                            }
+                            EdError::RefDenied { .. } => EdgionStatus::RefDenied,
                             _ => EdgionStatus::Unknown,
                         });
                         end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
@@ -264,23 +217,10 @@ pub async fn select_http_backend(
         match RouteRules::select_backend(&route_unit.rule) {
             Ok(backend) => backend,
             Err(e) => {
-                tracing::error!("Failed to select backend: {:?}", e);
                 ctx.add_error(match &e {
                     EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
                     EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                    EdError::RefDenied {
-                        target_namespace,
-                        target_name,
-                        reason,
-                    } => {
-                        tracing::warn!(
-                            target_namespace = %target_namespace,
-                            target_name = %target_name,
-                            reason = %reason,
-                            "Cross-namespace reference denied"
-                        );
-                        EdgionStatus::RefDenied
-                    }
+                    EdError::RefDenied { .. } => EdgionStatus::RefDenied,
                     _ => EdgionStatus::Unknown,
                 });
                 end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
@@ -300,22 +240,7 @@ pub async fn select_http_backend(
     backend_ref.backend_tls_policy =
         crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace);
 
-    if let Some(ref policy) = backend_ref.backend_tls_policy {
-        tracing::debug!(
-            policy = %format!("{}/{}",
-                policy.namespace().unwrap_or(""),
-                policy.name()
-            ),
-            service = %format!("{}/{}",
-                service_namespace.unwrap_or(""),
-                service_name
-            ),
-            sni = %policy.spec.validation.hostname,
-            "BackendTLSPolicy found for selected backend"
-        );
-    }
-
-    tracing::info!("Selected HTTP backend: {:?}", backend_ref);
+    // BackendTLSPolicy is applied via the peer builder; no per-request logging needed
 
     // Run backend-level request edgion_plugins
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
@@ -421,7 +346,6 @@ async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::ne
 
     // Use tokio async DNS resolution
     let mut addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
-        tracing::error!(domain = %domain, port = %port, error = %e, "DNS resolution failed");
         PingoraError::explain(
             ErrorType::ConnectError,
             format!("DNS resolution failed for {}: {}", domain, e),
@@ -429,17 +353,10 @@ async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::ne
     })?;
 
     let addr = addrs.next().ok_or_else(|| {
-        tracing::error!(domain = %domain, port = %port, "DNS resolution returned no addresses");
         PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain))
     })?;
 
-    // Security: reject localhost connections
     if addr.ip().is_loopback() {
-        tracing::error!(
-            domain = %domain,
-            resolved_ip = %addr.ip(),
-            "Rejected: external jump domain resolved to localhost"
-        );
         return Err(PingoraError::explain(
             ErrorType::ConnectError,
             format!("Domain {} resolved to localhost (rejected)", domain),

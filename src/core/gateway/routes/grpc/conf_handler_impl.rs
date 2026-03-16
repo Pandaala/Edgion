@@ -5,7 +5,7 @@ use crate::core::gateway::routes::grpc::{
     get_global_grpc_route_manager, GrpcMatchEngine, GrpcRouteManager, GrpcRouteRuleUnit,
 };
 use crate::core::gateway::routes::http::conf_handler_impl::filter_accepted_parent_refs;
-use crate::types::GRPCRoute;
+use crate::types::{GRPCRoute, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -47,55 +47,65 @@ pub fn create_grpc_route_handler() -> Box<dyn ConfHandler<GRPCRoute> + Send + Sy
 
 /// Private helper methods for GrpcRouteManager
 impl GrpcRouteManager {
-    /// Build global GrpcRouteRules from all stored routes.
-    fn build_global_routes(&self, all_routes: &HashMap<String, GRPCRoute>) -> Arc<GrpcRouteRules> {
+    /// Parse a single GRPCRoute into route rule units.
+    /// Returns empty Vec if the route has no accepted parentRefs or no rules.
+    fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRouteRuleUnit>> {
+        let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+
+        let accepted_refs = match filter_accepted_parent_refs(
+            route.spec.parent_refs.as_ref(),
+            route.status.as_ref().map(|s| s.parents.as_slice()),
+            Some(route_namespace),
+        ) {
+            Some(refs) => refs,
+            None => return Vec::new(),
+        };
+
+        let route_sv = route.get_sync_version();
+        let route_info = Arc::new(GrpcRouteInfo {
+            parent_refs: Some(accepted_refs),
+            effective_hostnames: get_effective_hostnames(route),
+        });
+
+        let mut units = Vec::new();
+        if let Some(rules) = &route.spec.rules {
+            for (rule_id, rule) in rules.iter().enumerate() {
+                let rule_arc = Arc::new(rule.clone());
+
+                if let Some(matches) = &rule.matches {
+                    for (match_id, match_item) in matches.iter().enumerate() {
+                        units.push(Arc::new(GrpcRouteRuleUnit {
+                            resource_key: resource_key.to_string(),
+                            matched_info: GrpcMatchInfo::new(
+                                route_namespace.to_string(),
+                                route_name.to_string(),
+                                rule_id,
+                                match_id,
+                                match_item.clone(),
+                                route_sv,
+                            ),
+                            rule: rule_arc.clone(),
+                            route_info: route_info.clone(),
+                        }));
+                    }
+                }
+            }
+        }
+        units
+    }
+
+    /// Build GrpcRouteRules from a flat list of all route units.
+    fn build_engine_from_all_units(
+        all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
+    ) -> Arc<GrpcRouteRules> {
         let mut resource_keys = HashSet::new();
         let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 
-        for (resource_key, route) in all_routes.iter() {
-            let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-            let route_name = route.metadata.name.as_deref().unwrap_or("");
-
-            // Only compile parentRefs that are Accepted=True
-            let accepted_refs = match filter_accepted_parent_refs(
-                route.spec.parent_refs.as_ref(),
-                route.status.as_ref().map(|s| s.parents.as_slice()),
-                Some(route_namespace),
-            ) {
-                Some(refs) => refs,
-                None => continue,
-            };
-
-            resource_keys.insert(resource_key.clone());
-
-            let route_info = Arc::new(GrpcRouteInfo {
-                parent_refs: Some(accepted_refs),
-                effective_hostnames: get_effective_hostnames(route),
-            });
-
-            if let Some(rules) = &route.spec.rules {
-                for (rule_id, rule) in rules.iter().enumerate() {
-                    let rule_arc = Arc::new(rule.clone());
-
-                    if let Some(matches) = &rule.matches {
-                        for (match_id, match_item) in matches.iter().enumerate() {
-                            let unit = Arc::new(GrpcRouteRuleUnit {
-                                resource_key: resource_key.clone(),
-                                matched_info: GrpcMatchInfo::new(
-                                    route_namespace.to_string(),
-                                    route_name.to_string(),
-                                    rule_id,
-                                    match_id,
-                                    match_item.clone(),
-                                ),
-                                rule: rule_arc.clone(),
-                                route_info: route_info.clone(),
-                            });
-
-                            route_rules_list.push(unit);
-                        }
-                    }
-                }
+        for (key, units) in all_units {
+            if !units.is_empty() {
+                resource_keys.insert(key.clone());
+                route_rules_list.extend(units.iter().cloned());
             }
         }
 
@@ -121,14 +131,19 @@ impl GrpcRouteManager {
         );
 
         let mut parsed_routes = HashMap::new();
+        let mut new_units_cache: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>> = HashMap::new();
+
         for (key, mut route) in data.clone() {
             route.preparse();
+            let units = Self::parse_route_to_units(&key, &route);
+            new_units_cache.insert(key.clone(), units);
             parsed_routes.insert(key, route);
         }
 
-        let new_route_rules = self.build_global_routes(&parsed_routes);
+        let new_route_rules = Self::build_engine_from_all_units(&new_units_cache);
 
         *self.grpc_routes.lock().unwrap() = parsed_routes;
+        *self.route_units_cache.lock().unwrap() = new_units_cache;
         let new_domain = DomainGrpcRouteRules::new();
         new_domain.grpc_routes.store(new_route_rules);
         self.global_grpc_routes.store(Arc::new(new_domain));
@@ -136,7 +151,7 @@ impl GrpcRouteManager {
         tracing::info!(component = "grpc_route_manager", "global gRPC routes updated");
     }
 
-    /// partial_update implementation — rebuilds the global gRPC route table.
+    /// partial_update — only re-parses changed routes, reuses cached units for unchanged ones.
     fn partial_update(
         &self,
         add: HashMap<String, GRPCRoute>,
@@ -157,20 +172,25 @@ impl GrpcRouteManager {
             parsed_add_or_update.insert(key, route);
         }
 
-        let all_routes = {
+        {
             let mut grpc_routes = self.grpc_routes.lock().unwrap();
+            let mut units_cache = self.route_units_cache.lock().unwrap();
+
             for (key, route) in parsed_add_or_update.iter() {
+                let units = Self::parse_route_to_units(key, route);
+                units_cache.insert(key.clone(), units);
                 grpc_routes.insert(key.clone(), route.clone());
             }
-            for key in remove.iter() {
-                grpc_routes.remove(key);
-            }
-            grpc_routes.clone()
-        };
 
-        let new_route_rules = self.build_global_routes(&all_routes);
-        let current = self.global_grpc_routes.load();
-        current.grpc_routes.store(new_route_rules);
+            for key in &remove {
+                grpc_routes.remove(key);
+                units_cache.remove(key);
+            }
+
+            let new_route_rules = Self::build_engine_from_all_units(&units_cache);
+            let current = self.global_grpc_routes.load();
+            current.grpc_routes.store(new_route_rules);
+        }
 
         tracing::info!(component = "grpc_route_manager", "global gRPC routes updated");
     }

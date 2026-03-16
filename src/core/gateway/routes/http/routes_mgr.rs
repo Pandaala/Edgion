@@ -279,4 +279,29 @@ impl RouteManager {
     pub fn get_global_routes(&self) -> arc_swap::Guard<Arc<DomainRouteRules>> {
         self.global_routes.load()
     }
+
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> HttpRouteManagerStats {
+        let routes = self.global_routes.load();
+        let exact_map = routes.exact_domain_map.load();
+        let has_catch_all = routes.catch_all_routes.load().is_some();
+        let wildcard_engine = routes.wildcard_engine.load();
+        let wildcard_domains = wildcard_engine.as_ref().as_ref().map_or(0, |e| e.host_count());
+        let http_routes_count = self.http_routes.lock().unwrap().len();
+
+        HttpRouteManagerStats {
+            exact_domains: exact_map.len(),
+            wildcard_domains,
+            has_catch_all,
+            http_routes: http_routes_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HttpRouteManagerStats {
+    pub exact_domains: usize,
+    pub wildcard_domains: usize,
+    pub has_catch_all: bool,
+    pub http_routes: usize,
 }

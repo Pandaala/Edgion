@@ -285,7 +285,7 @@ impl PolicyStore {
 }
 
 /// Statistics about the policy store
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PolicyStoreStats {
     /// Total number of services with policies
     pub total_services: usize,

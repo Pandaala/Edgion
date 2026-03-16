@@ -157,6 +157,10 @@ pub struct GrpcRouteManager {
     /// Key format: "namespace/name"
     /// Uses Mutex since route updates are serialized.
     pub grpc_routes: Mutex<HashMap<RouteKey, GRPCRoute>>,
+
+    /// Cached parsed route units per resource_key.
+    /// Avoids re-parsing unchanged routes during partial_update.
+    pub(crate) route_units_cache: Mutex<HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>,
 }
 
 impl Default for GrpcRouteManager {
@@ -170,6 +174,7 @@ impl GrpcRouteManager {
         Self {
             global_grpc_routes: ArcSwap::from_pointee(DomainGrpcRouteRules::new()),
             grpc_routes: Mutex::new(HashMap::new()),
+            route_units_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -177,6 +182,29 @@ impl GrpcRouteManager {
     pub fn get_global_grpc_routes(&self) -> arc_swap::Guard<Arc<DomainGrpcRouteRules>> {
         self.global_grpc_routes.load()
     }
+
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> GrpcRouteManagerStats {
+        let grpc_routes_count = self.grpc_routes.lock().unwrap().len();
+        let table = self.global_grpc_routes.load();
+        let inner = table.grpc_routes.load();
+        let resource_keys_count = inner.resource_keys.read().unwrap().len();
+
+        let route_units_cache_count = self.route_units_cache.lock().unwrap().len();
+
+        GrpcRouteManagerStats {
+            grpc_routes: grpc_routes_count,
+            resource_keys: resource_keys_count,
+            route_units_cache: route_units_cache_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GrpcRouteManagerStats {
+    pub grpc_routes: usize,
+    pub resource_keys: usize,
+    pub route_units_cache: usize,
 }
 
 // Global GrpcRouteManager instance

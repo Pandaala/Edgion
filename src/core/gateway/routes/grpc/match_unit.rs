@@ -30,6 +30,9 @@ pub struct GrpcMatchInfo {
     pub rule_id: usize,
     /// Match id at rule id
     pub match_id: usize,
+    /// sync_version from gRPC sync (0 = not set)
+    #[serde(default, skip_serializing_if = "crate::types::ctx::is_zero")]
+    pub sv: u64,
     /// Matched item (contains service/method in matched.method)
     pub matched: GRPCRouteMatch,
     /// Pre-compiled regex patterns for header matching (index corresponds to matched.headers)
@@ -40,7 +43,7 @@ pub struct GrpcMatchInfo {
 }
 
 impl GrpcMatchInfo {
-    pub fn new(route_ns: String, route_name: String, rule_id: usize, match_id: usize, matched: GRPCRouteMatch) -> Self {
+    pub fn new(route_ns: String, route_name: String, rule_id: usize, match_id: usize, matched: GRPCRouteMatch, sv: u64) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
             headers
@@ -77,6 +80,7 @@ impl GrpcMatchInfo {
             route_name,
             rule_id,
             match_id,
+            sv,
             matched,
             compiled_header_regexes,
         }
@@ -170,23 +174,12 @@ impl GrpcRouteRuleUnit {
                 if let Some(regex) = compiled_regex {
                     Ok(regex.is_match(header_value))
                 } else {
-                    // Fallback: compile at runtime (should not happen if pre-compilation succeeded)
-                    tracing::warn!(
-                        header = %header_match.name,
-                        "Using runtime regex compilation for header match (pre-compilation failed)"
-                    );
                     let re = Regex::new(&header_match.value)
                         .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
                     Ok(re.is_match(header_value))
                 }
             }
-            _ => {
-                tracing::warn!(
-                    match_type = %match_type,
-                    "Unsupported gRPC header match type, defaulting to Exact"
-                );
-                Ok(header_value == header_match.value)
-            }
+            _ => Ok(header_value == header_match.value),
         }
     }
 
