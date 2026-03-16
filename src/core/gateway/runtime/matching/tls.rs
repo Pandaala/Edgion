@@ -192,6 +192,29 @@ impl GatewayTlsMatcher {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GatewayTlsMatcherStats {
+    pub port_count: usize,
+    pub is_empty: bool,
+}
+
+impl GatewayTlsMatcher {
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> GatewayTlsMatcherStats {
+        let data = self.data.load();
+        match data.as_ref() {
+            Some(d) => GatewayTlsMatcherStats {
+                port_count: d.port_map.len(),
+                is_empty: false,
+            },
+            None => GatewayTlsMatcherStats {
+                port_count: 0,
+                is_empty: true,
+            },
+        }
+    }
+}
+
 impl Default for GatewayTlsMatcher {
     fn default() -> Self {
         Self::new()

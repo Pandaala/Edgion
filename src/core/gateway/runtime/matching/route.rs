@@ -126,6 +126,12 @@ pub fn check_gateway_listener_match(
 
             let listener_config = config_store.get_listener_config(gi);
 
+            if let (Some(parent_port), Some(config)) = (pr.port, listener_config.as_ref()) {
+                if config.port != parent_port {
+                    continue;
+                }
+            }
+
             // Check sectionName matching
             match (&pr.section_name, &gi.listener_name) {
                 (Some(section_name), Some(listener_name)) => {

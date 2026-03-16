@@ -57,10 +57,6 @@ impl ServerApp for EdgionTcpProxy {
         // Reject new connections if the server is shutting down
         // This stops the Listener from accepting new work while we drain existing connections.
         if *shutdown.borrow() {
-            tracing::info!(
-                listener_port = self.listener_port,
-                "Rejecting new TCP connection during shutdown"
-            );
             return None;
         }
         // Extract client address from the underlying socket
@@ -130,29 +126,13 @@ impl EdgionTcpProxy {
                     if !runtime.is_empty() {
                         let stream_ctx = StreamContext::new(client_ip, self.listener_port);
                         match runtime.run(&stream_ctx).await {
-                            StreamPluginResult::Allow => {
-                                tracing::debug!(
-                                    store_key = %store_key,
-                                    "Stream plugins allowed connection"
-                                );
-                            }
-                            StreamPluginResult::Deny(reason) => {
-                                tracing::info!(
-                                    listener_port = self.listener_port,
-                                    store_key = %store_key,
-                                    reason = %reason,
-                                    "Connection denied by stream plugin"
-                                );
+                            StreamPluginResult::Allow => {}
+                            StreamPluginResult::Deny(_) => {
                                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                                 return;
                             }
                         }
                     }
-                } else {
-                    tracing::warn!(
-                        store_key = %store_key,
-                        "EdgionStreamPlugins resource not found in store, allowing connection"
-                    );
                 }
             }
         }

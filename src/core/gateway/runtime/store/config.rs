@@ -317,6 +317,13 @@ impl GatewayConfigStore {
     }
 }
 
+impl GatewayConfigStore {
+    /// Number of Gateway configurations currently held.
+    pub fn gateway_count(&self) -> usize {
+        self.gateways.load().len()
+    }
+}
+
 impl Default for GatewayConfigStore {
     fn default() -> Self {
         Self::new()

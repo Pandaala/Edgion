@@ -24,6 +24,15 @@ pub mod edgion {
     /// Value: "true" or "false" (default: "false").
     pub const UPSTREAM_TLS: &str = "edgion.io/upstream-tls";
 
+    /// Max upstream connect retries for TLS/TCP routes.
+    /// Value: unsigned integer string (default: 1, i.e. no retry).
+    /// Gateway API TLSRoute has no retry spec, so this is Edgion-specific.
+    pub const MAX_CONNECT_RETRIES: &str = "edgion.io/max-connect-retries";
+
+    /// Sync version injected by gateway after gRPC sync.
+    /// Used for correlating data-plane logs with control-plane events.
+    pub const SYNC_VERSION: &str = "edgion.io/sync-version";
+
     // ========== Test metrics annotations ==========
     /// Test identifier for metrics filtering
     /// Example: edgion.io/metrics-test-key: "lb-test-001"

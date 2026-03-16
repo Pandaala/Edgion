@@ -28,13 +28,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 pub struct PortGatewayInfoStore {
-    data: ArcSwap<HashMap<u16, Arc<Vec<GatewayInfo>>>>,
+    flat_data: ArcSwap<HashMap<u16, Arc<Vec<GatewayInfo>>>>,
+    grouped_data: ArcSwap<HashMap<u16, Arc<HashMap<String, Arc<Vec<GatewayInfo>>>>>>,
 }
 
 impl PortGatewayInfoStore {
     pub fn new() -> Self {
         Self {
-            data: ArcSwap::from_pointee(HashMap::new()),
+            flat_data: ArcSwap::from_pointee(HashMap::new()),
+            grouped_data: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -44,8 +46,15 @@ impl PortGatewayInfoStore {
     /// This is the hot-path call used in `pg_request_filter` per request.
     #[inline]
     pub fn get(&self, port: u16) -> Arc<Vec<GatewayInfo>> {
-        let data = self.data.load();
+        let data = self.flat_data.load();
         data.get(&port).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
+    }
+
+    /// Get GatewayInfo contexts grouped by Gateway key for a given port.
+    #[inline]
+    pub fn get_grouped(&self, port: u16) -> Arc<HashMap<String, Arc<Vec<GatewayInfo>>>> {
+        let data = self.grouped_data.load();
+        data.get(&port).cloned().unwrap_or_else(|| Arc::new(HashMap::new()))
     }
 
     /// Rebuild the store from the full list of Gateway resources.
@@ -54,6 +63,7 @@ impl PortGatewayInfoStore {
     /// and builds a port → Vec<GatewayInfo> mapping.
     pub fn rebuild(&self, gateways: &[Gateway]) {
         let mut port_map: HashMap<u16, Vec<GatewayInfo>> = HashMap::new();
+        let mut grouped_port_map: HashMap<u16, HashMap<String, Vec<GatewayInfo>>> = HashMap::new();
 
         for gateway in gateways {
             let gateway_namespace = gateway.metadata.namespace.clone();
@@ -89,19 +99,37 @@ impl PortGatewayInfoStore {
                     metrics_test_key.clone(),
                     metrics_test_type.clone(),
                 );
-                port_map.entry(port).or_default().push(gi);
+                port_map.entry(port).or_default().push(gi.clone());
+                grouped_port_map
+                    .entry(port)
+                    .or_default()
+                    .entry(gi.gateway_key())
+                    .or_default()
+                    .push(gi);
             }
         }
 
         let port_count = port_map.len();
         let total_entries: usize = port_map.values().map(|v| v.len()).sum();
 
-        let arc_map: HashMap<u16, Arc<Vec<GatewayInfo>>> = port_map
+        let flat_arc_map: HashMap<u16, Arc<Vec<GatewayInfo>>> = port_map
             .into_iter()
             .map(|(port, infos)| (port, Arc::new(infos)))
             .collect();
 
-        self.data.store(Arc::new(arc_map));
+        let grouped_arc_map: HashMap<u16, Arc<HashMap<String, Arc<Vec<GatewayInfo>>>>> = grouped_port_map
+            .into_iter()
+            .map(|(port, gateway_infos)| {
+                let per_gateway = gateway_infos
+                    .into_iter()
+                    .map(|(gateway_key, infos)| (gateway_key, Arc::new(infos)))
+                    .collect();
+                (port, Arc::new(per_gateway))
+            })
+            .collect();
+
+        self.flat_data.store(Arc::new(flat_arc_map));
+        self.grouped_data.store(Arc::new(grouped_arc_map));
 
         tracing::info!(
             component = "port_gateway_info_store",
@@ -109,6 +137,24 @@ impl PortGatewayInfoStore {
             gateway_listener_entries = total_entries,
             "Rebuilt port GatewayInfo store"
         );
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PortGatewayInfoStats {
+    pub port_count: usize,
+    pub total_entries: usize,
+}
+
+impl PortGatewayInfoStore {
+    /// Collect size statistics for leak-detection tests.
+    pub fn stats(&self) -> PortGatewayInfoStats {
+        let data = self.flat_data.load();
+        let total: usize = data.values().map(|v| v.len()).sum();
+        PortGatewayInfoStats {
+            port_count: data.len(),
+            total_entries: total,
+        }
     }
 }
 

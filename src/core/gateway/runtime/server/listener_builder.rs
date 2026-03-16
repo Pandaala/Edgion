@@ -20,7 +20,7 @@ use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
 use crate::core::gateway::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
 use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, EdgionTcpProxy};
-use crate::core::gateway::routes::tls::EdgionTlsTcpProxy;
+use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsTcpProxy};
 use crate::core::gateway::routes::udp::{get_global_udp_route_manager, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
@@ -352,8 +352,11 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
+    let tls_route_manager = get_global_tls_route_managers().get_or_create_port_manager(port);
+
     let edgion_tls = EdgionTlsTcpProxy {
         listener_port: port,
+        tls_route_manager,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),

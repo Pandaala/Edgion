@@ -12,7 +12,7 @@ mod routes_mgr;
 // TCP proxy module
 pub mod edgion_tcp;
 
-pub use routes_mgr::{get_global_tcp_route_manager, TcpRouteManager};
+pub use routes_mgr::{get_global_tcp_route_manager, TcpRouteManager, TcpRouteManagerStats};
 
 pub use conf_handler_impl::create_tcp_route_handler;
 

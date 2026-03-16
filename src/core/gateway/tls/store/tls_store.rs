@@ -443,6 +443,16 @@ impl TlsStore {
     }
 }
 
+impl TlsStore {
+    /// Total number of TLS entries (valid + invalid).
+    pub fn entry_count(&self) -> usize {
+        self.tls_data
+            .read()
+            .expect("TLS store read lock poisoned")
+            .len()
+    }
+}
+
 impl Default for TlsStore {
     fn default() -> Self {
         Self::new()

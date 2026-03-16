@@ -29,19 +29,28 @@ pub struct MatchInfo {
     /// Match id at rule id,
     pub match_id: usize,
 
+    /// sync_version from gRPC sync (0 = not set)
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sv: u64,
+
     /// match item
     #[serde(skip)]
     pub m: HTTPRouteMatch,
 }
 
+pub fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
 impl MatchInfo {
-    pub fn new(rns: String, rn: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch) -> Self {
+    pub fn new(rns: String, rn: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch, sv: u64) -> Self {
         Self {
             rns,
             rn,
             m,
             rule_id,
             match_id,
+            sv,
         }
     }
 }
@@ -82,6 +91,9 @@ pub struct MatchedInfo {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// sync_version from gRPC sync (0 = not set)
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sv: u64,
 }
 
 /// TLS handshake metadata stored in SslDigestExtension.
