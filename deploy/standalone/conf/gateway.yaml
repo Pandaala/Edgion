@@ -1,0 +1,72 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: public-gateway
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "Edgion API Gateway"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: edgion-default-config
+---
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: edgion-default-config
+spec:
+  server:
+    threads: 4
+    workStealing: true
+    gracePeriodSeconds: 30
+    gracefulShutdownTimeoutS: 10
+    upstreamKeepalivePoolSize: 128
+  realIp:
+    trustedIps:
+      - "127.0.0.0/8"
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+    realIpHeader: "X-Forwarded-For"
+  httpTimeout:
+    client:
+      readTimeout: 60s
+      writeTimeout: 60s
+      keepaliveTimeout: 75s
+    backend:
+      defaultConnectTimeout: 5s
+      defaultRequestTimeout: 60s
+      defaultIdleTimeout: 300s
+      defaultMaxRetries: 3
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway-80
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway-443
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        options:
+          edgion.io/cert-provider: EdgionTls
+      allowedRoutes:
+        namespaces:
+          from: All

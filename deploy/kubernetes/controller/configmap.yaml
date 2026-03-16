@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edgion-controller-config
+  namespace: edgion-system
+  labels:
+    app: edgion-controller
+data:
+  edgion-controller.toml: |
+    work_dir = "/usr/local/edgion"
+
+    [server]
+    grpc_listen = "0.0.0.0:50051"
+    admin_listen = "0.0.0.0:5800"
+
+    [logging]
+    log_dir = "logs"
+    log_prefix = "edgion-controller"
+    log_level = "info"
+    json_format = true
+    console = false
+    buffer_size = 10000
+
+    [conf_center]
+    type = "kubernetes"
+    gateway_class = "public-gateway"
+    controller_name = "edgion.io/gateway-controller"
+    watch_namespaces = []
+    ha_mode = "leader-only"
+
+    [conf_center.leader_election]
+    lease_name = "edgion-controller-leader"
+    lease_namespace = "edgion-system"
+    lease_duration_secs = 15
+    renew_period_secs = 10
+    retry_period_secs = 2
+
+    [conf_center.metadata_filter]
+    blocked_annotations = [
+        "kubectl.kubernetes.io/last-applied-configuration",
+        "meta.helm.sh/release-name",
+        "meta.helm.sh/release-namespace",
+    ]
+    remove_managed_fields = true
+
+    [debug]
+    enabled = false
+
+    [conf_sync]
+    no_sync_kinds = ["ReferenceGrant", "Secret"]
+    default_capacity = 200

@@ -1,6 +1,6 @@
 # Edgion
 
-A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/pingora) and [Gateway API](https://gateway-api.sigs.k8s.io/). Designed for both Kubernetes and standalone (bare-metal / VM) environments.
+A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/pingora) and [Gateway API](https://gateway-api.sigs.k8s.io/). Designed for both Kubernetes and standalone (bare-metal / VM) environments. A modern Rust-native alternative to Kong, APISIX, Traefik, Envoy, and HAProxy.
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -23,64 +23,19 @@ A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/
 
 ## Plugins
 
-Edgion provides a rich set of built-in plugins via the [EdgionPlugins](docs/en/user-guide/http-route/filters/overview.md) CRD. Plugins can be attached to routes through Gateway API's `ExtensionRef` filter or composed via [Plugin Composition](docs/en/user-guide/http-route/filters/plugin-composition.md).
+25+ built-in plugins via [EdgionPlugins](docs/en/user-guide/http-route/filters/overview.md) CRD, composable through [Plugin Composition](docs/en/user-guide/http-route/filters/plugin-composition.md):
 
-### Authentication
+**Authentication** — [Basic Auth](docs/en/user-guide/http-route/filters/edgion-plugins/basic-auth.md) · [JWT Auth](docs/en/user-guide/http-route/filters/edgion-plugins/jwt-auth.md) · [Key Auth](docs/en/user-guide/http-route/filters/edgion-plugins/key-auth.md) · [HMAC Auth](docs/en/user-guide/http-route/filters/edgion-plugins/hmac-auth.md) · [LDAP Auth](docs/en/user-guide/edgion-plugins/ldap-auth.md) · [Forward Auth](docs/en/user-guide/edgion-plugins/forward-auth.md) · [OpenID Connect](docs/en/user-guide/edgion-plugins/openid-connect.md) · [JWE Decrypt](docs/en/user-guide/edgion-plugins/jwe-decrypt.md) · [Header Cert Auth](docs/en/user-guide/http-route/filters/edgion-plugins/header-cert-auth.md)
 
-| Plugin | Description |
-|--------|-------------|
-| [Basic Auth](docs/en/user-guide/http-route/filters/edgion-plugins/basic-auth.md) | HTTP Basic authentication with htpasswd support |
-| [JWT Auth](docs/en/user-guide/http-route/filters/edgion-plugins/jwt-auth.md) | JSON Web Token validation and claim extraction (HS256 / RS256 / ES256) |
-| [Key Auth](docs/en/user-guide/http-route/filters/edgion-plugins/key-auth.md) | API key authentication via header or query param |
-| [HMAC Auth](docs/en/user-guide/http-route/filters/edgion-plugins/hmac-auth.md) | HMAC-based request signing verification |
-| [LDAP Auth](docs/en/user-guide/edgion-plugins/ldap-auth.md) | LDAP / Active Directory authentication |
-| [Forward Auth](docs/en/user-guide/edgion-plugins/forward-auth.md) | Delegate authentication to an external service |
-| [OpenID Connect](docs/en/user-guide/edgion-plugins/openid-connect.md) | OIDC-based SSO with Code Flow + PKCE, session cookie, and token refresh |
-| [JWE Decrypt](docs/en/user-guide/edgion-plugins/jwe-decrypt.md) | JSON Web Encryption decryption with payload-to-header mapping |
-| [Header Cert Auth](docs/en/user-guide/http-route/filters/edgion-plugins/header-cert-auth.md) | Client certificate header-based authentication |
+**Security** — [CORS](docs/en/user-guide/http-route/filters/edgion-plugins/cors.md) · [CSRF](docs/en/user-guide/http-route/filters/edgion-plugins/csrf.md) · [IP Restriction](docs/en/user-guide/http-route/filters/edgion-plugins/ip-restriction.md) · [Request Restriction](docs/en/user-guide/http-route/filters/edgion-plugins/request-restriction.md)
 
-### Security
+**Traffic Management** — [Rate Limit](docs/en/user-guide/http-route/filters/edgion-plugins/rate-limit.md) · [Rate Limit (Redis)](docs/en/user-guide/edgion-plugins/rate-limit.md) · [Proxy Rewrite](docs/en/user-guide/http-route/filters/edgion-plugins/proxy-rewrite.md) · [Response Rewrite](docs/en/user-guide/http-route/filters/edgion-plugins/response-rewrite.md) · [Bandwidth Limit](docs/en/user-guide/http-route/filters/edgion-plugins/bandwidth-limit.md) · [Request Mirror](docs/en/user-guide/http-route/filters/edgion-plugins/request-mirror.md) · [Direct Endpoint](docs/en/user-guide/http-route/filters/edgion-plugins/direct-endpoint.md) · [Dynamic Upstream](docs/en/user-guide/http-route/filters/edgion-plugins/dynamic-upstream.md)
 
-| Plugin | Description |
-|--------|-------------|
-| [CORS](docs/en/user-guide/http-route/filters/edgion-plugins/cors.md) | Cross-Origin Resource Sharing policy |
-| [CSRF](docs/en/user-guide/http-route/filters/edgion-plugins/csrf.md) | Cross-Site Request Forgery protection |
-| [IP Restriction](docs/en/user-guide/http-route/filters/edgion-plugins/ip-restriction.md) | IP allowlist / denylist access control |
-| [Request Restriction](docs/en/user-guide/http-route/filters/edgion-plugins/request-restriction.md) | Attribute-based access control on headers, cookies, query params, path, method, and referer |
+**Observability & Utilities** — [Real IP](docs/en/user-guide/edgion-plugins/real-ip.md) · [Ctx Setter](docs/en/user-guide/edgion-plugins/ctx-setter.md) · [Mock](docs/en/user-guide/http-route/filters/edgion-plugins/mock.md) · [DSL](docs/en/user-guide/http-route/filters/edgion-plugins/dsl.md)
 
-### Traffic Management
+**Gateway API Standard Filters** — [Request Header Modifier](docs/en/user-guide/http-route/filters/gateway-api/request-header-modifier.md) · [Response Header Modifier](docs/en/user-guide/http-route/filters/gateway-api/response-header-modifier.md) · [Request Redirect](docs/en/user-guide/http-route/filters/gateway-api/request-redirect.md) · [URL Rewrite](docs/en/user-guide/http-route/filters/gateway-api/url-rewrite.md)
 
-| Plugin | Description |
-|--------|-------------|
-| [Rate Limit](docs/en/user-guide/http-route/filters/edgion-plugins/rate-limit.md) | Local rate limiting with CMS algorithm, multi-dimension keys (IP / Header / Path) |
-| [Rate Limit (Redis)](docs/en/user-guide/edgion-plugins/rate-limit.md) | Distributed rate limiting backed by Redis with cluster-wide coordination |
-| [Proxy Rewrite](docs/en/user-guide/http-route/filters/edgion-plugins/proxy-rewrite.md) | Rewrite upstream URI, host, method, and headers with regex and variable support |
-| [Response Rewrite](docs/en/user-guide/http-route/filters/edgion-plugins/response-rewrite.md) | Modify response status, headers (set / add / remove / rename), and body |
-| [Bandwidth Limit](docs/en/user-guide/http-route/filters/edgion-plugins/bandwidth-limit.md) | Per-route downstream bandwidth throttling |
-| [Request Mirror](docs/en/user-guide/http-route/filters/edgion-plugins/request-mirror.md) | Mirror traffic to a secondary backend |
-| [Direct Endpoint](docs/en/user-guide/http-route/filters/edgion-plugins/direct-endpoint.md) | Route to a specific endpoint bypassing service discovery |
-| [Dynamic Upstream](docs/en/user-guide/http-route/filters/edgion-plugins/dynamic-upstream.md) | Dynamically resolve upstream targets at request time |
-
-### Observability & Utilities
-
-| Plugin | Description |
-|--------|-------------|
-| [Real IP](docs/en/user-guide/edgion-plugins/real-ip.md) | Extract real client IP from proxy headers with recursive trusted-IP resolution |
-| [Ctx Setter](docs/en/user-guide/edgion-plugins/ctx-setter.md) | Set context variables for downstream plugins, conditions, and access log |
-| [Mock](docs/en/user-guide/http-route/filters/edgion-plugins/mock.md) | Return mock responses for testing |
-| [DSL](docs/en/user-guide/http-route/filters/edgion-plugins/dsl.md) | Custom request processing via built-in DSL expressions |
-
-### Gateway API Standard Filters
-
-These filters are built-in to the Gateway API specification and require no CRD:
-
-[Request Header Modifier](docs/en/user-guide/http-route/filters/gateway-api/request-header-modifier.md) | [Response Header Modifier](docs/en/user-guide/http-route/filters/gateway-api/response-header-modifier.md) | [Request Redirect](docs/en/user-guide/http-route/filters/gateway-api/request-redirect.md) | [URL Rewrite](docs/en/user-guide/http-route/filters/gateway-api/url-rewrite.md)
-
-### Stream Plugins (TCP/UDP)
-
-| Plugin | Description |
-|--------|-------------|
-| [IP Restriction](docs/en/user-guide/tcp-route/stream-plugins.md) | Connection-level IP allowlist / denylist |
+**Stream Plugins (TCP/UDP)** — [IP Restriction](docs/en/user-guide/tcp-route/stream-plugins.md)
 
 ## Documentation
 
@@ -89,7 +44,25 @@ These filters are built-in to the Gateway API specification and require no CRD:
 
 ## Getting Started
 
-For setup and usage details, see the [User Guide](docs/en/user-guide/README.md) and the [examples](examples/README.md).
+### Kubernetes
+
+```bash
+# One-line deploy (installs CRDs, controller, gateway, and base config)
+deploy/kubernetes/scripts/deploy.sh -y
+```
+
+See the [Kubernetes Deployment Guide](deploy/kubernetes/README.md) for configuration options, RBAC setup, and customization.
+
+### Standalone (Bare-Metal / VM)
+
+```bash
+# Start controller (file-system config mode) and gateway
+deploy/standalone/start.sh
+```
+
+See the [Standalone Deployment Guide](deploy/standalone/README.md) for binary installation, TOML configuration, and production tuning.
+
+For usage details, see the [User Guide](docs/en/user-guide/README.md) and the [examples](examples/README.md).
 
 ## Testing
 
@@ -166,5 +139,5 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 
 ---
 
-**Version**: v0.1.1  
-**Last Updated**: 2026-03-08
+**Version**: v0.1.5  
+**Last Updated**: 2026-03-16

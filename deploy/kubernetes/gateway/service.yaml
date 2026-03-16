@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-gateway
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: edgion-gateway
+  ports:
+  - name: admin
+    port: 5900
+    targetPort: 5900
+    protocol: TCP
+  - name: metrics
+    port: 5901
+    targetPort: 5901
+    protocol: TCP
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 443
+    protocol: TCP
+  - name: http-8080
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  - name: https-8443
+    port: 8443
+    targetPort: 8443
+    protocol: TCP

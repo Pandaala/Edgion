@@ -1,0 +1,26 @@
+work_dir = "/usr/local/edgion"
+
+[server]
+grpc_listen = "0.0.0.0:50051"
+admin_listen = "0.0.0.0:5800"
+
+[logging]
+log_dir = "logs"
+log_prefix = "edgion-controller"
+log_level = "info"
+json_format = true
+console = false
+buffer_size = 10000
+
+# FileSystem mode: watches a local directory of Gateway API YAML files.
+# Place your GatewayClass, Gateway, HTTPRoute, etc. YAML files in conf_dir.
+[conf_center]
+type = "file_system"
+conf_dir = "conf"
+
+[debug]
+enabled = false
+
+[conf_sync]
+no_sync_kinds = ["ReferenceGrant", "Secret"]
+default_capacity = 200

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edgion-system
+  labels:
+    app.kubernetes.io/name: edgion
+    app.kubernetes.io/component: system

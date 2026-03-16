@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway-443
+  namespace: edgion-system
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        options:
+          edgion.io/cert-provider: EdgionTls
+      allowedRoutes:
+        namespaces:
+          from: All
