@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: leak-tcp-sp
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "leak-stream-plugins"
+spec:
+  parentRefs:
+    - name: leak-test-gateway
+      namespace: edgion-test
+      sectionName: tcp
+      port: 31292
+  rules:
+    - backendRefs:
+        - name: leak-svc
+          port: 30001
+          weight: 100

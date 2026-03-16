@@ -15,6 +15,7 @@
 | [05-annotations-reference.md](05-annotations-reference.md) | `edgion.io/*` 注解参考（按作用域分类） | TODO |
 | [06-feature-flags.md](06-feature-flags.md) | Cargo Feature Flags（allocator/TLS/test 选项） | TODO |
 | [07-documentation-writing.md](07-documentation-writing.md) | `docs/zh-CN/` 文档编写规范与模板 | ✅ 完整 |
+| [08-conf-handler-guidelines.md](08-conf-handler-guidelines.md) | ConfHandler 开发规范：分类、增量更新、ArcSwap、配置泄漏防护 | ✅ 完整 |
 
 ## 常见开发流程
 

@@ -246,27 +246,31 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             }
         }
 
-        // Requeue routes only when listener hostnames actually changed.
+        // Requeue routes when listener hostnames or ports actually changed.
         // Cycle safety: route on_change only requeues Gateways when parentRef
-        // attachments change; hostname-only changes don't trigger Gateway requeue.
+        // attachments change; hostname/port-only changes don't trigger Gateway requeue.
         let route_index = get_gateway_route_index();
 
-        let current_hostnames: Vec<String> = gateway
-            .spec
-            .listeners
-            .as_ref()
-            .map(|ls| ls.iter().filter_map(|l| l.hostname.clone()).collect())
-            .unwrap_or_default();
+        let listeners = gateway.spec.listeners.as_deref().unwrap_or_default();
+
+        let current_hostnames: Vec<String> = listeners
+            .iter()
+            .filter_map(|l| l.hostname.clone())
+            .collect();
+        let current_ports: Vec<i32> = listeners.iter().map(|l| l.port).collect();
 
         let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
+        let ports_changed = route_index.update_gateway_ports(&gateway_key, current_ports);
 
-        if hostnames_changed {
+        if hostnames_changed || ports_changed {
             let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
             if !referencing_routes.is_empty() {
                 tracing::info!(
                     gateway = %gateway_key,
                     route_count = referencing_routes.len(),
-                    "Listener hostnames changed, requeue referencing routes"
+                    hostnames_changed,
+                    ports_changed,
+                    "Listener config changed, requeue referencing routes"
                 );
                 for (route_kind, route_key) in referencing_routes {
                     ctx.requeue(route_kind.as_str(), route_key);
@@ -311,11 +315,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             );
         }
 
-        get_gateway_route_index().remove_gateway_hostnames(&gateway_key);
+        let route_index = get_gateway_route_index();
+        route_index.remove_gateway_hostnames(&gateway_key);
+        route_index.remove_gateway_ports(&gateway_key);
 
         tracing::debug!(
             gateway = %gateway_key,
-            "Cleared secret, port manager, and hostname cache on Gateway delete"
+            "Cleared secret, port manager, hostname and port cache on Gateway delete"
         );
     }
 

@@ -37,11 +37,12 @@
 | `client-addr` | TCP 直连 IP |
 | `remote-addr` | 真实客户端 IP（经 RealIp 插件处理后） |
 | `host` / `path` | 请求 host 和 path |
-| `x-trace-id` | 客户端传入的 trace id |
+| `x-trace-id` | trace id（客户端传入或自动生成 UUID） |
 | `status` | 最终响应状态码 |
 | `sni` | TLS SNI（HTTPS 连接） |
 | `tls_id` | TLS 连接 ID（用于关联 tls.log） |
 | `discover_protocol` | 自动探测协议（grpc / websocket 等） |
+| `match_info.sv` | sync_version — gRPC 同步版本号，用于关联控制面日志（0 时省略）。详见 [05-coding-standards/00-logging-and-tracing-ids.md](../05-coding-standards/00-logging-and-tracing-ids.md) |
 | stage_logs | 各阶段插件日志（见下方 PluginLog） |
 | upstreams | 上游连接详情（ip、port、ct/ht/bt/et、retry） |
 
@@ -154,7 +155,7 @@ log.push(&format!("Rewrite -> {}; ", new_path));
 
 ## Key Files
 
-- `src/types/ctx.rs` — `EdgionHttpContext`
+- `src/types/ctx.rs` — `EdgionHttpContext`、`MatchInfo`（含 `sv` 字段）、`MatchedInfo`（含 `sv` 字段）
 - `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
 - `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
 - `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`

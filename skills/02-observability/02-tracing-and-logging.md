@@ -144,3 +144,10 @@ pub async fn start_watch_server_meta(self: Arc<Self>) {
 ```
 
 这样在分布式追踪系统（如 Jaeger）中可以按 span 名称过滤和关联。
+
+---
+
+## 相关规范
+
+- **[05-coding-standards/00-logging-and-tracing-ids.md](../05-coding-standards/00-logging-and-tracing-ids.md)** — rv / sv 传播机制和排障流程
+- **[05-coding-standards/01-log-safety.md](../05-coding-standards/01-log-safety.md)** — 敏感信息防泄漏、数据面禁止 tracing 的铁律

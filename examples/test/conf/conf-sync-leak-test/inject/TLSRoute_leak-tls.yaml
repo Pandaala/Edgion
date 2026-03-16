@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: leak-tls
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: leak-test-gateway
+      namespace: edgion-test
+      sectionName: tls
+  hostnames:
+    - "leak-tls.leak-test.example.com"
+  rules:
+    - backendRefs:
+        - name: leak-svc
+          port: 30001
+          weight: 100

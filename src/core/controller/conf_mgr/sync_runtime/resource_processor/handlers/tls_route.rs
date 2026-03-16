@@ -5,7 +5,10 @@
 use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_tls_route_if_enabled,
 };
-use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
+use super::{
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
+    update_attached_route_tracker, update_gateway_route_index,
+};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
@@ -145,12 +148,57 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             }
         }
 
+        // Resolve listener ports from parentRefs → Gateway → listener.port
+        if let Some(parent_refs) = &route.spec.parent_refs {
+            let mut ports = Vec::new();
+            for parent_ref in parent_refs {
+                if let Some(port) = parent_ref.port {
+                    ports.push(port as u16);
+                } else if let Some(section_name) = &parent_ref.section_name {
+                    let gw_ns = parent_ref
+                        .namespace
+                        .as_deref()
+                        .or(route.metadata.namespace.as_deref())
+                        .unwrap_or("default");
+                    if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
+                        if let Some(listeners) = &gateway.spec.listeners {
+                            if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
+                                ports.push(listener.port as u16);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !ports.is_empty() {
+                ports.sort_unstable();
+                ports.dedup();
+                route.spec.resolved_ports = Some(ports);
+            }
+        }
+
+        if route.spec.resolved_ports.is_none() {
+            tracing::error!(
+                route = %route.metadata.name.as_deref().unwrap_or(""),
+                ns = route_ns,
+                "TLSRoute has no resolved_ports: no parentRef.port or sectionName→listener match"
+            );
+        }
+
         ProcessResult::Continue(route)
     }
 
     fn on_change(&self, route: &TLSRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+
+        update_gateway_route_index(
+            ResourceKind::TLSRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
+
         let tracker_changed = update_attached_route_tracker(
             ResourceKind::TLSRoute,
             route_ns,
@@ -169,6 +217,8 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         super::route_utils::clear_service_backend_refs(ResourceKind::TLSRoute, route_ns, route_name);
+
+        remove_from_gateway_route_index(ResourceKind::TLSRoute, route_ns, route_name);
 
         let tracker_changed = remove_from_attached_route_tracker(ResourceKind::TLSRoute, route_ns, route_name);
         if tracker_changed {

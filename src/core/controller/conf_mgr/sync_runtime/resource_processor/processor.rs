@@ -420,9 +420,10 @@ where
         is_init: bool,
         existing_status_json: Option<String>,
     ) -> WorkItemResult<K> {
-        // Extract name/namespace early for logging (owned strings to avoid borrow issues)
+        // Extract name/namespace/version early for logging (owned strings to avoid borrow issues)
         let name = obj.meta().name.clone().unwrap_or_default();
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
+        let rv = crate::types::resource::meta::extract_version(obj.meta());
 
         // 1. Check namespace filter
         if let Some(allowed_ns) = ctx.namespace_filter() {
@@ -462,6 +463,7 @@ where
                 kind = self.kind,
                 name = %name,
                 namespace = %namespace,
+                rv,
                 error = %error,
                 "Resource validation error"
             );
@@ -474,6 +476,7 @@ where
                 kind = self.kind,
                 name = %name,
                 namespace = %namespace,
+                rv,
                 error = %error,
                 "Resource preparse error"
             );
@@ -538,6 +541,7 @@ where
                     kind = self.kind,
                     name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
                     namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
+                    rv,
                     phase = phase,
                     status_changed = status_changed,
                     "Resource processed and saving"
@@ -686,6 +690,9 @@ mod tests {
 
     impl ResourceMeta for TestResource {
         fn get_version(&self) -> u64 {
+            0
+        }
+        fn get_sync_version(&self) -> u64 {
             0
         }
         fn resource_kind() -> crate::types::ResourceKind {

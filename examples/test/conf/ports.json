@@ -1,5 +1,5 @@
 {
-  "current_max": 31286,
+  "current_max": 31287,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -113,7 +113,8 @@
     },
     "TLSRoute/StreamPlugins": {
       "tls": 31282,
-      "tls_filtered": 31283
+      "tls_filtered": 31283,
+      "tls_route_plugins": 31287
     },
     "TLSRoute/MultiSNI": {
       "tls": 31284

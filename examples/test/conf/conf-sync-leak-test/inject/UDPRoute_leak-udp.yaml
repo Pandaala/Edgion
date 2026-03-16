@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: leak-udp
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: leak-test-gateway
+      namespace: edgion-test
+      sectionName: udp
+      port: 31293
+  rules:
+    - backendRefs:
+        - name: leak-svc
+          port: 30001
+          weight: 100
