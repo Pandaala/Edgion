@@ -1,63 +1,106 @@
+use crate::core::common::matcher::HashHost;
 use crate::types::resources::TLSRoute;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Global TLS route table — immutable snapshot shared via ArcSwap.
+/// Per-port TLS route table — immutable snapshot shared via ArcSwap.
 ///
-/// Routes are indexed by (gateway_key, hostname) for O(1) lookup.
+/// Routes are indexed directly by hostname for O(1) lookup. The gateway_key
+/// dimension has been lifted to the outer `GlobalTlsRouteManagers` layer that
+/// assigns routes to port-specific managers, so this table only needs to care
+/// about hostname matching within a single port.
+///
 /// A new snapshot is built and atomically swapped on every route change,
-/// ensuring all readers (`EdgionTlsTcpProxy` instances) always see consistent data
-/// without caching stale Arc references.
+/// ensuring all readers (`EdgionTlsTcpProxy` instances) always see consistent
+/// data without caching stale Arc references.
 pub struct TlsRouteTable {
-    /// gateway_key -> hostname -> Vec<Arc<TLSRoute>>
-    gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TLSRoute>>>>,
+    /// Hostname matcher (exact + wildcard) using `HashHost`.
+    ///
+    /// `HashHost` supports both exact and wildcard (`*.example.com`) lookups
+    /// with O(W) wildcard matching where W = number of distinct wildcard suffix
+    /// lengths, and automatically returns the most-specific wildcard match.
+    host_map: HashHost<Vec<Arc<TLSRoute>>>,
+
+    /// Routes with no hostname specified.
+    /// Reserved for future use; not populated in phase 1.
+    catch_all_routes: Option<Vec<Arc<TLSRoute>>>,
 }
 
 impl TlsRouteTable {
     pub fn new() -> Self {
         Self {
-            gateway_routes: HashMap::new(),
+            host_map: HashHost::new(),
+            catch_all_routes: None,
         }
     }
 
-    pub fn from_gateway_routes(
-        gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TLSRoute>>>>,
-    ) -> Self {
-        Self { gateway_routes }
+    /// Build a TlsRouteTable from a flat set of routes belonging to one port.
+    ///
+    /// Each route's `spec.hostnames` are used to bucket into the `HashHost`
+    /// matcher. Routes with no hostnames go to `catch_all_routes`.
+    pub fn from_routes(routes: &HashMap<String, Arc<TLSRoute>>) -> Self {
+        let mut buckets: HashMap<String, Vec<Arc<TLSRoute>>> = HashMap::new();
+        let mut catch_all: Vec<Arc<TLSRoute>> = Vec::new();
+
+        for route in routes.values() {
+            let hostnames: Vec<String> = route
+                .spec
+                .hostnames
+                .as_ref()
+                .map(|h| h.to_vec())
+                .unwrap_or_default();
+
+            if hostnames.is_empty() {
+                catch_all.push(route.clone());
+                continue;
+            }
+
+            for hostname in &hostnames {
+                let lower = hostname.to_ascii_lowercase();
+                buckets.entry(lower).or_default().push(route.clone());
+            }
+        }
+
+        let mut host_map: HashHost<Vec<Arc<TLSRoute>>> = HashHost::new();
+        for (hostname, route_vec) in buckets {
+            host_map.insert(&hostname, route_vec);
+        }
+
+        Self {
+            host_map,
+            catch_all_routes: if catch_all.is_empty() {
+                None
+            } else {
+                Some(catch_all)
+            },
+        }
     }
 
-    /// Match a TLSRoute by gateway key and SNI hostname.
+    /// Match a TLSRoute by SNI hostname.
     ///
-    /// Priority: exact hostname > wildcard hostname.
-    pub fn match_route(&self, gateway_key: &str, sni_hostname: &str) -> Option<Arc<TLSRoute>> {
-        let hostname_routes = self.gateway_routes.get(gateway_key)?;
+    /// Priority: exact hostname > most-specific wildcard > catch-all.
+    /// `HashHost` handles exact-vs-wildcard priority and most-specific-wildcard
+    /// ordering internally.
+    pub fn match_route(&self, sni_hostname: &str) -> Option<Arc<TLSRoute>> {
+        let lower_sni = sni_hostname.to_ascii_lowercase();
 
-        // Exact match first
-        if let Some(routes) = hostname_routes.get(sni_hostname) {
+        if let Some(routes) = self.host_map.get(&lower_sni) {
             if let Some(route) = routes.first() {
                 return Some(route.clone());
             }
         }
 
-        // Wildcard matching: *.example.com matches test.example.com
-        if let Some(dot_pos) = sni_hostname.find('.') {
-            let wildcard = format!("*{}", &sni_hostname[dot_pos..]);
-            if let Some(routes) = hostname_routes.get(&wildcard) {
-                if let Some(route) = routes.first() {
-                    return Some(route.clone());
-                }
+        if let Some(routes) = &self.catch_all_routes {
+            if let Some(route) = routes.first() {
+                return Some(route.clone());
             }
         }
 
         None
     }
 
-    pub fn gateway_count(&self) -> usize {
-        self.gateway_routes.len()
-    }
-
-    pub fn total_hostname_count(&self) -> usize {
-        self.gateway_routes.values().map(|h| h.len()).sum()
+    pub fn has_catch_all(&self) -> bool {
+        self.catch_all_routes.is_some()
     }
 }
 
@@ -72,6 +115,7 @@ mod tests {
     use super::*;
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::tls_route::*;
+    use crate::types::ResourceMeta;
 
     fn create_test_tls_route(namespace: &str, name: &str, hostname: &str) -> TLSRoute {
         TLSRoute {
@@ -91,6 +135,31 @@ mod tests {
                 }]),
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![]),
+                resolved_ports: None,
+            },
+            status: None,
+        }
+    }
+
+    fn create_test_tls_route_no_hostname(namespace: &str, name: &str) -> TLSRoute {
+        TLSRoute {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: TLSRouteSpec {
+                parent_refs: Some(vec![ParentReference {
+                    group: Some("gateway.networking.k8s.io".to_string()),
+                    kind: Some("Gateway".to_string()),
+                    namespace: Some(namespace.to_string()),
+                    name: "test-gateway".to_string(),
+                    section_name: None,
+                    port: None,
+                }]),
+                hostnames: None,
+                rules: Some(vec![]),
+                resolved_ports: None,
             },
             status: None,
         }
@@ -101,43 +170,21 @@ mod tests {
         let route1 = Arc::new(create_test_tls_route("default", "route1", "test.example.com"));
         let route2 = Arc::new(create_test_tls_route("default", "route2", "api.example.com"));
 
-        let mut hostname_routes = HashMap::new();
-        hostname_routes.insert("test.example.com".to_string(), vec![route1]);
-        hostname_routes.insert("api.example.com".to_string(), vec![route2]);
+        let mut routes = HashMap::new();
+        routes.insert(route1.key_name(), route1);
+        routes.insert(route2.key_name(), route2);
 
-        let mut gateway_routes = HashMap::new();
-        gateway_routes.insert("default/test-gateway".to_string(), hostname_routes);
+        let table = TlsRouteTable::from_routes(&routes);
 
-        let table = TlsRouteTable::from_gateway_routes(gateway_routes);
-
-        assert!(table.match_route("default/test-gateway", "test.example.com").is_some());
-        assert!(table.match_route("default/test-gateway", "api.example.com").is_some());
-        assert!(table.match_route("default/test-gateway", "other.example.com").is_none());
-        assert!(table.match_route("default/other-gateway", "test.example.com").is_none());
+        assert!(table.match_route("test.example.com").is_some());
+        assert!(table.match_route("api.example.com").is_some());
+        assert!(table.match_route("other.example.com").is_none());
     }
-
-    #[test]
-    fn test_wildcard_match() {
-        let route = Arc::new(create_test_tls_route("default", "route1", "*.example.com"));
-
-        let mut hostname_routes = HashMap::new();
-        hostname_routes.insert("*.example.com".to_string(), vec![route]);
-
-        let mut gateway_routes = HashMap::new();
-        gateway_routes.insert("default/test-gateway".to_string(), hostname_routes);
-
-        let table = TlsRouteTable::from_gateway_routes(gateway_routes);
-
-        assert!(table.match_route("default/test-gateway", "test.example.com").is_some());
-        assert!(table.match_route("default/test-gateway", "api.example.com").is_some());
-        assert!(table.match_route("default/test-gateway", "example.com").is_none());
-    }
-
+    
     #[test]
     fn test_empty_table() {
         let table = TlsRouteTable::new();
-        assert!(table.match_route("any/gateway", "test.example.com").is_none());
-        assert_eq!(table.gateway_count(), 0);
-        assert_eq!(table.total_hostname_count(), 0);
+        assert!(table.match_route("test.example.com").is_none());
+        assert!(!table.has_catch_all());
     }
 }
