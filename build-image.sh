@@ -25,10 +25,10 @@ set -eo pipefail
 # Configuration  (edit these variables to customise the build)
 # =============================================================================
 
-DEFAULT_VERSION="0.1.5"
+DEFAULT_VERSION="0.1.6"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-RUST_VERSION="${RUST_VERSION:-1.87}"
+RUST_VERSION="${RUST_VERSION:-1.92}"
 FEATURES="${FEATURES:-default}"
 BINARIES="gateway controller"
 EXAMPLES="test_server test_client"
@@ -121,7 +121,7 @@ Environment Variables:
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
     VERSION             Image version (overrides git tag; default: ${DEFAULT_VERSION})
-    RUST_VERSION        Rust version for builder (default: 1.87)
+    RUST_VERSION        Rust version for builder (default: 1.92)
     FEATURES            Cargo features (default: default)
 
 Examples:
