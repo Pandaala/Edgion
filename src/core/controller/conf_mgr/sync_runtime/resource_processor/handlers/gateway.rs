@@ -262,19 +262,20 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
         let ports_changed = route_index.update_gateway_ports(&gateway_key, current_ports);
 
-        if hostnames_changed || ports_changed {
-            let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
-            if !referencing_routes.is_empty() {
-                tracing::info!(
-                    gateway = %gateway_key,
-                    route_count = referencing_routes.len(),
-                    hostnames_changed,
-                    ports_changed,
-                    "Listener config changed, requeue referencing routes"
-                );
-                for (route_kind, route_key) in referencing_routes {
-                    ctx.requeue(route_kind.as_str(), route_key);
-                }
+        let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
+        if !referencing_routes.is_empty() {
+            tracing::info!(
+                gateway = %gateway_key,
+                route_count = referencing_routes.len(),
+                hostnames_changed,
+                ports_changed,
+                // Even when listener fields are unchanged, a route may have been
+                // created after the Gateway and missed the earlier Gateway-driven
+                // requeue that would populate resolved listener data.
+                "Gateway changed, requeue referencing routes"
+            );
+            for (route_kind, route_key) in referencing_routes {
+                ctx.requeue(route_kind.as_str(), route_key);
             }
         }
     }

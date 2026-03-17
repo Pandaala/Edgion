@@ -50,6 +50,24 @@ SECRET_OUTPUT_FILE="$SECRET_OUTPUT_DIR/Secret_edgion-test_edge-tls.yaml"
 mkdir -p "$CERTS_DIR"
 mkdir -p "$SECRET_OUTPUT_DIR"
 
+REQUIRED_SAN_ENTRIES=(
+    "DNS:test.example.com"
+    "DNS:grpc.example.com"
+    "DNS:tcp.example.com"
+    "DNS:match-test.example.com"
+    "DNS:*.wildcard.example.com"
+    "DNS:section-test.example.com"
+    "DNS:gateway-tls.test.com"
+    "DNS:*.sandbox.example.com"
+    "DNS:*.pp2.example.com"
+    "DNS:*.sp-allow.example.com"
+    "DNS:*.sp-deny.example.com"
+    "DNS:*.both-absent.example.com"
+    "DNS:both-absent-tls.example.com"
+    "DNS:port-only.example.com"
+    "DNS:no-hostname-gateway-tls.test.com"
+)
+
 create_secret_yaml() {
     local name=$1
     local namespace=$2
@@ -90,14 +108,33 @@ generate_tls_cert() {
     cp "$TEMP_DIR/edge-tls.crt" "$CERTS_DIR/ca.pem"
 }
 
+cert_matches_required_sans() {
+    local cert_file=$1
+    local san_text
+
+    [ -f "$cert_file" ] || return 1
+
+    san_text=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | sed -n '/Subject Alternative Name/,+1p') || return 1
+
+    for san in "${REQUIRED_SAN_ENTRIES[@]}"; do
+        if [[ "$san_text" != *"$san"* ]]; then
+            log_warning "Existing TLS cert is missing SAN entry: $san"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
 log_section "Generate TLS certificate"
 log_info "temp directory: $TEMP_DIR"
 log_info "cert directory: $CERTS_DIR"
 log_info "runtime secret output: $SECRET_OUTPUT_FILE"
 
-if [ -f "$CERTS_DIR/server.crt" ] && [ -f "$CERTS_DIR/server.key" ]; then
-    log_info "Found existing TLS cert/key, reusing them."
+if [ -f "$CERTS_DIR/server.crt" ] && [ -f "$CERTS_DIR/server.key" ] && cert_matches_required_sans "$CERTS_DIR/server.crt"; then
+    log_info "Found existing TLS cert/key with matching SANs, reusing them."
 else
+    log_info "Generating fresh TLS cert/key for current integration test domains."
     generate_tls_cert
     log_success "TLS cert/key generated."
 fi
