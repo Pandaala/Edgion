@@ -22,12 +22,18 @@ pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
 
 pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
 
-pub use tls_route::{TlsMultiSniTestSuite, TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite};
+pub use tls_route::{
+    TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsProxyProtocolTestSuite, TlsRouteTestSuite,
+    TlsStreamPluginsTestSuite,
+};
 
 pub use udp_route::UdpTestSuite;
 
 // EdgionTls tests
-pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite, PortOnlyEdgionTlsTestSuite};
+pub use edgion_tls::{
+    CipherTestSuite, EdgionTlsBothAbsentParentRefTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite,
+    PortOnlyEdgionTlsTestSuite,
+};
 
 // Gateway tests
 pub use gateway::{

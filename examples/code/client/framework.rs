@@ -182,6 +182,105 @@ impl TestContext {
     ) -> anyhow::Result<crate::metrics_helper::LbDistributionAnalysis> {
         self.metrics_client().analyze_lb_distribution(test_key).await
     }
+
+    /// Apply a YAML/JSON resource to the Controller via Admin API.
+    /// Extracts kind and namespace from the resource metadata to build the
+    /// correct `/api/v1/namespaced/{kind}/{namespace}` URL.
+    /// Uses PUT (update) first; falls back to POST (create) on 404.
+    pub async fn apply_yaml(&self, yaml_content: &str) -> Result<(), String> {
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(yaml_content).map_err(|e| format!("Invalid YAML: {}", e))?;
+
+        let kind = value["kind"]
+            .as_str()
+            .ok_or("Missing 'kind' in YAML")?;
+        let namespace = value["metadata"]["namespace"]
+            .as_str()
+            .unwrap_or("default");
+        let name = value["metadata"]["name"]
+            .as_str()
+            .ok_or("Missing 'metadata.name' in YAML")?;
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        let update_url = format!(
+            "{}/api/v1/namespaced/{}/{}/{}",
+            self.admin_api_url(),
+            kind,
+            namespace,
+            name
+        );
+        let response = client
+            .put(&update_url)
+            .header("Content-Type", "application/x-yaml")
+            .body(yaml_content.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("Admin API PUT failed: {}", e))?;
+
+        if response.status().is_success() {
+            return Ok(());
+        }
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            let create_url = format!(
+                "{}/api/v1/namespaced/{}/{}",
+                self.admin_api_url(),
+                kind,
+                namespace
+            );
+            let response = client
+                .post(&create_url)
+                .header("Content-Type", "application/x-yaml")
+                .body(yaml_content.to_string())
+                .send()
+                .await
+                .map_err(|e| format!("Admin API POST failed: {}", e))?;
+
+            if response.status().is_success() {
+                return Ok(());
+            }
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Admin API POST returned {}: {}", status, body));
+        }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(format!("Admin API PUT returned {}: {}", status, body))
+    }
+
+    /// Delete a resource from the Controller via Admin API.
+    pub async fn delete_resource(&self, kind: &str, namespace: &str, name: &str) -> Result<(), String> {
+        let url = format!(
+            "{}/api/v1/namespaced/{}/{}/{}",
+            self.admin_api_url(),
+            kind,
+            namespace,
+            name
+        );
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        let response = client
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Admin API request failed: {}", e))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            Err(format!("Admin API returned {}: {}", status, body))
+        }
+    }
 }
 
 /// Test result

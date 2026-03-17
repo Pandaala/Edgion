@@ -1,5 +1,5 @@
 {
-  "current_max": 31287,
+  "current_max": 31290,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -118,6 +118,12 @@
     },
     "TLSRoute/MultiSNI": {
       "tls": 31284
+    },
+    "TLSRoute/BothAbsentParentRef": {
+      "tls": 31288
+    },
+    "EdgionTls/BothAbsentParentRef": {
+      "https": 31290
     }
   }
 }

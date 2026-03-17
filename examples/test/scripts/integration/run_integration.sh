@@ -575,6 +575,7 @@ run_all_tests() {
                     run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
                     run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
                     run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
+                    run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TLSRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
@@ -654,6 +655,7 @@ run_all_tests() {
                     run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
                     run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
                     run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+                    run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "EdgionTls_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
@@ -718,6 +720,7 @@ run_all_tests() {
         run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
         run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
         run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
+        run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
         
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
@@ -775,6 +778,7 @@ run_all_tests() {
         run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
         run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
         run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
         
         # ReferenceGrant Status Tests
         run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true

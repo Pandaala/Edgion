@@ -170,6 +170,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "TLSRoute/ProxyProtocol" => "TLSRoute/ProxyProtocol",
         "TLSRoute/StreamPlugins" => "TLSRoute/StreamPlugins",
         "TLSRoute/MultiSNI" => "TLSRoute/MultiSNI",
+        "TLSRoute/BothAbsentParentRef" => "TLSRoute/BothAbsentParentRef",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         // Gateway
@@ -213,6 +214,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionTls/mTLS" => "EdgionTls/mTLS",
         "EdgionTls/cipher" => "EdgionTls/cipher",
         "EdgionTls/port_only" => "EdgionTls/port_only",
+        "EdgionTls/BothAbsentParentRef" => "EdgionTls/BothAbsentParentRef",
         _ => suite,
     }
 }
@@ -395,6 +397,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::TlsMultiSniTestSuite));
         }
+        "TLSRoute/BothAbsentParentRef" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/BothAbsentParentRef tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsBothAbsentParentRefTestSuite));
+        }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));
         }
@@ -456,6 +465,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
+        }
+        "EdgionTls/BothAbsentParentRef" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/BothAbsentParentRef tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::EdgionTlsBothAbsentParentRefTestSuite));
         }
         "EdgionPlugins/PluginCondition" => {
             if !gateway {
@@ -842,6 +858,7 @@ async fn main() -> Result<()> {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
                     "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
                     "EdgionTls/port_only" => "port-only.example.com",
+                    "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
                     _ => "test.example.com",
                 };
                 let http_port = ports.http.unwrap_or(cli.http_port);
@@ -864,6 +881,7 @@ async fn main() -> Result<()> {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
                     "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
                     "EdgionTls/port_only" => "port-only.example.com",
+                    "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
                     _ => "test.example.com",
                 };
                 (

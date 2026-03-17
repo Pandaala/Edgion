@@ -1,0 +1,17 @@
+# EdgionTls for BothAbsentParentRef testing.
+# parentRef has ONLY name + namespace — no sectionName, no port.
+# Per Gateway API spec, this should attach to ALL listeners of the Gateway.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: edgiontls-both-absent-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-both-absent-gw
+      namespace: edgion-test
+  hosts:
+    - "both-absent-tls.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

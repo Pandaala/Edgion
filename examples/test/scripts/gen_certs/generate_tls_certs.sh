@@ -82,7 +82,7 @@ generate_tls_cert() {
       -out "$TEMP_DIR/edge-tls.crt" \
       -days 365 \
       -subj "/CN=test.example.com" \
-      -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:gateway-tls.test.com,DNS:*.sandbox.example.com,DNS:*.pp2.example.com,DNS:*.sp-allow.example.com,DNS:*.sp-deny.example.com" \
+      -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:gateway-tls.test.com,DNS:*.sandbox.example.com,DNS:*.pp2.example.com,DNS:*.sp-allow.example.com,DNS:*.sp-deny.example.com,DNS:*.both-absent.example.com,DNS:both-absent-tls.example.com,DNS:port-only.example.com,DNS:no-hostname-gateway-tls.test.com" \
       2>/dev/null
 
     cp "$TEMP_DIR/edge-tls.crt" "$CERTS_DIR/server.crt"
