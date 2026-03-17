@@ -42,6 +42,7 @@
 | [06-feature-flags.md](01-development/06-feature-flags.md) | Cargo Feature Flags 参考 |
 | [07-documentation-writing.md](01-development/07-documentation-writing.md) | 文档编写规范 |
 | [08-conf-handler-guidelines.md](01-development/08-conf-handler-guidelines.md) | ConfHandler 开发规范：分类、增量更新、ArcSwap、配置泄漏防护 |
+|| [09-status-management.md](01-development/09-status-management.md) | Status 管理规范：update_status 实现模式、已知陷阱、审查清单 |
 
 ### 02 [02-observability/](02-observability/SKILL.md) — 可观测性
 Access Log、Metrics、控制面日志的设计原则与操作规范。

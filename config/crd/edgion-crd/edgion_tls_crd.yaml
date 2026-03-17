@@ -216,25 +216,57 @@ spec:
             status:
               type: object
               properties:
-                condition:
+                parents:
                   type: array
+                  description: "Status per parent Gateway (Gateway API RouteParentStatus pattern)"
                   items:
                     type: object
+                    required:
+                      - parentRef
+                      - controllerName
                     properties:
-                      type:
+                      parentRef:
+                        type: object
+                        description: "Reference to the parent Gateway this status corresponds to"
+                        required:
+                          - name
+                        properties:
+                          group:
+                            type: string
+                          kind:
+                            type: string
+                          namespace:
+                            type: string
+                          name:
+                            type: string
+                          sectionName:
+                            type: string
+                          port:
+                            type: integer
+                            format: int32
+                      controllerName:
                         type: string
-                      status:
-                        type: string
-                      lastTransitionTime:
-                        type: string
-                        format: date-time
-                      reason:
-                        type: string
-                      message:
-                        type: string
-                      observedGeneration:
-                        type: integer
-                        format: int64
+                        description: "Name of the controller managing this route"
+                      conditions:
+                        type: array
+                        description: "Conditions for this parent (Accepted, ResolvedRefs, Programmed, Ready)"
+                        items:
+                          type: object
+                          properties:
+                            type:
+                              type: string
+                            status:
+                              type: string
+                            lastTransitionTime:
+                              type: string
+                              format: date-time
+                            reason:
+                              type: string
+                            message:
+                              type: string
+                            observedGeneration:
+                              type: integer
+                              format: int64
       subresources:
         status: {}
       additionalPrinterColumns:

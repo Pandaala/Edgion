@@ -28,6 +28,7 @@ integration_testing/
 # Cross-compilation config (personal dev workflow)
 Cross.toml
 Dockerfile.cross
+Dockerfile.cross.musl
 
 # K8s test configuration (generated at runtime)
 examples/test/k8s-conf/

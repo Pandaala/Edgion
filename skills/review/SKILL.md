@@ -14,6 +14,7 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
 按需读取：
 
 - 判定内存问题时，先看 [memory-leak/not-a-memory-leak.md](memory-leak/not-a-memory-leak.md)
+- 审查 handler 时，先看 [handler-requeue/handler-requeue-rule.md](handler-requeue/handler-requeue-rule.md)
 
 使用原则：
 

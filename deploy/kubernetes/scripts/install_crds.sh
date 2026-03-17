@@ -12,29 +12,20 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+EDGION_CRD_DIR="${REPO_ROOT}/config/crd/edgion-crd"
+
 CHANNEL="experimental"
 GATEWAY_API_VERSION="v1.4.0"
-EDGION_VERSION="main"
 DELETE=false
 
 GATEWAY_API_BASE="https://github.com/kubernetes-sigs/gateway-api/releases/download"
-EDGION_CRD_BASE="https://raw.githubusercontent.com/Pandaala/Edgion"
-
-EDGION_CRD_FILES=(
-  edgion_gateway_config_crd.yaml
-  edgion_plugins_crd.yaml
-  edgion_stream_plugins_crd.yaml
-  edgion_tls_crd.yaml
-  edgion_acme_crd.yaml
-  link_sys_crd.yaml
-  plugin_metadata_crd.yaml
-)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --channel) CHANNEL="${2:?Missing value}"; shift 2 ;;
     --gateway-api-version) GATEWAY_API_VERSION="${2:?Missing value}"; shift 2 ;;
-    --edgion-version) EDGION_VERSION="${2:?Missing value}"; shift 2 ;;
     --delete) DELETE=true; shift ;;
     -h|--help) sed -n '/^# /s/^# //p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -43,15 +34,19 @@ done
 
 command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found" >&2; exit 1; }
 
+if [[ ! -d "${EDGION_CRD_DIR}" ]]; then
+  echo "ERROR: Edgion CRD directory not found: ${EDGION_CRD_DIR}" >&2
+  exit 1
+fi
+
 GATEWAY_API_URL="${GATEWAY_API_BASE}/${GATEWAY_API_VERSION}/${CHANNEL}-install.yaml"
 
 if [[ "${DELETE}" == true ]]; then
   echo "Deleting Gateway API CRDs..."
   kubectl delete -f "${GATEWAY_API_URL}" --ignore-not-found=true || true
   echo "Deleting Edgion CRDs..."
-  for f in "${EDGION_CRD_FILES[@]}"; do
-    kubectl delete -f "${EDGION_CRD_BASE}/${EDGION_VERSION}/config/crd/edgion-crd/${f}" \
-      --ignore-not-found=true 2>/dev/null || true
+  for f in "${EDGION_CRD_DIR}"/*.yaml; do
+    kubectl delete -f "${f}" --ignore-not-found=true 2>/dev/null || true
   done
   echo "CRD deletion finished."
   exit 0
@@ -61,11 +56,10 @@ echo "Installing Gateway API CRDs (${CHANNEL} ${GATEWAY_API_VERSION})"
 kubectl apply --server-side --force-conflicts -f "${GATEWAY_API_URL}"
 
 echo ""
-echo "Installing Edgion CRDs (ref: ${EDGION_VERSION})"
-for f in "${EDGION_CRD_FILES[@]}"; do
-  echo "  ${f}"
-  kubectl apply --server-side --force-conflicts \
-    -f "${EDGION_CRD_BASE}/${EDGION_VERSION}/config/crd/edgion-crd/${f}"
+echo "Installing Edgion CRDs (local: ${EDGION_CRD_DIR})"
+for f in "${EDGION_CRD_DIR}"/*.yaml; do
+  echo "  $(basename "${f}")"
+  kubectl apply --server-side --force-conflicts -f "${f}"
 done
 
 echo ""

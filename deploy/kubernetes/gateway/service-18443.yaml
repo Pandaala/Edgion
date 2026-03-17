@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-gateway-18443
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: edgion-gateway
+  ports:
+  - name: tls-18443
+    port: 18443
+    targetPort: 18443
+    protocol: TCP

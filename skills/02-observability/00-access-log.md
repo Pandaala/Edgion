@@ -40,7 +40,7 @@
 | `x-trace-id` | trace id（客户端传入或自动生成 UUID） |
 | `status` | 最终响应状态码 |
 | `sni` | TLS SNI（HTTPS 连接） |
-| `tls_id` | TLS 连接 ID（用于关联 tls.log） |
+| `tls_id` | TLS 连接 ID（用于关联 tls_access.log） |
 | `discover_protocol` | 自动探测协议（grpc / websocket 等） |
 | `match_info.sv` | sync_version — gRPC 同步版本号，用于关联控制面日志（0 时省略）。详见 [05-coding-standards/00-logging-and-tracing-ids.md](../05-coding-standards/00-logging-and-tracing-ids.md) |
 | stage_logs | 各阶段插件日志（见下方 PluginLog） |

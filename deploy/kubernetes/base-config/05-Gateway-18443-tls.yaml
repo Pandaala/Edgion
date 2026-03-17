@@ -1,0 +1,22 @@
+# TLS passthrough / SNI-proxy gateway (TLSRoute).
+# EdgionTls CRD handles per-hostname certificate loading.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway-18443-tls
+  namespace: edgion-system
+  annotations:
+    edgion.io/backend-protocol: "tcp"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls
+      protocol: TLS
+      port: 18443
+      tls:
+        mode: Terminate
+        options:
+          edgion.io/cert-provider: EdgionTls
+      allowedRoutes:
+        namespaces:
+          from: All

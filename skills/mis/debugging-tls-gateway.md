@@ -38,7 +38,7 @@ kubectl exec -n edgion-system $GW_POD -- \
 
 # TLS connection log (per-connection events)
 kubectl exec -n edgion-system $GW_POD -- \
-  tail -20 /usr/local/edgion/logs/tls.log
+  tail -20 /usr/local/edgion/logs/tls_access.log
 ```
 
 ### 3. Key Log Patterns to Search For
@@ -109,7 +109,7 @@ sleep 3
 kubectl apply -f <tlsroute-yaml>
 ```
 
-### 5. TLS Connection Log Fields (tls.log)
+### 5. TLS Connection Log Fields (tls_access.log)
 
 | Field | Meaning |
 |---|---|

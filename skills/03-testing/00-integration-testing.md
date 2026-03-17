@@ -518,8 +518,19 @@ Test configs and code suites follow a **1:1 correspondence**:
 | `HTTPRoute/Match/` | `http_route/match/` | `-r HTTPRoute -i Match` |
 | `Gateway/Security/` | `gateway/security/` | `-r Gateway -i Security` |
 | `EdgionTls/mTLS/` | `edgion_tls/mtls/` | `-r EdgionTls -i mTLS` |
+| `TLSRoute/BothAbsentParentRef/` | `tls_route/both_absent_parent_ref/` | `-r TLSRoute -i BothAbsentParentRef` |
+| `EdgionTls/BothAbsentParentRef/` | `edgion_tls/both_absent_parent_ref/` | `-r EdgionTls -i BothAbsentParentRef` |
 
 Keep this mapping clean when adding new tests.
+
+### parentRef Coverage Tests
+
+The `BothAbsentParentRef` test suites validate Gateway API spec compliance for
+parentRefs that specify only `name` + `namespace` (no `sectionName`, no `port`).
+These tests also include a **Gateway requeue cycle** (delete Gateway → re-apply
+→ verify recovery) that validates the cross-resource requeue mechanism.
+
+See `skills/gateway-api/SKILL.md` for the full context on why these tests exist.
 
 ## TLS Certificates
 

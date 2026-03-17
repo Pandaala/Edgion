@@ -54,6 +54,40 @@ For `EdgionTls`, controller-side port resolution is required before the resource
 - If no listener port is resolved, the TLS resource is skipped from the matcher.
 - This state should be reflected in status instead of being hidden behind a global fallback.
 
+## parentRef Resolution: both-absent Fallback
+
+Per Gateway API spec, when a `parentRef` specifies neither `port` nor
+`sectionName`, the resource MUST attach to **all listeners** of the referenced
+Gateway. This applies to:
+
+- `TLSRoute` (port resolution in `tls_route.rs`)
+- `EdgionTls` (port resolution in `edgion_tls.rs`)
+- `HTTPRoute` / `GRPCRoute` (hostname resolution in `hostname_resolution.rs`)
+
+**Bug history (2026-03):** The original implementation only handled `port` set
+or `sectionName` set, missing the both-absent fallback. This caused TLSRoute
+and EdgionTls to silently get `resolved_ports = None` when parentRef had only
+`name` + `namespace`.
+
+**Test coverage:** `TLSRoute/BothAbsentParentRef` and
+`EdgionTls/BothAbsentParentRef` integration tests verify this behavior.
+
+## EdgionTls Requeue via gateway_route_index
+
+`EdgionTls` must register in `gateway_route_index` via its `on_change()` method.
+Without this, when a Gateway is added or its listeners change, EdgionTls would
+not be requeued to re-resolve its listener ports.
+
+**Bug history (2026-03):** EdgionTls originally had no `on_change()` at all.
+If EdgionTls was processed before its Gateway during init, `resolved_ports`
+would permanently be `None` with no requeue mechanism. Fixed by adding
+`on_change()` with `update_gateway_route_index()` and `on_delete()` with
+`remove_from_gateway_route_index()`.
+
+**Rule:** Any handler that calls `lookup_gateway()` in `parse()` MUST register
+in `gateway_route_index` via `on_change()` so that Gateway changes trigger
+requeue. Currently this applies to: TLSRoute, EdgionTls, HTTPRoute, GRPCRoute.
+
 ## Implementation guidance
 
 When editing TLS matching:
