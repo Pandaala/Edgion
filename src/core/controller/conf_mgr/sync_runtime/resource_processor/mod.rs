@@ -31,8 +31,8 @@ pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkItemResult};
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
-    programmed_condition, ready_condition, resolved_refs_condition, set_route_parent_conditions,
-    set_route_parent_conditions_full, update_condition, AcceptedError, ResolvedRefsError,
+    programmed_condition, ready_condition, resolved_refs_condition, set_parent_conditions,
+    set_parent_conditions_full, update_condition, AcceptedError, ResolvedRefsError,
 };
 
 // Re-export handlers
@@ -55,7 +55,8 @@ pub use secret_utils::{
 // Re-export ref_grant utilities
 pub use ref_grant::{
     get_global_cross_ns_ref_manager, get_global_dispatcher, get_global_reference_grant_store, is_cross_ns_ref_allowed,
-    trigger_full_cross_ns_revalidation, trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled,
+    trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation, trigger_gateway_secret_revalidation,
+    validate_grpc_route_if_enabled,
     validate_http_route_if_enabled, validate_tcp_route_if_enabled, validate_tls_route_if_enabled,
     validate_udp_route_if_enabled, CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsResourceRef,
     CrossNsRevalidationListener, ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,

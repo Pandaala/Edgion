@@ -54,6 +54,31 @@ pub fn trigger_full_cross_ns_revalidation() {
     }
 }
 
+/// Requeue all routes registered in the gateway_route_index after init.
+///
+/// During init, routes may register in gateway_route_index via on_change, but
+/// if a route's on_change runs before its parent Gateway's on_change, the
+/// Gateway's hostname/port change detection fires when no routes are registered
+/// yet. This one-time requeue ensures all such routes get reprocessed with
+/// the Gateway already in cache, so lookup_gateway() in parse() succeeds.
+pub fn trigger_gateway_route_revalidation() {
+    let index = crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index();
+    let routes = index.all_routes();
+    if routes.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        component = "gateway_route_revalidation",
+        route_count = routes.len(),
+        "Requeuing all gateway-referencing routes for post-init revalidation"
+    );
+
+    for (kind, key) in routes {
+        PROCESSOR_REGISTRY.requeue(kind.as_str(), key);
+    }
+}
+
 /// Requeue all Gateways after init to resolve TLS certificate references.
 ///
 /// During init, Gateways may be processed before Secrets are loaded into the

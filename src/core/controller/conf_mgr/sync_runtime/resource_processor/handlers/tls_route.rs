@@ -10,7 +10,7 @@ use super::{
     update_attached_route_tracker, update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::TLSRoute;
 use crate::types::resources::common::RefDenied;
@@ -149,12 +149,20 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         }
 
         // Resolve listener ports from parentRefs → Gateway → listener.port
+        //
+        // Per Gateway API spec:
+        //   - parentRef.port set → use that port directly
+        //   - parentRef.sectionName set → find matching listener by name, use its port
+        //   - neither set → attach to ALL listeners of the parent Gateway
+        //
+        // Only include ports from listeners whose allowedRoutes policy permits
+        // this TLSRoute's namespace (default: Same).
         if let Some(parent_refs) = &route.spec.parent_refs {
             let mut ports = Vec::new();
             for parent_ref in parent_refs {
                 if let Some(port) = parent_ref.port {
                     ports.push(port as u16);
-                } else if let Some(section_name) = &parent_ref.section_name {
+                } else {
                     let gw_ns = parent_ref
                         .namespace
                         .as_deref()
@@ -162,8 +170,26 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
                         .unwrap_or("default");
                     if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
                         if let Some(listeners) = &gateway.spec.listeners {
-                            if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                                ports.push(listener.port as u16);
+                            if let Some(section_name) = &parent_ref.section_name {
+                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
+                                    if super::route_utils::listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        route_ns,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
+                            } else {
+                                for listener in listeners {
+                                    if super::route_utils::listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        route_ns,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
                             }
                         }
                     }
@@ -178,10 +204,10 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         }
 
         if route.spec.resolved_ports.is_none() {
-            tracing::error!(
+            tracing::warn!(
                 route = %route.metadata.name.as_deref().unwrap_or(""),
                 ns = route_ns,
-                "TLSRoute has no resolved_ports: no parentRef.port or sectionName→listener match"
+                "TLSRoute has no resolved_ports: Gateway not yet available or no matching listeners"
             );
         }
 
@@ -226,9 +252,11 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         }
     }
 
-    fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, _validation_errors: &[String]) {
+    fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+
+        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
         let backend_ref_tuples = collect_backend_ref_tuples(route);
         let mut resolved_refs_errors = super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples);
@@ -240,8 +268,9 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_errors =
+                let mut accepted_errors =
                     super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+                accepted_errors.extend(validation_accepted_errors.clone());
 
                 let parent_status = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -250,7 +279,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_route_parent_conditions_full(
+                    set_parent_conditions_full(
                         &mut ps.conditions,
                         &accepted_errors,
                         &resolved_refs_errors,
@@ -258,7 +287,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
                     );
                 } else {
                     let mut conditions = Vec::new();
-                    set_route_parent_conditions_full(
+                    set_parent_conditions_full(
                         &mut conditions,
                         &accepted_errors,
                         &resolved_refs_errors,
@@ -274,6 +303,8 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             }
 
             super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+        } else {
+            status.parents.clear();
         }
     }
 }

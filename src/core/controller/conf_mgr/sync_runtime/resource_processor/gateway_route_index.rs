@@ -179,6 +179,23 @@ impl GatewayRouteIndex {
         }
     }
 
+    /// Get all unique routes across all gateways.
+    /// Used for post-init revalidation to ensure routes that registered
+    /// after their parent Gateway's on_change are reprocessed.
+    pub fn all_routes(&self) -> Vec<(ResourceKind, String)> {
+        let fwd = self.forward.read().unwrap();
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for entries in fwd.values() {
+            for e in entries {
+                if seen.insert((&e.kind, &e.key)) {
+                    result.push((e.kind, e.key.clone()));
+                }
+            }
+        }
+        result
+    }
+
     #[cfg(test)]
     pub fn clear(&self) {
         self.forward.write().unwrap().clear();

@@ -5,12 +5,15 @@
 //! - Server Secret reference resolution (secret_ref -> spec.secret)
 //! - CA Secret reference resolution for mTLS (client_auth.ca_secret_ref -> client_auth.ca_secret)
 //! - SecretRefManager registration for cascading updates
+//! - Gateway route index registration for port revalidation on Gateway changes
 //! - Gateway API standard status management (per parent)
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::lookup_gateway;
+use super::{remove_from_gateway_route_index, update_gateway_route_index};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::{
+    listener_allows_route_namespace, lookup_gateway,
+};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
-    get_secret, programmed_condition, ready_condition, update_condition, HandlerContext, ProcessResult,
+    format_secret_key, get_secret, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult,
     ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionTls;
@@ -25,7 +28,8 @@ use crate::types::ResourceKind;
 /// - parse: Parse secret_ref -> fill spec.secret
 /// - parse: Parse client_auth.ca_secret_ref -> fill client_auth.ca_secret
 /// - parse: Register Secret references to SecretRefManager
-/// - on_delete: Clear SecretRefManager references
+/// - on_change: Register in gateway_route_index so Gateway port/hostname changes trigger requeue
+/// - on_delete: Clear SecretRefManager and gateway_route_index references
 pub struct EdgionTlsHandler {
     controller_name: String,
 }
@@ -138,12 +142,21 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         }
 
         // 3. Resolve ports from parentRefs → Gateway → listener.port
+        //
+        // Per Gateway API spec:
+        //   - parentRef.port set → use that port directly
+        //   - parentRef.sectionName set → find matching listener by name, use its port
+        //   - neither set → attach to ALL listeners of the parent Gateway
+        //
+        // Only include ports from listeners whose allowedRoutes policy permits
+        // this EdgionTls's namespace (default: Same).
+        let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         if let Some(parent_refs) = &tls.spec.parent_refs {
             let mut ports = Vec::new();
             for parent_ref in parent_refs {
                 if let Some(port) = parent_ref.port {
                     ports.push(port as u16);
-                } else if let Some(section_name) = &parent_ref.section_name {
+                } else {
                     let gw_ns = parent_ref
                         .namespace
                         .as_deref()
@@ -151,8 +164,26 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                         .unwrap_or("default");
                     if let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name) {
                         if let Some(listeners) = &gateway.spec.listeners {
-                            if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                                ports.push(listener.port as u16);
+                            if let Some(section_name) = &parent_ref.section_name {
+                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
+                                    if listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        resource_ns,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
+                            } else {
+                                for listener in listeners {
+                                    if listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        resource_ns,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
                             }
                         }
                     }
@@ -174,6 +205,22 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         ProcessResult::Continue(tls)
     }
 
+    fn on_change(&self, tls: &EdgionTls, _ctx: &HandlerContext) {
+        let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        let tls_name = tls.metadata.name.as_deref().unwrap_or("");
+
+        // Register in gateway_route_index so Gateway's on_change can requeue
+        // this EdgionTls when listener hostnames or ports change. Without this,
+        // an EdgionTls processed before its Gateway would permanently have
+        // resolved_ports = None with no mechanism to trigger re-resolution.
+        update_gateway_route_index(
+            ResourceKind::EdgionTls,
+            tls_ns,
+            tls_name,
+            tls.spec.parent_refs.as_ref(),
+        );
+    }
+
     fn on_delete(&self, tls: &EdgionTls, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionTls,
@@ -181,22 +228,24 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             tls.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+
+        let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        let tls_name = tls.metadata.name.as_deref().unwrap_or("");
+        remove_from_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name);
+
         tracing::debug!(
             edgion_tls = %resource_ref.key(),
-            "Cleared secret references on EdgionTls delete"
+            "Cleared secret and gateway_route_index references on EdgionTls delete"
         );
     }
 
-    fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, _validation_errors: &[String]) {
+    fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = tls.metadata.generation;
-        let ports_resolved = tls
-            .spec
-            .resolved_ports
-            .as_ref()
-            .map(|ports| !ports.is_empty())
-            .unwrap_or(false);
+        let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
 
-        // Check Secret resolution: if Secret is not found, set ResolvedRefs=False
+        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+
+        // Check Secret resolution for ResolvedRefs condition
         let secret_ns = tls
             .spec
             .secret_ref
@@ -208,76 +257,44 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         let resolved_refs_errors: Vec<ResolvedRefsError> = if secret_resolved {
             vec![]
         } else {
-            vec![ResolvedRefsError::BackendNotFound {
+            vec![ResolvedRefsError::SecretNotFound {
                 namespace: secret_ns.map(|s| s.as_str()).unwrap_or("default").to_string(),
                 name: tls.spec.secret_ref.name.clone(),
             }]
         };
 
-        // Initialize status if not present
         let status = tls.status.get_or_insert_with(|| EdgionTlsStatus { parents: vec![] });
 
-        // Update status for each parent ref
         if let Some(parent_refs) = &tls.spec.parent_refs {
             for parent_ref in parent_refs {
+                let mut accepted_errors = super::route_utils::validate_parent_ref_accepted(
+                    resource_ns,
+                    parent_ref,
+                    None,
+                );
+                accepted_errors.extend(validation_accepted_errors.clone());
+
                 let parent_status = status.parents.iter_mut().find(|ps| {
-                    ps.parent_ref.name == parent_ref.name && ps.parent_ref.namespace == parent_ref.namespace
+                    ps.parent_ref.name == parent_ref.name
+                        && ps.parent_ref.namespace == parent_ref.namespace
+                        && ps.parent_ref.section_name == parent_ref.section_name
                 });
 
-                let update_conditions = |conditions: &mut Vec<_>| {
-                    update_condition(conditions, accepted_condition(generation));
-                    if ports_resolved {
-                        update_condition(conditions, programmed_condition(generation));
-                        update_condition(conditions, ready_condition(generation));
-                    } else {
-                        let parent_desc = if let Some(section_name) = &parent_ref.section_name {
-                            format!("parentRef '{}' section '{}'", parent_ref.name, section_name)
-                        } else {
-                            format!("parentRef '{}'", parent_ref.name)
-                        };
-                        let msg = format!("No listener ports resolved for {}", parent_desc);
-                        update_condition(
-                            conditions,
-                            condition_false(
-                                condition_types::PROGRAMMED,
-                                condition_reasons::INVALID,
-                                msg.clone(),
-                                generation,
-                            ),
-                        );
-                        update_condition(
-                            conditions,
-                            condition_false(condition_types::READY, condition_reasons::PENDING, msg, generation),
-                        );
-                    }
-                    if resolved_refs_errors.is_empty() {
-                        update_condition(
-                            conditions,
-                            condition_true(
-                                condition_types::RESOLVED_REFS,
-                                condition_reasons::RESOLVED_REFS,
-                                "Secret resolved",
-                                generation,
-                            ),
-                        );
-                    } else {
-                        update_condition(
-                            conditions,
-                            condition_false(
-                                condition_types::RESOLVED_REFS,
-                                condition_reasons::BACKEND_NOT_FOUND,
-                                resolved_refs_errors[0].message(),
-                                generation,
-                            ),
-                        );
-                    }
-                };
-
                 if let Some(ps) = parent_status {
-                    update_conditions(&mut ps.conditions);
+                    set_parent_conditions_full(
+                        &mut ps.conditions,
+                        &accepted_errors,
+                        &resolved_refs_errors,
+                        generation,
+                    );
                 } else {
                     let mut conditions = Vec::new();
-                    update_conditions(&mut conditions);
+                    set_parent_conditions_full(
+                        &mut conditions,
+                        &accepted_errors,
+                        &resolved_refs_errors,
+                        generation,
+                    );
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),
@@ -286,6 +303,214 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                     });
                 }
             }
+
+            super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+        } else {
+            status.parents.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
+    use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::types::resources::common::ParentReference;
+    use crate::types::resources::gateway::SecretObjectReference;
+    use kube::api::ObjectMeta;
+    use std::sync::Arc;
+
+    fn make_ctx() -> HandlerContext {
+        HandlerContext::new(
+            Arc::new(SecretRefManager::new()),
+            None,
+            None,
+            TriggerChain::default(),
+            3,
+        )
+    }
+
+    fn make_tls(parent_refs: Option<Vec<ParentReference>>, secret_name: &str) -> EdgionTls {
+        EdgionTls {
+            metadata: ObjectMeta {
+                name: Some("test-tls".to_string()),
+                namespace: Some("test-ns".to_string()),
+                generation: Some(1),
+                ..Default::default()
+            },
+            spec: crate::types::resources::edgion_tls::EdgionTlsSpec {
+                parent_refs,
+                hosts: vec!["example.com".to_string()],
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: secret_name.to_string(),
+                    namespace: Some("test-ns".to_string()),
+                },
+                client_auth: None,
+                min_tls_version: None,
+                ciphers: None,
+                extend: None,
+                secret: None,
+                resolved_ports: None,
+            },
+            status: None,
+        }
+    }
+
+    fn make_parent_ref(name: &str, ns: &str) -> ParentReference {
+        ParentReference {
+            group: None,
+            kind: None,
+            namespace: Some(ns.to_string()),
+            name: name.to_string(),
+            section_name: None,
+            port: None,
+        }
+    }
+
+    #[test]
+    fn test_update_status_with_validation_errors_sets_accepted_false() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+        let parent_refs = vec![make_parent_ref("my-gateway", "test-ns")];
+        let mut tls = make_tls(Some(parent_refs), "missing-secret");
+
+        let errors = vec!["Secret 'test-ns/missing-secret' not found (may arrive later)".to_string()];
+        handler.update_status(&mut tls, &ctx, &errors);
+
+        let status = tls.status.as_ref().expect("status should be set");
+        assert_eq!(status.parents.len(), 1);
+
+        let conditions = &status.parents[0].conditions;
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False", "Accepted should be False when validation errors exist");
+        assert_eq!(accepted.reason, "Invalid");
+        assert!(accepted.message.contains("Secret 'test-ns/missing-secret' not found"));
+    }
+
+    #[test]
+    fn test_update_status_no_errors_sets_accepted_true() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+        let parent_refs = vec![make_parent_ref("my-gateway", "test-ns")];
+        let mut tls = make_tls(Some(parent_refs), "existing-secret");
+
+        handler.update_status(&mut tls, &ctx, &[]);
+
+        let status = tls.status.as_ref().expect("status should be set");
+        assert_eq!(status.parents.len(), 1);
+
+        let conditions = &status.parents[0].conditions;
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "True");
+
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(resolved.status, "False", "Secret not in global store so ResolvedRefs should be False");
+    }
+
+    #[test]
+    fn test_update_status_no_parent_refs_still_initializes_status() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+        let mut tls = make_tls(None, "some-secret");
+
+        let errors = vec!["EdgionTls has no parent_refs".to_string()];
+        handler.update_status(&mut tls, &ctx, &errors);
+
+        let status = tls.status.as_ref().expect("status should be initialized");
+        assert!(status.parents.is_empty(), "no parent_refs means no per-parent status entries");
+    }
+
+    #[test]
+    fn test_update_status_multiple_parents_all_get_validation_errors() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+        let parent_refs = vec![
+            make_parent_ref("gw-1", "test-ns"),
+            make_parent_ref("gw-2", "test-ns"),
+        ];
+        let mut tls = make_tls(Some(parent_refs), "bad-secret");
+
+        let errors = vec!["Invalid TLS configuration".to_string()];
+        handler.update_status(&mut tls, &ctx, &errors);
+
+        let status = tls.status.as_ref().unwrap();
+        assert_eq!(status.parents.len(), 2);
+
+        for parent_status in &status.parents {
+            let accepted = parent_status.conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+            assert_eq!(accepted.status, "False");
+            assert_eq!(accepted.reason, "Invalid");
+            assert!(accepted.message.contains("Invalid TLS configuration"));
+        }
+    }
+
+    #[test]
+    fn test_update_status_updates_existing_parent_status() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+        let parent_refs = vec![make_parent_ref("my-gw", "test-ns")];
+        let mut tls = make_tls(Some(parent_refs.clone()), "test-secret");
+
+        handler.update_status(&mut tls, &ctx, &[]);
+        let accepted = &tls.status.as_ref().unwrap().parents[0]
+            .conditions.iter().find(|c| c.type_ == "Accepted").unwrap().status;
+        assert_eq!(accepted, "True");
+
+        let errors = vec!["Secret expired".to_string()];
+        handler.update_status(&mut tls, &ctx, &errors);
+
+        let status = tls.status.as_ref().unwrap();
+        assert_eq!(status.parents.len(), 1, "should update in-place, not duplicate");
+        let accepted = status.parents[0].conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "Invalid");
+    }
+
+    #[test]
+    fn test_update_status_clears_parents_when_parent_refs_removed() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+
+        let parent_refs = vec![make_parent_ref("my-gw", "test-ns")];
+        let mut tls = make_tls(Some(parent_refs), "test-secret");
+
+        handler.update_status(&mut tls, &ctx, &[]);
+        assert_eq!(tls.status.as_ref().unwrap().parents.len(), 1);
+
+        tls.spec.parent_refs = None;
+        handler.update_status(&mut tls, &ctx, &[]);
+        assert!(
+            tls.status.as_ref().unwrap().parents.is_empty(),
+            "parents should be cleared when parent_refs is removed"
+        );
+    }
+
+    #[test]
+    fn test_update_status_accepted_false_also_sets_programmed_ready_false() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+        let parent_refs = vec![make_parent_ref("my-gw", "test-ns")];
+        let mut tls = make_tls(Some(parent_refs), "bad-secret");
+
+        handler.update_status(&mut tls, &ctx, &[]);
+        let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
+        let programmed = conditions.iter().find(|c| c.type_ == "Programmed").unwrap();
+        assert_eq!(programmed.status, "True");
+
+        let errors = vec!["Secret missing".to_string()];
+        handler.update_status(&mut tls, &ctx, &errors);
+
+        let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+
+        let programmed = conditions.iter().find(|c| c.type_ == "Programmed").unwrap();
+        assert_eq!(programmed.status, "False", "Programmed must be False when Accepted is False");
+
+        let ready = conditions.iter().find(|c| c.type_ == "Ready").unwrap();
+        assert_eq!(ready.status, "False", "Ready must be False when Accepted is False");
     }
 }

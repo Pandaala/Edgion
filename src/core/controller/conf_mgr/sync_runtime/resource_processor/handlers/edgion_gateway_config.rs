@@ -4,7 +4,7 @@
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, ready_condition, update_condition, HandlerContext,
-    ProcessResult, ProcessorHandler,
+    ProcessResult, ProcessorHandler, condition_reasons,
 };
 use crate::types::prelude_resources::EdgionGatewayConfig;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
@@ -40,6 +40,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // Set Accepted condition
         if validation_errors.is_empty() {
             update_condition(&mut status.conditions, accepted_condition(generation));
+            update_condition(&mut status.conditions, ready_condition(generation));
         } else {
             update_condition(
                 &mut status.conditions,
@@ -50,9 +51,15 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
                     generation,
                 ),
             );
+            update_condition(
+                &mut status.conditions,
+                condition_false(
+                    condition_types::READY,
+                    condition_reasons::INVALID,
+                    "Resource has configuration errors",
+                    generation,
+                ),
+            );
         }
-
-        // Set Ready condition (always ready after parsing)
-        update_condition(&mut status.conditions, ready_condition(generation));
     }
 }

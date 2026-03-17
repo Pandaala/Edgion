@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 use crate::types::link_sys::RotationStrategy;
 
-/// Generate rotated file path based on strategy
+/// Generate the archive (rotated) file path for time-based strategies.
+/// Used when rotating: the active file (base path) is renamed to this path.
 /// e.g., "logs/access.log" with Daily => "logs/access.2025-12-05.log"
-/// For Size strategy, use `get_size_rotated_path` instead
+/// For Size strategy, use `get_size_rotated_path` instead.
 pub fn get_rotated_path(base_path: &Path, strategy: &RotationStrategy) -> PathBuf {
     match strategy {
         RotationStrategy::Never | RotationStrategy::Size(_) => base_path.to_path_buf(),

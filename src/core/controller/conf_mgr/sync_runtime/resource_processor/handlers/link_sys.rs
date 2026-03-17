@@ -4,7 +4,7 @@
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, ready_condition, update_condition, HandlerContext,
-    ProcessResult, ProcessorHandler,
+    ProcessResult, ProcessorHandler, condition_reasons,
 };
 use crate::types::prelude_resources::LinkSys;
 use crate::types::resources::link_sys::LinkSysStatus;
@@ -38,6 +38,7 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         // Set Accepted condition
         if validation_errors.is_empty() {
             update_condition(&mut status.conditions, accepted_condition(generation));
+            update_condition(&mut status.conditions, ready_condition(generation));
         } else {
             update_condition(
                 &mut status.conditions,
@@ -48,9 +49,15 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                     generation,
                 ),
             );
+            update_condition(
+                &mut status.conditions,
+                condition_false(
+                    condition_types::READY,
+                    condition_reasons::INVALID,
+                    "Resource has configuration errors",
+                    generation,
+                ),
+            );
         }
-
-        // Set Ready condition (always ready after parsing)
-        update_condition(&mut status.conditions, ready_condition(generation));
     }
 }

@@ -40,8 +40,14 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     // Create log directory if it doesn't exist
     tokio::fs::create_dir_all(&config.log_dir).await?;
 
-    // Create daily rotating file appender
-    let file_appender = tracing_appender::rolling::daily(&config.log_dir, &config.file_prefix);
+    // Fixed-name file appender (nginx-style: fixed name, no date in active file).
+    // External log rotation (logrotate or similar) handles archiving.
+    let file_name = if config.file_prefix.ends_with(".log") {
+        config.file_prefix.clone()
+    } else {
+        format!("{}.log", config.file_prefix)
+    };
+    let file_appender = tracing_appender::rolling::never(&config.log_dir, &file_name);
 
     // Wrap with non_blocking for async writes
     // This creates a background OS thread (not a Tokio task) that handles actual writes

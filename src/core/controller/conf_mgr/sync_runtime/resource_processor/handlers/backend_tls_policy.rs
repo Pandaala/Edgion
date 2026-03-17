@@ -187,6 +187,9 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
             &mut status.ancestors.last_mut().expect("just inserted").conditions
         };
 
+        let has_validation_errors = !validation_errors.is_empty();
+        let has_ref_errors = !resolved_ref_errors.is_empty();
+
         if validation_errors.is_empty() {
             update_condition(
                 conditions,
@@ -202,7 +205,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
                 conditions,
                 condition_false(
                     condition_types::ACCEPTED,
-                    condition_reasons::INVALID_KIND,
+                    "Invalid",
                     validation_errors.join("; "),
                     generation,
                 ),
@@ -224,31 +227,52 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
                 conditions,
                 condition_false(
                     condition_types::RESOLVED_REFS,
-                    condition_reasons::REF_NOT_PERMITTED,
+                    condition_reasons::BACKEND_NOT_FOUND,
                     resolved_ref_errors.join("; "),
                     generation,
                 ),
             );
         }
 
-        update_condition(
-            conditions,
-            condition_true(
-                condition_types::PROGRAMMED,
-                condition_reasons::PROGRAMMED,
-                "Configuration programmed",
-                generation,
-            ),
-        );
-        update_condition(
-            conditions,
-            condition_true(
-                condition_types::READY,
-                condition_reasons::READY,
-                "Policy is ready",
-                generation,
-            ),
-        );
+        if has_validation_errors || has_ref_errors {
+            update_condition(
+                conditions,
+                condition_false(
+                    condition_types::PROGRAMMED,
+                    "Invalid",
+                    "Policy not programmed due to errors",
+                    generation,
+                ),
+            );
+            update_condition(
+                conditions,
+                condition_false(
+                    condition_types::READY,
+                    "Invalid",
+                    "Policy not ready due to errors",
+                    generation,
+                ),
+            );
+        } else {
+            update_condition(
+                conditions,
+                condition_true(
+                    condition_types::PROGRAMMED,
+                    condition_reasons::PROGRAMMED,
+                    "Configuration programmed",
+                    generation,
+                ),
+            );
+            update_condition(
+                conditions,
+                condition_true(
+                    condition_types::READY,
+                    condition_reasons::READY,
+                    "Policy is ready",
+                    generation,
+                ),
+            );
+        }
     }
 }
 

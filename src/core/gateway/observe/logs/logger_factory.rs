@@ -48,9 +48,10 @@ pub async fn create_async_logger(config: &LogConfig, log_type: &str) -> Result<O
             // Determine log type from string
             let log_type_enum = match log_type {
                 "access" => LogType::Access,
+                "tls" => LogType::Tls,
                 "tcp" => LogType::Tcp,
                 "udp" => LogType::Udp,
-                _ => LogType::Access, // Default
+                _ => LogType::Access,
             };
 
             // Create and initialize LocalFileWriter

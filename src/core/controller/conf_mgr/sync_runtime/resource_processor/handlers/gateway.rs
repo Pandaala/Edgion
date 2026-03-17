@@ -411,18 +411,34 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             conditions.retain(|c| c.type_ != condition_types::LISTENERS_NOT_VALID);
         }
 
-        // Programmed: Always True after parsing (configuration accepted)
-        let programmed = condition_true(
-            condition_types::PROGRAMMED,
-            "Programmed",
-            "Gateway configuration programmed",
-            generation,
-        );
-        update_gateway_condition(conditions, programmed);
+        if validation_errors.is_empty() {
+            let programmed = condition_true(
+                condition_types::PROGRAMMED,
+                "Programmed",
+                "Gateway configuration programmed",
+                generation,
+            );
+            update_gateway_condition(conditions, programmed);
 
-        // Ready: True (data plane ready)
-        let ready = condition_true(condition_types::READY, "Ready", "Gateway is ready", generation);
-        update_gateway_condition(conditions, ready);
+            let ready = condition_true(condition_types::READY, "Ready", "Gateway is ready", generation);
+            update_gateway_condition(conditions, ready);
+        } else {
+            let programmed = condition_false(
+                condition_types::PROGRAMMED,
+                "Invalid",
+                "Gateway not programmed due to validation errors",
+                generation,
+            );
+            update_gateway_condition(conditions, programmed);
+
+            let ready = condition_false(
+                condition_types::READY,
+                "Invalid",
+                "Gateway not ready due to validation errors",
+                generation,
+            );
+            update_gateway_condition(conditions, ready);
+        }
 
         // Update listener statuses using pre-computed info
         if !listener_infos.is_empty() {

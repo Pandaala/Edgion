@@ -16,7 +16,8 @@ mod validator;
 pub use cross_ns_ref_manager::{get_global_cross_ns_ref_manager, CrossNamespaceRefManager, CrossNsResourceRef};
 pub use events::{get_global_dispatcher, ReferenceGrantChangedEvent, RevalidationListener};
 pub use revalidation_listener::{
-    trigger_full_cross_ns_revalidation, trigger_gateway_secret_revalidation, CrossNsRevalidationListener,
+    trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation, trigger_gateway_secret_revalidation,
+    CrossNsRevalidationListener,
 };
 pub use store::{get_global_reference_grant_store, ReferenceGrantStore};
 pub use validator::{

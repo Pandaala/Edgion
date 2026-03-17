@@ -110,7 +110,7 @@ fn default_ssl_log_config() -> LogConfig {
 }
 
 fn default_tls_log_config() -> LogConfig {
-    LogConfig::enabled_default("logs/tls.log")
+    LogConfig::enabled_default("logs/tls_access.log")
 }
 
 /// Pingora server configuration

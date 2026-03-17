@@ -15,6 +15,7 @@ pub mod names {
     pub const ACCESS_LOG_DROPPED: &str = "edgion_access_log_dropped_total";
     pub const SSL_LOG_DROPPED: &str = "edgion_ssl_log_dropped_total";
     pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
+    pub const TLS_LOG_DROPPED: &str = "edgion_tls_log_dropped_total";
     pub const UDP_LOG_DROPPED: &str = "edgion_udp_log_dropped_total";
     // K8s Status update metrics
     pub const STATUS_UPDATE_TOTAL: &str = "edgion_status_update_total";
@@ -64,6 +65,8 @@ pub struct GatewayMetrics {
     ssl_log_dropped: Counter,
     /// Total TCP logs dropped (channel full)
     tcp_log_dropped: Counter,
+    /// Total TLS access logs dropped (channel full)
+    tls_log_dropped: Counter,
     /// Total UDP logs dropped (channel full)
     udp_log_dropped: Counter,
     /// Total K8s status updates attempted
@@ -97,6 +100,7 @@ impl GatewayMetrics {
             access_log_dropped: counter!(names::ACCESS_LOG_DROPPED),
             ssl_log_dropped: counter!(names::SSL_LOG_DROPPED),
             tcp_log_dropped: counter!(names::TCP_LOG_DROPPED),
+            tls_log_dropped: counter!(names::TLS_LOG_DROPPED),
             udp_log_dropped: counter!(names::UDP_LOG_DROPPED),
             status_update_total: counter!(names::STATUS_UPDATE_TOTAL),
             status_update_failed: counter!(names::STATUS_UPDATE_FAILED),
@@ -152,6 +156,12 @@ impl GatewayMetrics {
     #[inline]
     pub fn tcp_log_dropped(&self) {
         self.tcp_log_dropped.increment(1);
+    }
+
+    /// Record a dropped TLS access log entry
+    #[inline]
+    pub fn tls_log_dropped(&self) {
+        self.tls_log_dropped.increment(1);
     }
 
     /// Record a dropped UDP log entry

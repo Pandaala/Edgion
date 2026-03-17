@@ -10,7 +10,7 @@ use super::{
     update_attached_route_tracker, update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::HTTPRoute;
 use crate::types::resources::common::RefDenied;
@@ -211,9 +211,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         }
     }
 
-    fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, _validation_errors: &[String]) {
+    fn update_status(&self, route: &mut HTTPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+
+        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
         let backend_ref_tuples = collect_backend_ref_tuples(route);
         let mut resolved_refs_errors = super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples);
@@ -225,8 +227,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_errors =
+                let mut accepted_errors =
                     super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+                accepted_errors.extend(validation_accepted_errors.clone());
 
                 let parent_status = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -235,7 +238,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_route_parent_conditions_full(
+                    set_parent_conditions_full(
                         &mut ps.conditions,
                         &accepted_errors,
                         &resolved_refs_errors,
@@ -243,7 +246,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                     );
                 } else {
                     let mut conditions = Vec::new();
-                    set_route_parent_conditions_full(
+                    set_parent_conditions_full(
                         &mut conditions,
                         &accepted_errors,
                         &resolved_refs_errors,
@@ -259,6 +262,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             }
 
             super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+        } else {
+            status.parents.clear();
         }
     }
 }

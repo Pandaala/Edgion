@@ -532,9 +532,13 @@ where
                 }
 
                 // 10. Call on_change
-                if !is_init {
-                    self.handler.on_change(&parsed_obj, ctx);
-                }
+                //
+                // Called in both init and runtime phases. During init, requeued
+                // items are buffered by the workqueue and processed after init
+                // completes, so cross-resource requeue (e.g., Gateway port
+                // changes triggering TLSRoute requeue) works correctly even
+                // when resources arrive out of order during the initial LIST.
+                self.handler.on_change(&parsed_obj, ctx);
 
                 let phase = if is_init { "init" } else { "runtime" };
                 tracing::debug!(

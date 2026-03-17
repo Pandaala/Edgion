@@ -536,6 +536,10 @@ impl KubernetesCenter {
                 // (Secrets may have been processed after Gateways during init)
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
 
+                // Requeue all routes in gateway_route_index to pick up Gateways
+                // that were processed before routes registered their parentRefs
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation();
+
                 // Start ACME background service (certificate issuance/renewal)
                 crate::core::controller::services::acme::start_acme_service(acme_client);
 
@@ -835,6 +839,7 @@ impl KubernetesCenter {
                 css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation();
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
             } else {
                 let not_ready: Vec<String> = pending_sync_kinds().into_iter().map(|s| s.to_string()).collect();
