@@ -26,10 +26,7 @@ pub async fn logging(
     // Record proxied response bytes for bandwidth monitoring
     global_metrics().add_response_bytes(session.upstream_body_bytes_received() as u64);
     if let Some(upstream) = ctx.get_current_upstream() {
-        if let (Some(service_key), Some(addr)) = (
-            upstream.service_key.as_deref(),
-            upstream.lb_backend_addr.as_ref(),
-        ) {
+        if let (Some(service_key), Some(addr)) = (upstream.service_key.as_deref(), upstream.lb_backend_addr.as_ref()) {
             match &upstream.lb_policy {
                 Some(crate::types::ParsedLBPolicy::LeastConn) => {
                     crate::core::gateway::lb::runtime_state::decrement(service_key, addr);

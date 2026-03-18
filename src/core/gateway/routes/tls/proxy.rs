@@ -15,9 +15,9 @@ use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::select_roundrobin_backend;
-use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::logs::LogBuffer;
+use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
 use crate::core::gateway::routes::tls::TlsRouteManager;
@@ -337,9 +337,9 @@ impl EdgionTlsTcpProxy {
         };
 
         let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
-        let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
-            std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
-        });
+        let dst_addr: std::net::SocketAddr = upstream_addr_str
+            .parse()
+            .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
         let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
         builder.add_authority(sni);
         let pp2_header = builder.build();

@@ -37,24 +37,32 @@ impl HttpRouteRuleUnit {
     /// Pre-compile RegularExpression regexes for header and query param matchers.
     /// Call once at route creation time; the returned vecs are positionally aligned
     /// with the `headers` / `query_params` slices in `HTTPRouteMatch`.
-    pub fn compile_match_regexes(match_item: &crate::types::HTTPRouteMatch) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
+    pub fn compile_match_regexes(
+        match_item: &crate::types::HTTPRouteMatch,
+    ) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
         let header_regexes = match_item.headers.as_ref().map_or_else(Vec::new, |headers| {
-            headers.iter().map(|hm| {
-                if hm.match_type.as_deref() == Some("RegularExpression") {
-                    Regex::new(&hm.value).ok().map(|r| Arc::new(r))
-                } else {
-                    None
-                }
-            }).collect()
+            headers
+                .iter()
+                .map(|hm| {
+                    if hm.match_type.as_deref() == Some("RegularExpression") {
+                        Regex::new(&hm.value).ok().map(|r| Arc::new(r))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         });
         let query_regexes = match_item.query_params.as_ref().map_or_else(Vec::new, |params| {
-            params.iter().map(|qm| {
-                if qm.match_type.as_deref() == Some("RegularExpression") {
-                    Regex::new(&qm.value).ok().map(|r| Arc::new(r))
-                } else {
-                    None
-                }
-            }).collect()
+            params
+                .iter()
+                .map(|qm| {
+                    if qm.match_type.as_deref() == Some("RegularExpression") {
+                        Regex::new(&qm.value).ok().map(|r| Arc::new(r))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         });
         (header_regexes, query_regexes)
     }

@@ -306,7 +306,10 @@ where
                                             match serde_json::from_value::<T>(event_data.clone()) {
                                                 Ok(mut resource) => {
                                                     resource.pre_parse();
-                                                    crate::types::resource::meta::set_sync_version(resource.meta_mut(), event_sv);
+                                                    crate::types::resource::meta::set_sync_version(
+                                                        resource.meta_mut(),
+                                                        event_sv,
+                                                    );
 
                                                     tracing::info!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
                                                     let change = match event_type {

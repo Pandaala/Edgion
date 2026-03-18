@@ -375,13 +375,14 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
     let http_routes = crate::core::gateway::routes::http::get_global_route_manager().stats();
     let grpc_routes = crate::core::gateway::routes::grpc::get_global_grpc_route_manager().stats();
     let tcp_routes = crate::core::gateway::routes::tcp::get_global_tcp_route_manager().stats();
-    let udp_routes = crate::core::gateway::routes::udp::get_global_udp_route_manager().stats();
+    let udp_routes = crate::core::gateway::routes::udp::get_global_udp_route_managers().stats();
     let tls_routes = crate::core::gateway::routes::tls::get_global_tls_route_managers().stats();
 
     let gateway_config = GatewayConfigStats {
         gateways: crate::core::gateway::runtime::store::config::get_global_gateway_config_store().gateway_count(),
     };
-    let port_gateway_info = crate::core::gateway::runtime::store::port_gateway_info::get_port_gateway_info_store().stats();
+    let port_gateway_info =
+        crate::core::gateway::runtime::store::port_gateway_info::get_port_gateway_info_store().stats();
     let gateway_tls_matcher = crate::core::gateway::runtime::matching::tls::get_gateway_tls_matcher().stats();
 
     let tls = crate::core::gateway::tls::store::tls_store::get_global_tls_store();
@@ -410,8 +411,7 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
 
     let policy_store = crate::core::gateway::lb::lb_policy::get_global_policy_store().stats();
 
-    let backend_tls_policy =
-        crate::core::gateway::backends::policy::get_global_backend_tls_policy_store().stats();
+    let backend_tls_policy = crate::core::gateway::backends::policy::get_global_backend_tls_policy_store().stats();
 
     let gateway_class_store = SimpleCountStats {
         count: crate::core::gateway::config::gateway_class::get_gateway_class_store()

@@ -6,10 +6,10 @@
 
 pub mod connection_filter_bridge;
 pub mod ip_restriction;
-pub mod tls_route;
 mod stream_plugin_runtime;
 mod stream_plugin_store;
 mod stream_plugin_trait;
+pub mod tls_route;
 
 pub use connection_filter_bridge::StreamPluginConnectionFilter;
 pub use ip_restriction::StreamIpRestriction;

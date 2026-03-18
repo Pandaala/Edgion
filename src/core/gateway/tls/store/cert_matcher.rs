@@ -39,10 +39,7 @@ impl TlsCertMatcher {
     ///
     /// # Warning
     /// Do not call this method frequently. Maintain at least 100ms interval between calls.
-    pub fn set(
-        &self,
-        port_matcher: HashMap<u16, HashHost<Vec<Arc<EdgionTls>>>>,
-    ) {
+    pub fn set(&self, port_matcher: HashMap<u16, HashHost<Vec<Arc<EdgionTls>>>>) {
         self.data.store(Arc::new(TlsCertMatcherData { port_matcher }));
     }
 

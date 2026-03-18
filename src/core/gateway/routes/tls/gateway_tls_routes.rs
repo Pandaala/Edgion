@@ -43,12 +43,7 @@ impl TlsRouteTable {
         let mut catch_all: Vec<Arc<TLSRoute>> = Vec::new();
 
         for route in routes.values() {
-            let hostnames: Vec<String> = route
-                .spec
-                .hostnames
-                .as_ref()
-                .map(|h| h.to_vec())
-                .unwrap_or_default();
+            let hostnames: Vec<String> = route.spec.hostnames.as_ref().map(|h| h.to_vec()).unwrap_or_default();
 
             if hostnames.is_empty() {
                 catch_all.push(route.clone());
@@ -68,11 +63,7 @@ impl TlsRouteTable {
 
         Self {
             host_map,
-            catch_all_routes: if catch_all.is_empty() {
-                None
-            } else {
-                Some(catch_all)
-            },
+            catch_all_routes: if catch_all.is_empty() { None } else { Some(catch_all) },
         }
     }
 
@@ -180,7 +171,7 @@ mod tests {
         assert!(table.match_route("api.example.com").is_some());
         assert!(table.match_route("other.example.com").is_none());
     }
-    
+
     #[test]
     fn test_empty_table() {
         let table = TlsRouteTable::new();

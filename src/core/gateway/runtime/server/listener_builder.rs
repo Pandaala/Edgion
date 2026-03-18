@@ -21,11 +21,12 @@ use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, Stre
 use crate::core::gateway::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
 use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, EdgionTcpProxy};
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsTcpProxy};
-use crate::core::gateway::routes::udp::{get_global_udp_route_manager, EdgionUdpProxy};
+use crate::core::gateway::routes::udp::{get_global_udp_route_managers, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
+use tokio_util::sync::CancellationToken;
 
 /// Annotation key to control HTTP/2 support
 /// Set to "false" to disable HTTP/2 (both h2c and ALPN)
@@ -296,36 +297,29 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
 
 /// Add a UDP listener to the Pingora server
 ///
-/// UDP listeners don't use Pingora's Service abstraction - they run as independent tokio tasks
+/// UDP listeners don't use Pingora's Service abstraction — they run as
+/// independent tokio tasks.  Each listener gets a per-port route manager
+/// (mirroring TLS pattern) and a `CancellationToken` for graceful shutdown.
 pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    // Get UDP routes for this gateway
-    let udp_route_manager = get_global_udp_route_manager();
-    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
-    let gateway_udp_routes = udp_route_manager.get_or_create_gateway_udp_routes(namespace_str, &context.gateway_name);
+    let udp_route_manager = get_global_udp_route_managers().get_or_create_port_manager(port);
 
-    // Create UDP socket
-    // Note: This is blocking, but it's called during server initialization
     let socket = std::net::UdpSocket::bind(&addr)?;
     socket.set_nonblocking(true)?;
     let socket = UdpSocket::from_std(socket)?;
 
-    // Create UDP proxy service
+    let cancel_token = CancellationToken::new();
     let edgion_udp = Arc::new(EdgionUdpProxy::new(
-        context.gateway_name.clone(),
-        context.gateway_namespace.clone(),
-        listener_name.clone(), // Pass listener name for sectionName matching
         port,
-        gateway_udp_routes,
+        udp_route_manager,
         context.edgion_gateway_config.clone(),
         socket,
+        cancel_token,
     ));
 
-    // Start UDP service in a background task
     tokio::spawn(async move {
         edgion_udp.serve().await;
     });

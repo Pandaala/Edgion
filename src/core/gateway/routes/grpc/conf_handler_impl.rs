@@ -96,9 +96,7 @@ impl GrpcRouteManager {
     }
 
     /// Build GrpcRouteRules from a flat list of all route units.
-    fn build_engine_from_all_units(
-        all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
-    ) -> Arc<GrpcRouteRules> {
+    fn build_engine_from_all_units(all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>) -> Arc<GrpcRouteRules> {
         let mut resource_keys = HashSet::new();
         let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 

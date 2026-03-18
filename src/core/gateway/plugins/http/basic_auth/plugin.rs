@@ -195,11 +195,9 @@ impl BasicAuth {
         // This prevents blocking the async runtime with expensive crypto operations (bcrypt/scrypt etc.)
         let password_clone = password.clone();
 
-        let is_valid = tokio::task::spawn_blocking(move || {
-            super::htpasswd::verify(&password_clone, &stored_hash)
-        })
-        .await
-        .map_err(|e| AuthFailure::BadCredentials(format!("Password verification task failed: {}", e).into()))?;
+        let is_valid = tokio::task::spawn_blocking(move || super::htpasswd::verify(&password_clone, &stored_hash))
+            .await
+            .map_err(|e| AuthFailure::BadCredentials(format!("Password verification task failed: {}", e).into()))?;
 
         if !is_valid {
             return Err(AuthFailure::BadCredentials("Invalid username or password".into()));

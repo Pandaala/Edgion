@@ -130,11 +130,31 @@ fn compute_md5_crypt(password: &[u8], salt: &[u8], magic: &[u8]) -> String {
     out.extend_from_slice(salt);
     out.push(b'$');
 
-    to64(&mut out, ((result[0] as u32) << 16) | ((result[6] as u32) << 8) | (result[12] as u32), 4);
-    to64(&mut out, ((result[1] as u32) << 16) | ((result[7] as u32) << 8) | (result[13] as u32), 4);
-    to64(&mut out, ((result[2] as u32) << 16) | ((result[8] as u32) << 8) | (result[14] as u32), 4);
-    to64(&mut out, ((result[3] as u32) << 16) | ((result[9] as u32) << 8) | (result[15] as u32), 4);
-    to64(&mut out, ((result[4] as u32) << 16) | ((result[10] as u32) << 8) | (result[5] as u32), 4);
+    to64(
+        &mut out,
+        ((result[0] as u32) << 16) | ((result[6] as u32) << 8) | (result[12] as u32),
+        4,
+    );
+    to64(
+        &mut out,
+        ((result[1] as u32) << 16) | ((result[7] as u32) << 8) | (result[13] as u32),
+        4,
+    );
+    to64(
+        &mut out,
+        ((result[2] as u32) << 16) | ((result[8] as u32) << 8) | (result[14] as u32),
+        4,
+    );
+    to64(
+        &mut out,
+        ((result[3] as u32) << 16) | ((result[9] as u32) << 8) | (result[15] as u32),
+        4,
+    );
+    to64(
+        &mut out,
+        ((result[4] as u32) << 16) | ((result[10] as u32) << 8) | (result[5] as u32),
+        4,
+    );
     to64(&mut out, result[11] as u32, 2);
 
     String::from_utf8(out).expect("base64 output is always valid UTF-8")

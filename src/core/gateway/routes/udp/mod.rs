@@ -1,22 +1,22 @@
 //! UDP Routes and Proxy Implementation
 //!
 //! This module contains all UDP-related functionality:
-//! - Route matching and management ([`routes_mgr`])
+//! - Per-port route management ([`routes_mgr`])
 //! - UDP proxy implementation ([`edgion_udp`])
-//! - Gateway-level route caching ([`gateway_udp_routes`])
+//! - Per-port route table ([`udp_route_table`])
 
 mod conf_handler_impl;
-mod gateway_udp_routes;
 mod routes_mgr;
+pub(crate) mod udp_route_table;
 
-// UDP proxy module
 pub mod edgion_udp;
 
-pub use routes_mgr::{get_global_udp_route_manager, UdpRouteManager, UdpRouteManagerStats};
+pub use routes_mgr::{
+    get_global_udp_route_managers, GlobalUdpRouteManagers, UdpPortRouteManager, UdpRouteManagerStats,
+};
 
 pub use conf_handler_impl::create_udp_route_handler;
 
-pub use gateway_udp_routes::GatewayUdpRoutes;
+pub use udp_route_table::UdpRouteTable;
 
-// Export UDP proxy type
 pub use edgion_udp::EdgionUdpProxy;

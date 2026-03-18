@@ -627,7 +627,6 @@ mod tests {
         // Test non-existent port
         let result = matcher.match_sni_with_port(9443, "api.example.com");
         assert!(result.is_none(), "Should not find cert for port 9443");
-
     }
 
     #[test]

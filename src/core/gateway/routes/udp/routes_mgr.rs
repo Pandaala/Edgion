@@ -1,334 +1,358 @@
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::core::gateway::routes::udp::GatewayUdpRoutes;
+use crate::core::gateway::routes::udp::udp_route_table::UdpRouteTable;
 use crate::types::resources::UDPRoute;
 use crate::types::ResourceMeta;
 
-/// UDP route manager
-pub struct UdpRouteManager {
-    /// resource_key -> Arc<UDPRoute> mapping
-    /// For quick lookup and updates
-    routes_by_key: Arc<DashMap<String, Arc<UDPRoute>>>,
-
-    /// gateway_key -> GatewayUdpRoutes mapping
-    /// Each gateway has its own set of UDP routes
-    gateway_udp_routes_map: Arc<DashMap<String, Arc<GatewayUdpRoutes>>>,
+/// Per-port UDP route manager.
+///
+/// Each instance owns an atomically-swappable `UdpRouteTable` snapshot.
+/// `EdgionUdpProxy` holds an `Arc<UdpPortRouteManager>` and calls
+/// `load_route_table()` per-packet for lock-free lookups.
+///
+/// Route data is owned by `GlobalUdpRouteManagers`; this struct only
+/// holds the compiled route snapshot for one port.
+pub struct UdpPortRouteManager {
+    route_table: ArcSwap<UdpRouteTable>,
 }
 
-impl Default for UdpRouteManager {
+impl Default for UdpPortRouteManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl UdpRouteManager {
+impl UdpPortRouteManager {
     pub fn new() -> Self {
         Self {
-            routes_by_key: Arc::new(DashMap::new()),
-            gateway_udp_routes_map: Arc::new(DashMap::new()),
+            route_table: ArcSwap::from_pointee(UdpRouteTable::new()),
         }
     }
 
-    /// Get or create GatewayUdpRoutes for a specific gateway
+    /// Load the current route table snapshot (hot path, per-packet).
+    pub fn load_route_table(&self) -> arc_swap::Guard<Arc<UdpRouteTable>> {
+        self.route_table.load()
+    }
+
+    /// Rebuild the route table from routes belonging to this port.
+    /// Called by `GlobalUdpRouteManagers` during rebuild.
+    pub fn rebuild(&self, routes: &HashMap<String, Arc<UDPRoute>>) {
+        let new_table = UdpRouteTable::from_routes(routes);
+
+        tracing::debug!(
+            component = "udp_port_route_manager",
+            routes = routes.len(),
+            "Rebuilt per-port UDP route table"
+        );
+
+        self.route_table.store(Arc::new(new_table));
+    }
+}
+
+/// Global wrapper managing `port -> Arc<UdpPortRouteManager>`.
+///
+/// Owns the canonical route cache (`resource_key -> Arc<UDPRoute>`) and
+/// implements `ConfHandler<UDPRoute>`. On every change it rebuilds all
+/// per-port managers by resolving each route's target ports from its
+/// `parentRefs`.
+pub struct GlobalUdpRouteManagers {
+    /// Canonical route store: resource_key -> initialized Arc<UDPRoute>
+    route_cache: DashMap<String, Arc<UDPRoute>>,
+
+    /// port -> per-port manager (stable Arc held by listeners)
+    by_port: DashMap<u16, Arc<UdpPortRouteManager>>,
+}
+
+impl Default for GlobalUdpRouteManagers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GlobalUdpRouteManagers {
+    pub fn new() -> Self {
+        Self {
+            route_cache: DashMap::new(),
+            by_port: DashMap::new(),
+        }
+    }
+
+    /// Get or create a per-port `UdpPortRouteManager`.
     ///
-    /// This method returns a cached GatewayUdpRoutes for the given gateway.
-    /// If it doesn't exist, creates a new empty one.
-    pub fn get_or_create_gateway_udp_routes(&self, namespace: &str, name: &str) -> Arc<GatewayUdpRoutes> {
-        let gateway_key = format!("{}/{}", namespace, name);
-
-        let entry = self.gateway_udp_routes_map.entry(gateway_key.clone());
-        let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
-
-        let gateway_routes = entry
-            .or_insert_with(|| Arc::new(GatewayUdpRoutes::new()))
+    /// Called by `listener_builder` at startup. The returned `Arc` is stable;
+    /// route updates only swap the inner `ArcSwap<UdpRouteTable>`.
+    pub fn get_or_create_port_manager(&self, port: u16) -> Arc<UdpPortRouteManager> {
+        self.by_port
+            .entry(port)
+            .or_insert_with(|| Arc::new(UdpPortRouteManager::new()))
             .value()
-            .clone();
-
-        if is_new {
-            tracing::debug!(
-                gateway_key = %gateway_key,
-                "Created new GatewayUdpRoutes"
-            );
-        }
-
-        gateway_routes
+            .clone()
     }
 
-    /// Build affected gateway->listener_names mapping from changed route keys
+    /// Insert an initialized route into the cache.
+    pub fn insert_route(&self, route: Arc<UDPRoute>) {
+        let key = route.key_name();
+        self.route_cache.insert(key, route);
+    }
+
+    /// Get a route from the cache by key.
+    pub fn get_route(&self, key: &str) -> Option<Arc<UDPRoute>> {
+        self.route_cache.get(key).map(|entry| entry.value().clone())
+    }
+
+    /// Remove a route from the cache by resource key.
+    pub fn remove_route(&self, resource_key: &str) {
+        self.route_cache.remove(resource_key);
+    }
+
+    /// Clear all routes from the cache.
+    pub fn clear_route_cache(&self) {
+        self.route_cache.clear();
+    }
+
+    /// Rebuild all per-port managers from the current route cache.
     ///
-    /// Returns a map of gateway_key -> set of affected listener names
-    /// This helps identify which specific gateway/listener combinations need rebuilding
-    fn build_affected_gateway_listeners(
-        &self,
-        changed_route_keys: &HashSet<String>,
-        removed_route_keys: &HashSet<String>,
-    ) -> HashMap<String, HashSet<String>> {
-        let mut affected: HashMap<String, HashSet<String>> = HashMap::new();
+    /// 1. Bucket each route by its target ports (from parentRef)
+    /// 2. For each port that has routes: rebuild the manager
+    /// 3. For ports that no longer have routes: rebuild with empty set
+    pub fn rebuild_all_port_managers(&self) {
+        let port_buckets = self.bucket_routes_by_port();
 
-        // Process changed routes (from current state)
-        for route_key in changed_route_keys {
-            if let Some(route) = self.routes_by_key.get(route_key) {
-                let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
+        let mut rebuilt_ports = 0u32;
 
-                for (gateway_key, listener_name) in gateway_listeners {
-                    affected.entry(gateway_key).or_default().insert(listener_name);
+        for (port, routes) in &port_buckets {
+            let manager = self.get_or_create_port_manager(*port);
+            manager.rebuild(routes);
+            rebuilt_ports += 1;
+        }
+
+        for entry in self.by_port.iter() {
+            let port = *entry.key();
+            if !port_buckets.contains_key(&port) {
+                entry.value().rebuild(&HashMap::new());
+                rebuilt_ports += 1;
+            }
+        }
+
+        let total_routes: usize = port_buckets.values().map(|r| r.len()).sum();
+        tracing::info!(
+            component = "global_udp_route_managers",
+            ports = port_buckets.len(),
+            total_route_entries = total_routes,
+            rebuilt_ports,
+            "Rebuilt all per-port UDP route managers"
+        );
+    }
+
+    /// Rebuild only the per-port managers for the given set of affected ports.
+    ///
+    /// Single-pass: iterates route_cache once, bucketing routes into only the
+    /// affected ports. Ports in `affected_ports` that end up with no routes
+    /// are rebuilt with an empty set (clearing stale entries).
+    pub fn rebuild_affected_port_managers(&self, affected_ports: &HashSet<u16>) {
+        if affected_ports.is_empty() {
+            return;
+        }
+
+        let mut port_buckets: HashMap<u16, HashMap<String, Arc<UDPRoute>>> = HashMap::new();
+        for &port in affected_ports {
+            port_buckets.insert(port, HashMap::new());
+        }
+
+        for entry in self.route_cache.iter() {
+            let route_ports = resolved_ports_for_route(entry.value());
+            for &port in route_ports {
+                if let Some(bucket) = port_buckets.get_mut(&port) {
+                    bucket.insert(entry.key().clone(), entry.value().clone());
                 }
             }
         }
 
-        // Process removed routes (need to lookup before removal)
-        for route_key in removed_route_keys {
-            if let Some(route) = self.routes_by_key.get(route_key) {
-                let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
-
-                for (gateway_key, listener_name) in gateway_listeners {
-                    affected.entry(gateway_key).or_default().insert(listener_name);
-                }
-            }
+        for (port, routes) in &port_buckets {
+            let manager = self.get_or_create_port_manager(*port);
+            manager.rebuild(routes);
         }
 
-        affected
+        tracing::info!(
+            component = "global_udp_route_managers",
+            affected = affected_ports.len(),
+            "Rebuilt affected per-port UDP route managers"
+        );
     }
 
-    /// Rebuild specified listeners for a gateway (incremental update)
-    ///
-    /// Only rebuilds the affected listeners, leaving other listeners unchanged.
-    /// This is much more efficient than rebuilding all listeners.
-    fn rebuild_gateway_listeners_incremental(
-        &self,
-        gateway_key: &str,
-        affected_listeners: &HashSet<String>,
-        removed_route_keys: &HashSet<String>,
-    ) {
-        // Rebuild only affected listeners for this gateway
-        let mut listener_routes: HashMap<String, Vec<Arc<UDPRoute>>> = HashMap::new();
+    /// Bucket all cached routes by their resolved ports.
+    fn bucket_routes_by_port(&self) -> HashMap<u16, HashMap<String, Arc<UDPRoute>>> {
+        let mut port_buckets: HashMap<u16, HashMap<String, Arc<UDPRoute>>> = HashMap::new();
 
-        // Initialize all affected listeners with empty vectors
-        for listener_name in affected_listeners {
-            listener_routes.insert(listener_name.clone(), Vec::new());
-        }
+        for entry in self.route_cache.iter() {
+            let route_key = entry.key().clone();
+            let route = entry.value().clone();
+            let ports = resolved_ports_for_route(&route);
 
-        // Collect routes for this gateway's affected listeners
-        for entry in self.routes_by_key.iter() {
-            let route_key = entry.key();
-
-            // Skip removed routes
-            if removed_route_keys.contains(route_key.as_str()) {
+            if ports.is_empty() {
+                tracing::warn!(
+                    route = %route_key,
+                    "UDPRoute has no resolved_ports, skipping port assignment"
+                );
                 continue;
             }
 
-            let route = entry.value();
-            let gateway_listeners = self.extract_gateway_listener_pairs_from_route(route);
-
-            // Add to affected listeners only
-            for (gw_key, listener_name) in gateway_listeners {
-                if gw_key == gateway_key && affected_listeners.contains(&listener_name) {
-                    listener_routes.get_mut(&listener_name).unwrap().push(route.clone());
-                }
+            for &port in ports {
+                port_buckets
+                    .entry(port)
+                    .or_default()
+                    .insert(route_key.clone(), route.clone());
             }
         }
 
-        // Update only affected listeners in the gateway (create if not exists)
-        let gateway_udp_routes = self
-            .gateway_udp_routes_map
-            .entry(gateway_key.to_string())
-            .or_insert_with(|| Arc::new(GatewayUdpRoutes::new()))
-            .clone();
-
-        gateway_udp_routes.update_listeners_incremental(listener_routes);
-        tracing::debug!(
-            gateway_key = %gateway_key,
-            listeners = affected_listeners.len(),
-            "Incrementally updated UDPRoute listeners"
-        );
+        port_buckets
     }
+}
 
-    /// Rebuild gateway routes maps after route changes (full rebuild, used for replace_all)
-    ///
-    /// This method should be called after replace_all to do a full rebuild.
-    /// For add_route and remove_route, use incremental update instead.
-    fn rebuild_gateway_routes_map(&self) {
-        // Group routes by gateway and listener
-        let mut gateway_routes: HashMap<String, HashMap<String, Vec<Arc<UDPRoute>>>> = HashMap::new();
-
-        for entry in self.routes_by_key.iter() {
-            let route = entry.value();
-            let gateway_listeners = self.extract_gateway_listener_pairs_from_route(route);
-
-            for (gateway_key, listener_name) in gateway_listeners {
-                let gateway_map = gateway_routes.entry(gateway_key).or_default();
-
-                gateway_map.entry(listener_name).or_default().push(route.clone());
-            }
-        }
-
-        // Update all gateways in the map
-        // First, update gateways that have routes
-        for (gateway_key, listener_routes) in &gateway_routes {
-            let listeners_count = listener_routes.len();
-            let gateway_udp_routes = self
-                .gateway_udp_routes_map
-                .entry(gateway_key.clone())
-                .or_insert_with(|| Arc::new(GatewayUdpRoutes::new()))
-                .clone();
-
-            gateway_udp_routes.update_routes(listener_routes.clone());
-            tracing::debug!(
-                gateway_key = %gateway_key,
-                listeners = listeners_count,
-                "Updated GatewayUdpRoutes"
-            );
-        }
-
-        // Remove stale gateway entries that no longer have any routes
-        // This prevents memory leaks after relist
-        // First clear the routes data (for any existing Arc references), then remove from map
-        let new_gateway_keys: HashSet<&String> = gateway_routes.keys().collect();
-        let stale_keys: Vec<String> = self
-            .gateway_udp_routes_map
-            .iter()
-            .filter(|entry| !new_gateway_keys.contains(entry.key()))
-            .map(|entry| entry.key().clone())
-            .collect();
-
-        for key in &stale_keys {
-            // Clear routes first (for any existing Arc references)
-            if let Some(entry) = self.gateway_udp_routes_map.get(key) {
-                entry.value().update_routes(HashMap::new());
-            }
-            // Then remove from map
-            self.gateway_udp_routes_map.remove(key);
-            tracing::debug!(gateway_key = %key, "Removed stale GatewayUdpRoutes");
-        }
-
-        if !stale_keys.is_empty() {
-            tracing::info!(
-                component = "udp_route_manager",
-                stale = stale_keys.len(),
-                "cleaned up stale gateway entries"
-            );
-        }
-    }
-
-    /// Add or update a UDPRoute (uses incremental update)
-    pub fn add_route(&self, route: Arc<UDPRoute>) {
-        let resource_key = route.key_name();
-
-        // Extract affected gateway/listeners from the route directly
-        let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
-
-        // Store by resource key
-        self.routes_by_key.insert(resource_key.clone(), route);
-
-        // Group by gateway_key
-        let mut affected: HashMap<String, HashSet<String>> = HashMap::new();
-        for (gateway_key, listener_name) in gateway_listeners {
-            affected.entry(gateway_key).or_default().insert(listener_name);
-        }
-
-        let affected_count = affected.len();
-
-        // Rebuild only affected gateway/listeners (incremental)
-        for (gateway_key, listeners) in affected {
-            self.rebuild_gateway_listeners_incremental(&gateway_key, &listeners, &HashSet::new());
-        }
-
-        tracing::info!(
-            route_key = %resource_key,
-            affected_gateways = affected_count,
-            "Added/updated UDPRoute with incremental update"
-        );
-    }
-
-    /// Remove a UDPRoute by resource key (uses incremental update)
-    pub fn remove_route(&self, resource_key: &str) {
-        // Calculate affected gateways/listeners BEFORE removal
-        let mut removed_keys = HashSet::new();
-        removed_keys.insert(resource_key.to_string());
-        let affected = self.build_affected_gateway_listeners(&HashSet::new(), &removed_keys);
-
-        let affected_count = affected.len();
-
-        // Remove from routes_by_key
-        self.routes_by_key.remove(resource_key);
-
-        // Rebuild only affected gateway/listeners (incremental)
-        for (gateway_key, listeners) in &affected {
-            self.rebuild_gateway_listeners_incremental(gateway_key, listeners, &removed_keys);
-        }
-
-        tracing::info!(
-            route_key = %resource_key,
-            affected_gateways = affected_count,
-            "Removed UDPRoute with incremental update"
-        );
-    }
-
-    /// Replace all routes (used in full_set)
-    pub fn replace_all(&self, routes: HashMap<String, Arc<UDPRoute>>) {
-        // Clear and rebuild routes_by_key
-        self.routes_by_key.clear();
-
-        for (key, route) in routes {
-            self.routes_by_key.insert(key, route);
-        }
-
-        // Rebuild gateway routes map
-        self.rebuild_gateway_routes_map();
-    }
-
-    // Private helper methods
-
-    /// Extract (gateway_key, listener_name) pairs from UDPRoute parentRefs
-    ///
-    /// Each UDPRoute can reference multiple Gateway listeners via parentRefs.
-    /// This method extracts all (gateway, listener) combinations.
-    fn extract_gateway_listener_pairs_from_route(&self, route: &UDPRoute) -> HashSet<(String, String)> {
-        let mut pairs = HashSet::new();
-
-        if let Some(parent_refs) = &route.spec.parent_refs {
-            for parent_ref in parent_refs {
-                let namespace = parent_ref
-                    .namespace
-                    .as_deref()
-                    .or(route.metadata.namespace.as_deref())
-                    .unwrap_or("default");
-                let gateway_key = format!("{}/{}", namespace, parent_ref.name);
-
-                // Use sectionName from parentRef (listener name in Gateway)
-                // If not specified, use empty string as default (will not match any listener)
-                let listener_name = parent_ref.section_name.clone().unwrap_or_else(|| String::from(""));
-
-                pairs.insert((gateway_key, listener_name));
-            }
-        }
-
-        pairs
-    }
+/// Get the resolved listener ports for a UDPRoute.
+///
+/// Uses `spec.resolved_ports` which is pre-computed by the controller
+/// from parentRef.port / parentRef.sectionName → Gateway listener.port.
+pub(crate) fn resolved_ports_for_route(route: &UDPRoute) -> &[u16] {
+    route.spec.resolved_ports.as_deref().unwrap_or_default()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UdpRouteManagerStats {
-    pub routes_by_key: usize,
-    pub gateway_udp_routes_map: usize,
+    pub route_cache: usize,
+    pub port_count: usize,
 }
 
-impl UdpRouteManager {
+impl GlobalUdpRouteManagers {
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> UdpRouteManagerStats {
         UdpRouteManagerStats {
-            routes_by_key: self.routes_by_key.len(),
-            gateway_udp_routes_map: self.gateway_udp_routes_map.len(),
+            route_cache: self.route_cache.len(),
+            port_count: self.by_port.len(),
         }
     }
 }
 
-/// Global UDP route manager
-static GLOBAL_UDP_ROUTE_MANAGER: OnceLock<UdpRouteManager> = OnceLock::new();
+static GLOBAL_UDP_ROUTE_MANAGERS: OnceLock<GlobalUdpRouteManagers> = OnceLock::new();
 
-pub fn get_global_udp_route_manager() -> &'static UdpRouteManager {
-    GLOBAL_UDP_ROUTE_MANAGER.get_or_init(UdpRouteManager::new)
+pub fn get_global_udp_route_managers() -> &'static GlobalUdpRouteManagers {
+    GLOBAL_UDP_ROUTE_MANAGERS.get_or_init(GlobalUdpRouteManagers::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::common::ParentReference;
+    use crate::types::resources::udp_route::*;
+
+    fn create_test_udp_route(namespace: &str, name: &str, port: u16) -> UDPRoute {
+        UDPRoute {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: UDPRouteSpec {
+                parent_refs: Some(vec![ParentReference {
+                    group: Some("gateway.networking.k8s.io".to_string()),
+                    kind: Some("Gateway".to_string()),
+                    namespace: Some(namespace.to_string()),
+                    name: "test-gateway".to_string(),
+                    section_name: Some("udp".to_string()),
+                    port: Some(port as i32),
+                }]),
+                rules: Some(vec![]),
+                resolved_ports: Some(vec![port]),
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn test_get_or_create_port_manager() {
+        let managers = GlobalUdpRouteManagers::new();
+        let mgr1 = managers.get_or_create_port_manager(9000);
+        let mgr2 = managers.get_or_create_port_manager(9000);
+        assert!(Arc::ptr_eq(&mgr1, &mgr2));
+
+        let mgr3 = managers.get_or_create_port_manager(9001);
+        assert!(!Arc::ptr_eq(&mgr1, &mgr3));
+    }
+
+    #[test]
+    fn test_insert_and_get_route() {
+        let managers = GlobalUdpRouteManagers::new();
+        let route = Arc::new(create_test_udp_route("default", "route1", 9000));
+        let key = route.key_name();
+
+        managers.insert_route(route.clone());
+        let found = managers.get_route(&key);
+        assert!(found.is_some());
+
+        managers.remove_route(&key);
+        let found = managers.get_route(&key);
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_rebuild_all_port_managers() {
+        let managers = GlobalUdpRouteManagers::new();
+        let _ = managers.get_or_create_port_manager(9000);
+
+        let route = Arc::new(create_test_udp_route("default", "route1", 9000));
+        managers.insert_route(route);
+
+        managers.rebuild_all_port_managers();
+
+        let mgr = managers.get_or_create_port_manager(9000);
+        let table = mgr.load_route_table();
+        assert!(table.match_route().is_some());
+    }
+
+    #[test]
+    fn test_rebuild_affected_port_managers() {
+        let managers = GlobalUdpRouteManagers::new();
+        let _ = managers.get_or_create_port_manager(9000);
+        let _ = managers.get_or_create_port_manager(9001);
+
+        let route = Arc::new(create_test_udp_route("default", "route1", 9000));
+        managers.insert_route(route);
+
+        let mut affected = HashSet::new();
+        affected.insert(9000);
+        managers.rebuild_affected_port_managers(&affected);
+
+        let mgr9000 = managers.get_or_create_port_manager(9000);
+        assert!(mgr9000.load_route_table().match_route().is_some());
+
+        let mgr9001 = managers.get_or_create_port_manager(9001);
+        assert!(mgr9001.load_route_table().match_route().is_none());
+    }
+
+    #[test]
+    fn test_stats() {
+        let managers = GlobalUdpRouteManagers::new();
+        let route = Arc::new(create_test_udp_route("default", "route1", 9000));
+        managers.insert_route(route);
+        let _ = managers.get_or_create_port_manager(9000);
+
+        let stats = managers.stats();
+        assert_eq!(stats.route_cache, 1);
+        assert_eq!(stats.port_count, 1);
+    }
+
+    #[test]
+    fn test_clear_route_cache() {
+        let managers = GlobalUdpRouteManagers::new();
+        let route = Arc::new(create_test_udp_route("default", "route1", 9000));
+        managers.insert_route(route);
+
+        assert_eq!(managers.stats().route_cache, 1);
+        managers.clear_route_cache();
+        assert_eq!(managers.stats().route_cache, 0);
+    }
 }

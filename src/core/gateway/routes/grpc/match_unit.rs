@@ -43,7 +43,14 @@ pub struct GrpcMatchInfo {
 }
 
 impl GrpcMatchInfo {
-    pub fn new(route_ns: String, route_name: String, rule_id: usize, match_id: usize, matched: GRPCRouteMatch, sv: u64) -> Self {
+    pub fn new(
+        route_ns: String,
+        route_name: String,
+        rule_id: usize,
+        match_id: usize,
+        matched: GRPCRouteMatch,
+        sv: u64,
+    ) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
             headers

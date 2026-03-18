@@ -472,19 +472,13 @@ fn select_from_backends(
                     .ok_or(not_found_ch)
             }
         }
-        Some(ParsedLBPolicy::LeastConn) => selection::least_conn::select(
-            &backends,
-            service_key,
-            256,
-            |b| is_backend_healthy(service_key, b, &health_store),
-        )
+        Some(ParsedLBPolicy::LeastConn) => selection::least_conn::select(&backends, service_key, 256, |b| {
+            is_backend_healthy(service_key, b, &health_store)
+        })
         .ok_or(not_found_lc),
-        Some(ParsedLBPolicy::Ewma) => selection::ewma::select(
-            &backends,
-            service_key,
-            256,
-            |b| is_backend_healthy(service_key, b, &health_store),
-        )
+        Some(ParsedLBPolicy::Ewma) => selection::ewma::select(&backends, service_key, 256, |b| {
+            is_backend_healthy(service_key, b, &health_store)
+        })
         .ok_or(not_found_ewma),
     }
 }

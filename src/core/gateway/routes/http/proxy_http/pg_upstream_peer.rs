@@ -196,21 +196,19 @@ pub async fn select_http_backend(
             &route_unit.matched_info.rns,
         ) {
             Ok(backend) => backend,
-            Err(_) => {
-                match RouteRules::select_backend(&route_unit.rule) {
-                    Ok(backend) => backend,
-                    Err(e) => {
-                        ctx.add_error(match &e {
-                            EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-                            EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                            EdError::RefDenied { .. } => EdgionStatus::RefDenied,
-                            _ => EdgionStatus::Unknown,
-                        });
-                        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-                        return Err(PingoraError::new(ErrorType::InternalError));
-                    }
+            Err(_) => match RouteRules::select_backend(&route_unit.rule) {
+                Ok(backend) => backend,
+                Err(e) => {
+                    ctx.add_error(match &e {
+                        EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+                        EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                        EdError::RefDenied { .. } => EdgionStatus::RefDenied,
+                        _ => EdgionStatus::Unknown,
+                    });
+                    end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+                    return Err(PingoraError::new(ErrorType::InternalError));
                 }
-            }
+            },
         }
     } else {
         // ===== Normal: weighted round-robin selection =====
@@ -352,9 +350,9 @@ async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::ne
         )
     })?;
 
-    let addr = addrs.next().ok_or_else(|| {
-        PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain))
-    })?;
+    let addr = addrs
+        .next()
+        .ok_or_else(|| PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain)))?;
 
     if addr.ip().is_loopback() {
         return Err(PingoraError::explain(

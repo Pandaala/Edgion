@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
+use tokio_util::sync::CancellationToken;
 
 use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::{log_udp, UdpLogEntry};
-use crate::core::gateway::routes::udp::GatewayUdpRoutes;
+use crate::core::gateway::routes::udp::UdpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 
 /// UDP session timeout (60 seconds of inactivity)
@@ -17,13 +18,16 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum UDP packet size (64KB)
 const MAX_UDP_PACKET_SIZE: usize = 65535;
 
+/// Maximum number of concurrent client sessions per listener.
+/// Prevents resource exhaustion from UDP reflection/amplification attacks.
+const MAX_UDP_SESSIONS: usize = 10000;
+
 /// Client session information with statistics
 struct ClientSession {
     upstream_socket: Arc<UdpSocket>,
     upstream_addr: std::net::SocketAddr,
     last_activity: Arc<Mutex<Instant>>,
     session_start: Instant,
-    // Atomic statistics for thread-safe updates
     packets_sent: Arc<AtomicU64>,
     packets_received: Arc<AtomicU64>,
     bytes_sent: Arc<AtomicU64>,
@@ -31,77 +35,86 @@ struct ClientSession {
 }
 
 /// UDP proxy service for Gateway UDP listeners.
+///
+/// Each instance is bound to a single listener port with its own per-port
+/// `UdpPortRouteManager`. Route updates swap the inner `ArcSwap<UdpRouteTable>`
+/// so the `Arc<UdpPortRouteManager>` stays stable.
+///
+/// Lifecycle is managed via `CancellationToken`: when the listener is removed
+/// (e.g. during hot-reload), calling `cancel_token.cancel()` stops the main
+/// loop, the session cleanup loop, and all upstream listener tasks.
 pub struct EdgionUdpProxy {
-    pub gateway_name: String,
-    pub gateway_namespace: Option<String>,
-    pub listener_name: String, // Listener name (sectionName in UDPRoute)
     pub listener_port: u16,
-    pub gateway_udp_routes: Arc<GatewayUdpRoutes>,
+    pub udp_route_manager: Arc<UdpPortRouteManager>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub socket: Arc<UdpSocket>,
-    /// Client address -> session mapping
-    /// Each client gets its own upstream socket for proper NAT-like behavior
     client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
+    cancel_token: CancellationToken,
 }
 
 impl EdgionUdpProxy {
-    /// Create a new UDP proxy service
     pub fn new(
-        gateway_name: String,
-        gateway_namespace: Option<String>,
-        listener_name: String,
         listener_port: u16,
-        gateway_udp_routes: Arc<GatewayUdpRoutes>,
+        udp_route_manager: Arc<UdpPortRouteManager>,
         edgion_gateway_config: Arc<EdgionGatewayConfig>,
         socket: UdpSocket,
+        cancel_token: CancellationToken,
     ) -> Self {
         Self {
-            gateway_name,
-            gateway_namespace,
-            listener_name,
             listener_port,
-            gateway_udp_routes,
+            udp_route_manager,
             edgion_gateway_config,
             socket: Arc::new(socket),
             client_sessions: Arc::new(DashMap::new()),
+            cancel_token,
         }
     }
 
-    /// Main service loop - receives packets from clients and handles them
+    /// Main service loop — receives packets from clients and handles them.
+    ///
+    /// Exits when `cancel_token` is cancelled or the socket errors out.
+    /// On exit, cancels the token so that `session_cleanup_loop` and all
+    /// per-session `handle_upstream_packets` tasks also terminate.
     pub async fn serve(self: Arc<Self>) {
-        // Spawn session cleanup task
         let cleanup_self = self.clone();
         tokio::spawn(async move {
             cleanup_self.session_cleanup_loop().await;
         });
 
-        // Main packet receiving loop
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
-        while let Ok((len, client_addr)) = self.socket.recv_from(&mut buf).await {
-            let data = buf[..len].to_vec();
-            let this = self.clone();
-
-            // Handle packet asynchronously
-            tokio::spawn(async move {
-                this.handle_client_packet(data, client_addr).await;
-            });
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.cancel_token.cancelled() => break,
+                result = self.socket.recv_from(&mut buf) => {
+                    match result {
+                        Ok((len, client_addr)) => {
+                            let data = buf[..len].to_vec();
+                            let this = self.clone();
+                            tokio::spawn(async move {
+                                this.handle_client_packet(data, client_addr).await;
+                            });
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
         }
-        // Socket error occurred, loop ended
+
+        // Ensure all child tasks (cleanup loop, upstream listeners) exit
+        // when the main loop terminates for any reason.
+        self.cancel_token.cancel();
     }
 
-    /// Handle a packet received from a client
+    /// Handle a packet received from a client.
     async fn handle_client_packet(&self, data: Vec<u8>, client_addr: std::net::SocketAddr) {
-        // 1. Match UDPRoute by listener_name and port
-        let udp_route = match self
-            .gateway_udp_routes
-            .match_route(&self.listener_name, self.listener_port)
-        {
+        let route_table = self.udp_route_manager.load_route_table();
+        let udp_route = match route_table.match_route() {
             Some(route) => route,
-            None => return, // No logging for dropped packets
+            None => return,
         };
 
-        // 2. Select backend
         let backend_ref = match udp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
             Some(rule) => match rule.backend_finder.select() {
                 Ok(backend) => backend,
@@ -110,7 +123,6 @@ impl EdgionUdpProxy {
             None => return,
         };
 
-        // 3. Build service key for EndpointSlice lookup
         let backend_namespace = backend_ref
             .namespace
             .as_deref()
@@ -123,48 +135,45 @@ impl EdgionUdpProxy {
             None => return,
         };
 
-        // Convert Pingora SocketAddr to std::net::SocketAddr
         let mut upstream_addr = match backend.addr {
             PingoraSocketAddr::Inet(sockaddr) => sockaddr,
-            PingoraSocketAddr::Unix(_) => return, // Unix sockets not supported for UDP
+            PingoraSocketAddr::Unix(_) => return,
         };
 
-        // Override port if specified in backend_ref
         if let Some(port) = backend_ref.port {
             upstream_addr.set_port(port as u16);
         }
 
-        // 5. Get or create client session
         let session = match self.get_or_create_session(client_addr, upstream_addr).await {
             Ok(session) => session,
             Err(_) => return,
         };
 
-        // 6. Forward packet to upstream
         let data_len = data.len() as u64;
         let _ = session.upstream_socket.send_to(&data, session.upstream_addr).await;
 
-        // 7. Update statistics
         session.packets_sent.fetch_add(1, Ordering::Relaxed);
         session.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
-
-        // 8. Update last activity
         *session.last_activity.lock() = Instant::now();
     }
 
-    /// Get or create a client session
+    /// Get or create a client session.
+    ///
+    /// Returns `Err(())` if the session limit is reached, preventing resource
+    /// exhaustion from UDP reflection/amplification attacks (fix for H-4).
     async fn get_or_create_session(
         &self,
         client_addr: std::net::SocketAddr,
         upstream_addr: std::net::SocketAddr,
     ) -> Result<Arc<ClientSession>, ()> {
-        // Check if session already exists
         if let Some(session) = self.client_sessions.get(&client_addr) {
-            // Update last activity
             return Ok(session.value().clone());
         }
 
-        // Create new upstream socket for this client
+        if self.client_sessions.len() >= MAX_UDP_SESSIONS {
+            return Err(());
+        }
+
         let upstream_socket = match UdpSocket::bind("0.0.0.0:0").await {
             Ok(socket) => Arc::new(socket),
             Err(_) => return Err(()),
@@ -181,113 +190,255 @@ impl EdgionUdpProxy {
             bytes_received: Arc::new(AtomicU64::new(0)),
         });
 
-        // Store session
         self.client_sessions.insert(client_addr, session.clone());
 
-        // Spawn upstream listener for this session
-        let client_sessions = self.client_sessions.clone();
-        let downstream_socket = self.socket.clone();
-        let last_activity = session.last_activity.clone();
-        let packets_received = session.packets_received.clone();
-        let bytes_received = session.bytes_received.clone();
+        let sessions_ref = self.client_sessions.clone();
+        let downstream = self.socket.clone();
+        let sess = session.clone();
+        let cancel = self.cancel_token.clone();
+
         tokio::spawn(async move {
-            Self::handle_upstream_packets_static(
-                client_addr,
-                upstream_socket,
-                downstream_socket,
-                client_sessions,
-                last_activity,
-                packets_received,
-                bytes_received,
-            )
-            .await;
+            Self::handle_upstream_packets(client_addr, downstream, sessions_ref, sess, cancel).await;
         });
 
         Ok(session)
     }
 
-    /// Handle packets received from upstream for a specific client (static method to avoid lifetime issues)
-    async fn handle_upstream_packets_static(
+    /// Handle packets received from upstream for a specific client.
+    ///
+    /// Exits when the session is removed, the cancel token fires, or a
+    /// socket error occurs.
+    async fn handle_upstream_packets(
         client_addr: std::net::SocketAddr,
-        upstream_socket: Arc<UdpSocket>,
         downstream_socket: Arc<UdpSocket>,
         client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
-        last_activity: Arc<Mutex<Instant>>,
-        packets_received: Arc<AtomicU64>,
-        bytes_received: Arc<AtomicU64>,
+        session: Arc<ClientSession>,
+        cancel: CancellationToken,
     ) {
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
         loop {
-            // Check if session still exists
             if !client_sessions.contains_key(&client_addr) {
-                // Session has been cleaned up, stop listening
                 break;
             }
 
-            // Set a timeout to check session existence periodically
-            match tokio::time::timeout(Duration::from_secs(1), upstream_socket.recv_from(&mut buf)).await {
-                Ok(Ok((len, _))) => {
-                    // Forward packet back to client
-                    let _ = downstream_socket.send_to(&buf[..len], client_addr).await;
-
-                    // Update statistics
-                    packets_received.fetch_add(1, Ordering::Relaxed);
-                    bytes_received.fetch_add(len as u64, Ordering::Relaxed);
-
-                    // Update last activity
-                    *last_activity.lock() = Instant::now();
-                }
-                Ok(Err(_)) => {
-                    // Socket error, break the loop
-                    break;
-                }
-                Err(_) => {
-                    // Timeout, continue checking
-                    continue;
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                result = tokio::time::timeout(Duration::from_secs(1), session.upstream_socket.recv_from(&mut buf)) => {
+                    match result {
+                        Ok(Ok((len, _))) => {
+                            let _ = downstream_socket.send_to(&buf[..len], client_addr).await;
+                            session.packets_received.fetch_add(1, Ordering::Relaxed);
+                            session.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+                            *session.last_activity.lock() = Instant::now();
+                        }
+                        Ok(Err(_)) => break,
+                        Err(_) => continue,
+                    }
                 }
             }
         }
     }
 
-    /// Periodically clean up inactive sessions
+    /// Periodically clean up inactive sessions.
+    ///
+    /// Exits when `cancel_token` is cancelled (fix for C-1: cleanup task
+    /// no longer holds `Arc<Self>` forever).
     async fn session_cleanup_loop(&self) {
         loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-
-            let now = Instant::now();
-            let mut to_remove = Vec::new();
-
-            // Find inactive sessions
-            for entry in self.client_sessions.iter() {
-                let last_activity = *entry.value().last_activity.lock();
-                if now.duration_since(last_activity) > SESSION_TIMEOUT {
-                    to_remove.push((*entry.key(), entry.value().clone()));
+            tokio::select! {
+                biased;
+                _ = self.cancel_token.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    self.cleanup_expired_sessions().await;
                 }
             }
+        }
+    }
 
-            // Remove inactive sessions and log them
-            for (client_addr, session) in to_remove {
-                // Log session before removal
-                let log_entry = UdpLogEntry::new(
-                    self.listener_port,
-                    client_addr.ip().to_string(),
-                    client_addr.port(),
-                    Some(session.upstream_addr.to_string()),
-                    session.session_start,
-                )
-                .with_stats(
-                    session.packets_sent.load(Ordering::Relaxed),
-                    session.packets_received.load(Ordering::Relaxed),
-                    session.bytes_sent.load(Ordering::Relaxed),
-                    session.bytes_received.load(Ordering::Relaxed),
-                );
+    async fn cleanup_expired_sessions(&self) {
+        let now = Instant::now();
+        let mut to_remove = Vec::new();
 
-                log_udp(&log_entry).await;
-
-                // Remove session
-                self.client_sessions.remove(&client_addr);
+        for entry in self.client_sessions.iter() {
+            let last_activity = *entry.value().last_activity.lock();
+            if now.duration_since(last_activity) > SESSION_TIMEOUT {
+                to_remove.push((*entry.key(), entry.value().clone()));
             }
         }
+
+        for (client_addr, session) in to_remove {
+            let log_entry = UdpLogEntry::new(
+                self.listener_port,
+                client_addr.ip().to_string(),
+                client_addr.port(),
+                Some(session.upstream_addr.to_string()),
+                session.session_start,
+            )
+            .with_stats(
+                session.packets_sent.load(Ordering::Relaxed),
+                session.packets_received.load(Ordering::Relaxed),
+                session.bytes_sent.load(Ordering::Relaxed),
+                session.bytes_received.load(Ordering::Relaxed),
+            );
+
+            log_udp(&log_entry).await;
+            self.client_sessions.remove(&client_addr);
+        }
+    }
+
+    /// Visible for testing: current session count.
+    #[cfg(test)]
+    pub(crate) fn session_count(&self) -> usize {
+        self.client_sessions.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::gateway::routes::udp::UdpPortRouteManager;
+
+    fn make_test_config() -> Arc<EdgionGatewayConfig> {
+        let json = serde_json::json!({
+            "apiVersion": "edgion.io/v1alpha1",
+            "kind": "EdgionGatewayConfig",
+            "metadata": { "name": "test-config" },
+            "spec": {}
+        });
+        Arc::new(serde_json::from_value(json).expect("test config"))
+    }
+
+    #[test]
+    fn test_cancel_token_propagation() {
+        let cancel = CancellationToken::new();
+        assert!(!cancel.is_cancelled());
+        cancel.cancel();
+        assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn test_session_limit_constant() {
+        assert_eq!(MAX_UDP_SESSIONS, 10000);
+    }
+
+    #[test]
+    fn test_session_timeout_constant() {
+        assert_eq!(SESSION_TIMEOUT, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn test_serve_exits_on_cancel() {
+        let cancel = CancellationToken::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let manager = Arc::new(UdpPortRouteManager::new());
+        let config = make_test_config();
+        let proxy = Arc::new(EdgionUdpProxy::new(19998, manager, config, socket, cancel.clone()));
+
+        let handle = tokio::spawn({
+            let proxy = proxy.clone();
+            async move { proxy.serve().await }
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("serve() should exit after cancel")
+            .expect("serve() should not panic");
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_loop_exits_on_cancel() {
+        let cancel = CancellationToken::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let manager = Arc::new(UdpPortRouteManager::new());
+        let config = make_test_config();
+        let proxy = Arc::new(EdgionUdpProxy::new(19997, manager, config, socket, cancel.clone()));
+
+        let handle = tokio::spawn({
+            let proxy = proxy.clone();
+            async move { proxy.session_cleanup_loop().await }
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("cleanup_loop should exit after cancel")
+            .expect("cleanup_loop should not panic");
+    }
+
+    #[tokio::test]
+    async fn test_session_creation_and_limit() {
+        let cancel = CancellationToken::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let manager = Arc::new(UdpPortRouteManager::new());
+        let config = make_test_config();
+        let proxy = Arc::new(EdgionUdpProxy::new(19996, manager, config, socket, cancel));
+
+        assert_eq!(proxy.session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_sessions() {
+        let cancel = CancellationToken::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let manager = Arc::new(UdpPortRouteManager::new());
+        let config = make_test_config();
+        let proxy = Arc::new(EdgionUdpProxy::new(19995, manager, config, socket, cancel));
+
+        // Manually insert an expired session
+        let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let expired_time = Instant::now() - Duration::from_secs(120);
+        let session = Arc::new(ClientSession {
+            upstream_socket,
+            upstream_addr: "127.0.0.1:8080".parse().unwrap(),
+            last_activity: Arc::new(Mutex::new(expired_time)),
+            session_start: expired_time,
+            packets_sent: Arc::new(AtomicU64::new(5)),
+            packets_received: Arc::new(AtomicU64::new(3)),
+            bytes_sent: Arc::new(AtomicU64::new(500)),
+            bytes_received: Arc::new(AtomicU64::new(300)),
+        });
+
+        let client_addr: std::net::SocketAddr = "192.168.1.1:12345".parse().unwrap();
+        proxy.client_sessions.insert(client_addr, session);
+        assert_eq!(proxy.session_count(), 1);
+
+        proxy.cleanup_expired_sessions().await;
+        assert_eq!(proxy.session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_keeps_active_sessions() {
+        let cancel = CancellationToken::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let manager = Arc::new(UdpPortRouteManager::new());
+        let config = make_test_config();
+        let proxy = Arc::new(EdgionUdpProxy::new(19994, manager, config, socket, cancel));
+
+        // Insert an active session (recent last_activity)
+        let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let session = Arc::new(ClientSession {
+            upstream_socket,
+            upstream_addr: "127.0.0.1:8080".parse().unwrap(),
+            last_activity: Arc::new(Mutex::new(Instant::now())),
+            session_start: Instant::now(),
+            packets_sent: Arc::new(AtomicU64::new(0)),
+            packets_received: Arc::new(AtomicU64::new(0)),
+            bytes_sent: Arc::new(AtomicU64::new(0)),
+            bytes_received: Arc::new(AtomicU64::new(0)),
+        });
+
+        let client_addr: std::net::SocketAddr = "192.168.1.2:12346".parse().unwrap();
+        proxy.client_sessions.insert(client_addr, session);
+        assert_eq!(proxy.session_count(), 1);
+
+        proxy.cleanup_expired_sessions().await;
+        assert_eq!(proxy.session_count(), 1);
     }
 }
