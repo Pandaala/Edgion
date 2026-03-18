@@ -22,8 +22,9 @@ impl Default for PluginMetadataHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
-    fn parse(&self, pm: PluginMetaData, _ctx: &HandlerContext) -> ProcessResult<PluginMetaData> {
+    async fn parse(&self, pm: PluginMetaData, _ctx: &HandlerContext) -> ProcessResult<PluginMetaData> {
         ProcessResult::Continue(pm)
     }
 }

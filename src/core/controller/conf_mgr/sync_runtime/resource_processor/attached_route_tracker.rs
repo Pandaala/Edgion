@@ -185,7 +185,6 @@ impl AttachedRouteTracker {
         }
     }
 
-    #[cfg(test)]
     pub fn clear(&self) {
         self.forward.write().unwrap().clear();
         self.reverse.write().unwrap().clear();

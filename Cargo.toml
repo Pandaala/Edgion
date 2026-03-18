@@ -80,6 +80,7 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 
 # Core async runtime and error handling
 tokio = { version = "1.49", features = ["full"] }
+tokio-util = "0.7"
 tokio-stream = "0.1"
 anyhow = "1.0"
 async-trait = "0.1"

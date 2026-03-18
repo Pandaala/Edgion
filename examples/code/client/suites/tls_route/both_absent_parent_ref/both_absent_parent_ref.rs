@@ -152,10 +152,7 @@ spec:
             namespace: edgion-test"#;
 
                     if let Err(e) = ctx.apply_yaml(gateway_yaml).await {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Failed to re-apply Gateway: {}", e),
-                        );
+                        return TestResult::failed(start.elapsed(), format!("Failed to re-apply Gateway: {}", e));
                     }
 
                     // Phase 4: wait for requeue to propagate
@@ -170,11 +167,9 @@ spec:
                                     let test_data = b"Hello Requeue";
                                     if tls_stream.write_all(test_data).await.is_ok() {
                                         let mut buf = vec![0u8; 1024];
-                                        if let Ok(Ok(n)) = tokio::time::timeout(
-                                            Duration::from_secs(2),
-                                            tls_stream.read(&mut buf),
-                                        )
-                                        .await
+                                        if let Ok(Ok(n)) =
+                                            tokio::time::timeout(Duration::from_secs(2), tls_stream.read(&mut buf))
+                                                .await
                                         {
                                             if n > 0 {
                                                 recovered = true;

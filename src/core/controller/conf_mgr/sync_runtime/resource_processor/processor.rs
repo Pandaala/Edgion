@@ -112,6 +112,7 @@ pub fn extract_status_value<T: Serialize>(obj: &T) -> Option<serde_json::Value> 
 ///
 /// This trait allows storing different ResourceProcessor<T> types in a HashMap
 /// and provides common operations without knowing the concrete type.
+#[async_trait::async_trait]
 pub trait ProcessorObj: Send + Sync {
     /// Get the resource kind name
     fn kind(&self) -> &'static str;
@@ -120,13 +121,13 @@ pub trait ProcessorObj: Send + Sync {
     fn as_watch_obj(&self) -> Arc<dyn WatchObj>;
 
     /// Enqueue a key for immediate processing (original events, init revalidation)
-    fn requeue(&self, key: String);
+    async fn requeue(&self, key: String);
 
     /// Enqueue a key with delay (unused legacy; prefer requeue_with_chain)
-    fn requeue_after(&self, key: String, duration: Duration);
+    async fn requeue_after(&self, key: String, duration: Duration);
 
     /// Cross-resource requeue with trigger chain (goes through delay subsystem)
-    fn requeue_with_chain(&self, key: String, chain: TriggerChain);
+    async fn requeue_with_chain(&self, key: String, chain: TriggerChain);
 
     /// Check if cache is ready
     fn is_ready(&self) -> bool;
@@ -156,7 +157,7 @@ pub trait ProcessorObj: Send + Sync {
     fn contains_key(&self, key: &str) -> bool;
 
     /// Requeue all keys in cache (used for leader status reconciliation)
-    fn requeue_all_keys(&self) -> usize;
+    async fn requeue_all_keys(&self) -> usize;
 }
 
 /// Enhanced ResourceProcessor that holds ServerCache<T>
@@ -285,13 +286,16 @@ where
     ///   - FileSystem mode: pass content of .status file as JSON string
     ///
     /// Returns WorkItemResult for status persistence handling by caller.
-    pub fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
+    pub async fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
         let ctx = self.create_context(TriggerChain::default());
-        self.process_resource(obj, &ctx, true, existing_status_json)
+        self.process_resource(obj, &ctx, true, existing_status_json).await
     }
 
     /// Handle InitDone event (LIST completed)
     pub fn on_init_done(&self) {
+        let ctx = self.create_context(TriggerChain::default());
+        self.handler.on_init_done(&ctx);
+
         WatchObj::set_ready(self.cache.as_ref());
         tracing::info!(
             component = "resource_processor",
@@ -301,23 +305,15 @@ where
     }
 
     /// Handle Apply event (enqueue for runtime processing)
-    pub fn on_apply(&self, obj: &K) {
+    pub async fn on_apply(&self, obj: &K) {
         let key = make_resource_key(obj);
-        let workqueue = self.workqueue.clone();
-
-        tokio::spawn(async move {
-            workqueue.enqueue(key).await;
-        });
+        self.workqueue.enqueue(key).await;
     }
 
     /// Handle Delete event (enqueue for runtime processing)
-    pub fn on_delete(&self, obj: &K) {
+    pub async fn on_delete(&self, obj: &K) {
         let key = make_resource_key(obj);
-        let workqueue = self.workqueue.clone();
-
-        tokio::spawn(async move {
-            workqueue.enqueue(key).await;
-        });
+        self.workqueue.enqueue(key).await;
     }
 
     // ==================== Cache Operations ====================
@@ -362,7 +358,7 @@ where
     ///
     /// Returns `WorkItemResult` indicating what action was taken and whether
     /// status needs to be persisted.
-    pub fn process_work_item(
+    pub async fn process_work_item(
         &self,
         key: &str,
         store_obj: Option<K>,
@@ -376,11 +372,11 @@ where
         match (store_obj, cache_obj) {
             (Some(obj), _) => {
                 // Object exists in store -> process it
-                self.process_resource(obj, &ctx, false, existing_status_json)
+                self.process_resource(obj, &ctx, false, existing_status_json).await
             }
             (None, Some(cached)) => {
                 // Object deleted from store but exists in cache -> delete
-                self.process_delete(&cached, &ctx);
+                self.process_delete(&cached, &ctx).await;
                 WorkItemResult::Deleted { key: key.to_string() }
             }
             (None, None) => {
@@ -413,7 +409,7 @@ where
     /// * `existing_status_json` - Existing status from config center as JSON string
     ///   - K8s mode: None (status is in obj)
     ///   - FileSystem mode: content of .status file
-    fn process_resource(
+    async fn process_resource(
         &self,
         obj: K,
         ctx: &HandlerContext,
@@ -484,7 +480,7 @@ where
         all_errors.extend(preparse_errors);
 
         // 6. Parse/preprocess
-        match self.handler.parse(obj, ctx) {
+        match self.handler.parse(obj, ctx).await {
             ProcessResult::Continue(mut parsed_obj) => {
                 // 7. Determine old status for comparison
                 // - If existing_status_json provided (FileSystem mode): use it
@@ -538,7 +534,7 @@ where
                 // completes, so cross-resource requeue (e.g., Gateway port
                 // changes triggering TLSRoute requeue) works correctly even
                 // when resources arrive out of order during the initial LIST.
-                self.handler.on_change(&parsed_obj, ctx);
+                self.handler.on_change(&parsed_obj, ctx).await;
 
                 let phase = if is_init { "init" } else { "runtime" };
                 tracing::debug!(
@@ -577,11 +573,11 @@ where
     }
 
     /// Process resource deletion
-    fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
+    async fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
         let key = make_resource_key(cached_obj);
 
         // 1. Execute handler's delete cleanup
-        self.handler.on_delete(cached_obj, ctx);
+        self.handler.on_delete(cached_obj, ctx).await;
 
         // 2. Remove from cache
         self.remove(&key);
@@ -595,6 +591,7 @@ where
 }
 
 // Implement ProcessorObj for ResourceProcessor<K>
+#[async_trait::async_trait]
 impl<K> ProcessorObj for ResourceProcessor<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -607,27 +604,19 @@ where
         self.cache.clone()
     }
 
-    fn requeue(&self, key: String) {
-        let workqueue = self.workqueue.clone();
-        tokio::spawn(async move {
-            workqueue.enqueue(key).await;
-        });
+    async fn requeue(&self, key: String) {
+        self.workqueue.enqueue(key).await;
     }
 
-    fn requeue_after(&self, key: String, duration: Duration) {
-        let workqueue = self.workqueue.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(duration).await;
-            workqueue.enqueue(key).await;
-        });
+    async fn requeue_after(&self, key: String, duration: Duration) {
+        self.workqueue
+            .enqueue_after(key, duration, TriggerChain::default())
+            .await;
     }
 
-    fn requeue_with_chain(&self, key: String, chain: TriggerChain) {
-        let workqueue = self.workqueue.clone();
+    async fn requeue_with_chain(&self, key: String, chain: TriggerChain) {
         let delay = self.workqueue.config().default_requeue_delay;
-        tokio::spawn(async move {
-            workqueue.enqueue_after(key, delay, chain).await;
-        });
+        self.workqueue.enqueue_after(key, delay, chain).await;
     }
 
     fn is_ready(&self) -> bool {
@@ -666,15 +655,12 @@ where
         self.cache.get_by_key(key).is_some()
     }
 
-    fn requeue_all_keys(&self) -> usize {
+    async fn requeue_all_keys(&self) -> usize {
         let keys = self.cache.list_keys();
         let count = keys.len();
-        let workqueue = self.workqueue.clone();
-        tokio::spawn(async move {
-            for key in keys {
-                workqueue.enqueue(key).await;
-            }
-        });
+        for key in keys {
+            self.workqueue.enqueue(key).await;
+        }
         count
     }
 }
@@ -767,7 +753,7 @@ mod tests {
         processor.on_init();
         assert!(!processor.is_ready());
 
-        let result = processor.on_init_apply(resource.clone(), None);
+        let result = processor.on_init_apply(resource.clone(), None).await;
         assert!(matches!(result, WorkItemResult::Processed { .. }));
 
         processor.on_init_done();

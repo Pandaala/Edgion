@@ -83,7 +83,7 @@ impl HandlerContext {
     /// the chain, the requeue is dropped and an error is logged.
     ///
     /// Uses the delay subsystem (`requeue_with_chain`) for coalescing.
-    pub fn requeue(&self, kind: &str, key: String) {
+    pub async fn requeue(&self, kind: &str, key: String) {
         if self
             .trigger_chain
             .would_exceed_cycle_limit(kind, &key, self.max_trigger_cycles)
@@ -97,7 +97,9 @@ impl HandlerContext {
             );
             return;
         }
-        PROCESSOR_REGISTRY.requeue_with_chain(kind, key, self.trigger_chain.clone());
+        PROCESSOR_REGISTRY
+            .requeue_with_chain(kind, key, self.trigger_chain.clone())
+            .await;
     }
 
     /// Clean metadata using the configured filter

@@ -23,8 +23,9 @@ impl Default for EndpointSliceHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<EndpointSlice> for EndpointSliceHandler {
-    fn parse(&self, eps: EndpointSlice, _ctx: &HandlerContext) -> ProcessResult<EndpointSlice> {
+    async fn parse(&self, eps: EndpointSlice, _ctx: &HandlerContext) -> ProcessResult<EndpointSlice> {
         ProcessResult::Continue(eps)
     }
 }

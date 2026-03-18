@@ -191,12 +191,8 @@ impl TestContext {
         let value: serde_yaml::Value =
             serde_yaml::from_str(yaml_content).map_err(|e| format!("Invalid YAML: {}", e))?;
 
-        let kind = value["kind"]
-            .as_str()
-            .ok_or("Missing 'kind' in YAML")?;
-        let namespace = value["metadata"]["namespace"]
-            .as_str()
-            .unwrap_or("default");
+        let kind = value["kind"].as_str().ok_or("Missing 'kind' in YAML")?;
+        let namespace = value["metadata"]["namespace"].as_str().unwrap_or("default");
         let name = value["metadata"]["name"]
             .as_str()
             .ok_or("Missing 'metadata.name' in YAML")?;
@@ -226,12 +222,7 @@ impl TestContext {
         }
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            let create_url = format!(
-                "{}/api/v1/namespaced/{}/{}",
-                self.admin_api_url(),
-                kind,
-                namespace
-            );
+            let create_url = format!("{}/api/v1/namespaced/{}/{}", self.admin_api_url(), kind, namespace);
             let response = client
                 .post(&create_url)
                 .header("Content-Type", "application/x-yaml")

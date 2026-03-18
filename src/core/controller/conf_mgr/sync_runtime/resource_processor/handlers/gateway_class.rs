@@ -25,12 +25,13 @@ impl Default for GatewayClassHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
     fn filter(&self, gc: &GatewayClass) -> bool {
         gc.spec.controller_name == self.controller_name
     }
 
-    fn parse(&self, gc: GatewayClass, _ctx: &HandlerContext) -> ProcessResult<GatewayClass> {
+    async fn parse(&self, gc: GatewayClass, _ctx: &HandlerContext) -> ProcessResult<GatewayClass> {
         ProcessResult::Continue(gc)
     }
 

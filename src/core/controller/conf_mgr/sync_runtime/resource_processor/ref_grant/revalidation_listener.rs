@@ -11,7 +11,7 @@ use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 /// This should be called after all processors are ready during Init phase.
 /// It ensures that any Route resources that were processed before their
 /// corresponding ReferenceGrant resources are revalidated.
-pub fn trigger_full_cross_ns_revalidation() {
+pub async fn trigger_full_cross_ns_revalidation() {
     let manager = get_global_cross_ns_ref_manager();
     let stats = manager.stats();
 
@@ -38,7 +38,9 @@ pub fn trigger_full_cross_ns_revalidation() {
         for resource_ref in manager.get_refs(&ns) {
             let ref_key = resource_ref.key();
             if !requeued.contains(&ref_key) {
-                PROCESSOR_REGISTRY.requeue(resource_ref.kind_str(), resource_ref.resource_key());
+                PROCESSOR_REGISTRY
+                    .requeue(resource_ref.kind_str(), resource_ref.resource_key())
+                    .await;
                 requeued.insert(ref_key);
                 requeued_count += 1;
             }
@@ -61,7 +63,7 @@ pub fn trigger_full_cross_ns_revalidation() {
 /// Gateway's hostname/port change detection fires when no routes are registered
 /// yet. This one-time requeue ensures all such routes get reprocessed with
 /// the Gateway already in cache, so lookup_gateway() in parse() succeeds.
-pub fn trigger_gateway_route_revalidation() {
+pub async fn trigger_gateway_route_revalidation() {
     let index = crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index();
     let routes = index.all_routes();
     if routes.is_empty() {
@@ -75,7 +77,7 @@ pub fn trigger_gateway_route_revalidation() {
     );
 
     for (kind, key) in routes {
-        PROCESSOR_REGISTRY.requeue(kind.as_str(), key);
+        PROCESSOR_REGISTRY.requeue(kind.as_str(), key).await;
     }
 }
 
@@ -84,7 +86,7 @@ pub fn trigger_gateway_route_revalidation() {
 /// During init, Gateways may be processed before Secrets are loaded into the
 /// SecretStore (each resource type initializes independently). This function
 /// requeues all Gateways so they re-evaluate ResolvedRefs with fully populated stores.
-pub fn trigger_gateway_secret_revalidation() {
+pub async fn trigger_gateway_secret_revalidation() {
     let Some(gateway_proc) = PROCESSOR_REGISTRY.get("Gateway") else {
         return;
     };
@@ -101,7 +103,7 @@ pub fn trigger_gateway_secret_revalidation() {
     );
 
     for key in keys {
-        PROCESSOR_REGISTRY.requeue("Gateway", key);
+        PROCESSOR_REGISTRY.requeue("Gateway", key).await;
     }
 }
 
@@ -123,8 +125,9 @@ impl Default for CrossNsRevalidationListener {
     }
 }
 
+#[async_trait::async_trait]
 impl RevalidationListener for CrossNsRevalidationListener {
-    fn on_reference_grant_changed(&self, event: &ReferenceGrantChangedEvent) {
+    async fn on_reference_grant_changed(&self, event: &ReferenceGrantChangedEvent) {
         let manager = get_global_cross_ns_ref_manager();
 
         let namespaces_to_check: Vec<String> = if event.affected_namespaces.is_empty() {
@@ -164,7 +167,7 @@ impl RevalidationListener for CrossNsRevalidationListener {
                     "Requeuing resource due to ReferenceGrant change"
                 );
 
-                PROCESSOR_REGISTRY.requeue(kind, key);
+                PROCESSOR_REGISTRY.requeue(kind, key).await;
                 requeued.insert(ref_key);
                 requeued_count += 1;
             }

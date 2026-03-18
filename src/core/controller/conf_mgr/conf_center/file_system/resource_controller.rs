@@ -134,7 +134,7 @@ where
                                     // Read existing status from .status file for comparison
                                     let existing_status_json = status_handler.read_status_json(kind, &key);
 
-                                    let result = self.processor.on_init_apply(obj, existing_status_json);
+                                    let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                     // Handle status persistence (same as runtime)
                                     match result {
@@ -231,7 +231,7 @@ where
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         let existing_status_json = status_handler.read_status_json(kind, &key);
-                                        let result = self.processor.on_init_apply(obj, existing_status_json);
+                                        let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                         if let WorkItemResult::Processed { obj, status_changed } = result {
                                             init_count += 1;
@@ -266,7 +266,7 @@ where
                                 // Runtime phase - parse and enqueue
                                 match serde_yaml::from_str::<K>(&content) {
                                     Ok(obj) => {
-                                        self.processor.on_apply(&obj);
+                                        self.processor.on_apply(&obj).await;
                                     }
                                     Err(e) => {
                                         tracing::warn!(
@@ -293,7 +293,7 @@ where
                                     // For delete, we need to get the cached object
                                     // The worker will handle the actual deletion
                                     if let Some(obj) = self.processor.get(&key) {
-                                        self.processor.on_delete(&obj);
+                                        self.processor.on_delete(&obj).await;
                                     } else {
                                         tracing::trace!(
                                             component = "fs_resource_controller",
@@ -466,12 +466,14 @@ where
                     let existing_status_json = status_handler.read_status_json(kind, &work_item.key);
 
                     // Use processor's process_work_item which handles the reconciliation logic
-                    let result = processor.process_work_item(
-                        &work_item.key,
-                        store_obj,
-                        existing_status_json,
-                        work_item.trigger_chain.clone(),
-                    );
+                    let result = processor
+                        .process_work_item(
+                            &work_item.key,
+                            store_obj,
+                            existing_status_json,
+                            work_item.trigger_chain.clone(),
+                        )
+                        .await;
 
                     // Persist status based on result
                     match result {

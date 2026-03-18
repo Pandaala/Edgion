@@ -120,10 +120,7 @@ spec:
           from: All"#;
 
                     if let Err(e) = ctx.apply_yaml(gateway_yaml).await {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Failed to re-apply Gateway: {}", e),
-                        );
+                        return TestResult::failed(start.elapsed(), format!("Failed to re-apply Gateway: {}", e));
                     }
 
                     // Phase 4: wait for requeue

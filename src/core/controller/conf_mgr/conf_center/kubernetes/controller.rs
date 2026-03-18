@@ -198,18 +198,19 @@ fn spawn_namespace_watcher(
     shutdown: ShutdownSignal,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
+        use kube::runtime::watcher::Event;
+
         let api: kube::Api<Namespace> = kube::Api::all(client);
         let store =
             crate::core::controller::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store();
 
         tracing::info!(component = "namespace_watcher", "Starting Namespace label watcher");
 
-        let stream = watcher::watcher(api, watcher_config)
-            .default_backoff()
-            .applied_objects();
+        let stream = watcher::watcher(api, watcher_config).default_backoff();
 
         futures::pin_mut!(stream);
 
+        let mut init_batch: Option<Vec<Namespace>> = None;
         let mut shutdown = shutdown;
         loop {
             tokio::select! {
@@ -219,20 +220,52 @@ fn spawn_namespace_watcher(
                 }
                 event = stream.try_next() => {
                     match event {
-                        Ok(Some(ns)) => {
-                            let name = ns.name_any();
-                            let changed = if ns.metadata.deletion_timestamp.is_some() {
-                                store.remove(&name)
-                            } else {
-                                store.upsert(ns)
-                            };
-                            if changed {
-                                tracing::debug!(
-                                    component = "namespace_watcher",
-                                    namespace = %name,
-                                    "Namespace labels changed, requeuing Selector Gateways"
-                                );
-                                requeue_selector_gateways();
+                        Ok(Some(ev)) => match ev {
+                            Event::Init => {
+                                init_batch = Some(Vec::new());
+                            }
+                            Event::InitApply(ns) => {
+                                if let Some(ref mut batch) = init_batch {
+                                    batch.push(ns);
+                                }
+                            }
+                            Event::InitDone => {
+                                if let Some(batch) = init_batch.take() {
+                                    let count = batch.len();
+                                    store.replace_all(batch);
+                                    tracing::info!(
+                                        component = "namespace_watcher",
+                                        count = count,
+                                        "NamespaceStore authoritative replace_all on init_done"
+                                    );
+                                }
+                            }
+                            Event::Apply(ns) => {
+                                let name = ns.name_any();
+                                let changed = if ns.metadata.deletion_timestamp.is_some() {
+                                    store.remove(&name)
+                                } else {
+                                    store.upsert(ns)
+                                };
+                                if changed {
+                                    tracing::debug!(
+                                        component = "namespace_watcher",
+                                        namespace = %name,
+                                        "Namespace labels changed, requeuing Selector Gateways"
+                                    );
+                                    requeue_selector_gateways().await;
+                                }
+                            }
+                            Event::Delete(ns) => {
+                                let name = ns.name_any();
+                                if store.remove(&name) {
+                                    tracing::debug!(
+                                        component = "namespace_watcher",
+                                        namespace = %name,
+                                        "Namespace deleted, requeuing Selector Gateways"
+                                    );
+                                    requeue_selector_gateways().await;
+                                }
                             }
                         }
                         Ok(None) => {
@@ -252,7 +285,7 @@ fn spawn_namespace_watcher(
 
 /// Requeue all Gateways that use Selector namespace policy so they
 /// re-evaluate listener namespace constraints.
-fn requeue_selector_gateways() {
+async fn requeue_selector_gateways() {
     let Some(processor) = PROCESSOR_REGISTRY.get("Gateway") else {
         return;
     };
@@ -277,7 +310,7 @@ fn requeue_selector_gateways() {
                 gw.metadata.namespace.as_deref().unwrap_or("default"),
                 gw.metadata.name.as_deref().unwrap_or("")
             );
-            PROCESSOR_REGISTRY.requeue("Gateway", key);
+            PROCESSOR_REGISTRY.requeue("Gateway", key).await;
         }
     }
 }

@@ -31,8 +31,9 @@ impl Default for BackendTlsPolicyHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
-    fn parse(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
+    async fn parse(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
             btp.metadata.namespace.clone(),
@@ -103,7 +104,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         ProcessResult::Continue(btp)
     }
 
-    fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+    async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
             btp.metadata.namespace.clone(),

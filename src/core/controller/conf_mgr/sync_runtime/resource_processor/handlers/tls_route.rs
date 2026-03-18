@@ -92,6 +92,7 @@ impl Default for TlsRouteHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
     fn validate(&self, route: &TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = validate_tls_route_if_enabled(route);
@@ -105,7 +106,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         errors
     }
 
-    fn parse(&self, mut route: TLSRoute, _ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
+    async fn parse(&self, mut route: TLSRoute, _ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route);
 
@@ -214,7 +215,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         ProcessResult::Continue(route)
     }
 
-    fn on_change(&self, route: &TLSRoute, ctx: &HandlerContext) {
+    async fn on_change(&self, route: &TLSRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -232,11 +233,11 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
-    fn on_delete(&self, route: &TLSRoute, ctx: &HandlerContext) {
+    async fn on_delete(&self, route: &TLSRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -248,7 +249,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
 
         let tracker_changed = remove_from_attached_route_tracker(ResourceKind::TLSRoute, route_ns, route_name);
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
@@ -279,20 +280,10 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_parent_conditions_full(
-                        &mut ps.conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
                 } else {
                     let mut conditions = Vec::new();
-                    set_parent_conditions_full(
-                        &mut conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),

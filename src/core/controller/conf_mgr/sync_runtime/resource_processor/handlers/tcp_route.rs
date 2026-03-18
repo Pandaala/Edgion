@@ -89,6 +89,7 @@ impl Default for TcpRouteHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
     fn validate(&self, route: &TCPRoute, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = validate_tcp_route_if_enabled(route);
@@ -102,7 +103,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         errors
     }
 
-    fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
+    async fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route);
 
@@ -148,7 +149,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         ProcessResult::Continue(route)
     }
 
-    fn on_change(&self, route: &TCPRoute, ctx: &HandlerContext) {
+    async fn on_change(&self, route: &TCPRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         let tracker_changed = update_attached_route_tracker(
@@ -158,11 +159,11 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
-    fn on_delete(&self, route: &TCPRoute, ctx: &HandlerContext) {
+    async fn on_delete(&self, route: &TCPRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -172,7 +173,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
 
         let tracker_changed = remove_from_attached_route_tracker(ResourceKind::TCPRoute, route_ns, route_name);
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
@@ -201,20 +202,10 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_parent_conditions_full(
-                        &mut ps.conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
                 } else {
                     let mut conditions = Vec::new();
-                    set_parent_conditions_full(
-                        &mut conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),

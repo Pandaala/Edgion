@@ -3,8 +3,8 @@
 //! Handles EdgionGatewayConfig resources with Gateway API standard status management.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_types, update_condition, HandlerContext,
-    ProcessResult, ProcessorHandler,
+    accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
+    ProcessorHandler,
 };
 use crate::types::prelude_resources::EdgionGatewayConfig;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
@@ -24,8 +24,9 @@ impl Default for EdgionGatewayConfigHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
-    fn parse(&self, egc: EdgionGatewayConfig, _ctx: &HandlerContext) -> ProcessResult<EdgionGatewayConfig> {
+    async fn parse(&self, egc: EdgionGatewayConfig, _ctx: &HandlerContext) -> ProcessResult<EdgionGatewayConfig> {
         ProcessResult::Continue(egc)
     }
 

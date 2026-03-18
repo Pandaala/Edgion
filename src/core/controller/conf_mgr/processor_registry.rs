@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 
-use super::sync_runtime::resource_processor::{get_listener_port_manager, get_service_ref_manager, ProcessorObj};
+use super::sync_runtime::resource_processor::{
+    get_attached_route_tracker, get_gateway_route_index, get_global_cross_ns_ref_manager,
+    get_global_reference_grant_store, get_listener_port_manager, get_service_ref_manager, ProcessorObj,
+};
 use super::sync_runtime::workqueue::TriggerChain;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
 
@@ -104,9 +107,9 @@ impl ProcessorRegistry {
     /// Used for init-time revalidation and scenarios without cascade context.
     ///
     /// For cascade-aware requeue with delay coalescing, use `requeue_with_chain`.
-    pub fn requeue(&self, kind: &str, key: String) {
+    pub async fn requeue(&self, kind: &str, key: String) {
         if let Some(processor) = self.get(kind) {
-            processor.requeue(key.clone());
+            processor.requeue(key.clone()).await;
             tracing::debug!(
                 component = "processor_registry",
                 target_kind = kind,
@@ -129,9 +132,9 @@ impl ProcessorRegistry {
     /// The trigger chain is propagated for cascade cycle detection.
     ///
     /// Called by `HandlerContext::requeue` after cycle detection passes.
-    pub fn requeue_with_chain(&self, kind: &str, key: String, chain: TriggerChain) {
+    pub async fn requeue_with_chain(&self, kind: &str, key: String, chain: TriggerChain) {
         if let Some(processor) = self.get(kind) {
-            processor.requeue_with_chain(key.clone(), chain);
+            processor.requeue_with_chain(key.clone(), chain).await;
             tracing::debug!(
                 component = "processor_registry",
                 target_kind = kind,
@@ -164,10 +167,16 @@ impl ProcessorRegistry {
 
     /// Requeue all resources across all kinds.
     /// Used on leader transition to trigger full status reconciliation.
-    pub fn requeue_all(&self) {
-        let processors = self.processors.read().unwrap();
-        for (kind, processor) in processors.iter() {
-            let count = processor.requeue_all_keys();
+    pub async fn requeue_all(&self) {
+        let processors: Vec<_> = self
+            .processors
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        for (kind, processor) in processors {
+            let count = processor.requeue_all_keys().await;
             tracing::info!(
                 component = "processor_registry",
                 kind = kind,
@@ -201,6 +210,18 @@ impl ProcessorRegistry {
         // Clear ServiceRefManager to avoid stale Service→Route references
         get_service_ref_manager().clear();
         tracing::info!(component = "processor_registry", "Cleared ServiceRefManager");
+
+        get_global_reference_grant_store().replace_all(std::collections::HashMap::new());
+        tracing::info!(component = "processor_registry", "Cleared ReferenceGrantStore");
+
+        get_global_cross_ns_ref_manager().clear();
+        tracing::info!(component = "processor_registry", "Cleared CrossNamespaceRefManager");
+
+        get_gateway_route_index().clear();
+        tracing::info!(component = "processor_registry", "Cleared GatewayRouteIndex");
+
+        get_attached_route_tracker().clear();
+        tracing::info!(component = "processor_registry", "Cleared AttachedRouteTracker");
     }
 }
 

@@ -27,5 +27,5 @@ pub use real_ip::RealIpTestSuite;
 pub use security::SecurityTestSuite;
 pub use stream_plugins::StreamPluginsTestSuite;
 pub use tls::BackendTlsTestSuite;
-pub use tls::GatewayTlsTestSuite;
 pub use tls::GatewayTlsNoHostnameListenerTestSuite;
+pub use tls::GatewayTlsTestSuite;

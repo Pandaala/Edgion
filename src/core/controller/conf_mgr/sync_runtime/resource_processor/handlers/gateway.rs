@@ -122,6 +122,7 @@ impl GatewayHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<Gateway> for GatewayHandler {
     fn filter(&self, g: &Gateway) -> bool {
         match &self.gateway_class_name {
@@ -130,7 +131,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         }
     }
 
-    fn parse(&self, mut g: Gateway, ctx: &HandlerContext) -> ProcessResult<Gateway> {
+    async fn parse(&self, mut g: Gateway, ctx: &HandlerContext) -> ProcessResult<Gateway> {
         let resource_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
@@ -223,7 +224,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         ProcessResult::Continue(g)
     }
 
-    fn on_change(&self, gateway: &Gateway, ctx: &HandlerContext) {
+    async fn on_change(&self, gateway: &Gateway, ctx: &HandlerContext) {
         let gateway_key = format!(
             "{}/{}",
             gateway.metadata.namespace.as_deref().unwrap_or(""),
@@ -236,7 +237,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let mut requeued = HashSet::new();
         for conflicting_gateway_key in conflicting_gateways {
             if !requeued.contains(&conflicting_gateway_key) {
-                ctx.requeue("Gateway", conflicting_gateway_key.clone());
+                ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
                 requeued.insert(conflicting_gateway_key.clone());
                 tracing::info!(
                     gateway = %gateway_key,
@@ -253,10 +254,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         let listeners = gateway.spec.listeners.as_deref().unwrap_or_default();
 
-        let current_hostnames: Vec<String> = listeners
-            .iter()
-            .filter_map(|l| l.hostname.clone())
-            .collect();
+        let current_hostnames: Vec<String> = listeners.iter().filter_map(|l| l.hostname.clone()).collect();
         let current_ports: Vec<i32> = listeners.iter().map(|l| l.port).collect();
 
         let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
@@ -275,12 +273,12 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 "Gateway changed, requeue referencing routes"
             );
             for (route_kind, route_key) in referencing_routes {
-                ctx.requeue(route_kind.as_str(), route_key);
+                ctx.requeue(route_kind.as_str(), route_key).await;
             }
         }
     }
 
-    fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
+    async fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
@@ -308,7 +306,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Requeue previously conflicting Gateways so they can update their Conflicted status
         // (change from Conflicted=True to Conflicted=False)
         for conflicting_gateway_key in conflicting_gateways {
-            ctx.requeue("Gateway", conflicting_gateway_key.clone());
+            ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
             tracing::info!(
                 deleted_gateway = %gateway_key,
                 conflicting_gateway = %conflicting_gateway_key,

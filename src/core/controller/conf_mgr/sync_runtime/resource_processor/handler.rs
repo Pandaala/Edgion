@@ -35,6 +35,7 @@ impl<K> ProcessResult<K> {
 /// and change handling logic.
 ///
 /// The handler is stateless - all state is managed by ResourceProcessor.
+#[async_trait::async_trait]
 pub trait ProcessorHandler<K>: Send + Sync
 where
     K: Resource + Clone + Send + Sync + 'static,
@@ -91,7 +92,7 @@ where
     /// Returns ProcessResult::Continue to save, ProcessResult::Skip to discard.
     ///
     /// Default: pass through unchanged
-    fn parse(&self, obj: K, _ctx: &HandlerContext) -> ProcessResult<K> {
+    async fn parse(&self, obj: K, _ctx: &HandlerContext) -> ProcessResult<K> {
         ProcessResult::Continue(obj)
     }
 
@@ -101,7 +102,7 @@ where
     /// Used to clean up SecretRefManager registrations, etc.
     ///
     /// Default: no-op
-    fn on_delete(&self, _obj: &K, _ctx: &HandlerContext) {}
+    async fn on_delete(&self, _obj: &K, _ctx: &HandlerContext) {}
 
     /// Post-change processing
     ///
@@ -109,7 +110,16 @@ where
     /// Used for cascading operations (e.g., Secret change triggers Gateway requeue).
     ///
     /// Default: no-op
-    fn on_change(&self, _obj: &K, _ctx: &HandlerContext) {}
+    async fn on_change(&self, _obj: &K, _ctx: &HandlerContext) {}
+
+    /// Called when the init LIST phase completes (all resources have been parsed).
+    ///
+    /// Use this to perform authoritative full-sync operations such as
+    /// `replace_all` on global stores, ensuring resources deleted upstream
+    /// are cleaned up locally.
+    ///
+    /// Default: no-op
+    fn on_init_done(&self, _ctx: &HandlerContext) {}
 
     /// Update resource status
     ///
@@ -135,6 +145,7 @@ where
 #[allow(dead_code)]
 pub struct DefaultHandler;
 
+#[async_trait::async_trait]
 impl<K> ProcessorHandler<K> for DefaultHandler
 where
     K: Resource + Clone + Send + Sync + 'static,

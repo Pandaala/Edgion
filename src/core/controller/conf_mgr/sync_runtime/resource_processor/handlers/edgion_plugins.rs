@@ -754,6 +754,7 @@ impl Default for EdgionPluginsHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
     fn preparse(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext) -> Vec<String> {
         // Build plugin runtime and collect validation errors
@@ -761,7 +762,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         ep.get_preparse_errors().to_vec()
     }
 
-    fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {
+    async fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionPlugins,
             ep.metadata.namespace.clone(),
@@ -797,7 +798,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         ProcessResult::Continue(ep)
     }
 
-    fn on_delete(&self, ep: &EdgionPlugins, ctx: &HandlerContext) {
+    async fn on_delete(&self, ep: &EdgionPlugins, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionPlugins,
             ep.metadata.namespace.clone(),
@@ -923,8 +924,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_parse_resolves_basic_auth_users_and_registers_refs() {
+    #[tokio::test]
+    async fn test_parse_resolves_basic_auth_users_and_registers_refs() {
         let _guard = SECRET_STORE_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
@@ -963,7 +964,7 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
         let handler = EdgionPluginsHandler::new();
-        let parsed = match handler.parse(ep, &ctx) {
+        let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
@@ -988,8 +989,8 @@ mod tests {
         replace_all_secrets(HashMap::new());
     }
 
-    #[test]
-    fn test_parse_resolves_openid_connect_secrets_and_registers_refs() {
+    #[tokio::test]
+    async fn test_parse_resolves_openid_connect_secrets_and_registers_refs() {
         let _guard = SECRET_STORE_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
@@ -1028,7 +1029,7 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
         let handler = EdgionPluginsHandler::new();
-        let parsed = match handler.parse(ep, &ctx) {
+        let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
@@ -1052,8 +1053,8 @@ mod tests {
         replace_all_secrets(HashMap::new());
     }
 
-    #[test]
-    fn test_parse_resolves_jwe_secret_and_registers_refs() {
+    #[tokio::test]
+    async fn test_parse_resolves_jwe_secret_and_registers_refs() {
         let _guard = SECRET_STORE_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
@@ -1082,7 +1083,7 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
         let handler = EdgionPluginsHandler::new();
-        let parsed = match handler.parse(ep, &ctx) {
+        let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
@@ -1110,8 +1111,8 @@ mod tests {
         replace_all_secrets(HashMap::new());
     }
 
-    #[test]
-    fn test_parse_resolves_hmac_credentials_and_registers_refs() {
+    #[tokio::test]
+    async fn test_parse_resolves_hmac_credentials_and_registers_refs() {
         let _guard = SECRET_STORE_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
@@ -1150,7 +1151,7 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
         let handler = EdgionPluginsHandler::new();
-        let parsed = match handler.parse(ep, &ctx) {
+        let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
@@ -1185,8 +1186,8 @@ mod tests {
         replace_all_secrets(HashMap::new());
     }
 
-    #[test]
-    fn test_parse_resolves_header_cert_auth_ca_secrets_and_registers_refs() {
+    #[tokio::test]
+    async fn test_parse_resolves_header_cert_auth_ca_secrets_and_registers_refs() {
         let _guard = SECRET_STORE_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
@@ -1221,7 +1222,7 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
         let handler = EdgionPluginsHandler::new();
-        let parsed = match handler.parse(ep, &ctx) {
+        let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };

@@ -272,10 +272,12 @@ fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'static str {
     {
         return condition_reasons::REF_NOT_PERMITTED;
     }
-    if errors
-        .iter()
-        .any(|e| matches!(e, ResolvedRefsError::BackendNotFound { .. } | ResolvedRefsError::SecretNotFound { .. }))
-    {
+    if errors.iter().any(|e| {
+        matches!(
+            e,
+            ResolvedRefsError::BackendNotFound { .. } | ResolvedRefsError::SecretNotFound { .. }
+        )
+    }) {
         return condition_reasons::BACKEND_NOT_FOUND;
     }
     condition_reasons::REF_NOT_PERMITTED
@@ -369,10 +371,7 @@ mod tests {
             resource_ns: "test-ns".to_string(),
         };
         assert_eq!(err.reason(), "NotAllowedByListeners");
-        assert_eq!(
-            err.message(),
-            "Namespace 'test-ns' not allowed by Gateway listeners"
-        );
+        assert_eq!(err.message(), "Namespace 'test-ns' not allowed by Gateway listeners");
     }
 
     #[test]
@@ -600,9 +599,8 @@ mod tests {
     #[test]
     fn test_set_parent_conditions_full_with_validation_errors() {
         let mut conditions = Vec::new();
-        let accepted_errors = AcceptedError::from_validation_errors(&[
-            "Secret 'test/missing' not found (may arrive later)".to_string(),
-        ]);
+        let accepted_errors =
+            AcceptedError::from_validation_errors(&["Secret 'test/missing' not found (may arrive later)".to_string()]);
         set_parent_conditions_full(&mut conditions, &accepted_errors, &[], Some(1));
 
         assert_eq!(conditions.len(), 2); // Accepted, ResolvedRefs only
@@ -622,9 +620,7 @@ mod tests {
     #[test]
     fn test_set_parent_conditions_full_validation_and_resolved_refs_errors() {
         let mut conditions = Vec::new();
-        let accepted_errors = AcceptedError::from_validation_errors(&[
-            "Secret 'ns/bad' not found".to_string(),
-        ]);
+        let accepted_errors = AcceptedError::from_validation_errors(&["Secret 'ns/bad' not found".to_string()]);
         let resolved_errors = vec![ResolvedRefsError::BackendNotFound {
             namespace: "ns".to_string(),
             name: "bad".to_string(),

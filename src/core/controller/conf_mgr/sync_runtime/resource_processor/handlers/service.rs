@@ -19,7 +19,7 @@ impl ServiceHandler {
         Self
     }
 
-    fn requeue_dependent_routes(&self, svc: &Service, event: &str, ctx: &HandlerContext) {
+    async fn requeue_dependent_routes(&self, svc: &Service, event: &str, ctx: &HandlerContext) {
         let svc_ns = svc.metadata.namespace.as_deref().unwrap_or("default");
         let svc_name = svc.metadata.name.as_deref().unwrap_or("");
         let service_key = format!("{}/{}", svc_ns, svc_name);
@@ -41,7 +41,7 @@ impl ServiceHandler {
                 Some(ns) => format!("{}/{}", ns, resource_ref.name),
                 None => resource_ref.name.clone(),
             };
-            ctx.requeue(resource_ref.kind.as_str(), key);
+            ctx.requeue(resource_ref.kind.as_str(), key).await;
         }
     }
 }
@@ -52,16 +52,17 @@ impl Default for ServiceHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<Service> for ServiceHandler {
-    fn parse(&self, svc: Service, _ctx: &HandlerContext) -> ProcessResult<Service> {
+    async fn parse(&self, svc: Service, _ctx: &HandlerContext) -> ProcessResult<Service> {
         ProcessResult::Continue(svc)
     }
 
-    fn on_change(&self, svc: &Service, ctx: &HandlerContext) {
-        self.requeue_dependent_routes(svc, "updated", ctx);
+    async fn on_change(&self, svc: &Service, ctx: &HandlerContext) {
+        self.requeue_dependent_routes(svc, "updated", ctx).await;
     }
 
-    fn on_delete(&self, svc: &Service, ctx: &HandlerContext) {
-        self.requeue_dependent_routes(svc, "deleted", ctx);
+    async fn on_delete(&self, svc: &Service, ctx: &HandlerContext) {
+        self.requeue_dependent_routes(svc, "deleted", ctx).await;
     }
 }

@@ -475,7 +475,8 @@ impl KubernetesCenter {
         config_sync_server.set_endpoint_mode(resolved_mode);
 
         // 3. Create Controller with resolved endpoint mode and leader handle
-        let controller = self.create_k8s_controller(client, resolved_mode)?
+        let controller = self
+            .create_k8s_controller(client, resolved_mode)?
             .with_leader_handle(leader_handle.clone());
 
         // 4. Spawn controller.run task
@@ -530,15 +531,19 @@ impl KubernetesCenter {
                 // Trigger full cross-namespace revalidation
                 // This ensures Routes processed before ReferenceGrants are revalidated
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
-                );
+                )
+                .await;
 
                 // Requeue Gateways with TLS cert refs so they re-check SecretStore
                 // (Secrets may have been processed after Gateways during init)
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation()
+                    .await;
 
                 // Requeue all routes in gateway_route_index to pick up Gateways
                 // that were processed before routes registered their parentRefs
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+                )
+                .await;
 
                 // Start ACME background service (certificate issuance/renewal)
                 crate::core::controller::services::acme::start_acme_service(acme_client);
@@ -627,7 +632,11 @@ impl KubernetesCenter {
 
             match exit_reason {
                 MainFlowExit::Shutdown => {
-                    tracing::info!(component = "kubernetes_center", ha_mode = "leader-only", "Normal shutdown");
+                    tracing::info!(
+                        component = "kubernetes_center",
+                        ha_mode = "leader-only",
+                        "Normal shutdown"
+                    );
                     crate::core::controller::services::acme::stop_acme_service();
                     PROCESSOR_REGISTRY.clear_registry();
                     return Ok(());
@@ -837,9 +846,14 @@ impl KubernetesCenter {
 
             if pending_sync_kinds().is_empty() {
                 css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
+                )
+                .await;
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation()
+                    .await;
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+                )
+                .await;
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
             } else {
                 let not_ready: Vec<String> = pending_sync_kinds().into_iter().map(|s| s.to_string()).collect();
@@ -858,9 +872,7 @@ impl KubernetesCenter {
         let tx_leader = event_tx.clone();
         let leader_watcher_handle = tokio::spawn(async move {
             let mut current_leader = lh.is_leader();
-            if current_leader
-                && tx_leader.send(LifecycleEvent::LeadershipAcquired).await.is_err()
-            {
+            if current_leader && tx_leader.send(LifecycleEvent::LeadershipAcquired).await.is_err() {
                 return;
             }
             loop {
@@ -906,7 +918,7 @@ impl KubernetesCenter {
     async fn start_leader_services(&self, client: &Client) {
         tracing::info!(component = "kubernetes_center", "Starting leader-only services");
         crate::core::controller::services::acme::start_acme_service(client.clone());
-        PROCESSOR_REGISTRY.requeue_all();
+        PROCESSOR_REGISTRY.requeue_all().await;
     }
 
     /// Stop leader-only services

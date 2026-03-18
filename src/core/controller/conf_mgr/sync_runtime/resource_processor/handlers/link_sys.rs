@@ -3,8 +3,8 @@
 //! Handles LinkSys resources with Gateway API standard status management.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_types, update_condition, HandlerContext,
-    ProcessResult, ProcessorHandler,
+    accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
+    ProcessorHandler,
 };
 use crate::types::prelude_resources::LinkSys;
 use crate::types::resources::link_sys::LinkSysStatus;
@@ -24,8 +24,9 @@ impl Default for LinkSysHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<LinkSys> for LinkSysHandler {
-    fn parse(&self, ls: LinkSys, _ctx: &HandlerContext) -> ProcessResult<LinkSys> {
+    async fn parse(&self, ls: LinkSys, _ctx: &HandlerContext) -> ProcessResult<LinkSys> {
         ProcessResult::Continue(ls)
     }
 

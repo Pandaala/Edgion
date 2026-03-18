@@ -324,11 +324,7 @@ impl LeaderElection {
             }
         });
         pod_api
-            .patch(
-                &self.config.identity,
-                &PatchParams::default(),
-                &Patch::Merge(&patch),
-            )
+            .patch(&self.config.identity, &PatchParams::default(), &Patch::Merge(&patch))
             .await?;
         Ok(())
     }

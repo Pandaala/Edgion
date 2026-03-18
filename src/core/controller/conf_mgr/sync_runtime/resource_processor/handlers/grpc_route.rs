@@ -92,6 +92,7 @@ impl Default for GrpcRouteHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     fn validate(&self, route: &GRPCRoute, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = validate_grpc_route_if_enabled(route);
@@ -105,7 +106,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         errors
     }
 
-    fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
+    async fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route);
 
@@ -170,7 +171,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         ProcessResult::Continue(route)
     }
 
-    fn on_change(&self, route: &GRPCRoute, ctx: &HandlerContext) {
+    async fn on_change(&self, route: &GRPCRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -188,11 +189,11 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
-    fn on_delete(&self, route: &GRPCRoute, ctx: &HandlerContext) {
+    async fn on_delete(&self, route: &GRPCRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -204,7 +205,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 
         let tracker_changed = remove_from_attached_route_tracker(ResourceKind::GRPCRoute, route_ns, route_name);
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
@@ -235,20 +236,10 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_parent_conditions_full(
-                        &mut ps.conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
                 } else {
                     let mut conditions = Vec::new();
-                    set_parent_conditions_full(
-                        &mut conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),

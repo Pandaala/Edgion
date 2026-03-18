@@ -1,3 +1,4 @@
+use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
@@ -7,7 +8,6 @@ use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
-use crate::core::gateway::observe::logs::LogBuffer;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;

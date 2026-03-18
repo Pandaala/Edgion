@@ -26,8 +26,9 @@ impl Default for EdgionStreamPluginsHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
-    fn parse(&self, esp: EdgionStreamPlugins, _ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
+    async fn parse(&self, esp: EdgionStreamPlugins, _ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
         ProcessResult::Continue(esp)
     }
 
