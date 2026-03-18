@@ -1,334 +1,244 @@
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::core::gateway::routes::tcp::GatewayTcpRoutes;
+use crate::core::gateway::routes::tcp::tcp_route_table::TcpRouteTable;
 use crate::types::resources::TCPRoute;
 use crate::types::ResourceMeta;
 
-/// TCP route manager
-pub struct TcpRouteManager {
-    /// resource_key -> Arc<TCPRoute> mapping
-    /// For quick lookup and updates
-    routes_by_key: Arc<DashMap<String, Arc<TCPRoute>>>,
-
-    /// gateway_key -> GatewayTcpRoutes mapping
-    /// Each gateway has its own set of TCP routes
-    gateway_tcp_routes_map: Arc<DashMap<String, Arc<GatewayTcpRoutes>>>,
+/// Per-port TCP route manager.
+///
+/// Each instance owns an atomically-swappable `TcpRouteTable` snapshot.
+/// `EdgionTcpProxy` holds an `Arc<TcpPortRouteManager>` and calls
+/// `load_route_table()` per-connection for lock-free lookups.
+///
+/// Route data is owned by `GlobalTcpRouteManagers`; this struct only
+/// holds the compiled route snapshot for one port.
+pub struct TcpPortRouteManager {
+    route_table: ArcSwap<TcpRouteTable>,
 }
 
-impl Default for TcpRouteManager {
+impl Default for TcpPortRouteManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TcpRouteManager {
+impl TcpPortRouteManager {
     pub fn new() -> Self {
         Self {
-            routes_by_key: Arc::new(DashMap::new()),
-            gateway_tcp_routes_map: Arc::new(DashMap::new()),
+            route_table: ArcSwap::from_pointee(TcpRouteTable::new()),
         }
     }
 
-    /// Get or create GatewayTcpRoutes for a specific gateway
+    /// Load the current route table snapshot (hot path, per-connection).
+    pub fn load_route_table(&self) -> arc_swap::Guard<Arc<TcpRouteTable>> {
+        self.route_table.load()
+    }
+
+    /// Rebuild the route table from routes belonging to this port.
+    /// Called by `GlobalTcpRouteManagers` during rebuild.
+    pub fn rebuild(&self, routes: &HashMap<String, Arc<TCPRoute>>) {
+        let new_table = TcpRouteTable::from_routes(routes);
+
+        tracing::debug!(
+            component = "tcp_port_route_manager",
+            routes = routes.len(),
+            "Rebuilt per-port TCP route table"
+        );
+
+        self.route_table.store(Arc::new(new_table));
+    }
+}
+
+/// Global wrapper managing `port -> Arc<TcpPortRouteManager>`.
+///
+/// Owns the canonical route cache (`resource_key -> Arc<TCPRoute>`) and
+/// implements `ConfHandler<TCPRoute>`. On every change it rebuilds all
+/// per-port managers by resolving each route's target ports from its
+/// `parentRefs`.
+pub struct GlobalTcpRouteManagers {
+    /// Canonical route store: resource_key -> initialized Arc<TCPRoute>
+    route_cache: DashMap<String, Arc<TCPRoute>>,
+
+    /// port -> per-port manager (stable Arc held by listeners)
+    by_port: DashMap<u16, Arc<TcpPortRouteManager>>,
+}
+
+impl Default for GlobalTcpRouteManagers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GlobalTcpRouteManagers {
+    pub fn new() -> Self {
+        Self {
+            route_cache: DashMap::new(),
+            by_port: DashMap::new(),
+        }
+    }
+
+    /// Get or create a per-port `TcpPortRouteManager`.
     ///
-    /// This method returns a cached GatewayTcpRoutes for the given gateway.
-    /// If it doesn't exist, creates a new empty one.
-    pub fn get_or_create_gateway_tcp_routes(&self, namespace: &str, name: &str) -> Arc<GatewayTcpRoutes> {
-        let gateway_key = format!("{}/{}", namespace, name);
-
-        let entry = self.gateway_tcp_routes_map.entry(gateway_key.clone());
-        let is_new = matches!(entry, dashmap::mapref::entry::Entry::Vacant(_));
-
-        let gateway_routes = entry
-            .or_insert_with(|| Arc::new(GatewayTcpRoutes::new()))
+    /// Called by `listener_builder` at startup. The returned `Arc` is stable;
+    /// route updates only swap the inner `ArcSwap<TcpRouteTable>`.
+    pub fn get_or_create_port_manager(&self, port: u16) -> Arc<TcpPortRouteManager> {
+        self.by_port
+            .entry(port)
+            .or_insert_with(|| Arc::new(TcpPortRouteManager::new()))
             .value()
-            .clone();
-
-        if is_new {
-            tracing::debug!(
-                gateway_key = %gateway_key,
-                "Created new GatewayTcpRoutes"
-            );
-        }
-
-        gateway_routes
+            .clone()
     }
 
-    /// Build affected gateway->listener_names mapping from changed route keys
+    /// Insert an initialized route into the cache.
+    pub fn insert_route(&self, route: Arc<TCPRoute>) {
+        let key = route.key_name();
+        self.route_cache.insert(key, route);
+    }
+
+    /// Get a route from the cache by key.
+    pub fn get_route(&self, key: &str) -> Option<Arc<TCPRoute>> {
+        self.route_cache.get(key).map(|entry| entry.value().clone())
+    }
+
+    /// Remove a route from the cache by resource key.
+    pub fn remove_route(&self, resource_key: &str) {
+        self.route_cache.remove(resource_key);
+    }
+
+    /// Clear all routes from the cache.
+    pub fn clear_route_cache(&self) {
+        self.route_cache.clear();
+    }
+
+    /// Rebuild all per-port managers from the current route cache.
     ///
-    /// Returns a map of gateway_key -> set of affected listener names
-    /// This helps identify which specific gateway/listener combinations need rebuilding
-    fn build_affected_gateway_listeners(
-        &self,
-        changed_route_keys: &HashSet<String>,
-        removed_route_keys: &HashSet<String>,
-    ) -> HashMap<String, HashSet<String>> {
-        let mut affected: HashMap<String, HashSet<String>> = HashMap::new();
+    /// 1. Bucket each route by its target ports (from parentRef)
+    /// 2. For each port that has routes: rebuild the manager
+    /// 3. For ports that no longer have routes: rebuild with empty set
+    pub fn rebuild_all_port_managers(&self) {
+        let port_buckets = self.bucket_routes_by_port();
 
-        // Process changed routes (from current state)
-        for route_key in changed_route_keys {
-            if let Some(route) = self.routes_by_key.get(route_key) {
-                let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
+        let mut rebuilt_ports = 0u32;
 
-                for (gateway_key, listener_name) in gateway_listeners {
-                    affected.entry(gateway_key).or_default().insert(listener_name);
+        for (port, routes) in &port_buckets {
+            let manager = self.get_or_create_port_manager(*port);
+            manager.rebuild(routes);
+            rebuilt_ports += 1;
+        }
+
+        for entry in self.by_port.iter() {
+            let port = *entry.key();
+            if !port_buckets.contains_key(&port) {
+                entry.value().rebuild(&HashMap::new());
+                rebuilt_ports += 1;
+            }
+        }
+
+        let total_routes: usize = port_buckets.values().map(|r| r.len()).sum();
+        tracing::info!(
+            component = "global_tcp_route_managers",
+            ports = port_buckets.len(),
+            total_route_entries = total_routes,
+            rebuilt_ports,
+            "Rebuilt all per-port TCP route managers"
+        );
+    }
+
+    /// Rebuild only the per-port managers for the given set of affected ports.
+    ///
+    /// Single-pass: iterates route_cache once, bucketing routes into only the
+    /// affected ports. Ports in `affected_ports` that end up with no routes
+    /// are rebuilt with an empty set (clearing stale entries).
+    pub fn rebuild_affected_port_managers(&self, affected_ports: &HashSet<u16>) {
+        if affected_ports.is_empty() {
+            return;
+        }
+
+        let mut port_buckets: HashMap<u16, HashMap<String, Arc<TCPRoute>>> = HashMap::new();
+        for &port in affected_ports {
+            port_buckets.insert(port, HashMap::new());
+        }
+
+        for entry in self.route_cache.iter() {
+            let route_ports = resolved_ports_for_route(entry.value());
+            for &port in route_ports {
+                if let Some(bucket) = port_buckets.get_mut(&port) {
+                    bucket.insert(entry.key().clone(), entry.value().clone());
                 }
             }
         }
 
-        // Process removed routes (need to lookup before removal)
-        for route_key in removed_route_keys {
-            if let Some(route) = self.routes_by_key.get(route_key) {
-                let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
-
-                for (gateway_key, listener_name) in gateway_listeners {
-                    affected.entry(gateway_key).or_default().insert(listener_name);
-                }
-            }
+        for (port, routes) in &port_buckets {
+            let manager = self.get_or_create_port_manager(*port);
+            manager.rebuild(routes);
         }
 
-        affected
+        tracing::info!(
+            component = "global_tcp_route_managers",
+            affected = affected_ports.len(),
+            "Rebuilt affected per-port TCP route managers"
+        );
     }
 
-    /// Rebuild specified listeners for a gateway (incremental update)
-    ///
-    /// Only rebuilds the affected listeners, leaving other listeners unchanged.
-    /// This is much more efficient than rebuilding all listeners.
-    fn rebuild_gateway_listeners_incremental(
-        &self,
-        gateway_key: &str,
-        affected_listeners: &HashSet<String>,
-        removed_route_keys: &HashSet<String>,
-    ) {
-        // Rebuild only affected listeners for this gateway
-        let mut listener_routes: HashMap<String, Vec<Arc<TCPRoute>>> = HashMap::new();
+    /// Bucket all cached routes by their resolved ports.
+    fn bucket_routes_by_port(&self) -> HashMap<u16, HashMap<String, Arc<TCPRoute>>> {
+        let mut port_buckets: HashMap<u16, HashMap<String, Arc<TCPRoute>>> = HashMap::new();
 
-        // Initialize all affected listeners with empty vectors
-        for listener_name in affected_listeners {
-            listener_routes.insert(listener_name.clone(), Vec::new());
-        }
+        for entry in self.route_cache.iter() {
+            let route_key = entry.key().clone();
+            let route = entry.value().clone();
+            let ports = resolved_ports_for_route(&route);
 
-        // Collect routes for this gateway's affected listeners
-        for entry in self.routes_by_key.iter() {
-            let route_key = entry.key();
-
-            // Skip removed routes
-            if removed_route_keys.contains(route_key.as_str()) {
+            if ports.is_empty() {
+                tracing::warn!(
+                    route = %route_key,
+                    "TCPRoute has no resolved_ports, skipping port assignment"
+                );
                 continue;
             }
 
-            let route = entry.value();
-            let gateway_listeners = self.extract_gateway_listener_pairs_from_route(route);
-
-            // Add to affected listeners only
-            for (gw_key, listener_name) in gateway_listeners {
-                if gw_key == gateway_key && affected_listeners.contains(&listener_name) {
-                    listener_routes.get_mut(&listener_name).unwrap().push(route.clone());
-                }
+            for &port in ports {
+                port_buckets
+                    .entry(port)
+                    .or_default()
+                    .insert(route_key.clone(), route.clone());
             }
         }
 
-        // Update only affected listeners in the gateway (create if not exists)
-        let gateway_tcp_routes = self
-            .gateway_tcp_routes_map
-            .entry(gateway_key.to_string())
-            .or_insert_with(|| Arc::new(GatewayTcpRoutes::new()))
-            .clone();
-
-        gateway_tcp_routes.update_listeners_incremental(listener_routes);
-        tracing::debug!(
-            gateway_key = %gateway_key,
-            listeners = affected_listeners.len(),
-            "Incrementally updated TCPRoute listeners"
-        );
+        port_buckets
     }
+}
 
-    /// Rebuild gateway routes maps after route changes (full rebuild, used for replace_all)
-    ///
-    /// This method should be called after replace_all to do a full rebuild.
-    /// For add_route and remove_route, use incremental update instead.
-    fn rebuild_gateway_routes_map(&self) {
-        // Group routes by gateway and listener
-        let mut gateway_routes: HashMap<String, HashMap<String, Vec<Arc<TCPRoute>>>> = HashMap::new();
-
-        for entry in self.routes_by_key.iter() {
-            let route = entry.value();
-            let gateway_listeners = self.extract_gateway_listener_pairs_from_route(route);
-
-            for (gateway_key, listener_name) in gateway_listeners {
-                let gateway_map = gateway_routes.entry(gateway_key).or_default();
-
-                gateway_map.entry(listener_name).or_default().push(route.clone());
-            }
-        }
-
-        // Update all gateways in the map
-        // First, update gateways that have routes
-        for (gateway_key, listener_routes) in &gateway_routes {
-            let listeners_count = listener_routes.len();
-            let gateway_tcp_routes = self
-                .gateway_tcp_routes_map
-                .entry(gateway_key.clone())
-                .or_insert_with(|| Arc::new(GatewayTcpRoutes::new()))
-                .clone();
-
-            gateway_tcp_routes.update_routes(listener_routes.clone());
-            tracing::debug!(
-                gateway_key = %gateway_key,
-                listeners = listeners_count,
-                "Updated GatewayTcpRoutes"
-            );
-        }
-
-        // Remove stale gateway entries that no longer have any routes
-        // This prevents memory leaks after relist
-        // First clear the routes data (for any existing Arc references), then remove from map
-        let new_gateway_keys: HashSet<&String> = gateway_routes.keys().collect();
-        let stale_keys: Vec<String> = self
-            .gateway_tcp_routes_map
-            .iter()
-            .filter(|entry| !new_gateway_keys.contains(entry.key()))
-            .map(|entry| entry.key().clone())
-            .collect();
-
-        for key in &stale_keys {
-            // Clear routes first (for any existing Arc references)
-            if let Some(entry) = self.gateway_tcp_routes_map.get(key) {
-                entry.value().update_routes(HashMap::new());
-            }
-            // Then remove from map
-            self.gateway_tcp_routes_map.remove(key);
-            tracing::debug!(gateway_key = %key, "Removed stale GatewayTcpRoutes");
-        }
-
-        if !stale_keys.is_empty() {
-            tracing::info!(
-                component = "tcp_route_manager",
-                stale = stale_keys.len(),
-                "cleaned up stale gateway entries"
-            );
-        }
-    }
-
-    /// Add or update a TCPRoute (uses incremental update)
-    pub fn add_route(&self, route: Arc<TCPRoute>) {
-        let resource_key = route.key_name();
-
-        // Extract affected gateway/listeners from the route directly
-        let gateway_listeners = self.extract_gateway_listener_pairs_from_route(&route);
-
-        // Store by resource key
-        self.routes_by_key.insert(resource_key.clone(), route);
-
-        // Group by gateway_key
-        let mut affected: HashMap<String, HashSet<String>> = HashMap::new();
-        for (gateway_key, listener_name) in gateway_listeners {
-            affected.entry(gateway_key).or_default().insert(listener_name);
-        }
-
-        let affected_count = affected.len();
-
-        // Rebuild only affected gateway/listeners (incremental)
-        for (gateway_key, listeners) in affected {
-            self.rebuild_gateway_listeners_incremental(&gateway_key, &listeners, &HashSet::new());
-        }
-
-        tracing::info!(
-            route_key = %resource_key,
-            affected_gateways = affected_count,
-            "Added/updated TCPRoute with incremental update"
-        );
-    }
-
-    /// Remove a TCPRoute by resource key (uses incremental update)
-    pub fn remove_route(&self, resource_key: &str) {
-        // Calculate affected gateways/listeners BEFORE removal
-        let mut removed_keys = HashSet::new();
-        removed_keys.insert(resource_key.to_string());
-        let affected = self.build_affected_gateway_listeners(&HashSet::new(), &removed_keys);
-
-        let affected_count = affected.len();
-
-        // Remove from routes_by_key
-        self.routes_by_key.remove(resource_key);
-
-        // Rebuild only affected gateway/listeners (incremental)
-        for (gateway_key, listeners) in &affected {
-            self.rebuild_gateway_listeners_incremental(gateway_key, listeners, &removed_keys);
-        }
-
-        tracing::info!(
-            route_key = %resource_key,
-            affected_gateways = affected_count,
-            "Removed TCPRoute with incremental update"
-        );
-    }
-
-    /// Replace all routes (used in full_set)
-    pub fn replace_all(&self, routes: HashMap<String, Arc<TCPRoute>>) {
-        // Clear and rebuild routes_by_key
-        self.routes_by_key.clear();
-
-        for (key, route) in routes {
-            self.routes_by_key.insert(key, route);
-        }
-
-        // Rebuild gateway routes map
-        self.rebuild_gateway_routes_map();
-    }
-
-    // Private helper methods
-
-    /// Extract (gateway_key, listener_name) pairs from TCPRoute parentRefs
-    ///
-    /// Each TCPRoute can reference multiple Gateway listeners via parentRefs.
-    /// This method extracts all (gateway, listener) combinations.
-    fn extract_gateway_listener_pairs_from_route(&self, route: &TCPRoute) -> HashSet<(String, String)> {
-        let mut pairs = HashSet::new();
-
-        if let Some(parent_refs) = &route.spec.parent_refs {
-            for parent_ref in parent_refs {
-                let namespace = parent_ref
-                    .namespace
-                    .as_deref()
-                    .or(route.metadata.namespace.as_deref())
-                    .unwrap_or("default");
-                let gateway_key = format!("{}/{}", namespace, parent_ref.name);
-
-                // Use sectionName from parentRef (listener name in Gateway)
-                // If not specified, use empty string as default (will not match any listener)
-                let listener_name = parent_ref.section_name.clone().unwrap_or_else(|| String::from(""));
-
-                pairs.insert((gateway_key, listener_name));
-            }
-        }
-
-        pairs
-    }
+/// Get the resolved listener ports for a TCPRoute.
+///
+/// Uses `spec.resolved_ports` which is pre-computed by the controller
+/// from parentRef.port / parentRef.sectionName → Gateway listener.port.
+pub(crate) fn resolved_ports_for_route(route: &TCPRoute) -> &[u16] {
+    route.spec.resolved_ports.as_deref().unwrap_or_default()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TcpRouteManagerStats {
-    pub routes_by_key: usize,
-    pub gateway_tcp_routes_map: usize,
+    pub route_cache: usize,
+    pub port_count: usize,
 }
 
-impl TcpRouteManager {
+impl GlobalTcpRouteManagers {
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> TcpRouteManagerStats {
         TcpRouteManagerStats {
-            routes_by_key: self.routes_by_key.len(),
-            gateway_tcp_routes_map: self.gateway_tcp_routes_map.len(),
+            route_cache: self.route_cache.len(),
+            port_count: self.by_port.len(),
         }
     }
 }
 
-/// Global TCP route manager
-static GLOBAL_TCP_ROUTE_MANAGER: OnceLock<TcpRouteManager> = OnceLock::new();
+static GLOBAL_TCP_ROUTE_MANAGERS: OnceLock<GlobalTcpRouteManagers> = OnceLock::new();
 
-pub fn get_global_tcp_route_manager() -> &'static TcpRouteManager {
-    GLOBAL_TCP_ROUTE_MANAGER.get_or_init(TcpRouteManager::new)
+pub fn get_global_tcp_route_managers() -> &'static GlobalTcpRouteManagers {
+    GLOBAL_TCP_ROUTE_MANAGERS.get_or_init(GlobalTcpRouteManagers::new)
 }

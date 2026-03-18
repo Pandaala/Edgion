@@ -374,7 +374,7 @@ struct SimpleCountStats {
 async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
     let http_routes = crate::core::gateway::routes::http::get_global_route_manager().stats();
     let grpc_routes = crate::core::gateway::routes::grpc::get_global_grpc_route_manager().stats();
-    let tcp_routes = crate::core::gateway::routes::tcp::get_global_tcp_route_manager().stats();
+    let tcp_routes = crate::core::gateway::routes::tcp::get_global_tcp_route_managers().stats();
     let udp_routes = crate::core::gateway::routes::udp::get_global_udp_route_managers().stats();
     let tls_routes = crate::core::gateway::routes::tls::get_global_tls_route_managers().stats();
 

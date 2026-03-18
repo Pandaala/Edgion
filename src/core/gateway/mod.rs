@@ -1,5 +1,6 @@
 pub mod api;
 pub mod backends;
+pub mod cache;
 pub mod cli;
 pub mod conf_sync;
 pub mod config;

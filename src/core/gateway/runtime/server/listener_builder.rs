@@ -19,7 +19,7 @@ use tokio::net::UdpSocket;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
 use crate::core::gateway::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
-use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, EdgionTcpProxy};
+use crate::core::gateway::routes::tcp::{get_global_tcp_route_managers, EdgionTcpProxy};
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsTcpProxy};
 use crate::core::gateway::routes::udp::{get_global_udp_route_managers, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
@@ -259,18 +259,11 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    // Pre-fetch TCP routes for this gateway (similar to HTTP approach)
-    let tcp_route_manager = get_global_tcp_route_manager();
-    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
-    let gateway_tcp_routes = tcp_route_manager.get_or_create_gateway_tcp_routes(namespace_str, &context.gateway_name);
+    let tcp_route_manager = get_global_tcp_route_managers().get_or_create_port_manager(port);
 
-    // Create TCP proxy service
     let edgion_tcp = EdgionTcpProxy {
-        gateway_name: context.gateway_name.clone(),
-        gateway_namespace: context.gateway_namespace.clone(),
-        listener_name: listener_name.clone(), // Pass listener name for sectionName matching
         listener_port: port,
-        gateway_tcp_routes, // Pass in pre-fetched routes
+        tcp_route_manager,
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),
     };

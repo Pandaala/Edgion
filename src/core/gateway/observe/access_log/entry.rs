@@ -1,16 +1,23 @@
 //! Access log entry definition
 
 use crate::core::gateway::plugins::StageLogs;
+use crate::core::gateway::routes::grpc::GrpcMatchInfo;
 use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
 use serde::Serialize;
 use std::collections::HashMap;
 
-/// Helper function to check if a slice is empty
 fn is_empty<T>(slice: &&[T]) -> bool {
     slice.is_empty()
 }
 
-/// Access log entry with only essential fields
+/// Unified match info that covers both HTTP and gRPC routes in access logs.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum RouteMatchInfo<'a> {
+    Http(&'a MatchInfo),
+    Grpc(&'a GrpcMatchInfo),
+}
+
 #[derive(Serialize)]
 pub struct AccessLogEntry<'a> {
     #[serde(rename = "ts")]
@@ -19,7 +26,7 @@ pub struct AccessLogEntry<'a> {
     pub request_info: &'a RequestInfo,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub match_info: Option<&'a MatchInfo>,
+    pub match_info: Option<RouteMatchInfo<'a>>,
 
     #[serde(skip_serializing_if = "is_empty")]
     pub errors: &'a [EdgionStatus],
@@ -39,7 +46,13 @@ pub struct AccessLogEntry<'a> {
 impl<'a> AccessLogEntry<'a> {
     #[inline]
     pub fn from_context(ctx: &'a EdgionHttpContext) -> Self {
-        let match_info = ctx.route_unit.as_ref().map(|ru| &ru.matched_info);
+        let match_info = if let Some(ru) = ctx.route_unit.as_ref() {
+            Some(RouteMatchInfo::Http(&ru.matched_info))
+        } else {
+            ctx.grpc_route_unit
+                .as_ref()
+                .map(|gru| RouteMatchInfo::Grpc(&gru.matched_info))
+        };
 
         Self {
             timestamp: chrono::Utc::now().timestamp_millis(),

@@ -107,20 +107,31 @@ impl EdgionUdpProxy {
         self.cancel_token.cancel();
     }
 
-    /// Handle a packet received from a client.
     async fn handle_client_packet(&self, data: Vec<u8>, client_addr: std::net::SocketAddr) {
+        let client_ip = client_addr.ip().to_string();
+        let client_port = client_addr.port();
+
         let route_table = self.udp_route_manager.load_route_table();
         let udp_route = match route_table.match_route() {
             Some(route) => route,
-            None => return,
+            None => {
+                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoRouteMatched")).await;
+                return;
+            }
         };
 
         let backend_ref = match udp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
             Some(rule) => match rule.backend_finder.select() {
                 Ok(backend) => backend,
-                Err(_) => return,
+                Err(_) => {
+                    log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoBackendSelected")).await;
+                    return;
+                }
             },
-            None => return,
+            None => {
+                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoRuleAvailable")).await;
+                return;
+            }
         };
 
         let backend_namespace = backend_ref
@@ -132,7 +143,10 @@ impl EdgionUdpProxy {
 
         let backend = match select_roundrobin_backend(&service_key) {
             Some(backend) => backend,
-            None => return,
+            None => {
+                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoBackendResolved")).await;
+                return;
+            }
         };
 
         let mut upstream_addr = match backend.addr {
@@ -146,7 +160,10 @@ impl EdgionUdpProxy {
 
         let session = match self.get_or_create_session(client_addr, upstream_addr).await {
             Ok(session) => session,
-            Err(_) => return,
+            Err(_) => {
+                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "SessionLimitReached")).await;
+                return;
+            }
         };
 
         let data_len = data.len() as u64;

@@ -11,34 +11,25 @@ use crate::core::gateway::observe::AccessLogger;
 /// Global UDP logger instance
 static UDP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 
-/// UDP session log entry
+/// UDP log entry (covers both session-based and per-packet failure logs)
 #[derive(Serialize)]
 pub struct UdpLogEntry {
-    /// Timestamp in milliseconds
     pub ts: i64,
-    /// Listener port
     pub listener_port: u16,
-    /// Client address
     pub client_addr: String,
-    /// Client port
     pub client_port: u16,
-    /// Upstream address (if known)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_addr: Option<String>,
-    /// Session duration in milliseconds
     pub session_duration_ms: u64,
-    /// Number of packets sent to upstream
     pub packets_sent: u64,
-    /// Number of packets received from upstream
     pub packets_received: u64,
-    /// Bytes sent to upstream
     pub bytes_sent: u64,
-    /// Bytes received from upstream
     pub bytes_received: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 impl UdpLogEntry {
-    /// Create a new UDP log entry
     pub fn new(
         listener_port: u16,
         client_addr: String,
@@ -59,10 +50,27 @@ impl UdpLogEntry {
             packets_received: 0,
             bytes_sent: 0,
             bytes_received: 0,
+            status: None,
         }
     }
 
-    /// Set packet/byte statistics
+    /// Create a failure log entry for packets that couldn't establish a session.
+    pub fn failure(listener_port: u16, client_addr: String, client_port: u16, status: &str) -> Self {
+        Self {
+            ts: chrono::Utc::now().timestamp_millis(),
+            listener_port,
+            client_addr,
+            client_port,
+            upstream_addr: None,
+            session_duration_ms: 0,
+            packets_sent: 0,
+            packets_received: 0,
+            bytes_sent: 0,
+            bytes_received: 0,
+            status: Some(status.to_string()),
+        }
+    }
+
     pub fn with_stats(
         mut self,
         packets_sent: u64,
@@ -77,7 +85,6 @@ impl UdpLogEntry {
         self
     }
 
-    /// Serialize to JSON
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
     }

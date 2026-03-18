@@ -14,7 +14,7 @@ use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::{log_tcp, TcpLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
-use crate::core::gateway::routes::tcp::GatewayTcpRoutes;
+use crate::core::gateway::routes::tcp::TcpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 
 /// TCP connection context
@@ -33,6 +33,11 @@ pub struct TcpContext {
 #[derive(Debug, Clone)]
 pub enum TcpStatus {
     Success,
+    NoRouteMatched,
+    NoRuleAvailable,
+    PluginDenied,
+    NoBackendSelected,
+    NoBackendResolved,
     UpstreamConnectionFailed,
     UpstreamReadError,
     UpstreamWriteError,
@@ -42,11 +47,8 @@ pub enum TcpStatus {
 
 /// TCP proxy service for Gateway TCP listeners.
 pub struct EdgionTcpProxy {
-    pub gateway_name: String,
-    pub gateway_namespace: Option<String>,
-    pub listener_name: String, // Listener name (sectionName in TCPRoute)
     pub listener_port: u16,
-    pub gateway_tcp_routes: Arc<GatewayTcpRoutes>,
+    pub tcp_route_manager: Arc<TcpPortRouteManager>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub connector: TransportConnector,
 }
@@ -54,19 +56,16 @@ pub struct EdgionTcpProxy {
 #[async_trait]
 impl ServerApp for EdgionTcpProxy {
     async fn process_new(self: &Arc<Self>, downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
-        // Reject new connections if the server is shutting down
-        // This stops the Listener from accepting new work while we drain existing connections.
         if *shutdown.borrow() {
             return None;
         }
-        // Extract client address from the underlying socket
+
         let (client_addr, client_port) = downstream
             .get_socket_digest()
             .and_then(|d| d.peer_addr().cloned())
             .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
             .unwrap_or_else(|| ("unknown".to_string(), 0));
 
-        // Create context
         let mut ctx = TcpContext {
             listener_port: self.listener_port,
             client_addr,
@@ -79,29 +78,22 @@ impl ServerApp for EdgionTcpProxy {
             connection_established: false,
         };
 
-        // Handle connection (context will be updated regardless of success or failure)
         self.handle_connection(downstream, &mut ctx).await;
 
-        // Only log if connection was actually established
-        if ctx.connection_established {
-            self.log_connection(&ctx).await;
-        }
+        self.log_connection(&ctx).await;
 
         None
     }
 }
 
 impl EdgionTcpProxy {
-    /// Core logic for handling TCP connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
-        // 1. Match TCPRoute by listener_name and port
-        let tcp_route = match self
-            .gateway_tcp_routes
-            .match_route(&self.listener_name, self.listener_port)
-        {
+        // 1. Match TCPRoute from per-port route table
+        let route_table = self.tcp_route_manager.load_route_table();
+        let tcp_route = match route_table.match_route() {
             Some(route) => route,
             None => {
-                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                ctx.status = TcpStatus::NoRouteMatched;
                 return;
             }
         };
@@ -110,14 +102,12 @@ impl EdgionTcpProxy {
         let rule = match tcp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
             Some(rule) => rule,
             None => {
-                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                ctx.status = TcpStatus::NoRuleAvailable;
                 return;
             }
         };
 
-        // 3. Execute stream plugins
-        // Dynamic lookup from StreamPluginStore using store_key (supports hot-reloading
-        // and avoids resource loading order issues)
+        // 3. Execute stream plugins (dynamic lookup from StreamPluginStore)
         if let Some(store_key) = &rule.stream_plugin_store_key {
             if let Ok(client_ip) = ctx.client_addr.parse() {
                 let store = get_global_stream_plugin_store();
@@ -128,7 +118,7 @@ impl EdgionTcpProxy {
                         match runtime.run(&stream_ctx).await {
                             StreamPluginResult::Allow => {}
                             StreamPluginResult::Deny(_) => {
-                                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                                ctx.status = TcpStatus::PluginDenied;
                                 return;
                             }
                         }
@@ -141,7 +131,7 @@ impl EdgionTcpProxy {
         let backend_ref = match rule.backend_finder.select() {
             Ok(backend) => backend,
             Err(_) => {
-                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                ctx.status = TcpStatus::NoBackendSelected;
                 return;
             }
         };
@@ -157,12 +147,12 @@ impl EdgionTcpProxy {
         let backend = match select_roundrobin_backend(&service_key) {
             Some(backend) => backend,
             None => {
-                ctx.status = TcpStatus::UpstreamConnectionFailed;
+                ctx.status = TcpStatus::NoBackendResolved;
                 return;
             }
         };
 
-        // 6. Build upstream address (using actual IP address)
+        // 6. Build upstream address
         let mut upstream_addr = backend.addr;
         if let Some(port) = backend_ref.port {
             upstream_addr.set_port(port as u16);
@@ -180,18 +170,12 @@ impl EdgionTcpProxy {
             }
         };
 
-        // Mark connection as established
         ctx.connection_established = true;
 
         // 8. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
-
-        // Note: TCP routes currently use RoundRobin only
-        // When LeastConnection support is added, increment/decrement should be called here
-        // based on the selected LB policy
     }
 
-    /// Bidirectional data transfer
     async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TcpContext) {
         const BUFFER_SIZE: usize = 8192;
         let mut upstream_buf = vec![0u8; BUFFER_SIZE];
@@ -199,7 +183,6 @@ impl EdgionTcpProxy {
 
         loop {
             select! {
-                // Client → Upstream
                 result = downstream.read(&mut upstream_buf) => {
                     match result {
                         Ok(0) => {
@@ -207,22 +190,21 @@ impl EdgionTcpProxy {
                         }
                         Ok(n) => {
                             ctx.bytes_sent += n as u64;
-                        if (upstream.write_all(&upstream_buf[0..n]).await).is_err() {
+                            if (upstream.write_all(&upstream_buf[0..n]).await).is_err() {
                                 ctx.status = TcpStatus::UpstreamWriteError;
                                 break;
                             }
-                        if (upstream.flush().await).is_err() {
+                            if (upstream.flush().await).is_err() {
                                 ctx.status = TcpStatus::UpstreamWriteError;
                                 break;
                             }
                         }
-                    Err(_) => {
+                        Err(_) => {
                             ctx.status = TcpStatus::DownstreamReadError;
                             break;
                         }
                     }
                 }
-                // Upstream → Client
                 result = upstream.read(&mut downstream_buf) => {
                     match result {
                         Ok(0) => {
@@ -230,16 +212,16 @@ impl EdgionTcpProxy {
                         }
                         Ok(n) => {
                             ctx.bytes_received += n as u64;
-                        if (downstream.write_all(&downstream_buf[0..n]).await).is_err() {
+                            if (downstream.write_all(&downstream_buf[0..n]).await).is_err() {
                                 ctx.status = TcpStatus::DownstreamWriteError;
                                 break;
                             }
-                        if (downstream.flush().await).is_err() {
+                            if (downstream.flush().await).is_err() {
                                 ctx.status = TcpStatus::DownstreamWriteError;
                                 break;
                             }
                         }
-                    Err(_) => {
+                        Err(_) => {
                             ctx.status = TcpStatus::UpstreamReadError;
                             break;
                         }
@@ -249,7 +231,6 @@ impl EdgionTcpProxy {
         }
     }
 
-    /// Log TCP connection
     async fn log_connection(&self, ctx: &TcpContext) {
         let log_entry = TcpLogEntry::from_context(ctx);
         log_tcp(&log_entry).await;
