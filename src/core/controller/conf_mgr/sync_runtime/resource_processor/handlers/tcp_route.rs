@@ -149,6 +149,10 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             }
         }
 
+        // Treat resolved_ports as controller-derived state.
+        // Clear any stale value before recomputing from current parentRefs.
+        route.spec.resolved_ports = None;
+
         // Resolve listener ports from parentRefs (mirrors UDPRoute pattern)
         if let Some(parent_refs) = &route.spec.parent_refs {
             let mut ports = Vec::new();
@@ -197,7 +201,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         }
 
         if route.spec.resolved_ports.is_none() {
-            tracing::warn!(
+            tracing::debug!(
                 route = %route.metadata.name.as_deref().unwrap_or(""),
                 ns = route_ns,
                 "TCPRoute has no resolved_ports: Gateway not yet available or no matching listeners"

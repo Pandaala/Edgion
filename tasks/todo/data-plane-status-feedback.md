@@ -193,9 +193,9 @@ Response:
 |------|----------------------|-------------------|
 | HTTPRoute | `HttpRouteManager` has matching route entries | Same as Programmed (no separate readiness) |
 | GRPCRoute | `GrpcRouteManager` has matching route entries | Same |
-| TCPRoute | `TcpRouteManager` has matching route entries | Same |
+| TCPRoute | `GlobalTcpRouteManagers` has matching route entries | Same |
 | TLSRoute | `TlsRouteManager` has matching route entries | Same |
-| UDPRoute | `UdpRouteManager` has matching route entries | Same |
+| UDPRoute | `GlobalUdpRouteManagers` has matching route entries | Same |
 | EdgionTls | `TlsStore` has the TLS entry AND `CertMatcher` has it | Same |
 | EdgionPlugins | `PluginStore` has the plugin | Same |
 | EdgionStreamPlugins | `StreamPluginStore` has the plugin | Same |
@@ -245,9 +245,9 @@ pub async fn query_data_plane_status(
 |-------|-----------|------|
 | `HttpRouteManager` | `has_route(ns, name) -> bool` | `src/core/gateway/routes/http/mod.rs` |
 | `GrpcRouteManager` | `has_route(ns, name) -> bool` | `src/core/gateway/routes/grpc/mod.rs` |
-| `TcpRouteManager` | `has_route(ns, name) -> bool` | `src/core/gateway/routes/tcp/mod.rs` |
+| `GlobalTcpRouteManagers` | `has_route(ns, name) -> bool` | `src/core/gateway/routes/tcp/mod.rs` |
 | `TlsRouteManager` | `has_route(ns, name) -> bool` | `src/core/gateway/routes/tls/mod.rs` |
-| `UdpRouteManager` | `has_route(ns, name) -> bool` | `src/core/gateway/routes/udp/mod.rs` |
+| `GlobalUdpRouteManagers` | `has_route(ns, name) -> bool` | `src/core/gateway/routes/udp/mod.rs` |
 | `TlsStore` | `has_entry(ns, name) -> bool` | `src/core/gateway/tls/store/tls_store.rs` |
 | `PluginStore` | `has_plugin(ns, name) -> bool` | `src/core/gateway/plugins/http/mod.rs` |
 | `StreamPluginStore` | `has_plugin(ns, name) -> bool` | `src/core/gateway/plugins/stream/mod.rs` |

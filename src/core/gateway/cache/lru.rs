@@ -1,9 +1,7 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::hash::Hash;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheStatus {
@@ -12,36 +10,55 @@ pub enum CacheStatus {
     Expired,
 }
 
-#[derive(Debug)]
-struct CacheEntry<V> {
-    value: V,
+#[derive(Debug, Clone)]
+struct CacheNode<K, V> {
+    key: Option<K>,
+    value: Option<V>,
     expires_at: Option<Instant>,
+    prev: Option<usize>,
+    next: Option<usize>,
+    next_free: Option<usize>,
+    occupied: bool,
 }
 
-impl<V> CacheEntry<V> {
-    fn new(value: V, ttl: Option<Duration>) -> Self {
-        // checked_add guards against overflow on extreme TTL values;
-        // overflow silently produces no expiry, which is acceptable.
-        let expires_at = ttl.and_then(|d| Instant::now().checked_add(d));
-        Self { value, expires_at }
+impl<K, V> Default for CacheNode<K, V> {
+    fn default() -> Self {
+        Self {
+            key: None,
+            value: None,
+            expires_at: None,
+            prev: None,
+            next: None,
+            next_free: None,
+            occupied: false,
+        }
     }
+}
 
+impl<K, V> CacheNode<K, V> {
     fn is_expired(&self, now: Instant) -> bool {
-        self.expires_at.is_some_and(|t| now >= t)
+        self.expires_at.is_some_and(|expires_at| now >= expires_at)
+    }
+
+    fn reset(&mut self) {
+        self.key = None;
+        self.value = None;
+        self.expires_at = None;
+        self.prev = None;
+        self.next = None;
+        self.occupied = false;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Inner state — all mutation goes through LocalLruCacheInner so that
-// LocalLruCache only needs to acquire the lock once per public call.
-// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 struct LocalLruCacheInner<K, V> {
     capacity: usize,
-    entries: HashMap<K, CacheEntry<V>>,
-    /// LRU order: front = least-recently-used, back = most-recently-used.
-    order: VecDeque<K>,
+    len: usize,
+    map: HashMap<K, usize>,
+    nodes: Vec<CacheNode<K, V>>,
+    head: Option<usize>,
+    tail: Option<usize>,
+    free_head: Option<usize>,
 }
 
 impl<K, V> LocalLruCacheInner<K, V>
@@ -49,68 +66,202 @@ where
     K: Eq + Hash + Clone,
 {
     fn new(capacity: usize) -> Self {
+        let mut nodes = Vec::with_capacity(capacity);
+        for idx in 0..capacity {
+            let next_free = if idx + 1 < capacity { Some(idx + 1) } else { None };
+            let mut node = CacheNode::default();
+            node.next_free = next_free;
+            nodes.push(node);
+        }
+
         Self {
             capacity,
-            entries: HashMap::with_capacity(capacity),
-            order: VecDeque::with_capacity(capacity),
+            len: 0,
+            map: HashMap::with_capacity(capacity),
+            nodes,
+            head: None,
+            tail: None,
+            free_head: Some(0),
         }
     }
 
-    /// Remove `key` from the LRU order queue. O(n) — acceptable for small capacities.
-    fn remove_from_order(&mut self, key: &K) {
-        if let Some(pos) = self.order.iter().position(|k| k == key) {
-            self.order.remove(pos);
+    fn alloc_index(&mut self) -> usize {
+        if let Some(idx) = self.free_head {
+            self.free_head = self.nodes[idx].next_free;
+            self.nodes[idx].next_free = None;
+            return idx;
+        }
+
+        let tail = self.tail.expect("tail must exist when cache is full");
+        self.remove_index(tail);
+        tail
+    }
+
+    fn release_index(&mut self, idx: usize) {
+        self.nodes[idx].reset();
+        self.nodes[idx].next_free = self.free_head;
+        self.free_head = Some(idx);
+    }
+
+    fn detach(&mut self, idx: usize) {
+        let prev = self.nodes[idx].prev;
+        let next = self.nodes[idx].next;
+
+        match prev {
+            Some(prev_idx) => self.nodes[prev_idx].next = next,
+            None => self.head = next,
+        }
+
+        match next {
+            Some(next_idx) => self.nodes[next_idx].prev = prev,
+            None => self.tail = prev,
+        }
+
+        self.nodes[idx].prev = None;
+        self.nodes[idx].next = None;
+    }
+
+    fn attach_head(&mut self, idx: usize) {
+        self.nodes[idx].prev = None;
+        self.nodes[idx].next = self.head;
+
+        if let Some(head_idx) = self.head {
+            self.nodes[head_idx].prev = Some(idx);
+        } else {
+            self.tail = Some(idx);
+        }
+
+        self.head = Some(idx);
+    }
+
+    fn touch(&mut self, idx: usize) {
+        if self.head == Some(idx) {
+            return;
+        }
+        self.detach(idx);
+        self.attach_head(idx);
+    }
+
+    fn remove_index(&mut self, idx: usize) -> Option<V> {
+        if !self.nodes[idx].occupied {
+            return None;
+        }
+
+        let key = self.nodes[idx]
+            .key
+            .as_ref()
+            .expect("occupied node must have key")
+            .clone();
+
+        self.detach(idx);
+        self.map.remove(&key);
+        self.len -= 1;
+
+        let value = self.nodes[idx].value.take();
+        self.release_index(idx);
+        value
+    }
+
+    fn prune_expired_from_tail(&mut self, now: Instant) {
+        let mut cursor = self.tail;
+
+        while let Some(idx) = cursor {
+            let prev = self.nodes[idx].prev;
+            if self.nodes[idx].occupied && self.nodes[idx].is_expired(now) {
+                self.remove_index(idx);
+            }
+            cursor = prev;
         }
     }
 
-    /// Move `key` to the MRU end of the queue.
-    fn touch(&mut self, key: &K) {
-        self.remove_from_order(key);
-        self.order.push_back(key.clone());
-    }
+    fn insert(&mut self, key: K, value: V, ttl: Option<Duration>) {
+        let now = Instant::now();
 
-    /// Check expiry for a single key on access; remove and return true if expired.
-    fn evict_if_expired(&mut self, key: &K, now: Instant) -> bool {
-        if self.entries.get(key).is_some_and(|e| e.is_expired(now)) {
-            self.entries.remove(key);
-            self.remove_from_order(key);
-            return true;
+        if let Some(&idx) = self.map.get(&key) {
+            self.nodes[idx].value = Some(value);
+            self.nodes[idx].expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
+            self.touch(idx);
+            return;
         }
-        false
+
+        self.prune_expired_from_tail(now);
+
+        let idx = self.alloc_index();
+        self.nodes[idx].key = Some(key.clone());
+        self.nodes[idx].value = Some(value);
+        self.nodes[idx].expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
+        self.nodes[idx].occupied = true;
+        self.nodes[idx].next_free = None;
+
+        self.attach_head(idx);
+        self.map.insert(key, idx);
+        self.len += 1;
     }
 
-    /// Evict from the LRU tail until the entry count is within capacity.
-    ///
-    /// Follows OpenResty lru-rbtree semantics: no full-table TTL scan.
-    /// Expired entries that happen to sit at the LRU tail are evicted
-    /// just like any other entry; entries that are expired but not at
-    /// the tail survive until they are accessed (lazy expiry).
-    fn evict_to_capacity(&mut self) {
-        while self.entries.len() > self.capacity {
-            let Some(lru_key) = self.order.pop_front() else {
-                break;
+    fn get(&mut self, key: &K) -> (Option<V>, CacheStatus)
+    where
+        V: Clone,
+    {
+        let Some(&idx) = self.map.get(key) else {
+            return (None, CacheStatus::Miss);
+        };
+
+        let now = Instant::now();
+        if self.nodes[idx].is_expired(now) {
+            self.remove_index(idx);
+            return (None, CacheStatus::Expired);
+        }
+
+        let value = self.nodes[idx]
+            .value
+            .as_ref()
+            .expect("occupied node must have value")
+            .clone();
+        self.touch(idx);
+        (Some(value), CacheStatus::Hit)
+    }
+
+    fn remove(&mut self, key: &K) -> Option<V> {
+        let idx = *self.map.get(key)?;
+        self.remove_index(idx)
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.len = 0;
+        self.head = None;
+        self.tail = None;
+        self.free_head = if self.capacity > 0 { Some(0) } else { None };
+
+        for (idx, node) in self.nodes.iter_mut().enumerate() {
+            node.reset();
+            node.next_free = if idx + 1 < self.capacity {
+                Some(idx + 1)
+            } else {
+                None
             };
-            self.entries.remove(&lru_key);
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// A fixed-capacity, TTL-aware LRU cache backed by a single mutex.
+/// A small process-local TTL/LRU cache for gateway-side short-lived results.
 ///
-/// Expiry is **lazy**: a stale entry is only detected and removed when it is
-/// accessed (`get` / `get_with_status`). Inserts never scan the table for
-/// expired entries — this matches the behaviour of OpenResty's `lru-rbtree`.
+/// This cache is intentionally scoped to the "OpenResty-style local cache" use
+/// case we discussed:
+/// - process-local shared cache
+/// - short TTL result caching
+/// - fixed entry capacity
+/// - ordinary in-process locking
 ///
-/// Suitable for small-capacity, short-TTL plugin result caches where
-/// simplicity and predictable per-operation cost matter more than
-/// minimising peak memory usage.
+/// The implementation keeps a fixed-capacity node pool plus a doubly-linked LRU
+/// list under one mutex. That gives us predictable metadata allocation and keeps
+/// lock-held work to O(1) for touch/insert/remove, without pulling in a heavier
+/// cache dependency yet.
+///
+/// `V` is fully caller-defined. If cloning values is expensive, callers can
+/// store `Arc<T>` as the value type and keep cache hits cheap.
 #[derive(Debug)]
 pub struct LocalLruCache<K, V> {
-    capacity: usize,
     inner: Mutex<LocalLruCacheInner<K, V>>,
 }
 
@@ -122,87 +273,52 @@ where
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "LocalLruCache capacity must be greater than 0");
         Self {
-            capacity,
             inner: Mutex::new(LocalLruCacheInner::new(capacity)),
         }
     }
 
-    /// The maximum number of entries this cache will hold.
-    #[inline]
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.inner.lock().capacity
     }
 
-    /// Current number of entries, including any that may have expired
-    /// but not yet been accessed.
     pub fn len(&self) -> usize {
-        self.inner.lock().entries.len()
+        self.inner.lock().len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().entries.is_empty()
+        self.len() == 0
     }
 
     pub fn clear(&self) {
-        let mut inner = self.inner.lock();
-        inner.entries.clear();
-        inner.order.clear();
+        self.inner.lock().clear();
     }
 
     pub fn remove(&self, key: &K) -> Option<V> {
-        let mut inner = self.inner.lock();
-        if let Some(entry) = inner.entries.remove(key) {
-            inner.remove_from_order(key);
-            Some(entry.value)
-        } else {
-            None
-        }
+        self.inner.lock().remove(key)
     }
 
-    /// Insert or update `key` with the given `ttl`.
-    ///
-    /// `ttl = None` means the entry never expires.
-    /// `ttl = Some(Duration::ZERO)` is treated as an immediate delete.
     pub fn insert(&self, key: K, value: V, ttl: Option<Duration>) {
-        if ttl.is_some_and(|d| d.is_zero()) {
+        if ttl.is_some_and(|ttl| ttl.is_zero()) {
             self.remove(&key);
             return;
         }
 
-        let mut inner = self.inner.lock();
-        inner.entries.insert(key.clone(), CacheEntry::new(value, ttl));
-        inner.touch(&key);
-        inner.evict_to_capacity();
+        self.inner.lock().insert(key, value, ttl);
     }
 
     pub fn get(&self, key: &K) -> Option<V> {
         self.get_with_status(key).0
     }
 
-    /// Returns the cached value and a `CacheStatus` describing why the
-    /// lookup succeeded or failed.
     pub fn get_with_status(&self, key: &K) -> (Option<V>, CacheStatus) {
-        let now = Instant::now();
-        let mut inner = self.inner.lock();
-
-        if !inner.entries.contains_key(key) {
-            return (None, CacheStatus::Miss);
-        }
-
-        if inner.evict_if_expired(key, now) {
-            return (None, CacheStatus::Expired);
-        }
-
-        // Safety: we confirmed the key exists above and it was not expired.
-        let value = inner.entries.get(key).unwrap().value.clone();
-        inner.touch(key);
-        (Some(value), CacheStatus::Hit)
+        self.inner.lock().get(key)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CacheStatus, LocalLruCache};
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -282,26 +398,45 @@ mod tests {
     }
 
     #[test]
-    fn test_lru_eviction_does_not_scan_expired_entries() {
-        // OpenResty lru semantics: insert never does a full TTL scan.
-        // When at capacity, the LRU tail is evicted regardless of expiry state.
-        //
-        // Setup: capacity=2, insert a (no TTL) then b (short TTL).
-        // Touch b so order is [a(LRU), b(MRU)].
-        // Let b expire.
-        // Insert c: capacity is full, evict LRU tail → evicts a (not b, even though b is expired).
-        // b stays in the map until it is accessed (lazy expiry).
+    fn test_insert_prunes_expired_before_evicting_valid_entry() {
         let cache = LocalLruCache::new(2);
 
         cache.insert("a", 1, None);
         cache.insert("b", 2, Some(Duration::from_millis(10)));
-        assert_eq!(cache.get(&"b"), Some(2)); // touch b → order: [a(LRU), b(MRU)]
-        std::thread::sleep(Duration::from_millis(20)); // b is now expired but not evicted yet
+        assert_eq!(cache.get(&"b"), Some(2)); // make b more recent than a
+        std::thread::sleep(Duration::from_millis(20));
 
-        cache.insert("c", 3, None); // evicts a (LRU tail), b stays
+        cache.insert("c", 3, None);
 
-        assert_eq!(cache.get(&"a"), None); // a was LRU-evicted
-        assert_eq!(cache.get_with_status(&"b"), (None, CacheStatus::Expired)); // b expired lazily
+        assert_eq!(cache.get(&"a"), Some(1));
+        assert_eq!(cache.get_with_status(&"b"), (None, CacheStatus::Miss));
         assert_eq!(cache.get(&"c"), Some(3));
+    }
+
+    #[test]
+    fn test_value_can_be_arc_to_reduce_clone_cost() {
+        let cache = LocalLruCache::new(2);
+        let value = Arc::new(vec![1, 2, 3]);
+
+        cache.insert("a", value.clone(), None);
+
+        let cached = cache.get(&"a").unwrap();
+        assert!(Arc::ptr_eq(&cached, &value));
+    }
+
+    #[test]
+    fn test_clear_reuses_preallocated_slots() {
+        let cache = LocalLruCache::new(2);
+
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, None);
+        cache.clear();
+
+        cache.insert("c", 3, None);
+        cache.insert("d", 4, None);
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&"c"), Some(3));
+        assert_eq!(cache.get(&"d"), Some(4));
     }
 }

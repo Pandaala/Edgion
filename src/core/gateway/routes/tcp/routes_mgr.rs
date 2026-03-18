@@ -130,12 +130,15 @@ impl GlobalTcpRouteManagers {
             rebuilt_ports += 1;
         }
 
-        for entry in self.by_port.iter() {
-            let port = *entry.key();
-            if !port_buckets.contains_key(&port) {
-                entry.value().rebuild(&HashMap::new());
-                rebuilt_ports += 1;
-            }
+        // Remove stale port entries that no longer have any routes
+        let stale_ports: Vec<u16> = self
+            .by_port
+            .iter()
+            .filter(|e| !port_buckets.contains_key(e.key()))
+            .map(|e| *e.key())
+            .collect();
+        for port in &stale_ports {
+            self.by_port.remove(port);
         }
 
         let total_routes: usize = port_buckets.values().map(|r| r.len()).sum();
@@ -144,6 +147,7 @@ impl GlobalTcpRouteManagers {
             ports = port_buckets.len(),
             total_route_entries = total_routes,
             rebuilt_ports,
+            removed_stale_ports = stale_ports.len(),
             "Rebuilt all per-port TCP route managers"
         );
     }
@@ -172,14 +176,20 @@ impl GlobalTcpRouteManagers {
             }
         }
 
+        let mut removed_stale = 0usize;
         for (port, routes) in &port_buckets {
             let manager = self.get_or_create_port_manager(*port);
             manager.rebuild(routes);
+            if routes.is_empty() {
+                self.by_port.remove(port);
+                removed_stale += 1;
+            }
         }
 
         tracing::info!(
             component = "global_tcp_route_managers",
             affected = affected_ports.len(),
+            removed_stale_ports = removed_stale,
             "Rebuilt affected per-port TCP route managers"
         );
     }

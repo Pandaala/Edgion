@@ -149,6 +149,10 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             }
         }
 
+        // Treat resolved_ports as controller-derived state.
+        // Clear any stale value before recomputing from current parentRefs.
+        route.spec.resolved_ports = None;
+
         // Resolve listener ports from parentRefs → Gateway → listener.port
         //
         // Per Gateway API spec:
@@ -205,7 +209,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         }
 
         if route.spec.resolved_ports.is_none() {
-            tracing::warn!(
+            tracing::debug!(
                 route = %route.metadata.name.as_deref().unwrap_or(""),
                 ns = route_ns,
                 "TLSRoute has no resolved_ports: Gateway not yet available or no matching listeners"

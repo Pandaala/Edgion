@@ -182,11 +182,24 @@ verify_store_stats_baseline() {
 
     local all_ok=true
     local check_fields=(
-        ".data.http_routes.http_routes"  ".data.http_routes.exact_domains"  ".data.http_routes.wildcard_domains"
+        # HTTP route manager
+        ".data.http_routes.http_routes"  ".data.http_routes.exact_domains"
+        ".data.http_routes.wildcard_domains" ".data.http_routes.port_count"
+        # gRPC route manager
         ".data.grpc_routes.grpc_routes"  ".data.grpc_routes.resource_keys"
-        ".data.tcp_routes.routes_by_key" ".data.udp_routes.routes_by_key"
-        ".data.tls_routes.route_cache"   ".data.tls_store.entries"  ".data.tls_cert_matcher.port_count"
+        ".data.grpc_routes.route_units_cache" ".data.grpc_routes.port_count"
+        # TCP/UDP/TLS route managers
+        ".data.tcp_routes.route_cache"   ".data.tcp_routes.port_count"
+        ".data.udp_routes.route_cache"   ".data.udp_routes.port_count"
+        ".data.tls_routes.route_cache"   ".data.tls_routes.port_count"
+        # Gateway-level stores
+        ".data.gateway_config.gateways"
+        ".data.port_gateway_info.port_count"
+        # TLS cert stores
+        ".data.tls_store.entries"  ".data.tls_cert_matcher.port_count"
+        # Plugin stores
         ".data.plugin_store.plugins"     ".data.stream_plugin_store.plugins"
+        # Link / policy stores
         ".data.link_sys_store.resources" ".data.policy_store.total_services"
         ".data.backend_tls_policy.policies" ".data.backend_tls_policy.reverse_index_targets"
     )
@@ -233,8 +246,24 @@ record_result() {
     else
         FAILED=$((FAILED + 1))
         log_error "Scenario '${name}': FAIL — LEAK DETECTED"
-        curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null \
-            | python3 -m json.tool 2>/dev/null || true
+        local leak_stats
+        leak_stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+        local diff_fields=(
+            ".data.http_routes.http_routes" ".data.http_routes.port_count"
+            ".data.grpc_routes.grpc_routes" ".data.grpc_routes.route_units_cache" ".data.grpc_routes.port_count"
+            ".data.tcp_routes.route_cache"  ".data.tcp_routes.port_count"
+            ".data.udp_routes.route_cache"  ".data.udp_routes.port_count"
+            ".data.tls_routes.route_cache"  ".data.tls_routes.port_count"
+            ".data.port_gateway_info.port_count"
+        )
+        for f in "${diff_fields[@]}"; do
+            local cur bl
+            cur=$(json_field "$leak_stats" "$f")
+            bl=$(json_field "$BASELINE_STORE_STATS" "$f")
+            if [ "$cur" != "$bl" ]; then
+                log_error "    ${f}: current=${cur} baseline=${bl}"
+            fi
+        done
     fi
 }
 
@@ -424,6 +453,55 @@ scenario_mixed_lifecycle() {
     else record_result "mixed_lifecycle" "fail"; fi
 }
 
+scenario_port_manager_lifecycle() {
+    log_scenario "Port manager lifecycle (verify by_port cleanup)"
+
+    local stats_before pc_http_before pc_grpc_before pc_tcp_before pc_udp_before
+    stats_before=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    pc_http_before=$(json_field "$stats_before" ".data.http_routes.port_count")
+    pc_grpc_before=$(json_field "$stats_before" ".data.grpc_routes.port_count")
+    pc_tcp_before=$(json_field "$stats_before" ".data.tcp_routes.port_count")
+    pc_udp_before=$(json_field "$stats_before" ".data.udp_routes.port_count")
+    log_info "  Before inject: http_pc=${pc_http_before} grpc_pc=${pc_grpc_before} tcp_pc=${pc_tcp_before} udp_pc=${pc_udp_before}"
+
+    ctl_apply "${CONF_DIR}/inject/Service_leak-svc.yaml"
+    ctl_apply "${CONF_DIR}/inject/EndpointSlice_leak-svc.yaml"
+    ctl_apply "${CONF_DIR}/inject/HTTPRoute_leak-http.yaml"
+    ctl_apply "${CONF_DIR}/inject/GRPCRoute_leak-grpc.yaml"
+    ctl_apply "${CONF_DIR}/inject/TCPRoute_leak-tcp.yaml"
+    ctl_apply "${CONF_DIR}/inject/UDPRoute_leak-udp.yaml"
+    sleep "$SYNC_WAIT"
+
+    local stats_mid pc_http_mid pc_grpc_mid pc_tcp_mid pc_udp_mid
+    stats_mid=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    pc_http_mid=$(json_field "$stats_mid" ".data.http_routes.port_count")
+    pc_grpc_mid=$(json_field "$stats_mid" ".data.grpc_routes.port_count")
+    pc_tcp_mid=$(json_field "$stats_mid" ".data.tcp_routes.port_count")
+    pc_udp_mid=$(json_field "$stats_mid" ".data.udp_routes.port_count")
+    log_info "  After inject:  http_pc=${pc_http_mid} grpc_pc=${pc_grpc_mid} tcp_pc=${pc_tcp_mid} udp_pc=${pc_udp_mid}"
+
+    ctl_delete "HTTPRoute" "leak-http"
+    ctl_delete "GRPCRoute" "leak-grpc"
+    ctl_delete "TCPRoute" "leak-tcp"
+    ctl_delete "UDPRoute" "leak-udp"
+    ctl_delete "Service" "leak-svc"
+    ctl_delete "EndpointSlice" "leak-svc"
+    sleep "$CLEANUP_WAIT"
+
+    if verify_all_baseline; then
+        local stats_after pc_http_after pc_grpc_after pc_tcp_after pc_udp_after
+        stats_after=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+        pc_http_after=$(json_field "$stats_after" ".data.http_routes.port_count")
+        pc_grpc_after=$(json_field "$stats_after" ".data.grpc_routes.port_count")
+        pc_tcp_after=$(json_field "$stats_after" ".data.tcp_routes.port_count")
+        pc_udp_after=$(json_field "$stats_after" ".data.udp_routes.port_count")
+        log_info "  After delete:  http_pc=${pc_http_after} grpc_pc=${pc_grpc_after} tcp_pc=${pc_tcp_after} udp_pc=${pc_udp_after}"
+        record_result "port_manager_lifecycle" "pass"
+    else
+        record_result "port_manager_lifecycle" "fail"
+    fi
+}
+
 scenario_full_blast() {
     log_scenario "Full multi-protocol blast (all resource types)"
     for file in "${CONF_DIR}/inject/"*.yaml; do ctl_apply "$file"; done
@@ -493,6 +571,7 @@ main() {
     scenario_stream_plugin
     scenario_backend_tls_policy
     scenario_mixed_lifecycle
+    scenario_port_manager_lifecycle
     scenario_full_blast
 
     log_section "Cleaning up base configs"

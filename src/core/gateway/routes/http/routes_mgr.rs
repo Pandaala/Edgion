@@ -355,12 +355,23 @@ impl GlobalHttpRouteManagers {
             rebuilt_ports += 1;
         }
 
-        // Clear ports that no longer have routes
+        // Remove stale port entries: ports that have no routes AND are not
+        // registered in PortGatewayInfoStore (i.e. no Gateway listener on that port).
+        let active_ports: HashSet<u16> = pgis.all_ports().into_iter().collect();
+        let stale_ports: Vec<u16> = self
+            .by_port
+            .iter()
+            .filter(|e| !port_buckets.contains_key(e.key()) && !active_ports.contains(e.key()))
+            .map(|e| *e.key())
+            .collect();
+        for port in &stale_ports {
+            self.by_port.remove(port);
+        }
+        // Clear route tables for ports that still exist (active listener) but have no routes
         for entry in self.by_port.iter() {
             let port = *entry.key();
             if !port_buckets.contains_key(&port) {
                 entry.value().store_route_table(DomainRouteRules::new());
-                rebuilt_ports += 1;
             }
         }
 
@@ -370,6 +381,7 @@ impl GlobalHttpRouteManagers {
             ports = port_buckets.len(),
             total_route_entries = total_routes,
             rebuilt_ports,
+            removed_stale_ports = stale_ports.len(),
             "Rebuilt all per-port HTTP route managers"
         );
     }
@@ -405,16 +417,24 @@ impl GlobalHttpRouteManagers {
             }
         }
 
+        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        let active_ports: HashSet<u16> = pgis.all_ports().into_iter().collect();
+        let mut removed_stale = 0usize;
         for (port, routes) in &port_buckets {
             let manager = self.get_or_create_port_manager(*port);
             let table =
                 crate::core::gateway::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(routes);
             manager.store_route_table(table);
+            if routes.is_empty() && !active_ports.contains(port) {
+                self.by_port.remove(port);
+                removed_stale += 1;
+            }
         }
 
         tracing::info!(
             component = "global_http_route_managers",
             affected = affected_ports.len(),
+            removed_stale_ports = removed_stale,
             "Rebuilt affected per-port HTTP route managers"
         );
     }

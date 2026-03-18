@@ -707,6 +707,7 @@ run_all_tests() {
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
         run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g websocket" || test_failed=true
+        run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
         
         # GRPCRoute Tests
         run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true

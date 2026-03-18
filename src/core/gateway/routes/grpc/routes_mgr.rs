@@ -235,11 +235,20 @@ impl GlobalGrpcRouteManagers {
             rebuilt_ports += 1;
         }
 
+        let active_ports: HashSet<u16> = pgis.all_ports().into_iter().collect();
+        let stale_ports: Vec<u16> = self
+            .by_port
+            .iter()
+            .filter(|e| !port_buckets.contains_key(e.key()) && !active_ports.contains(e.key()))
+            .map(|e| *e.key())
+            .collect();
+        for port in &stale_ports {
+            self.by_port.remove(port);
+        }
         for entry in self.by_port.iter() {
             let port = *entry.key();
             if !port_buckets.contains_key(&port) {
                 entry.value().store_route_table(DomainGrpcRouteRules::new());
-                rebuilt_ports += 1;
             }
         }
 
@@ -247,6 +256,7 @@ impl GlobalGrpcRouteManagers {
             component = "global_grpc_route_managers",
             ports = port_buckets.len(),
             rebuilt_ports,
+            removed_stale_ports = stale_ports.len(),
             "Rebuilt all per-port gRPC route managers"
         );
     }
@@ -286,15 +296,23 @@ impl GlobalGrpcRouteManagers {
         }
         drop(units_cache);
 
+        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        let active_ports: HashSet<u16> = pgis.all_ports().into_iter().collect();
+        let mut removed_stale = 0usize;
         for (port, units) in &port_buckets {
             let manager = self.get_or_create_port_manager(*port);
             let table = build_grpc_route_rules_from_units(units);
             manager.store_route_table(table);
+            if units.is_empty() && !active_ports.contains(port) {
+                self.by_port.remove(port);
+                removed_stale += 1;
+            }
         }
 
         tracing::info!(
             component = "global_grpc_route_managers",
             affected = affected_ports.len(),
+            removed_stale_ports = removed_stale,
             "Rebuilt affected per-port gRPC route managers"
         );
     }
