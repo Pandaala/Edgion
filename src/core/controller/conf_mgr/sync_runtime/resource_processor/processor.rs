@@ -76,16 +76,17 @@ fn extract_status_json<T: Serialize>(obj: &T) -> StatusExtractResult {
     }
 }
 
-/// Check if status has changed based on extraction results
-fn status_has_changed(old: &StatusExtractResult, new: &StatusExtractResult) -> bool {
+/// Check if status has changed using semantic comparison.
+///
+/// Uses `status_diff::status_semantically_changed` to ignore non-semantic
+/// fields like `lastTransitionTime`, avoiding unnecessary K8s API writes.
+fn status_has_changed(kind: &str, old: &StatusExtractResult, new: &StatusExtractResult) -> bool {
     match (old, new) {
-        // Both present - compare values
-        (StatusExtractResult::Present(old_val), StatusExtractResult::Present(new_val)) => old_val != new_val,
-        // Both empty - no change
+        (StatusExtractResult::Present(old_val), StatusExtractResult::Present(new_val)) => {
+            super::status_diff::status_semantically_changed(kind, old_val, new_val)
+        }
         (StatusExtractResult::Empty, StatusExtractResult::Empty) => false,
-        // One has error - assume change to trigger persistence attempt
         (StatusExtractResult::SerializationError, _) | (_, StatusExtractResult::SerializationError) => true,
-        // One empty, one present - change
         _ => true,
     }
 }
@@ -516,14 +517,24 @@ where
                     );
                 }
 
-                let status_changed = status_has_changed(&old_status, &new_status);
+                let status_changed = status_has_changed(self.kind, &old_status, &new_status);
 
                 if status_changed {
+                    tracing::debug!(
+                        kind = self.kind,
+                        name = %name,
+                        namespace = %namespace,
+                        "Status semantically changed, will persist"
+                    );
+                } else if matches!((&old_status, &new_status),
+                    (StatusExtractResult::Present(_), StatusExtractResult::Present(_)))
+                {
+                    crate::core::controller::conf_mgr::sync_runtime::record_status_write_skipped(self.kind);
                     tracing::trace!(
                         kind = self.kind,
                         name = %name,
                         namespace = %namespace,
-                        "Status changed, will persist"
+                        "Status unchanged by semantic diff, skipping persist"
                     );
                 }
 
@@ -816,7 +827,7 @@ mod tests {
 
         let new_status = extract_status_json(&gc_modified);
 
-        let changed = status_has_changed(&old_status, &new_status);
+        let changed = status_has_changed("GatewayClass", &old_status, &new_status);
         assert!(changed, "Status should have changed after update_status");
     }
 }

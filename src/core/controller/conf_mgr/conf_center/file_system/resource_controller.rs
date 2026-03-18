@@ -143,16 +143,26 @@ where
                                             if status_changed {
                                                 match extract_status_value(&obj) {
                                                     Some(status_value) => {
-                                                        if let Err(e) =
-                                                            status_handler.write_status_value(kind, &key, &status_value)
-                                                        {
-                                                            tracing::warn!(
-                                                                component = "fs_resource_controller",
-                                                                kind = kind,
-                                                                key = %key,
-                                                                error = %e,
-                                                                "Failed to write status file during init"
-                                                            );
+                                                        match status_handler.write_status_value(kind, &key, &status_value) {
+                                                            Ok(()) => {
+                                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
+                                                                tracing::info!(
+                                                                    component = "fs_resource_controller",
+                                                                    kind = kind,
+                                                                    key = %key,
+                                                                    "Persisted status to filesystem during init"
+                                                                );
+                                                            }
+                                                            Err(e) => {
+                                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "filesystem");
+                                                                tracing::warn!(
+                                                                    component = "fs_resource_controller",
+                                                                    kind = kind,
+                                                                    key = %key,
+                                                                    error = %e,
+                                                                    "Failed to write status file during init"
+                                                                );
+                                                            }
                                                         }
                                                     }
                                                     None => {
@@ -237,16 +247,26 @@ where
                                             init_count += 1;
                                             if status_changed {
                                                 if let Some(status_value) = extract_status_value(&obj) {
-                                                    if let Err(e) =
-                                                        status_handler.write_status_value(kind, &key, &status_value)
-                                                    {
-                                                        tracing::warn!(
-                                                            component = "fs_resource_controller",
-                                                            kind = kind,
-                                                            key = %key,
-                                                            error = %e,
-                                                            "Failed to write status file during apply-as-init"
-                                                        );
+                                                    match status_handler.write_status_value(kind, &key, &status_value) {
+                                                        Ok(()) => {
+                                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
+                                                            tracing::info!(
+                                                                component = "fs_resource_controller",
+                                                                kind = kind,
+                                                                key = %key,
+                                                                "Persisted status to filesystem during apply-as-init"
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "filesystem");
+                                                            tracing::warn!(
+                                                                component = "fs_resource_controller",
+                                                                kind = kind,
+                                                                key = %key,
+                                                                error = %e,
+                                                                "Failed to write status file during apply-as-init"
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }
@@ -479,23 +499,31 @@ where
                     match result {
                         WorkItemResult::Processed { obj, status_changed } => {
                             if status_changed {
-                                // Extract and persist native status
                                 match extract_status_value(&obj) {
                                     Some(status_value) => {
-                                        if let Err(e) =
-                                            status_handler.write_status_value(kind, &work_item.key, &status_value)
-                                        {
-                                            tracing::warn!(
-                                                component = "fs_resource_controller",
-                                                kind = kind,
-                                                key = %work_item.key,
-                                                error = %e,
-                                                "Failed to write status file"
-                                            );
+                                        match status_handler.write_status_value(kind, &work_item.key, &status_value) {
+                                            Ok(()) => {
+                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
+                                                tracing::info!(
+                                                    component = "fs_resource_controller",
+                                                    kind = kind,
+                                                    key = %work_item.key,
+                                                    "Persisted status to filesystem"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "filesystem");
+                                                tracing::warn!(
+                                                    component = "fs_resource_controller",
+                                                    kind = kind,
+                                                    key = %work_item.key,
+                                                    error = %e,
+                                                    "Failed to write status file"
+                                                );
+                                            }
                                         }
                                     }
                                     None => {
-                                        // Status changed but extraction failed - log warning
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,

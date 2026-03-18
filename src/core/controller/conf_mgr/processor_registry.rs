@@ -151,6 +151,51 @@ impl ProcessorRegistry {
         }
     }
 
+    /// Wait for a specific set of resource kinds to become ready.
+    ///
+    /// Used by phased init to gate Phase 2 resource startup until Phase 1
+    /// foundation resources (Gateway, Secret, etc.) are fully loaded.
+    ///
+    /// Returns `true` if all specified kinds became ready within the timeout,
+    /// `false` if the timeout was reached (Phase 2 will still start as a fallback).
+    pub async fn wait_kinds_ready(&self, kinds: &[&str], timeout: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+
+        loop {
+            let pending: Vec<&str> = kinds
+                .iter()
+                .filter(|k| {
+                    self.get(k)
+                        .map(|p| !p.is_ready())
+                        .unwrap_or(true)
+                })
+                .copied()
+                .collect();
+
+            if pending.is_empty() {
+                tracing::info!(
+                    component = "processor_registry",
+                    elapsed_ms = start.elapsed().as_millis(),
+                    kinds = ?kinds,
+                    "All specified resource kinds are ready"
+                );
+                return true;
+            }
+
+            if start.elapsed() >= timeout {
+                tracing::warn!(
+                    component = "processor_registry",
+                    elapsed_ms = start.elapsed().as_millis(),
+                    not_ready = ?pending,
+                    "Timeout waiting for specified resource kinds, proceeding anyway"
+                );
+                return false;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     /// Set all processors to not ready state
     pub fn set_all_not_ready(&self) {
         for processor in self.processors.read().unwrap().values() {

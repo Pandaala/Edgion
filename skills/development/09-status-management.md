@@ -174,16 +174,62 @@ This is a type-level reuse; the struct name does not appear in K8s status YAML.
 - `status_handler.write_status_value(kind, &key, &status_value)` → `.status` YAML file
 - Guarded by: `status_changed` only (no leader check)
 
-### Change detection
-Status is serialized to JSON before and after `update_status()` and compared
-as strings. Only actual changes trigger persistence.
+### Change detection — Semantic Status Diff
 
-Important: if `status` serializes to `{}` (e.g., `EdgionTlsStatus { parents: vec![] }`
-with `skip_serializing_if = "Vec::is_empty"`), the `status` field in JSON becomes
-`"status":{}` which is `StatusExtractResult::Present("{}")`. If the K8s object
-originally had `"status": null` or no status field, this IS a change and will
-trigger a write — but the written status is effectively empty, providing no
-useful information to users.
+**Every status write is a K8s API call.** Minimizing unnecessary writes is
+critical for scalability.
+
+Status is serialized to JSON before and after `update_status()`. The comparison
+uses **semantic diffing** (`status_diff::status_semantically_changed`) rather
+than raw string comparison. This ignores non-semantic fields like
+`lastTransitionTime` so that re-processing a resource (e.g., after Controller
+restart or cross-resource requeue) does NOT trigger a write when the logical
+state is unchanged.
+
+#### How it works
+
+`status_has_changed(kind, old, new)` in `processor.rs` delegates to
+`status_diff::status_semantically_changed(kind, old_json, new_json)`, which:
+
+1. Deserializes both JSON strings into `serde_json::Value`
+2. Routes to a kind-specific comparator based on the resource `kind` string
+3. Compares only **semantic fields** of conditions:
+   - `type`, `status`, `reason`, `message`, `observedGeneration` — compared
+   - `lastTransitionTime` — **ignored**
+
+#### Kind-specific comparators
+
+| Category | Kinds | Comparator | What it compares |
+|----------|-------|------------|------------------|
+| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins | `conditions_only_status_equal` | `status.conditions[]` |
+| **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | `status.parents[]` matched by parentRef identity |
+| **Per-ancestor** | BackendTLSPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
+| **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
+| **Lifecycle** | EdgionAcme | Direct `Value` equality | All fields compared verbatim (no conditions to filter) |
+| **Unknown** | Future resources | `conditions_only_status_equal` | Safe fallback |
+
+#### Key scenarios this optimizes
+
+1. **Controller restart**: All resources re-processed with fresh timestamps →
+   semantic diff detects "no change" → zero K8s API writes.
+2. **Cross-resource requeue**: Gateway requeued due to Secret arrival but
+   nothing actually changed → no write.
+3. **Periodic re-validation**: Resources re-evaluated but state is stable →
+   no write.
+
+#### Adding a new resource kind
+
+When adding a new resource with status, add its `kind` string to the
+appropriate match arm in `status_diff::status_semantically_changed()`. If the
+status structure doesn't fit any existing pattern, create a new comparator
+function.
+
+#### Important edge cases
+
+- `Empty → Present("{}")` is still treated as a change (triggers initial write)
+- Invalid JSON on either side → always treated as changed (safe fallback)
+- Condition arrays in different order → correctly handled (matched by `type`)
+- Parent/listener arrays in different order → correctly handled (matched by identity)
 
 ## 8. Stale Status Cleanup
 
@@ -214,8 +260,24 @@ standard conditions, no stale condition values survive re-processing.
 - [ ] **No duplicate checks**: if validate() already checks something, update_status uses `validation_errors` instead of re-checking
 - [ ] **No "route" in non-route contexts**: use `resource_ns`, `set_parent_conditions_full`, etc.
 - [ ] **No Programmed/Ready conditions**: these require data-plane feedback and must not be set from the control plane
+- [ ] **Status diff registration**: new resource kind added to `status_diff::status_semantically_changed()` match arms
+- [ ] **Status diff tests**: new resource kind has test cases in `status_diff.rs` covering no-change and changed scenarios
 
 ## 10. Historical Fixes
+
+### 2026-03-18: Semantic status diff for minimized K8s API writes
+Replaced raw JSON string comparison with semantic status diffing
+(`status_diff.rs`). The new `status_semantically_changed()` function ignores
+`lastTransitionTime` and uses kind-specific comparators to avoid false-positive
+status writes. This eliminates unnecessary K8s API calls on Controller restart,
+cross-resource requeue, and periodic re-validation.
+
+Key changes:
+- Added `status_diff.rs` module with layered comparison: condition-level →
+  composite (parents/ancestors/listeners) → top-level kind dispatch.
+- `status_has_changed()` in `processor.rs` now takes `kind` parameter and
+  delegates to `status_diff::status_semantically_changed()`.
+- 64 unit tests covering all resource categories and edge cases.
 
 ### 2026-03-17: validation_errors ignored
 All per-parent handlers now correctly use `validation_errors` via

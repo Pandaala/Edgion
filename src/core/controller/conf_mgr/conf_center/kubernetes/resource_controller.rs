@@ -631,29 +631,40 @@ where
         &K::plural(&dt),
     );
 
+    let kind_str = K::kind(&dt).to_string();
+
     let patch = serde_json::json!({ "status": status_value });
     let params = PatchParams::default();
 
-    match api_scope {
+    let result = match api_scope {
         ApiScope::Namespaced(_) => {
             let ns = namespace.unwrap_or("default");
             let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &api_resource);
-            api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
+            api.patch_status(name, &params, &Patch::Merge(&patch)).await
         }
         ApiScope::ClusterScoped => {
             let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-            api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
+            api.patch_status(name, &params, &Patch::Merge(&patch)).await
+        }
+    };
+
+    match &result {
+        Ok(_) => {
+            crate::core::controller::conf_mgr::sync_runtime::record_status_write(&kind_str, "kubernetes");
+            tracing::info!(
+                component = "resource_controller",
+                kind = %kind_str,
+                name = name,
+                namespace = namespace,
+                "Persisted status to K8s API"
+            );
+        }
+        Err(_) => {
+            crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(&kind_str, "kubernetes");
         }
     }
 
-    tracing::trace!(
-        component = "resource_controller",
-        name = name,
-        namespace = namespace,
-        "Persisted status to K8s API"
-    );
-
-    Ok(())
+    result.map(|_| ())
 }
 
 /// Check if resource passes namespace filter

@@ -39,6 +39,7 @@ use serde::Serialize;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 
 // Import handlers
@@ -129,7 +130,25 @@ impl FileSystemController {
         Ok(())
     }
 
-    /// Spawn all resource controllers
+    /// Phase 1 foundation resource kinds for FileSystem mode.
+    fn phase1_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = vec!["GatewayClass", "Gateway", "Secret", "ReferenceGrant", "Service"];
+        if self.endpoint_mode.uses_endpoint() {
+            kinds.push("Endpoints");
+        }
+        if self.endpoint_mode.uses_endpoint_slice() {
+            kinds.push("EndpointSlice");
+        }
+        kinds
+    }
+
+    /// Spawn all resource controllers with phased initialization.
+    ///
+    /// Phase 1 (Foundation): GatewayClass, Gateway, Secret, ReferenceGrant,
+    ///   Service, Endpoints/EndpointSlice
+    /// Phase 2 (Dependent): Routes, EdgionTls, BackendTLSPolicy, Plugins, etc.
+    ///
+    /// Phase 2 waits for Phase 1 processors to complete init before spawning.
     async fn spawn_all_controllers(
         &self,
         watcher: &Arc<FileSystemWatcher>,
@@ -137,6 +156,140 @@ impl FileSystemController {
         shutdown_signal: ShutdownSignal,
     ) -> Result<Vec<JoinHandle<Result<()>>>> {
         let mut handles = Vec::new();
+
+        // ==================== Phase 1: Foundation Resources ====================
+        tracing::info!(
+            component = "fs_controller",
+            "Phase 1: Spawning foundation resource controllers"
+        );
+
+        // Cluster-scoped foundation
+        handles.push(
+            spawn::<GatewayClass, _>(
+                "GatewayClass",
+                GatewayClassHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
+                watcher,
+                secret_ref_manager,
+                shutdown_signal.clone(),
+            )
+            .await,
+        );
+
+        // Gateway
+        handles.push(
+            spawn::<Gateway, _>(
+                "Gateway",
+                GatewayHandler::new(None, None),
+                watcher,
+                secret_ref_manager,
+                shutdown_signal.clone(),
+            )
+            .await,
+        );
+
+        // Secret
+        handles.push(
+            spawn::<Secret, _>(
+                "Secret",
+                SecretHandler::new(),
+                watcher,
+                secret_ref_manager,
+                shutdown_signal.clone(),
+            )
+            .await,
+        );
+
+        // ReferenceGrant
+        handles.push(
+            spawn::<ReferenceGrant, _>(
+                "ReferenceGrant",
+                ReferenceGrantHandler::new(),
+                watcher,
+                secret_ref_manager,
+                shutdown_signal.clone(),
+            )
+            .await,
+        );
+
+        // Service
+        handles.push(
+            spawn::<Service, _>(
+                "Service",
+                ServiceHandler::new(),
+                watcher,
+                secret_ref_manager,
+                shutdown_signal.clone(),
+            )
+            .await,
+        );
+
+        // Endpoint resources
+        if self.endpoint_mode.uses_endpoint() {
+            tracing::info!(
+                component = "fs_controller",
+                mode = ?self.endpoint_mode,
+                "Registering Endpoints controller (Phase 1)"
+            );
+            handles.push(
+                spawn::<Endpoints, _>(
+                    "Endpoints",
+                    EndpointsHandler::new(),
+                    watcher,
+                    secret_ref_manager,
+                    shutdown_signal.clone(),
+                )
+                .await,
+            );
+        }
+
+        if self.endpoint_mode.uses_endpoint_slice() {
+            tracing::info!(
+                component = "fs_controller",
+                mode = ?self.endpoint_mode,
+                "Registering EndpointSlice controller (Phase 1)"
+            );
+            handles.push(
+                spawn::<EndpointSlice, _>(
+                    "EndpointSlice",
+                    EndpointSliceHandler::new(),
+                    watcher,
+                    secret_ref_manager,
+                    shutdown_signal.clone(),
+                )
+                .await,
+            );
+        }
+
+        let phase1_count = handles.len();
+        tracing::info!(
+            component = "fs_controller",
+            count = phase1_count,
+            "Phase 1 foundation controllers spawned, waiting for init completion"
+        );
+
+        // Wait for Phase 1 resources to complete their init phase
+        const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
+        let phase1_ready = PROCESSOR_REGISTRY
+            .wait_kinds_ready(&self.phase1_kinds(), PHASE1_TIMEOUT)
+            .await;
+
+        if phase1_ready {
+            tracing::info!(
+                component = "fs_controller",
+                "Phase 1 complete: all foundation resources ready, starting Phase 2"
+            );
+        } else {
+            tracing::warn!(
+                component = "fs_controller",
+                "Phase 1 timeout: starting Phase 2 anyway (fallback to parallel init)"
+            );
+        }
+
+        // ==================== Phase 2: Dependent Resources ====================
+        tracing::info!(
+            component = "fs_controller",
+            "Phase 2: Spawning dependent resource controllers"
+        );
 
         // Route resources
         handles.push(
@@ -190,66 +343,7 @@ impl FileSystemController {
             .await,
         );
 
-        // Backend resources
-        handles.push(
-            spawn::<Service, _>(
-                "Service",
-                ServiceHandler::new(),
-                watcher,
-                secret_ref_manager,
-                shutdown_signal.clone(),
-            )
-            .await,
-        );
-
-        // Register endpoint handlers based on endpoint mode
-        if self.endpoint_mode.uses_endpoint() {
-            tracing::info!(
-                component = "fs_controller",
-                mode = ?self.endpoint_mode,
-                "Registering Endpoints controller"
-            );
-            handles.push(
-                spawn::<Endpoints, _>(
-                    "Endpoints",
-                    EndpointsHandler::new(),
-                    watcher,
-                    secret_ref_manager,
-                    shutdown_signal.clone(),
-                )
-                .await,
-            );
-        }
-
-        if self.endpoint_mode.uses_endpoint_slice() {
-            tracing::info!(
-                component = "fs_controller",
-                mode = ?self.endpoint_mode,
-                "Registering EndpointSlice controller"
-            );
-            handles.push(
-                spawn::<EndpointSlice, _>(
-                    "EndpointSlice",
-                    EndpointSliceHandler::new(),
-                    watcher,
-                    secret_ref_manager,
-                    shutdown_signal.clone(),
-                )
-                .await,
-            );
-        }
-
         // TLS related
-        handles.push(
-            spawn::<Secret, _>(
-                "Secret",
-                SecretHandler::new(),
-                watcher,
-                secret_ref_manager,
-                shutdown_signal.clone(),
-            )
-            .await,
-        );
         handles.push(
             spawn::<EdgionTls, _>(
                 "EdgionTls",
@@ -271,29 +365,7 @@ impl FileSystemController {
             .await,
         );
 
-        // Gateway (no gateway_class filter in FileSystem mode)
-        handles.push(
-            spawn::<Gateway, _>(
-                "Gateway",
-                GatewayHandler::new(None, None),
-                watcher,
-                secret_ref_manager,
-                shutdown_signal.clone(),
-            )
-            .await,
-        );
-
-        // Other resources
-        handles.push(
-            spawn::<ReferenceGrant, _>(
-                "ReferenceGrant",
-                ReferenceGrantHandler::new(),
-                watcher,
-                secret_ref_manager,
-                shutdown_signal.clone(),
-            )
-            .await,
-        );
+        // Plugin resources
         handles.push(
             spawn::<EdgionPlugins, _>(
                 "EdgionPlugins",
@@ -334,6 +406,8 @@ impl FileSystemController {
             )
             .await,
         );
+
+        // ACME
         handles.push(
             spawn::<EdgionAcme, _>(
                 "EdgionAcme",
@@ -345,17 +419,7 @@ impl FileSystemController {
             .await,
         );
 
-        // Cluster-scoped resources
-        handles.push(
-            spawn::<GatewayClass, _>(
-                "GatewayClass",
-                GatewayClassHandler::new(DEFAULT_CONTROLLER_NAME.to_string()),
-                watcher,
-                secret_ref_manager,
-                shutdown_signal.clone(),
-            )
-            .await,
-        );
+        // Cluster-scoped dependent
         handles.push(
             spawn::<EdgionGatewayConfig, _>(
                 "EdgionGatewayConfig",
@@ -365,6 +429,14 @@ impl FileSystemController {
                 shutdown_signal.clone(),
             )
             .await,
+        );
+
+        tracing::info!(
+            component = "fs_controller",
+            phase1_count = phase1_count,
+            phase2_count = handles.len() - phase1_count,
+            total = handles.len(),
+            "All resource controllers spawned (Phase 1 + Phase 2)"
         );
 
         Ok(handles)

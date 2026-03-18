@@ -5,7 +5,10 @@
 use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_udp_route_if_enabled,
 };
-use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
+use super::{
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
+    update_attached_route_tracker, update_gateway_route_index,
+};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
@@ -207,6 +210,16 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
     async fn on_change(&self, route: &UDPRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+
+        // Register in gateway_route_index so Gateway changes trigger requeue
+        // (required because parse() calls lookup_gateway() for resolved_ports)
+        update_gateway_route_index(
+            ResourceKind::UDPRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
+
         let tracker_changed = update_attached_route_tracker(
             ResourceKind::UDPRoute,
             route_ns,
@@ -225,6 +238,8 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         super::route_utils::clear_service_backend_refs(ResourceKind::UDPRoute, route_ns, route_name);
+
+        remove_from_gateway_route_index(ResourceKind::UDPRoute, route_ns, route_name);
 
         let tracker_changed = remove_from_attached_route_tracker(ResourceKind::UDPRoute, route_ns, route_name);
         if tracker_changed {

@@ -26,6 +26,10 @@ pub mod names {
     pub const RELOAD_DURATION: &str = "edgion_controller_reload_duration_seconds";
     /// Total client notifications sent for reload
     pub const RELOAD_CLIENT_NOTIFICATIONS: &str = "edgion_controller_reload_client_notifications_total";
+    /// Total status writes (with labels: kind, backend, result)
+    pub const STATUS_WRITES_TOTAL: &str = "edgion_controller_status_writes_total";
+    /// Total status writes skipped by semantic diff (with labels: kind)
+    pub const STATUS_WRITES_SKIPPED_TOTAL: &str = "edgion_controller_status_writes_skipped_total";
 }
 
 /// Global controller metrics singleton
@@ -186,4 +190,27 @@ impl ReloadTimer {
         reload_metrics().reload_completed(duration);
         duration
     }
+}
+
+// ==================== Status Write Metrics ====================
+
+/// Record a successful status write (K8s API or FileSystem).
+///
+/// Labels: `kind` (resource kind), `backend` ("kubernetes" or "filesystem").
+#[inline]
+pub fn record_status_write(kind: &str, backend: &str) {
+    counter!(names::STATUS_WRITES_TOTAL, "kind" => kind.to_string(), "backend" => backend.to_string(), "result" => "success").increment(1);
+}
+
+/// Record a failed status write.
+#[inline]
+pub fn record_status_write_error(kind: &str, backend: &str) {
+    counter!(names::STATUS_WRITES_TOTAL, "kind" => kind.to_string(), "backend" => backend.to_string(), "result" => "error").increment(1);
+}
+
+/// Record a status write that was skipped because semantic diff detected
+/// no meaningful change.
+#[inline]
+pub fn record_status_write_skipped(kind: &str) {
+    counter!(names::STATUS_WRITES_SKIPPED_TOTAL, "kind" => kind.to_string()).increment(1);
 }

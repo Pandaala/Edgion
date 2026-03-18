@@ -24,6 +24,7 @@ pub mod ref_grant;
 pub mod ref_manager;
 pub mod secret_utils;
 pub mod service_ref;
+pub mod status_diff;
 pub mod status_utils;
 
 pub use context::HandlerContext;

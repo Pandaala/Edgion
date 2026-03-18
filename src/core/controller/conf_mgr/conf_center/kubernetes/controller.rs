@@ -45,6 +45,7 @@ use serde::Serialize;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -429,13 +430,42 @@ impl KubernetesController {
         self.run_controllers(shutdown_signal).await
     }
 
-    /// Internal method to run all controllers
-    /// Returns when shutdown is triggered or a relink signal is received
+    /// Phase 1 foundation resource kinds that must be ready before Phase 2 starts.
+    ///
+    /// These are the resources that Phase 2 resources (Routes, EdgionTls, etc.)
+    /// depend on during their init processing:
+    /// - GatewayClass: Gateway validation requires GatewayClass reference
+    /// - Gateway: Route lookup_gateway() needs Gateway in cache
+    /// - Secret: Gateway TLS listeners and Route auth need Secret
+    /// - ReferenceGrant: Cross-namespace reference validation
+    /// - Service: Route backend references need Service info
+    fn phase1_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = vec!["GatewayClass", "Gateway", "Secret", "ReferenceGrant", "Service"];
+        if self.endpoint_mode.uses_endpoint() {
+            kinds.push("Endpoints");
+        }
+        if self.endpoint_mode.uses_endpoint_slice() {
+            kinds.push("EndpointSlice");
+        }
+        kinds
+    }
+
+    /// Internal method to run all controllers with phased initialization.
+    ///
+    /// Phase 1 (Foundation): GatewayClass, Gateway, Secret, ReferenceGrant,
+    ///   Service, Endpoints/EndpointSlice, Namespace watcher
+    /// Phase 2 (Dependent): Routes, EdgionTls, BackendTLSPolicy, Plugins, etc.
+    ///
+    /// Phase 2 waits for Phase 1 to complete init before starting, so that
+    /// dependent resources find their references already in cache on first
+    /// processing — reducing post-init revalidation and duplicate status writes.
+    ///
+    /// Returns when shutdown is triggered or a relink signal is received.
     #[allow(clippy::vec_init_then_push)]
     async fn run_controllers(&self, mut shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
         tracing::info!(
             component = "k8s_controller",
-            "Starting Kubernetes controller - spawning independent ResourceControllers"
+            "Starting Kubernetes controller - spawning ResourceControllers with phased init"
         );
 
         // Create relink signal channel
@@ -456,7 +486,114 @@ impl KubernetesController {
 
         let mut h = Vec::new();
 
-        // ==================== Namespaced Resources ====================
+        // ==================== Phase 1: Foundation Resources ====================
+        // These must be ready before Phase 2 resources start, so that
+        // Routes can resolve Gateway/Secret/Service references on first processing.
+
+        tracing::info!(
+            component = "k8s_controller",
+            "Phase 1: Spawning foundation resource controllers"
+        );
+
+        // Cluster-scoped foundation
+        h.push(spawn_cluster::<GatewayClass, _>(
+            self,
+            "GatewayClass",
+            GatewayClassHandler::new(self.controller_name.clone()),
+            &ctx,
+        ));
+
+        // Gateway (needs GatewayClass, filter by gateway_class)
+        h.push(spawn::<Gateway, _>(
+            self,
+            "Gateway",
+            GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
+            &ctx,
+        ));
+
+        // Secret (TLS certificates, auth credentials)
+        h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
+
+        // ReferenceGrant (cross-namespace reference validation)
+        h.push(spawn::<ReferenceGrant, _>(
+            self,
+            "ReferenceGrant",
+            ReferenceGrantHandler::new(),
+            &ctx,
+        ));
+
+        // Service (Route backend references)
+        h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
+
+        // Endpoint resources (Route backend address resolution)
+        if self.endpoint_mode.uses_endpoint() {
+            tracing::info!(
+                component = "k8s_controller",
+                mode = ?self.endpoint_mode,
+                "Registering Endpoints controller (Phase 1)"
+            );
+            h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
+        }
+
+        if self.endpoint_mode.uses_endpoint_slice() {
+            tracing::info!(
+                component = "k8s_controller",
+                mode = ?self.endpoint_mode,
+                "Registering EndpointSlice controller (Phase 1)"
+            );
+            h.push(spawn::<EndpointSlice, _>(
+                self,
+                "EndpointSlice",
+                EndpointSliceHandler::new(),
+                &ctx,
+            ));
+        }
+
+        // Safety check: Auto mode should have been resolved
+        if self.endpoint_mode.is_auto() {
+            unreachable!("EndpointMode::Auto should be resolved before run_controllers");
+        }
+
+        // Namespace watcher (Gateway Selector namespace policy)
+        h.push(spawn_namespace_watcher(
+            self.client.clone(),
+            watcher::Config::default(),
+            ctx.shutdown.clone(),
+        ));
+
+        let phase1_count = h.len();
+        tracing::info!(
+            component = "k8s_controller",
+            count = phase1_count,
+            "Phase 1 foundation controllers spawned, waiting for init completion"
+        );
+
+        // Wait for Phase 1 resources to complete their init phase
+        const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
+        let phase1_ready = PROCESSOR_REGISTRY
+            .wait_kinds_ready(&self.phase1_kinds(), PHASE1_TIMEOUT)
+            .await;
+
+        if phase1_ready {
+            tracing::info!(
+                component = "k8s_controller",
+                "Phase 1 complete: all foundation resources ready, starting Phase 2"
+            );
+        } else {
+            tracing::warn!(
+                component = "k8s_controller",
+                "Phase 1 timeout: starting Phase 2 anyway (fallback to parallel init)"
+            );
+        }
+
+        // ==================== Phase 2: Dependent Resources ====================
+        // These resources depend on Phase 1 resources being in cache.
+
+        tracing::info!(
+            component = "k8s_controller",
+            "Phase 2: Spawning dependent resource controllers"
+        );
+
         // Route resources
         h.push(spawn::<HTTPRoute, _>(
             self,
@@ -489,40 +626,7 @@ impl KubernetesController {
             &ctx,
         ));
 
-        // Backend resources
-        h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
-
-        // Register endpoint handlers based on endpoint mode
-        if self.endpoint_mode.uses_endpoint() {
-            tracing::info!(
-                component = "k8s_controller",
-                mode = ?self.endpoint_mode,
-                "Registering Endpoints controller"
-            );
-            h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
-        }
-
-        if self.endpoint_mode.uses_endpoint_slice() {
-            tracing::info!(
-                component = "k8s_controller",
-                mode = ?self.endpoint_mode,
-                "Registering EndpointSlice controller"
-            );
-            h.push(spawn::<EndpointSlice, _>(
-                self,
-                "EndpointSlice",
-                EndpointSliceHandler::new(),
-                &ctx,
-            ));
-        }
-
-        // Safety check: Auto mode should have been resolved
-        if self.endpoint_mode.is_auto() {
-            unreachable!("EndpointMode::Auto should be resolved before run_controllers");
-        }
-
-        // TLS related (special processing)
-        h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
+        // TLS related (depend on Secret being in cache)
         h.push(spawn::<EdgionTls, _>(
             self,
             "EdgionTls",
@@ -536,21 +640,7 @@ impl KubernetesController {
             &ctx,
         ));
 
-        // Gateway (special processing: filter by gateway_class)
-        h.push(spawn::<Gateway, _>(
-            self,
-            "Gateway",
-            GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
-            &ctx,
-        ));
-
-        // Other namespaced resources
-        h.push(spawn::<ReferenceGrant, _>(
-            self,
-            "ReferenceGrant",
-            ReferenceGrantHandler::new(),
-            &ctx,
-        ));
+        // Plugin resources
         h.push(spawn::<EdgionPlugins, _>(
             self,
             "EdgionPlugins",
@@ -571,7 +661,7 @@ impl KubernetesController {
         ));
         h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
 
-        // ==================== ACME Resources ====================
+        // ACME
         h.push(spawn::<EdgionAcme, _>(
             self,
             "EdgionAcme",
@@ -579,13 +669,7 @@ impl KubernetesController {
             &ctx,
         ));
 
-        // ==================== Cluster-Scoped Resources ====================
-        h.push(spawn_cluster::<GatewayClass, _>(
-            self,
-            "GatewayClass",
-            GatewayClassHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
+        // Cluster-scoped dependent
         h.push(spawn_cluster::<EdgionGatewayConfig, _>(
             self,
             "EdgionGatewayConfig",
@@ -593,20 +677,15 @@ impl KubernetesController {
             &ctx,
         ));
 
-        // ==================== Auxiliary Watchers ====================
-        h.push(spawn_namespace_watcher(
-            self.client.clone(),
-            watcher::Config::default(),
-            ctx.shutdown.clone(),
-        ));
-
         // Drop our copy of the sender so we can detect when all controllers stop
         drop(relink_tx);
 
         tracing::info!(
             component = "k8s_controller",
-            count = h.len(),
-            "All ResourceControllers spawned - each running independently"
+            phase1_count = phase1_count,
+            phase2_count = h.len() - phase1_count,
+            total = h.len(),
+            "All ResourceControllers spawned (Phase 1 + Phase 2)"
         );
 
         // Wait for either:

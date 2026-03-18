@@ -54,8 +54,8 @@ Both scripts are **self-contained** — they auto-start and auto-stop the enviro
 |----------|-------------------|-------------------|
 | HTTPRoute | `httproute` | RouteManager (exact_domains, wildcard_domains, catch_all, http_routes) |
 | GRPCRoute | `grpcroute` | GrpcRouteManager (grpc_routes, resource_keys) |
-| TCPRoute | `tcproute` | TcpRouteManager (routes_by_key, gateway_tcp_routes_map) |
-| UDPRoute | `udproute` | UdpRouteManager (routes_by_key, gateway_udp_routes_map) |
+| TCPRoute | `tcproute` | GlobalTcpRouteManagers (route_cache, port_count) |
+| UDPRoute | `udproute` | GlobalUdpRouteManagers (route_cache, port_count) |
 | TLSRoute | `tlsroute` | GlobalTlsRouteManagers (route_cache, port_count) |
 | EdgionTls | `edgiontls` | TlsStore (entries), TlsCertMatcher (port_count) |
 | EdgionPlugins | `edgionplugins` | PluginStore (plugins) |

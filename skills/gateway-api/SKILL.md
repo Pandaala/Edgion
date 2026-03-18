@@ -86,7 +86,8 @@ would permanently be `None` with no requeue mechanism. Fixed by adding
 
 **Rule:** Any handler that calls `lookup_gateway()` in `parse()` MUST register
 in `gateway_route_index` via `on_change()` so that Gateway changes trigger
-requeue. Currently this applies to: TLSRoute, EdgionTls, HTTPRoute, GRPCRoute.
+requeue. Currently this applies to: TLSRoute, EdgionTls, HTTPRoute, GRPCRoute,
+TCPRoute, UDPRoute.
 
 ## Implementation guidance
 

@@ -7,8 +7,6 @@
 //! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
-use std::collections::HashSet;
-
 use crate::core::common::config::is_reference_grant_validation_enabled;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
@@ -231,20 +229,14 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             gateway.metadata.name.as_deref().unwrap_or("")
         );
 
-        // Bidirectional conflict marking: requeue all conflicting Gateways
-        let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
-
-        let mut requeued = HashSet::new();
-        for conflicting_gateway_key in conflicting_gateways {
-            if !requeued.contains(&conflicting_gateway_key) {
-                ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
-                requeued.insert(conflicting_gateway_key.clone());
-                tracing::info!(
-                    gateway = %gateway_key,
-                    conflicting_gateway = %conflicting_gateway_key,
-                    "Requeue conflicting Gateway for Conflicted status update"
-                );
-            }
+        // Only requeue Gateways whose conflict relation actually changed.
+        for conflicting_gateway_key in get_listener_port_manager().take_affected_gateways(&gateway_key) {
+            ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
+            tracing::info!(
+                gateway = %gateway_key,
+                conflicting_gateway = %conflicting_gateway_key,
+                "Requeue affected Gateway for Conflicted status update"
+            );
         }
 
         // Requeue routes when listener hostnames or ports actually changed.
@@ -297,11 +289,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         get_global_cross_ns_ref_manager().clear_resource_refs(&cross_ns_ref);
 
-        // Get conflicting gateways BEFORE unregistering (they need to be requeued)
-        let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
-
-        // Clear ListenerPortManager registration
-        get_listener_port_manager().unregister_gateway(&gateway_key);
+        // Clear ListenerPortManager registration and requeue only those Gateways
+        // whose conflict status may change as a result.
+        let conflicting_gateways = get_listener_port_manager().unregister_gateway_and_get_affected(&gateway_key);
 
         // Requeue previously conflicting Gateways so they can update their Conflicted status
         // (change from Conflicted=True to Conflicted=False)
