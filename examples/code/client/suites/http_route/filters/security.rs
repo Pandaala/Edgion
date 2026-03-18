@@ -237,6 +237,10 @@ impl TestSuite for HttpSecurityTestSuite {
         "HTTP Security"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Filters/Security")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_missing_hostname(),

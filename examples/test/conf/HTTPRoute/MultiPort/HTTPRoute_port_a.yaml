@@ -1,0 +1,22 @@
+# HTTPRoute bound to port-a listener (31300) only
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route-port-a
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: multiport-gateway
+      namespace: edgion-test
+      sectionName: http-port-a
+      port: 31300
+  hostnames:
+    - "port-a.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /echo
+      backendRefs:
+        - name: test-http
+          port: 30001

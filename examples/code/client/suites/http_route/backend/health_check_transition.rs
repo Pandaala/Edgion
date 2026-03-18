@@ -153,6 +153,10 @@ impl TestSuite for HealthCheckTransitionTestSuite {
         "HealthCheckTransition"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Backend/HealthCheckTransition")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![Self::test_health_check_transitions_to_unhealthy()]
     }

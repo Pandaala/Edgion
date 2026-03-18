@@ -1,5 +1,5 @@
 {
-  "current_max": 31290,
+  "current_max": 31301,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -123,7 +123,10 @@
       "tls": 31288
     },
     "EdgionTls/BothAbsentParentRef": {
-      "https": 31290
+      "https": 31289
+    },
+    "HTTPRoute/MultiPort": {
+      "http": 31300
     }
   }
 }

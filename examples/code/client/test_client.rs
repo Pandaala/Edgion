@@ -159,6 +159,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
         "HTTPRoute/Filters/Security" => "HTTPRoute/Filters/Security",
         "HTTPRoute/Protocol" | "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
+        "HTTPRoute/MultiPort" => "HTTPRoute/MultiPort",
         // GRPCRoute
         "GRPCRoute/Basic" | "GRPCRoute" => "GRPCRoute/Basic",
         "GRPCRoute/Match" => "GRPCRoute/Match",
@@ -331,6 +332,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::HttpsTestSuite));
+        }
+        "HTTPRoute/MultiPort" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/MultiPort tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::MultiPortTestSuite));
         }
         // GRPCRoute
         "GRPCRoute" => {
@@ -947,6 +955,11 @@ async fn main() -> Result<()> {
     );
 
     let mut runner = TestRunner::new(context);
+
+    // Enable per-suite port resolution from ports.json
+    if let Ok(port_config) = port_config::PortConfig::load() {
+        runner.set_port_resolver(Box::new(move |key: &str| port_config.get_ports(key).http));
+    }
 
     // Add test suite
     add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref());

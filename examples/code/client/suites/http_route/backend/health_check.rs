@@ -118,6 +118,10 @@ impl TestSuite for HealthCheckTestSuite {
         "HealthCheck"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Backend/HealthCheck")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_healthy_backend_available(),

@@ -2,42 +2,59 @@
 
 > Deep reference for HTTP/gRPC route matching in Edgion Gateway.
 > Covers the full data flow from config registration to per-request matching,
-> including the global route table design, match engines, and listener-level
+> including the per-port route table design, match engines, and listener-level
 > multi-Gateway support.
 
 ## Overview
 
 The route matching system resolves incoming HTTP/gRPC requests to backend
-services through a multi-level matching pipeline:
+services through a multi-level matching pipeline with **per-port route
+isolation** (aligned with Gateway API's listener-level scoping):
 
 ```
 Request (port, hostname, path, headers, query, method)
   → Listener (physical TCP binding, one per port)
-    → Global route table lookup:
+    → Per-port route table lookup:
       → Domain match (exact → wildcard → catch-all)
         → Path match (regex → radix tree: exact → prefix)
           → Deep match (method, headers, query params, Gateway/Listener constraints)
             → RouteMatchResult { route_unit, matched_gateway }
 ```
 
-All gateways sharing a port share a single global route table.
-Gateway/Listener ownership is validated during `deep_match`, not during
-domain or path lookup.
+Each listener port has its own route table (`DomainRouteRules`), matching
+the pattern used by TCP/UDP/TLS routes. Routes are assigned to ports via
+`resolved_ports` (set by the controller during `parentRef` resolution) or
+via fallback logic at the gateway side.
 
 ## Key Data Structures
 
-### RouteManager (global singleton)
+### GlobalHttpRouteManagers (per-port route management)
 
 ```
-RouteManager
-├── global_routes: ArcSwap<DomainRouteRules>
-│   Single route table for ALL gateways.
-│   Routes carry parentRef → Gateway binding; gateway validation
-│   happens during deep_match via caller-supplied gateway_infos.
+GlobalHttpRouteManagers
+├── route_cache: DashMap<String, HTTPRoute>
+│   Canonical store of all HTTPRoute resources (keyed by "namespace/name").
 │
-└── http_routes: Mutex<HashMap<RouteKey, HTTPRoute>>
-    Stores all HTTPRoute resources for lookup during delete/update events.
+└── by_port: DashMap<u16, Arc<HttpPortRouteManager>>
+    Per-port managers. Each holds an independent route table.
 ```
+
+```
+HttpPortRouteManager
+└── route_table: ArcSwap<DomainRouteRules>
+    Lock-free route table for one listener port.
+    Updated atomically via ArcSwap::store().
+```
+
+Routes are assigned to ports using a three-tiered strategy in
+`bucket_routes_by_port()`:
+1. `route.spec.resolved_ports` — controller-resolved listener ports (primary)
+2. `parentRef.port` — direct port from parentRef (fallback #1)
+3. All known ports in `by_port` — backward-compatible catch-all (fallback #2)
+
+Gateway handler triggers `rebuild_all_port_managers()` after
+`PortGatewayInfoStore` is updated, ensuring routes cached before
+Gateways arrived are correctly distributed.
 
 **Key file:** `src/core/gateway/routes/http/routes_mgr.rs`
 
@@ -213,66 +230,73 @@ GatewayInfo
 
 Multiple Kubernetes Gateway resources can declare the same port. Pingora
 binds one physical listener per port. All Gateways on the same port share
-a single `EdgionHttp` instance carrying `Arc<Vec<GatewayInfo>>` — the
-full list of Gateway/Listener contexts for that port.
+a single `EdgionHttp` instance. Gateway info is fetched dynamically from
+`PortGatewayInfoStore` at request time, so Gateways added/removed at
+runtime are reflected without restart.
 
 ```
 runtime/server/base.rs:
   1. Pre-collect GatewayInfo per port:
      port_gateway_infos: HashMap<u16, Vec<GatewayInfo>>
 
-  2. For each unique port, create one ListenerContext with all GatewayInfos:
-     ListenerContext {
-       gateway_infos: Arc<Vec<GatewayInfo>>,  // all gateways on this port
-       ...
-     }
+  2. For each unique port, create one ListenerContext:
+     ListenerContext { listener, ... }
 
   3. runtime/server/listener_builder creates EdgionHttp:
-     EdgionHttp {
-       gateway_infos: Arc<Vec<GatewayInfo>>,  // passed to match_route
-       ...
-     }
+     EdgionHttp { listener, ... }
+     (gateway_infos fetched dynamically per request from PortGatewayInfoStore)
 ```
 
 ### Request Flow
 
 ```
 pg_request_filter():
-  gateway_infos = &edgion_http.gateway_infos
+  port = edgion_http.listener.port
+  gateway_infos = get_port_gateway_info_store().get(port)
 
   1. Try gRPC match (if applicable):
-     grpc_routes.match_route(session, gateway_infos, hostname)
-     → Sets ctx.gateway_info from matched GatewayInfo
+     grpc_port_manager = get_global_grpc_route_managers().get_or_create_port_manager(port)
+     grpc_routes = grpc_port_manager.load_route_table()
+     try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos)
 
-  2. Try HTTP match:
-     global_routes.match_route(session, ctx, gateway_infos)
+  2. Try HTTP match (if gRPC not matched):
+     http_port_manager = get_global_http_route_managers().get_or_create_port_manager(port)
+     port_routes = http_port_manager.load_route_table()
+     port_routes.match_route(session, ctx, &gateway_infos)
      → Returns RouteMatchResult { route_unit, matched_gateway }
-     → Sets ctx.gateway_info = result.matched_gateway
-     → Sets ctx.route_unit = Some(result.route_unit)
 
-  3. No fallback needed — single unified lookup handles all gateways
+  3. No fallback needed — per-port lookup handles route isolation
 ```
 
 **Key file:** `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs`
 
 ## Route Registration (Config Time)
 
-### HTTPRoute → RouteManager flow
+### HTTPRoute → GlobalHttpRouteManagers flow
 
 ```
 ConfigClient receives HTTPRoute
   → ConfHandler<HTTPRoute>.full_set() or .partial_update()
-    → RouteManager stores HTTPRoute in http_routes map
-    → parse_http_routes_to_domain_rules():
-        for each HTTPRoute:
-          validate(route) → parent_refs, rules, namespace, name
-          effective_hostnames = resolve_all_effective_hostnames()
-          for each hostname:
-            for each rule + match:
-              create HttpRouteRuleUnit (or regex variant)
-              add to domain_rules_map[hostname]
-    → Build RouteRules (RadixRouteMatchEngine + RegexRoutesEngine) per hostname
-    → Atomically replace global_routes via ArcSwap::store()
+    → GlobalHttpRouteManagers stores HTTPRoute in route_cache (DashMap)
+    → rebuild_all_port_managers():
+        1. Pre-create port managers for ports from parentRef.port + PortGatewayInfoStore
+        2. bucket_routes_by_port():
+           resolved_ports → parentRef.port → all known ports (fallback chain)
+        3. For each port bucket:
+           parse_http_routes_to_domain_rules():
+             for each HTTPRoute in this port's bucket:
+               validate(route) → parent_refs, rules, namespace, name
+               effective_hostnames = resolve_all_effective_hostnames()
+               for each hostname:
+                 for each rule + match:
+                   create HttpRouteRuleUnit (or regex variant)
+                   add to domain_rules_map[hostname]
+           Build DomainRouteRules (RadixRouteMatchEngine + RegexRoutesEngine)
+           Atomically replace port's route_table via ArcSwap::store()
+
+Gateway ConfHandler also triggers rebuild_all_port_managers() after
+PortGatewayInfoStore is updated, to ensure routes that arrived before
+Gateways are re-distributed to the correct ports.
 ```
 
 ### Effective Hostname Resolution
@@ -286,21 +310,29 @@ Per Gateway API spec, if HTTPRoute has no `spec.hostnames`:
 
 ### Partial Update Strategy
 
+- **Port scoping**: `partial_update` identifies affected ports (from
+  `resolved_ports` / `parentRef.port` / all known ports), then rebuilds only
+  those ports' route tables via `rebuild_affected_port_managers()`.
 - **Exact domains**: Fine-grained RCU (Read-Copy-Update) — clone HashMap, update
   affected hostnames, atomically swap via inner ArcSwap
 - **Wildcard domains**: Rebuild RadixHostMatchEngine, but reuse `Arc<RouteRules>`
   for unaffected hostnames (Arc reuse optimization)
-- **Atomicity**: `full_set` replaces the entire `Arc<DomainRouteRules>`;
-  `partial_update` swaps only inner `ArcSwap` fields
+- **Atomicity**: Each port's `HttpPortRouteManager` stores a complete
+  `DomainRouteRules` via `ArcSwap::store()`. Readers see a consistent
+  snapshot per port.
 
 ## gRPC Route Matching
 
-gRPC routes follow a parallel architecture:
+gRPC routes follow the same per-port isolation pattern as HTTP:
 
 ```
-GrpcRouteManager
-├── global_grpc_routes: ArcSwap<DomainGrpcRouteRules>
-└── grpc_routes: Mutex<HashMap<RouteKey, GRPCRoute>>
+GlobalGrpcRouteManagers
+├── route_cache: DashMap<String, GRPCRoute>
+├── by_port: DashMap<u16, Arc<GrpcPortRouteManager>>
+└── route_units_cache: Mutex<HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>
+
+GrpcPortRouteManager
+└── route_table: ArcSwap<DomainGrpcRouteRules>
 
 DomainGrpcRouteRules
 └── grpc_routes: ArcSwap<GrpcRouteRules>
@@ -316,7 +348,8 @@ DomainGrpcRouteRules
 3. Catch-all
 
 Each candidate runs `deep_match` with `gateway_infos` for Gateway/Listener
-validation, identical to HTTP routes.
+validation, identical to HTTP routes. Port resolution uses the same
+fallback chain as HTTP (resolved_ports → parentRef.port → all known ports).
 
 **Key files:** `src/core/gateway/routes/grpc/`
 
@@ -331,14 +364,19 @@ Pingora receives request
   │
   ├─ request_filter()
   │   ├─ build_request_metadata() → hostname, path, protocol, client_addr
+  │   ├─ gateway_infos = PortGatewayInfoStore.get(port)
   │   ├─ HTTPS isolation check (SNI/Host mismatch → 421)
   │   │
   │   ├─ gRPC route match (if applicable)
-  │   │   └─ try_match_grpc_route(grpc_routes, session, ctx, gateway_infos)
+  │   │   └─ grpc_port_mgr = get_global_grpc_route_managers().get_or_create_port_manager(port)
+  │   │       grpc_routes = grpc_port_mgr.load_route_table()
+  │   │       try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos)
   │   │       → on match: ctx.gateway_info = matched GatewayInfo
   │   │
   │   ├─ HTTP route match (if gRPC not matched)
-  │   │   └─ global_routes.match_route(session, ctx, gateway_infos)
+  │   │   └─ http_port_mgr = get_global_http_route_managers().get_or_create_port_manager(port)
+  │   │       port_routes = http_port_mgr.load_route_table()
+  │   │       port_routes.match_route(session, ctx, &gateway_infos)
   │   │       → on match: ctx.gateway_info = result.matched_gateway
   │   │                    ctx.route_unit = result.route_unit
   │   │
@@ -359,22 +397,26 @@ Pingora receives request
 
 | File | Purpose |
 |------|---------|
-| `src/core/gateway/routes/http/routes_mgr.rs` | RouteManager, DomainRouteRules, RouteRules |
+| `src/core/gateway/routes/http/routes_mgr.rs` | GlobalHttpRouteManagers, HttpPortRouteManager, DomainRouteRules, RouteRules |
 | `src/core/gateway/routes/http/match_unit.rs` | HttpRouteRuleUnit, RouteMatchResult, deep_match |
-| `src/core/gateway/routes/http/conf_handler_impl.rs` | HTTPRoute → RouteManager registration |
+| `src/core/gateway/routes/http/conf_handler_impl.rs` | HTTPRoute → per-port route registration |
 | `src/core/gateway/routes/http/match_engine/radix_route_match.rs` | RadixRouteMatchEngine |
 | `src/core/gateway/routes/http/match_engine/radix_path.rs` | RadixPath compilation |
 | `src/core/gateway/routes/http/match_engine/regex_routes_engine.rs` | RegexRoutesEngine |
-| `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs` | Request filter + route matching invocation |
-| `src/core/gateway/routes/http/proxy_http/mod.rs` | EdgionHttp struct (gateway_infos) |
-| `src/core/gateway/routes/grpc/routes_mgr.rs` | GrpcRouteManager, DomainGrpcRouteRules |
+| `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs` | Request filter + per-port route matching |
+| `src/core/gateway/routes/http/proxy_http/mod.rs` | EdgionHttpProxy struct |
+| `src/core/gateway/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers, GrpcPortRouteManager |
 | `src/core/gateway/routes/grpc/match_engine.rs` | GrpcMatchEngine (service/method routing) |
 | `src/core/gateway/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit, gRPC deep_match |
 | `src/core/gateway/routes/grpc/integration.rs` | try_match_grpc_route integration helper |
+| `src/core/gateway/runtime/handler.rs` | GatewayHandler (triggers HTTP/gRPC route rebuild on Gateway changes) |
 | `src/core/gateway/runtime/server/base.rs` | GatewayBase, listener bootstrap and port-level GatewayInfo collection |
 | `src/core/gateway/runtime/server/listener_builder.rs` | ListenerContext, add_http_listener |
 | `src/core/gateway/runtime/store/config.rs` | GatewayInfo, GatewayConfigStore |
+| `src/core/gateway/runtime/store/port_gateway_info.rs` | PortGatewayInfoStore (port → GatewayInfo mapping) |
 | `src/core/gateway/runtime/matching/route.rs` | check_gateway_listener_match, hostname matching |
 | `src/core/common/matcher/host_match/radix_match/radix_host_match.rs` | RadixHostMatchEngine (wildcard domain matching) |
+| `src/types/resources/http_route.rs` | HTTPRouteSpec (includes resolved_ports) |
+| `src/types/resources/grpc_route.rs` | GRPCRouteSpec (includes resolved_ports) |
 | `src/types/resources/common.rs` | ParentReference type definition |
 | `src/types/ctx.rs` | EdgionHttpContext (per-request state) |

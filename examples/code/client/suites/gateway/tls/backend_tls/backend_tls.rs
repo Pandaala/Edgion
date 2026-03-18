@@ -295,6 +295,10 @@ impl TestSuite for BackendTlsTestSuite {
         "backend_tls"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("Gateway/TLS/BackendTLS")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_backend_tls_health(),

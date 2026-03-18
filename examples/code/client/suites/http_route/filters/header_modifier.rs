@@ -454,6 +454,10 @@ impl TestSuite for HeaderModifierTestSuite {
         "Header Modifier"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Filters/HeaderModifier")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_request_header_set(),

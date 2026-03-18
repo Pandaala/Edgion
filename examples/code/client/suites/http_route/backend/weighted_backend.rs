@@ -219,6 +219,10 @@ impl TestSuite for WeightedBackendTestSuite {
         "Weighted Backend"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Backend/WeightedBackend")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_backend_consistency(),

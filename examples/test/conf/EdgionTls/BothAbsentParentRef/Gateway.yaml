@@ -10,7 +10,7 @@ spec:
   listeners:
     - name: https
       protocol: HTTPS
-      port: 31290
+      port: 31289
       hostname: "both-absent-tls.example.com"
       allowedRoutes:
         namespaces:

@@ -107,6 +107,13 @@ impl TestContext {
         }
     }
 
+    /// Create a copy with an overridden HTTP port.
+    pub fn with_http_port(&self, port: u16) -> Self {
+        let mut ctx = self.clone();
+        ctx.http_port = port;
+        ctx
+    }
+
     pub fn http_url(&self) -> String {
         format!("http://{}:{}", self.target_host, self.http_port)
     }
@@ -370,6 +377,14 @@ pub trait TestSuite: Send + Sync {
     fn name(&self) -> &str;
     fn test_cases(&self) -> Vec<TestCase>;
 
+    /// Override the port config key for this suite.
+    /// When `Some("HTTPRoute/Backend/WeightedBackend")`, the runner will look up
+    /// the HTTP port for that key in ports.json and create a per-suite context.
+    /// Default is None (use the runner-level port).
+    fn port_key(&self) -> Option<&str> {
+        None
+    }
+
     async fn setup(&self) -> anyhow::Result<()> {
         Ok(())
     }
@@ -416,6 +431,8 @@ pub trait TestSuite: Send + Sync {
 pub struct TestRunner {
     context: TestContext,
     suites: Vec<Box<dyn TestSuite>>,
+    /// Resolves a port config key (e.g. "HTTPRoute/Backend/WeightedBackend") to an HTTP port.
+    port_resolver: Option<Box<dyn Fn(&str) -> Option<u16> + Send + Sync>>,
 }
 
 impl TestRunner {
@@ -423,6 +440,7 @@ impl TestRunner {
         Self {
             context,
             suites: Vec::new(),
+            port_resolver: None,
         }
     }
 
@@ -430,11 +448,25 @@ impl TestRunner {
         self.suites.push(suite);
     }
 
+    pub fn set_port_resolver(&mut self, resolver: Box<dyn Fn(&str) -> Option<u16> + Send + Sync>) {
+        self.port_resolver = Some(resolver);
+    }
+
     pub async fn run(&self) -> TestResults {
         let mut suite_results = Vec::new();
 
         for suite in &self.suites {
-            let result = suite.run(&self.context).await;
+            let ctx = match (suite.port_key(), &self.port_resolver) {
+                (Some(key), Some(resolver)) => {
+                    if let Some(port) = resolver(key) {
+                        self.context.with_http_port(port)
+                    } else {
+                        self.context.clone()
+                    }
+                }
+                _ => self.context.clone(),
+            };
+            let result = suite.run(&ctx).await;
             suite_results.push(result);
         }
 

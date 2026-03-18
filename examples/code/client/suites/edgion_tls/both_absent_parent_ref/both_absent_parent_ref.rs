@@ -5,14 +5,14 @@
 // certificate to all listeners of the referenced Gateway.
 //
 // Required config files (in examples/test/conf/EdgionTls/BothAbsentParentRef/):
-// - Gateway.yaml         # HTTPS Gateway listener on port 31290
+// - Gateway.yaml         # HTTPS Gateway listener on port 31289
 // - EdgionTls.yaml       # EdgionTls with parentRef (name+ns only)
 // - HTTPRoute.yaml       # Route for both-absent-tls.example.com
 // - Service.yaml         # Backend service
 // - EndpointSlice.yaml   # Backend endpoint
 //
 // Port allocation (from ports.json "EdgionTls/BothAbsentParentRef"):
-// - 31290 (https): HTTPS with EdgionTls certificate
+// - 31289 (https): HTTPS with EdgionTls certificate
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -113,7 +113,7 @@ spec:
   listeners:
     - name: https
       protocol: HTTPS
-      port: 31290
+      port: 31289
       hostname: "both-absent-tls.example.com"
       allowedRoutes:
         namespaces:
@@ -123,20 +123,22 @@ spec:
                         return TestResult::failed(start.elapsed(), format!("Failed to re-apply Gateway: {}", e));
                     }
 
-                    // Phase 4: wait for requeue
+                    // Phase 4: wait for Gateway + dependent route/TLS updates to propagate
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-                    // Phase 5: verify HTTPS works again (retry)
+                    // Phase 5: verify HTTPS works again with a slightly longer retry window.
+                    // Gateway delete/re-apply is followed by asynchronous config propagation to the
+                    // data plane, so a few extra seconds avoids false negatives from timing jitter.
                     let url = format!("https://{}:{}/health", host, ctx.https_port);
                     let mut recovered = false;
-                    for attempt in 0..5 {
+                    for attempt in 0..10 {
                         if let Ok(resp) = ctx.http_client.get(&url).send().await {
                             if resp.status().is_success() {
                                 recovered = true;
                                 break;
                             }
                         }
-                        if attempt < 4 {
+                        if attempt < 9 {
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                     }

@@ -236,6 +236,10 @@ impl TestSuite for HttpRedirectTestSuite {
         "HTTP Redirect"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Filters/Redirect")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_simple_redirect(),
