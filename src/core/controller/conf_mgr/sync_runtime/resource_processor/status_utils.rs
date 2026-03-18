@@ -1,10 +1,15 @@
 //! Status utilities for Gateway API resources
 //!
 //! Provides utilities for managing resource status according to Gateway API standards (GEP-1364):
-//! - Standard conditions: Accepted, ResolvedRefs, Programmed, Ready
+//! - Standard conditions: Accepted, ResolvedRefs
 //! - Typed error enums for compile-time safe reason mapping
 //! - Condition update helpers
 //! - Time formatting
+//!
+//! Note: Programmed and Ready conditions are intentionally omitted. These conditions
+//! require data-plane feedback to be accurate, and our Controller-Gateway architecture
+//! uses async gRPC sync without a status-back channel. Setting them from the control
+//! plane would be misleading.
 
 use crate::types::resources::common::Condition;
 use chrono::{SecondsFormat, Utc};
@@ -15,10 +20,6 @@ pub mod condition_types {
     pub const ACCEPTED: &str = "Accepted";
     /// All references to other objects are resolved
     pub const RESOLVED_REFS: &str = "ResolvedRefs";
-    /// Configuration has been sent to the data plane
-    pub const PROGRAMMED: &str = "Programmed";
-    /// Data plane is ready to serve traffic
-    pub const READY: &str = "Ready";
     /// Listener conflicts with another Listener (port/hostname collision)
     pub const CONFLICTED: &str = "Conflicted";
     /// Gateway has listeners that are not valid (used at Gateway level)
@@ -41,13 +42,8 @@ pub mod condition_reasons {
     pub const BACKEND_NOT_FOUND: &str = "BackendNotFound";
     pub const INVALID_KIND: &str = "InvalidKind";
 
-    // Programmed reasons
-    pub const PROGRAMMED: &str = "Programmed";
+    // General reasons
     pub const INVALID: &str = "Invalid";
-
-    // Ready reasons
-    pub const READY: &str = "Ready";
-    pub const PENDING: &str = "Pending";
 
     // Conflicted reasons (for Listener port conflicts)
     pub const LISTENER_CONFLICT: &str = "ListenerConflict";
@@ -285,27 +281,7 @@ fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'static str {
     condition_reasons::REF_NOT_PERMITTED
 }
 
-/// Create standard "Programmed: True" condition
-pub fn programmed_condition(observed_generation: Option<i64>) -> Condition {
-    condition_true(
-        condition_types::PROGRAMMED,
-        condition_reasons::PROGRAMMED,
-        "Configuration programmed",
-        observed_generation,
-    )
-}
-
-/// Create standard "Ready: True" condition
-pub fn ready_condition(observed_generation: Option<i64>) -> Condition {
-    condition_true(
-        condition_types::READY,
-        condition_reasons::READY,
-        "Resource is ready",
-        observed_generation,
-    )
-}
-
-/// Set all standard conditions for a resource's parent status.
+/// Set standard conditions (Accepted, ResolvedRefs) for a resource's parent status.
 /// Uses empty `accepted_errors`; `resolved_refs_errors` controls the ResolvedRefs condition.
 pub fn set_parent_conditions(
     conditions: &mut Vec<Condition>,
@@ -315,7 +291,7 @@ pub fn set_parent_conditions(
     set_parent_conditions_full(conditions, &[], resolved_refs_errors, observed_generation);
 }
 
-/// Set all standard conditions for a resource's parent status.
+/// Set standard conditions (Accepted, ResolvedRefs) for a resource's parent status.
 /// `accepted_errors` controls the Accepted condition per-parent.
 /// `resolved_refs_errors` controls the ResolvedRefs condition (resource-level).
 pub fn set_parent_conditions_full(
@@ -326,8 +302,6 @@ pub fn set_parent_conditions_full(
 ) {
     if accepted_errors.is_empty() {
         update_condition(conditions, accepted_condition(observed_generation));
-        update_condition(conditions, programmed_condition(observed_generation));
-        update_condition(conditions, ready_condition(observed_generation));
     } else {
         let reason = accepted_errors[0].reason();
         let message = accepted_errors
@@ -337,20 +311,7 @@ pub fn set_parent_conditions_full(
             .join("; ");
         update_condition(
             conditions,
-            condition_false(condition_types::ACCEPTED, reason, message.clone(), observed_generation),
-        );
-        update_condition(
-            conditions,
-            condition_false(
-                condition_types::PROGRAMMED,
-                reason,
-                message.clone(),
-                observed_generation,
-            ),
-        );
-        update_condition(
-            conditions,
-            condition_false(condition_types::READY, condition_reasons::INVALID, message, observed_generation),
+            condition_false(condition_types::ACCEPTED, reason, message, observed_generation),
         );
     }
     update_condition(
@@ -540,12 +501,12 @@ mod tests {
         let mut conditions = Vec::new();
         set_parent_conditions(&mut conditions, &[], Some(1));
 
-        assert_eq!(conditions.len(), 4); // Accepted, Programmed, Ready, ResolvedRefs
+        assert_eq!(conditions.len(), 2); // Accepted, ResolvedRefs
         assert!(conditions.iter().all(|c| c.status == "True"));
         assert!(conditions.iter().any(|c| c.type_ == "Accepted"));
-        assert!(conditions.iter().any(|c| c.type_ == "Programmed"));
-        assert!(conditions.iter().any(|c| c.type_ == "Ready"));
         assert!(conditions.iter().any(|c| c.type_ == "ResolvedRefs"));
+        assert!(!conditions.iter().any(|c| c.type_ == "Programmed"));
+        assert!(!conditions.iter().any(|c| c.type_ == "Ready"));
     }
 
     #[test]
@@ -573,16 +534,15 @@ mod tests {
         }];
         set_parent_conditions_full(&mut conditions, &accepted_errors, &[], Some(1));
 
+        assert_eq!(conditions.len(), 2); // Accepted, ResolvedRefs only
+
         let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
         assert_eq!(accepted.status, "False");
         assert_eq!(accepted.reason, "NotAllowedByListeners");
         assert!(accepted.message.contains("blocked-ns"));
 
-        let programmed = conditions.iter().find(|c| c.type_ == "Programmed").unwrap();
-        assert_eq!(programmed.status, "False");
-
-        let ready = conditions.iter().find(|c| c.type_ == "Ready").unwrap();
-        assert_eq!(ready.status, "False");
+        assert!(!conditions.iter().any(|c| c.type_ == "Programmed"));
+        assert!(!conditions.iter().any(|c| c.type_ == "Ready"));
 
         let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
         assert_eq!(resolved.status, "True");
@@ -645,16 +605,15 @@ mod tests {
         ]);
         set_parent_conditions_full(&mut conditions, &accepted_errors, &[], Some(1));
 
+        assert_eq!(conditions.len(), 2); // Accepted, ResolvedRefs only
+
         let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
         assert_eq!(accepted.status, "False");
         assert_eq!(accepted.reason, "Invalid");
         assert!(accepted.message.contains("Secret 'test/missing' not found"));
 
-        let programmed = conditions.iter().find(|c| c.type_ == "Programmed").unwrap();
-        assert_eq!(programmed.status, "False");
-
-        let ready = conditions.iter().find(|c| c.type_ == "Ready").unwrap();
-        assert_eq!(ready.status, "False");
+        assert!(!conditions.iter().any(|c| c.type_ == "Programmed"));
+        assert!(!conditions.iter().any(|c| c.type_ == "Ready"));
 
         let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
         assert_eq!(resolved.status, "True");

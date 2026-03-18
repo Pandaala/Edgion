@@ -832,19 +832,6 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             )
         };
         update_k8s_condition(&mut status.conditions, accepted);
-
-        // Set Ready condition (ready only if no errors)
-        let ready = if validation_errors.is_empty() {
-            k8s_condition_true(condition_types::READY, "Ready", "Resource is ready", generation)
-        } else {
-            k8s_condition_false(
-                condition_types::READY,
-                "ConfigurationError",
-                "Resource has configuration errors",
-                generation,
-            )
-        };
-        update_k8s_condition(&mut status.conditions, ready);
     }
 }
 

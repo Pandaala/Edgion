@@ -412,35 +412,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             conditions.retain(|c| c.type_ != condition_types::LISTENERS_NOT_VALID);
         }
 
-        if validation_errors.is_empty() {
-            let programmed = condition_true(
-                condition_types::PROGRAMMED,
-                "Programmed",
-                "Gateway configuration programmed",
-                generation,
-            );
-            update_gateway_condition(conditions, programmed);
-
-            let ready = condition_true(condition_types::READY, "Ready", "Gateway is ready", generation);
-            update_gateway_condition(conditions, ready);
-        } else {
-            let programmed = condition_false(
-                condition_types::PROGRAMMED,
-                "Invalid",
-                "Gateway not programmed due to validation errors",
-                generation,
-            );
-            update_gateway_condition(conditions, programmed);
-
-            let ready = condition_false(
-                condition_types::READY,
-                "Invalid",
-                "Gateway not ready due to validation errors",
-                generation,
-            );
-            update_gateway_condition(conditions, ready);
-        }
-
         // Update listener statuses using pre-computed info
         if !listener_infos.is_empty() {
             let listener_statuses = status.listeners.get_or_insert_with(Vec::new);
@@ -638,56 +609,7 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, resolved);
     }
 
-    // Programmed: False if conflicted or has unresolved refs
-    if is_conflicted {
-        let programmed = condition_false(
-            condition_types::PROGRAMMED,
-            condition_reasons::LISTENER_CONFLICT,
-            "Listener not programmed due to port conflict",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, programmed);
-    } else if has_unresolved_refs {
-        let programmed = condition_false(
-            condition_types::PROGRAMMED,
-            condition_reasons::INVALID,
-            "Listener not programmed due to unresolved references",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, programmed);
-    } else {
-        let programmed = condition_true(
-            condition_types::PROGRAMMED,
-            condition_reasons::PROGRAMMED,
-            "Listener configuration programmed",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, programmed);
-    }
-
-    // Ready: False if conflicted or has unresolved refs
-    if is_conflicted || has_unresolved_refs {
-        let reason = if is_conflicted {
-            condition_reasons::LISTENER_CONFLICT
-        } else {
-            condition_reasons::PENDING
-        };
-        let msg = if is_conflicted {
-            "Listener not ready due to port conflict".to_string()
-        } else {
-            "Listener not ready due to unresolved references".to_string()
-        };
-        let ready = condition_false(condition_types::READY, reason, msg, generation);
-        update_gateway_condition(&mut ls.conditions, ready);
-    } else {
-        let ready = condition_true(
-            condition_types::READY,
-            condition_reasons::READY,
-            "Listener is ready",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, ready);
-    }
+    let _ = is_conflicted;
 }
 
 fn is_valid_pem(data: &[u8]) -> bool {

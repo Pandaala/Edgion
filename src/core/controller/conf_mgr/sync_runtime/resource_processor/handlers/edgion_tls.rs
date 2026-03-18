@@ -489,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_status_accepted_false_also_sets_programmed_ready_false() {
+    fn test_update_status_only_sets_accepted_and_resolved_refs() {
         let handler = EdgionTlsHandler::default();
         let ctx = make_ctx();
         let parent_refs = vec![make_parent_ref("my-gw", "test-ns")];
@@ -497,8 +497,11 @@ mod tests {
 
         handler.update_status(&mut tls, &ctx, &[]);
         let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
-        let programmed = conditions.iter().find(|c| c.type_ == "Programmed").unwrap();
-        assert_eq!(programmed.status, "True");
+        assert_eq!(conditions.len(), 2, "Only Accepted and ResolvedRefs should be set");
+        assert!(conditions.iter().any(|c| c.type_ == "Accepted"));
+        assert!(conditions.iter().any(|c| c.type_ == "ResolvedRefs"));
+        assert!(!conditions.iter().any(|c| c.type_ == "Programmed"), "Programmed should not be set");
+        assert!(!conditions.iter().any(|c| c.type_ == "Ready"), "Ready should not be set");
 
         let errors = vec!["Secret missing".to_string()];
         handler.update_status(&mut tls, &ctx, &errors);
@@ -506,11 +509,7 @@ mod tests {
         let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
         let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
         assert_eq!(accepted.status, "False");
-
-        let programmed = conditions.iter().find(|c| c.type_ == "Programmed").unwrap();
-        assert_eq!(programmed.status, "False", "Programmed must be False when Accepted is False");
-
-        let ready = conditions.iter().find(|c| c.type_ == "Ready").unwrap();
-        assert_eq!(ready.status, "False", "Ready must be False when Accepted is False");
+        assert!(!conditions.iter().any(|c| c.type_ == "Programmed"), "Programmed should not be set");
+        assert!(!conditions.iter().any(|c| c.type_ == "Ready"), "Ready should not be set");
     }
 }

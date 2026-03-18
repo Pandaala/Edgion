@@ -234,45 +234,9 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
             );
         }
 
-        if has_validation_errors || has_ref_errors {
-            update_condition(
-                conditions,
-                condition_false(
-                    condition_types::PROGRAMMED,
-                    "Invalid",
-                    "Policy not programmed due to errors",
-                    generation,
-                ),
-            );
-            update_condition(
-                conditions,
-                condition_false(
-                    condition_types::READY,
-                    "Invalid",
-                    "Policy not ready due to errors",
-                    generation,
-                ),
-            );
-        } else {
-            update_condition(
-                conditions,
-                condition_true(
-                    condition_types::PROGRAMMED,
-                    condition_reasons::PROGRAMMED,
-                    "Configuration programmed",
-                    generation,
-                ),
-            );
-            update_condition(
-                conditions,
-                condition_true(
-                    condition_types::READY,
-                    condition_reasons::READY,
-                    "Policy is ready",
-                    generation,
-                ),
-            );
-        }
+        // Programmed and Ready conditions intentionally omitted:
+        // they require data-plane feedback which is not available in our architecture.
+        let _ = (has_validation_errors, has_ref_errors);
     }
 }
 

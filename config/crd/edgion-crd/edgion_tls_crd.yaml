@@ -249,7 +249,7 @@ spec:
                         description: "Name of the controller managing this route"
                       conditions:
                         type: array
-                        description: "Conditions for this parent (Accepted, ResolvedRefs, Programmed, Ready)"
+                        description: "Conditions for this parent (Accepted, ResolvedRefs)"
                         items:
                           type: object
                           properties:
