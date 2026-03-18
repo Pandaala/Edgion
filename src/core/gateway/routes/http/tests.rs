@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod route_matching_tests {
     use crate::core::common::conf_sync::traits::ConfHandler;
-    use crate::core::gateway::routes::http::routes_mgr::DomainRouteRules;
-    use crate::core::gateway::routes::http::routes_mgr::RouteManager;
+    use crate::core::gateway::routes::http::routes_mgr::{HttpPortRouteManager, RouteManager};
     use crate::core::gateway::runtime::store::get_global_gateway_store;
     use crate::types::{Gateway, HTTPRoute};
     use std::collections::{HashMap, HashSet};
@@ -80,6 +79,7 @@ mod route_matching_tests {
             "spec": {
                 "parentRefs": parent_refs_json,
                 "hostnames": hostnames,
+                "resolvedPorts": [80],
                 "rules": [{
                     "matches": matches_json,
                     "backendRefs": [{
@@ -135,6 +135,7 @@ mod route_matching_tests {
             "spec": {
                 "parentRefs": parent_refs_json,
                 "hostnames": hostnames,
+                "resolvedPorts": [80],
                 "rules": [{
                     "matches": matches_json,
                     "backendRefs": [{
@@ -150,7 +151,8 @@ mod route_matching_tests {
 
     /// Helper function to verify route matching without Session
     /// Instead, we'll test the internal state of RouteRules
-    fn verify_route_exists(domain_routes: &Arc<DomainRouteRules>, hostname: &str, should_exist: bool) {
+    fn verify_route_exists(port_manager: &Arc<HttpPortRouteManager>, hostname: &str, should_exist: bool) {
+        let domain_routes = port_manager.load_route_table();
         // Check exact domain map first (case-insensitive)
         let exact_map = domain_routes.exact_domain_map.load();
         let exists_exact = exact_map.get(&hostname.to_lowercase()).is_some();
@@ -180,11 +182,12 @@ mod route_matching_tests {
 
     /// Helper function to verify route count
     fn verify_route_count(
-        domain_routes: &Arc<DomainRouteRules>,
+        port_manager: &Arc<HttpPortRouteManager>,
         hostname: &str,
         expected_normal_routes: usize,
         expected_regex_routes: usize,
     ) {
+        let domain_routes = port_manager.load_route_table();
         // Try exact domain map first (case-insensitive)
         let exact_map = domain_routes.exact_domain_map.load();
         let route_rules = if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {

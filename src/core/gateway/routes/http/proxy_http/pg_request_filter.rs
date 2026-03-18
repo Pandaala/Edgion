@@ -1,8 +1,7 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::plugins::http::get_global_plugin_store;
-use crate::core::gateway::routes::grpc::get_global_grpc_route_manager;
-use crate::core::gateway::routes::grpc::try_match_grpc_route;
-use crate::core::gateway::routes::http::routes_mgr::get_global_route_manager;
+use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_match_grpc_route};
+use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
 use crate::core::gateway::runtime::store::get_port_gateway_info_store;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_421, end_response_500};
 use crate::types::filters::PluginRunningResult;
@@ -36,15 +35,15 @@ pub async fn request_filter(
             return Ok(true);
         }
 
-        let grpc_route_manager = get_global_grpc_route_manager();
-        let grpc_routes = grpc_route_manager.get_global_grpc_routes();
+        let grpc_port_manager = get_global_grpc_route_managers().get_or_create_port_manager(port);
+        let grpc_routes = grpc_port_manager.load_route_table();
         let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos).await;
     }
 
     if !ctx.is_grpc_route_matched {
-        let route_manager = get_global_route_manager();
-        let global_routes = route_manager.get_global_routes();
-        match global_routes.match_route(session, ctx, &gateway_infos) {
+        let http_port_manager = get_global_http_route_managers().get_or_create_port_manager(port);
+        let port_routes = http_port_manager.load_route_table();
+        match port_routes.match_route(session, ctx, &gateway_infos) {
             Ok(result) => {
                 ctx.gateway_info = result.matched_gateway;
                 ctx.route_unit = Some(result.route_unit);

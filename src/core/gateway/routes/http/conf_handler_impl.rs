@@ -3,8 +3,10 @@ use crate::core::common::matcher::host_match::radix_match::{RadixHost, RadixHost
 use crate::core::gateway::routes::http::lb_policy_sync::{cleanup_lb_policies_for_routes, sync_lb_policies_for_routes};
 use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
-use crate::core::gateway::routes::http::routes_mgr::RouteRules;
-use crate::core::gateway::routes::http::{get_global_route_manager, HttpRouteRuleUnit, RouteManager};
+use crate::core::gateway::routes::http::routes_mgr::{
+    resolved_ports_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
+};
+use crate::core::gateway::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::types::resources::common::ParentReference;
 use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, MatchInfo, ResourceMeta};
@@ -109,13 +111,10 @@ fn get_effective_hostnames(route: &HTTPRoute) -> Vec<String> {
     vec![CATCH_ALL_HOSTNAME.to_string()]
 }
 
-/// Implement ConfHandler for Arc<RouteManager> to allow using the global instance
-impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
+/// Implement ConfHandler for &'static GlobalHttpRouteManagers
+impl ConfHandler<HTTPRoute> for &'static GlobalHttpRouteManagers {
     fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
-        // Extract and update LB policies from all routes
-        sync_lb_policies_for_routes(data);
-
-        (**self).full_set(data)
+        (**self).full_set(data);
     }
 
     fn partial_update(
@@ -124,429 +123,181 @@ impl ConfHandler<HTTPRoute> for Arc<RouteManager> {
         update: HashMap<String, HTTPRoute>,
         remove: HashSet<String>,
     ) {
-        // Merge add and update for policy extraction
-        let mut add_or_update = add.clone();
-        add_or_update.extend(update.clone());
+        (**self).partial_update(add, update, remove);
+    }
+}
 
-        // Extract and update LB policies from add/update routes
+impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
+    fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
+        sync_lb_policies_for_routes(data);
+
+        let start_time = Instant::now();
+        tracing::info!(component = "http_route_manager", cnt = data.len(), "full set start");
+
+        // Step 1: Replace route cache
+        self.route_cache.clear();
+        for (key, route) in data {
+            self.route_cache.insert(key.clone(), route.clone());
+        }
+
+        // Step 2: Rebuild all per-port managers
+        self.rebuild_all_port_managers();
+
+        let elapsed = start_time.elapsed();
+        tracing::info!(
+            component = "http_route_manager",
+            ms = elapsed.as_millis(),
+            "full set done"
+        );
+    }
+
+    fn partial_update(
+        &self,
+        add: HashMap<String, HTTPRoute>,
+        update: HashMap<String, HTTPRoute>,
+        remove: HashSet<String>,
+    ) {
+        let mut add_or_update = add;
+        add_or_update.extend(update);
+
         sync_lb_policies_for_routes(&add_or_update);
-
-        // Clean up LB policies for removed routes
         cleanup_lb_policies_for_routes(&remove);
 
-        (**self).partial_update(add, update, remove)
-    }
-}
+        tracing::info!(
+            component = "http_route_manager",
+            add = add_or_update.len(),
+            rm = remove.len(),
+            "partial update start"
+        );
 
-/// Create a RouteManager handler for registration with ConfigClient
-/// Returns the global RouteManager instance
-pub fn create_route_manager_handler() -> Box<dyn ConfHandler<HTTPRoute> + Send + Sync> {
-    Box::new(get_global_route_manager())
-}
+        // Compute affected ports BEFORE updating cache.
+        // When a route lacks resolved_ports, extract from parentRef.port
+        // or mark all existing ports as affected.
+        let mut affected_ports = HashSet::new();
+        let mut needs_all_ports = false;
 
-/// Private helper methods for RouteManager
-impl RouteManager {
-    /// Check if the path match is a regex type
-    fn is_regex_path(match_item: &HTTPRouteMatch) -> bool {
-        if let Some(ref path_match) = match_item.path {
-            if let Some(ref match_type) = path_match.match_type {
-                return match_type == "RegularExpression";
-            }
-        }
-        false
-    }
-
-    /// Create a regex route unit from match_item
-    #[allow(clippy::too_many_arguments)]
-    fn create_regex_route_unit(
-        namespace: &str,
-        name: &str,
-        rule_id: usize,
-        match_id: usize,
-        resource_key: &str,
-        match_item: &HTTPRouteMatch,
-        rule: Arc<HTTPRouteRule>,
-        parent_refs: Option<Vec<crate::types::resources::common::ParentReference>>,
-    ) -> Result<HttpRouteRuleUnit, String> {
-        let path_value = match_item
-            .path
-            .as_ref()
-            .and_then(|p| p.value.as_deref())
-            .ok_or_else(|| "Regex path must have value".to_string())?;
-
-        let regex = Regex::new(path_value).map_err(|e| format!("Invalid regex '{}': {}", path_value, e))?;
-        let (compiled_header_regexes, compiled_query_regexes) = HttpRouteRuleUnit::compile_match_regexes(match_item);
-
-        Ok(HttpRouteRuleUnit {
-            resource_key: resource_key.to_string(),
-            matched_info: MatchInfo::new(
-                namespace.to_string(),
-                name.to_string(),
-                rule_id,
-                match_id,
-                match_item.clone(),
-                0,
-            ),
-            rule,
-            path_regex: Some(regex),
-            parent_refs,
-            compiled_header_regexes,
-            compiled_query_regexes,
-        })
-    }
-}
-
-impl RouteManager {
-    /// Collect the set of hostnames affected by the given add/update/remove changes.
-    /// Includes both old and new hostnames for updates to ensure stale entries are cleaned.
-    fn build_affected_hostnames(
-        &self,
-        add_or_update: &HashMap<String, HTTPRoute>,
-        remove: &HashSet<String>,
-    ) -> HashSet<String> {
-        let mut affected: HashSet<String> = HashSet::new();
-
-        let http_routes = self.http_routes.lock().unwrap();
-
-        for (resource_key, route) in add_or_update.iter() {
-            for h in get_effective_hostnames(route) {
-                affected.insert(h);
-            }
-            // For updates, also include old hostnames
-            let old_route = http_routes.get(resource_key);
-            if let Some(old_route) = old_route {
-                for h in get_effective_hostnames(old_route) {
-                    affected.insert(h);
-                }
-            }
-        }
-
-        for resource_key in remove.iter() {
-            if let Some(route) = http_routes.get(resource_key) {
-                for h in get_effective_hostnames(route) {
-                    affected.insert(h);
-                }
-            }
-        }
-
-        affected
-    }
-
-    /// Rebuild RouteRules for a single exact hostname from ALL stored routes.
-    /// Returns new RouteRules or None if no routes remain for this hostname.
-    fn rebuild_exact_hostname(&self, hostname: &str, remove: &HashSet<String>) -> Option<Arc<RouteRules>> {
-        let http_routes = self.http_routes.lock().unwrap();
-
-        let mut route_rules_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
-        let mut regex_routes_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
-        let mut resource_keys: HashSet<String> = HashSet::new();
-
-        for (resource_key, route) in http_routes.iter() {
-            if remove.contains(resource_key) {
-                continue;
-            }
-
-            let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-
-            // Only include parentRefs that are Accepted=True
-            let accepted_refs = match filter_accepted_parent_refs(
-                route.spec.parent_refs.as_ref(),
-                route.status.as_ref().map(|s| s.parents.as_slice()),
-                Some(route_namespace),
-            ) {
-                Some(refs) => refs,
-                None => continue,
-            };
-
-            let applies_to_hostname = get_effective_hostnames(route).contains(&hostname.to_string());
-
-            if !applies_to_hostname {
-                continue;
-            }
-
-            let route_name = route.metadata.name.as_deref().unwrap_or("");
-            let route_sv = route.get_sync_version();
-            let accepted_refs_opt = Some(accepted_refs.clone());
-
-            if let Some(rules) = &route.spec.rules {
-                for (rule_id, rule) in rules.iter().enumerate() {
-                    let rule_arc = Arc::new(rule.clone());
-
-                    // Default match if none provided (prefix "/")
-                    let default_matches = vec![HTTPRouteMatch {
-                        path: Some(HTTPPathMatch {
-                            match_type: Some("PathPrefix".to_string()),
-                            value: Some("/".to_string()),
-                        }),
-                        headers: None,
-                        query_params: None,
-                        method: None,
-                    }];
-
-                    let matches = match &rule.matches {
-                        Some(m) if !m.is_empty() => m,
-                        _ => &default_matches,
-                    };
-
-                    for (match_id, match_item) in matches.iter().enumerate() {
-                        if Self::is_regex_path(match_item) {
-                            if let Ok(mut regex_unit) = Self::create_regex_route_unit(
-                                route_namespace,
-                                route_name,
-                                rule_id,
-                                match_id,
-                                resource_key,
-                                match_item,
-                                rule_arc.clone(),
-                                accepted_refs_opt.clone(),
-                            ) {
-                                regex_unit.matched_info.sv = route_sv;
-                                regex_routes_list.push(Arc::new(regex_unit));
-                            }
-                        } else {
-                            let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(match_item);
-                            let rule_unit = HttpRouteRuleUnit {
-                                resource_key: resource_key.clone(),
-                                matched_info: MatchInfo::new(
-                                    route_namespace.to_string(),
-                                    route_name.to_string(),
-                                    rule_id,
-                                    match_id,
-                                    match_item.clone(),
-                                    route_sv,
-                                ),
-                                rule: rule_arc.clone(),
-                                path_regex: None,
-                                parent_refs: accepted_refs_opt.clone(),
-                                compiled_header_regexes: chr,
-                                compiled_query_regexes: cqr,
-                            };
-                            route_rules_list.push(Arc::new(rule_unit));
-                        }
-                    }
-                }
-            }
-
-            resource_keys.insert(resource_key.clone());
-        }
-
-        if route_rules_list.is_empty() && regex_routes_list.is_empty() {
-            return None;
-        }
-
-        let match_engine = if route_rules_list.is_empty() {
-            None
-        } else {
-            match RadixRouteMatchEngine::build(route_rules_list.clone()) {
-                Ok(engine) => Some(Arc::new(engine)),
-                Err(e) => {
-                    tracing::error!(component="route_manager",hostname=%hostname,err=%e,"rebuild match_engine failed");
-                    return None;
-                }
-            }
-        };
-
-        let regex_routes_engine =
-            (!regex_routes_list.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(regex_routes_list.clone())));
-
-        Some(Arc::new(RouteRules {
-            resource_keys: RwLock::new(resource_keys),
-            route_rules_list: RwLock::new(route_rules_list),
-            match_engine,
-            regex_routes: RwLock::new(regex_routes_list),
-            regex_routes_engine,
-        }))
-    }
-
-    /// Rebuild the wildcard engine from all stored routes.
-    /// Reuses Arc<RouteRules> from the existing engine for unchanged wildcard hostnames.
-    fn rebuild_wildcard_engine(
-        &self,
-        affected_hostnames: &HashSet<String>,
-        remove: &HashSet<String>,
-        current_engine: Option<&RadixHostMatchEngine<RouteRules>>,
-    ) -> Result<Option<RadixHostMatchEngine<RouteRules>>, String> {
-        let http_routes = self.http_routes.lock().unwrap();
-
-        let mut existing_hosts_map: HashMap<String, RadixHost<RouteRules>> = HashMap::new();
-        if let Some(engine) = current_engine {
-            for host in engine.export_hosts() {
-                existing_hosts_map.insert(host.original.to_lowercase(), host);
-            }
-        }
-
-        let mut wildcard_hostnames: HashSet<String> = HashSet::new();
-        for (resource_key, route) in http_routes.iter() {
-            if remove.contains(resource_key) {
-                continue;
-            }
-
-            let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-            if filter_accepted_parent_refs(
-                route.spec.parent_refs.as_ref(),
-                route.status.as_ref().map(|s| s.parents.as_slice()),
-                Some(route_ns),
-            )
-            .is_none()
-            {
-                continue;
-            }
-            for h in get_effective_hostnames(route) {
-                if h.starts_with("*.") {
-                    wildcard_hostnames.insert(h);
-                }
-            }
-        }
-
-        let mut radix_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
-
-        for hostname in wildcard_hostnames.iter() {
-            // Reuse unchanged wildcard hostnames
-            if !affected_hostnames.contains(hostname) {
-                if let Some(existing_host) = existing_hosts_map.get(&hostname.to_lowercase()) {
-                    radix_hosts.push(existing_host.clone());
-                    continue;
-                }
-            }
-
-            // Rebuild affected hostname
-            let mut route_rules_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
-            let mut regex_routes_list: Vec<Arc<HttpRouteRuleUnit>> = Vec::new();
-            let mut resource_keys: HashSet<String> = HashSet::new();
-
-            for (resource_key, route) in http_routes.iter() {
-                if remove.contains(resource_key) {
-                    continue;
-                }
-
-                let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-
-                // Only include parentRefs that are Accepted=True
-                let accepted_refs = match filter_accepted_parent_refs(
-                    route.spec.parent_refs.as_ref(),
-                    route.status.as_ref().map(|s| s.parents.as_slice()),
-                    Some(route_namespace),
-                ) {
-                    Some(refs) => refs,
-                    None => continue,
-                };
-
-                let applies = get_effective_hostnames(route).contains(&hostname.to_string());
-
-                if !applies {
-                    continue;
-                }
-
-                let route_name = route.metadata.name.as_deref().unwrap_or("");
-                let route_sv = route.get_sync_version();
-                let accepted_refs_opt = Some(accepted_refs.clone());
-
-                if let Some(rules) = &route.spec.rules {
-                    for (rule_id, rule) in rules.iter().enumerate() {
-                        let rule_arc = Arc::new(rule.clone());
-
-                        // Default match if none provided (prefix "/")
-                        let default_matches = vec![HTTPRouteMatch {
-                            path: Some(HTTPPathMatch {
-                                match_type: Some("PathPrefix".to_string()),
-                                value: Some("/".to_string()),
-                            }),
-                            headers: None,
-                            query_params: None,
-                            method: None,
-                        }];
-
-                        let matches = match &rule.matches {
-                            Some(m) if !m.is_empty() => m,
-                            _ => &default_matches,
-                        };
-
-                        for (match_id, match_item) in matches.iter().enumerate() {
-                            if Self::is_regex_path(match_item) {
-                                if let Ok(mut regex_unit) = Self::create_regex_route_unit(
-                                    route_namespace,
-                                    route_name,
-                                    rule_id,
-                                    match_id,
-                                    resource_key,
-                                    match_item,
-                                    rule_arc.clone(),
-                                    accepted_refs_opt.clone(),
-                                ) {
-                                    regex_unit.matched_info.sv = route_sv;
-                                    regex_routes_list.push(Arc::new(regex_unit));
-                                }
-                            } else {
-                                let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(match_item);
-                                let rule_unit = HttpRouteRuleUnit {
-                                    resource_key: resource_key.clone(),
-                                    matched_info: MatchInfo::new(
-                                        route_namespace.to_string(),
-                                        route_name.to_string(),
-                                        rule_id,
-                                        match_id,
-                                        match_item.clone(),
-                                        route_sv,
-                                    ),
-                                    rule: rule_arc.clone(),
-                                    path_regex: None,
-                                    parent_refs: accepted_refs_opt.clone(),
-                                    compiled_header_regexes: chr,
-                                    compiled_query_regexes: cqr,
-                                };
-                                route_rules_list.push(Arc::new(rule_unit));
+        for (key, route) in &add_or_update {
+            let ports = resolved_ports_for_route(route);
+            if ports.is_empty() {
+                if let Some(parent_refs) = &route.spec.parent_refs {
+                    let any_port = parent_refs.iter().any(|pr| pr.port.is_some());
+                    if any_port {
+                        for pr in parent_refs {
+                            if let Some(p) = pr.port {
+                                affected_ports.insert(p as u16);
                             }
                         }
+                    } else {
+                        needs_all_ports = true;
                     }
+                } else {
+                    needs_all_ports = true;
                 }
-
-                resource_keys.insert(resource_key.clone());
-            }
-
-            // Skip if no routes for this hostname
-            if route_rules_list.is_empty() && regex_routes_list.is_empty() {
-                continue;
-            }
-
-            let match_engine = if route_rules_list.is_empty() {
-                None
             } else {
-                match RadixRouteMatchEngine::build(route_rules_list.clone()) {
-                    Ok(engine) => Some(Arc::new(engine)),
-                    Err(e) => {
-                        tracing::error!(component="route_manager",hostname=%hostname,err=%e,"rebuild match_engine failed");
-                        continue;
+                for &port in ports {
+                    affected_ports.insert(port);
+                }
+            }
+            if let Some(old) = self.route_cache.get(key) {
+                for &port in resolved_ports_for_route(old.value()) {
+                    affected_ports.insert(port);
+                }
+            }
+        }
+        for key in &remove {
+            if let Some(old) = self.route_cache.get(key) {
+                let ports = resolved_ports_for_route(old.value());
+                if ports.is_empty() {
+                    needs_all_ports = true;
+                } else {
+                    for &port in ports {
+                        affected_ports.insert(port);
                     }
                 }
-            };
-
-            let regex_routes_engine =
-                (!regex_routes_list.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(regex_routes_list.clone())));
-
-            let route_rules = Arc::new(RouteRules {
-                resource_keys: RwLock::new(resource_keys),
-                route_rules_list: RwLock::new(route_rules_list),
-                match_engine,
-                regex_routes: RwLock::new(regex_routes_list),
-                regex_routes_engine,
-            });
-
-            radix_hosts.push(RadixHost::new(hostname, route_rules));
+            }
+        }
+        if needs_all_ports {
+            for entry in self.by_port.iter() {
+                affected_ports.insert(*entry.key());
+            }
         }
 
-        if radix_hosts.is_empty() {
-            Ok(None)
-        } else {
-            let mut new_engine = RadixHostMatchEngine::new();
-            new_engine.initialize(radix_hosts)?;
-            Ok(Some(new_engine))
+        // Update route cache
+        for (key, route) in add_or_update {
+            self.route_cache.insert(key, route);
         }
+        for key in &remove {
+            self.route_cache.remove(key);
+        }
+
+        // Rebuild affected port managers
+        self.rebuild_affected_port_managers(&affected_ports);
+
+        tracing::info!(component = "http_route_manager", "partial update done");
     }
 }
 
-/// Parse all HTTPRoutes and collect rules into a global domain->rules structure.
+/// Create a handler for registration with ConfigClient
+pub fn create_route_manager_handler() -> Box<dyn ConfHandler<HTTPRoute> + Send + Sync> {
+    Box::new(get_global_http_route_managers())
+}
+
+// ============================================================================
+// Route parsing and DomainRouteRules building
+// ============================================================================
+
+/// Check if the path match is a regex type
+fn is_regex_path(match_item: &HTTPRouteMatch) -> bool {
+    if let Some(ref path_match) = match_item.path {
+        if let Some(ref match_type) = path_match.match_type {
+            return match_type == "RegularExpression";
+        }
+    }
+    false
+}
+
+/// Create a regex route unit from match_item
+#[allow(clippy::too_many_arguments)]
+fn create_regex_route_unit(
+    namespace: &str,
+    name: &str,
+    rule_id: usize,
+    match_id: usize,
+    resource_key: &str,
+    match_item: &HTTPRouteMatch,
+    rule: Arc<HTTPRouteRule>,
+    parent_refs: Option<Vec<crate::types::resources::common::ParentReference>>,
+) -> Result<HttpRouteRuleUnit, String> {
+    let path_value = match_item
+        .path
+        .as_ref()
+        .and_then(|p| p.value.as_deref())
+        .ok_or_else(|| "Regex path must have value".to_string())?;
+
+    let regex = Regex::new(path_value).map_err(|e| format!("Invalid regex '{}': {}", path_value, e))?;
+    let (compiled_header_regexes, compiled_query_regexes) = HttpRouteRuleUnit::compile_match_regexes(match_item);
+
+    Ok(HttpRouteRuleUnit {
+        resource_key: resource_key.to_string(),
+        matched_info: MatchInfo::new(
+            namespace.to_string(),
+            name.to_string(),
+            rule_id,
+            match_id,
+            match_item.clone(),
+            0,
+        ),
+        rule,
+        path_regex: Some(regex),
+        parent_refs,
+        compiled_header_regexes,
+        compiled_query_regexes,
+    })
+}
+
+/// Parse all HTTPRoutes and collect rules into a domain->rules structure.
 ///
-/// Routes from all gateways are merged into a single table keyed by hostname.
+/// Routes are merged into a single table keyed by hostname.
 /// Each route unit carries its parentRefs so gateway validation happens at match time.
 fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> DomainRouteRulesMap {
     let mut domain_rules: DomainRouteRulesMap = HashMap::new();
@@ -563,8 +314,6 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
             }
         };
 
-        // Only compile parentRefs that are Accepted=True by their Gateway/Listener.
-        // When status is not yet available (initial sync), all parentRefs are included.
         let accepted_refs = match filter_accepted_parent_refs(
             route.spec.parent_refs.as_ref(),
             route.status.as_ref().map(|s| s.parents.as_slice()),
@@ -605,8 +354,8 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                         .entry(hostname.clone())
                         .or_insert_with(|| (Vec::new(), Vec::new()));
 
-                    if RouteManager::is_regex_path(match_item) {
-                        match RouteManager::create_regex_route_unit(
+                    if is_regex_path(match_item) {
+                        match create_regex_route_unit(
                             &validated.namespace,
                             &validated.name,
                             rule_id,
@@ -664,7 +413,6 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
 /// Validate HTTPRoute and extract required fields
 /// Returns Some(ValidatedHttpRoute) if valid, None otherwise
 fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
-    // Check parent_refs
     match &route.spec.parent_refs {
         Some(refs) if !refs.is_empty() => refs,
         _ => {
@@ -673,7 +421,6 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
-    // Check rules
     let rules = match &route.spec.rules {
         Some(rules) if !rules.is_empty() => rules,
         _ => {
@@ -682,7 +429,6 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
-    // Check and extract route namespace
     let route_namespace = match &route.metadata.namespace {
         Some(ns) if !ns.is_empty() => ns.clone(),
         _ => {
@@ -691,7 +437,6 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
-    // Check and extract route name
     let route_name = match &route.metadata.name {
         Some(name) if !name.is_empty() => name.clone(),
         _ => {
@@ -707,233 +452,82 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
     })
 }
 
-impl ConfHandler<HTTPRoute> for RouteManager {
-    /// Full set with a complete set of HTTPRoutes.
-    /// Builds a single global route table shared by all gateways/listeners.
-    fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
-        let start_time = Instant::now();
-        tracing::info!(component = "route_manager", cnt = data.len(), "full set start");
+/// Build DomainRouteRules from a set of routes (used by per-port rebuild).
+pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, HTTPRoute>) -> DomainRouteRules {
+    let domain_rules_map = parse_http_routes_to_domain_rules(data);
 
-        // Step 0: Store all HTTPRoute resources
-        *self.http_routes.lock().unwrap() = data.clone();
-        // Step 1: Parse all HTTPRoutes into global domain->rules structure
-        let domain_rules_map = parse_http_routes_to_domain_rules(data);
-        // Step 2: Build the single global DomainRouteRules
-        let mut exact_domain_map: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
-        let mut wildcard_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
-        let mut catch_all_routes: Option<Arc<RouteRules>> = None;
-        for (domain, split) in domain_rules_map.into_iter() {
-            if split.0.is_empty() && split.1.is_empty() {
-                continue;
-            }
+    let mut exact_domain_map: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
+    let mut wildcard_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
+    let mut catch_all_routes: Option<Arc<RouteRules>> = None;
 
-            let match_engine = if split.0.is_empty() {
-                None
-            } else {
-                match RadixRouteMatchEngine::build(split.0.clone()) {
-                    Ok(engine) => Some(Arc::new(engine)),
-                    Err(e) => {
-                        tracing::error!(component="route_manager",domain=%domain,err=?e,"build failed");
-                        continue;
-                    }
-                }
-            };
-
-            let regex_routes_engine =
-                (!split.1.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(split.1.clone())));
-
-            let mut resource_keys: HashSet<String> = split.0.iter().map(|u| u.resource_key.clone()).collect();
-            resource_keys.extend(split.1.iter().map(|u| u.resource_key.clone()));
-
-            let route_rules = Arc::new(RouteRules {
-                resource_keys: RwLock::new(resource_keys),
-                route_rules_list: RwLock::new(split.0),
-                match_engine,
-                regex_routes: RwLock::new(split.1),
-                regex_routes_engine,
-            });
-
-            if domain == CATCH_ALL_HOSTNAME {
-                catch_all_routes = Some(route_rules);
-            } else if domain.starts_with("*.") {
-                wildcard_hosts.push(RadixHost::new(&domain, route_rules));
-            } else {
-                exact_domain_map.insert(domain.to_lowercase(), route_rules);
-            }
+    for (domain, split) in domain_rules_map.into_iter() {
+        if split.0.is_empty() && split.1.is_empty() {
+            continue;
         }
 
-        let wildcard_engine = if !wildcard_hosts.is_empty() {
-            let mut engine = RadixHostMatchEngine::new();
-            if let Err(e) = engine.initialize(wildcard_hosts) {
-                tracing::error!(component="route_manager",err=%e,"failed to build RadixHostMatchEngine");
-                None
-            } else {
-                Some(engine)
-            }
-        } else {
+        let match_engine = if split.0.is_empty() {
             None
+        } else {
+            match RadixRouteMatchEngine::build(split.0.clone()) {
+                Ok(engine) => Some(Arc::new(engine)),
+                Err(e) => {
+                    tracing::error!(component="route_manager",domain=%domain,err=?e,"build failed");
+                    continue;
+                }
+            }
         };
 
-        let elapsed = start_time.elapsed();
-        let global = self.global_routes.load();
-        global.exact_domain_map.store(Arc::new(exact_domain_map));
-        global.wildcard_engine.store(Arc::new(wildcard_engine));
-        global.catch_all_routes.store(Arc::new(catch_all_routes));
-        tracing::info!(component = "route_manager", ms = elapsed.as_millis(), "full set done");
+        let regex_routes_engine = (!split.1.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(split.1.clone())));
+
+        let mut resource_keys: HashSet<String> = split.0.iter().map(|u| u.resource_key.clone()).collect();
+        resource_keys.extend(split.1.iter().map(|u| u.resource_key.clone()));
+
+        let route_rules = Arc::new(RouteRules {
+            resource_keys: RwLock::new(resource_keys),
+            route_rules_list: RwLock::new(split.0),
+            match_engine,
+            regex_routes: RwLock::new(split.1),
+            regex_routes_engine,
+        });
+
+        if domain == CATCH_ALL_HOSTNAME {
+            catch_all_routes = Some(route_rules);
+        } else if domain.starts_with("*.") {
+            wildcard_hosts.push(RadixHost::new(&domain, route_rules));
+        } else {
+            exact_domain_map.insert(domain.to_lowercase(), route_rules);
+        }
     }
 
-    /// Handle partial configuration updates.
-    /// Processes additions, updates, and removals of HTTPRoutes against the global route table.
-    fn partial_update(
-        &self,
-        add: HashMap<String, HTTPRoute>,
-        update: HashMap<String, HTTPRoute>,
-        remove: HashSet<String>,
-    ) {
-        tracing::info!(
-            component = "route_manager",
-            add = add.len(),
-            update = update.len(),
-            rm = remove.len(),
-            "Processing HTTPRoute changes"
-        );
-
-        let mut add_or_update = add;
-        add_or_update.extend(update);
-
-        // Step 0: Build affected hostnames BEFORE updating storage
-        let affected_hostnames = self.build_affected_hostnames(&add_or_update, &remove);
-
-        // Step 1: Update http_routes storage
-        {
-            let mut routes = self.http_routes.lock().unwrap();
-            for (key, route) in add_or_update.iter() {
-                routes.insert(key.clone(), route.clone());
-            }
+    let wildcard_engine = if !wildcard_hosts.is_empty() {
+        let mut engine = RadixHostMatchEngine::new();
+        if let Err(e) = engine.initialize(wildcard_hosts) {
+            tracing::error!(component="route_manager",err=%e,"failed to build RadixHostMatchEngine");
+            None
+        } else {
+            Some(engine)
         }
+    } else {
+        None
+    };
 
-        // Step 2: Separate exact, wildcard, and catch-all hostnames
-        let mut exact_hostnames: HashSet<String> = HashSet::new();
-        let mut wildcard_hostnames: HashSet<String> = HashSet::new();
-        let mut catch_all_affected = false;
-        for hostname in &affected_hostnames {
-            if hostname == CATCH_ALL_HOSTNAME {
-                catch_all_affected = true;
-            } else if hostname.starts_with("*.") {
-                wildcard_hostnames.insert(hostname.clone());
-            } else {
-                exact_hostnames.insert(hostname.clone());
-            }
-        }
-
-        // Step 3: Load current global routes snapshot
-        let current_global = self.global_routes.load();
-
-        // Update exact domains (RCU pattern)
-        if !exact_hostnames.is_empty() {
-            let current_map = current_global.exact_domain_map.load();
-            let mut new_map = (**current_map).clone();
-
-            for hostname in exact_hostnames.iter() {
-                match self.rebuild_exact_hostname(hostname, &remove) {
-                    Some(new_route_rules) => {
-                        new_map.insert(hostname.to_lowercase(), new_route_rules);
-                    }
-                    None => {
-                        new_map.remove(&hostname.to_lowercase());
-                    }
-                }
-            }
-
-            current_global.exact_domain_map.store(Arc::new(new_map));
-            tracing::info!(
-                component = "route_manager",
-                cnt = exact_hostnames.len(),
-                "exact domains updated"
-            );
-        }
-
-        // Update catch-all routes (dedicated field)
-        if catch_all_affected {
-            let new_catch_all = self.rebuild_exact_hostname(CATCH_ALL_HOSTNAME, &remove);
-            current_global.catch_all_routes.store(Arc::new(new_catch_all));
-            tracing::info!(component = "route_manager", "catch-all routes updated");
-        }
-
-        // Update wildcard domains (rebuild engine with Arc reuse)
-        if !wildcard_hostnames.is_empty() {
-            let current_engine_opt = current_global.wildcard_engine.load();
-            let current_engine = current_engine_opt.as_ref().as_ref();
-
-            match self.rebuild_wildcard_engine(&wildcard_hostnames, &remove, current_engine) {
-                Ok(new_engine_opt) => {
-                    current_global.wildcard_engine.store(Arc::new(new_engine_opt));
-                    tracing::info!(
-                        component = "route_manager",
-                        cnt = wildcard_hostnames.len(),
-                        "wildcard engine rebuilt"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(component="route_manager",err=%e,"failed to rebuild wildcard engine");
-                }
-            }
-        }
-
-        // Step 4: Remove deleted routes from storage (after rebuilding)
-        {
-            let mut routes = self.http_routes.lock().unwrap();
-            for key in remove.iter() {
-                routes.remove(key);
-            }
-        }
-
-        tracing::info!(component = "route_manager", "HTTPRoute changes processed successfully");
+    DomainRouteRules {
+        exact_domain_map: arc_swap::ArcSwap::from_pointee(exact_domain_map),
+        wildcard_engine: arc_swap::ArcSwap::from_pointee(wildcard_engine),
+        catch_all_routes: arc_swap::ArcSwap::from_pointee(catch_all_routes),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::runtime::store::get_global_gateway_store;
-    use crate::types::{Gateway, HTTPRoute};
+    use crate::types::HTTPRoute;
 
-    /// Helper function to create a test Gateway from JSON
-    fn create_test_gateway(namespace: &str, name: &str, hostnames: Vec<&str>) -> Gateway {
-        let listeners_json: Vec<serde_json::Value> = hostnames
-            .iter()
-            .map(|h| {
-                serde_json::json!({
-                    "name": format!("listener-{}", h),
-                    "hostname": h,
-                    "port": 80,
-                    "protocol": "HTTP"
-                })
-            })
-            .collect();
-
-        let json = serde_json::json!({
-            "apiVersion": "gateway.networking.k8s.io/v1",
-            "kind": "Gateway",
-            "metadata": {
-                "namespace": namespace,
-                "name": name
-            },
-            "spec": {
-                "gatewayClassName": "test-class",
-                "listeners": listeners_json
-            }
-        });
-
-        serde_json::from_value(json).expect("Failed to create Gateway")
-    }
-
-    /// Helper function to create a test HTTPRoute from JSON
     fn create_test_httproute(
         namespace: &str,
         name: &str,
         hostnames: Vec<&str>,
-        gateway_refs: Vec<(&str, &str)>, // (namespace, name)
+        gateway_refs: Vec<(&str, &str)>,
     ) -> HTTPRoute {
         let parent_refs_json: Vec<serde_json::Value> = gateway_refs
             .iter()
@@ -967,247 +561,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_affected_hostnames_with_add_routes() {
-        let mgr = RouteManager::new();
-
-        // Create test routes
-        let mut add_or_update = HashMap::new();
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        let route2 = create_test_httproute(
-            "default",
-            "route2",
-            vec!["web.example.com"],
-            vec![("default", "gateway1")],
-        );
-        add_or_update.insert("default/route1".to_string(), route1);
-        add_or_update.insert("default/route2".to_string(), route2);
-
-        let remove = HashSet::new();
-
-        let result = mgr.build_affected_hostnames(&add_or_update, &remove);
-        assert_eq!(result.len(), 2);
-        assert!(result.contains("api.example.com"));
-        assert!(result.contains("web.example.com"));
-    }
-
-    #[test]
-    fn test_build_affected_hostnames_with_remove_routes() {
-        let mgr = RouteManager::new();
-
-        // First add a route
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        mgr.http_routes
-            .lock()
-            .unwrap()
-            .insert("default/route1".to_string(), route1);
-
-        // Now test remove
-        let add_or_update = HashMap::new();
-        let mut remove = HashSet::new();
-        remove.insert("default/route1".to_string());
-
-        let result = mgr.build_affected_hostnames(&add_or_update, &remove);
-        assert_eq!(result.len(), 1);
-        assert!(result.contains("api.example.com"));
-    }
-
-    #[test]
-    fn test_build_affected_hostnames_with_multiple_gateways() {
-        let mgr = RouteManager::new();
-
-        // Create test routes targeting different gateways
-        let mut add_or_update = HashMap::new();
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        let route2 = create_test_httproute(
-            "default",
-            "route2",
-            vec!["web.example.com"],
-            vec![("default", "gateway2")],
-        );
-        add_or_update.insert("default/route1".to_string(), route1);
-        add_or_update.insert("default/route2".to_string(), route2);
-
-        let remove = HashSet::new();
-
-        let result = mgr.build_affected_hostnames(&add_or_update, &remove);
-        assert_eq!(result.len(), 2);
-        assert!(result.contains("api.example.com"));
-        assert!(result.contains("web.example.com"));
-    }
-
-    #[test]
-    fn test_build_affected_hostnames_deduplicates() {
-        let mgr = RouteManager::new();
-
-        // Create test routes with same hostname but different gateways
-        let mut add_or_update = HashMap::new();
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        let route2 = create_test_httproute(
-            "default",
-            "route2",
-            vec!["api.example.com"],
-            vec![("default", "gateway2")],
-        );
-        add_or_update.insert("default/route1".to_string(), route1);
-        add_or_update.insert("default/route2".to_string(), route2);
-
-        let remove = HashSet::new();
-
-        let result = mgr.build_affected_hostnames(&add_or_update, &remove);
-        assert_eq!(result.len(), 1);
-        assert!(result.contains("api.example.com"));
-    }
-
-    #[test]
-    fn test_partial_update_add_routes() {
-        let mgr = RouteManager::new();
-
-        // Setup: Create a gateway and add it to the gateway store
-        let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
-
-        // Add gateway to store
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
-            let _ = store_guard.add_gateway(gateway);
-        }
-
-        // Create test routes to add
-        let mut add = HashMap::new();
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        add.insert("default/route1".to_string(), route1);
-
-        let remove = HashSet::new();
-
-        // Execute partial_update
-        mgr.partial_update(add, HashMap::new(), remove);
-
-        // Verify the route was stored
-        let http_routes = mgr.http_routes.lock().unwrap();
-        assert!(http_routes.contains_key("default/route1"));
-    }
-
-    #[test]
-    fn test_partial_update_remove_routes() {
-        let mgr = RouteManager::new();
-
-        // Setup: Add a route first
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        mgr.http_routes
-            .lock()
-            .unwrap()
-            .insert("default/route1".to_string(), route1);
-
-        // Create remove set
-        let mut remove = HashSet::new();
-        remove.insert("default/route1".to_string());
-
-        // Execute partial_update
-        mgr.partial_update(HashMap::new(), HashMap::new(), remove);
-
-        // Verify the route was removed
-        let http_routes = mgr.http_routes.lock().unwrap();
-        assert!(!http_routes.contains_key("default/route1"));
-    }
-
-    #[test]
-    fn test_full_set_stores_routes() {
-        let mgr = RouteManager::new();
-
-        // Create test data
-        let mut data = HashMap::new();
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        let route2 = create_test_httproute(
-            "default",
-            "route2",
-            vec!["web.example.com"],
-            vec![("default", "gateway1")],
-        );
-        data.insert("default/route1".to_string(), route1);
-        data.insert("default/route2".to_string(), route2);
-
-        // Execute full_set
-        mgr.full_set(&data);
-
-        // Verify routes were stored
-        let http_routes = mgr.http_routes.lock().unwrap();
-        assert_eq!(http_routes.len(), 2);
-        assert!(http_routes.contains_key("default/route1"));
-        assert!(http_routes.contains_key("default/route2"));
-    }
-
-    #[test]
-    fn test_full_set_replaces_existing_routes() {
-        let mgr = RouteManager::new();
-
-        // Setup: Add some existing routes
-        {
-            let mut http_routes = mgr.http_routes.lock().unwrap();
-            let old_route = create_test_httproute(
-                "default",
-                "old-route",
-                vec!["old.example.com"],
-                vec![("default", "gateway1")],
-            );
-            http_routes.insert("default/old-route".to_string(), old_route);
-        }
-
-        // Create new test data (without old route)
-        let mut data = HashMap::new();
-        let route1 = create_test_httproute(
-            "default",
-            "route1",
-            vec!["api.example.com"],
-            vec![("default", "gateway1")],
-        );
-        data.insert("default/route1".to_string(), route1);
-
-        // Execute full_set
-        mgr.full_set(&data);
-
-        // Verify old route was replaced
-        let http_routes = mgr.http_routes.lock().unwrap();
-        assert_eq!(http_routes.len(), 1);
-        assert!(!http_routes.contains_key("default/old-route"));
-        assert!(http_routes.contains_key("default/route1"));
-    }
-
-    #[test]
     fn test_get_effective_hostnames_prefers_resolved() {
         let mut route = create_test_httproute(
             "default",
@@ -1224,8 +577,6 @@ mod tests {
     #[test]
     fn test_get_effective_hostnames_falls_back_to_spec_hostnames() {
         let route = create_test_httproute("default", "route1", vec!["spec.example.com"], vec![("default", "gw1")]);
-        // resolved_hostnames is None (default from deserialization)
-
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["spec.example.com"]);
     }
@@ -1233,7 +584,6 @@ mod tests {
     #[test]
     fn test_get_effective_hostnames_catch_all_when_empty() {
         let route = create_test_httproute("default", "route1", vec![], vec![("default", "gw1")]);
-
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["*"]);
     }
@@ -1247,7 +597,6 @@ mod tests {
             vec![("default", "gw1")],
         );
         route.spec.resolved_hostnames = Some(vec![]);
-
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["fallback.example.com"]);
     }
@@ -1261,7 +610,6 @@ mod tests {
             vec![("default", "gw1")],
         );
         route.spec.resolved_hostnames = Some(vec!["a.example.com".to_string(), "b.example.com".to_string()]);
-
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["a.example.com", "b.example.com"]);
     }

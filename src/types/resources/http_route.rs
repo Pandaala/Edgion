@@ -44,6 +44,11 @@ pub struct HTTPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_hostnames: Option<Vec<String>>,
 
+    /// Pre-computed listener ports from parentRef resolution (set by Controller).
+    /// Used by Gateway to bind this route to per-port route tables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_ports: Option<Vec<u16>>,
+
     /// Rules defines the HTTP routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HTTPRouteRule>>,

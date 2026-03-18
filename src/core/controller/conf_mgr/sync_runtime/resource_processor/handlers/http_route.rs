@@ -112,6 +112,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // Register Service backend references for cross-resource requeue
         Self::register_service_refs(&route);
 
+        // Treat resolved_ports as controller-derived state.
+        // Clear any user-provided or stale value before recomputing from current parentRefs.
+        route.spec.resolved_ports = None;
+
         // Resolve effective hostnames (intersection with Gateway listener hostnames)
         if let Some(parent_refs) = &route.spec.parent_refs {
             let route_ns_resolve = route.metadata.namespace.as_deref().unwrap_or("default");
@@ -128,6 +132,53 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             if let Some(annotation) = resolved.annotation {
                 let annotations = route.metadata.annotations.get_or_insert_with(Default::default);
                 annotations.insert("edgion.io/hostname-resolution".to_string(), annotation);
+            }
+        }
+
+        // Resolve listener ports from parentRefs for per-port route isolation
+        if let Some(parent_refs) = &route.spec.parent_refs {
+            let route_ns_ports = route.metadata.namespace.as_deref().unwrap_or("default");
+            let mut ports = Vec::new();
+            for parent_ref in parent_refs {
+                if let Some(port) = parent_ref.port {
+                    ports.push(port as u16);
+                } else {
+                    let gw_ns = parent_ref
+                        .namespace
+                        .as_deref()
+                        .or(route.metadata.namespace.as_deref())
+                        .unwrap_or("default");
+                    if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
+                        if let Some(listeners) = &gateway.spec.listeners {
+                            if let Some(section_name) = &parent_ref.section_name {
+                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
+                                    if super::route_utils::listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        route_ns_ports,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
+                            } else {
+                                for listener in listeners {
+                                    if super::route_utils::listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        route_ns_ports,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !ports.is_empty() {
+                ports.sort_unstable();
+                ports.dedup();
+                route.spec.resolved_ports = Some(ports);
             }
         }
 

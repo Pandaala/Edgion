@@ -526,9 +526,10 @@ where
                         namespace = %namespace,
                         "Status semantically changed, will persist"
                     );
-                } else if matches!((&old_status, &new_status),
-                    (StatusExtractResult::Present(_), StatusExtractResult::Present(_)))
-                {
+                } else if matches!(
+                    (&old_status, &new_status),
+                    (StatusExtractResult::Present(_), StatusExtractResult::Present(_))
+                ) {
                     crate::core::controller::conf_mgr::sync_runtime::record_status_write_skipped(self.kind);
                     tracing::trace!(
                         kind = self.kind,

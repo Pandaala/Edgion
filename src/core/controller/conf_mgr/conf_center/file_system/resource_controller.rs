@@ -143,7 +143,11 @@ where
                                             if status_changed {
                                                 match extract_status_value(&obj) {
                                                     Some(status_value) => {
-                                                        match status_handler.write_status_value(kind, &key, &status_value) {
+                                                        match status_handler.write_status_value(
+                                                            kind,
+                                                            &key,
+                                                            &status_value,
+                                                        ) {
                                                             Ok(()) => {
                                                                 crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
                                                                 tracing::info!(
@@ -503,7 +507,10 @@ where
                                     Some(status_value) => {
                                         match status_handler.write_status_value(kind, &work_item.key, &status_value) {
                                             Ok(()) => {
-                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
+                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write(
+                                                    kind,
+                                                    "filesystem",
+                                                );
                                                 tracing::info!(
                                                     component = "fs_resource_controller",
                                                     kind = kind,

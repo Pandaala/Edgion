@@ -164,11 +164,7 @@ impl ProcessorRegistry {
         loop {
             let pending: Vec<&str> = kinds
                 .iter()
-                .filter(|k| {
-                    self.get(k)
-                        .map(|p| !p.is_ready())
-                        .unwrap_or(true)
-                })
+                .filter(|k| self.get(k).map(|p| !p.is_ready()).unwrap_or(true))
                 .copied()
                 .collect();
 

@@ -1,4 +1,6 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::gateway::routes::grpc::get_global_grpc_route_managers;
+use crate::core::gateway::routes::http::get_global_http_route_managers;
 use crate::core::gateway::runtime::matching::rebuild_gateway_tls_matcher;
 use crate::core::gateway::runtime::store::{
     get_global_gateway_config_store, get_global_gateway_store, rebuild_port_gateway_infos,
@@ -63,6 +65,12 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
         // Rebuild port → GatewayInfo mapping (for dynamic route matching)
         rebuild_port_gateway_infos(&gateways);
+
+        // After port-gateway mapping is updated, rebuild HTTP/gRPC per-port route
+        // managers so routes cached before Gateways arrived get assigned to the
+        // correct ports.
+        get_global_http_route_managers().rebuild_all_port_managers();
+        get_global_grpc_route_managers().rebuild_all_port_managers();
     }
 
     fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
@@ -153,6 +161,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
             let gateways = store.list_gateways();
             rebuild_gateway_tls_matcher(&gateways);
             rebuild_port_gateway_infos(&gateways);
+            get_global_http_route_managers().rebuild_all_port_managers();
+            get_global_grpc_route_managers().rebuild_all_port_managers();
         }
     }
 }

@@ -205,9 +205,7 @@ fn ancestor_ref_matches(a: &Value, b: &Value) -> bool {
     let a_ref = a.get("ancestorRef");
     let b_ref = b.get("ancestorRef");
     match (a_ref, b_ref) {
-        (Some(ar), Some(br)) => {
-            ar.get("name") == br.get("name") && ar.get("namespace") == br.get("namespace")
-        }
+        (Some(ar), Some(br)) => ar.get("name") == br.get("name") && ar.get("namespace") == br.get("namespace"),
         (None, None) => true,
         _ => false,
     }

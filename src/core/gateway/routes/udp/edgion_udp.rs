@@ -115,7 +115,13 @@ impl EdgionUdpProxy {
         let udp_route = match route_table.match_route() {
             Some(route) => route,
             None => {
-                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoRouteMatched")).await;
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    client_ip,
+                    client_port,
+                    "NoRouteMatched",
+                ))
+                .await;
                 return;
             }
         };
@@ -124,12 +130,24 @@ impl EdgionUdpProxy {
             Some(rule) => match rule.backend_finder.select() {
                 Ok(backend) => backend,
                 Err(_) => {
-                    log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoBackendSelected")).await;
+                    log_udp(&UdpLogEntry::failure(
+                        self.listener_port,
+                        client_ip,
+                        client_port,
+                        "NoBackendSelected",
+                    ))
+                    .await;
                     return;
                 }
             },
             None => {
-                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoRuleAvailable")).await;
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    client_ip,
+                    client_port,
+                    "NoRuleAvailable",
+                ))
+                .await;
                 return;
             }
         };
@@ -144,7 +162,13 @@ impl EdgionUdpProxy {
         let backend = match select_roundrobin_backend(&service_key) {
             Some(backend) => backend,
             None => {
-                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "NoBackendResolved")).await;
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    client_ip,
+                    client_port,
+                    "NoBackendResolved",
+                ))
+                .await;
                 return;
             }
         };
@@ -161,7 +185,13 @@ impl EdgionUdpProxy {
         let session = match self.get_or_create_session(client_addr, upstream_addr).await {
             Ok(session) => session,
             Err(_) => {
-                log_udp(&UdpLogEntry::failure(self.listener_port, client_ip, client_port, "SessionLimitReached")).await;
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    client_ip,
+                    client_port,
+                    "SessionLimitReached",
+                ))
+                .await;
                 return;
             }
         };
