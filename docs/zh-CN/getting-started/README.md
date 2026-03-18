@@ -4,9 +4,9 @@
 
 ## 目录
 
-- 安装部署（即将推出）
-- 第一个 Gateway（即将推出）
-- 核心概念（即将推出）
+- [安装部署](./installation-and-deployment.md)：先选择 Kubernetes 或 Standalone 模式，再进入对应部署入口。
+- [第一个 Gateway](./first-gateway.md)：用最小的 GatewayClass、Gateway、HTTPRoute 组合跑通第一条流量。
+- [核心概念](./core-concepts.md)：快速建立 GatewayClass / Gateway / Route / Edgion 扩展的心智模型。
 
 ## 建议入口
 

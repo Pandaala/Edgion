@@ -50,7 +50,7 @@ fires change detection (`hostnames_changed=true`) but `get_routes_for_gateway()`
 returns empty because no routes have registered yet. The one-time post-init
 requeue ensures all registered routes get reprocessed with the Gateway in cache.
 
-See also: `skills/00-architecture/10-requeue-mechanism.md` for the full map.
+See also: `skills/architecture/10-requeue-mechanism.md` for the full map.
 
 ## Also applies to Secret references
 

@@ -5,7 +5,7 @@ metadata:
   namespace: edgion-test
   annotations:
     # Reference EdgionStreamPlugins using annotation
-    edgion.io/stream-plugins: test-ip-filter
+    edgion.io/edgion-stream-plugins: test-ip-filter
 spec:
   parentRefs:
     - name: tcp-test-gateway
@@ -16,4 +16,3 @@ spec:
         - name: test-tcp
           port: 30010
           weight: 100
-

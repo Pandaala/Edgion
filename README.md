@@ -71,8 +71,10 @@ For usage details, see the [User Guide](docs/en/user-guide/README.md) and the [e
 cargo test --all --tests
 
 # Run integration tests
-cd examples/testing
-./run_integration_test.sh
+./examples/test/scripts/integration/run_integration.sh
+
+# Run a focused integration suite
+./examples/test/scripts/integration/run_integration.sh --no-prepare -r HTTPRoute -i Basic
 ```
 
 ## Architecture
@@ -92,7 +94,7 @@ Edgion follows a **Controller–Gateway** separation architecture connected via 
                 ┌──────▼───────┐
                 │  Controller  │ ── Admin API :5800
                 └──────┬───────┘
-                       │ gRPC :5810
+                       │ gRPC :50051
           ┌────────────┼────────────┐
           │            │            │
    ┌──────▼──┐  ┌──────▼──┐  ┌──────▼──┐
@@ -140,4 +142,4 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 ---
 
 **Version**: v0.1.5  
-**Last Updated**: 2026-03-16
+**Last Updated**: 2026-03-18

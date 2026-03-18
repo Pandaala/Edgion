@@ -2,6 +2,10 @@
 
 本文档记录如何在 Edgion 中添加一个新的 Kubernetes 资源类型。利用统一的宏系统，添加新资源变得更加简单。
 
+> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/development/00-add-new-resource.md](../../../skills/development/00-add-new-resource.md)。
+> 本文档保留给人看的背景说明和手工检查点。
+> 如果要按资源类型套模板，优先看该 workflow 下面的分类参考：`route-like`、`controller-only`、`plugin-like`、`cluster-scoped`。
+
 ## 概述
 
 Edgion 采用**单一数据源 + 宏生成**的架构：
@@ -9,6 +13,12 @@ Edgion 采用**单一数据源 + 宏生成**的架构：
 - `resource_defs.rs` - 所有资源类型的元数据定义（单一数据源）
 - `impl_resource_meta!` 宏 - 自动生成 ResourceMeta trait 实现
 - 辅助函数 - 统一处理资源的加载、列表、查询等操作
+
+### 当前架构和旧文档的关键区别
+
+- Controller 侧现在是 `ResourceProcessor<T> + ServerCache<T> + PROCESSOR_REGISTRY` 架构。
+- `ConfigSyncServer` 不再手动为每个资源维护字段；资源由 processor 注册为 watch/list 对象。
+- 因此，旧版“给 controller 的 ConfigServer 手动加字段”的做法不再适用于当前仓库。
 
 ### CRD 版本与兼容策略（务必遵循）
 
@@ -24,409 +34,273 @@ Edgion 采用**单一数据源 + 宏生成**的架构：
 
 ## 快速清单
 
-添加新资源类型只需修改以下几个核心位置：
+添加新资源类型通常需要修改以下几个核心位置：
 
 ### 必须修改
 
-1. **`src/types/resources/your_resource/mod.rs`** - 定义资源结构体（CustomResource）
+1. **`src/types/resources/<resource>.rs`** - 定义资源结构体
 2. **`src/types/resources/mod.rs`** - 导出新模块
-3. **`src/types/resource_defs.rs`** - 在 `define_resources!` 宏中添加资源定义
-4. **`src/types/resource_meta_traits/impls.rs`** - 使用 `impl_resource_meta!` 宏实现 trait
-5. **`src/core/conf_sync/conf_server/config_server.rs`** - 添加 `ServerCache<T>` 字段
-6. **`src/core/conf_sync/conf_client/config_client.rs`** - 添加 `ClientCache<T>` 字段
-7. **`src/core/cli/config/mod.rs`** - 添加容量配置字段和 `get_capacity()` 分支
+3. **`src/types/resource/kind.rs`** - 添加 `ResourceKind` 变体和名称映射
+4. **`src/types/resource/defs.rs`** - 在 `define_resources!` 中添加元数据
+5. **`src/types/resource/meta/impls.rs`** - 使用 `impl_resource_meta!` 实现 `ResourceMeta`
+6. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`** - 实现 `ProcessorHandler`
+7. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`** - 导出新 handler
+8. **`src/core/controller/conf_mgr/conf_center/file_system/controller.rs`** - 注册 FileSystem 模式 processor
+9. **`src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`** - 注册 Kubernetes 模式 processor
 
 ### 按需修改
 
-8. **`src/core/conf_mgr/conf_store/init_loader.rs`** - 添加加载分支
-9. **`src/core/api/controller/common.rs`** - 更新辅助宏（如 `list_all_resources!`）
-10. **`src/core/api/gateway/mod.rs`** - 更新 Gateway Admin API 宏
-11. **配置文件** - CRD 定义、示例配置
+10. **`src/core/gateway/conf_sync/conf_client/config_client.rs`** - 如果要同步到 Gateway，添加 `ClientCache<T>` 和变更分发
+11. **`src/core/gateway/.../conf_handler*.rs`** - 如果 Gateway 运行时需要消费该资源
+12. **`src/core/controller/api/namespaced_handlers.rs`** 或 **`cluster_handlers.rs`** - 如果要支持 Controller Admin API CRUD
+13. **`src/core/gateway/api/mod.rs`** - 如果要支持 Gateway Admin API 查询
+14. **`src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`** - 如果要支持 Kubernetes 模式下的动态 CRUD
+15. **`config/crd/`** - CRD 定义或上游 CRD 更新
+16. **测试与示例配置** - `examples/test/`、测试 YAML、集成测试
 
 ---
 
 ## 详细步骤
 
-### 步骤 1: 定义资源类型
+### 步骤 1：先判断资源属于哪一类
 
-#### 1.1 创建资源结构体
+在动代码前，先把资源归类：
 
-在 `src/types/resources/` 下创建新目录和模块：
+- `route-like`：像 `TLSRoute` / `HTTPRoute`，会绑定 `Gateway`、引用 `Service`，并同步到 Gateway 运行时
+- `controller-only`：像 `ReferenceGrant`，只在控制面参与校验、重排队或策略判断
+- `plugin-like`：像 `EdgionPlugins`，是可复用运行时配置，常常还会依赖 `Secret`
+- `cluster-scoped`：像 `GatewayClass` / `EdgionGatewayConfig`，属于全局 base-conf
 
-```rust
-// src/types/resources/your_resource/mod.rs
-use kube::CustomResource;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+如果你不确定，先按最接近的已有资源追链路，而不是从零猜。
 
-#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(
-    group = "edgion.io",
-    version = "v1",
-    kind = "YourResource",
-    plural = "yourresources",
-    shortname = "yr",
-    namespaced,  // 如果是 cluster-scoped 资源，移除此行
-    status = "YourResourceStatus"
-)]
-#[serde(rename_all = "camelCase")]
-pub struct YourResourceSpec {
-    pub some_field: String,
-    // ... 其他字段
-}
+### 步骤 2：定义资源类型并导出
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, Default)]
-pub struct YourResourceStatus {
-    // 状态字段
-}
-```
+通常要更新：
 
-#### 1.2 导出模块
+- `src/types/resources/<resource>.rs` 或 `src/types/resources/<resource>/mod.rs`
+- `src/types/resources/mod.rs`
 
-```rust
-// src/types/resources/mod.rs
-pub mod your_resource;
-pub use your_resource::*;
-```
+这一步要确认的重点是：
 
-### 步骤 2: 注册到统一资源系统
+- `group / version / kind / plural`
+- namespaced 还是 cluster-scoped
+- status 类型
+- 有没有运行时派生字段，需要 `serde(skip)` 或预处理逻辑
 
-#### 2.1 在 `resource_defs.rs` 中添加定义
+### 步骤 3：注册到统一资源系统
 
-这是**最关键的一步**，所有资源元数据都集中在这里：
+当前仓库里，这是新增资源最核心的一组文件：
 
-```rust
-// src/types/resource_defs.rs
-define_resources! {
-    // ... 现有资源 ...
-    
-    // 添加新资源（按类别分组）
-    YourResource {
-        kind_id: 20,                      // 使用下一个可用 ID
-        kind_name: "YourResource",
-        api_group: "edgion.io",
-        api_version: "v1",
-        plural: "yourresources",
-        is_namespaced: true,              // 或 false（cluster-scoped）
-        is_k8s_native: false,             // 是否为 k8s 原生资源
-    }
-}
-```
+- `src/types/resource/kind.rs`
+- `src/types/resource/defs.rs`
+- `src/types/resource/meta/impls.rs`
 
-#### 2.2 使用宏实现 ResourceMeta trait
+职责分工：
 
-```rust
-// src/types/resource_meta_traits/impls.rs
-use crate::types::resources::YourResource;
+- `kind.rs`：`ResourceKind` 枚举、`as_str()`、`from_kind_name()` 等名称映射
+- `defs.rs`：单一数据源，定义 cache field、capacity field、scope、registry/no-sync 行为
+- `meta/impls.rs`：通过 `impl_resource_meta!` 接入 `ResourceMeta`
 
-// 标准实现（适用于大多数资源）
-impl_resource_meta!(YourResource);
+注意：
 
-// 如果需要自定义 pre_parse，使用带闭包的版本：
-impl_resource_meta!(YourResource, |resource| {
-    // 自定义预处理逻辑
-    resource.init_runtime();
-});
-```
+- 现在 `defs.rs` 用的是 `enum_value`、`cache_field`、`capacity_field`、`cluster_scoped` 这些字段，不是旧文档里的 `kind_id` / `is_namespaced`
+- 如果资源默认不该同步到 Gateway，还要判断是否应加入 `DEFAULT_NO_SYNC_KINDS`
 
-### 步骤 3: 配置同步层集成
+### 步骤 4：实现控制器侧处理链路
 
-#### 3.1 更新 ConfigServer
+当前控制器架构的核心不是“给 ConfigServer 加字段”，而是：
 
-```rust
-// src/core/conf_sync/conf_server_old/config_server.rs
+- `ProcessorHandler<T>`
+- `ResourceProcessor<T>`
+- `PROCESSOR_REGISTRY`
 
-pub struct ConfigServer {
-    // ... 现有字段 ...
-    pub your_resources: ServerCache<YourResource>,
-}
+通常要更新：
 
-impl ConfigServer {
-    pub fn new(base_conf: GatewayBaseConf, conf_sync_config: &ConfSyncConfig) -> Self {
-        Self {
-            // ... 现有初始化 ...
-            your_resources: ServerCache::new(
-                conf_sync_config.get_capacity(ResourceKind::YourResource) as usize
-            ),
-        }
-    }
-    
-    // 添加 list/watch 方法
-    pub fn list_your_resources(&self) -> ListData<YourResource> {
-        self.your_resources.list()
-    }
-    
-    pub fn watch_your_resources(
-        &self,
-        client_id: String,
-        client_name: String,
-        from_version: u64,
-    ) -> mpsc::Receiver<WatchResponse<YourResource>> {
-        self.your_resources.watch(client_id, client_name, from_version)
-    }
-}
-```
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
+- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
+- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
 
-#### 3.2 更新 ConfigClient
+其中 handler 需要考虑：
 
-```rust
-// src/core/conf_sync/conf_client/config_client.rs
+- `filter()`
+- `validate()`
+- `preparse()`
+- `parse()`
+- `on_change()`
+- `on_delete()`
+- `update_status()`
 
-pub struct ConfigClient {
-    // ... 现有字段 ...
-    pub your_resources: ClientCache<YourResource>,
-}
-```
+如果 `parse()` 会查 `Gateway`、`Service`、`Secret`、`ReferenceGrant`，还要把对应的依赖注册和 requeue 补齐。
 
-#### 3.3 添加容量配置
+### 步骤 5：决定是否同步到 Gateway
 
-```rust
-// src/core/cli/config/mod.rs
+这一步是分水岭。
 
-pub struct ConfSyncConfig {
-    // ... 现有字段 ...
-    
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub your_resources_capacity: u32,
-}
+如果资源需要进 Gateway：
 
-impl ConfSyncConfig {
-    pub fn get_capacity(&self, kind: ResourceKind) -> u32 {
-        match kind {
-            // ... 现有分支 ...
-            ResourceKind::YourResource => self.your_resources_capacity,
-        }
-    }
-}
-```
+- 更新 `src/core/gateway/conf_sync/conf_client/config_client.rs`
+- 添加 `ClientCache<T>`
+- 补 `get_dyn_cache()`、`list()`、`apply_resource_change()`
+- 如果 Gateway 运行时需要它，再补对应的 `ConfHandler<T>`
 
-### 步骤 4: 添加加载逻辑
+常见位置：
 
-```rust
-// src/core/conf_mgr/conf_store/init_loader.rs
+- `src/core/gateway/routes/*/conf_handler_impl.rs`
+- `src/core/gateway/plugins/http/conf_handler_impl.rs`
+- `src/core/gateway/tls/store/conf_handler.rs`
+- `src/core/gateway/config/*/conf_handler_impl.rs`
 
-// 对于简单资源，使用 load_simple 函数：
-Some(ResourceKind::YourResource) => {
-    load_simple::<YourResource>(
-        content, name, "YourResource", 
-        &config_server.your_resources, &mut stats
-    );
-}
+如果资源不需要进 Gateway：
 
-// 对于需要验证的路由类资源，使用 load_route_with_validation：
-Some(ResourceKind::YourRoute) => {
-    load_route_with_validation::<YourRoute, _>(
-        content, name, "YourRoute", 
-        &config_server.your_routes, &mut stats,
-        |r| validate_your_route_if_enabled(r),
-    );
-}
-```
+- 不要加 Gateway cache wiring
+- 需要明确让 Gateway 侧跳过它，而不是放成“未定义行为”
 
-### 步骤 5: 更新 Admin API 宏
+### 步骤 6：补 Controller / Gateway Admin API
 
-#### 5.1 Controller Admin API
+这部分在当前仓库里也是显式 wiring，不是自动的。
 
-```rust
-// src/core/api/controller/common.rs
+Controller 侧：
 
-#[macro_export]
-macro_rules! list_all_resources {
-    ($server:expr, $kind:expr) => {{
-        match $kind {
-            // ... 现有分支 ...
-            ResourceKind::YourResource => list_to_json!($server.your_resources.list().data),
-        }
-    }};
-}
+- namespaced 资源：`src/core/controller/api/namespaced_handlers.rs`
+- cluster-scoped 资源：`src/core/controller/api/cluster_handlers.rs`
 
-// 同样更新其他宏：list_namespaced_resources!, get_namespaced_resource!, resource_exists_namespaced!
-```
+Gateway 侧只读查询：
 
-#### 5.2 Gateway Admin API
+- `src/core/gateway/api/mod.rs`
 
-```rust
-// src/core/api/gateway/mod.rs
+如果不补这些位置，资源可能已经在运行，但你通过 Admin API 看不到它。
 
-macro_rules! list_client_resources {
-    ($client:expr, $kind:expr) => {{
-        match $kind {
-            // ... 现有分支 ...
-            ResourceKind::YourResource => to_json_vec($client.your_resources.list()),
-        }
-    }};
-}
+### 步骤 7：补 Kubernetes 动态写入路径
 
-// 同样更新 get_client_resource! 宏
-```
+如果资源要支持 Kubernetes 模式下的 create/update/delete，需要更新：
 
-### 步骤 6: 配置文件
+- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
 
-#### 6.1 Kubernetes CRD
+这里要保证：
 
-```yaml
-# config/crd/edgion-crd/your_resource_crd.yaml
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: yourresources.edgion.io
-spec:
-  group: edgion.io
-  names:
-    kind: YourResource
-    plural: yourresources
-    shortNames:
-    - yr
-  scope: Namespaced
-  versions:
-  - name: v1
-    served: true
-    storage: true
-    schema:
-      openAPIV3Schema:
-        type: object
-        properties:
-          spec:
-            type: object
-            # ... schema 定义
-```
+- `ApiResource` 的 `group/version/kind` 对
+- scope 对
+- namespaced / cluster-scoped 的动态 API 选择对
 
-#### 6.2 示例配置
+### 步骤 8：补 CRD / 上游 API 清单
 
-```yaml
-# examples/conf/YourResource_default_example.yaml
-apiVersion: edgion.io/v1
-kind: YourResource
-metadata:
-  name: example
-  namespace: default
-spec:
-  someField: "value"
-```
+Edgion 自定义资源通常放在：
 
-#### 6.3 控制器配置
+- `config/crd/edgion-crd/`
 
-```toml
-# config/edgion-controller.toml
-[conf_sync]
-your_resources_capacity = 200
-```
+Gateway API 标准或实验性资源，优先跟随：
+
+- `config/crd/gateway-api/`
+
+要保持一致的内容：
+
+- group / version / kind
+- scope
+- schema 字段
+- status 结构
+
+### 步骤 9：补测试
+
+至少要覆盖：
+
+- Rust 单元测试
+- `examples/test/` 下的集成测试
+- 如果暴露了 API，补 controller / gateway admin API 的验证
+
+对 route-like、plugin-like、依赖型资源来说，集成测试往往是最关键的安全网。
 
 ---
 
 ## 架构说明
 
-### 资源元数据流转
+### 当前新增资源的主链路
 
 ```mermaid
 graph TD
-    subgraph SingleSource[单一数据源]
-        RD[resource_defs.rs<br/>define_resources!]
-    end
-    
-    RD --> RK[ResourceKind enum]
-    RD --> REG[ResourceRegistry]
-    RD --> META[ResourceTypeMetadata]
-    
-    subgraph TraitImpl[Trait 实现]
-        IMPLS[impls.rs<br/>impl_resource_meta!]
-    end
-    
-    IMPLS --> RM[ResourceMeta trait]
-    
-    subgraph Runtime[运行时使用]
-        CS[ConfigServer]
-        CC[ConfigClient]
-        API[Admin API]
-        LOADER[InitLoader]
-    end
-    
-    RK --> CS
-    RK --> CC
-    RK --> API
-    RK --> LOADER
-    RM --> CS
-    RM --> CC
+    A["Rust Resource Type"] --> B["ResourceKind / defs.rs / meta/impls.rs"]
+    B --> C["ProcessorHandler<T>"]
+    C --> D["ResourceProcessor<T>"]
+    D --> E["PROCESSOR_REGISTRY"]
+    E --> F["ConfigSyncServer (watch/list)"]
+    F --> G["ConfigClient / ClientCache<T>"]
+    G --> H["Gateway ConfHandler<T> / Runtime Store"]
 ```
 
-### 关键宏和函数
+这个链路里最容易忘的是三段：
+
+- `kind.rs + defs.rs + meta/impls.rs`
+- controller 两种 mode 的 processor 注册
+- Gateway sync 后的 `ClientCache<T>` / `ConfHandler<T>` wiring
+
+### 当前关键扩展点
 
 | 名称 | 位置 | 作用 |
 |------|------|------|
-| `define_resources!` | `resource_defs.rs` | 定义所有资源元数据 |
-| `impl_resource_meta!` | `resource_meta_traits/impls.rs` | 自动实现 ResourceMeta trait |
-| `load_simple()` | `init_loader.rs` | 加载简单资源 |
-| `load_route_with_validation()` | `init_loader.rs` | 加载需验证的路由资源 |
-| `list_all_resources!` | `api/controller/common.rs` | 列出所有资源 |
-| `list_client_resources!` | `api/gateway/mod.rs` | 从 ConfigClient 列出资源 |
+| `ResourceKind` | `src/types/resource/kind.rs` | 新资源的枚举入口和名称映射 |
+| `define_resources!` | `src/types/resource/defs.rs` | 单一数据源，定义 scope、cache field、capacity、registry 行为 |
+| `impl_resource_meta!` | `src/types/resource/meta/impls.rs` | 把资源接入 `ResourceMeta` |
+| `ProcessorHandler<T>` | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` | 定义控制器侧 filter / validate / parse / status / requeue 逻辑 |
+| `ConfHandler<T>` | `src/core/common/conf_sync/traits.rs` | 定义 Gateway 侧 full_set / partial_update 逻辑 |
+| `ConfigClient` | `src/core/gateway/conf_sync/conf_client/config_client.rs` | Gateway 侧 cache 和变更分发入口 |
 
 ---
 
-## 编译时保护
+## 编译期与运行期保护
 
-添加新资源后，如果遗漏了某些 `match` 分支，编译器会报错：
+当前仓库能帮你兜住一部分遗漏，但不是全部：
 
-```
-error[E0004]: non-exhaustive patterns: `ResourceKind::YourResource` not covered
-```
+- 忘记 `kind.rs` 或 `defs.rs`：经常会直接编译失败
+- 忘记某个 `match` 分支：很多地方会报非穷尽匹配
+- 忘记 controller 的 spawn：通常不会编译报错，但运行时资源永远不会 ready
+- 忘记 Gateway 的 cache wiring：控制器正常、Gateway 无数据，只有运行时或集成测试能发现
 
-这确保了新资源类型在所有需要处理的地方都被正确处理。
+所以“能编译”并不等于“资源已经完整接好”。
 
 ---
 
 ## 常见问题
 
-### Q: ResourceKind 的 kind_id 如何分配？
+### Q: `enum_value` 怎么分配？
 
-A: 查看 `resource_defs.rs` 中现有资源的最大 ID，使用下一个数字。ID 用于序列化和枚举值。
+A: 看 `src/types/resource/kind.rs` 和 `src/types/resource/defs.rs` 当前最大的编号，保持二者一致地使用下一个可用值。
 
-### Q: 何时需要自定义 pre_parse()？
+### Q: 什么时候需要 `preparse()`？
 
-A: 当资源需要在加载后进行预处理时：
-- 初始化运行时对象（如插件运行时）
-- 构建查找表或索引
-- 验证配置的一致性
+A: 当资源在进入运行时前需要提前构建派生结构或做昂贵校验时，例如：
 
-使用带闭包的 `impl_resource_meta!` 宏版本：
+- 插件运行时初始化
+- 正则、查找表、索引构建
+- 配置一致性校验
 
-```rust
-impl_resource_meta!(YourResource, |resource| {
-    resource.init_something();
-});
-```
+### Q: 怎么区分 namespaced 和 cluster-scoped？
 
-### Q: 如何区分 namespaced 和 cluster-scoped 资源？
+A: 不只看 CRD：
 
-A: 在 `resource_defs.rs` 中设置 `is_namespaced`:
-- `true` - 资源属于特定 namespace
-- `false` - 资源是集群级别的（如 GatewayClass）
+- Rust 类型声明里 scope 要对
+- `defs.rs` 里的 `cluster_scoped` 要对
+- controller API 要走 `namespaced_handlers.rs` 或 `cluster_handlers.rs`
+- Kubernetes storage 的动态 API 选择也要对
 
-### Q: 忘记修改某个文件会怎样？
+### Q: controller-only 资源是不是就不用管 Gateway 了？
 
-A: Rust 编译器会在大多数情况下报错：
-- 忘记 `resource_defs.rs` → `ResourceKind` 缺少变体
-- 忘记 `impls.rs` → ResourceMeta trait 未实现
-- 忘记 `match` 分支 → 非穷尽模式匹配错误
+A: 不是“什么都不用做”，而是要显式让 Gateway 跳过它，并保证依赖它的其他资源在控制器侧会正确重校验。
 
 ---
 
 ## 检查清单
 
-提交前确认：
+提交前建议按这份表过一遍：
 
-- [ ] `src/types/resources/your_resource/mod.rs` - 资源定义
-- [ ] `src/types/resources/mod.rs` - 模块导出
-- [ ] `src/types/resource_defs.rs` - `define_resources!` 宏
-- [ ] `src/types/resource_meta_traits/impls.rs` - `impl_resource_meta!` 宏
-- [ ] `src/core/conf_sync/conf_server/config_server.rs` - ServerCache 字段
-- [ ] `src/core/conf_sync/conf_client/config_client.rs` - ClientCache 字段
-- [ ] `src/core/cli/config/mod.rs` - 容量配置和 `get_capacity()`
-- [ ] `src/core/conf_mgr/conf_store/init_loader.rs` - 加载分支
-- [ ] Admin API 宏更新（如需要）
-- [ ] `cargo build` 编译通过
-- [ ] `cargo test` 测试通过
-- [ ] 集成测试通过
+- [ ] 资源类型定义已完成，模块已导出
+- [ ] `kind.rs`、`defs.rs`、`meta/impls.rs` 都已更新
+- [ ] `ProcessorHandler<T>` 已实现
+- [ ] FileSystem 和 Kubernetes 两条 controller 链路都已注册
+- [ ] 如果需要同步到 Gateway，`ConfigClient` 和对应 `ConfHandler<T>` 已接好
+- [ ] Controller / Gateway Admin API 已按需补齐
+- [ ] Kubernetes storage 动态 CRUD 已按需补齐
+- [ ] CRD / 上游 API 清单已更新
+- [ ] 单元测试、集成测试至少覆盖一条主路径
 
 ---
 
@@ -435,8 +309,9 @@ A: Rust 编译器会在大多数情况下报错：
 - [Kubernetes Custom Resources](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)
 - [kube-rs Documentation](https://docs.rs/kube/latest/kube/)
 - [Gateway API Specification](https://gateway-api.sigs.k8s.io/)
+- [../../../skills/development/00-add-new-resource.md](../../../skills/development/00-add-new-resource.md)
 
 ---
 
-**最后更新**: 2026-01-11  
-**文档版本**: v2.0（统一宏系统）
+**最后更新**: 2026-03-18  
+**文档版本**: v3.0（对齐 ResourceProcessor / ConfigClient 架构）

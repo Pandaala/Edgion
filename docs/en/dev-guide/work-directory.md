@@ -92,8 +92,8 @@ let config_dir = work_dir().config(); // work_dir/config
 let runtime_dir = work_dir().runtime(); // work_dir/runtime
 
 // 3. Resolve relative/absolute paths
-let log_path = work_dir().resolve("logs/access.log");
-// Relative path -> work_dir/logs/access.log
+let log_path = work_dir().resolve("logs/edgion_access.log");
+// Relative path -> work_dir/logs/edgion_access.log
 // Absolute path -> Unchanged
 ```
 
@@ -101,7 +101,7 @@ let log_path = work_dir().resolve("logs/access.log");
 
 | Input Path | work_dir | Resolved Result |
 |-----------|---------|----------------|
-| `logs/access.log` | `/usr/local/edgion` | `/usr/local/edgion/logs/access.log` |
+| `logs/edgion_access.log` | `/usr/local/edgion` | `/usr/local/edgion/logs/edgion_access.log` |
 | `/var/log/edgion.log` | `/usr/local/edgion` | `/var/log/edgion.log` (absolute path preserved) |
 | `config/gateway.toml` | `.` | `./config/gateway.toml` |
 
@@ -168,9 +168,9 @@ impl WorkDir {
 
 ```rust
 // Log system initialization
-let log_path = work_dir().resolve("logs/access.log");
+let log_path = work_dir().resolve("logs/edgion_access.log");
 let writer = LocalFileWriter::new(LocalFileWriterConfig {
-    path: "logs/access.log".to_string(),  // Relative path
+    path: "logs/edgion_access.log".to_string(),  // Relative path
     ..Default::default()
 });
 
@@ -185,16 +185,16 @@ let writer = LocalFileWriter::new(LocalFileWriterConfig {
 ```rust
 use crate::types::global_def::prefix_dir;
 
-let log_path = prefix_dir().join("logs/access.log");
+let log_path = prefix_dir().join("logs/edgion_access.log");
 ```
 
 #### New Code
 ```rust
 use crate::types::work_dir;
 
-let log_path = work_dir().resolve("logs/access.log");
+let log_path = work_dir().resolve("logs/edgion_access.log");
 // Or
-let log_path = work_dir().logs().join("access.log");
+let log_path = work_dir().logs().join("edgion_access.log");
 ```
 
 ### Configuration File Migration
@@ -222,7 +222,7 @@ fn test_work_dir_resolve() {
     let wd = WorkDir::new(temp.path().to_path_buf()).unwrap();
     
     // Test relative path
-    let relative = wd.resolve("logs/access.log");
+    let relative = wd.resolve("logs/edgion_access.log");
     assert!(relative.starts_with(temp.path()));
     
     // Test absolute path
@@ -286,10 +286,10 @@ Error: Cannot create work_dir /nonexistent/path
 **Solution**:
 ```rust
 // Wrong: Using relative path directly
-let path = PathBuf::from("logs/access.log");
+let path = PathBuf::from("logs/edgion_access.log");
 
 // Correct: Resolve through work_dir
-let path = work_dir().resolve("logs/access.log");
+let path = work_dir().resolve("logs/edgion_access.log");
 ```
 
 ## Best Practices
@@ -316,10 +316,10 @@ WORKDIR /usr/local/edgion
 ```toml
 # Recommended (relative to work_dir)
 [access_log.output.localFile]
-path = "logs/access.log"
+path = "logs/edgion_access.log"
 
 # Not recommended (absolute path breaks work_dir unified management)
-path = "/var/log/edgion/access.log"
+path = "/var/log/edgion/edgion_access.log"
 ```
 
 ### 4. Validate Before Startup

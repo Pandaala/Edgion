@@ -161,7 +161,7 @@
 - 实现插件**运行时逻辑**（解析 JWT、选密钥、校验签名与 exp/nbf、设置头/匿名/401）。  
 - **凭证加载**：从 K8s Secret 解析 secret_ref / secret_refs（若需在 conf sync 或请求路径拉取，需定方案）。  
 - **单元测试**：mock session，覆盖有 token/无 token/错误 token/匿名/hide_credentials。  
-- **集成测试**：脚本与配置目录按「插件开发」文档（`run_integration_test.sh`、`EdgionPlugins/PluginJwtAuth`、client suite）。  
+- **集成测试**：脚本与配置目录按「插件开发」文档（`run_integration.sh`、`EdgionPlugins/JwtAuth`、client suite）。  
 - **用户文档**：`Edgion/docs/zh-CN/user-guide/edgion-plugins/jwt-auth.md`（或对应 path）。
 
 ---

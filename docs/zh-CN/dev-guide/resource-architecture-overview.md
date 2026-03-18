@@ -1,835 +1,120 @@
-# Resource Architecture Overview
+# 资源架构总览
 
-This document provides a comprehensive overview of Edgion's resource architecture, explaining how Kubernetes resources (like HTTPRoute, GRPCRoute, etc.) flow through the system from YAML definitions to runtime components.
+> 本文档说明当前 Edgion 中一个资源如何从类型定义一路走到控制面处理、配置同步，再进入 Gateway 运行时。
 
-## Architecture Diagram
+## 端到端链路
 
 ```mermaid
 graph TD
-    YAML[Resource YAML/JSON] -->|Deserialized| ResourceType[Resource Type Definition]
-    ResourceType -->|Implements| ResourceMeta[ResourceMeta Trait]
-    ResourceType -->|Registered in| ResourceKind[ResourceKind Enum]
-    
-    ResourceKind -->|Proto Definition| ProtoDef[config_sync.proto]
-    ProtoDef -->|gRPC Service| Server[ConfigServer]
-    ProtoDef -->|gRPC Client| Client[ConfigClient]
-    
-    Server -->|Watch/List API| ServerCache[ServerCache T]
-    Client -->|Subscribe| ClientCache[ClientCache T]
-    
-    ServerCache -->|Apply Changes| EventDispatch[Server Event Dispatch]
-    ClientCache -->|Apply Changes| ClientEventDispatch[Client Event Dispatch]
-    
-    EventDispatch -->|Validate & Store| Storage[(Resource Storage)]
-    ClientEventDispatch -->|Process| Handler[Resource Handlers]
-    
-    Handler -->|Update| RouteManager[Route Manager]
-    Handler -->|Update| ServiceStore[Service Store]
-    Handler -->|Update| PluginStore[Plugin Store]
+    YAML["YAML / K8s 对象"] --> Type["Rust 资源类型<br/>src/types/resources/"]
+    Type --> Kind["ResourceKind<br/>src/types/resource/kind.rs"]
+    Type --> Defs["define_resources!<br/>src/types/resource/defs.rs"]
+    Type --> Meta["ResourceMeta 实现<br/>src/types/resource/meta/impls.rs"]
+    Defs --> Processor["ResourceProcessor<T>"]
+    Meta --> Processor
+    Processor --> Registry["PROCESSOR_REGISTRY"]
+    Registry --> Sync["ConfigSyncServer"]
+    Sync --> Client["ConfigClient"]
+    Client --> Cache["ClientCache<T>"]
+    Cache --> Handler["ConfHandler"]
+    Handler --> Runtime["Route / Plugin / TLS / Backend 运行时"]
 ```
 
-## System Components
+## 1. 类型定义与注册
 
-### 1. Resource Type Definition
+每一种资源都需要穿过 4 个注册面：
 
-**Location**: `src/types/resources/`
+| 面向 | 当前路径 | 作用 |
+|------|----------|------|
+| Rust 类型 | `src/types/resources/` | 资源本体结构，定义 CRD 或 K8s 对象字段 |
+| Kind 枚举 | `src/types/resource/kind.rs` | 控制面、同步层、网关运行时共用的穷举枚举 |
+| 统一元数据 | `src/types/resource/defs.rs` | `define_resources!` 单一事实源，维护 cache 名、base-conf 标记、registry 可见性、endpoint 行为 |
+| Meta 实现 | `src/types/resource/meta/impls.rs` | `ResourceMeta` 实现，包括 `key_name()`、版本读取、可选 `pre_parse()` |
 
-Each Kubernetes resource is defined as a Rust struct using the `kube::CustomResource` derive macro or standard Kubernetes API types.
+`define_resources!` 条目里最关键的元数据通常包括：
 
-**Example Structure** (using GRPCRoute):
+- `enum_value`
+- `kind_name`
+- `cache_field`
+- `cluster_scoped`
+- `is_base_conf`
+- `in_registry`
 
-```rust
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[kube(
-    group = "gateway.networking.k8s.io",
-    version = "v1",
-    kind = "GRPCRoute",
-    plural = "grpcroutes",
-    namespaced
-)]
-pub struct GRPCRouteSpec {
-    pub parent_refs: Option<Vec<ParentReference>>,
-    pub hostnames: Option<Vec<String>>,
-    pub rules: Option<Vec<GRPCRouteRule>>,
-}
-```
+## 2. Controller 侧处理
 
-**Key Features**:
-- Serialization/deserialization support via serde
-- JSON schema generation for validation
-- Runtime-only fields marked with `#[serde(skip)]`
-- Pre-parsing hooks for computed fields
+当资源进入文件系统或 Kubernetes 存储后，Controller 侧的处理链路由 config center 和 processor 栈驱动：
 
-### 2. ResourceMeta Trait
+1. `ConfCenter` 实现先把原始对象放进存储。
+2. 每个 kind 对应一个 `ResourceController`，负责把 key 推入队列。
+3. `ResourceProcessor<T>` 出队后调用对应的 `ProcessorHandler`。
+4. Handler 常见实现点包括：
+   - `validate`
+   - `preparse`
+   - `parse`
+   - `on_change`
+   - `update_status`
+5. 引用管理器和 requeue 机制负责把依赖资源重新校验起来。
 
-**Location**: `src/types/resource_meta_traits/traits.rs`
+这也是为什么现在新增资源必须走 processor / handler 模式，而不是沿用旧的“单体 cache server 手工挂字段”思路。
 
-The `ResourceMeta` trait provides a unified interface for all resource types:
+## 3. 配置同步到 Gateway
 
-```rust
-pub trait ResourceMeta: DeserializeOwned + Send + Sync + 'static {
-    fn get_version(&self) -> u64;
-    fn resource_kind() -> ResourceKind;
-    fn kind_name() -> &'static str;
-    fn key_name(&self) -> String;
-    fn pre_parse(&mut self);
-}
-```
+现在的 Gateway 配置同步，是从 processors 动态组装出来的，而不是在 sync server 里手工维护一张资源清单。
 
-**Purpose**:
-- **Version tracking**: For optimistic concurrency control
-- **Type identification**: For routing and dispatching events
-- **Unique keys**: For cache storage (namespace/name format)
-- **Pre-parsing**: For populating runtime-only fields after deserialization
+- 每个 processor 都会暴露一个 watch object。
+- `PROCESSOR_REGISTRY.all_watch_objs()` 把这些 watch object 汇总起来。
+- `ConfigSyncServer.register_all()` 通过 gRPC `List` / `Watch` 对外发布。
+- `src/types/resource/defs.rs` 里的 `DEFAULT_NO_SYNC_KINDS` 定义了默认 controller-only 资源。
 
-**Implementation Example**:
+例子：
 
-```rust
-impl ResourceMeta for GRPCRoute {
-    fn get_version(&self) -> u64 {
-        extract_version(&self.metadata)
-    }
-    
-    fn resource_kind() -> ResourceKind {
-        ResourceKind::GRPCRoute
-    }
-    
-    fn kind_name() -> &'static str {
-        "GRPCRoute"
-    }
-    
-    fn key_name(&self) -> String {
-        if let Some(namespace) = &self.metadata.namespace {
-            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
-        } else {
-            self.metadata.name.as_deref().unwrap_or("").to_string()
-        }
-    }
-    
-    fn pre_parse(&mut self) {
-        // Parse extension refs, timeouts, etc.
-        self.preparse();
-        self.parse_timeouts();
-    }
-}
-```
+- `ReferenceGrant` 默认只在 Controller 侧处理。
+- `Secret` 作为关联资源跟随其他资源变化，也默认不直接进入常规同步集合。
 
-### 3. ResourceKind Enum
+## 4. Gateway 侧运行时接线
 
-**Location**: `src/types/resource_kind.rs`
+Gateway 侧的工作方式是：
 
-A central enum that identifies all resource types in the system:
+1. `ConfigClient` 为每个需要同步的 kind 创建一个 `ClientCache<T>`。
+2. 每个 cache 绑定一个领域专属 `ConfHandler`。
+3. 同步过来的数据进入 cache。
+4. Handler 再去更新对应的运行时组件。
 
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum ResourceKind {
-    Unspecified = 0,
-    GatewayClass = 1,
-    EdgionGatewayConfig = 2,
-    Gateway = 3,
-    HTTPRoute = 4,
-    Service = 5,
-    EndpointSlice = 6,
-    EdgionTls = 7,
-    Secret = 8,
-    EdgionPlugins = 9,
-    GRPCRoute = 10,
-}
-```
+常见映射关系：
 
-**Purpose**:
-- Used in protobuf definitions for gRPC communication
-- Enables type-safe dispatching in event handlers
-- Supports dynamic type detection from YAML/JSON content
+| 资源家族 | Gateway 运行时消费者 |
+|----------|----------------------|
+| Route 类资源 | `src/core/gateway/routes/` 下的 route manager |
+| `Service` / `EndpointSlice` / `Endpoint` | 后端发现和健康检查组件 |
+| `EdgionPlugins` / `EdgionStreamPlugins` | `src/core/gateway/plugins/` 下的插件存储 |
+| `EdgionTls` / `BackendTLSPolicy` | TLS store 和后端 TLS policy 运行时 |
+| Base-conf 资源 | Gateway 配置和运行时 store |
 
-### 4. Protocol Buffer Definition
+## 5. 常见资源家族
 
-**Location**: `src/core/conf_sync/proto/config_sync.proto`
+分析一个新资源时，先做分类最稳：
 
-Defines the gRPC service for configuration synchronization:
+| 家族 | 特征 | 参考模式 |
+|------|------|----------|
+| route-like | 绑定 Gateway、要同步到 Gateway、进入路由运行时 | `skills/development/references/add-resource-route-like.md` |
+| controller-only | 主要负责校验 / requeue / status，不应同步到 Gateway | `skills/development/references/add-resource-controller-only.md` |
+| plugin-like | 负责解析引用并成为可复用运行时配置 | `skills/development/references/add-resource-plugin-like.md` |
+| cluster-scoped base-conf | 提供 Gateway 基础配置或集群级默认值 | `skills/development/references/add-resource-cluster-scoped.md` |
 
-```protobuf
-service ConfigSync {
-    rpc List(ListRequest) returns (ListResponse);
-    rpc Watch(WatchRequest) returns (stream WatchResponse);
-    rpc GetBaseConf(GetBaseConfRequest) returns (GetBaseConfResponse);
-}
+## 6. 新增一种资源时
 
-enum ResourceKind {
-    RESOURCE_KIND_UNSPECIFIED = 0;
-    RESOURCE_KIND_GATEWAY_CLASS = 1;
-    // ... other kinds ...
-    RESOURCE_KIND_GRPC_ROUTE = 10;
-}
-```
+建议按这个顺序：
 
-**Operations**:
-- **List**: Fetch all resources of a specific kind
-- **Watch**: Stream updates for resources (Add/Update/Delete)
-- **GetBaseConf**: Fetch base configuration (GatewayClass, Gateway, EdgionGatewayConfig)
+1. 先看 [添加新资源类型指南](./add-new-resource-guide.md)。
+2. 再从 `skills/development/references/` 里选最接近的模式。
+3. 接上类型定义、kind 枚举、`define_resources!`、`ResourceMeta`。
+4. 接上 Controller `ProcessorHandler` 和必要的 requeue 逻辑。
+5. 明确它是否需要同步到 Gateway。
+6. 只有需要同步时，才继续补 Gateway 运行时。
+7. 最后用集成测试和 Admin API 验证闭环。
 
-### 5. Server-Side Components
+## 相关文档
 
-#### ConfigServer
-
-**Location**: `src/core/conf_sync/conf_server/config_server.rs`
-
-The server-side cache that stores all resources:
-
-```rust
-pub struct ConfigServer {
-    pub base_conf: RwLock<GatewayBaseConf>,
-    pub routes: ServerCache<HTTPRoute>,
-    pub grpc_routes: ServerCache<GRPCRoute>,
-    pub services: ServerCache<Service>,
-    pub endpoint_slices: ServerCache<EndpointSlice>,
-    pub edgion_tls: ServerCache<EdgionTls>,
-    pub edgion_plugins: ServerCache<EdgionPlugins>,
-    pub secrets: ServerCache<Secret>,
-}
-```
-
-Each `ServerCache<T>` provides:
-- Thread-safe storage with `RwLock`
-- Version tracking for optimistic concurrency
-- Event streaming to watching clients
-- Ready state management
-
-#### Server Event Dispatch
-
-**Location**: `src/core/conf_sync/conf_server/event_dispatch.rs`
-
-Handles incoming resource changes and applies them to caches:
-
-```rust
-fn apply_resource_change_with_resource_type(
-    &self,
-    change: ResourceChange,  // Add, Update, or Delete
-    resource_type: ResourceKind,
-    data: String,
-) {
-    match resource_type {
-        ResourceKind::GRPCRoute => {
-            if let Ok(resource) = serde_yaml::from_str::<GRPCRoute>(&data) {
-                // Validate parent gateway references
-                // Apply change to cache
-                Self::execute_change_on_cache::<GRPCRoute>(change, &self.grpc_routes, resource);
-            }
-        }
-        // ... other resource types ...
-    }
-}
-```
-
-**Validation Steps**:
-1. Deserialize YAML/JSON to typed resource
-2. Validate references (e.g., parent gateways must exist)
-3. Apply change to appropriate cache
-4. Notify watching clients
-
-### 6. Client-Side Components
-
-#### ConfigClient
-
-**Location**: `src/core/conf_sync/conf_client/config_client.rs`
-
-The client-side cache that subscribes to server updates:
-
-```rust
-pub struct ConfigClient {
-    gateway_class_key: String,
-    pub base_conf: RwLock<Option<GatewayBaseConf>>,
-    routes: ClientCache<HTTPRoute>,
-    grpc_routes: ClientCache<GRPCRoute>,
-    services: ClientCache<Service>,
-    endpoint_slices: ClientCache<EndpointSlice>,
-    edgion_tls: ClientCache<EdgionTls>,
-    edgion_plugins: ClientCache<EdgionPlugins>,
-    secrets: ClientCache<Secret>,
-}
-```
-
-Each `ClientCache<T>` provides:
-- Local resource storage
-- Event handlers for Add/Update/Delete
-- Integration with domain-specific processors (RouteManager, ServiceStore, etc.)
-
-#### Client Event Dispatch
-
-**Location**: `src/core/conf_sync/conf_client/config_client.rs`
-
-Processes incoming events from the server:
-
-```rust
-impl ConfigClientEventDispatcher for ConfigClient {
-    fn apply_resource_change(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        _resource_version: Option<u64>,
-    ) {
-        match resource_type {
-            ResourceKind::GRPCRoute => {
-                if let Ok(resource) = serde_yaml::from_str::<GRPCRoute>(&data) {
-                    Self::apply_change_to_cache(&self.grpc_routes, change, resource);
-                }
-            }
-            // ... other resource types ...
-        }
-    }
-}
-```
-
-### 7. Resource Handlers
-
-**Purpose**: Process resource changes and update runtime components
-
-**Examples**:
-- **RouteManager** (`src/core/routes/`): Manages routing tables for HTTPRoute and GRPCRoute
-- **ServiceStore** (`src/core/backends/`): Tracks Service resources
-- **EpSliceHandler** (`src/core/backends/`): Manages endpoint slices for load balancing
-- **PluginStore** (`src/core/plugins/`): Handles plugin configurations
-
-**Integration**:
-
-```rust
-// In ConfigClient::new()
-let routes_cache = ClientCache::new(gateway_class_key, client_id, client_name);
-let route_handler = create_route_manager_handler();
-routes_cache.set_conf_processor(route_handler);
-```
-
-When a route change occurs:
-1. Cache receives the event
-2. Cache calls the registered handler
-3. Handler updates its internal state (e.g., routing table)
-4. Gateway proxy uses updated state for request routing
-
-## Data Flow
-
-### Resource Addition Flow
-
-```mermaid
-sequenceDiagram
-    participant K8s as Kubernetes API
-    participant Loader as Config Loader
-    participant Server as ConfigServer
-    participant Client as ConfigClient
-    participant Handler as Resource Handler
-    participant Proxy as Gateway Proxy
-    
-    K8s->>Loader: Watch GRPCRoute
-    Loader->>Server: Add(GRPCRoute)
-    Server->>Server: Validate & Store
-    Server->>Client: Watch Event (Add)
-    Client->>Client: Deserialize
-    Client->>Handler: Process Add
-    Handler->>Handler: Update Routing Table
-    
-    Note over Proxy: Next Request
-    Proxy->>Handler: Match Route
-    Handler-->>Proxy: Route Rule
-    Proxy->>Proxy: Apply Rule & Proxy
-```
-
-### Resource Update Flow
-
-```mermaid
-sequenceDiagram
-    participant K8s as Kubernetes API
-    participant Loader as Config Loader
-    participant Server as ConfigServer
-    participant Client as ConfigClient
-    participant Handler as Resource Handler
-    
-    K8s->>Loader: Watch GRPCRoute (Modified)
-    Loader->>Server: Update(GRPCRoute, new_version)
-    Server->>Server: Version Check
-    Server->>Server: Update Cache
-    Server->>Client: Watch Event (Update)
-    Client->>Client: Deserialize
-    Client->>Handler: Process Update
-    Handler->>Handler: Update Routing Table
-```
-
-### Resource Deletion Flow
-
-```mermaid
-sequenceDiagram
-    participant K8s as Kubernetes API
-    participant Loader as Config Loader
-    participant Server as ConfigServer
-    participant Client as ConfigClient
-    participant Handler as Resource Handler
-    
-    K8s->>Loader: Watch GRPCRoute (Deleted)
-    Loader->>Server: Delete(GRPCRoute)
-    Server->>Server: Remove from Cache
-    Server->>Client: Watch Event (Delete)
-    Client->>Client: Remove from Cache
-    Client->>Handler: Process Delete
-    Handler->>Handler: Remove from Routing Table
-```
-
-## How to Add a New Resource Type
-
-Follow these steps to add support for a new Kubernetes resource type:
-
-### Step 1: Define Resource Type
-
-Create a new file `src/types/resources/your_resource.rs`:
-
-```rust
-use kube::CustomResource;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-pub const YOUR_RESOURCE_GROUP: &str = "gateway.networking.k8s.io";
-pub const YOUR_RESOURCE_KIND: &str = "YourResource";
-
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[kube(
-    group = "gateway.networking.k8s.io",
-    version = "v1",
-    kind = "YourResource",
-    plural = "yourresources",
-    namespaced
-)]
-pub struct YourResourceSpec {
-    // Your fields here
-}
-```
-
-Export in `src/types/resources/mod.rs`:
-
-```rust
-pub mod your_resource;
-pub use self::your_resource::*;
-```
-
-### Step 2: Implement ResourceMeta Trait
-
-Create `src/types/resource_meta_traits/your_resource.rs`:
-
-```rust
-use crate::types::resource_kind::ResourceKind;
-use crate::types::resources::YourResource;
-use super::traits::{extract_version, ResourceMeta};
-
-impl ResourceMeta for YourResource {
-    fn get_version(&self) -> u64 {
-        extract_version(&self.metadata)
-    }
-    
-    fn resource_kind() -> ResourceKind {
-        ResourceKind::YourResource
-    }
-    
-    fn kind_name() -> &'static str {
-        "YourResource"
-    }
-    
-    fn key_name(&self) -> String {
-        if let Some(namespace) = &self.metadata.namespace {
-            format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
-        } else {
-            self.metadata.name.as_deref().unwrap_or("").to_string()
-        }
-    }
-    
-    fn pre_parse(&mut self) {
-        // Optional: parse runtime-only fields
-    }
-}
-```
-
-Export in `src/types/resource_meta_traits/mod.rs`:
-
-```rust
-mod your_resource;
-```
-
-### Step 3: Update ResourceKind Enum
-
-Edit `src/types/resource_kind.rs`:
-
-```rust
-pub enum ResourceKind {
-    // ... existing variants ...
-    YourResource = 11,  // Next available number
-}
-
-impl ResourceKind {
-    pub fn from_kind_name(kind_str: &str) -> Option<Self> {
-        match kind_str {
-            // ... existing cases ...
-            "YourResource" => Some(ResourceKind::YourResource),
-            _ => None,
-        }
-    }
-}
-```
-
-### Step 4: Update Protocol Buffer
-
-Edit `src/core/conf_sync/proto/config_sync.proto`:
-
-```protobuf
-enum ResourceKind {
-    // ... existing ...
-    RESOURCE_KIND_YOUR_RESOURCE = 11;
-}
-```
-
-Rebuild to regenerate proto bindings:
-
-```bash
-cargo build
-```
-
-### Step 5: Update Server Cache
-
-Edit `src/core/conf_sync/conf_server/config_server.rs`:
-
-```rust
-pub enum ResourceItem {
-    // ... existing ...
-    YourResource(YourResource),
-}
-
-pub struct ConfigServer {
-    // ... existing caches ...
-    pub your_resources: ServerCache<YourResource>,
-}
-
-impl ConfigServer {
-    pub fn new(base_conf: GatewayBaseConf) -> Self {
-        Self {
-            // ... existing caches ...
-            your_resources: ServerCache::new(200),
-        }
-    }
-    
-    pub fn list(&self, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        let (data_json, resource_version) = match kind {
-            // ... existing cases ...
-            ResourceKind::YourResource => {
-                let list_data = self.your_resources.list();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize YourResource data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            // ...
-        };
-        // ...
-    }
-}
-```
-
-### Step 6: Update Server Event Dispatch
-
-Edit `src/core/conf_sync/conf_server/event_dispatch.rs`:
-
-```rust
-impl ConfigServer {
-    fn apply_resource_change_with_resource_type(
-        &self,
-        change: ResourceChange,
-        resource_type: ResourceKind,
-        data: String,
-    ) {
-        match resource_type {
-            // ... existing cases ...
-            ResourceKind::YourResource => {
-                if let Ok(resource) = serde_yaml::from_str::<YourResource>(&data) {
-                    tracing::info!("Applying YourResource resource change");
-                    Self::execute_change_on_cache::<YourResource>(
-                        change, 
-                        &self.your_resources, 
-                        resource
-                    );
-                }
-            }
-            // ...
-        }
-    }
-}
-
-impl ConfigServerEventDispatcher for ConfigServer {
-    fn enable_version_fix_mode(&self) {
-        // ... existing ...
-        self.your_resources.enable_version_fix_mode();
-    }
-
-    fn set_ready(&self) {
-        // ... existing ...
-        self.your_resources.set_ready();
-    }
-}
-```
-
-### Step 7: Update Client Cache
-
-Edit `src/core/conf_sync/conf_client/config_client.rs`:
-
-```rust
-pub struct ConfigClient {
-    // ... existing ...
-    your_resources: ClientCache<YourResource>,
-}
-
-impl ConfigClient {
-    pub fn new(gateway_class_key: String, client_id: String, client_name: String) -> Self {
-        let your_resources_cache = ClientCache::new(
-            gateway_class_key.clone(), 
-            client_id.clone(), 
-            client_name.clone()
-        );
-        
-        // Optional: Register handler
-        // let handler = create_your_resource_handler();
-        // your_resources_cache.set_conf_processor(handler);
-        
-        Self {
-            // ... existing ...
-            your_resources: your_resources_cache,
-        }
-    }
-
-    pub fn your_resources(&self) -> &ClientCache<YourResource> {
-        &self.your_resources
-    }
-
-    pub fn list_your_resources(&self) -> ListData<YourResource> {
-        self.your_resources.list_owned()
-    }
-
-    pub fn is_ready(&self) -> Result<(), String> {
-        let mut not_ready = Vec::new();
-        // ... existing checks ...
-        if !self.your_resources.is_ready() {
-            not_ready.push("your_resources");
-        }
-        // ...
-    }
-
-    pub fn list(&self, key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        let (data_json, resource_version) = match kind {
-            // ... existing cases ...
-            ResourceKind::YourResource => {
-                let list_data = self.your_resources.list();
-                let json = serde_json::to_string(&list_data.data)
-                    .map_err(|e| format!("Failed to serialize YourResource data: {}", e))?;
-                (json, list_data.resource_version)
-            }
-            // ...
-        };
-        // ...
-    }
-}
-
-impl ConfigClientEventDispatcher for ConfigClient {
-    fn apply_resource_change(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        _resource_version: Option<u64>,
-    ) {
-        match resource_type {
-            // ... existing cases ...
-            ResourceKind::YourResource => match serde_yaml::from_str::<YourResource>(&data) {
-                Ok(resource) => {
-                    Self::apply_change_to_cache(&self.your_resources, change, resource);
-                }
-                Err(e) => log_error("YourResource", &e),
-            },
-            // ...
-        }
-    }
-}
-```
-
-### Step 8: Create Example YAML
-
-Create `config/examples/test_your-resource_YourResource.yaml`:
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: YourResource
-metadata:
-  name: example-resource
-  namespace: default
-spec:
-  # Your spec fields
-```
-
-### Step 9: Test
-
-1. Start the operator: `cargo run --bin edgion-op`
-2. Start the gateway: `cargo run --bin edgion-gw`
-3. Apply your resource: The operator should detect and sync it
-4. Verify in logs that the resource is processed
-
-## Cache Synchronization
-
-### Version Management
-
-Resources use Kubernetes' `resourceVersion` for optimistic concurrency control:
-
-1. Server tracks the highest version seen
-2. Clients store local versions
-3. On reconnect, clients request updates from their last seen version
-4. Server streams only newer versions
-
-### Ready State
-
-Caches have a "ready" state that indicates initial synchronization is complete:
-
-1. Cache starts in "not ready" state
-2. Server calls `set_ready()` after initial load
-3. Clients check `is_ready()` before serving traffic
-4. Gateway waits for all caches to be ready before accepting requests
-
-### Event Ordering
-
-Events are processed in order:
-1. Server maintains event order per resource type
-2. Watch streams guarantee ordered delivery
-3. Clients apply changes sequentially
-
-## Best Practices
-
-### 1. Runtime-Only Fields
-
-Use `#[serde(skip)]` and `#[schemars(skip)]` for fields that are computed at runtime:
-
-```rust
-#[serde(skip)]
-#[schemars(skip)]
-pub backend_finder: BackendSelector<GRPCBackendRef>,
-```
-
-### 2. Pre-Parsing
-
-Implement `pre_parse()` to populate runtime fields after deserialization:
-
-```rust
-fn pre_parse(&mut self) {
-    // Parse extension refs
-    self.preparse();
-    
-    // Parse timeouts from strings to Duration
-    self.parse_timeouts();
-}
-```
-
-### 3. Validation
-
-Validate resources in server event dispatch before storing:
-
-```rust
-// Check parent references exist
-if !gateway_exists {
-    tracing::warn!("GRPCRoute references non-existent Gateway, skipping");
-    return;
-}
-```
-
-### 4. Error Handling
-
-Always handle deserialization errors gracefully:
-
-```rust
-match serde_yaml::from_str::<GRPCRoute>(&data) {
-    Ok(resource) => { /* process */ }
-    Err(e) => {
-        tracing::error!("Failed to parse GRPCRoute: {}", e);
-        return;
-    }
-}
-```
-
-### 5. Logging
-
-Use structured logging with context:
-
-```rust
-tracing::info!(
-    component = "config_server",
-    change = ?change,
-    kind = "GRPCRoute",
-    route_name = ?resource.metadata.name,
-    "Applying GRPCRoute resource change"
-);
-```
-
-## Examples
-
-### HTTPRoute
-
-HTTPRoute is used for routing HTTP/HTTPS traffic based on:
-- Hostname matching
-- Path matching (Exact, PathPrefix, RegularExpression)
-- Header matching
-- Query parameter matching
-- HTTP method matching
-
-See `src/types/resources/http_route.rs` for complete implementation.
-
-### GRPCRoute
-
-GRPCRoute is used for routing gRPC traffic based on:
-- Hostname matching
-- gRPC service and method matching
-- Header matching (HTTP/2 headers)
-
-Key differences from HTTPRoute:
-- Uses `GRPCMethodMatch` instead of `HTTPPathMatch`
-- Method matching format: `service.name/method.name`
-- No URL rewrite/redirect filters (not applicable to gRPC)
-
-See `src/types/resources/grpc_route.rs` for complete implementation.
-
-## Troubleshooting
-
-### Resource Not Appearing
-
-1. Check operator logs for deserialization errors
-2. Verify the resource passes validation
-3. Ensure parent references exist (for routes)
-4. Check that the operator is watching the correct namespace
-
-### Cache Not Ready
-
-1. Verify server is running and accessible
-2. Check gRPC connectivity
-3. Review watch stream for errors
-4. Ensure initial list completed successfully
-
-### Updates Not Propagating
-
-1. Verify resource version is incrementing
-2. Check watch stream is active
-3. Review event dispatch logs
-4. Ensure no deserialization errors
-
-## Related Documentation
-
-- [Kubernetes Gateway API Specification](https://gateway-api.sigs.k8s.io/)
-- [HTTPRoute Reference](../../../src/types/resources/http_route.rs)
-- [GRPCRoute Reference](../../../src/types/resources/grpc_route.rs)
-- [负载均衡算法使用](../user-guide/http-route/lb-algorithms.md)
-
-## Conclusion
-
-This architecture provides a robust, type-safe way to sync Kubernetes resources from the API server to the gateway runtime. The pattern is consistent across all resource types, making it easy to add new resources while maintaining reliability and performance.
-
-Key benefits:
-- **Type Safety**: Compile-time guarantees through Rust's type system
-- **Extensibility**: Easy to add new resource types
-- **Efficiency**: Incremental updates via watch streams
-- **Reliability**: Version tracking and validation at every step
-- **Observability**: Structured logging throughout the pipeline
+- [架构概览](./architecture-overview.md)
+- [资源注册指南](./resource-registry-guide.md)
+- [添加新资源类型指南](./add-new-resource-guide.md)

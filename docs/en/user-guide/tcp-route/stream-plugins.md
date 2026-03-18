@@ -2,17 +2,18 @@
 
 > **🔌 Edgion Extension**
 > 
-> `EdgionStreamPlugins` is an Edgion custom CRD that provides access control capabilities for TCP/UDP traffic.
+> `EdgionStreamPlugins` is an Edgion custom CRD that provides access control for stream-style connections.
 
-Get started with Edgion's TCP/UDP stream plugin functionality.
+Get started with Edgion's stream plugin functionality.
 
 ## What are Stream Plugins?
 
-Stream Plugins provide access control and security policies for TCP and UDP traffic, such as IP restriction, rate limiting, etc.
+Stream Plugins provide access control and security policies for stream-style connections, such as IP restriction and early connection rejection.
 
 **Supported Protocols**:
-- TCP (TCPRoute)
-- UDP (UDPRoute)
+- Gateway listener-level connection filtering
+- TCPRoute
+- TLSRoute
 
 **Currently Supported Plugins**:
 - **IP Restriction** - Access control based on client IP address
@@ -56,7 +57,7 @@ metadata:
   name: my-tcp-route
   namespace: default
   annotations:
-    edgion.io/stream-plugins: ip-filter  # Reference plugin name
+    edgion.io/edgion-stream-plugins: ip-filter  # Reference plugin name
 spec:
   parentRefs:
     - name: my-gateway
@@ -164,16 +165,16 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   annotations:
-    edgion.io/stream-plugins: common-policy
+    edgion.io/edgion-stream-plugins: common-policy
 # ...
 
 ---
-# UDP route also uses it
+# TLSRoute can also use it
 apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: UDPRoute
+kind: TLSRoute
 metadata:
   annotations:
-    edgion.io/stream-plugins: common-policy
+    edgion.io/edgion-stream-plugins: common-policy
 # ...
 ```
 
@@ -205,7 +206,7 @@ metadata:
   name: app-route
   namespace: app
   annotations:
-    edgion.io/stream-plugins: security/global-policy  # Cross-namespace
+    edgion.io/edgion-stream-plugins: security/global-policy  # Cross-namespace
 spec:
   # ...
 ```
@@ -227,6 +228,7 @@ spec:
    ```bash
    kubectl get tcproute <name> -o yaml | grep annotations -A 2
    ```
+   The current primary key is `edgion.io/edgion-stream-plugins`.
 
 3. Check the Gateway logs:
    ```bash

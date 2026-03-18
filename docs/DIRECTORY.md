@@ -7,7 +7,7 @@
 
 ```
 docs/
-├── README.md                       # 项目级 README（待修正）
+├── README.md                       # 项目级 README（语言入口）
 ├── DIRECTORY.md                    # 本文件 — 完整目录树
 ├── refactoring/                    # 内部重构设计文档
 ├── review/                         # 代码审查记录
@@ -22,7 +22,10 @@ docs/
 en/
 ├── README.md
 ├── getting-started/
-│   └── README.md
+│   ├── README.md
+│   ├── installation-and-deployment.md
+│   ├── first-gateway.md
+│   └── core-concepts.md
 ├── user-guide/
 │   ├── README.md
 │   ├── http-route/
@@ -41,6 +44,7 @@ en/
 │   │   │   ├── gateway-api/
 │   │   │   │   ├── request-header-modifier.md
 │   │   │   │   ├── response-header-modifier.md
+│   │   │   │   ├── request-mirror.md
 │   │   │   │   ├── request-redirect.md
 │   │   │   │   └── url-rewrite.md
 │   │   │   └── edgion-plugins/
@@ -126,8 +130,13 @@ en/
     ├── resource-registry-guide.md
     ├── add-new-resource-guide.md
     ├── annotations-guide.md
+    ├── http-plugin-development.md
+    ├── stream-plugin-development.md
     ├── work-directory.md
     ├── logging-system.md
+    ├── ci-release-workflow.md
+    ├── ai-agent-collaboration.md
+    ├── knowledge-source-map.md
     └── jwt-auth-plugin-design.md
 ```
 
@@ -137,7 +146,10 @@ en/
 zh-CN/
 ├── README.md
 ├── getting-started/
-│   └── README.md
+│   ├── README.md
+│   ├── installation-and-deployment.md
+│   ├── first-gateway.md
+│   └── core-concepts.md
 ├── user-guide/
 │   ├── README.md
 │   ├── http-route/
@@ -147,7 +159,7 @@ zh-CN/
 │   │   │   ├── README.md, path.md, headers.md, query-params.md, method.md
 │   │   ├── filters/
 │   │   │   ├── README.md, overview.md, plugin-composition.md
-│   │   │   ├── gateway-api/  (4 files, same as en/)
+│   │   │   ├── gateway-api/  (5 files, same as en/)
 │   │   │   └── edgion-plugins/  (18 files, same as en/)
 │   │   ├── backends/
 │   │   │   ├── README.md, service-ref.md, weight.md, backend-tls.md, health-check.md
@@ -165,7 +177,11 @@ zh-CN/
     ├── README.md, architecture-overview.md
     ├── resource-architecture-overview.md, resource-registry-guide.md
     ├── add-new-resource-guide.md, annotations-guide.md
+    ├── http-plugin-development.md
+    ├── stream-plugin-development.md
     ├── work-directory.md, logging-system.md
+    ├── ci-release-workflow.md
+    ├── ai-agent-collaboration.md, knowledge-source-map.md
     └── jwt-auth-plugin-design.md
 ```
 

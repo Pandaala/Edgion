@@ -16,9 +16,9 @@
 // - GatewayClass__public-gateway.yaml        # GatewayClass config
 //
 // Generated certificate files:
-// - examples/testing/certs/backend/server.crt   # backend server certificate
-// - examples/testing/certs/backend/server.key   # backend server private key
-// - examples/testing/certs/backend/ca.crt       # CA certificate
+// - examples/test/certs/backend/server.crt      # backend server certificate
+// - examples/test/certs/backend/server.key      # backend server private key
+// - examples/test/certs/backend/ca.crt          # CA certificate
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

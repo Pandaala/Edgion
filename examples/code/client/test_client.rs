@@ -926,7 +926,7 @@ async fn main() -> Result<()> {
 
     // Get access log path from environment variable
     let access_log_path =
-        std::env::var("EDGION_TEST_ACCESS_LOG_PATH").unwrap_or_else(|_| "examples/testing/logs/access.log".to_string());
+        std::env::var("EDGION_TEST_ACCESS_LOG_PATH").unwrap_or_else(|_| "logs/edgion_access.log".to_string());
 
     let context = TestContext::new(
         cli.target_host.clone(),

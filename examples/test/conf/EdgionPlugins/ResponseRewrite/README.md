@@ -73,5 +73,5 @@ curl -i http://response-rewrite.example.com/combined
 kubectl apply -f .
 
 # Run the integration suite
-cd ../../script && ./run_integration_test.sh ResponseRewrite
+./examples/test/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i ResponseRewrite
 ```

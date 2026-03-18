@@ -2,17 +2,18 @@
 
 > **🔌 Edgion 扩展**
 > 
-> `EdgionStreamPlugins` 是 Edgion 自定义 CRD，为 TCP/UDP 流量提供访问控制功能。
+> `EdgionStreamPlugins` 是 Edgion 自定义 CRD，为流式连接提供访问控制能力。
 
-快速上手 Edgion 的 TCP/UDP 流式插件功能。
+快速上手 Edgion 的 stream plugin 功能。
 
 ## 什么是 Stream Plugins？
 
-Stream Plugins 为 TCP 和 UDP 流量提供访问控制和安全策略，例如 IP 限制、速率限制等。
+Stream Plugins 为流式连接提供访问控制和安全策略，例如 IP 限制、连接级拒绝等。
 
 **支持的协议**：
-- ✅ TCP (TCPRoute)
-- ✅ UDP (UDPRoute)
+- ✅ Gateway 监听器级连接过滤
+- ✅ TCPRoute
+- ✅ TLSRoute
 
 **当前支持的插件**：
 - 🔒 **IP Restriction** - 基于客户端 IP 地址的访问控制
@@ -56,7 +57,7 @@ metadata:
   name: my-tcp-route
   namespace: default
   annotations:
-    edgion.io/stream-plugins: ip-filter  # 引用插件名称
+    edgion.io/edgion-stream-plugins: ip-filter  # 引用插件名称
 spec:
   parentRefs:
     - name: my-gateway
@@ -164,16 +165,16 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   annotations:
-    edgion.io/stream-plugins: common-policy
+    edgion.io/edgion-stream-plugins: common-policy
 # ...
 
 ---
-# UDP 路由也使用
+# TLSRoute 也可以使用
 apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: UDPRoute
+kind: TLSRoute
 metadata:
   annotations:
-    edgion.io/stream-plugins: common-policy
+    edgion.io/edgion-stream-plugins: common-policy
 # ...
 ```
 
@@ -205,7 +206,7 @@ metadata:
   name: app-route
   namespace: app
   annotations:
-    edgion.io/stream-plugins: security/global-policy  # 跨命名空间
+    edgion.io/edgion-stream-plugins: security/global-policy  # 跨命名空间
 spec:
   # ...
 ```
@@ -227,6 +228,7 @@ spec:
    ```bash
    kubectl get tcproute <name> -o yaml | grep annotations -A 2
    ```
+   当前主键是 `edgion.io/edgion-stream-plugins`。
 
 3. 查看 Gateway 日志：
    ```bash

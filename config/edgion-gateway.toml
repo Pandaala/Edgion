@@ -4,13 +4,13 @@
 # 
 # :
 #   1. :
-#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml
+#      ./edgion-gateway --config-file /usr/local/edgion/config/edgion-gateway.toml
 #   
-#   2.  ( --config):
+#   2.  server_addr:
 #      ./edgion-gateway --server-addr http://127.0.0.1:50051
 #   
 #   3. :
-#      ./edgion-gateway --config /usr/local/edgion/config/edgion-gateway.toml --server-addr http://192.168.1.100:50051
+#      ./edgion-gateway --config-file /usr/local/edgion/config/edgion-gateway.toml --server-addr http://192.168.1.100:50051
 #
 # ================================================================================
 
@@ -47,6 +47,7 @@ server_addr = "http://127.0.0.1:50051"
 
 # Admin HTTP server listen address (optional)
 # 
+# 当前实现里 Gateway Admin API 仍固定监听 5900，这个字段暂未接线
 # admin_listen = "0.0.0.0:8081"
 
 [logging]
@@ -213,4 +214,3 @@ path = "logs/udp.log"
 # strategy = "daily"  # 
 # max_files = 10
 # check_interval_secs = 30
-

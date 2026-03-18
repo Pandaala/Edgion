@@ -47,7 +47,7 @@ graph TB
     end
     
     subgraph Output[Output Files]
-        AccessLog[access.log enabled]
+        AccessLog[edgion_access.log enabled]
         SslLog[ssl.log enabled]
         TcpLog[tcp.log disabled]
         UdpLog[udp.log disabled]
@@ -151,8 +151,8 @@ Three rotation strategies are supported:
 | `Never` | No rotation | Development/test environments |
 
 Rotation file naming:
-- **Time rotation**: `access.log.2025-01-05` or `access.log.2025-01-05-14`
-- **Size rotation**: `access.log.1`, `access.log.2`, `access.log.3`
+- **Time rotation**: `edgion_access.log.2025-01-05` or `edgion_access.log.2025-01-05-14`
+- **Size rotation**: `edgion_access.log.1`, `edgion_access.log.2`, `edgion_access.log.3`
 
 Automatic cleanup of old files, keeping the most recent N (configurable via `max_files`).
 

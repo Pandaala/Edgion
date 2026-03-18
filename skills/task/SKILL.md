@@ -51,12 +51,12 @@ Recommended step sequence:
 
 | Step | Purpose | Related Skills |
 |------|---------|----------------|
-| `step-01-*` | Problem analysis | [00-architecture/](../00-architecture/SKILL.md) for system understanding |
-| `step-02-*` | Solution design | [00-architecture/](../00-architecture/SKILL.md) for design constraints |
-| `step-03-*` | Implementation plan | [01-development/](../01-development/SKILL.md) for coding guidelines |
-| `step-04-*` | Implementation notes | [01-development/](../01-development/SKILL.md), [02-observability/](../02-observability/SKILL.md) for logging/metrics |
-| `step-05-*` | Validation / tests | [03-testing/](../03-testing/SKILL.md) for test patterns |
-| `step-06-*` | Documentation | [01-development/07-documentation-writing.md](../01-development/07-documentation-writing.md), [docs/](../../docs/) for user docs |
+| `step-01-*` | Problem analysis | [architecture/](../architecture/SKILL.md) for system understanding |
+| `step-02-*` | Solution design | [architecture/](../architecture/SKILL.md) for design constraints |
+| `step-03-*` | Implementation plan | [development/](../development/SKILL.md) for coding guidelines |
+| `step-04-*` | Implementation notes | [development/](../development/SKILL.md), [observability/](../observability/SKILL.md) for logging/metrics |
+| `step-05-*` | Validation / tests | [testing/](../testing/SKILL.md) for test patterns |
+| `step-06-*` | Documentation | [development/07-documentation-writing.md](../development/07-documentation-writing.md), [docs/](../../docs/) for user docs |
 
 ## Step Review Rule
 
@@ -108,7 +108,7 @@ After completing a task, check whether any outputs should be propagated:
 | Reusable workflow patterns | `skills/` (appropriate category) | When the approach is generalizable |
 | Review conclusions | `skills/review/` | When a review finding is project-specific and reusable |
 | User-facing feature docs | `docs/en/`, `docs/zh-CN/` | When the change affects user-visible behavior |
-| Architecture decisions | `skills/00-architecture/` | When the change alters system design |
+| Architecture decisions | `skills/architecture/` | When the change alters system design |
 | New resource/plugin docs | `docs/*/dev-guide/` | When a new resource type or plugin is added |
 
 See [docs/DIRECTORY.md](../../docs/DIRECTORY.md) for the full user documentation structure.

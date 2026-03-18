@@ -2,6 +2,10 @@
 
 This document records how to add a new Kubernetes resource type in Edgion. With the unified macro system, adding new resources becomes much simpler.
 
+> The primary AI / agent workflow now lives in [../../../skills/development/00-add-new-resource.md](../../../skills/development/00-add-new-resource.md).
+> This document remains the human-facing background guide and manual checklist.
+> For classified examples, use the references linked from that workflow: `route-like`, `controller-only`, `plugin-like`, and `cluster-scoped`.
+
 ## Overview
 
 Edgion uses a **single source of truth + macro generation** architecture:
@@ -9,6 +13,12 @@ Edgion uses a **single source of truth + macro generation** architecture:
 - `resource_defs.rs` - Metadata definitions for all resource types (single source of truth)
 - `impl_resource_meta!` macro - Automatically generates ResourceMeta trait implementations
 - Helper functions - Unified handling of resource loading, listing, querying, etc.
+
+### Important Difference From Older Documentation
+
+- The Controller now uses `ResourceProcessor<T> + ServerCache<T> + PROCESSOR_REGISTRY`.
+- `ConfigSyncServer` no longer keeps one manual field per resource.
+- Resources are exposed to config sync by processor registration, so the old "add a controller ConfigServer field" workflow is outdated for this repository.
 
 ### CRD Version and Compatibility Strategy (Must Follow)
 
@@ -24,409 +34,274 @@ Edgion uses a **single source of truth + macro generation** architecture:
 
 ## Quick Checklist
 
-Adding a new resource type requires modifying only a few core locations:
+Adding a new resource type usually requires touching these core locations:
 
 ### Must Modify
 
-1. **`src/types/resources/your_resource/mod.rs`** - Define resource struct (CustomResource)
-2. **`src/types/resources/mod.rs`** - Export new module
-3. **`src/types/resource_defs.rs`** - Add resource definition in the `define_resources!` macro
-4. **`src/types/resource_meta_traits/impls.rs`** - Implement trait using `impl_resource_meta!` macro
-5. **`src/core/conf_sync/conf_server/config_server.rs`** - Add `ServerCache<T>` field
-6. **`src/core/conf_sync/conf_client/config_client.rs`** - Add `ClientCache<T>` field
-7. **`src/core/cli/config/mod.rs`** - Add capacity config field and `get_capacity()` branch
+1. **`src/types/resources/<resource>.rs`** - Define the resource type
+2. **`src/types/resources/mod.rs`** - Export the new module
+3. **`src/types/resource/kind.rs`** - Add the `ResourceKind` variant and name mapping
+4. **`src/types/resource/defs.rs`** - Add metadata in `define_resources!`
+5. **`src/types/resource/meta/impls.rs`** - Implement `ResourceMeta` via `impl_resource_meta!`
+6. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`** - Implement `ProcessorHandler`
+7. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`** - Re-export the handler
+8. **`src/core/controller/conf_mgr/conf_center/file_system/controller.rs`** - Register the FileSystem-mode processor
+9. **`src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`** - Register the Kubernetes-mode processor
 
 ### Modify as Needed
 
-8. **`src/core/conf_mgr/conf_store/init_loader.rs`** - Add loading branch
-9. **`src/core/api/controller/common.rs`** - Update helper macros (e.g., `list_all_resources!`)
-10. **`src/core/api/gateway/mod.rs`** - Update Gateway Admin API macros
-11. **Configuration files** - CRD definitions, example configurations
+10. **`src/core/gateway/conf_sync/conf_client/config_client.rs`** - If the resource syncs to Gateway, add `ClientCache<T>` wiring and change dispatch
+11. **`src/core/gateway/.../conf_handler*.rs`** - If Gateway runtime needs to consume it
+12. **`src/core/controller/api/namespaced_handlers.rs`** or **`cluster_handlers.rs`** - If Controller Admin API CRUD should support it
+13. **`src/core/gateway/api/mod.rs`** - If Gateway Admin API should expose it
+14. **`src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`** - If Kubernetes-mode dynamic CRUD should support it
+15. **`config/crd/`** - CRD manifests or upstream CRD updates
+16. **Tests and example configs** - `examples/test/`, YAML fixtures, integration tests
 
 ---
 
 ## Detailed Steps
 
-### Step 1: Define Resource Type
+### Step 1: Classify The Resource First
 
-#### 1.1 Create Resource Struct
+Before editing code, decide which family the new resource belongs to:
 
-Create a new directory and module under `src/types/resources/`:
+- `route-like`: similar to `TLSRoute` / `HTTPRoute`, attaches to `Gateway`, references `Service`, and syncs to Gateway runtime
+- `controller-only`: similar to `ReferenceGrant`, used only for validation, policy, or requeue behavior on the control plane
+- `plugin-like`: similar to `EdgionPlugins`, reusable runtime configuration that may also depend on `Secret`
+- `cluster-scoped`: similar to `GatewayClass` / `EdgionGatewayConfig`, part of global base configuration
 
-```rust
-// src/types/resources/your_resource/mod.rs
-use kube::CustomResource;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+If you are unsure, trace the closest existing resource end to end instead of designing from scratch.
 
-#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(
-    group = "edgion.io",
-    version = "v1",
-    kind = "YourResource",
-    plural = "yourresources",
-    shortname = "yr",
-    namespaced,  // Remove this line for cluster-scoped resources
-    status = "YourResourceStatus"
-)]
-#[serde(rename_all = "camelCase")]
-pub struct YourResourceSpec {
-    pub some_field: String,
-    // ... other fields
-}
+### Step 2: Define The Resource Type And Export It
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, Default)]
-pub struct YourResourceStatus {
-    // Status fields
-}
-```
+Usually update:
 
-#### 1.2 Export Module
+- `src/types/resources/<resource>.rs` or `src/types/resources/<resource>/mod.rs`
+- `src/types/resources/mod.rs`
 
-```rust
-// src/types/resources/mod.rs
-pub mod your_resource;
-pub use your_resource::*;
-```
+Key things to align:
 
-### Step 2: Register in the Unified Resource System
+- `group / version / kind / plural`
+- namespaced vs cluster-scoped
+- status type
+- any runtime-derived fields that should be skipped from serialization
 
-#### 2.1 Add Definition in `resource_defs.rs`
+### Step 3: Register It In The Unified Resource System
 
-This is the **most critical step**; all resource metadata is centralized here:
+These are the core files for all new resources:
 
-```rust
-// src/types/resource_defs.rs
-define_resources! {
-    // ... existing resources ...
-    
-    // Add new resource (grouped by category)
-    YourResource {
-        kind_id: 20,                      // Use the next available ID
-        kind_name: "YourResource",
-        api_group: "edgion.io",
-        api_version: "v1",
-        plural: "yourresources",
-        is_namespaced: true,              // or false (cluster-scoped)
-        is_k8s_native: false,             // Whether it's a k8s native resource
-    }
-}
-```
+- `src/types/resource/kind.rs`
+- `src/types/resource/defs.rs`
+- `src/types/resource/meta/impls.rs`
 
-#### 2.2 Implement ResourceMeta Trait Using Macro
+Current responsibilities:
 
-```rust
-// src/types/resource_meta_traits/impls.rs
-use crate::types::resources::YourResource;
+- `kind.rs`: `ResourceKind`, `as_str()`, and `from_kind_name()`
+- `defs.rs`: single source of truth for cache fields, capacity fields, scope, and registry / no-sync behavior
+- `meta/impls.rs`: `impl_resource_meta!` integration
 
-// Standard implementation (suitable for most resources)
-impl_resource_meta!(YourResource);
+Important note:
 
-// If custom pre_parse is needed, use the version with closure:
-impl_resource_meta!(YourResource, |resource| {
-    // Custom preprocessing logic
-    resource.init_runtime();
-});
-```
+- This repository now uses `enum_value`, `cache_field`, `capacity_field`, and `cluster_scoped` in `defs.rs`
+- Do not follow older examples that describe `kind_id` or `is_namespaced`
+- If the resource should stay controller-only by default, also evaluate whether it belongs in `DEFAULT_NO_SYNC_KINDS`
 
-### Step 3: Configuration Sync Layer Integration
+### Step 4: Wire The Controller Processing Pipeline
 
-#### 3.1 Update ConfigServer
+The controller-side architecture is now based on:
 
-```rust
-// src/core/conf_sync/conf_server_old/config_server.rs
+- `ProcessorHandler<T>`
+- `ResourceProcessor<T>`
+- `PROCESSOR_REGISTRY`
 
-pub struct ConfigServer {
-    // ... existing fields ...
-    pub your_resources: ServerCache<YourResource>,
-}
+Usually update:
 
-impl ConfigServer {
-    pub fn new(base_conf: GatewayBaseConf, conf_sync_config: &ConfSyncConfig) -> Self {
-        Self {
-            // ... existing initialization ...
-            your_resources: ServerCache::new(
-                conf_sync_config.get_capacity(ResourceKind::YourResource) as usize
-            ),
-        }
-    }
-    
-    // Add list/watch methods
-    pub fn list_your_resources(&self) -> ListData<YourResource> {
-        self.your_resources.list()
-    }
-    
-    pub fn watch_your_resources(
-        &self,
-        client_id: String,
-        client_name: String,
-        from_version: u64,
-    ) -> mpsc::Receiver<WatchResponse<YourResource>> {
-        self.your_resources.watch(client_id, client_name, from_version)
-    }
-}
-```
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
+- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
+- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
 
-#### 3.2 Update ConfigClient
+Inside the handler, consider:
 
-```rust
-// src/core/conf_sync/conf_client/config_client.rs
+- `filter()`
+- `validate()`
+- `preparse()`
+- `parse()`
+- `on_change()`
+- `on_delete()`
+- `update_status()`
 
-pub struct ConfigClient {
-    // ... existing fields ...
-    pub your_resources: ClientCache<YourResource>,
-}
-```
+If `parse()` looks up `Gateway`, `Service`, `Secret`, or `ReferenceGrant`, you also need to wire the corresponding dependency registration and requeue behavior.
 
-#### 3.3 Add Capacity Configuration
+### Step 5: Decide Whether It Should Sync To Gateway
 
-```rust
-// src/core/cli/config/mod.rs
+This is the main architectural split.
 
-pub struct ConfSyncConfig {
-    // ... existing fields ...
-    
-    #[arg(skip)]
-    #[serde(default = "default_capacity")]
-    pub your_resources_capacity: u32,
-}
+If the resource must exist on Gateway:
 
-impl ConfSyncConfig {
-    pub fn get_capacity(&self, kind: ResourceKind) -> u32 {
-        match kind {
-            // ... existing branches ...
-            ResourceKind::YourResource => self.your_resources_capacity,
-        }
-    }
-}
-```
+- update `src/core/gateway/conf_sync/conf_client/config_client.rs`
+- add `ClientCache<T>`
+- wire `get_dyn_cache()`, `list()`, and `apply_resource_change()`
+- add a `ConfHandler<T>` if Gateway runtime needs to consume it
 
-### Step 4: Add Loading Logic
+Typical Gateway-side locations:
 
-```rust
-// src/core/conf_mgr/conf_store/init_loader.rs
+- `src/core/gateway/routes/*/conf_handler_impl.rs`
+- `src/core/gateway/plugins/http/conf_handler_impl.rs`
+- `src/core/gateway/tls/store/conf_handler.rs`
+- `src/core/gateway/config/*/conf_handler_impl.rs`
 
-// For simple resources, use the load_simple function:
-Some(ResourceKind::YourResource) => {
-    load_simple::<YourResource>(
-        content, name, "YourResource", 
-        &config_server.your_resources, &mut stats
-    );
-}
+If the resource should not sync to Gateway:
 
-// For route resources requiring validation, use load_route_with_validation:
-Some(ResourceKind::YourRoute) => {
-    load_route_with_validation::<YourRoute, _>(
-        content, name, "YourRoute", 
-        &config_server.your_routes, &mut stats,
-        |r| validate_your_route_if_enabled(r),
-    );
-}
-```
+- do not add Gateway cache wiring
+- explicitly make Gateway skip it instead of leaving the behavior ambiguous
 
-### Step 5: Update Admin API Macros
+### Step 6: Wire Controller And Gateway Admin APIs
 
-#### 5.1 Controller Admin API
+These paths are explicit in the current repository.
 
-```rust
-// src/core/api/controller/common.rs
+Controller side:
 
-#[macro_export]
-macro_rules! list_all_resources {
-    ($server:expr, $kind:expr) => {{
-        match $kind {
-            // ... existing branches ...
-            ResourceKind::YourResource => list_to_json!($server.your_resources.list().data),
-        }
-    }};
-}
+- namespaced resources: `src/core/controller/api/namespaced_handlers.rs`
+- cluster-scoped resources: `src/core/controller/api/cluster_handlers.rs`
 
-// Also update other macros: list_namespaced_resources!, get_namespaced_resource!, resource_exists_namespaced!
-```
+Gateway read-only inspection:
 
-#### 5.2 Gateway Admin API
+- `src/core/gateway/api/mod.rs`
 
-```rust
-// src/core/api/gateway/mod.rs
+If you skip these files, the resource may work internally but still be invisible to operators.
 
-macro_rules! list_client_resources {
-    ($client:expr, $kind:expr) => {{
-        match $kind {
-            // ... existing branches ...
-            ResourceKind::YourResource => to_json_vec($client.your_resources.list()),
-        }
-    }};
-}
+### Step 7: Wire Kubernetes Dynamic CRUD
 
-// Also update get_client_resource! macro
-```
+If the resource should support create/update/delete in Kubernetes mode, update:
 
-### Step 6: Configuration Files
+- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
 
-#### 6.1 Kubernetes CRD
+Make sure:
 
-```yaml
-# config/crd/edgion-crd/your_resource_crd.yaml
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: yourresources.edgion.io
-spec:
-  group: edgion.io
-  names:
-    kind: YourResource
-    plural: yourresources
-    shortNames:
-    - yr
-  scope: Namespaced
-  versions:
-  - name: v1
-    served: true
-    storage: true
-    schema:
-      openAPIV3Schema:
-        type: object
-        properties:
-          spec:
-            type: object
-            # ... schema definition
-```
+- `group / version / kind` are correct
+- scope is correct
+- namespaced vs cluster-scoped API selection is correct
 
-#### 6.2 Example Configuration
+### Step 8: Update CRDs Or Upstream API Manifests
 
-```yaml
-# examples/conf/YourResource_default_example.yaml
-apiVersion: edgion.io/v1
-kind: YourResource
-metadata:
-  name: example
-  namespace: default
-spec:
-  someField: "value"
-```
+Custom Edgion CRDs usually live under:
 
-#### 6.3 Controller Configuration
+- `config/crd/edgion-crd/`
 
-```toml
-# config/edgion-controller.toml
-[conf_sync]
-your_resources_capacity = 200
-```
+Gateway API standard or experimental resources should follow:
+
+- `config/crd/gateway-api/`
+
+Keep these aligned with the Rust type:
+
+- group / version / kind
+- scope
+- schema
+- status structure
+
+### Step 9: Add Tests
+
+At minimum, cover:
+
+- Rust unit tests
+- integration tests under `examples/test/`
+- controller / gateway API validation when new endpoints are exposed
+
+For route-like, plugin-like, or dependency-heavy resources, integration tests are usually the most important safety net.
 
 ---
 
 ## Architecture Explanation
 
-### Resource Metadata Flow
+### Current End-To-End Path For A New Resource
 
 ```mermaid
 graph TD
-    subgraph SingleSource[Single Source of Truth]
-        RD[resource_defs.rs<br/>define_resources!]
-    end
-    
-    RD --> RK[ResourceKind enum]
-    RD --> REG[ResourceRegistry]
-    RD --> META[ResourceTypeMetadata]
-    
-    subgraph TraitImpl[Trait Implementation]
-        IMPLS[impls.rs<br/>impl_resource_meta!]
-    end
-    
-    IMPLS --> RM[ResourceMeta trait]
-    
-    subgraph Runtime[Runtime Usage]
-        CS[ConfigServer]
-        CC[ConfigClient]
-        API[Admin API]
-        LOADER[InitLoader]
-    end
-    
-    RK --> CS
-    RK --> CC
-    RK --> API
-    RK --> LOADER
-    RM --> CS
-    RM --> CC
+    A["Rust Resource Type"] --> B["ResourceKind / defs.rs / meta/impls.rs"]
+    B --> C["ProcessorHandler<T>"]
+    C --> D["ResourceProcessor<T>"]
+    D --> E["PROCESSOR_REGISTRY"]
+    E --> F["ConfigSyncServer (watch/list)"]
+    F --> G["ConfigClient / ClientCache<T>"]
+    G --> H["Gateway ConfHandler<T> / Runtime Store"]
 ```
 
-### Key Macros and Functions
+The most common missing segments are:
+
+- `kind.rs + defs.rs + meta/impls.rs`
+- processor registration in both controller modes
+- Gateway `ClientCache<T>` / `ConfHandler<T>` wiring
+
+### Key Extension Points
 
 | Name | Location | Purpose |
 |------|----------|---------|
-| `define_resources!` | `resource_defs.rs` | Define all resource metadata |
-| `impl_resource_meta!` | `resource_meta_traits/impls.rs` | Auto-implement ResourceMeta trait |
-| `load_simple()` | `init_loader.rs` | Load simple resources |
-| `load_route_with_validation()` | `init_loader.rs` | Load route resources with validation |
-| `list_all_resources!` | `api/controller/common.rs` | List all resources |
-| `list_client_resources!` | `api/gateway/mod.rs` | List resources from ConfigClient |
+| `ResourceKind` | `src/types/resource/kind.rs` | Enum entry point and string mapping for the new resource |
+| `define_resources!` | `src/types/resource/defs.rs` | Single source of truth for scope, cache fields, capacities, and registry behavior |
+| `impl_resource_meta!` | `src/types/resource/meta/impls.rs` | Integrates the resource into `ResourceMeta` |
+| `ProcessorHandler<T>` | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` | Controller-side filter / validate / parse / status / requeue logic |
+| `ConfHandler<T>` | `src/core/common/conf_sync/traits.rs` | Gateway-side full-set / partial-update logic |
+| `ConfigClient` | `src/core/gateway/conf_sync/conf_client/config_client.rs` | Gateway cache wiring and change dispatch |
 
 ---
 
-## Compile-Time Protection
+## Compile-Time And Runtime Protection
 
-After adding a new resource, if you miss certain `match` branches, the compiler will report an error:
+The current architecture catches some omissions at compile time, but not all:
 
-```
-error[E0004]: non-exhaustive patterns: `ResourceKind::YourResource` not covered
-```
+- missing `kind.rs` or `defs.rs`: often fails compilation
+- missing a `match` arm: often fails with non-exhaustive pattern errors
+- missing controller spawn: may compile, but the resource never becomes ready
+- missing Gateway cache wiring: controller works, Gateway sees no data, usually caught only by runtime checks or integration tests
 
-This ensures the new resource type is correctly handled in all places that need to process it.
+So “it compiles” is not enough to prove the resource is fully wired.
 
 ---
 
 ## FAQ
 
-### Q: How is the ResourceKind kind_id assigned?
+### Q: How is `enum_value` assigned?
 
-A: Check the maximum ID of existing resources in `resource_defs.rs` and use the next number. The ID is used for serialization and enum values.
+A: Check the highest value currently used in `src/types/resource/kind.rs` and `src/types/resource/defs.rs`, then add the next consistent value in both places.
 
-### Q: When is custom pre_parse() needed?
+### Q: When is `preparse()` needed?
 
-A: When a resource needs preprocessing after loading:
-- Initializing runtime objects (e.g., plugin runtimes)
-- Building lookup tables or indexes
-- Validating configuration consistency
+A: Use it when the resource needs derived structures or expensive validation before runtime, for example:
 
-Use the closure version of the `impl_resource_meta!` macro:
+- plugin runtime initialization
+- regex / lookup table / index construction
+- configuration consistency checks
 
-```rust
-impl_resource_meta!(YourResource, |resource| {
-    resource.init_something();
-});
-```
+### Q: How do I distinguish namespaced and cluster-scoped resources?
 
-### Q: How to distinguish between namespaced and cluster-scoped resources?
+A: Do not rely on CRD schema alone. You must also align:
 
-A: Set `is_namespaced` in `resource_defs.rs`:
-- `true` - Resource belongs to a specific namespace
-- `false` - Resource is cluster-level (e.g., GatewayClass)
+- the Rust type declaration
+- `cluster_scoped` in `defs.rs`
+- controller API path (`namespaced_handlers.rs` vs `cluster_handlers.rs`)
+- Kubernetes storage mapping
 
-### Q: What happens if I forget to modify a file?
+### Q: If a resource is controller-only, can I ignore Gateway completely?
 
-A: The Rust compiler will report errors in most cases:
-- Forgot `resource_defs.rs` -> Missing `ResourceKind` variant
-- Forgot `impls.rs` -> ResourceMeta trait not implemented
-- Forgot `match` branch -> Non-exhaustive pattern matching error
+A: Not entirely. You should explicitly make Gateway skip it and ensure dependent resources are revalidated correctly on the controller side.
 
 ---
 
 ## Checklist
 
-Confirm before submitting:
+Before submitting, verify:
 
-- [ ] `src/types/resources/your_resource/mod.rs` - Resource definition
-- [ ] `src/types/resources/mod.rs` - Module export
-- [ ] `src/types/resource_defs.rs` - `define_resources!` macro
-- [ ] `src/types/resource_meta_traits/impls.rs` - `impl_resource_meta!` macro
-- [ ] `src/core/conf_sync/conf_server/config_server.rs` - ServerCache field
-- [ ] `src/core/conf_sync/conf_client/config_client.rs` - ClientCache field
-- [ ] `src/core/cli/config/mod.rs` - Capacity config and `get_capacity()`
-- [ ] `src/core/conf_mgr/conf_store/init_loader.rs` - Loading branch
-- [ ] Admin API macro updates (if needed)
-- [ ] `cargo build` compiles successfully
-- [ ] `cargo test` tests pass
-- [ ] Integration tests pass
+- [ ] resource type is defined and exported
+- [ ] `kind.rs`, `defs.rs`, and `meta/impls.rs` are all updated
+- [ ] `ProcessorHandler<T>` is implemented
+- [ ] the processor is registered in both FileSystem and Kubernetes controller flows
+- [ ] if Gateway sync is needed, `ConfigClient` and the relevant `ConfHandler<T>` are wired
+- [ ] controller / gateway admin APIs are updated if needed
+- [ ] Kubernetes storage dynamic CRUD is updated if needed
+- [ ] CRD or upstream API manifests are updated
+- [ ] unit tests and integration tests cover at least one primary path
 
 ---
 
@@ -435,8 +310,9 @@ Confirm before submitting:
 - [Kubernetes Custom Resources](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)
 - [kube-rs Documentation](https://docs.rs/kube/latest/kube/)
 - [Gateway API Specification](https://gateway-api.sigs.k8s.io/)
+- [../../../skills/development/00-add-new-resource.md](../../../skills/development/00-add-new-resource.md)
 
 ---
 
-**Last updated**: 2026-01-11  
-**Document version**: v2.0 (Unified macro system)
+**Last updated**: 2026-03-18  
+**Document version**: v3.0 (aligned with ResourceProcessor / ConfigClient architecture)

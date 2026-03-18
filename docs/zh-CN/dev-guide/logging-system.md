@@ -47,7 +47,7 @@ graph TB
     end
     
     subgraph Output[Output Files]
-        AccessLog[access.log enabled]
+        AccessLog[edgion_access.log enabled]
         SslLog[ssl.log enabled]
         TcpLog[tcp.log disabled]
         UdpLog[udp.log disabled]
@@ -151,8 +151,8 @@ while let Ok(first_line) = rx.recv() {
 | `Never` | 不轮转 | 开发测试环境 |
 
 轮转文件命名规则：
-- **时间轮转**：`access.log.2025-01-05` 或 `access.log.2025-01-05-14`
-- **大小轮转**：`access.log.1`, `access.log.2`, `access.log.3`
+- **时间轮转**：`edgion_access.log.2025-01-05` 或 `edgion_access.log.2025-01-05-14`
+- **大小轮转**：`edgion_access.log.1`, `edgion_access.log.2`, `edgion_access.log.3`
 
 自动清理旧文件，保留最近 N 个（可配置 `max_files`）。
 

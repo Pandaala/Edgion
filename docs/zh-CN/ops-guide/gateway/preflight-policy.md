@@ -135,10 +135,10 @@ Preflight Handler 拦截
 
 ### Q: 如何查看 preflight 请求的处理日志？
 
-**A:** Preflight 请求会记录在 `access.log` 中，可以通过 HTTP 方法 `OPTIONS` 进行过滤：
+**A:** Preflight 请求会记录在 `edgion_access.log` 中，可以通过 HTTP 方法 `OPTIONS` 进行过滤：
 
 ```bash
-grep "OPTIONS" logs/access.log
+grep "OPTIONS" logs/edgion_access.log
 ```
 
 ## 相关文档
