@@ -1,32 +1,33 @@
 ---
 name: resource-plugin-metadata
-description: PluginMetaData 资源：插件元数据定义、配置模板、插件发现。
+description: PluginMetaData 资源：插件共享配置、全局参数、被 EdgionPlugins 引用。
 ---
 
 # PluginMetaData 资源
 
-> **状态**: 框架已建立，待填充详细内容。
 > **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
 
-## 待填充内容
+PluginMetaData 是 Edgion 的自定义扩展资源，用于定义插件的共享元数据配置。当多个 EdgionPlugins 实例需要共享同一套配置参数时，可以将公共部分提取为 PluginMetaData，避免重复定义。
 
-### 功能点
+## 源码位置
 
-<!-- TODO:
-- 定义插件的元数据信息
-- 配置模板和校验规则
--->
+- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugin_metadata.rs`
+- 类型定义: `src/types/resources/plugin_metadata.rs`
 
-### Controller 侧处理
+## Controller 侧处理
 
-<!-- TODO: PluginMetadataHandler -->
+### parse
 
-### Gateway 侧处理
+无特殊处理逻辑，直接透传。PluginMetaData 是纯数据资源，Handler 不执行任何引用解析或状态管理。
 
-<!-- TODO: 用于插件配置校验和发现 -->
+无 validate、on_change、on_delete、update_status 的特殊实现。
 
-### 跨资源关联
+## Gateway 侧处理
 
-<!-- TODO:
-- ← EdgionPlugins: 引用插件元数据
--->
+PluginMetaData 同步到 Gateway 后，存入插件配置存储，供 EdgionPlugins 引用。插件执行时读取对应的 PluginMetaData 获取共享配置参数。
+
+## 跨资源关联
+
+| 关联方向 | 目标资源 | 关联机制 | 说明 |
+|---------|---------|---------|------|
+| PluginMetaData ← EdgionPlugins | EdgionPlugins | 引用 | EdgionPlugins 引用 PluginMetaData 的共享配置 |

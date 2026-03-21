@@ -1,5 +1,5 @@
 ---
-name: gateway-architecture
+name: 02-gateway
 description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TLS 管理、插件系统、负载均衡、后端发现、可观测性、LinkSys。
 ---
 
@@ -17,12 +17,12 @@ description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TL
 | [02-pingora-lifecycle.md](02-pingora-lifecycle.md) | ProxyHttp 回调、ConnectionFilter | 修改请求处理流程、理解代理生命周期 |
 | [03-routes/](03-routes/) | 路由子系统 | 修改路由逻辑、排查路由不匹配 |
 | [04-tls/](04-tls/) | TLS 子系统 | TLS 证书管理、mTLS 配置 |
-| [05-plugin-system.md](05-plugin-system.md) | 插件系统（4 阶段） | 理解插件执行、修改插件框架 |
-| [06-load-balancing.md](06-load-balancing.md) | 负载均衡策略 | 修改 LB 策略、理解后端选择 |
-| [07-backends.md](07-backends.md) | 后端发现 + 健康检查 | 修改后端管理、健康检查 |
-| [08-observe.md](08-observe.md) | 可观测性 | AccessLog、Metrics |
-| [09-link-sys.md](09-link-sys.md) | LinkSys 外部系统集成 | 修改外部数据发送 |
-| [10-runtime-store.md](10-runtime-store.md) | 运行时存储 | 理解 Gateway/Route 配置存储 |
+| [05-plugin-system.md](05-plugin-system.md) | 插件系统（4 阶段执行模型） | 理解插件执行流程、开发新插件、修改条件执行逻辑 |
+| [06-load-balancing.md](06-load-balancing.md) | 负载均衡策略 | 修改 LB 策略、理解 RoundRobin/EWMA/LeastConn/ConsistentHash 选择算法 |
+| [07-backends.md](07-backends.md) | 后端发现 + 健康检查 | 修改 Endpoint/EndpointSlice 发现、健康检查配置、BackendTLSPolicy |
+| [08-observe.md](08-observe.md) | 可观测性 | AccessLog 零拷贝输出、Prometheus 指标、协议日志 |
+| [09-link-sys.md](09-link-sys.md) | LinkSys 外部系统集成 | ES/Redis/Etcd/Webhook/LocalFile 客户端管理、DataSender 实现 |
+| [10-runtime-store.md](10-runtime-store.md) | 运行时存储 | Gateway/Listener 配置存储、ArcSwap 无锁读取模式 |
 
 ## 架构总览
 
