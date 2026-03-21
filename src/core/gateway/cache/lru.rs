@@ -235,11 +235,7 @@ where
 
         for (idx, node) in self.nodes.iter_mut().enumerate() {
             node.reset();
-            node.next_free = if idx + 1 < self.capacity {
-                Some(idx + 1)
-            } else {
-                None
-            };
+            node.next_free = if idx + 1 < self.capacity { Some(idx + 1) } else { None };
         }
     }
 }

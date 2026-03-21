@@ -108,7 +108,7 @@ impl LeaderHandle {
 
 ```rust
 enum LifecycleEvent {
-    CachesReady,            // PROCESSOR_REGISTRY 所有处理器就绪
+    CachesReady,            // 所有应注册的处理器已注册，且所有 sync kinds 已就绪
     CachesTimeout,          // 超时未就绪
     LeadershipLost,         // 失去 leadership
     LeadershipAcquired,     // 获得 leadership（all-serve 模式）
@@ -124,7 +124,7 @@ enum LifecycleEvent {
 | Task | 职责 | 发送事件 |
 |------|------|---------|
 | Controller | 运行 `KubernetesController.run()` | `ControllerExit` |
-| Caches | 等待 `PROCESSOR_REGISTRY` 就绪 | `CachesReady` / `CachesTimeout` |
+| Caches | 等待所有 phased processors 完成注册，且所有会同步到 Gateway 的 kinds ready | `CachesReady` / `CachesTimeout` |
 | Leader | 监控 leadership 状态变化（100ms 轮询） | `LeadershipLost` / `LeadershipAcquired` |
 | Reload | 监听 Admin API reload 信号 | `ReloadRequested` |
 
@@ -132,6 +132,30 @@ enum LifecycleEvent {
 > Leader watcher 启动时会**立即检查当前状态**，若已是 leader 则立刻发送一次 `LeadershipAcquired`，  
 > 而不等待下一次 100ms 轮询触发。这保证了副本重启后（重启前已是 leader）能立即恢复 leader 服务，  
 > 不会错过成为 leader 的初始状态。
+
+## ConfigSyncServer 发布时机
+
+`ConfigSyncServer` 不能在 “Phase 1 foundation resources ready” 时提前对外发布。
+Kubernetes phased init 中，`HTTPRoute`、`GRPCRoute`、`EdgionTls`、`EdgionPlugins` 等 Phase 2 资源
+是在 Phase 1 之后才注册到 `PROCESSOR_REGISTRY` 的。
+
+如果 caches watcher 只看“当前 registry 里没有 not_ready kinds”就发送 `CachesReady`，
+就会把只包含 `Gateway` / `Service` / `Endpoints` / `EndpointSlice` 等基础资源的
+部分 `WatchObj` 集合注册进 `ConfigSyncServer`。之后 Gateway 对 Phase 2 kinds 做 `List(kind)`
+会收到 `Unknown kind`，即使旧缓存还在、业务流量暂时仍可用。
+
+正确规则是：
+
+1. 先等待所有 phased processors 都已经注册完成
+2. 再等待所有会同步到 Gateway 的 kinds ready
+3. 最后执行 `PROCESSOR_REGISTRY.all_watch_objs(no_sync_kinds)` 并发布 `CachesReady`
+
+排障时如果看到：
+
+- Gateway 日志反复出现 `Failed to list resources: Unknown kind: HTTPRoute/GRPCRoute/EdgionTls/...`
+- 但已有流量仍然可用
+
+优先检查是不是 controller restart/reload 后只发布了部分 `WatchObj`。
 
 ### 重试与 Backoff
 

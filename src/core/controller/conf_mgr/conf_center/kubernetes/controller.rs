@@ -450,6 +450,31 @@ impl KubernetesController {
         kinds
     }
 
+    /// All resource kinds that should register processors during controller startup.
+    ///
+    /// This includes both Phase 1 foundation resources and Phase 2 dependent
+    /// resources. The namespace watcher is intentionally excluded because it
+    /// does not participate in PROCESSOR_REGISTRY readiness gating.
+    pub(crate) fn all_processor_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.phase1_kinds();
+        kinds.extend([
+            "HTTPRoute",
+            "GRPCRoute",
+            "TCPRoute",
+            "UDPRoute",
+            "TLSRoute",
+            "EdgionTls",
+            "BackendTLSPolicy",
+            "EdgionPlugins",
+            "EdgionStreamPlugins",
+            "PluginMetaData",
+            "LinkSys",
+            "EdgionAcme",
+            "EdgionGatewayConfig",
+        ]);
+        kinds
+    }
+
     /// Internal method to run all controllers with phased initialization.
     ///
     /// Phase 1 (Foundation): GatewayClass, Gateway, Secret, ReferenceGrant,

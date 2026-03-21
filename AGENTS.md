@@ -40,8 +40,10 @@ Treat it as the canonical shared layer for Codex, Cursor, Claude, and other agen
 
 - Debug route, TLS, or sync issues:
   1. `skills/testing/SKILL.md`
-  2. `skills/gateway-api/SKILL.md` when Gateway API semantics matter
-  3. `skills/mis/debugging-tls-gateway.md` for TLS gateway routing issues
+  2. `skills/architecture/01-config-center/02-kubernetes/00-lifecycle.md` when symptoms appear after controller restart/reload, or when Gateway logs `Unknown kind`
+  3. `skills/architecture/02-grpc-sync.md` for `ConfigSyncServer` / `supported_kinds` / list-watch behavior
+  4. `skills/gateway-api/SKILL.md` when Gateway API semantics matter
+  5. `skills/mis/debugging-tls-gateway.md` for TLS gateway routing issues
 
 - Understand controller/gateway config and path behavior:
   1. `skills/development/04-config-reference.md`

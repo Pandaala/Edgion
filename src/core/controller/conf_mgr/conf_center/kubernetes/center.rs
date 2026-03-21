@@ -478,6 +478,7 @@ impl KubernetesCenter {
         let controller = self
             .create_k8s_controller(client, resolved_mode)?
             .with_leader_handle(leader_handle.clone());
+        let expected_processor_kinds = controller.all_processor_kinds();
 
         // 4. Spawn controller.run task
         let shutdown_signal = shutdown_handle.signal();
@@ -501,24 +502,36 @@ impl KubernetesCenter {
         let acme_client = client.clone();
         // Get no_sync_kinds from global config (or use default)
         let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
+        let expected_sync_kinds: Vec<&'static str> = expected_processor_kinds
+            .iter()
+            .copied()
+            .filter(|k| !no_sync_kinds.iter().any(|ns| ns == k))
+            .collect();
         let caches_handle = tokio::spawn(async move {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
             let start = Instant::now();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
 
-            // Treat no_sync_kinds as optional for cache readiness as well:
-            // if those resources are unavailable in the cluster (e.g. experimental CRDs),
-            // they should not block ConfigSyncServer startup.
             let pending_sync_kinds = || -> Vec<&'static str> {
-                PROCESSOR_REGISTRY
-                    .not_ready_kinds()
-                    .into_iter()
-                    .filter(|k| !no_sync_refs.contains(k))
+                let missing_registration: Vec<&'static str> = expected_processor_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).is_none())
+                    .collect();
+                if !missing_registration.is_empty() {
+                    return missing_registration;
+                }
+
+                expected_sync_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).map(|p| !p.is_ready()).unwrap_or(true))
                     .collect()
             };
 
-            // Wait for PROCESSOR_REGISTRY to be ready
+            // Wait until all phased processors are registered and all sync kinds
+            // are ready before publishing ConfigSyncServer.
             while !pending_sync_kinds().is_empty() && start.elapsed() < timeout {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
@@ -807,6 +820,7 @@ impl KubernetesCenter {
         // Create controller with leader_handle for status write gating
         let mut controller = self.create_k8s_controller(client, resolved_mode)?;
         controller = controller.with_leader_handle(leader_handle.clone());
+        let expected_processor_kinds = controller.all_processor_kinds();
 
         let shutdown_signal = shutdown_handle.signal();
         let tx = event_tx.clone();
@@ -826,6 +840,11 @@ impl KubernetesCenter {
         let css = config_sync_server.clone();
         let tx = event_tx.clone();
         let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
+        let expected_sync_kinds: Vec<&'static str> = expected_processor_kinds
+            .iter()
+            .copied()
+            .filter(|k| !no_sync_kinds.iter().any(|ns| ns == k))
+            .collect();
         let caches_handle = tokio::spawn(async move {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
@@ -833,10 +852,19 @@ impl KubernetesCenter {
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
 
             let pending_sync_kinds = || -> Vec<&'static str> {
-                PROCESSOR_REGISTRY
-                    .not_ready_kinds()
-                    .into_iter()
-                    .filter(|k| !no_sync_refs.contains(k))
+                let missing_registration: Vec<&'static str> = expected_processor_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).is_none())
+                    .collect();
+                if !missing_registration.is_empty() {
+                    return missing_registration;
+                }
+
+                expected_sync_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).map(|p| !p.is_ready()).unwrap_or(true))
                     .collect()
             };
 

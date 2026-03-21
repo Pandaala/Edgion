@@ -43,6 +43,25 @@ PROCESSOR_REGISTRY
 
 `ReferenceGrant` and `Secret` are `no_sync_kinds` — not sent to Gateway.
 
+### Registration Timing Invariant
+
+`ConfigSyncServer` should only call `register_all(PROCESSOR_REGISTRY.all_watch_objs(...))`
+after all phased controllers have finished registering their processors.
+
+In Kubernetes mode, Phase 1 foundation resources (`Gateway`, `Service`, `Endpoints`, ...)
+start before Phase 2 route / TLS / plugin resources. If `ConfigSyncServer` is published as
+soon as Phase 1 is ready, Gateway may still receive an older `supported_kinds` set or retry
+Phase 2 `List(kind)` calls, but the live controller will only know the Phase 1 watch objects.
+The result is repeated gRPC errors like:
+
+- `Failed to list resources: Unknown kind: HTTPRoute`
+- `Failed to list resources: Unknown kind: GRPCRoute`
+- `Failed to list resources: Unknown kind: EdgionTls`
+
+This can coexist with temporarily healthy traffic because Gateway may still be serving from
+previously cached snapshots. Treat this as a control-plane readiness bug, not as proof that
+the corresponding resource kind is unsupported.
+
 ## Client Side (Gateway)
 
 ```
