@@ -2,7 +2,7 @@
 
 This document records how to add a new Kubernetes resource type in Edgion. With the unified macro system, adding new resources becomes much simpler.
 
-> The primary AI / agent workflow now lives in [../../../skills/02-development/00-add-new-resource.md](../../../skills/02-development/00-add-new-resource.md).
+> The primary AI / agent workflow now lives in [../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md).
 > This document remains the human-facing background guide and manual checklist.
 > For classified examples, use the references linked from that workflow: `route-like`, `controller-only`, `plugin-like`, and `cluster-scoped`.
 
@@ -310,7 +310,7 @@ Before submitting, verify:
 - [Kubernetes Custom Resources](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)
 - [kube-rs Documentation](https://docs.rs/kube/latest/kube/)
 - [Gateway API Specification](https://gateway-api.sigs.k8s.io/)
-- [../../../skills/02-development/00-add-new-resource.md](../../../skills/02-development/00-add-new-resource.md)
+- [../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md)
 
 ---
 

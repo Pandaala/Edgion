@@ -96,17 +96,17 @@ When reasoning about a new resource, classify it first:
 
 | Family | Characteristics | Reference pattern |
 |--------|-----------------|-------------------|
-| Route-like | Attaches to Gateway, syncs to Gateway, participates in route runtime | `skills/02-development/references/add-resource-route-like.md` |
-| Controller-only | Drives validation/requeue/status, but should not sync to Gateway | `skills/02-development/references/add-resource-controller-only.md` |
-| Plugin-like | Resolves references and becomes reusable runtime config | `skills/02-development/references/add-resource-plugin-like.md` |
-| Cluster-scoped base-conf | Feeds gateway base configuration or cluster-wide defaults | `skills/02-development/references/add-resource-cluster-scoped.md` |
+| Route-like | Attaches to Gateway, syncs to Gateway, participates in route runtime | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-route-like.md` |
+| Controller-only | Drives validation/requeue/status, but should not sync to Gateway | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-controller-only.md` |
+| Plugin-like | Resolves references and becomes reusable runtime config | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-plugin-like.md` |
+| Cluster-scoped base-conf | Feeds gateway base configuration or cluster-wide defaults | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-cluster-scoped.md` |
 
 ## 6. When Adding a New Kind
 
 Use this order:
 
 1. Read [Adding New Resource Types Guide](./add-new-resource-guide.md).
-2. Choose the closest pattern reference from the `skills/02-development/references/` set.
+2. Choose the closest pattern reference from the `skills/01-architecture/01-controller/09-add-new-resource/references/` set.
 3. Wire type definition, kind enum, `define_resources!`, and `ResourceMeta`.
 4. Wire controller `ProcessorHandler` and any requeue behavior.
 5. Decide whether the kind syncs to Gateway or stays controller-only.

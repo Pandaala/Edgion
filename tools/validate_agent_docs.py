@@ -33,12 +33,12 @@ ENTRY_FILES = [
     REPO_ROOT / "skills/02-development/05-annotations-reference.md",
     REPO_ROOT / "skills/02-development/06-feature-flags.md",
     REPO_ROOT / "skills/02-development/07-documentation-writing.md",
-    REPO_ROOT / "skills/04-testing/01-integration-testing.md",
-    REPO_ROOT / "skills/05-debugging/00-debugging.md",
-    REPO_ROOT / "skills/06-cicd/00-local-build.md",
-    REPO_ROOT / "skills/06-cicd/01-docker-build.md",
-    REPO_ROOT / "skills/06-cicd/02-github-workflow.md",
-    REPO_ROOT / "skills/10-misc/debugging-tls-gateway.md",
+    REPO_ROOT / "skills/05-testing/01-integration-testing.md",
+    REPO_ROOT / "skills/06-tracing/00-debugging.md",
+    REPO_ROOT / "skills/09-misc/00-local-build.md",
+    REPO_ROOT / "skills/09-misc/01-docker-build.md",
+    REPO_ROOT / "skills/09-misc/02-github-workflow.md",
+    REPO_ROOT / "skills/09-misc/debugging-tls-gateway.md",
     REPO_ROOT / "docs/en/dev-guide/README.md",
     REPO_ROOT / "docs/en/dev-guide/ai-agent-collaboration.md",
     REPO_ROOT / "docs/en/dev-guide/knowledge-source-map.md",
@@ -223,12 +223,12 @@ FORBIDDEN_PATTERNS = {
         "TODO (2026-02-25): Small Improvement",
         "currently listed in directory but not described",
     ],
-    "skills/04-testing/01-integration-testing.md": [
+    "skills/05-testing/01-integration-testing.md": [
         "TODO (2026-02-25): Small Improvement",
         "examples/test/code/",
         "scripts/certs/",
     ],
-    "skills/04-testing/SKILL.md": [
+    "skills/05-testing/SKILL.md": [
         "examples/test/code/",
     ],
     "docs/en/dev-guide/README.md": [

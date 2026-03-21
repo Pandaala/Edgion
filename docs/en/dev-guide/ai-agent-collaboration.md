@@ -90,7 +90,7 @@ Use a layered approach:
 For example:
 
 - `cargo build`, `cargo test`, and the main integration test entrypoint belong in `AGENTS.md`
-- workflow-specific testing detail belongs in `skills/04-testing/`
+- workflow-specific testing detail belongs in `skills/05-testing/`
 - human guidance for AI collaboration belongs in this document
 
 Avoid maintaining the same command explanation in both `docs/` and `skills/`.
@@ -109,7 +109,7 @@ Recommended rule:
 Example for integration testing:
 
 - the repo-wide entry command lives in `AGENTS.md`
-- suite details and debugging stay in `skills/04-testing/00-integration-testing.md`
+- suite details and debugging stay in `skills/05-testing/00-integration-testing.md`
 - human guidance for using the workflow with AI stays in this document
 
 ## Recommended Usage Pattern In This Repository

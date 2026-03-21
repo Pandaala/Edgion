@@ -83,9 +83,9 @@ git mv skills/03-coding-standards skills/03-coding
 1. `skills/SKILL.md` — 删除 observability 段落，重写 coding-standards 段落为 coding
 2. `skills/00-lifecycle/SKILL.md` — 更新 Phase 3 加载路径、检查点路径、阶段映射表
 3. `skills/00-lifecycle/02-skills-directory-design.md` — 更新编号体系、依赖图
-4. `skills/02-development/SKILL.md` — 更新两处引用
-5. `skills/02-development/01-edgion-plugin-dev.md` — 更新 observability 引用
-6. `skills/02-development/08-conf-handler-guidelines.md` — 更新 coding-standards 引用
+4. `skills/02-features/SKILL.md` — 更新两处引用
+5. `skills/01-architecture/02-gateway/12-edgion-plugin-dev.md` — 更新 observability 引用
+6. `skills/01-architecture/02-gateway/11-conf-handler-guidelines.md` — 更新 coding-standards 引用
 7. `skills/09-task/SKILL.md` — 更新 step 表格引用
 8. `skills/01-architecture/05-plugin-system.md` — 更新 observability 引用
 9. `AGENTS.md` — 合并两个 Knowledge Map 条目为一个，更新 Workflows 引用

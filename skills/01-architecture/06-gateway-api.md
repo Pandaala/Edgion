@@ -88,7 +88,7 @@ Edgion 通过以下机制扩展标准 Gateway API：
 | `edgion.io/edgion-tls` | Gateway | 引用 EdgionTls 资源名称（替代 Secret） |
 | `edgion.io/link-sys` | Gateway | 引用 LinkSys 资源名称 |
 
-完整注解列表见 `skills/02-development/05-annotations-reference.md`。
+完整注解列表见 `skills/02-features/10-annotations/00-annotations-overview.md`。
 
 ### 2. ExtensionRef 过滤器
 

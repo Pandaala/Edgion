@@ -23,6 +23,10 @@ description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TL
 | [08-observe.md](08-observe.md) | 可观测性 | AccessLog 零拷贝输出、Prometheus 指标、协议日志 |
 | [09-link-sys.md](09-link-sys.md) | LinkSys 外部系统集成 | ES/Redis/Etcd/Webhook/LocalFile 客户端管理、DataSender 实现 |
 | [10-runtime-store.md](10-runtime-store.md) | 运行时存储 | Gateway/Listener 配置存储、ArcSwap 无锁读取模式 |
+| [11-conf-handler-guidelines.md](11-conf-handler-guidelines.md) | ConfHandler 开发规范 | 实现/修改 ConfHandler 的 full_set/partial_update |
+| [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md) | HTTP 插件开发指南 | 开发新的 EdgionPlugin |
+| [13-stream-plugin-dev.md](13-stream-plugin-dev.md) | Stream 插件开发指南 | 开发 TCP/TLS 层插件 |
+| [14-link-sys-dev.md](14-link-sys-dev.md) | LinkSys 连接器开发指南 | 开发新的外部系统连接器 |
 
 ## 架构总览
 

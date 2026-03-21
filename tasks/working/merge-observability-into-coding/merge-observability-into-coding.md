@@ -55,9 +55,9 @@
 | `skills/00-lifecycle/SKILL.md` | 中 — 阶段映射表中引用了这两个目录 |
 | `skills/00-lifecycle/02-skills-directory-design.md` | 中 — 编号体系和依赖图需更新 |
 | `AGENTS.md` | 中 — Knowledge Map 引用了这两个目录 |
-| `skills/02-development/SKILL.md` | 低 — 引用了 `05-observability/` |
-| `skills/02-development/01-edgion-plugin-dev.md` | 低 — 引用了 `05-observability/00-access-log.md` |
-| `skills/02-development/08-conf-handler-guidelines.md` | 低 — 引用了 `03-coding-standards/01-log-safety.md` |
+| `skills/02-features/SKILL.md` | 低 — 引用了 `05-observability/` |
+| `skills/01-architecture/02-gateway/12-edgion-plugin-dev.md` | 低 — 引用了 `05-observability/00-access-log.md` |
+| `skills/01-architecture/02-gateway/11-conf-handler-guidelines.md` | 低 — 引用了 `03-coding-standards/01-log-safety.md` |
 | `skills/01-architecture/05-plugin-system.md` | 低 — 引用了 `05-observability/00-access-log.md` |
 | `skills/09-task/SKILL.md` | 低 — step 表格引用了 `coding-standards/` |
 | `docs/en/dev-guide/knowledge-source-map.md` | 低 — 引用了 `05-observability/` |

@@ -588,7 +588,7 @@ based on Gateway feedback. This is the key architectural difference from the old
 | # | File | Change | Effort |
 |---|------|--------|--------|
 | 5.1 | All CRD YAML files with status conditions | Update description to include Programmed and Ready again | Small |
-| 5.2 | `skills/02-development/09-status-management.md` | Update to reflect data-plane feedback mechanism | Small |
+| 5.2 | `skills/01-architecture/01-controller/10-status-management.md` | Update to reflect data-plane feedback mechanism | Small |
 | 5.3 | `skills/01-architecture/02-grpc-sync.md` | Add status query section | Small |
 
 ### Phase 6: Testing
@@ -676,7 +676,7 @@ control-plane assumptions.
 
 ## Related
 
-- [09-status-management.md](../../skills/02-development/09-status-management.md) — Status management guidelines
+- [09-status-management.md](../../skills/01-architecture/01-controller/10-status-management.md) — Status management guidelines
 - [02-grpc-sync.md](../../skills/01-architecture/02-grpc-sync.md) — gRPC sync architecture
 - [resource_controller.rs](../../src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs) — Status persistence
 - [client_registry.rs](../../src/core/controller/conf_sync/conf_server/client_registry.rs) — Gateway tracking

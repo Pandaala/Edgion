@@ -11,13 +11,13 @@
 
 1. **渐进式加载**：`skills/SKILL.md` → 分类 SKILL.md → 具体文件。只加载当前任务需要的最小子树，不要一次全部加载。
 2. **快速定位优先**：`skills/SKILL.md` 有"快速定位"表，按关键词（资源名、子系统名、场景）直接给出最短路径，优先使用它而不是逐级浏览。
-3. **理解 vs 动手**：想理解"X 是什么/怎么工作" → `01-architecture/`；想动手"开发/修改 X" → `02-development/` + `03-coding/`。
-4. **资源相关任务**：先到 `01-architecture/05-resources/SKILL.md` 找到该资源的架构文档，再根据任务类型决定是否需要 development/testing。
+3. **三层定位**：理解架构 → `01-architecture/`；查功能/配置 Schema → `02-features/`；写代码 → `01-architecture/`（开发指南）+ `03-coding/`。
+4. **资源相关任务**：先到 `01-architecture/05-resources/SKILL.md` 找到该资源的架构文档，再到 `02-features/` 查功能 Schema。
 5. **`docs/` 不是起点**：`docs/` 面向人类用户，`skills/` 面向 AI 和开发者。任务上下文从 skills 获取。
 
 ### 任务生命周期
 
-任务模板、生命周期阶段、阶段→Skills 映射、裁剪规则统一见 `skills/09-task/SKILL.md`。
+任务模板、生命周期阶段、阶段→Skills 映射、裁剪规则统一见 `skills/07-task/SKILL.md`。
 
 ## 常见工作流
 
@@ -25,47 +25,47 @@
   1. 阅读 `skills/SKILL.md`
   2. 阅读 `skills/01-architecture/SKILL.md`
   3. 仅加载直接相关的架构文件
-  4. 然后阅读 `skills/02-development/SKILL.md`
-  5. 最后使用 `skills/04-testing/SKILL.md` 进行验证
+  4. 然后阅读 `skills/02-features/SKILL.md`（功能/配置 Schema 参考）
+  5. 最后使用 `skills/05-testing/SKILL.md` 进行验证
 
 - 添加新资源类型：
-  1. `skills/02-development/00-add-new-resource.md`
+  1. `skills/01-architecture/01-controller/09-add-new-resource/00-guide.md`
   2. 从该工作流中选择最接近的模式参考（`route-like`、`controller-only`、`plugin-like`、`cluster-scoped`）
   3. `skills/01-architecture/00-common/03-resource-system.md`
   4. `skills/01-architecture/01-controller/03-config-center/SKILL.md`
-  5. `skills/04-testing/00-integration-testing.md`
+  5. `skills/05-testing/00-integration-testing.md`
 
 - 调试路由、TLS 或同步问题：
-  1. `skills/04-testing/SKILL.md`
+  1. `skills/05-testing/SKILL.md`
   2. 当症状出现在 Controller 重启/重载之后，或 Gateway 日志出现 `Unknown kind` 时：`skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md`
   3. 关于 Controller↔Gateway gRPC 同步行为：`skills/01-architecture/03-controller-gateway-link/SKILL.md`
   4. 当涉及 Gateway API 语义时：`skills/08-gateway-api/SKILL.md`
-  5. TLS 网关路由问题：`skills/10-misc/debugging-tls-gateway.md`
+  5. TLS 网关路由问题：`skills/09-misc/debugging-tls-gateway.md`
 
 - 了解 Controller/Gateway 配置和路径行为：
-  1. `skills/02-development/04-config-reference.md`
-  2. 加载 Controller、Gateway 或 `EdgionGatewayConfig` 对应的参考文件
+  1. `skills/02-features/02-config/SKILL.md`
+  2. 加载 Controller、Gateway 或 `EdgionGatewayConfig` 对应的配置 Schema 文件
   3. 当相对路径行为相关时：`docs/zh-CN/dev-guide/work-directory.md`
 
 - 在修改清单或文档之前了解 `edgion.io/*` 键：
-  1. `skills/02-development/05-annotations-reference.md`
+  1. `skills/02-features/10-annotations/00-annotations-overview.md`
   2. 加载 `metadata.annotations`、`options` 或保留/仅测试键的对应参考
   3. 更新过时的示例，而不是向前复制遗留键
 
 - 添加或调试 HTTP 插件行为：
-  1. `skills/02-development/01-edgion-plugin-dev.md`
+  1. `skills/01-architecture/02-gateway/12-edgion-plugin-dev.md`
   2. `skills/03-coding/observability/00-access-log.md`
-  3. `skills/04-testing/00-integration-testing.md`
+  3. `skills/05-testing/00-integration-testing.md`
 
 - 添加或调试 Stream 插件行为：
-  1. `skills/02-development/02-stream-plugin-dev.md`
-  2. `skills/02-development/05-annotations-reference.md`
-  3. `skills/04-testing/00-integration-testing.md`
+  1. `skills/01-architecture/02-gateway/13-stream-plugin-dev.md`
+  2. `skills/02-features/10-annotations/00-annotations-overview.md`
+  3. `skills/05-testing/00-integration-testing.md`
 
 - 修改 CI 或发布自动化：
-  1. `skills/06-cicd/02-github-workflow.md`
-  2. `skills/06-cicd/00-local-build.md`
-  3. `skills/06-cicd/01-docker-build.md`
+  1. `skills/09-misc/02-github-workflow.md`
+  2. `skills/09-misc/00-local-build.md`
+  3. `skills/09-misc/01-docker-build.md`
 
 ## 常用命令
 

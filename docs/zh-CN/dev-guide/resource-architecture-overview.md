@@ -96,17 +96,17 @@ Gateway 侧的工作方式是：
 
 | 家族 | 特征 | 参考模式 |
 |------|------|----------|
-| route-like | 绑定 Gateway、要同步到 Gateway、进入路由运行时 | `skills/02-development/references/add-resource-route-like.md` |
-| controller-only | 主要负责校验 / requeue / status，不应同步到 Gateway | `skills/02-development/references/add-resource-controller-only.md` |
-| plugin-like | 负责解析引用并成为可复用运行时配置 | `skills/02-development/references/add-resource-plugin-like.md` |
-| cluster-scoped base-conf | 提供 Gateway 基础配置或集群级默认值 | `skills/02-development/references/add-resource-cluster-scoped.md` |
+| route-like | 绑定 Gateway、要同步到 Gateway、进入路由运行时 | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-route-like.md` |
+| controller-only | 主要负责校验 / requeue / status，不应同步到 Gateway | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-controller-only.md` |
+| plugin-like | 负责解析引用并成为可复用运行时配置 | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-plugin-like.md` |
+| cluster-scoped base-conf | 提供 Gateway 基础配置或集群级默认值 | `skills/01-architecture/01-controller/09-add-new-resource/references/add-resource-cluster-scoped.md` |
 
 ## 6. 新增一种资源时
 
 建议按这个顺序：
 
 1. 先看 [添加新资源类型指南](./add-new-resource-guide.md)。
-2. 再从 `skills/02-development/references/` 里选最接近的模式。
+2. 再从 `skills/01-architecture/01-controller/09-add-new-resource/references/` 里选最接近的模式。
 3. 接上类型定义、kind 枚举、`define_resources!`、`ResourceMeta`。
 4. 接上 Controller `ProcessorHandler` 和必要的 requeue 逻辑。
 5. 明确它是否需要同步到 Gateway。

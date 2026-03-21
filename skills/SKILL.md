@@ -11,9 +11,12 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 ## 导航规则
 
 1. **渐进式披露**：本文件 → 分类 SKILL.md → 具体文件。只加载当前任务需要的最小子树。
-2. **理解 vs 动手**：想理解"X 是什么/怎么工作" → `01-architecture/`；想动手"开发/修改 X" → `02-development/` + `03-coding/`。
-3. **跨领域任务**：修改一个资源的 Handler 通常需要 architecture（理解处理流程）→ development（开发规范）→ coding（编码约束）→ testing（验证），按需逐层加载，不要一次全加载。
-4. **资源相关任务**：先到 [05-resources/](01-architecture/05-resources/SKILL.md) 找到该资源的架构文档，再根据任务类型决定是否需要 development/testing。
+2. **三层定位**：
+   - **理解架构**（内部怎么实现） → `01-architecture/`
+   - **查功能/配置**（怎么用/怎么配） → `02-features/`
+   - **写代码**（编码规范） → `03-coding/`
+3. **跨领域任务**：修改一个资源的 Handler 通常需要 architecture（理解处理流程）→ features（功能/Schema 参考）→ coding（编码约束）→ testing（验证），按需逐层加载。
+4. **资源相关任务**：先到 [05-resources/](01-architecture/05-resources/SKILL.md) 找到该资源的架构文档，再到 [02-features/](02-features/SKILL.md) 查功能 Schema。
 
 ## 快速定位
 
@@ -22,43 +25,47 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **架构全貌** — Controller/Gateway/Ctl 三 bin 关系 | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
 | **Controller 内部** — ConfCenter、Workqueue、ResourceProcessor、Requeue | [01-architecture/01-controller/](01-architecture/01-controller/SKILL.md) |
 | **Gateway 内部** — Pingora 生命周期、路由匹配、插件执行、负载均衡 | [01-architecture/02-gateway/](01-architecture/02-gateway/SKILL.md) |
-| **Controller↔Gateway 配置同步** — gRPC Watch/List、ConfigSyncServer/Client | [01-architecture/03-controller-gateway-link/](01-architecture/03-controller-gateway-link/SKILL.md) |
-| **某种资源的处理链路** — Gateway/HTTPRoute/EdgionPlugins/StreamPlugins/Secret 等 20 种 | [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) |
-| **开发新资源/插件** — 添加 CRD、EdgionPlugin、StreamPlugin、LinkSys | [02-development/SKILL.md](02-development/SKILL.md) |
-| **路由匹配规则** — HTTP/gRPC/TCP/TLS/UDP 各引擎的匹配逻辑 | [02-gateway/03-routes/00-route-matching.md](01-architecture/02-gateway/03-routes/00-route-matching.md) |
-| **TLS 配置** — 下游 TLS、上游 mTLS、证书管理、SNI 匹配 | [02-gateway/04-tls/00-tls-overview.md](01-architecture/02-gateway/04-tls/00-tls-overview.md) |
-| **可观测性** — AccessLog、Metrics、Tracing、日志安全 | [03-coding/SKILL.md](03-coding/SKILL.md) |
-| **集成测试** — 架构、运行、新增用例 | [04-testing/01-integration-testing.md](04-testing/01-integration-testing.md) |
-| **配置参考** — TOML 配置项、注解、Feature Flags | [02-development/04-config-reference.md](02-development/04-config-reference.md) |
-| **ConfHandler 开发** — 分类、增量更新、ArcSwap、配置泄漏防护 | [02-development/08-conf-handler-guidelines.md](02-development/08-conf-handler-guidelines.md) |
+| **Controller↔Gateway 配置同步** — gRPC Watch/List | [01-architecture/03-controller-gateway-link/](01-architecture/03-controller-gateway-link/SKILL.md) |
+| **某种资源的处理链路** — 20 种资源的架构 | [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) |
+| **二进制启动与部署** — CLI 参数、部署模式 | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
+| **TOML 配置 Schema** — Controller/Gateway 配置 | [02-features/02-config/](02-features/02-config/SKILL.md) |
+| **Gateway 资源功能** — Listener、协议、TLS 绑定 | [02-features/03-gateway/](02-features/03-gateway/SKILL.md) |
+| **路由功能与 Schema** — HTTPRoute/GRPCRoute/TCP/TLS/UDP | [02-features/04-routes/](02-features/04-routes/SKILL.md) |
+| **TLS 功能** — EdgionTls/ACME/BackendTLSPolicy | [02-features/05-tls/](02-features/05-tls/SKILL.md) |
+| **插件目录** — 28 个 HTTP 插件 + Stream 插件 | [02-features/06-plugins/](02-features/06-plugins/SKILL.md) |
+| **后端与负载均衡** — Service 发现、健康检查、LB 策略 | [02-features/07-backends/](02-features/07-backends/SKILL.md) |
+| **可观测性** — Access Log、Metrics、协议日志 | [02-features/08-observability/](02-features/08-observability/SKILL.md) |
+| **注解参考** — 所有 edgion.io/* 键 | [02-features/10-annotations/](02-features/10-annotations/SKILL.md) |
+| **开发新资源/插件** — 添加 CRD、插件、连接器 | [01-architecture/01-controller/09-add-new-resource/](01-architecture/01-controller/09-add-new-resource/00-guide.md) |
+| **路由匹配规则** — 各引擎匹配逻辑 | [01-architecture/02-gateway/03-routes/00-route-matching.md](01-architecture/02-gateway/03-routes/00-route-matching.md) |
+| **编码规范** — 日志 ID、日志安全、可观测性 | [03-coding/SKILL.md](03-coding/SKILL.md) |
+| **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 
 ## 目录总览
 
 | # | 目录 | 用途 |
 |---|------|------|
-| 01 | [architecture/](01-architecture/SKILL.md) | 系统架构：通用约定、Controller、Gateway、gRPC 同步、资源、ctl |
-| 02 | [development/](02-development/SKILL.md) | 开发指南：新资源、插件开发、配置参考、注解、Feature Flags |
+| 01 | [architecture/](01-architecture/SKILL.md) | 系统架构 + 开发指南：Controller、Gateway、gRPC 同步、资源处理、插件/资源/连接器开发 |
+| 02 | [features/](02-features/SKILL.md) | 功能与配置参考：二进制部署、配置 Schema、Gateway/路由/TLS/插件/后端/可观测性/注解 |
 | 03 | [coding/](03-coding/SKILL.md) | 编码规范：日志 ID、日志安全、可观测性（Access Log / Metrics / Tracing） |
-| 04 | [testing/](04-testing/SKILL.md) | 测试：单元测试、集成测试、K8s 测试、专项测试 |
-| 05 | [debugging/](05-debugging/SKILL.md) | 调试：Admin API、edgion-ctl、常见问题 |
-| 06 | [cicd/](06-cicd/SKILL.md) | 构建发布：本地编译、Docker、GitHub Actions |
-| 07 | [review/](07-review/SKILL.md) | Review 沉淀：误报判定、可观测性审查 |
+| 04 | [review/](04-review/SKILL.md) | Review 沉淀：误报判定、可观测性审查 |
+| 05 | [testing/](05-testing/SKILL.md) | 测试：单元测试、集成测试、K8s 测试、专项测试 |
+| 06 | [tracing/](06-tracing/SKILL.md) | 调试：Admin API、edgion-ctl、常见问题 |
+| 07 | [task/](07-task/SKILL.md) | 任务管理：目录规则、模板、生命周期阶段、完成检查清单 |
 | 08 | [gateway-api/](08-gateway-api/SKILL.md) | Gateway API 兼容性备忘 |
-| 09 | [task/](09-task/SKILL.md) | 任务管理：目录规则、模板、生命周期阶段、完成检查清单 |
-| 10 | [misc/](10-misc/) | 杂项（TLS 排查等） |
+| 09 | [misc/](09-misc/) | 杂项（TLS 排查等） |
 
 ## 开发生命周期速查
 
-任务按阶段推进，每阶段加载对应 skills（详见 [09-task/SKILL.md](09-task/SKILL.md)）：
+任务按阶段推进，每阶段加载对应 skills（详见 [07-task/SKILL.md](07-task/SKILL.md)）：
 
 | Phase | 做什么 | 加载 |
 |-------|--------|------|
 | 1 Analysis | 需求分析、影响评估 | `01-architecture/` |
-| 2 Design | 方案设计 | `01-architecture/`, `02-development/` |
-| 3 Implementation | 编码 | `02-development/`, `03-coding/` |
-| 4 Testing | 测试验证 | `04-testing/` |
-| 5 Documentation | 文档更新 | `02-development/07-documentation-writing.md` |
-| 6 Review | 回顾、知识回写 | `07-review/` |
+| 2 Design | 方案设计、Schema 确认 | `01-architecture/`, `02-features/` |
+| 3 Implementation | 编码 | `01-architecture/`（开发指南）, `02-features/`（配置 Schema）, `03-coding/` |
+| 4 Testing | 测试验证 | `05-testing/` |
+| 5 Review | 代码审查 | `04-review/` |
 
 ## 用户文档
 

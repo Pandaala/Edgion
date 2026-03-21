@@ -2,7 +2,7 @@
 
 This document is for contributors who maintain GitHub Actions, publish Docker images, or need to reproduce CI behavior locally. It explains the current Edgion CI / release structure, the shared local action, command boundaries, and the highest-risk change points.
 
-> The primary AI / agent workflow now lives in [../../../skills/06-cicd/02-github-workflow.md](../../../skills/06-cicd/02-github-workflow.md).
+> The primary AI / agent workflow now lives in [../../../skills/09-misc/02-github-workflow.md](../../../skills/09-misc/02-github-workflow.md).
 > This document remains the human-facing background guide, release-flow explanation, and manual review checklist.
 
 ## The Two Main Workflow Families
@@ -146,9 +146,9 @@ cargo test --all
 
 If you need something closer to release binary packaging, start with:
 
-- `skills/06-cicd/00-local-build.md`
-- `skills/06-cicd/01-docker-build.md`
-- `skills/06-cicd/02-github-workflow.md`
+- `skills/09-misc/00-local-build.md`
+- `skills/09-misc/01-docker-build.md`
+- `skills/09-misc/02-github-workflow.md`
 
 ## The Most Common Pitfalls When Editing Workflows
 
@@ -184,13 +184,13 @@ Local debugging commands can be more flexible. CI commands should stay stable, c
 
 Start from the skill entry:
 
-- [../../../skills/06-cicd/02-github-workflow.md](../../../skills/06-cicd/02-github-workflow.md)
+- [../../../skills/09-misc/02-github-workflow.md](../../../skills/09-misc/02-github-workflow.md)
 
 If the task also touches feature combinations or build dependencies, continue with:
 
-- [../../../skills/02-development/06-feature-flags.md](../../../skills/02-development/06-feature-flags.md)
-- [../../../skills/06-cicd/00-local-build.md](../../../skills/06-cicd/00-local-build.md)
-- [../../../skills/06-cicd/01-docker-build.md](../../../skills/06-cicd/01-docker-build.md)
+- [../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md](../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md)
+- [../../../skills/09-misc/00-local-build.md](../../../skills/09-misc/00-local-build.md)
+- [../../../skills/09-misc/01-docker-build.md](../../../skills/09-misc/01-docker-build.md)
 
 ## Related Docs
 

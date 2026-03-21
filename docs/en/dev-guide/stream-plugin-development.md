@@ -2,7 +2,7 @@
 
 This document is for contributors who need to extend `EdgionStreamPlugins`. It explains where stream plugins fit in Edgion, how the two-stage runtime works, and which wiring points humans most often miss.
 
-> The primary AI / agent workflow now lives in [../../../skills/02-development/02-stream-plugin-dev.md](../../../skills/02-development/02-stream-plugin-dev.md).
+> The primary AI / agent workflow now lives in [../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md](../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md).
 > This document remains the human-facing background guide, implementation boundary explanation, and manual review checklist.
 
 ## What This Plugin Family Is For
@@ -138,7 +138,7 @@ The repository historically had older forms such as `edgion.io/stream-plugins`. 
 
 If you want an AI tool to implement it, start from the skill entry instead:
 
-- [../../../skills/02-development/02-stream-plugin-dev.md](../../../skills/02-development/02-stream-plugin-dev.md)
+- [../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md](../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md)
 
 ## Testing And Verification
 

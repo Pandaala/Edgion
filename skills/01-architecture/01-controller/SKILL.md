@@ -21,6 +21,8 @@ description: edgion-controller 控制面架构：总体设计、启动/关闭、
 | [06-requeue-mechanism.md](06-requeue-mechanism.md) | 跨资源 Requeue 机制 | 排查依赖联动、理解 TriggerChain |
 | [07-cache-server.md](07-cache-server.md) | ServerCache + EventStore 内存缓存 | 调试 gRPC 同步数据源、理解版本机制 |
 | [08-acme-service.md](08-acme-service.md) | ACME 证书自动化服务 | 修改/调试自动证书签发与续期 |
+| [09-add-new-resource/](09-add-new-resource/00-guide.md) | 添加新资源 workflow + 4 类模板 | 需要添加新的 ResourceKind |
+| [10-status-management.md](10-status-management.md) | update_status 实现规范与陷阱 | 实现/修改 CRD status 回写 |
 
 ## 架构总览
 
