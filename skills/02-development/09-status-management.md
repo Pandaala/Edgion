@@ -303,7 +303,7 @@ determine.
 
 ## 11. Related
 
-- [02-resource-controller.md](../01-architecture/01-config-center/02-kubernetes/02-resource-controller.md) — Status persistence and leader guard
-- [08-resource-system.md](../01-architecture/08-resource-system.md) — Resource system and preparse
+- [02-resource-controller.md](../01-architecture/01-controller/03-config-center/02-kubernetes/02-resource-controller.md) — Status persistence and leader guard
+- [03-resource-system.md](../01-architecture/00-common/03-resource-system.md) — Resource system and preparse
 - [00-add-new-resource.md](00-add-new-resource.md) — Adding new resource types
 - [08-conf-handler-guidelines.md](08-conf-handler-guidelines.md) — ConfHandler (gateway side) guidelines

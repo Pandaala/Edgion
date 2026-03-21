@@ -14,7 +14,7 @@
 - [../../src/core/gateway/link_sys/runtime/conf_handler.rs](../../src/core/gateway/link_sys/runtime/conf_handler.rs)
 - [../../src/core/gateway/link_sys/runtime/store.rs](../../src/core/gateway/link_sys/runtime/store.rs)
 - [../../src/core/gateway/link_sys/providers/webhook/mod.rs](../../src/core/gateway/link_sys/providers/webhook/mod.rs)
-- [../04-testing/02-link-sys-testing.md](../04-testing/02-link-sys-testing.md)
+- [../04-testing/03-link-sys-testing.md](../04-testing/03-link-sys-testing.md)
 
 ## 先分清你改的是哪一类东西
 

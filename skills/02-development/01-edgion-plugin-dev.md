@@ -329,7 +329,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 - `src/types/resources/edgion_plugins/tests.rs`
 - 各插件自身的 `plugin.rs` / `tests.rs`
-- [../04-testing/00-integration-testing.md](../04-testing/00-integration-testing.md)
+- [../04-testing/01-integration-testing.md](../04-testing/01-integration-testing.md)
 
 ## 审查清单
 
@@ -346,4 +346,4 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 - [../../docs/zh-CN/dev-guide/http-plugin-development.md](../../docs/zh-CN/dev-guide/http-plugin-development.md)
 - [observability/00-access-log.md](../03-coding/observability/00-access-log.md)
 - [02-stream-plugin-dev.md](02-stream-plugin-dev.md)
-- [../04-testing/00-integration-testing.md](../04-testing/00-integration-testing.md)
+- [../04-testing/01-integration-testing.md](../04-testing/01-integration-testing.md)

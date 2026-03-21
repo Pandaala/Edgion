@@ -249,4 +249,4 @@ metadata:
 
 - [05-annotations-reference.md](05-annotations-reference.md)
 - [08-conf-handler-guidelines.md](08-conf-handler-guidelines.md)
-- [../04-testing/00-integration-testing.md](../04-testing/00-integration-testing.md)
+- [../04-testing/01-integration-testing.md](../04-testing/01-integration-testing.md)

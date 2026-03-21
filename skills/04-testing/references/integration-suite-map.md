@@ -39,7 +39,7 @@
 | `ref-grant-status` | `examples/test/conf/ref-grant-status/` | `RefGrantStatusTestSuite` | 否 | `ReferenceGrant` 状态验证 |
 | `Services/acme` | `examples/test/conf/Services/acme/` | `AcmeTestSuite` | 视场景而定 | 服务级联调 |
 
-`LinkSys` 测试虽然也在 `examples/test/conf/LinkSys/` 下，但它有独立的 bash + Docker Compose 链路，优先看 [../02-link-sys-testing.md](../02-link-sys-testing.md)。
+`LinkSys` 测试虽然也在 `examples/test/conf/LinkSys/` 下，但它有独立的 bash + Docker Compose 链路，优先看 [../03-link-sys-testing.md](../03-link-sys-testing.md)。
 
 ## `EdgionPlugins` 常见 item
 

@@ -23,14 +23,7 @@
 
 ## 任务生命周期
 
-每个任务**必须**从生命周期技能开始：
-
-1. 阅读 `skills/00-lifecycle/SKILL.md` — 了解 6 阶段生命周期
-2. 使用 `skills/00-lifecycle/01-task-template.md` 中的模板创建任务
-3. 遵循阶段门禁：分析 → 设计 → 实现 → 测试 → 文档 → 审查
-4. 在每个阶段，加载生命周期"阶段 → Skills 映射"表中指定的技能
-
-目录结构和状态约定请参见 `skills/09-task/SKILL.md`。
+任务模板、生命周期阶段、阶段→Skills 映射、裁剪规则统一见 `skills/09-task/SKILL.md`。
 
 ## 常见工作流
 
@@ -44,14 +37,14 @@
 - 添加新资源类型：
   1. `skills/02-development/00-add-new-resource.md`
   2. 从该工作流中选择最接近的模式参考（`route-like`、`controller-only`、`plugin-like`、`cluster-scoped`）
-  3. `skills/01-architecture/08-resource-system.md`
-  4. `skills/01-architecture/01-config-center/SKILL.md`
+  3. `skills/01-architecture/00-common/03-resource-system.md`
+  4. `skills/01-architecture/01-controller/03-config-center/SKILL.md`
   5. `skills/04-testing/00-integration-testing.md`
 
 - 调试路由、TLS 或同步问题：
   1. `skills/04-testing/SKILL.md`
-  2. 当症状出现在 Controller 重启/重载之后，或 Gateway 日志出现 `Unknown kind` 时：`skills/01-architecture/01-config-center/02-kubernetes/00-lifecycle.md`
-  3. 关于 `ConfigSyncServer` / `supported_kinds` / list-watch 行为：`skills/01-architecture/02-grpc-sync.md`
+  2. 当症状出现在 Controller 重启/重载之后，或 Gateway 日志出现 `Unknown kind` 时：`skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md`
+  3. 关于 Controller↔Gateway gRPC 同步行为：`skills/01-architecture/03-controller-gateway-link/SKILL.md`
   4. 当涉及 Gateway API 语义时：`skills/08-gateway-api/SKILL.md`
   5. TLS 网关路由问题：`skills/10-misc/debugging-tls-gateway.md`
 

@@ -23,8 +23,8 @@ ENTRY_FILES = [
     REPO_ROOT / "examples/README.md",
     REPO_ROOT / ".cursor/rules/00-edgion-entry.mdc",
     REPO_ROOT / "docs/DIRECTORY.md",
-    REPO_ROOT / "skills/01-architecture/08-resource-system.md",
-    REPO_ROOT / "skills/01-architecture/10-requeue-mechanism.md",
+    REPO_ROOT / "skills/01-architecture/00-common/03-resource-system.md",
+    REPO_ROOT / "skills/01-architecture/01-controller/06-requeue-mechanism.md",
     REPO_ROOT / "skills/02-development/00-add-new-resource.md",
     REPO_ROOT / "skills/02-development/01-edgion-plugin-dev.md",
     REPO_ROOT / "skills/02-development/02-stream-plugin-dev.md",
@@ -33,8 +33,8 @@ ENTRY_FILES = [
     REPO_ROOT / "skills/02-development/05-annotations-reference.md",
     REPO_ROOT / "skills/02-development/06-feature-flags.md",
     REPO_ROOT / "skills/02-development/07-documentation-writing.md",
-    REPO_ROOT / "skills/04-testing/00-integration-testing.md",
-    REPO_ROOT / "skills/04-testing/03-debugging.md",
+    REPO_ROOT / "skills/04-testing/01-integration-testing.md",
+    REPO_ROOT / "skills/05-debugging/00-debugging.md",
     REPO_ROOT / "skills/06-cicd/00-local-build.md",
     REPO_ROOT / "skills/06-cicd/01-docker-build.md",
     REPO_ROOT / "skills/06-cicd/02-github-workflow.md",
@@ -87,7 +87,7 @@ FORBIDDEN_PATTERNS = {
         "cd examples/testing",
         "./run_integration_test.sh",
     ],
-    "skills/01-architecture/00-overview.md": [
+    "skills/01-architecture/00-common/00-project-overview.md": [
         "ConfigSyncServer (gRPC :5810)",
     ],
     "skills/01-architecture/SKILL.md": [
@@ -223,7 +223,7 @@ FORBIDDEN_PATTERNS = {
         "TODO (2026-02-25): Small Improvement",
         "currently listed in directory but not described",
     ],
-    "skills/04-testing/00-integration-testing.md": [
+    "skills/04-testing/01-integration-testing.md": [
         "TODO (2026-02-25): Small Improvement",
         "examples/test/code/",
         "scripts/certs/",

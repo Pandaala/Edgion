@@ -179,5 +179,5 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 - 要看 suite/resource/item 的具体映射： [references/integration-suite-map.md](references/integration-suite-map.md)
 - 要确认 `test_server` 端口、端点、OIDC/auth、mirror 能力： [references/test-server-capabilities.md](references/test-server-capabilities.md)
 - 要保留现场做手工排查： [../05-debugging/00-debugging.md](../05-debugging/00-debugging.md)
-- 要跑 K8s 版本： [01-k8s-integration-testing.md](01-k8s-integration-testing.md)
-- 要跑 LinkSys： [02-link-sys-testing.md](02-link-sys-testing.md)
+- 要跑 K8s 版本： [02-k8s-integration-testing.md](02-k8s-integration-testing.md)
+- 要跑 LinkSys： [03-link-sys-testing.md](03-link-sys-testing.md)

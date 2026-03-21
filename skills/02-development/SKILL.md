@@ -28,17 +28,17 @@ description: Development workflow skill for Edgion. Use when implementing featur
 ### 添加新插件
 1. 阅读 [01-edgion-plugin-dev.md](01-edgion-plugin-dev.md)（HTTP 插件）或 [02-stream-plugin-dev.md](02-stream-plugin-dev.md)（TCP 插件）
 2. 参考 [observability/00-access-log.md](../03-coding/observability/00-access-log.md) 了解 PluginLog 规范
-3. 参考 [testing/00-integration-testing.md](../04-testing/00-integration-testing.md) 添加集成测试
+3. 参考 [testing/01-integration-testing.md](../04-testing/01-integration-testing.md) 添加集成测试
 
 ### 添加新资源类型
 1. 阅读 [00-add-new-resource.md](00-add-new-resource.md)
-2. 参考 [architecture/08-resource-system.md](../01-architecture/08-resource-system.md) 理解资源系统
-3. 参考 [architecture/01-config-center/SKILL.md](../01-architecture/01-config-center/SKILL.md) 理解处理流程
-4. 如涉及依赖重排队，参考 [architecture/10-requeue-mechanism.md](../01-architecture/10-requeue-mechanism.md)
+2. 参考 [architecture/00-common/03-resource-system.md](../01-architecture/00-common/03-resource-system.md) 理解资源系统
+3. 参考 [architecture/01-controller/03-config-center/SKILL.md](../01-architecture/01-controller/03-config-center/SKILL.md) 理解处理流程
+4. 如涉及依赖重排队，参考 [architecture/01-controller/06-requeue-mechanism.md](../01-architecture/01-controller/06-requeue-mechanism.md)
 
 ### 添加外部系统连接器
 1. 阅读 [03-link-sys-dev.md](03-link-sys-dev.md)
-2. 参考 [testing/02-link-sys-testing.md](../04-testing/02-link-sys-testing.md) 添加集成测试
+2. 参考 [testing/03-link-sys-testing.md](../04-testing/03-link-sys-testing.md) 添加集成测试
 
 ### 调整注解或 `edgion.io/*` 扩展键
 1. 阅读 [05-annotations-reference.md](05-annotations-reference.md)
