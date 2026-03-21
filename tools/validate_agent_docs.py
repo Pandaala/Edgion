@@ -23,22 +23,22 @@ ENTRY_FILES = [
     REPO_ROOT / "examples/README.md",
     REPO_ROOT / ".cursor/rules/00-edgion-entry.mdc",
     REPO_ROOT / "docs/DIRECTORY.md",
-    REPO_ROOT / "skills/architecture/08-resource-system.md",
-    REPO_ROOT / "skills/architecture/10-requeue-mechanism.md",
-    REPO_ROOT / "skills/development/00-add-new-resource.md",
-    REPO_ROOT / "skills/development/01-edgion-plugin-dev.md",
-    REPO_ROOT / "skills/development/02-stream-plugin-dev.md",
-    REPO_ROOT / "skills/development/03-link-sys-dev.md",
-    REPO_ROOT / "skills/development/04-config-reference.md",
-    REPO_ROOT / "skills/development/05-annotations-reference.md",
-    REPO_ROOT / "skills/development/06-feature-flags.md",
-    REPO_ROOT / "skills/development/07-documentation-writing.md",
-    REPO_ROOT / "skills/testing/00-integration-testing.md",
-    REPO_ROOT / "skills/testing/03-debugging.md",
-    REPO_ROOT / "skills/cicd/00-local-build.md",
-    REPO_ROOT / "skills/cicd/01-docker-build.md",
-    REPO_ROOT / "skills/cicd/02-github-workflow.md",
-    REPO_ROOT / "skills/mis/debugging-tls-gateway.md",
+    REPO_ROOT / "skills/01-architecture/08-resource-system.md",
+    REPO_ROOT / "skills/01-architecture/10-requeue-mechanism.md",
+    REPO_ROOT / "skills/02-development/00-add-new-resource.md",
+    REPO_ROOT / "skills/02-development/01-edgion-plugin-dev.md",
+    REPO_ROOT / "skills/02-development/02-stream-plugin-dev.md",
+    REPO_ROOT / "skills/02-development/03-link-sys-dev.md",
+    REPO_ROOT / "skills/02-development/04-config-reference.md",
+    REPO_ROOT / "skills/02-development/05-annotations-reference.md",
+    REPO_ROOT / "skills/02-development/06-feature-flags.md",
+    REPO_ROOT / "skills/02-development/07-documentation-writing.md",
+    REPO_ROOT / "skills/04-testing/00-integration-testing.md",
+    REPO_ROOT / "skills/04-testing/03-debugging.md",
+    REPO_ROOT / "skills/06-cicd/00-local-build.md",
+    REPO_ROOT / "skills/06-cicd/01-docker-build.md",
+    REPO_ROOT / "skills/06-cicd/02-github-workflow.md",
+    REPO_ROOT / "skills/10-misc/debugging-tls-gateway.md",
     REPO_ROOT / "docs/en/dev-guide/README.md",
     REPO_ROOT / "docs/en/dev-guide/ai-agent-collaboration.md",
     REPO_ROOT / "docs/en/dev-guide/knowledge-source-map.md",
@@ -87,10 +87,10 @@ FORBIDDEN_PATTERNS = {
         "cd examples/testing",
         "./run_integration_test.sh",
     ],
-    "skills/architecture/00-overview.md": [
+    "skills/01-architecture/00-overview.md": [
         "ConfigSyncServer (gRPC :5810)",
     ],
-    "skills/architecture/SKILL.md": [
+    "skills/01-architecture/SKILL.md": [
         "ConfigSyncServer (gRPC :5810)",
     ],
     "examples/test/conf/EdgionPlugins/ResponseRewrite/README.md": [
@@ -211,24 +211,24 @@ FORBIDDEN_PATTERNS = {
         'work_dir().resolve("logs/access.log")',
         'path = "logs/access.log"',
     ],
-    "skills/development/01-edgion-plugin-dev.md": [
+    "skills/02-development/01-edgion-plugin-dev.md": [
         "src/core/gateway/plugins/runtime/runtime.rs",
     ],
-    "skills/development/07-documentation-writing.md": [
+    "skills/02-development/07-documentation-writing.md": [
         "TODO (2026-02-25): Small Improvement",
         "**Language**: zh-CN (Chinese) only for now.",
         "All documentation lives under `docs/zh-CN/`.",
     ],
-    "skills/development/03-link-sys-dev.md": [
+    "skills/02-development/03-link-sys-dev.md": [
         "TODO (2026-02-25): Small Improvement",
         "currently listed in directory but not described",
     ],
-    "skills/testing/00-integration-testing.md": [
+    "skills/04-testing/00-integration-testing.md": [
         "TODO (2026-02-25): Small Improvement",
         "examples/test/code/",
         "scripts/certs/",
     ],
-    "skills/testing/SKILL.md": [
+    "skills/04-testing/SKILL.md": [
         "examples/test/code/",
     ],
     "docs/en/dev-guide/README.md": [

@@ -2,7 +2,7 @@
 
 本文档面向需要扩展 `EdgionStreamPlugins` 的贡献者，解释 stream plugin 在 Edgion 中的定位、两阶段运行模型，以及人类开发时最容易漏掉的接线点。
 
-> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/development/02-stream-plugin-dev.md](../../../skills/development/02-stream-plugin-dev.md)。
+> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/02-development/02-stream-plugin-dev.md](../../../skills/02-development/02-stream-plugin-dev.md)。
 > 本文档保留给人看的背景说明、实现边界和手工核对清单。
 
 ## 这类插件解决什么问题
@@ -138,7 +138,7 @@ metadata:
 
 如果你是让 AI 来做，直接从 skill 入口开始更稳：
 
-- [../../../skills/development/02-stream-plugin-dev.md](../../../skills/development/02-stream-plugin-dev.md)
+- [../../../skills/02-development/02-stream-plugin-dev.md](../../../skills/02-development/02-stream-plugin-dev.md)
 
 ## 测试与验证
 

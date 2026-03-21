@@ -2,7 +2,7 @@
 
 This document is for contributors who need to extend `EdgionPlugins`. It explains the execution stages used by HTTP plugins in Edgion, how the resource-to-runtime wiring works, and which segments are most often missed during implementation.
 
-> The primary AI / agent workflow now lives in [../../../skills/development/01-edgion-plugin-dev.md](../../../skills/development/01-edgion-plugin-dev.md).
+> The primary AI / agent workflow now lives in [../../../skills/02-development/01-edgion-plugin-dev.md](../../../skills/02-development/01-edgion-plugin-dev.md).
 > This document remains the human-facing background guide, implementation-boundary explanation, and manual review checklist.
 
 ## What This Plugin Family Is For
@@ -185,7 +185,7 @@ So when implementing a new plugin, it is not enough to write the trait implement
 
 If you want an AI tool to implement it, start from the skill entry:
 
-- [../../../skills/development/01-edgion-plugin-dev.md](../../../skills/development/01-edgion-plugin-dev.md)
+- [../../../skills/02-development/01-edgion-plugin-dev.md](../../../skills/02-development/01-edgion-plugin-dev.md)
 
 ## Testing And Verification
 

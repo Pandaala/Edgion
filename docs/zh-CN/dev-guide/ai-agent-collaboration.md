@@ -90,7 +90,7 @@
 例如：
 
 - `cargo build`、`cargo test`、集成测试入口放在 `AGENTS.md`
-- 某个测试套件的细节放在 `skills/testing/`
+- 某个测试套件的细节放在 `skills/04-testing/`
 - 给团队成员看的“怎么和 AI 配合”放在本文档
 
 不要把所有命令都堆进一个超级 skill，也不要在 `docs/` 和 `skills/` 里重复维护同一套命令解释。
@@ -109,7 +109,7 @@
 例如集成测试：
 
 - 仓库级入口命令写在 `AGENTS.md`
-- 套件细节、目录结构、排障方法写在 `skills/testing/00-integration-testing.md`
+- 套件细节、目录结构、排障方法写在 `skills/04-testing/00-integration-testing.md`
 - 面向人的“如何和 AI 一起使用这些测试能力”写在本文档
 
 ## 当前仓库的推荐使用方式

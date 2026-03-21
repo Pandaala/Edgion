@@ -2,7 +2,7 @@
 
 本文档面向需要扩展 `EdgionPlugins` 的贡献者，解释 HTTP 插件在 Edgion 中的执行阶段、资源到运行时的接线方式，以及实现时最常漏掉的几段。
 
-> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/development/01-edgion-plugin-dev.md](../../../skills/development/01-edgion-plugin-dev.md)。
+> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/02-development/01-edgion-plugin-dev.md](../../../skills/02-development/01-edgion-plugin-dev.md)。
 > 本文档保留给人看的背景说明、实现边界和人工审查清单。
 
 ## 这类插件解决什么问题
@@ -182,7 +182,7 @@ graph TD
 
 如果你是让 AI 来做，直接从 skill 入口开始更稳：
 
-- [../../../skills/development/01-edgion-plugin-dev.md](../../../skills/development/01-edgion-plugin-dev.md)
+- [../../../skills/02-development/01-edgion-plugin-dev.md](../../../skills/02-development/01-edgion-plugin-dev.md)
 
 ## 测试与验证
 

@@ -2,7 +2,7 @@
 
 本文档面向维护 GitHub Actions、发布 Docker 镜像、或需要在本地复现 CI 行为的贡献者，说明当前 Edgion 的 CI / release 结构、共享 action、命令边界和常见改动风险。
 
-> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/cicd/02-github-workflow.md](../../../skills/cicd/02-github-workflow.md)。
+> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/06-cicd/02-github-workflow.md](../../../skills/06-cicd/02-github-workflow.md)。
 > 本文档保留给人看的背景说明、发布流程解读和人工审查清单。
 
 ## 当前有哪两条主线
@@ -146,9 +146,9 @@ cargo test --all
 
 如果你想接近 release 二进制构建，优先看：
 
-- `skills/cicd/00-local-build.md`
-- `skills/cicd/01-docker-build.md`
-- `skills/cicd/02-github-workflow.md`
+- `skills/06-cicd/00-local-build.md`
+- `skills/06-cicd/01-docker-build.md`
+- `skills/06-cicd/02-github-workflow.md`
 
 ## 改 workflow 时最容易踩坑的点
 
@@ -186,13 +186,13 @@ cargo test --all
 
 直接从 skill 入口开始最稳：
 
-- [../../../skills/cicd/02-github-workflow.md](../../../skills/cicd/02-github-workflow.md)
+- [../../../skills/06-cicd/02-github-workflow.md](../../../skills/06-cicd/02-github-workflow.md)
 
 如果任务还涉及 feature 组合或构建依赖，再补看：
 
-- [../../../skills/development/06-feature-flags.md](../../../skills/development/06-feature-flags.md)
-- [../../../skills/cicd/00-local-build.md](../../../skills/cicd/00-local-build.md)
-- [../../../skills/cicd/01-docker-build.md](../../../skills/cicd/01-docker-build.md)
+- [../../../skills/02-development/06-feature-flags.md](../../../skills/02-development/06-feature-flags.md)
+- [../../../skills/06-cicd/00-local-build.md](../../../skills/06-cicd/00-local-build.md)
+- [../../../skills/06-cicd/01-docker-build.md](../../../skills/06-cicd/01-docker-build.md)
 
 ## 相关文档
 

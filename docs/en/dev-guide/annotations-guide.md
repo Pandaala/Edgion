@@ -4,13 +4,13 @@ This document explains which `edgion.io/*` keys in Edgion are real `metadata.ann
 
 If you are changing code, debugging behavior, or updating docs, start with the agent-facing entry:
 
-- [05-annotations-reference.md](../../../skills/development/05-annotations-reference.md)
+- [05-annotations-reference.md](../../../skills/02-development/05-annotations-reference.md)
 
 The detailed key tables are split into these references:
 
-- [annotations-metadata.md](../../../skills/development/references/annotations-metadata.md)
-- [annotations-options-and-labels.md](../../../skills/development/references/annotations-options-and-labels.md)
-- [annotations-system-and-test-keys.md](../../../skills/development/references/annotations-system-and-test-keys.md)
+- [annotations-metadata.md](../../../skills/02-development/references/annotations-metadata.md)
+- [annotations-options-and-labels.md](../../../skills/02-development/references/annotations-options-and-labels.md)
+- [annotations-system-and-test-keys.md](../../../skills/02-development/references/annotations-system-and-test-keys.md)
 
 ## Start With Placement, Not Just The Key Name
 
