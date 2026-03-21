@@ -5,23 +5,17 @@
 
 ## 从这里开始
 
-- 当任务需要项目特定上下文时，首先阅读 `skills/SKILL.md`。
-- 使用渐进式披露：根目录 `skills/SKILL.md` -> 相关领域 `SKILL.md` -> 具体参考文件。
-- 默认不要加载整个 `docs/` 目录树。`docs/` 用于面向人类的叙述性文档和多语言材料，`skills/` 用于任务工作流和项目特定的操作知识。
-- 如果任务不明确，优先选择最小的相关技能子树，而不是加载宽泛的架构材料。
+当任务需要项目上下文时，从 `skills/SKILL.md` 开始。
 
-## 知识图谱
+### Skills 导航规则
 
-- 架构：`skills/01-architecture/SKILL.md`
-- 开发工作流：`skills/02-development/SKILL.md`
-- 编码规范与可观测性：`skills/03-coding/SKILL.md`
-- 测试与调试：`skills/04-testing/SKILL.md`
-- 构建与 CI/CD：`skills/06-cicd/SKILL.md`
-- 代码审查启发式规则：`skills/07-review/SKILL.md`
-- 任务跟踪：`skills/09-task/SKILL.md`
-- Gateway API 兼容性说明：`skills/08-gateway-api/SKILL.md`
+1. **渐进式加载**：`skills/SKILL.md` → 分类 SKILL.md → 具体文件。只加载当前任务需要的最小子树，不要一次全部加载。
+2. **快速定位优先**：`skills/SKILL.md` 有"快速定位"表，按关键词（资源名、子系统名、场景）直接给出最短路径，优先使用它而不是逐级浏览。
+3. **理解 vs 动手**：想理解"X 是什么/怎么工作" → `01-architecture/`；想动手"开发/修改 X" → `02-development/` + `03-coding/`。
+4. **资源相关任务**：先到 `01-architecture/05-resources/SKILL.md` 找到该资源的架构文档，再根据任务类型决定是否需要 development/testing。
+5. **`docs/` 不是起点**：`docs/` 面向人类用户，`skills/` 面向 AI 和开发者。任务上下文从 skills 获取。
 
-## 任务生命周期
+### 任务生命周期
 
 任务模板、生命周期阶段、阶段→Skills 映射、裁剪规则统一见 `skills/09-task/SKILL.md`。
 
