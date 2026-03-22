@@ -17,7 +17,7 @@
 
 ### 任务生命周期
 
-任务模板、生命周期阶段、阶段→Skills 映射、裁剪规则统一见 `skills/07-task/SKILL.md`。
+任务模板、生命周期阶段、阶段→Skills 映射、裁剪规则统一见 `skills/07-tasks/SKILL.md`。
 
 ## 常见工作流
 
@@ -70,11 +70,6 @@
 ## 常用命令
 
 ```bash
-# 构建
-cargo build
-cargo build --bin edgion-controller
-cargo build --bin edgion-gateway
-
 # 检查
 cargo check --all-targets
 cargo fmt --all -- --check
