@@ -2275,9 +2275,9 @@ async fn list_resources(
         Some(c) => state.aggregator.list_keys_by_cluster(c),
         None => state.aggregator.list_all_keys(),
     };
-    let keys: Vec<_> = match &params.kind {
-        Some(k) => keys.into_iter().filter(|key| &key.kind == k).collect(),
-        None => keys,
+    let keys: Vec<ResourceKeyDto> = match &params.kind {
+        Some(k) => keys.into_iter().filter(|key| &key.kind == k).map(ResourceKeyDto::from).collect(),
+        None => keys.into_iter().map(ResourceKeyDto::from).collect(),
     };
     Json(keys)
 }
