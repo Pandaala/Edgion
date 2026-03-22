@@ -230,8 +230,8 @@ mod tests {
         assert_eq!(routes.len(), 2, "Should have 2 routes for same service/method");
 
         // Verify route identifiers
-        assert_eq!(routes[0].matched_info.route_name, "route1");
-        assert_eq!(routes[1].matched_info.route_name, "route2");
+        assert_eq!(routes[0].matched_info.rsc.name, "route1");
+        assert_eq!(routes[1].matched_info.rsc.name, "route2");
 
         // Verify route identifiers distinguish the two routes
         assert_eq!(routes[0].resource_key, "default/route1");

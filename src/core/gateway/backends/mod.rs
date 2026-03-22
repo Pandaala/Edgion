@@ -685,7 +685,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
     let namespace = ctx
         .backend_context
         .as_ref()
-        .map(|bc| bc.namespace.as_str())
+        .map(|bc| bc.rsc.ns.as_str())
         .ok_or(EdgionStatus::Unknown)?;
 
     let service_key = format!("{}/{}", namespace, br_name);

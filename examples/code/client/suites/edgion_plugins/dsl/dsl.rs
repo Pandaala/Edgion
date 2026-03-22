@@ -1108,6 +1108,7 @@ impl DslTestSuite {
     // ==================== 场景 15: Range Iterate ====================
 
     fn test_range_iterate() -> TestCase {
+
         TestCase::new(
             "dsl_range_iterate",
             "DSL: range(1,4) iterate → X-Range-Sum: 6, X-Range-Len: 3 in response headers",
@@ -1143,6 +1144,246 @@ impl DslTestSuite {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!("status={} x-range-sum='{}' x-range-len='{}'", status, sum, len),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 16: Regex Replace ====================
+
+    fn test_regex_replace_versioned_path() -> TestCase {
+        TestCase::new(
+            "dsl_regex_replace_versioned_path",
+            "DSL: regex_replace /v2/ → /latest/ in path",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-regex-replace/v2/users",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-regex-replace.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let cleaned = resp
+                                .headers()
+                                .get("x-cleaned-path")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if cleaned.contains("/latest/") && !cleaned.contains("/v2/") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("X-Cleaned-Path: {}", cleaned),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected /latest/ in path, got '{}'", cleaned),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_regex_replace_no_match() -> TestCase {
+        TestCase::new(
+            "dsl_regex_replace_no_match",
+            "DSL: regex_replace no version in path → unchanged",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-regex-replace/users",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-regex-replace.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let cleaned = resp
+                                .headers()
+                                .get("x-cleaned-path")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if cleaned.contains("/test/dsl-regex-replace/users") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Path unchanged: {}", cleaned),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Unexpected path: '{}'", cleaned),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 17: Trim + Split ====================
+
+    fn test_trim_split_with_admin() -> TestCase {
+        TestCase::new(
+            "dsl_trim_split_with_admin",
+            "DSL: split+trim X-Roles containing admin → X-Is-Admin: true",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-trim-split/api",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-trim-split.example.com")
+                        .header("X-Roles", "viewer, admin , editor")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let is_admin = resp
+                                .headers()
+                                .get("x-is-admin")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let count = resp
+                                .headers()
+                                .get("x-role-count")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if is_admin == "true" && count == "3" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Is-Admin: true, X-Role-Count: 3".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "X-Is-Admin='{}' X-Role-Count='{}'",
+                                        is_admin, count
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_trim_split_without_admin() -> TestCase {
+        TestCase::new(
+            "dsl_trim_split_without_admin",
+            "DSL: split+trim X-Roles without admin → no X-Is-Admin header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-trim-split/api",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-trim-split.example.com")
+                        .header("X-Roles", "viewer, editor")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let has_admin = resp.headers().get("x-is-admin").is_some();
+                            let count = resp
+                                .headers()
+                                .get("x-role-count")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if !has_admin && count == "2" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "No X-Is-Admin, X-Role-Count: 2".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "has_admin={} X-Role-Count='{}'",
+                                        has_admin, count
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 18: Break + Continue ====================
+
+    fn test_break_continue() -> TestCase {
+        TestCase::new(
+            "dsl_break_continue",
+            "DSL: break stops at 'target', continue skips 'skip' → X-Found: target, X-Skipped: 1",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-break-continue/api",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-break-continue.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let found = resp
+                                .headers()
+                                .get("x-found")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let skipped = resp
+                                .headers()
+                                .get("x-skipped")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if found == "target" && skipped == "1" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Found: target, X-Skipped: 1".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("X-Found='{}' X-Skipped='{}'", found, skipped),
                                 )
                             }
                         }
@@ -1192,6 +1433,14 @@ impl TestSuite for DslTestSuite {
             Self::test_deny_with_body_wrong_method(),
             Self::test_deny_with_body_get_allowed(),
             Self::test_range_iterate(),
+            // Scenario 16: Regex replace
+            Self::test_regex_replace_versioned_path(),
+            Self::test_regex_replace_no_match(),
+            // Scenario 17: Trim + Split
+            Self::test_trim_split_with_admin(),
+            Self::test_trim_split_without_admin(),
+            // Scenario 18: Break + Continue
+            Self::test_break_continue(),
         ]
     }
 }

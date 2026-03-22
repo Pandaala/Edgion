@@ -193,7 +193,7 @@ pub async fn select_http_backend(
             &route_unit.rule,
             &jump.backend_ref_name,
             jump.backend_ref_namespace.as_deref(),
-            &route_unit.matched_info.rns,
+            &route_unit.matched_info.rsc.ns,
         ) {
             Ok(backend) => backend,
             Err(_) => match RouteRules::select_backend(&route_unit.rule) {
@@ -233,7 +233,7 @@ pub async fn select_http_backend(
     let service_namespace = backend_ref
         .namespace
         .as_deref()
-        .or(Some(route_unit.matched_info.rns.as_str()));
+        .or(Some(route_unit.matched_info.rsc.ns.as_str()));
 
     backend_ref.backend_tls_policy =
         crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace);
@@ -313,7 +313,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         let ns = grpc_br.namespace.clone().unwrap_or_else(|| {
             ctx.grpc_route_unit
                 .as_ref()
-                .map(|unit| unit.matched_info.route_ns.clone())
+                .map(|unit| unit.matched_info.rsc.ns.clone())
                 .unwrap_or_default()
         });
         (grpc_br.name.clone(), ns)
@@ -321,7 +321,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         let ns = http_br.namespace.clone().unwrap_or_else(|| {
             ctx.route_unit
                 .as_ref()
-                .map(|unit| unit.matched_info.rns.clone())
+                .map(|unit| unit.matched_info.rsc.ns.clone())
                 .unwrap_or_default()
         });
         (http_br.name.clone(), ns)

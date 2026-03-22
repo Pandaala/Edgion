@@ -109,7 +109,7 @@ impl HttpRouteRuleUnit {
 
     /// Get route identifier
     pub fn identifier(&self) -> String {
-        format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
+        format!("{}/{}", self.matched_info.rsc.ns, self.matched_info.rsc.name)
     }
 
     /// Parse query string (already extracted by Pingora)
@@ -257,9 +257,9 @@ impl HttpRouteRuleUnit {
                 parent_refs,
                 gateway_infos,
                 &ctx.request_info.hostname,
-                &matched_info.rns,
+                &matched_info.rsc.ns,
                 "HTTPRoute",
-                &matched_info.rn,
+                &matched_info.rsc.name,
             ) {
                 Some(gi) => gi,
                 None => return Ok(None),

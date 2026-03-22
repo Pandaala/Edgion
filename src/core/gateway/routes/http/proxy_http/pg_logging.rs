@@ -121,13 +121,13 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     // Get matched route information (HTTP or gRPC)
     let (route_ns, route_name) = if let Some(ref route_unit) = ctx.route_unit {
         (
-            route_unit.matched_info.rns.as_str(),
-            route_unit.matched_info.rn.as_str(),
+            route_unit.matched_info.rsc.ns.as_str(),
+            route_unit.matched_info.rsc.name.as_str(),
         )
     } else if let Some(ref grpc_unit) = ctx.grpc_route_unit {
         (
-            grpc_unit.matched_info.route_ns.as_str(),
-            grpc_unit.matched_info.route_name.as_str(),
+            grpc_unit.matched_info.rsc.ns.as_str(),
+            grpc_unit.matched_info.rsc.name.as_str(),
         )
     } else {
         ("unknown", "unknown")
@@ -137,7 +137,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     let (backend_ns, backend_name) = ctx
         .backend_context
         .as_ref()
-        .map(|bc| (bc.namespace.as_str(), bc.name.as_str()))
+        .map(|bc| (bc.rsc.ns.as_str(), bc.rsc.name.as_str()))
         .unwrap_or(("unknown", "unknown"));
 
     // Get protocol from discover_protocol (default "http", could be "grpc", "websocket", etc.)

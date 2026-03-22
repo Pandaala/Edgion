@@ -25,7 +25,7 @@ use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::MatchedInfo;
+use crate::types::{MatchedInfo, Rsc};
 use crate::types::ResourceMeta;
 
 /// TLS Passthrough proxy service.
@@ -116,9 +116,11 @@ impl EdgionTlsPassthroughProxy {
         };
 
         ctx.matched = Some(MatchedInfo {
-            kind: "TLSRoute".to_string(),
-            ns: tls_route.metadata.namespace.clone().unwrap_or_default(),
-            name: tls_route.metadata.name.clone().unwrap_or_default(),
+            rsc: Rsc {
+                kind: "TLSRoute".to_string(),
+                ns: tls_route.metadata.namespace.clone().unwrap_or_default(),
+                name: tls_route.metadata.name.clone().unwrap_or_default(),
+            },
             section: None,
             sv: tls_route.get_sync_version(),
         });
@@ -172,9 +174,11 @@ impl EdgionTlsPassthroughProxy {
                 addr: parsed_upstream_addr.as_ref().map(|a| a.ip().to_string()),
                 port: parsed_upstream_addr.as_ref().map(|a| a.port()),
                 backend: Some(MatchedInfo {
-                    kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
-                    ns: namespace.to_string(),
-                    name: backend_ref.name.clone(),
+                    rsc: Rsc {
+                        kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
+                        ns: namespace.to_string(),
+                        name: backend_ref.name.clone(),
+                    },
                     section: None,
                     sv: 0,
                 }),

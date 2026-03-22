@@ -89,7 +89,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     let service_namespace = backend_ref
         .namespace
         .as_deref()
-        .or(Some(grpc_route_unit.matched_info.route_ns.as_str()));
+        .or(Some(grpc_route_unit.matched_info.rsc.ns.as_str()));
 
     backend_ref.backend_tls_policy =
         crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace);

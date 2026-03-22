@@ -62,7 +62,7 @@ pub async fn request_filter(
         // Get CORS config dynamically from matched route's EdgionPlugins
         // This ensures we always get the latest config even if EdgionPlugin is updated
         let cors_config = if let Some(ref route_unit) = ctx.route_unit {
-            let namespace = &route_unit.matched_info.rns;
+            let namespace = &route_unit.matched_info.rsc.ns;
             extract_cors_config_from_route_filters(&route_unit.rule.filters, namespace)
         } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
             // gRPC routes don't have CORS config yet, so None

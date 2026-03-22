@@ -1,0 +1,25 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-trim-split
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "trim-split"
+        source: |
+          let roles = req.header("X-Roles")
+          if roles != nil {
+              let parts = split(roles, ",")
+              let count = len(parts)
+              resp.set_header("X-Role-Count", to_str(count))
+              for role in parts {
+                  let trimmed = trim(role)
+                  if trimmed == "admin" {
+                      resp.set_header("X-Is-Admin", "true")
+                  }
+              }
+          }
+        errorPolicy: deny

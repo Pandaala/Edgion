@@ -193,8 +193,8 @@ mod tests {
 
         // Verify the route is stored
         assert_eq!(engine.routes.len(), 1);
-        assert_eq!(engine.routes[0].matched_info.rns, "default");
-        assert_eq!(engine.routes[0].matched_info.rn, "route1");
+        assert_eq!(engine.routes[0].matched_info.rsc.ns, "default");
+        assert_eq!(engine.routes[0].matched_info.rsc.name, "route1");
     }
 
     #[test]
@@ -211,9 +211,9 @@ mod tests {
         assert_eq!(engine.route_count(), 3);
 
         // Verify sorted by pattern length (longest first)
-        assert_eq!(engine.routes[0].matched_info.rn, "long"); // longest pattern
-        assert_eq!(engine.routes[1].matched_info.rn, "medium");
-        assert_eq!(engine.routes[2].matched_info.rn, "short"); // shortest pattern
+        assert_eq!(engine.routes[0].matched_info.rsc.name, "long"); // longest pattern
+        assert_eq!(engine.routes[1].matched_info.rsc.name, "medium");
+        assert_eq!(engine.routes[2].matched_info.rsc.name, "short"); // shortest pattern
 
         // Verify pattern lengths
         let len0 = engine.routes[0].path_regex.as_ref().unwrap().as_str().len();
@@ -261,17 +261,17 @@ mod tests {
         // Test /api/test - should match index for "api" route
         let matches: Vec<usize> = regex_set.matches("/api/test").into_iter().collect();
         assert_eq!(matches.len(), 1);
-        assert!(engine.routes[matches[0]].matched_info.rn.contains("api"));
+        assert!(engine.routes[matches[0]].matched_info.rsc.name.contains("api"));
 
         // Test /users/123 - should match index for "users" route
         let matches: Vec<usize> = regex_set.matches("/users/123").into_iter().collect();
         assert_eq!(matches.len(), 1);
-        assert!(engine.routes[matches[0]].matched_info.rn.contains("users"));
+        assert!(engine.routes[matches[0]].matched_info.rsc.name.contains("users"));
 
         // Test /admin/panel - should match index for "admin" route
         let matches: Vec<usize> = regex_set.matches("/admin/panel").into_iter().collect();
         assert_eq!(matches.len(), 1);
-        assert!(engine.routes[matches[0]].matched_info.rn.contains("admin"));
+        assert!(engine.routes[matches[0]].matched_info.rsc.name.contains("admin"));
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
             .max_by_key(|&&idx| engine.routes[idx].path_regex.as_ref().unwrap().as_str().len())
             .unwrap();
 
-        assert!(engine.routes[*longest_idx].matched_info.rn.contains("specific"));
+        assert!(engine.routes[*longest_idx].matched_info.rsc.name.contains("specific"));
     }
 
     #[test]
@@ -340,9 +340,9 @@ mod tests {
         assert!(engine.regex_set.is_some());
 
         // Find routes by name (since they're sorted by length)
-        let uuid_route = engine.routes.iter().find(|r| r.matched_info.rn == "uuid").unwrap();
-        let date_route = engine.routes.iter().find(|r| r.matched_info.rn == "date").unwrap();
-        let version_route = engine.routes.iter().find(|r| r.matched_info.rn == "version").unwrap();
+        let uuid_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "uuid").unwrap();
+        let date_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "date").unwrap();
+        let version_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "version").unwrap();
 
         // Test UUID pattern
         assert!(uuid_route.matches_path("/items/550e8400-e29b-41d4-a716-446655440000"));
@@ -411,9 +411,9 @@ mod tests {
         let engine = RegexRoutesEngine::build(routes);
 
         // Find routes by name (since they're sorted by length)
-        let dots_route = engine.routes.iter().find(|r| r.matched_info.rn == "dots").unwrap();
-        let question_route = engine.routes.iter().find(|r| r.matched_info.rn == "question").unwrap();
-        let brackets_route = engine.routes.iter().find(|r| r.matched_info.rn == "brackets").unwrap();
+        let dots_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "dots").unwrap();
+        let question_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "question").unwrap();
+        let brackets_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "brackets").unwrap();
 
         // Test escaped dot - literal dot, not any character
         assert!(dots_route.matches_path("/api.json"));

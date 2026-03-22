@@ -124,7 +124,7 @@ impl RequestFilter for DirectEndpoint {
         let ctx = session.ctx();
         let (backend_refs, route_ns) = match ctx.route_unit.as_ref() {
             Some(unit) if unit.rule.backend_refs.as_ref().is_some_and(|r| !r.is_empty()) => {
-                (unit.rule.backend_refs.as_ref().unwrap(), unit.matched_info.rns.as_str())
+                (unit.rule.backend_refs.as_ref().unwrap(), unit.matched_info.rsc.ns.as_str())
             }
             _ => {
                 log.push("NoRouteOrBkRefs; ");

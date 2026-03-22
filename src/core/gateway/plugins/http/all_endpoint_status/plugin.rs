@@ -560,7 +560,7 @@ impl RequestFilter for AllEndpointStatus {
         let original_path = session.get_path().to_string();
         let original_query = session.get_query();
         let original_headers = session.request_headers();
-        let route_namespace = route_unit.matched_info.rns.clone();
+        let route_namespace = route_unit.matched_info.rsc.ns.clone();
 
         // 2. Resolve all endpoints from all backends
         let effective_max = self.config.effective_max_endpoints(global_config.max_endpoints);

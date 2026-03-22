@@ -17,8 +17,7 @@ pub struct TlsRouteContext {
     pub listener_port: u16,
     pub sni: String,
     pub tls_id: Option<String>,
-    pub matched_route_ns: String,
-    pub matched_route_name: String,
+    pub rsc: crate::types::Rsc,
     pub is_mtls: bool,
 }
 

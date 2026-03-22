@@ -24,8 +24,9 @@ pub struct GrpcRouteInfo {
 /// gRPC route match information
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct GrpcMatchInfo {
-    pub route_ns: String,
-    pub route_name: String,
+    /// Resource identifier (kind="GRPCRoute")
+    #[schemars(skip)]
+    pub rsc: crate::types::Rsc,
     /// Rule id in GRPCRoute
     pub rule_id: usize,
     /// Match id at rule id
@@ -83,8 +84,11 @@ impl GrpcMatchInfo {
         };
 
         Self {
-            route_ns,
-            route_name,
+            rsc: crate::types::Rsc {
+                kind: "GRPCRoute".to_string(),
+                ns: route_ns,
+                name: route_name,
+            },
             rule_id,
             match_id,
             sv,
@@ -132,9 +136,9 @@ impl GrpcRouteRuleUnit {
                 parent_refs,
                 gateway_infos,
                 hostname,
-                &self.matched_info.route_ns,
+                &self.matched_info.rsc.ns,
                 "GRPCRoute",
-                &self.matched_info.route_name,
+                &self.matched_info.rsc.name,
             ) {
                 Some(gi) => gi,
                 None => return Ok(None),
@@ -213,8 +217,8 @@ impl GrpcRouteRuleUnit {
     pub fn identifier(&self) -> String {
         format!(
             "{}/{} (rule:{}, match:{})",
-            self.matched_info.route_ns,
-            self.matched_info.route_name,
+            self.matched_info.rsc.ns,
+            self.matched_info.rsc.name,
             self.matched_info.rule_id,
             self.matched_info.match_id
         )
