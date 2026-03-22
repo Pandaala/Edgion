@@ -352,8 +352,19 @@ where
         self.len() == 0
     }
 
+    /// Clears all entries and resets all stats counters to zero.
+    ///
+    /// Called on config reload or full invalidation. Prior hit-rate statistics
+    /// are not meaningful after the cache population changes completely.
+    /// If you need to preserve historical stats, call [`stats()`] before `clear()`.
     pub fn clear(&self) {
         self.inner.lock().clear();
+        // Reset counters after the lock is released — the inner clear has no
+        // access to the outer struct's atomics.
+        self.hits.store(0, Relaxed);
+        self.misses.store(0, Relaxed);
+        self.expirations.store(0, Relaxed);
+        self.evictions.store(0, Relaxed);
     }
 
     pub fn remove(&self, key: &K) -> Option<V> {
@@ -636,5 +647,26 @@ mod tests {
         assert_eq!(cache.len(), 2);
         assert_eq!(cache.get(&"c"), Some(3));
         assert_eq!(cache.get(&"d"), Some(4));
+    }
+
+    #[test]
+    fn test_clear_resets_stats_counters() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, None);
+        cache.get(&"a"); // hit
+        cache.get(&"b"); // miss
+
+        // Sanity: stats are non-zero before clear
+        let before = cache.stats();
+        assert!(before.hits > 0 || before.misses > 0);
+
+        cache.clear();
+
+        let after = cache.stats();
+        assert_eq!(after.hits, 0);
+        assert_eq!(after.misses, 0);
+        assert_eq!(after.expirations, 0);
+        assert_eq!(after.evictions, 0);
     }
 }
