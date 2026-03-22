@@ -62,6 +62,7 @@ pub async fn run(
                 match result {
                     Ok(()) => {
                         tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
+                        backoff.reset();
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -127,10 +128,6 @@ async fn connect_and_run(
         "Connected and registered with center"
     );
 
-    let ping_interval = Duration::from_secs(config.ping_interval_secs);
-    let mut ping_timer = tokio::time::interval(ping_interval);
-    ping_timer.tick().await; // skip immediate first tick
-
     loop {
         tokio::select! {
             msg = inbound.message() => {
@@ -149,11 +146,6 @@ async fn connect_and_run(
                     }
                     Some(_) => {} // empty payload, ignore
                 }
-            }
-            _ = ping_timer.tick() => {
-                // Note: ping is server-initiated; this timer is just a keepalive guard.
-                // If center doesn't send Ping within interval*3, the stream will be
-                // closed by center. Controller doesn't need to self-ping.
             }
         }
     }
