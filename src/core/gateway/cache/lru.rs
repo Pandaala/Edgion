@@ -121,16 +121,24 @@ where
         }
     }
 
-    fn alloc_index(&mut self) -> usize {
+    /// Allocates a node index for a new entry.
+    ///
+    /// Returns `(index, evicted)` where `evicted` is `true` only if a live
+    /// (non-expired) tail entry was displaced to make room. Returns `false`
+    /// when: a free-list slot was available, or the displaced tail entry was
+    /// already expired (cleanup, not eviction).
+    fn alloc_index(&mut self) -> (usize, bool) {
         if let Some(idx) = self.free_head {
             self.free_head = self.nodes[idx].next_free;
             self.nodes[idx].next_free = None;
-            return idx;
+            return (idx, false);
         }
 
         let tail = self.tail.expect("tail must exist when cache is full");
+        let now = Instant::now();
+        let is_live = self.nodes[tail].occupied && !self.nodes[tail].is_expired(now);
         self.remove_index(tail);
-        tail
+        (tail, is_live)
     }
 
     fn release_index(&mut self, idx: usize) {
@@ -210,19 +218,19 @@ where
         }
     }
 
-    fn insert(&mut self, key: K, value: V, ttl: Option<Duration>) {
+    fn insert(&mut self, key: K, value: V, ttl: Option<Duration>) -> bool {
         let now = Instant::now();
 
         if let Some(&idx) = self.map.get(&key) {
             self.nodes[idx].value = Some(value);
             self.nodes[idx].expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
             self.touch(idx);
-            return;
+            return false; // key-update: no eviction
         }
 
         self.prune_expired_from_tail(now);
 
-        let idx = self.alloc_index();
+        let (idx, evicted) = self.alloc_index();
         self.nodes[idx].key = Some(key.clone());
         self.nodes[idx].value = Some(value);
         self.nodes[idx].expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
@@ -232,6 +240,8 @@ where
         self.attach_head(idx);
         self.map.insert(key, idx);
         self.len += 1;
+
+        evicted
     }
 
     fn get(&mut self, key: &K) -> (Option<V>, CacheStatus)
@@ -356,7 +366,10 @@ where
             return;
         }
 
-        self.inner.lock().insert(key, value, ttl);
+        let evicted = self.inner.lock().insert(key, value, ttl); // MutexGuard dropped here
+        if evicted {
+            self.evictions.fetch_add(1, Relaxed);
+        }
     }
 
     pub fn get(&self, key: &K) -> Option<V> {
@@ -557,6 +570,55 @@ mod tests {
         assert_eq!(s.hits, 0);
         assert_eq!(s.misses, 0);
         assert_eq!(s.expirations, 0);
+        assert_eq!(s.evictions, 0);
+    }
+
+    #[test]
+    fn test_eviction_count_when_capacity_full_and_live_entry_displaced() {
+        let cache = LocalLruCache::new(2);
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, None);
+        // Cache is now full with two live entries. Next insert must evict one.
+        cache.insert("c", 3, None);
+
+        let s = cache.stats();
+        assert_eq!(s.evictions, 1);
+    }
+
+    #[test]
+    fn test_eviction_count_zero_when_expired_entry_freed_before_displacement() {
+        // If prune_expired_from_tail frees a slot, no live entry is displaced.
+        let cache = LocalLruCache::new(2);
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, Some(Duration::from_millis(10)));
+        std::thread::sleep(Duration::from_millis(20));
+
+        // "b" is expired. insert("c") prunes "b" first, freeing a slot.
+        // No live entry should be evicted.
+        cache.insert("c", 3, None);
+
+        let s = cache.stats();
+        assert_eq!(s.evictions, 0);
+    }
+
+    #[test]
+    fn test_overwrite_existing_key_does_not_count_as_eviction() {
+        let cache = LocalLruCache::new(2);
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, None);
+        // Overwriting "a" — no new slot needed, no eviction.
+        cache.insert("a", 99, None);
+
+        let s = cache.stats();
+        assert_eq!(s.evictions, 0);
+    }
+
+    #[test]
+    fn test_zero_ttl_insert_does_not_count_as_eviction() {
+        let cache = LocalLruCache::new(2);
+        cache.insert("a", 1, None);
+        cache.insert("a", 2, Some(Duration::ZERO)); // removes "a", never calls inner.insert
+        let s = cache.stats();
         assert_eq!(s.evictions, 0);
     }
 
