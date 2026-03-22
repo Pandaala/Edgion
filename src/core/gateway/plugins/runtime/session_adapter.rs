@@ -272,6 +272,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .map(|s| s.to_string())
     }
 
+    fn get_response_status(&self) -> Option<u16> {
+        self.response_header.as_ref().map(|h| h.status.as_u16())
+    }
+
     fn set_response_status(&mut self, status: u16) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
             let status_code = http::StatusCode::from_u16(status).map_err(|_| {

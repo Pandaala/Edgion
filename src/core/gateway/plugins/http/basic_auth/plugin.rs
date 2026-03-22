@@ -2,17 +2,20 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
+use crate::core::gateway::cache::lru::LocalLruCache;
+use crate::core::gateway::cli::config::get_default_auth_cache_capacity;
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::BasicAuthConfig;
 
+use async_singleflight::DefaultGroup;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use dashmap::DashMap;
+use sha2::{Digest, Sha256};
 
 type BasicAuthError = Box<dyn std::error::Error + Send + Sync>;
 type BasicAuthResult<T> = Result<T, BasicAuthError>;
@@ -31,9 +34,9 @@ pub struct BasicAuth {
     // We store whatever is verified: either a bcrypt hash (generated locally)
     // or a pre-supplied hash (from htpasswd).
     user_passwords: Arc<HashMap<String, String>>,
-    // Cache for successful authentications: AuthHeader -> (Username, Expiry)
-    // We only cache VALID credentials to avoid memory DoS attacks with random invalid headers.
-    auth_cache: Arc<DashMap<String, (String, Instant)>>,
+    /// LRU cache: auth header value -> username (TTL-based, managed by LocalLruCache)
+    auth_cache: Arc<LocalLruCache<String, String>>,
+    sf_group: Arc<DefaultGroup<bool>>,
     plugin_namespace: String,
     config: BasicAuthConfig,
 }
@@ -41,10 +44,16 @@ pub struct BasicAuth {
 impl BasicAuth {
     /// Create a new BasicAuth plugin from configuration
     pub fn new(config: &BasicAuthConfig, plugin_namespace: String) -> Self {
+        let capacity = if config.cache_capacity == 0 {
+            get_default_auth_cache_capacity()
+        } else {
+            config.cache_capacity
+        };
         let mut plugin = BasicAuth {
             name: "BasicAuth".to_string(),
             user_passwords: Arc::new(HashMap::new()),
-            auth_cache: Arc::new(DashMap::new()),
+            auth_cache: Arc::new(LocalLruCache::new(capacity)),
+            sf_group: Arc::new(DefaultGroup::new()),
             plugin_namespace,
             config: config.clone(),
         };
@@ -159,56 +168,75 @@ impl BasicAuth {
     }
 
     async fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<String, AuthFailure> {
-        // Extract authorization header
         let auth_header_value = match session.header_value("authorization") {
             Some(v) => v,
             None => return Err(AuthFailure::MissingHeader),
         };
 
-        // 1. Check Cache (Fast Path)
-        // If we have verified this exact header recently, skip cost.
-        if let Some(entry) = self.auth_cache.get(&auth_header_value) {
-            let (username, expiry) = entry.value();
-            if Instant::now() < *expiry {
-                return Ok(username.clone());
-            } else {
-                // Expired
-                drop(entry); // unlock
-                self.auth_cache.remove(&auth_header_value);
+        // Fast path: cache lookup (skipped entirely when cache_ttl == 0)
+        if self.config.cache_ttl > 0 {
+            if let Some(username) = self.auth_cache.get(&auth_header_value) {
+                return Ok(username);
             }
         }
 
-        // 2. Slow Path: Full Verification
-        // Extract and decode credentials
+        // Decode credentials
         let (username, password) = self
             .extract_credentials(&auth_header_value)
             .map_err(AuthFailure::BadCredentials)?;
 
-        // Find user
+        // Look up stored hash
         let stored_hash = self
             .user_passwords
             .get(&username)
             .ok_or_else(|| AuthFailure::BadCredentials("Invalid username or password".into()))?
             .clone();
 
-        // Verify password - OFF-LOADED TO BLOCKING THREAD
-        // This prevents blocking the async runtime with expensive crypto operations (bcrypt/scrypt etc.)
-        let password_clone = password.clone();
-
-        let is_valid = tokio::task::spawn_blocking(move || super::htpasswd::verify(&password_clone, &stored_hash))
-            .await
-            .map_err(|e| AuthFailure::BadCredentials(format!("Password verification task failed: {}", e).into()))?;
+        // Bcrypt hashes start with "$2" — only these are expensive enough to warrant singleflight
+        let is_bcrypt = stored_hash.starts_with("$2");
+        let is_valid: bool = if is_bcrypt && self.config.singleflight {
+            // singleflight key: SHA256(password_bytes || stored_hash_bytes)
+            // Never stores plaintext password in the map key.
+            let sf_key = {
+                let mut h = Sha256::new();
+                h.update(password.as_bytes());
+                h.update(stored_hash.as_bytes());
+                format!("{:x}", h.finalize())
+            };
+            let ph = stored_hash.clone();
+            let pw = password.clone();
+            // work() returns Result<bool, Option<()>> — unwrap_or(false) on error
+            let result = self.sf_group.work(&sf_key, async move {
+                let verified = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("BasicAuth: bcrypt spawn_blocking panicked: {}", e);
+                        false
+                    });
+                Ok::<bool, ()>(verified)
+            }).await;
+            result.unwrap_or(false)
+        } else {
+            // Non-bcrypt (SHA1/MD5/APR-MD5) or singleflight disabled
+            let ph = stored_hash.clone();
+            let pw = password.clone();
+            tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
+                .await
+                .map_err(|e| AuthFailure::BadCredentials(format!("Task failed: {}", e).into()))?
+        };
 
         if !is_valid {
             return Err(AuthFailure::BadCredentials("Invalid username or password".into()));
         }
 
-        // 3. Cache Success
-        // Cache this header for 5 minutes
-        self.auth_cache.insert(
-            auth_header_value.to_string(),
-            (username.clone(), Instant::now() + Duration::from_secs(300)),
-        );
+        // Cache success only — failures are never stored
+        if self.config.cache_ttl > 0 {
+            self.auth_cache.insert(
+                auth_header_value.to_string(),
+                username.clone(),
+                Some(Duration::from_secs(self.config.cache_ttl)),
+            );
+        }
 
         Ok(username)
     }
@@ -326,20 +354,16 @@ mod tests {
 
     fn create_basic_auth_with_users() -> BasicAuth {
         let config = BasicAuthConfig {
-            secret_refs: None,
             realm: "Test Realm".to_string(),
-            hide_credentials: false,
-            auth_failure_delay_ms: 0,
-            anonymous: None,
-            resolved_users: None,
-            validation_error: None,
+            cache_ttl: 300,
+            cache_capacity: 10,
+            singleflight: false, // disable for deterministic tests
+            ..Default::default()
         };
         let mut auth = BasicAuth::new(&config, "default".to_string());
-
         let mut users = HashMap::new();
         users.insert("testuser".to_string(), "testpass".to_string());
         auth.load_users(users).unwrap();
-
         auth
     }
 
@@ -400,13 +424,9 @@ mod tests {
     #[tokio::test]
     async fn test_anonymous_access() {
         let config = BasicAuthConfig {
-            secret_refs: None,
             realm: "Test".to_string(),
-            hide_credentials: false,
-            auth_failure_delay_ms: 0,
             anonymous: Some("anonymous-user".to_string()),
-            resolved_users: None,
-            validation_error: None,
+            ..Default::default()
         };
         let auth = BasicAuth::new(&config, "default".to_string());
         let mut mock_session = MockPluginSession::new();
@@ -425,13 +445,9 @@ mod tests {
     #[tokio::test]
     async fn test_wrong_password_with_anonymous_must_reject() {
         let config = BasicAuthConfig {
-            secret_refs: None,
             realm: "Test".to_string(),
-            hide_credentials: false,
-            auth_failure_delay_ms: 0,
             anonymous: Some("anonymous-user".to_string()),
-            resolved_users: None,
-            validation_error: None,
+            ..Default::default()
         };
         let mut auth = BasicAuth::new(&config, "default".to_string());
         let mut users = HashMap::new();
@@ -457,13 +473,9 @@ mod tests {
     #[tokio::test]
     async fn test_no_header_with_anonymous_allows_access() {
         let config = BasicAuthConfig {
-            secret_refs: None,
             realm: "Test".to_string(),
-            hide_credentials: false,
-            auth_failure_delay_ms: 0,
             anonymous: Some("anonymous-user".to_string()),
-            resolved_users: None,
-            validation_error: None,
+            ..Default::default()
         };
         let auth = BasicAuth::new(&config, "default".to_string());
         let mut mock_session = MockPluginSession::new();
@@ -480,13 +492,9 @@ mod tests {
     #[tokio::test]
     async fn test_hide_credentials() {
         let config = BasicAuthConfig {
-            secret_refs: None,
             realm: "Test".to_string(),
             hide_credentials: true,
-            auth_failure_delay_ms: 0,
-            anonymous: None,
-            resolved_users: None,
-            validation_error: None,
+            ..Default::default()
         };
         let mut auth = BasicAuth::new(&config, "default".to_string());
         let mut users = HashMap::new();
@@ -532,5 +540,95 @@ mod tests {
         let (username, password) = auth.extract_credentials(&header).expect("should parse");
         assert_eq!(username, " user ");
         assert_eq!(password, " pass ");
+    }
+
+    #[test]
+    fn test_basic_auth_cache_is_lru() {
+        let config = BasicAuthConfig {
+            cache_ttl: 60,
+            cache_capacity: 10,
+            singleflight: false,
+            resolved_users: Some(std::collections::HashMap::from([
+                ("u".to_string(), "p".to_string()),
+            ])),
+            ..Default::default()
+        };
+        let auth = BasicAuth::new(&config, "default".to_string());
+        assert_eq!(auth.auth_cache.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_load_users_clears_lru_cache() {
+        use std::collections::HashMap as StdMap;
+        let config = BasicAuthConfig {
+            cache_ttl: 300,
+            cache_capacity: 10,
+            singleflight: false,
+            resolved_users: Some(StdMap::from([("alice".to_string(), "pw".to_string())])),
+            ..Default::default()
+        };
+        let mut auth = BasicAuth::new(&config, "default".to_string());
+        auth.auth_cache.insert(
+            "Basic someheader".to_string(),
+            "alice".to_string(),
+            Some(std::time::Duration::from_secs(300)),
+        );
+        assert_eq!(auth.auth_cache.len(), 1);
+        auth.load_users(StdMap::from([("alice".to_string(), "pw".to_string())])).unwrap();
+        assert_eq!(auth.auth_cache.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_bcrypt_singleflight_path_succeeds() {
+        // bcrypt hash of "hunter2" at cost 4 (fast for tests)
+        let bcrypt_hash = bcrypt::hash("hunter2", 4).unwrap();
+        use std::collections::HashMap as StdMap;
+        let config = BasicAuthConfig {
+            cache_ttl: 60,
+            cache_capacity: 10,
+            singleflight: true, // enable singleflight
+            resolved_users: Some(StdMap::from([("alice".to_string(), bcrypt_hash)])),
+            ..Default::default()
+        };
+        let auth = BasicAuth::new(&config, "default".to_string());
+        use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+        let mut session = MockPluginSession::new();
+        let hdr = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("alice:hunter2")
+        );
+        session.expect_header_value().returning(move |_| Some(hdr.clone()));
+        session.expect_set_request_header().returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("BasicAuth");
+        let result = auth.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        // verify the cache was populated after singleflight success
+        assert_eq!(auth.auth_cache.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_non_bcrypt_does_not_use_singleflight() {
+        // SHA1 hash — singleflight must not interfere with non-bcrypt verification
+        let sha1_hash = "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g="; // SHA1("password")
+        use std::collections::HashMap as StdMap;
+        let config = BasicAuthConfig {
+            cache_ttl: 0, // disable cache so we test the slow path
+            cache_capacity: 10,
+            singleflight: true,
+            resolved_users: Some(StdMap::from([("user".to_string(), sha1_hash.to_string())])),
+            ..Default::default()
+        };
+        let auth = BasicAuth::new(&config, "default".to_string());
+        use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+        let mut session = MockPluginSession::new();
+        let hdr = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("user:password")
+        );
+        session.expect_header_value().returning(move |_| Some(hdr.clone()));
+        session.expect_set_request_header().returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("BasicAuth");
+        let result = auth.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

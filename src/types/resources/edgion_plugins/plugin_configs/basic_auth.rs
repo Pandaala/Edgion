@@ -24,6 +24,22 @@ pub struct BasicAuthConfig {
     #[serde(default)]
     pub auth_failure_delay_ms: u64,
 
+    /// LRU cache TTL in seconds for successful authentications.
+    /// Default: 300 (5 minutes). Set to 0 to disable caching entirely.
+    #[serde(default = "default_basic_auth_cache_ttl")]
+    pub cache_ttl: u64,
+
+    /// LRU cache capacity (number of entries).
+    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    #[serde(default)]
+    pub cache_capacity: usize,
+
+    /// Enable singleflight deduplication for concurrent bcrypt verifications.
+    /// Only applies to bcrypt hashes (passwords starting with `$2`).
+    /// Default: true.
+    #[serde(default = "default_basic_auth_singleflight")]
+    pub singleflight: bool,
+
     /// Realm for WWW-Authenticate header
     #[serde(default = "default_realm")]
     pub realm: String,
@@ -48,12 +64,23 @@ fn default_realm() -> String {
     "API Gateway".to_string()
 }
 
+fn default_basic_auth_cache_ttl() -> u64 {
+    300
+}
+
+fn default_basic_auth_singleflight() -> bool {
+    true
+}
+
 impl Default for BasicAuthConfig {
     fn default() -> Self {
         Self {
             secret_refs: None,
             hide_credentials: false,
             auth_failure_delay_ms: 0,
+            cache_ttl: default_basic_auth_cache_ttl(),
+            cache_capacity: 0,
+            singleflight: default_basic_auth_singleflight(),
             realm: default_realm(),
             anonymous: None,
             resolved_users: None,
@@ -107,5 +134,19 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.detect_validation_error().is_none());
+    }
+
+    #[test]
+    fn test_basic_auth_cache_config_defaults() {
+        let cfg = BasicAuthConfig::default();
+        assert_eq!(cfg.cache_ttl, 300);
+        assert_eq!(cfg.cache_capacity, 0);
+        assert!(cfg.singleflight);
+    }
+
+    #[test]
+    fn test_basic_auth_cache_disabled_when_ttl_zero() {
+        let cfg = BasicAuthConfig { cache_ttl: 0, ..Default::default() };
+        assert_eq!(cfg.cache_ttl, 0);
     }
 }

@@ -125,6 +125,15 @@ pub struct OpenidConnectConfig {
     pub introspection_endpoint_auth_method: EndpointAuthMethod,
     #[serde(default)]
     pub introspection_cache_ttl: u64,
+    /// LRU capacity for introspection result cache.
+    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    #[serde(default)]
+    pub introspection_cache_capacity: usize,
+
+    /// LRU capacity for access token cache.
+    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    #[serde(default)]
+    pub access_token_cache_capacity: usize,
     #[serde(default)]
     pub token_endpoint_auth_method: EndpointAuthMethod,
 
@@ -272,6 +281,8 @@ impl Default for OpenidConnectConfig {
             introspection_endpoint: None,
             introspection_endpoint_auth_method: EndpointAuthMethod::default(),
             introspection_cache_ttl: 0,
+            introspection_cache_capacity: 0,
+            access_token_cache_capacity: 0,
             token_endpoint_auth_method: EndpointAuthMethod::default(),
             set_access_token_header: false,
             set_id_token_header: false,
@@ -438,6 +449,13 @@ impl OpenidConnectConfig {
 mod tests {
     use super::{OpenidConnectConfig, UnauthAction, VerificationMode};
     use std::collections::HashMap;
+
+    #[test]
+    fn test_oidc_cache_capacity_defaults_zero() {
+        let cfg = OpenidConnectConfig::default();
+        assert_eq!(cfg.introspection_cache_capacity, 0);
+        assert_eq!(cfg.access_token_cache_capacity, 0);
+    }
 
     #[test]
     fn test_validation_requires_discovery_and_client_id() {

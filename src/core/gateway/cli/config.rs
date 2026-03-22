@@ -65,10 +65,20 @@ pub struct EdgionGatewayConfig {
     #[serde(default)]
     pub server: ServerConfig,
 
+    /// Metrics configuration
+    #[arg(skip)]
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+
     /// RateLimit plugin global configuration
     #[arg(skip)]
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
+
+    /// AuthCache plugin global configuration
+    #[arg(skip)]
+    #[serde(default)]
+    pub auth_cache: AuthCacheGlobalConfig,
 
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
@@ -216,6 +226,107 @@ impl Default for LoggingConfig {
             buffer_size: default_buffer_size(),
         }
     }
+}
+
+// ============================================
+// Metrics Configuration
+// ============================================
+
+/// Metrics configuration section (`[metrics]` in TOML)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MetricsConfig {
+    /// Prometheus metrics listen address
+    pub listen: String,
+    /// Request duration histogram configuration
+    pub request_duration: RequestDurationConfig,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            listen: "0.0.0.0:5901".to_string(),
+            request_duration: RequestDurationConfig::default(),
+        }
+    }
+}
+
+/// Request duration histogram configuration (`[metrics.request_duration]` in TOML)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RequestDurationConfig {
+    /// Enable the request duration histogram
+    pub enabled: bool,
+    /// Bucket boundaries in milliseconds
+    pub buckets: Vec<f64>,
+    /// Idle timeout in seconds for cold time-series cleanup (0 = disabled)
+    pub idle_timeout_secs: u64,
+    /// Per-label enable/disable toggles
+    pub labels: RequestDurationLabels,
+}
+
+impl Default for RequestDurationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            buckets: vec![
+                1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
+            ],
+            idle_timeout_secs: 600,
+            labels: RequestDurationLabels::default(),
+        }
+    }
+}
+
+/// Per-label toggles for request duration histogram
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RequestDurationLabels {
+    pub gateway_namespace: bool,
+    pub gateway_name: bool,
+    pub route_namespace: bool,
+    pub route_name: bool,
+    pub backend_namespace: bool,
+    pub backend_name: bool,
+    pub protocol: bool,
+    pub status: bool,
+}
+
+impl Default for RequestDurationLabels {
+    fn default() -> Self {
+        Self {
+            gateway_namespace: true,
+            gateway_name: true,
+            route_namespace: true,
+            route_name: true,
+            backend_namespace: true,
+            backend_name: true,
+            protocol: true,
+            status: true,
+        }
+    }
+}
+
+// ============================================
+// Global RequestDurationConfig Store
+// ============================================
+
+use std::sync::OnceLock;
+
+/// Global request duration config, initialized once at startup.
+static REQUEST_DURATION_CONFIG: OnceLock<RequestDurationConfig> = OnceLock::new();
+
+/// Initialize the global request duration config (call once at startup).
+pub fn init_request_duration_config(config: RequestDurationConfig) {
+    let _ = REQUEST_DURATION_CONFIG.set(config);
+}
+
+/// Get the global request duration config (zero-cost after init).
+#[inline]
+pub fn get_request_duration_config() -> &'static RequestDurationConfig {
+    REQUEST_DURATION_CONFIG
+        .get()
+        .expect("RequestDurationConfig not initialized")
 }
 
 // ============================================
@@ -389,6 +500,56 @@ pub fn get_min_estimator_slots() -> usize {
     MIN_ESTIMATOR_SLOTS_K * SLOTS_K
 }
 
+// ============================================
+// Auth Cache Global Configuration
+// ============================================
+
+const DEFAULT_AUTH_CACHE_CAPACITY: usize = 1024;
+
+fn default_auth_cache_capacity() -> usize {
+    DEFAULT_AUTH_CACHE_CAPACITY
+}
+
+/// Global auth cache configuration.
+/// Per-plugin `cache_capacity = 0` falls back to this value.
+///
+/// ## TOML Configuration Example:
+/// ```toml
+/// [auth_cache]
+/// default_capacity = 1024
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthCacheGlobalConfig {
+    /// Default LRU capacity for all auth plugins (default: 1024 entries).
+    #[serde(default = "default_auth_cache_capacity")]
+    pub default_capacity: usize,
+}
+
+impl Default for AuthCacheGlobalConfig {
+    fn default() -> Self {
+        // Uses the same constant as default_auth_cache_capacity() to prevent drift
+        Self { default_capacity: DEFAULT_AUTH_CACHE_CAPACITY }
+    }
+}
+
+static AUTH_CACHE_GLOBAL_CONFIG: OnceLock<AuthCacheGlobalConfig> = OnceLock::new();
+
+/// Initialize the global auth cache configuration (call once at startup).
+pub fn init_auth_cache_global_config(config: &AuthCacheGlobalConfig) {
+    let _ = AUTH_CACHE_GLOBAL_CONFIG.set(config.clone());
+}
+
+/// Get the default auth cache capacity.
+/// Returns the configured value, or compile-time fallback 1024 if not yet initialized.
+/// Never returns 0 — safe to pass directly to `LocalLruCache::new()`.
+pub fn get_default_auth_cache_capacity() -> usize {
+    AUTH_CACHE_GLOBAL_CONFIG
+        .get()
+        .map(|c| c.default_capacity)
+        .unwrap_or(DEFAULT_AUTH_CACHE_CAPACITY)
+}
+
 impl EdgionGatewayConfig {
     /// Load configuration from TOML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
@@ -508,6 +669,20 @@ mod tests {
     fn test_gateway_instance_count_never_zero() {
         set_gateway_instance_count(0); // Try to set zero
         assert_eq!(get_gateway_instance_count(), 1); // Should be clamped to 1
+    }
+
+    #[test]
+    fn test_auth_cache_global_config_default() {
+        let config = AuthCacheGlobalConfig::default();
+        assert_eq!(config.default_capacity, 1024);
+    }
+
+    #[test]
+    fn test_get_default_auth_cache_capacity_fallback() {
+        // Before init (or after init with default), capacity must be >= 1
+        // so LocalLruCache::new() never panics
+        let cap = get_default_auth_cache_capacity();
+        assert!(cap >= 1, "capacity must be > 0");
     }
 
     #[test]

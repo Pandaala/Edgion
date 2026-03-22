@@ -1,0 +1,26 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-multi-header-ops-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-multi-header-ops.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/dsl-multi-header-ops
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-multi-header-ops
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

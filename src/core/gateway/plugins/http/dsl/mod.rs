@@ -16,3 +16,6 @@
 pub mod config;
 pub mod lang;
 pub mod plugin;
+
+#[cfg(test)]
+mod tests;

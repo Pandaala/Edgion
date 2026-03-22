@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-deny-with-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "deny-with-body"
+        source: |
+          let auth = req.header("Authorization")
+          if auth == nil {
+              return deny(401, "{\"error\":\"unauthorized\"}")
+          }
+          let method = req.method
+          if method != "GET" {
+              return deny(405, "method not allowed")
+          }
+        errorPolicy: deny

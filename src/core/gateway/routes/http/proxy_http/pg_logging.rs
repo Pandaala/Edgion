@@ -1,6 +1,7 @@
 use super::EdgionHttpProxy;
+use crate::core::gateway::cli::config::get_request_duration_config;
 use crate::core::gateway::observe::metrics::{
-    global_metrics, record_backend_request, status_group, TestData, TestType,
+    global_metrics, record_backend_request, record_request_duration, status_group, TestData, TestType,
 };
 use crate::core::gateway::observe::AccessLogEntry;
 use crate::types::EdgionHttpContext;
@@ -153,6 +154,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     };
 
     // Record the metric
+    let status = status_group(ctx.request_info.status);
     record_backend_request(
         gateway_ns,
         gateway_name,
@@ -161,9 +163,24 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         backend_ns,
         backend_name,
         protocol,
-        status_group(ctx.request_info.status),
+        status,
         test_key,
         &test_data,
+    );
+
+    // Record request duration histogram
+    let duration_ms = ctx.start_time.elapsed().as_secs_f64() * 1000.0;
+    record_request_duration(
+        get_request_duration_config(),
+        gateway_ns,
+        gateway_name,
+        route_ns,
+        route_name,
+        backend_ns,
+        backend_name,
+        protocol,
+        status,
+        duration_ms,
     );
 }
 

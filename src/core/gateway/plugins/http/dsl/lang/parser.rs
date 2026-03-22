@@ -130,6 +130,7 @@ pub fn parse_program(source: &str) -> Result<Program, ParseError> {
 /// Reserved keywords that cannot be used as variable names
 const RESERVED_KEYWORDS: &[&str] = &[
     "let", "mut", "if", "else", "for", "while", "in", "return", "true", "false", "nil",
+    "break", "continue",
 ];
 
 /// Check if `name` is a reserved keyword
@@ -186,6 +187,12 @@ fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, 
         parse_for_stmt(input, ctx)
     } else if starts_with_keyword(input, "while") || input.starts_with("while(") {
         parse_while_stmt(input, ctx)
+    } else if starts_with_keyword(input, "break") {
+        ctx.add_node().map_err(nom::Err::Failure)?;
+        Ok((&input[5..], Stmt::new(StmtKind::Break)))
+    } else if starts_with_keyword(input, "continue") {
+        ctx.add_node().map_err(nom::Err::Failure)?;
+        Ok((&input[8..], Stmt::new(StmtKind::Continue)))
     } else if starts_with_keyword(input, "return") {
         parse_return_stmt(input, ctx)
     } else {

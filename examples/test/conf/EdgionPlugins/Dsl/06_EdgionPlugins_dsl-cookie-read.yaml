@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-cookie-read
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "cookie-read"
+        source: |
+          let sid = req.cookie("session_id")
+          if sid != nil {
+              req.set_header("X-Session", sid)
+          } else {
+              req.set_header("X-Session", "anonymous")
+          }
+        errorPolicy: deny

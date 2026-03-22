@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-sha256-sign
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "sha256-sign"
+        source: |
+          let token = req.header("X-Token")
+          if token != nil {
+              req.set_header("X-Token-Hash", sha256(token))
+          }
+        errorPolicy: deny

@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-resp-status-conditional
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "resp-status-conditional"
+        source: |
+          let s = resp.status
+          if s != nil {
+              if s == 404 {
+                  resp.set_header("X-Not-Found", "true")
+              }
+          }
+        errorPolicy: deny

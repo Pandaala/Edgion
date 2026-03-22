@@ -4,18 +4,38 @@ use axum::{
     Router,
 };
 use http::{header, StatusCode};
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use metrics_util::MetricKindMask;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+use crate::core::gateway::cli::config::MetricsConfig;
 
 /// Global Prometheus metrics handle
 static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
-/// Initialize the Prometheus metrics exporter
-pub fn init_metrics_exporter() -> Result<(), String> {
-    let builder = PrometheusBuilder::new();
+/// Initialize the Prometheus metrics exporter with configuration
+pub fn init_metrics_exporter(cfg: &MetricsConfig) -> Result<(), String> {
+    let rd = &cfg.request_duration;
 
-    // Set prefix for all metrics
-    let builder = builder.add_global_label("service", "edgion-gateway");
+    let mut builder = PrometheusBuilder::new().add_global_label("service", "edgion-gateway");
+
+    // idle_timeout: clean up cold time-series
+    if rd.idle_timeout_secs > 0 {
+        builder = builder.idle_timeout(MetricKindMask::ALL, Some(Duration::from_secs(rd.idle_timeout_secs)));
+    }
+
+    // Custom bucket boundaries for request duration histogram
+    if rd.enabled && !rd.buckets.is_empty() {
+        builder = builder
+            .set_buckets_for_metric(
+                Matcher::Full(
+                    crate::core::gateway::observe::metrics::registry::names::GATEWAY_REQUEST_DURATION_MS.to_string(),
+                ),
+                &rd.buckets,
+            )
+            .map_err(|e| format!("Failed to set buckets: {}", e))?;
+    }
 
     // Build and install the recorder
     let handle = builder
@@ -29,6 +49,8 @@ pub fn init_metrics_exporter() -> Result<(), String> {
     tracing::info!(
         component = "metrics",
         event = "exporter_initialized",
+        idle_timeout_secs = rd.idle_timeout_secs,
+        histogram_enabled = rd.enabled,
         "Prometheus metrics exporter initialized"
     );
 
@@ -69,15 +91,17 @@ pub fn create_metrics_router() -> Router {
 }
 
 /// Serve the metrics API on the specified port
-pub async fn serve(port: u16) -> anyhow::Result<()> {
+pub async fn serve(cfg: &MetricsConfig) -> anyhow::Result<()> {
     // Initialize metrics exporter if not already done
     if PROMETHEUS_HANDLE.get().is_none() {
-        init_metrics_exporter().map_err(|e| anyhow::anyhow!("Failed to initialize metrics exporter: {}", e))?;
+        init_metrics_exporter(cfg).map_err(|e| anyhow::anyhow!("Failed to initialize metrics exporter: {}", e))?;
     }
 
     let app = create_metrics_router();
-    let addr_str = format!("0.0.0.0:{}", port);
-    let addr: std::net::SocketAddr = addr_str.parse()?;
+    let addr: std::net::SocketAddr = cfg
+        .listen
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid metrics listen address '{}': {}", cfg.listen, e))?;
 
     tracing::info!(
         component = "metrics_api",

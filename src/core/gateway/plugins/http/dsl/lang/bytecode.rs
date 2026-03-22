@@ -125,10 +125,15 @@ pub enum BuiltinId {
     ReqSetHost,
     ReqSetMethod,
 
-    // resp.*
+    // resp.* mutation
     RespSetHeader,
     RespAppendHeader,
     RespRemoveHeader,
+
+    // resp.* read
+    RespStatus,     // resp.status → int|nil
+    RespHeader,     // resp.header(name) → str|nil
+    RespHasHeader,  // resp.has_header(name) → bool
 
     // ctx.*
     CtxGet,
@@ -153,6 +158,8 @@ pub enum BuiltinId {
     RegexFind,
     RegexReplace,
     Range,
+    Trim,
+    Split,
 }
 
 /// Constant pool entry

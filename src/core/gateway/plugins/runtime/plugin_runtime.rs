@@ -392,6 +392,7 @@ impl PluginRuntime {
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
+            EdgionPlugin::Dsl(config) => DslPlugin::from_config_response(config),
             _ => None,
         }
     }

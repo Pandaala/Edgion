@@ -32,6 +32,8 @@ pub mod names {
     // Request mirror metrics
     pub const MIRROR_REQUESTS_TOTAL: &str = "edgion_mirror_requests_total";
     pub const MIRROR_DURATION_MS: &str = "edgion_mirror_duration_ms";
+    // End-to-end request duration histogram
+    pub const GATEWAY_REQUEST_DURATION_MS: &str = "edgion_gateway_request_duration_ms";
     // Controller: number of gateway instances connected via gRPC long-poll
     pub const CONTROLLER_CONNECTED_GATEWAYS: &str = "edgion_controller_connected_gateways";
     // Controller: schema validation failures from Admin API (non-K8s mode)
@@ -301,4 +303,57 @@ pub fn record_mirror_metric(status: &'static str, duration_ms: f64) {
     )
     .increment(1);
     histogram!(names::MIRROR_DURATION_MS).record(duration_ms);
+}
+
+/// Record end-to-end request duration histogram.
+///
+/// Labels are conditionally included based on `RequestDurationConfig.labels`.
+/// When a label is disabled, it is not written at all (not an empty string),
+/// which truly reduces cardinality.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn record_request_duration(
+    cfg: &crate::core::gateway::cli::config::RequestDurationConfig,
+    gateway_namespace: &str,
+    gateway_name: &str,
+    route_namespace: &str,
+    route_name: &str,
+    backend_namespace: &str,
+    backend_name: &str,
+    protocol: &str,
+    status: &str,
+    duration_ms: f64,
+) {
+    if !cfg.enabled {
+        return;
+    }
+    let labels = &cfg.labels;
+
+    let mut label_vec: Vec<(&'static str, String)> = Vec::with_capacity(8);
+    if labels.gateway_namespace {
+        label_vec.push(("gateway_namespace", gateway_namespace.to_string()));
+    }
+    if labels.gateway_name {
+        label_vec.push(("gateway_name", gateway_name.to_string()));
+    }
+    if labels.route_namespace {
+        label_vec.push(("route_namespace", route_namespace.to_string()));
+    }
+    if labels.route_name {
+        label_vec.push(("route_name", route_name.to_string()));
+    }
+    if labels.backend_namespace {
+        label_vec.push(("backend_namespace", backend_namespace.to_string()));
+    }
+    if labels.backend_name {
+        label_vec.push(("backend_name", backend_name.to_string()));
+    }
+    if labels.protocol {
+        label_vec.push(("protocol", protocol.to_string()));
+    }
+    if labels.status {
+        label_vec.push(("status", status.to_string()));
+    }
+
+    histogram!(names::GATEWAY_REQUEST_DURATION_MS, &label_vec).record(duration_ms);
 }

@@ -86,6 +86,10 @@ pub trait PluginSession: Send + Sync {
     /// Get a response header value by name (for ResponseRewrite)
     fn get_response_header(&self, name: &str) -> Option<String>;
 
+    /// Get the response status code (available in upstream_response_filter stage)
+    /// Returns None if response has not been received yet (request stage)
+    fn get_response_status(&self) -> Option<u16>;
+
     /// Set the response status code (for ResponseRewrite)
     fn set_response_status(&mut self, status: u16) -> PluginSessionResult<()>;
 
