@@ -112,15 +112,23 @@ impl LdapAuth {
     }
 
     fn check_cache(&self, username: &str, password: &str) -> Option<String> {
-        if self.config.cache_ttl == 0 { return None; }
+        if self.config.cache_ttl == 0 {
+            return None;
+        }
         let key = Self::cache_key(username, password);
         self.auth_cache.get(&key)
     }
 
     fn store_cache(&self, username: &str, password: &str) {
-        if self.config.cache_ttl == 0 { return; }
+        if self.config.cache_ttl == 0 {
+            return;
+        }
         let key = Self::cache_key(username, password);
-        self.auth_cache.insert(key, username.to_string(), Some(Duration::from_secs(self.config.cache_ttl)));
+        self.auth_cache.insert(
+            key,
+            username.to_string(),
+            Some(Duration::from_secs(self.config.cache_ttl)),
+        );
 
         // Anomaly detection: very low hit ratio after enough samples may indicate brute-force
         const LOW_HIT_RATIO_WARN_THRESHOLD: f64 = 0.5;

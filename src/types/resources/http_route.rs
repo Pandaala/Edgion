@@ -565,7 +565,10 @@ impl HTTPCORSFilter {
         }
 
         // Scheme must be alphanumeric (+ hyphen)
-        if !scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+        if !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
             return Err("invalid scheme characters".to_string());
         }
 

@@ -41,22 +41,27 @@ impl TlsPassthroughTestSuite {
                     let sni = ServerName::try_from("test-443.sandbox.example.com").unwrap();
 
                     // Connect TCP to the gateway passthrough port
-                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await
+                    {
                         Ok(Ok(s)) => s,
-                        Ok(Err(e)) => return TestResult::failed(start.elapsed(), format!("TCP connection failed: {e}")),
+                        Ok(Err(e)) => {
+                            return TestResult::failed(start.elapsed(), format!("TCP connection failed: {e}"))
+                        }
                         Err(_) => return TestResult::failed(start.elapsed(), "TCP connection timed out".to_string()),
                     };
 
                     // TLS handshake — this goes through the gateway transparently
                     // and completes with the HTTPS backend (port 30051)
-                    let mut tls_stream: tokio_rustls::client::TlsStream<TcpStream> = match connector.connect(sni, tcp_stream).await {
-                        Ok(s) => s,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("TLS handshake failed: {e}")),
-                    };
+                    let mut tls_stream: tokio_rustls::client::TlsStream<TcpStream> =
+                        match connector.connect(sni, tcp_stream).await {
+                            Ok(s) => s,
+                            Err(e) => return TestResult::failed(start.elapsed(), format!("TLS handshake failed: {e}")),
+                        };
 
                     // Send an HTTP request over the TLS tunnel to the HTTPS backend
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let request = b"GET /health HTTP/1.1\r\nHost: test-443.sandbox.example.com\r\nConnection: close\r\n\r\n";
+                    let request =
+                        b"GET /health HTTP/1.1\r\nHost: test-443.sandbox.example.com\r\nConnection: close\r\n\r\n";
                     if let Err(e) = tls_stream.write_all(request).await {
                         return TestResult::failed(start.elapsed(), format!("Write failed: {e}"));
                     }
@@ -74,11 +79,17 @@ impl TlsPassthroughTestSuite {
                                 // Got a response — passthrough is working even if not the expected status
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("TLS passthrough connected, received {} bytes: {}", n, &body[..body.len().min(100)]),
+                                    format!(
+                                        "TLS passthrough connected, received {} bytes: {}",
+                                        n,
+                                        &body[..body.len().min(100)]
+                                    ),
                                 )
                             }
                         }
-                        Ok(Ok(_)) => TestResult::failed(start.elapsed(), "Connection closed immediately (0 bytes)".to_string()),
+                        Ok(Ok(_)) => {
+                            TestResult::failed(start.elapsed(), "Connection closed immediately (0 bytes)".to_string())
+                        }
                         Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("Read failed: {e}")),
                         Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
                     }
@@ -99,9 +110,12 @@ impl TlsPassthroughTestSuite {
                     let connector = make_tls_connector();
                     let sni = ServerName::try_from("nomatch.other.com").unwrap();
 
-                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                    let tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await
+                    {
                         Ok(Ok(s)) => s,
-                        Ok(Err(e)) => return TestResult::failed(start.elapsed(), format!("TCP connection failed: {e}")),
+                        Ok(Err(e)) => {
+                            return TestResult::failed(start.elapsed(), format!("TCP connection failed: {e}"))
+                        }
                         Err(_) => return TestResult::failed(start.elapsed(), "TCP connection timed out".to_string()),
                     };
 
@@ -141,9 +155,13 @@ impl TlsPassthroughTestSuite {
                     let addr = format!("{}:31290", ctx.target_host);
 
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                    let mut tcp_stream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr))
+                        .await
+                    {
                         Ok(Ok(s)) => s,
-                        Ok(Err(e)) => return TestResult::failed(start.elapsed(), format!("TCP connection failed: {e}")),
+                        Ok(Err(e)) => {
+                            return TestResult::failed(start.elapsed(), format!("TCP connection failed: {e}"))
+                        }
                         Err(_) => return TestResult::failed(start.elapsed(), "TCP connection timed out".to_string()),
                     };
 
@@ -160,10 +178,9 @@ impl TlsPassthroughTestSuite {
                             start.elapsed(),
                             "Connection error — plain TCP rejected".to_string(),
                         ),
-                        Ok(Ok(n)) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Expected rejection but received {} bytes", n),
-                        ),
+                        Ok(Ok(n)) => {
+                            TestResult::failed(start.elapsed(), format!("Expected rejection but received {} bytes", n))
+                        }
                         Err(_) => TestResult::passed_with_message(
                             start.elapsed(),
                             "Read timed out — treated as rejection".to_string(),

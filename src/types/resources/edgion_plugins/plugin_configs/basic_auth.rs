@@ -146,7 +146,10 @@ mod tests {
 
     #[test]
     fn test_basic_auth_cache_disabled_when_ttl_zero() {
-        let cfg = BasicAuthConfig { cache_ttl: 0, ..Default::default() };
+        let cfg = BasicAuthConfig {
+            cache_ttl: 0,
+            ..Default::default()
+        };
         assert_eq!(cfg.cache_ttl, 0);
     }
 }

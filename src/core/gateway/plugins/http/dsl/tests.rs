@@ -7,8 +7,8 @@
 use super::lang::bytecode::CompiledScript;
 use super::lang::validator::{compile_dsl_source, ValidationLimits};
 use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
-use crate::core::gateway::plugins::runtime::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::session::{MockPluginSession, PluginSession};
+use crate::core::gateway::plugins::runtime::PluginLog;
 use crate::types::filters::PluginRunningResult;
 
 // ---------------------------------------------------------------------------
@@ -16,18 +16,16 @@ use crate::types::filters::PluginRunningResult;
 // ---------------------------------------------------------------------------
 
 fn make_vm(source: &str) -> Vm {
-    let b64 = compile_dsl_source(source, &ValidationLimits::default())
-        .unwrap_or_else(|e| panic!("compile failed: {:?}", e));
-    let script = CompiledScript::deserialize_base64(&b64)
-        .expect("deserialize failed");
+    let b64 =
+        compile_dsl_source(source, &ValidationLimits::default()).unwrap_or_else(|e| panic!("compile failed: {:?}", e));
+    let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
     Vm::new(script, VmLimits::default()).expect("vm creation failed")
 }
 
 fn make_vm_with_limits(source: &str, limits: VmLimits) -> Vm {
-    let b64 = compile_dsl_source(source, &ValidationLimits::default())
-        .unwrap_or_else(|e| panic!("compile failed: {:?}", e));
-    let script = CompiledScript::deserialize_base64(&b64)
-        .expect("deserialize failed");
+    let b64 =
+        compile_dsl_source(source, &ValidationLimits::default()).unwrap_or_else(|e| panic!("compile failed: {:?}", e));
+    let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
     Vm::new(script, limits).expect("vm creation failed")
 }
 
@@ -57,7 +55,10 @@ fn good_next() -> PluginRunningResult {
 }
 
 fn err_response_body(status: u16, body: &str) -> PluginRunningResult {
-    PluginRunningResult::ErrResponse { status, body: Some(body.to_string()) }
+    PluginRunningResult::ErrResponse {
+        status,
+        body: Some(body.to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,10 +78,12 @@ mod request_builtins {
     #[test]
     fn test_req_header_present() {
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
+        session
+            .expect_header_value()
             .withf(|h| h == "X-Foo")
             .returning(|_| Some("bar".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Out" && v == "bar")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -94,7 +97,8 @@ mod request_builtins {
     #[test]
     fn test_req_header_absent() {
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
+        session
+            .expect_header_value()
             .withf(|h| h == "X-Foo")
             .returning(|_| None);
         let result = run(
@@ -108,7 +112,8 @@ mod request_builtins {
     fn test_req_method() {
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("POST".to_string());
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-M" && v == "POST")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -120,7 +125,8 @@ mod request_builtins {
     fn test_req_path() {
         let mut session = MockPluginSession::new();
         session.expect_get_path().return_const("/api/users".to_string());
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-P" && v == "/api/users")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -131,10 +137,12 @@ mod request_builtins {
     #[test]
     fn test_req_query() {
         let mut session = MockPluginSession::new();
-        session.expect_get_query_param()
+        session
+            .expect_get_query_param()
             .withf(|k| k == "page")
             .returning(|_| Some("2".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Q" && v == "2")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -149,7 +157,8 @@ mod request_builtins {
     fn test_req_query_string() {
         let mut session = MockPluginSession::new();
         session.expect_get_query().returning(|| Some("a=1&b=2".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-QS" && v == "a=1&b=2")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -163,10 +172,12 @@ mod request_builtins {
     #[test]
     fn test_req_cookie() {
         let mut session = MockPluginSession::new();
-        session.expect_get_cookie()
+        session
+            .expect_get_cookie()
             .withf(|k| k == "session")
             .returning(|_| Some("abc".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-C" && v == "abc")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -181,7 +192,8 @@ mod request_builtins {
     fn test_req_client_ip() {
         let mut session = MockPluginSession::new();
         session.expect_client_addr().return_const("1.2.3.4".to_string());
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-IP" && v == "1.2.3.4")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -193,7 +205,8 @@ mod request_builtins {
     fn test_req_remote_ip() {
         let mut session = MockPluginSession::new();
         session.expect_remote_addr().return_const("10.0.0.1".to_string());
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-RIP" && v == "10.0.0.1")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -204,27 +217,28 @@ mod request_builtins {
     #[test]
     fn test_req_host() {
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
+        session
+            .expect_header_value()
             .withf(|h| h == "Host")
             .returning(|_| Some("example.com".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-H" && v == "example.com")
             .times(1)
             .returning(|_, _| Ok(()));
-        let result = run(
-            "let h = req.host\nif h != nil { req.set_header(\"X-H\", h) }",
-            session,
-        );
+        let result = run("let h = req.host\nif h != nil { req.set_header(\"X-H\", h) }", session);
         assert_eq!(result, good_next());
     }
 
     #[test]
     fn test_req_scheme() {
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
+        session
+            .expect_header_value()
             .withf(|h| h == "X-Forwarded-Proto")
             .returning(|_| Some("https".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-S" && v == "https")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -237,7 +251,8 @@ mod request_builtins {
         let mut session = MockPluginSession::new();
         session.expect_get_path().return_const("/api".to_string());
         session.expect_get_query().returning(|| Some("x=1".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-U" && v == "/api?x=1")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -248,10 +263,12 @@ mod request_builtins {
     #[test]
     fn test_req_content_type() {
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
+        session
+            .expect_header_value()
             .withf(|h| h == "Content-Type")
             .returning(|_| Some("application/json".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-CT" && v == "application/json")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -265,10 +282,12 @@ mod request_builtins {
     #[test]
     fn test_req_has_header_true() {
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
+        session
+            .expect_header_value()
             .withf(|h| h == "X-Auth")
             .returning(|_| Some("token".to_string()));
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-R" && v == "yes")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -282,7 +301,8 @@ mod request_builtins {
     #[test]
     fn test_req_has_header_false() {
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
+        session
+            .expect_header_value()
             .withf(|h| h == "X-Auth")
             .returning(|_| None);
         let result = run(
@@ -295,16 +315,14 @@ mod request_builtins {
     #[test]
     fn test_req_header_names_for_in() {
         let mut session = MockPluginSession::new();
-        session.expect_request_headers()
-            .returning(|| vec![
+        session.expect_request_headers().returning(|| {
+            vec![
                 ("X-A".to_string(), "v1".to_string()),
                 ("X-B".to_string(), "v2".to_string()),
                 ("X-C".to_string(), "v3".to_string()),
-            ]);
-        let result = run(
-            r#"for name in req.header_names { log(name) }"#,
-            session,
-        );
+            ]
+        });
+        let result = run(r#"for name in req.header_names { log(name) }"#, session);
         assert_eq!(result, good_next());
     }
 }
@@ -315,7 +333,8 @@ mod request_mutation {
     #[test]
     fn test_set_header() {
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-A" && v == "v1")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -326,7 +345,8 @@ mod request_mutation {
     #[test]
     fn test_append_header() {
         let mut session = MockPluginSession::new();
-        session.expect_append_request_header()
+        session
+            .expect_append_request_header()
             .withf(|h, v| h == "X-A" && v == "v2")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -337,7 +357,8 @@ mod request_mutation {
     #[test]
     fn test_remove_header() {
         let mut session = MockPluginSession::new();
-        session.expect_remove_request_header()
+        session
+            .expect_remove_request_header()
             .withf(|h| h == "X-Del")
             .times(1)
             .returning(|_| Ok(()));
@@ -348,7 +369,8 @@ mod request_mutation {
     #[test]
     fn test_set_uri() {
         let mut session = MockPluginSession::new();
-        session.expect_set_upstream_uri()
+        session
+            .expect_set_upstream_uri()
             .withf(|u| u == "/new/path")
             .times(1)
             .returning(|_| Ok(()));
@@ -359,7 +381,8 @@ mod request_mutation {
     #[test]
     fn test_set_host() {
         let mut session = MockPluginSession::new();
-        session.expect_set_upstream_host()
+        session
+            .expect_set_upstream_host()
             .withf(|h| h == "new.host")
             .times(1)
             .returning(|_| Ok(()));
@@ -370,7 +393,8 @@ mod request_mutation {
     #[test]
     fn test_set_method() {
         let mut session = MockPluginSession::new();
-        session.expect_set_upstream_method()
+        session
+            .expect_set_upstream_method()
             .withf(|m| m == "POST")
             .times(1)
             .returning(|_| Ok(()));
@@ -386,7 +410,8 @@ mod response_builtins {
     fn test_resp_status_read() {
         let mut session = MockPluginSession::new();
         session.expect_get_response_status().returning(|| Some(404));
-        session.expect_set_response_header()
+        session
+            .expect_set_response_header()
             .withf(|h, v| h == "X-Status" && v == "not_found")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -401,7 +426,8 @@ mod response_builtins {
     fn test_resp_status_nil() {
         let mut session = MockPluginSession::new();
         session.expect_get_response_status().returning(|| None);
-        session.expect_set_response_header()
+        session
+            .expect_set_response_header()
             .withf(|h, v| h == "X-Status" && v == "no_status")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -415,10 +441,12 @@ mod response_builtins {
     #[test]
     fn test_resp_header_read() {
         let mut session = MockPluginSession::new();
-        session.expect_get_response_header()
+        session
+            .expect_get_response_header()
             .withf(|h| h == "X-B")
             .returning(|_| Some("hello".to_string()));
-        session.expect_set_response_header()
+        session
+            .expect_set_response_header()
             .withf(|h, v| h == "X-Copy" && v == "hello")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -432,10 +460,12 @@ mod response_builtins {
     #[test]
     fn test_resp_header_nil() {
         let mut session = MockPluginSession::new();
-        session.expect_get_response_header()
+        session
+            .expect_get_response_header()
             .withf(|h| h == "X-B")
             .returning(|_| None);
-        session.expect_set_response_header()
+        session
+            .expect_set_response_header()
             .withf(|h, v| h == "X-Copy" && v == "none")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -449,10 +479,12 @@ mod response_builtins {
     #[test]
     fn test_resp_has_header_true() {
         let mut session = MockPluginSession::new();
-        session.expect_get_response_header()
+        session
+            .expect_get_response_header()
             .withf(|h| h == "X-B")
             .returning(|_| Some("val".to_string()));
-        session.expect_set_response_header()
+        session
+            .expect_set_response_header()
             .withf(|h, v| h == "X-R" && v == "yes")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -466,7 +498,8 @@ mod response_builtins {
     #[test]
     fn test_resp_has_header_false() {
         let mut session = MockPluginSession::new();
-        session.expect_get_response_header()
+        session
+            .expect_get_response_header()
             .withf(|h| h == "X-B")
             .returning(|_| None);
         let result = run(
@@ -479,7 +512,8 @@ mod response_builtins {
     #[test]
     fn test_resp_set_header() {
         let mut session = MockPluginSession::new();
-        session.expect_set_response_header()
+        session
+            .expect_set_response_header()
             .withf(|h, v| h == "X-C" && v == "val")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -490,7 +524,8 @@ mod response_builtins {
     #[test]
     fn test_resp_append_header() {
         let mut session = MockPluginSession::new();
-        session.expect_append_response_header()
+        session
+            .expect_append_response_header()
             .withf(|h, v| h == "Vary" && v == "Origin")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -501,7 +536,8 @@ mod response_builtins {
     #[test]
     fn test_resp_remove_header() {
         let mut session = MockPluginSession::new();
-        session.expect_remove_response_header()
+        session
+            .expect_remove_response_header()
             .withf(|h| h == "X-Remove")
             .times(1)
             .returning(|_| Ok(()));
@@ -516,7 +552,8 @@ mod response_builtins {
         use crate::core::gateway::plugins::runtime::traits::UpstreamResponseFilter;
 
         let mut session = MockPluginSession::new();
-        session.expect_set_response_header()
+        session
+            .expect_set_response_header()
             .withf(|h, v| h == "X-Phase" && v == "resp")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -541,7 +578,8 @@ mod utility_functions {
     fn assert_output(source: &str, expected: &str) {
         let expected = expected.to_string();
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(move |h, v| h == "X-Out" && v == expected)
             .times(1)
             .returning(|_, _| Ok(()));
@@ -593,42 +631,27 @@ mod utility_functions {
 
     #[test]
     fn test_regex_replace_all() {
-        assert_output(
-            r#"req.set_header("X-Out", regex_replace("a-b-c", "-", "/"))"#,
-            "a/b/c",
-        );
+        assert_output(r#"req.set_header("X-Out", regex_replace("a-b-c", "-", "/"))"#, "a/b/c");
     }
 
     #[test]
     fn test_base64_encode() {
-        assert_output(
-            r#"req.set_header("X-Out", base64_encode("hello"))"#,
-            "aGVsbG8=",
-        );
+        assert_output(r#"req.set_header("X-Out", base64_encode("hello"))"#, "aGVsbG8=");
     }
 
     #[test]
     fn test_base64_decode() {
-        assert_output(
-            r#"req.set_header("X-Out", base64_decode("aGVsbG8="))"#,
-            "hello",
-        );
+        assert_output(r#"req.set_header("X-Out", base64_decode("aGVsbG8="))"#, "hello");
     }
 
     #[test]
     fn test_url_encode() {
-        assert_output(
-            r#"req.set_header("X-Out", url_encode("a b+c"))"#,
-            "a%20b%2Bc",
-        );
+        assert_output(r#"req.set_header("X-Out", url_encode("a b+c"))"#, "a%20b%2Bc");
     }
 
     #[test]
     fn test_url_decode() {
-        assert_output(
-            r#"req.set_header("X-Out", url_decode("a%20b"))"#,
-            "a b",
-        );
+        assert_output(r#"req.set_header("X-Out", url_decode("a%20b"))"#, "a b");
     }
 
     #[test]
@@ -656,7 +679,8 @@ mod utility_functions {
         let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let captured_clone = captured.clone();
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, _| h == "X-T")
             .times(1)
             .returning(move |_, v| {
@@ -702,7 +726,13 @@ mod control_flow {
     fn test_return_deny_nil_body() {
         let session = MockPluginSession::new();
         let result = run(r#"return deny(403, nil)"#, session);
-        assert_eq!(result, PluginRunningResult::ErrResponse { status: 403, body: None });
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: None
+            }
+        );
     }
 
     #[test]
@@ -722,7 +752,8 @@ mod control_flow {
     #[test]
     fn test_if_else_true_branch() {
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X" && v == "1")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -736,7 +767,8 @@ mod control_flow {
     #[test]
     fn test_if_else_false_branch() {
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X" && v == "2")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -751,9 +783,7 @@ mod control_flow {
     fn test_break_stops_loop() {
         let mut session = MockPluginSession::new();
         // i=0,1,2 执行 set_header; i==3 时 break → 3 次调用
-        session.expect_set_request_header()
-            .times(3)
-            .returning(|_, _| Ok(()));
+        session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
         let result = run(
             "let mut i = 0\nwhile i < 10 {\nif i == 3 { break }\nreq.set_header(\"X-Log\", to_str(i))\ni = i + 1\n}",
             session,
@@ -765,9 +795,7 @@ mod control_flow {
     fn test_continue_skips_iteration() {
         let mut session = MockPluginSession::new();
         // i=0,2,4 执行; i=1,3 被 continue 跳过 → 3 次调用
-        session.expect_set_request_header()
-            .times(3)
-            .returning(|_, _| Ok(()));
+        session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
         let result = run(
             "for i in range(0, 5) {\nif i == 1 { continue }\nif i == 3 { continue }\nreq.set_header(\"X-Log\", to_str(i))\n}",
             session,
@@ -779,9 +807,7 @@ mod control_flow {
     fn test_break_in_for_range() {
         let mut session = MockPluginSession::new();
         // i=0,1,2 → i==3 break → 3 次
-        session.expect_set_request_header()
-            .times(3)
-            .returning(|_, _| Ok(()));
+        session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
         let result = run(
             "for i in range(0, 10) {\nif i == 3 { break }\nreq.set_header(\"X-Log\", to_str(i))\n}",
             session,
@@ -792,17 +818,16 @@ mod control_flow {
     #[test]
     fn test_break_in_for_in() {
         let mut session = MockPluginSession::new();
-        session.expect_request_headers()
-            .returning(|| vec![
+        session.expect_request_headers().returning(|| {
+            vec![
                 ("X-A".to_string(), "v1".to_string()),
                 ("X-B".to_string(), "v2".to_string()),
                 ("X-C".to_string(), "v3".to_string()),
                 ("X-D".to_string(), "v4".to_string()),
-            ]);
+            ]
+        });
         // iterates header_names; breaks at idx==2 → set_header called 2 times
-        session.expect_set_request_header()
-            .times(2)
-            .returning(|_, _| Ok(()));
+        session.expect_set_request_header().times(2).returning(|_, _| Ok(()));
         let result = run(
             "let mut idx = 0\nfor name in req.header_names {\nif idx == 2 { break }\nreq.set_header(\"X-Item\", name)\nidx = idx + 1\n}",
             session,
@@ -814,9 +839,7 @@ mod control_flow {
     fn test_nested_while_break() {
         let mut session = MockPluginSession::new();
         // outer 执行 3 次，inner 每次立即 break → 3 次 set_header
-        session.expect_set_request_header()
-            .times(3)
-            .returning(|_, _| Ok(()));
+        session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
         let result = run(
             "let mut i = 0\nwhile i < 3 {\nlet mut j = 0\nwhile j < 5 {\nreq.set_header(\"X-Inner\", \"hit\")\nbreak\n}\ni = i + 1\n}",
             session,
@@ -831,7 +854,10 @@ mod sandbox {
     #[test]
     fn test_step_limit_exceeded() {
         let session = MockPluginSession::new();
-        let limits = VmLimits { max_steps: 5, ..Default::default() };
+        let limits = VmLimits {
+            max_steps: 5,
+            ..Default::default()
+        };
         let result = run_with_limits(
             "let a=1\nlet b=2\nlet c=3\nlet d=4\nlet e=5\nlet f=6\nlet g=7\nlet h=8\nlet k=9\nlet l=10",
             session,
@@ -843,7 +869,10 @@ mod sandbox {
     #[test]
     fn test_loop_limit_exceeded() {
         let session = MockPluginSession::new();
-        let limits = VmLimits { max_loop_iterations: 3, ..Default::default() };
+        let limits = VmLimits {
+            max_loop_iterations: 3,
+            ..Default::default()
+        };
         let result = run_with_limits(r#"while true { }"#, session, limits);
         assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
     }
@@ -851,23 +880,34 @@ mod sandbox {
     #[test]
     fn test_string_too_long() {
         let session = MockPluginSession::new();
-        let limits = VmLimits { max_string_len: 5, ..Default::default() };
+        let limits = VmLimits {
+            max_string_len: 5,
+            ..Default::default()
+        };
         let result = run_with_limits(r#"let s = "hello" + " world""#, session, limits);
         assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
     }
 
     #[test]
     fn test_step_limit_with_ignore() {
-        use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
         use crate::core::gateway::plugins::http::dsl::lang::bytecode::CompiledScript;
-        use crate::core::gateway::plugins::http::dsl::lang::vm::{Vm, VmLimits, DslErrorPolicy, execute_safe};
+        use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
+        use crate::core::gateway::plugins::http::dsl::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 
         let b64 = compile_dsl_source(
             "let a=1\nlet b=2\nlet c=3\nlet d=4\nlet e=5\nlet f=6",
             &ValidationLimits::default(),
-        ).expect("compile failed");
+        )
+        .expect("compile failed");
         let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
-        let vm = Vm::new(script, VmLimits { max_steps: 3, ..Default::default() }).expect("vm failed");
+        let vm = Vm::new(
+            script,
+            VmLimits {
+                max_steps: 3,
+                ..Default::default()
+            },
+        )
+        .expect("vm failed");
         let session = MockPluginSession::new();
         let mut log = PluginLog::new("test");
         let mut s = session;
@@ -877,18 +917,27 @@ mod sandbox {
 
     #[test]
     fn test_loop_limit_with_deny_with() {
-        use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
         use crate::core::gateway::plugins::http::dsl::lang::bytecode::CompiledScript;
-        use crate::core::gateway::plugins::http::dsl::lang::vm::{Vm, VmLimits, DslErrorPolicy, execute_safe};
+        use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
+        use crate::core::gateway::plugins::http::dsl::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 
-        let b64 = compile_dsl_source(r#"while true { }"#, &ValidationLimits::default())
-            .expect("compile failed");
+        let b64 = compile_dsl_source(r#"while true { }"#, &ValidationLimits::default()).expect("compile failed");
         let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
-        let vm = Vm::new(script, VmLimits { max_loop_iterations: 2, ..Default::default() }).expect("vm failed");
+        let vm = Vm::new(
+            script,
+            VmLimits {
+                max_loop_iterations: 2,
+                ..Default::default()
+            },
+        )
+        .expect("vm failed");
         let session = MockPluginSession::new();
         let mut log = PluginLog::new("test");
         let mut s = session;
-        let policy = DslErrorPolicy::DenyWith { status: 429, body: Some("slow".to_string()) };
+        let policy = DslErrorPolicy::DenyWith {
+            status: 429,
+            body: Some("slow".to_string()),
+        };
         let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &policy);
         assert_eq!(result, err_response_body(429, "slow"));
     }
@@ -896,17 +945,25 @@ mod sandbox {
 
 mod error_policy {
     use super::*;
-    use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
     use crate::core::gateway::plugins::http::dsl::lang::bytecode::CompiledScript;
-    use crate::core::gateway::plugins::http::dsl::lang::vm::{Vm, VmLimits, DslErrorPolicy, execute_safe};
+    use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
+    use crate::core::gateway::plugins::http::dsl::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 
     fn limited_vm() -> Vm {
         let b64 = compile_dsl_source(
             "let a=1\nlet b=2\nlet c=3\nlet d=4\nlet e=5\nlet f=6",
             &ValidationLimits::default(),
-        ).expect("compile failed");
+        )
+        .expect("compile failed");
         let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
-        Vm::new(script, VmLimits { max_steps: 3, ..Default::default() }).expect("vm failed")
+        Vm::new(
+            script,
+            VmLimits {
+                max_steps: 3,
+                ..Default::default()
+            },
+        )
+        .expect("vm failed")
     }
 
     #[test]
@@ -935,7 +992,10 @@ mod error_policy {
         let session = MockPluginSession::new();
         let mut log = PluginLog::new("test");
         let mut s = session;
-        let policy = DslErrorPolicy::DenyWith { status: 418, body: Some("teapot".to_string()) };
+        let policy = DslErrorPolicy::DenyWith {
+            status: 418,
+            body: Some("teapot".to_string()),
+        };
         let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &policy);
         assert_eq!(result, err_response_body(418, "teapot"));
     }
@@ -1002,7 +1062,8 @@ mod range_and_string_ops {
             req.set_header("X-Total", to_str(total))
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Total" && v == "3")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1017,7 +1078,8 @@ mod range_and_string_ops {
             req.set_header("X-Len", to_str(len(r)))
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Len" && v == "0")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1036,7 +1098,8 @@ mod range_and_string_ops {
             req.set_header("X-Sum", to_str(sum))
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Sum" && v == "6")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1051,7 +1114,8 @@ mod range_and_string_ops {
             req.set_header("X-Trimmed", s)
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Trimmed" && v == "hello")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1066,7 +1130,8 @@ mod range_and_string_ops {
             req.set_header("X-Empty", s)
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Empty" && v.is_empty())
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1081,7 +1146,8 @@ mod range_and_string_ops {
             req.set_header("X-Count", to_str(len(parts)))
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Count" && v == "3")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1103,7 +1169,8 @@ mod range_and_string_ops {
             req.set_header("X-Found", found)
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Found" && v == "yes")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1118,7 +1185,8 @@ mod range_and_string_ops {
             req.set_header("X-Count", to_str(len(parts)))
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Count" && v == "1")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -1142,7 +1210,8 @@ mod range_and_string_ops {
             req.set_header("X-Found", found)
         "#;
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header()
+        session
+            .expect_set_request_header()
             .withf(|h, v| h == "X-Found" && v == "yes")
             .times(1)
             .returning(|_, _| Ok(()));

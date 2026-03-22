@@ -24,9 +24,9 @@ use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
-use crate::types::ResourceMeta;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::MatchedInfo;
+use crate::types::ResourceMeta;
 
 /// TLS Passthrough proxy service.
 ///
@@ -91,8 +91,7 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         ctx.sni = Some(sni.clone());
 
         // 3. Handle connection: route match → connect upstream → relay
-        self.handle_connection(downstream, &mut ctx, &sni, &peek_buf[..n])
-            .await;
+        self.handle_connection(downstream, &mut ctx, &sni, &peek_buf[..n]).await;
         self.log_disconnect(&mut ctx).await;
 
         None
@@ -105,13 +104,7 @@ impl EdgionTlsPassthroughProxy {
     /// `initial_bytes` contains the raw ClientHello bytes already read from
     /// downstream. These must be forwarded to upstream before starting the
     /// bidirectional relay.
-    async fn handle_connection(
-        &self,
-        downstream: Stream,
-        ctx: &mut TlsContext,
-        sni: &str,
-        initial_bytes: &[u8],
-    ) {
+    async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str, initial_bytes: &[u8]) {
         // 1. Match TLSRoute by SNI
         let route_table = self.tls_route_manager.load_route_table();
         let tls_route = match route_table.match_route(sni) {
@@ -238,9 +231,9 @@ impl EdgionTlsPassthroughProxy {
                     })
                     .unwrap_or_default();
                 let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
-                let dst_addr: std::net::SocketAddr = upstream_addr_str
-                    .parse()
-                    .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
+                let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
+                    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
+                });
                 let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
                 builder.add_authority(sni);
                 let pp2_header = builder.build();

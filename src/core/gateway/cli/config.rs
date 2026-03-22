@@ -529,7 +529,9 @@ pub struct AuthCacheGlobalConfig {
 impl Default for AuthCacheGlobalConfig {
     fn default() -> Self {
         // Uses the same constant as default_auth_cache_capacity() to prevent drift
-        Self { default_capacity: DEFAULT_AUTH_CACHE_CAPACITY }
+        Self {
+            default_capacity: DEFAULT_AUTH_CACHE_CAPACITY,
+        }
     }
 }
 

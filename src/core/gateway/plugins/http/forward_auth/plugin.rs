@@ -518,12 +518,11 @@ mod tests {
     fn test_forward_auth_cache_key_stable() {
         let request_headers = Some(vec!["authorization".to_string(), "cookie".to_string()]);
         let mut session = MockPluginSession::new();
-        session.expect_header_value()
-            .returning(|name| match name {
-                "authorization" => Some("Bearer token123".to_string()),
-                "cookie" => Some("session=abc".to_string()),
-                _ => None,
-            });
+        session.expect_header_value().returning(|name| match name {
+            "authorization" => Some("Bearer token123".to_string()),
+            "cookie" => Some("session=abc".to_string()),
+            _ => None,
+        });
         let key1 = ForwardAuth::cache_key(&session, &request_headers);
         let key2 = ForwardAuth::cache_key(&session, &request_headers);
         assert_eq!(key1, key2, "cache key must be deterministic");

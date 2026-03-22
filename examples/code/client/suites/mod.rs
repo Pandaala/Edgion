@@ -23,8 +23,8 @@ pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
 pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
 
 pub use tls_route::{
-    TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite,
-    TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite,
+    TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite, TlsProxyProtocolTestSuite,
+    TlsRouteTestSuite, TlsStreamPluginsTestSuite,
 };
 
 pub use udp_route::UdpTestSuite;

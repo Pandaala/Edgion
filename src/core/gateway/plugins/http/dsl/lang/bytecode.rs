@@ -131,9 +131,9 @@ pub enum BuiltinId {
     RespRemoveHeader,
 
     // resp.* read
-    RespStatus,     // resp.status → int|nil
-    RespHeader,     // resp.header(name) → str|nil
-    RespHasHeader,  // resp.has_header(name) → bool
+    RespStatus,    // resp.status → int|nil
+    RespHeader,    // resp.header(name) → str|nil
+    RespHasHeader, // resp.has_header(name) → bool
 
     // ctx.*
     CtxGet,

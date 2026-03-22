@@ -15,11 +15,19 @@ impl OpenidConnect {
             jwks_refresh: Arc::new(Mutex::new(())),
             introspection_cache: Arc::new(LocalLruCache::new({
                 let cap = config.introspection_cache_capacity;
-                if cap == 0 { get_default_auth_cache_capacity() } else { cap }
+                if cap == 0 {
+                    get_default_auth_cache_capacity()
+                } else {
+                    cap
+                }
             })),
             access_token_cache: Arc::new(LocalLruCache::new({
                 let cap = config.access_token_cache_capacity;
-                if cap == 0 { get_default_auth_cache_capacity() } else { cap }
+                if cap == 0 {
+                    get_default_auth_cache_capacity()
+                } else {
+                    cap
+                }
             })),
             refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),
             refresh_singleflight_results: Arc::new(Mutex::new(HashMap::new())),
@@ -1113,13 +1121,17 @@ impl OpenidConnect {
     }
 
     pub(super) async fn get_cached_introspection_claims(&self, token: &str) -> Option<Value> {
-        if self.config.introspection_cache_ttl == 0 { return None; }
+        if self.config.introspection_cache_ttl == 0 {
+            return None;
+        }
         let key = Self::introspection_cache_key(token);
         self.introspection_cache.get(&key).map(|e| e.claims)
     }
 
     pub(super) async fn cache_introspection_claims(&self, token: &str, claims: &Value) {
-        if self.config.introspection_cache_ttl == 0 { return; }
+        if self.config.introspection_cache_ttl == 0 {
+            return;
+        }
         let key = Self::introspection_cache_key(token);
         let config_ttl = Duration::from_secs(self.config.introspection_cache_ttl);
         // Cap TTL at token's remaining lifetime
@@ -1131,11 +1143,8 @@ impl OpenidConnect {
             Some(remaining) => config_ttl.min(remaining),
             None => config_ttl,
         };
-        self.introspection_cache.insert(
-            key,
-            IntrospectionCacheEntry { claims: claims.clone() },
-            Some(ttl),
-        );
+        self.introspection_cache
+            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, Some(ttl));
         // No retain/len check needed — LocalLruCache handles eviction automatically
     }
 
@@ -1147,7 +1156,9 @@ impl OpenidConnect {
     }
 
     pub(super) async fn cache_access_token(&self, session_ref: &str, token: &str, expires_at: Option<u64>) {
-        if session_ref.is_empty() || token.is_empty() { return; }
+        if session_ref.is_empty() || token.is_empty() {
+            return;
+        }
         let clock_skew = self.config.clock_skew_seconds;
         // TTL = token exp - now - clock_skew, capped at 1 hour, fallback 5 min
         let ttl = expires_at
@@ -1158,7 +1169,10 @@ impl OpenidConnect {
             .unwrap_or(Duration::from_secs(300));
         self.access_token_cache.insert(
             session_ref.to_string(),
-            AccessTokenCacheEntry { token: token.to_string(), expires_at },
+            AccessTokenCacheEntry {
+                token: token.to_string(),
+                expires_at,
+            },
             Some(ttl),
         );
         // The old `retain` and `len > 4096` emergency-clear are removed.
@@ -1166,13 +1180,17 @@ impl OpenidConnect {
     }
 
     pub(super) async fn get_cached_access_token(&self, session_ref: &str) -> Option<String> {
-        if session_ref.is_empty() { return None; }
+        if session_ref.is_empty() {
+            return None;
+        }
         // Expiry (including clock_skew) was baked into TTL at insert time — no manual check needed.
         self.access_token_cache.get(&session_ref.to_string()).map(|e| e.token)
     }
 
     pub(super) async fn remove_cached_access_token(&self, session_ref: &str) {
-        if session_ref.is_empty() { return; }
+        if session_ref.is_empty() {
+            return;
+        }
         self.access_token_cache.remove(&session_ref.to_string());
     }
 

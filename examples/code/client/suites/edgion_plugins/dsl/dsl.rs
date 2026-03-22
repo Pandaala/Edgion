@@ -318,7 +318,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-set-request-header/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-set-request-header.example.com")
                         .header("X-User-Id", "42")
@@ -327,12 +328,21 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let processed = resp.headers().get("x-processed-user")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let processed = resp
+                                .headers()
+                                .get("x-processed-user")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 200 && processed == "uid-42" {
-                                TestResult::passed_with_message(start.elapsed(), "X-Processed-User: uid-42 in response".into())
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Processed-User: uid-42 in response".into(),
+                                )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-processed-user='{}'", status, processed))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-processed-user='{}'", status, processed),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -350,7 +360,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-set-request-header/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-set-request-header.example.com")
                         .send()
@@ -360,9 +371,15 @@ impl DslTestSuite {
                             let status = resp.status().as_u16();
                             let has_processed = resp.headers().contains_key("x-processed-user");
                             if status == 200 && !has_processed {
-                                TestResult::passed_with_message(start.elapsed(), "No X-Processed-User as expected".into())
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "No X-Processed-User as expected".into(),
+                                )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} has_x_processed_user={}", status, has_processed))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_processed_user={}", status, has_processed),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -382,7 +399,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-deny-by-header/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-deny-by-header.example.com")
                         .header("X-Block", "1")
@@ -395,7 +413,10 @@ impl DslTestSuite {
                             if status == 403 && body.contains("blocked") {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 403/blocked, got {}/{}", status, body))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 403/blocked, got {}/{}", status, body),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -413,7 +434,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-deny-by-header/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-deny-by-header.example.com")
                         .send()
@@ -444,7 +466,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-cookie-read/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-cookie-read.example.com")
                         .header("Cookie", "session_id=abc123")
@@ -453,12 +476,18 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let session = resp.headers().get("x-session")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let session = resp
+                                .headers()
+                                .get("x-session")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 200 && session == "abc123" {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-session='{}'", status, session))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-session='{}'", status, session),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -476,7 +505,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-cookie-read/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-cookie-read.example.com")
                         .send()
@@ -484,12 +514,18 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let session = resp.headers().get("x-session")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let session = resp
+                                .headers()
+                                .get("x-session")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 200 && session == "anonymous" {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-session='{}'", status, session))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-session='{}'", status, session),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -509,7 +545,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-ctx-chain/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-ctx-chain.example.com")
                         .header("X-Tenant", "acme")
@@ -518,17 +555,26 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let internal = resp.headers().get("x-internal-tenant")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            let pipeline = resp.headers().get("x-pipeline")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let internal = resp
+                                .headers()
+                                .get("x-internal-tenant")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let pipeline = resp
+                                .headers()
+                                .get("x-pipeline")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 200 && internal == "acme" && pipeline == "dsl-ok" {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!(
-                                    "status={} x-internal-tenant='{}' x-pipeline='{}'",
-                                    status, internal, pipeline
-                                ))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} x-internal-tenant='{}' x-pipeline='{}'",
+                                        status, internal, pipeline
+                                    ),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -546,7 +592,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-ctx-chain/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-ctx-chain.example.com")
                         .send()
@@ -559,10 +606,13 @@ impl DslTestSuite {
                             if status == 200 && no_internal && no_pipeline {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!(
-                                    "status={} has_internal={} has_pipeline={}",
-                                    status, !no_internal, !no_pipeline
-                                ))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} has_internal={} has_pipeline={}",
+                                        status, !no_internal, !no_pipeline
+                                    ),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -582,7 +632,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-multi-header-ops/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-multi-header-ops.example.com")
                         .header("User-Agent", "test-runner/1.0")
@@ -591,19 +642,32 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let x_set = resp.headers().get("x-set")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            let x_multi = resp.headers().get("x-multi")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            let ua_removed = resp.headers().get("x-ua-removed")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            if status == 200 && x_set == "value1" && x_multi.contains("first") && x_multi.contains("second") && ua_removed == "true" {
+                            let x_set = resp.headers().get("x-set").and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let x_multi = resp
+                                .headers()
+                                .get("x-multi")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let ua_removed = resp
+                                .headers()
+                                .get("x-ua-removed")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200
+                                && x_set == "value1"
+                                && x_multi.contains("first")
+                                && x_multi.contains("second")
+                                && ua_removed == "true"
+                            {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!(
-                                    "status={} x-set='{}' x-multi='{}' x-ua-removed='{}'",
-                                    status, x_set, x_multi, ua_removed
-                                ))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} x-set='{}' x-multi='{}' x-ua-removed='{}'",
+                                        status, x_set, x_multi, ua_removed
+                                    ),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -623,7 +687,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-uri-rewrite/v1/users", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-uri-rewrite.example.com")
                         .send()
@@ -631,14 +696,26 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let rewritten = resp.headers().get("x-rewritten")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            let new_path = resp.headers().get("x-new-path")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let rewritten = resp
+                                .headers()
+                                .get("x-rewritten")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let new_path = resp
+                                .headers()
+                                .get("x-new-path")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 200 && rewritten == "true" && new_path.contains("/api/users") {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-rewritten='{}' x-new-path='{}'", status, rewritten, new_path))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} x-rewritten='{}' x-new-path='{}'",
+                                        status, rewritten, new_path
+                                    ),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -656,7 +733,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-uri-rewrite/v2/items", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-uri-rewrite.example.com")
                         .send()
@@ -668,7 +746,10 @@ impl DslTestSuite {
                             if status == 200 && !has_rewritten {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} has_x_rewritten={}", status, has_rewritten))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_rewritten={}", status, has_rewritten),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -688,7 +769,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-sha256-sign/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-sha256-sign.example.com")
                         .header("X-Token", "hello")
@@ -697,13 +779,19 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let hash = resp.headers().get("x-token-hash")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let hash = resp
+                                .headers()
+                                .get("x-token-hash")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
                             if status == 200 && hash == expected {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-token-hash='{}'", status, hash))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-token-hash='{}'", status, hash),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -723,7 +811,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-regex-extract/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-regex-extract.example.com")
                         .header("User-Agent", "Mozilla/5.0 Chrome/120.0 Safari/537.36")
@@ -732,12 +821,18 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let chrome_ver = resp.headers().get("x-chrome-ver")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let chrome_ver = resp
+                                .headers()
+                                .get("x-chrome-ver")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 200 && chrome_ver.contains("Chrome/120") {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-chrome-ver='{}'", status, chrome_ver))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-chrome-ver='{}'", status, chrome_ver),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -755,7 +850,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-regex-extract/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-regex-extract.example.com")
                         .header("User-Agent", "curl/7.0")
@@ -768,7 +864,10 @@ impl DslTestSuite {
                             if status == 200 && !has_chrome {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} has_x_chrome_ver={}", status, has_chrome))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_chrome_ver={}", status, has_chrome),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -788,7 +887,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-response-inject/health", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-response-inject.example.com")
                         .send()
@@ -796,19 +896,27 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let acao = resp.headers().get("access-control-allow-origin")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            let powered_by = resp.headers().get("x-powered-by")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            let vary = resp.headers().get("vary")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let acao = resp
+                                .headers()
+                                .get("access-control-allow-origin")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let powered_by = resp
+                                .headers()
+                                .get("x-powered-by")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let vary = resp.headers().get("vary").and_then(|v| v.to_str().ok()).unwrap_or("");
                             if status == 200 && acao == "*" && powered_by == "Edgion-DSL" && vary.contains("Origin") {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!(
-                                    "status={} acao='{}' powered_by='{}' vary='{}'",
-                                    status, acao, powered_by, vary
-                                ))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} acao='{}' powered_by='{}' vary='{}'",
+                                        status, acao, powered_by, vary
+                                    ),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -827,8 +935,12 @@ impl DslTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!("http://{}:31180/test/dsl-resp-status-conditional/status/404", ctx.target_host);
-                    let response = ctx.http_client
+                    let url = format!(
+                        "http://{}:31180/test/dsl-resp-status-conditional/status/404",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-resp-status-conditional.example.com")
                         .send()
@@ -836,12 +948,18 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let not_found = resp.headers().get("x-not-found")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let not_found = resp
+                                .headers()
+                                .get("x-not-found")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 404 && not_found == "true" {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-not-found='{}'", status, not_found))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-not-found='{}'", status, not_found),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -858,8 +976,12 @@ impl DslTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!("http://{}:31180/test/dsl-resp-status-conditional/status/200", ctx.target_host);
-                    let response = ctx.http_client
+                    let url = format!(
+                        "http://{}:31180/test/dsl-resp-status-conditional/status/200",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-resp-status-conditional.example.com")
                         .send()
@@ -871,7 +993,10 @@ impl DslTestSuite {
                             if status == 200 && !has_not_found {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} has_x_not_found={}", status, has_not_found))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_not_found={}", status, has_not_found),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -891,7 +1016,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-deny-with-body/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-deny-with-body.example.com")
                         .send()
@@ -903,7 +1029,10 @@ impl DslTestSuite {
                             if status == 401 && body.contains("unauthorized") {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 401/unauthorized, got {}/{}", status, body))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 401/unauthorized, got {}/{}", status, body),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -921,7 +1050,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-deny-with-body/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .post(url)
                         .header("host", "dsl-deny-with-body.example.com")
                         .header("Authorization", "Bearer token123")
@@ -952,7 +1082,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-deny-with-body/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-deny-with-body.example.com")
                         .header("Authorization", "Bearer token123")
@@ -984,7 +1115,8 @@ impl DslTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("http://{}:31180/test/dsl-range-iterate/api", ctx.target_host);
-                    let response = ctx.http_client
+                    let response = ctx
+                        .http_client
                         .get(url)
                         .header("host", "dsl-range-iterate.example.com")
                         .send()
@@ -992,14 +1124,26 @@ impl DslTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            let sum = resp.headers().get("x-range-sum")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
-                            let len = resp.headers().get("x-range-len")
-                                .and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let sum = resp
+                                .headers()
+                                .get("x-range-sum")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let len = resp
+                                .headers()
+                                .get("x-range-len")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
                             if status == 200 && sum == "6" && len == "3" {
-                                TestResult::passed_with_message(start.elapsed(), "X-Range-Sum: 6, X-Range-Len: 3 in response".into())
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Range-Sum: 6, X-Range-Len: 3 in response".into(),
+                                )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("status={} x-range-sum='{}' x-range-len='{}'", status, sum, len))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-range-sum='{}' x-range-len='{}'", status, sum, len),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),

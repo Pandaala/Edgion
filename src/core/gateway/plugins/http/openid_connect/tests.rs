@@ -1204,7 +1204,8 @@ async fn test_remove_cached_access_token() {
     let now = OpenidConnect::now_unix_secs();
 
     // Insert a token
-    oidc.cache_access_token("session-abc", "token-xyz", Some(now + 60)).await;
+    oidc.cache_access_token("session-abc", "token-xyz", Some(now + 60))
+        .await;
     assert_eq!(
         oidc.get_cached_access_token("session-abc").await,
         Some("token-xyz".to_string()),

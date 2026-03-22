@@ -206,15 +206,18 @@ impl BasicAuth {
             let ph = stored_hash.clone();
             let pw = password.clone();
             // work() returns Result<bool, Option<()>> — unwrap_or(false) on error
-            let result = self.sf_group.work(&sf_key, async move {
-                let verified = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("BasicAuth: bcrypt spawn_blocking panicked: {}", e);
-                        false
-                    });
-                Ok::<bool, ()>(verified)
-            }).await;
+            let result = self
+                .sf_group
+                .work(&sf_key, async move {
+                    let verified = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("BasicAuth: bcrypt spawn_blocking panicked: {}", e);
+                            false
+                        });
+                    Ok::<bool, ()>(verified)
+                })
+                .await;
             result.unwrap_or(false)
         } else {
             // Non-bcrypt (SHA1/MD5/APR-MD5) or singleflight disabled
@@ -548,9 +551,7 @@ mod tests {
             cache_ttl: 60,
             cache_capacity: 10,
             singleflight: false,
-            resolved_users: Some(std::collections::HashMap::from([
-                ("u".to_string(), "p".to_string()),
-            ])),
+            resolved_users: Some(std::collections::HashMap::from([("u".to_string(), "p".to_string())])),
             ..Default::default()
         };
         let auth = BasicAuth::new(&config, "default".to_string());
@@ -574,7 +575,8 @@ mod tests {
             Some(std::time::Duration::from_secs(300)),
         );
         assert_eq!(auth.auth_cache.len(), 1);
-        auth.load_users(StdMap::from([("alice".to_string(), "pw".to_string())])).unwrap();
+        auth.load_users(StdMap::from([("alice".to_string(), "pw".to_string())]))
+            .unwrap();
         assert_eq!(auth.auth_cache.len(), 0);
     }
 

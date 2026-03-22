@@ -129,8 +129,7 @@ pub fn parse_program(source: &str) -> Result<Program, ParseError> {
 
 /// Reserved keywords that cannot be used as variable names
 const RESERVED_KEYWORDS: &[&str] = &[
-    "let", "mut", "if", "else", "for", "while", "in", "return", "true", "false", "nil",
-    "break", "continue",
+    "let", "mut", "if", "else", "for", "while", "in", "return", "true", "false", "nil", "break", "continue",
 ];
 
 /// Check if `name` is a reserved keyword
