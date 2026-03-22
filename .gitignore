@@ -32,3 +32,7 @@ Dockerfile.cross.musl
 
 # K8s test configuration (generated at runtime)
 examples/test/k8s-conf/
+
+.understand-anything/
+
+docs/superpowers/
