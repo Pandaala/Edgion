@@ -383,6 +383,35 @@ where
         }
     }
 
+    /// Returns current cache keys in MRU order (most-recently-used first).
+    ///
+    /// Acquires the mutex and walks the full LRU list — O(n). All concurrent
+    /// `get`, `insert`, `remove`, `clear`, and other operations that acquire
+    /// the lock will block for the entire duration of the walk. Do not call
+    /// on large caches from latency-sensitive code paths. Intended for
+    /// debugging and admin inspection only.
+    ///
+    /// Expired-but-not-yet-pruned entries are excluded from the result.
+    /// As a result, `get_keys().len()` may be less than `len()` when lazy-expired
+    /// entries are present. This is by design and consistent with the lazy expiry
+    /// model.
+    pub fn get_keys(&self) -> Vec<K> {
+        let inner = self.inner.lock();
+        let now = Instant::now();
+        let mut keys = Vec::with_capacity(inner.len);
+        let mut cursor = inner.head;
+        while let Some(idx) = cursor {
+            let node = &inner.nodes[idx];
+            if node.occupied && !node.is_expired(now) {
+                if let Some(ref k) = node.key {
+                    keys.push(k.clone());
+                }
+            }
+            cursor = node.next;
+        }
+        keys
+    }
+
     pub fn get(&self, key: &K) -> Option<V> {
         self.get_with_status(key).0
     }
@@ -390,9 +419,15 @@ where
     pub fn get_with_status(&self, key: &K) -> (Option<V>, CacheStatus) {
         let result = self.inner.lock().get(key); // MutexGuard dropped here
         match result.1 {
-            CacheStatus::Hit     => { self.hits.fetch_add(1, Relaxed); }
-            CacheStatus::Miss    => { self.misses.fetch_add(1, Relaxed); }
-            CacheStatus::Expired => { self.expirations.fetch_add(1, Relaxed); }
+            CacheStatus::Hit => {
+                self.hits.fetch_add(1, Relaxed);
+            }
+            CacheStatus::Miss => {
+                self.misses.fetch_add(1, Relaxed);
+            }
+            CacheStatus::Expired => {
+                self.expirations.fetch_add(1, Relaxed);
+            }
         }
         result
     }
@@ -647,6 +682,42 @@ mod tests {
         assert_eq!(cache.len(), 2);
         assert_eq!(cache.get(&"c"), Some(3));
         assert_eq!(cache.get(&"d"), Some(4));
+    }
+
+    #[test]
+    fn test_get_keys_mru_order() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, None);
+        cache.insert("c", 3, None);
+        cache.get(&"a"); // touch "a" -> now MRU order is: a, c, b
+
+        let keys = cache.get_keys();
+        assert_eq!(keys, vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn test_get_keys_empty_cache() {
+        let cache: LocalLruCache<&str, i32> = LocalLruCache::new(4);
+        assert!(cache.get_keys().is_empty());
+    }
+
+    #[test]
+    fn test_get_keys_excludes_expired_entries() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, Some(Duration::from_millis(10)));
+        std::thread::sleep(Duration::from_millis(20));
+
+        // "b" is expired but not yet pruned — still in node pool, counted by len()
+        let keys = cache.get_keys();
+        assert!(!keys.contains(&"b"), "expired entry must not appear in get_keys");
+        assert!(keys.contains(&"a"));
+
+        // Demonstrate the documented invariant: get_keys().len() may be < len()
+        assert!(cache.get_keys().len() <= cache.len());
     }
 
     #[test]
