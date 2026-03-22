@@ -1,11 +1,11 @@
 ---
 name: gateway-api-conformance
-description: Gateway API v1.4.0 合规性：支持的资源、Edgion 扩展 CRD、一致性测试、扩展点。
+description: Gateway API v1.5.0 合规性：支持的资源、Edgion 扩展 CRD、一致性测试、扩展点。
 ---
 
 # Gateway API 合规性
 
-Edgion 实现了 Kubernetes Gateway API v1.4.0 规范，支持 HTTP、gRPC、TCP、TLS 和 UDP 路由协议。在标准 Gateway API 基础上，Edgion 通过自定义 CRD 和注解提供扩展功能。
+Edgion 实现了 Kubernetes Gateway API v1.5.0 规范，支持 HTTP、gRPC、TCP、TLS 和 UDP 路由协议。在标准 Gateway API 基础上，Edgion 通过自定义 CRD 和注解提供扩展功能。
 
 ## 支持的 Gateway API 资源
 
@@ -16,7 +16,7 @@ Edgion 实现了 Kubernetes Gateway API v1.4.0 规范，支持 HTTP、gRPC、TCP
 | **HTTPRoute** | gateway.networking.k8s.io/v1 | Standard | HTTP 路由规则：主机名匹配、路径匹配、Header 匹配、请求重定向/重写/镜像 |
 | **GRPCRoute** | gateway.networking.k8s.io/v1 | Standard | gRPC 路由规则：Service/Method 匹配、Header 匹配 |
 | **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP 四层路由，按端口转发到后端 |
-| **TLSRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TLS passthrough 路由，按 SNI 匹配后直接转发加密流量 |
+| **TLSRoute** | gateway.networking.k8s.io/v1 | GA | TLS passthrough 路由，按 SNI 匹配后直接转发加密流量 |
 | **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP 路由，按端口转发 |
 | **ReferenceGrant** | gateway.networking.k8s.io/v1beta1 | Standard | 跨命名空间引用授权，仅在 Controller 侧使用（no_sync_kinds） |
 | **BackendTLSPolicy** | gateway.networking.k8s.io/v1alpha3 | Experimental | 后端 TLS 策略，配置 Gateway→Backend 的 mTLS |
@@ -27,10 +27,10 @@ Gateway API 标准 CRD 通过官方 YAML 安装：
 
 ```bash
 # 安装 Standard channel CRDs
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
 
 # 安装 Experimental channel CRDs（包含 TCPRoute、TLSRoute、UDPRoute 等）
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/experimental-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml
 ```
 
 Edgion 扩展 CRD 通过 Edgion 自有的部署清单安装。
@@ -49,7 +49,7 @@ Edgion 扩展 CRD 通过 Edgion 自有的部署清单安装。
 
 ## 一致性测试
 
-Edgion 使用官方 `sigs.k8s.io/gateway-api` v1.4.0 提供的 Go 测试套件进行一致性测试。
+Edgion 使用官方 `sigs.k8s.io/gateway-api` v1.5.0 提供的 Go 测试套件进行一致性测试。
 
 ### 运行方式
 

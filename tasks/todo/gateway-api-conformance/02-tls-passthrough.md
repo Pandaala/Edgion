@@ -8,7 +8,7 @@
 - Gateway listener 只实现了 Terminate 模式
 - TLSRoute 在 `proxy.rs` 中实现为 `EdgionTlsTcpProxy`，总是先终止 TLS 再转发明文 TCP
 - grep "Passthrough" 在 gateway 代码库中无命中
-- TLSRoute 仍注册为 `v1alpha2`（应更新到 `v1`，GA v1.5）
+- TLSRoute 已更新为 `v1`（GA v1.5）
 
 ## 规范要求
 
@@ -37,7 +37,7 @@
 
 ### 4. TLSRoute API 版本更新
 
-- `src/types/resources/tls_route.rs:27` 的 `api_version` 从 `v1alpha2` 更新到 `v1`
+- `src/types/resources/tls_route.rs:27` 的 `api_version` 已更新为 `v1`
 
 ## 涉及文件
 

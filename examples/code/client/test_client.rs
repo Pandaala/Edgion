@@ -116,6 +116,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "tls-pp2" | "tlspp2" | "tls-proxy-protocol" => "TLSRoute/ProxyProtocol".to_string(),
             "tls-stream-plugins" | "tlsstreamplugins" => "TLSRoute/StreamPlugins".to_string(),
             "tls-multi-sni" | "tlsmultisni" | "multi-sni" => "TLSRoute/MultiSNI".to_string(),
+            "tls-passthrough" | "tlspassthrough" => "TLSRoute/Passthrough".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
@@ -172,6 +173,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "TLSRoute/StreamPlugins" => "TLSRoute/StreamPlugins",
         "TLSRoute/MultiSNI" => "TLSRoute/MultiSNI",
         "TLSRoute/BothAbsentParentRef" => "TLSRoute/BothAbsentParentRef",
+        "TLSRoute/Passthrough" => "TLSRoute/Passthrough",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         // Gateway
@@ -411,6 +413,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TlsBothAbsentParentRefTestSuite));
+        }
+        "TLSRoute/Passthrough" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/Passthrough tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsPassthroughTestSuite));
         }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));

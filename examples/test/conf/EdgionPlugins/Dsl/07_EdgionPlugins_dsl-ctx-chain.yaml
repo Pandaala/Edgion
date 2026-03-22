@@ -24,6 +24,7 @@ spec:
           let tenant = ctx.get("tenant")
           if tenant != nil {
               req.set_header("X-Internal-Tenant", tenant)
+              resp.set_header("X-Internal-Tenant", tenant)
               ctx.set("processed", "true")
           }
         errorPolicy: deny
@@ -35,5 +36,6 @@ spec:
           let ok = ctx.get("processed")
           if ok != nil {
               req.append_header("X-Pipeline", "dsl-ok")
+              resp.set_header("X-Pipeline", "dsl-ok")
           }
         errorPolicy: deny

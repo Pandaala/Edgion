@@ -385,6 +385,19 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
+        // Gateway-level ResolvedRefs (Gateway API v1.5): indicates whether non-Listener
+        // object references (e.g. infrastructure, backendTLS) on the Gateway are resolved.
+        // Currently no such references exist in the spec, so this is always True.
+        {
+            let cond = condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "All gateway-level references resolved",
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        }
+
         // ListenersNotValid: True if any listener has port conflicts
         if !conflicts.is_empty() {
             let conflicting_names: Vec<&String> = conflicts.keys().collect();

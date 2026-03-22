@@ -68,7 +68,7 @@ This is different from ordinary cluster-scoped data because these resources are 
 
 ## 5. Manifests And Tests
 
-- `config/crd/gateway-api/gateway-api-standard-v1.4.0.yaml`
+- `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml`
 - `config/crd/edgion-crd/edgion_gateway_config_crd.yaml`
 - `examples/test/conf/base/`
 

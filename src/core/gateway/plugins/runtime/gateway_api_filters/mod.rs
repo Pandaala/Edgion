@@ -7,8 +7,10 @@ pub mod extension_ref;
 pub mod request_header_modifier;
 pub mod request_redirect;
 pub mod response_header_modifier;
+pub mod cors_filter;
 pub mod url_rewrite;
 
+pub use cors_filter::GapiCorsFilter;
 pub use debug_access_log::DebugAccessLogToHeaderFilter;
 pub use extension_ref::ExtensionRefFilter;
 pub use request_header_modifier::RequestHeaderModifierFilter;

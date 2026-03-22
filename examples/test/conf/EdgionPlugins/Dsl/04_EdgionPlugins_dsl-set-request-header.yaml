@@ -13,5 +13,6 @@ spec:
           let user_id = req.header("X-User-Id")
           if user_id != nil {
               req.set_header("X-Processed-User", "uid-" + user_id)
+              resp.set_header("X-Processed-User", "uid-" + user_id)
           }
         errorPolicy: deny

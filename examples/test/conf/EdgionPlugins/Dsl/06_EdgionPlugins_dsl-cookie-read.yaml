@@ -13,7 +13,9 @@ spec:
           let sid = req.cookie("session_id")
           if sid != nil {
               req.set_header("X-Session", sid)
+              resp.set_header("X-Session", sid)
           } else {
               req.set_header("X-Session", "anonymous")
+              resp.set_header("X-Session", "anonymous")
           }
         errorPolicy: deny

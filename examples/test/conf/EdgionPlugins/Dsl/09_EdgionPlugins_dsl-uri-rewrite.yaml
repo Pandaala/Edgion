@@ -11,7 +11,10 @@ spec:
         name: "uri-rewrite"
         source: |
           let p = req.path
-          if p.starts_with("/v1/") {
-              req.set_uri("/api/" + substr(p, 4, len(p)))
+          if p.contains("/v1/") {
+              let rewritten = regex_replace(p, "/v1/", "/api/")
+              req.set_uri(rewritten)
+              resp.set_header("X-Rewritten", "true")
+              resp.set_header("X-New-Path", rewritten)
           }
         errorPolicy: deny

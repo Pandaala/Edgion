@@ -15,6 +15,7 @@ spec:
               let ver = regex_find(ua, "Chrome/[0-9]+")
               if ver != nil {
                   req.set_header("X-Chrome-Ver", ver)
+                  resp.set_header("X-Chrome-Ver", ver)
               }
           }
         errorPolicy: deny

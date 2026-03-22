@@ -12,6 +12,8 @@ spec:
         source: |
           let token = req.header("X-Token")
           if token != nil {
-              req.set_header("X-Token-Hash", sha256(token))
+              let hash = sha256(token)
+              req.set_header("X-Token-Hash", hash)
+              resp.set_header("X-Token-Hash", hash)
           }
         errorPolicy: deny

@@ -125,6 +125,9 @@
     "EdgionTls/BothAbsentParentRef": {
       "https": 31289
     },
+    "TLSRoute/Passthrough": {
+      "tls": 31290
+    },
     "HTTPRoute/MultiPort": {
       "http": 31300
     }

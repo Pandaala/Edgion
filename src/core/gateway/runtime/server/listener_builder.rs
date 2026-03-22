@@ -20,7 +20,7 @@ use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
 use crate::core::gateway::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
 use crate::core::gateway::routes::tcp::{get_global_tcp_route_managers, EdgionTcpProxy};
-use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsTcpProxy};
+use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsPassthroughProxy, EdgionTlsTcpProxy};
 use crate::core::gateway::routes::udp::{get_global_udp_route_managers, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
@@ -375,6 +375,47 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     Ok(())
 }
 
+/// Add a TLS Passthrough listener to the Pingora server.
+///
+/// This creates a **plain TCP** listener that extracts SNI from the TLS
+/// ClientHello without performing a TLS handshake, then transparently
+/// relays the encrypted traffic to the matched backend.
+pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
+    let listener_name = context.listener.name.clone();
+    let addr = format!("0.0.0.0:{}", context.listener.port);
+    let port = context.listener.port as u16;
+
+    let tls_route_manager = get_global_tls_route_managers().get_or_create_port_manager(port);
+
+    let proxy = EdgionTlsPassthroughProxy {
+        listener_port: port,
+        tls_route_manager,
+        access_logger: context.access_logger.clone(),
+        edgion_gateway_config: context.edgion_gateway_config.clone(),
+        connector: TransportConnector::new(None),
+    };
+
+    let mut service = Service::with_listeners(
+        format!("TLS-Passthrough-{}", listener_name),
+        Listeners::tcp(&addr),
+        proxy,
+    );
+
+    apply_connection_filter(&mut service, context);
+
+    server.add_service(service);
+
+    tracing::info!(
+        gateway=%context.gateway_key,
+        listener=%listener_name,
+        addr=%addr,
+        protocol="TLS-Passthrough",
+        "Adding TLS passthrough listener"
+    );
+
+    Ok(())
+}
+
 /// Main entry point for adding a listener to the server
 ///
 /// This function dispatches to the appropriate listener builder based on the
@@ -386,26 +427,39 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
         "TCP" => add_tcp_listener(server, &context),
         "UDP" => add_udp_listener(server, &context),
         "TLS" => {
-            #[cfg(any(feature = "boringssl", feature = "openssl"))]
-            {
-                // Check Gateway annotation for backend protocol
-                let backend_protocol = context
-                    .gateway_annotations
-                    .get(ANNOTATION_BACKEND_PROTOCOL)
-                    .map(|s| s.as_str());
+            // Check listener TLS mode: Passthrough or Terminate (default)
+            let tls_mode = context
+                .listener
+                .tls
+                .as_ref()
+                .and_then(|t| t.mode.as_deref())
+                .unwrap_or("Terminate");
 
-                match backend_protocol {
-                    Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
-                    _ => anyhow::bail!(
-                        "TLS protocol requires '{}' annotation set to 'tcp'",
-                        ANNOTATION_BACKEND_PROTOCOL
-                    ),
+            match tls_mode {
+                "Passthrough" => add_tls_passthrough_listener(server, &context),
+                _ => {
+                    // Terminate mode
+                    #[cfg(any(feature = "boringssl", feature = "openssl"))]
+                    {
+                        let backend_protocol = context
+                            .gateway_annotations
+                            .get(ANNOTATION_BACKEND_PROTOCOL)
+                            .map(|s| s.as_str());
+
+                        match backend_protocol {
+                            Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
+                            _ => anyhow::bail!(
+                                "TLS Terminate mode requires '{}' annotation set to 'tcp'",
+                                ANNOTATION_BACKEND_PROTOCOL
+                            ),
+                        }
+                    }
+
+                    #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+                    {
+                        anyhow::bail!("TLS protocol requires either 'boringssl' or 'openssl' feature")
+                    }
                 }
-            }
-
-            #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
-            {
-                anyhow::bail!("TLS protocol requires either 'boringssl' or 'openssl' feature")
             }
         }
         protocol => {

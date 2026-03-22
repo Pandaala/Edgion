@@ -1,6 +1,6 @@
 # Gateway API Conformance Test — Execution Plan
 
-> Target: Gateway API v1.4.0 Standard Conformance
+> Target: Gateway API v1.5.0 Standard Conformance
 > Created: 2026-02-14
 
 ---
@@ -37,7 +37,7 @@
 ```
 examples/gateway-api-conformance/
 ├── PLAN.md                             # This file
-├── go.mod                              # Go module (gateway-api v1.4.0 dep)
+├── go.mod                              # Go module (gateway-api v1.5.0 dep)
 ├── go.sum
 ├── conformance_test.go                 # Go test entry point
 ├── manifests/
@@ -56,7 +56,7 @@ examples/gateway-api-conformance/
 ## Phase 0 — Infrastructure (this PR)
 
 1. Create directory structure and this plan.
-2. Create Go test module with `sigs.k8s.io/gateway-api` v1.4.0 dependency.
+2. Create Go test module with `sigs.k8s.io/gateway-api` v1.5.0 dependency.
 3. Write `conformance_test.go` that calls `conformance.RunConformance(t)`.
 4. Create Kubernetes manifests:
    - `gatewayclass.yaml` — GatewayClass `edgion` with

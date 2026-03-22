@@ -1,6 +1,6 @@
 # TLSRoute with Proxy Protocol v2 enabled
 # Points to PP2-aware backend (test_server --tcp-pp2-port 30012)
-apiVersion: gateway.networking.k8s.io/v1alpha2
+apiVersion: gateway.networking.k8s.io/v1
 kind: TLSRoute
 metadata:
   name: tls-pp2-route

@@ -79,7 +79,7 @@ This explicit non-wiring is useful because it prevents hidden waits, accidental 
 
 ### 6. Manifests And Tests
 
-- `config/crd/gateway-api/gateway-api-standard-v1.4.0.yaml`
+- `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml`
 - `examples/test/conf/base/ReferenceGrant_edgion-test_allow-cross-ns.yaml`
 - `examples/test/conf/ref-grant-status/`
 

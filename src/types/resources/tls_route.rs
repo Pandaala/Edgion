@@ -23,7 +23,7 @@ pub const TLS_ROUTE_KIND: &str = "TLSRoute";
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "gateway.networking.k8s.io",
-    version = "v1alpha2",
+    version = "v1",
     kind = "TLSRoute",
     plural = "tlsroutes",
     status = "TLSRouteStatus",

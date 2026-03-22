@@ -79,7 +79,7 @@ pub struct TlsContext {
 }
 
 impl TlsContext {
-    fn new(listener_port: u16, client_addr: String, client_port: u16) -> Self {
+    pub(super) fn new(listener_port: u16, client_addr: String, client_port: u16) -> Self {
         Self {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -100,11 +100,11 @@ impl TlsContext {
         }
     }
 
-    fn push_log(&mut self, message: &str) {
+    pub(super) fn push_log(&mut self, message: &str) {
         let _ = self.log.get_or_insert_with(LogBuffer::new).push(message);
     }
 
-    fn current_upstream_mut(&mut self) -> Option<&mut TlsUpstreamInfo> {
+    pub(super) fn current_upstream_mut(&mut self) -> Option<&mut TlsUpstreamInfo> {
         self.upstream_info.last_mut()
     }
 }

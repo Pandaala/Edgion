@@ -49,7 +49,7 @@ impl SchemaValidator {
         }
 
         // Load Gateway API CRDs
-        let gateway_api_file = crd_dir.join("gateway-api/gateway-api-standard-v1.4.0.yaml");
+        let gateway_api_file = crd_dir.join("gateway-api/gateway-api-standard-v1.5.0.yaml");
         if gateway_api_file.exists() {
             Self::load_gateway_api_crds(&gateway_api_file, &mut validators)?;
         }

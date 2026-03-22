@@ -54,7 +54,7 @@ Edgion 基于 **Gateway API v1.4.0**，支持范围：
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Core |
 | ReferenceGrant | `gateway.networking.k8s.io/v1beta1` | Core |
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
-| TLSRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
+| TLSRoute | `gateway.networking.k8s.io/v1` | GA |
 | UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
 | BackendTLSPolicy | `gateway.networking.k8s.io/v1alpha3` | Experimental |
 
