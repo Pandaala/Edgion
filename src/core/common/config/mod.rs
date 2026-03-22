@@ -161,6 +161,11 @@ pub struct EdgionControllerConfig {
     #[arg(skip)]
     #[serde(default)]
     pub conf_center: ConfCenterConfig,
+
+    /// Optional federated center connection. Absent = feature disabled.
+    #[arg(skip)]
+    #[serde(default)]
+    pub center: Option<CenterClientConfig>,
 }
 
 /// Server configuration
@@ -484,6 +489,37 @@ impl EdgionControllerConfig {
     }
 }
 
+/// Configuration for connecting this controller to a federated center.
+/// When absent, the federation client is not started.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CenterClientConfig {
+    /// gRPC address of the federated center (e.g. "http://center.example.com:50052")
+    pub address: String,
+    /// Stable controller name; combined with `cluster` to form a stable controller_id across restarts
+    pub name: String,
+    /// Cluster this controller belongs to (used for center-side grouping)
+    pub cluster: String,
+    /// Environment tags (e.g. ["production"])
+    pub env: Vec<String>,
+    /// Arbitrary extension tags
+    pub tag: Vec<String>,
+    /// Heartbeat interval in seconds (default: 30)
+    #[serde(default = "default_ping_interval_secs")]
+    pub ping_interval_secs: u64,
+}
+
+fn default_ping_interval_secs() -> u64 {
+    30
+}
+
+impl CenterClientConfig {
+    /// Build the stable controller_id from cluster + name
+    pub fn controller_id(&self) -> String {
+        format!("{}/{}", self.cluster, self.name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +572,24 @@ mod tests {
         cfg.logging.console = Some(false);
         let log_cfg = cfg.to_log_config();
         assert!(!log_cfg.console);
+    }
+
+    #[test]
+    fn test_center_client_config_parses_from_toml() {
+        let toml = r#"
+            [center]
+            address = "http://center.example.com:50052"
+            name = "ctrl-01"
+            cluster = "prod-cn"
+            env = ["production"]
+            tag = ["team-infra"]
+        "#;
+        let config: EdgionControllerConfig = toml::from_str(toml).unwrap();
+        let center = config.center.unwrap();
+        assert_eq!(center.address, "http://center.example.com:50052");
+        assert_eq!(center.name, "ctrl-01");
+        assert_eq!(center.cluster, "prod-cn");
+        assert_eq!(center.env, vec!["production"]);
+        assert_eq!(center.ping_interval_secs, 30); // default
     }
 }
