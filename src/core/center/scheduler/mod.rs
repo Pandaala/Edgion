@@ -6,26 +6,23 @@ use uuid::Uuid;
 
 use crate::core::center::config::CenterSyncConfig;
 use crate::core::center::fed_sync::registry::ControllerRegistry;
-use crate::core::center::fed_sync::server::{PendingListMap, PendingListEntry};
-use crate::core::common::fed_sync::proto::{
-    center_message::Payload as CenterPayload,
-    CenterMessage, ListRequest,
-};
+use crate::core::center::fed_sync::server::{PendingListEntry, PendingListMap};
+use crate::core::common::fed_sync::proto::{center_message::Payload as CenterPayload, CenterMessage, ListRequest};
 
 /// Send ListRequests to all currently online controllers, registering each in pending_lists.
-pub async fn send_list_requests(
-    registry: &ControllerRegistry,
-    pending: &PendingListMap,
-) {
+pub async fn send_list_requests(registry: &ControllerRegistry, pending: &PendingListMap) {
     let senders = registry.online_senders();
     for (controller_id, tx) in senders {
         let request_id = Uuid::new_v4().to_string();
         let (resp_tx, _resp_rx) = oneshot::channel();
 
-        pending.lock().unwrap().insert(request_id.clone(), PendingListEntry {
-            sender: resp_tx,
-            created_at: std::time::Instant::now(),
-        });
+        pending.lock().unwrap().insert(
+            request_id.clone(),
+            PendingListEntry {
+                sender: resp_tx,
+                created_at: std::time::Instant::now(),
+            },
+        );
 
         let msg = CenterMessage {
             payload: Some(CenterPayload::ListRequest(ListRequest {
@@ -118,10 +115,10 @@ mod tests {
 
         send_list_requests(&registry, &pending).await;
 
-        let msg = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.recv(),
-        ).await.unwrap().unwrap();
+        let msg = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         let request_id = match msg.payload {
             Some(CenterPayload::ListRequest(r)) => r.request_id,

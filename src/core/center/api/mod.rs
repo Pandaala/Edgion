@@ -69,40 +69,54 @@ struct ResourceKeyDto {
 impl From<crate::core::common::fed_sync::proto::ResourceKey> for ResourceKeyDto {
     fn from(k: crate::core::common::fed_sync::proto::ResourceKey) -> Self {
         Self {
-            kind: k.kind, namespace: k.namespace, name: k.name,
+            kind: k.kind,
+            namespace: k.namespace,
+            name: k.name,
             resource_version: k.resource_version,
-            labels: k.labels, annotations: k.annotations,
+            labels: k.labels,
+            annotations: k.annotations,
         }
     }
 }
 
-async fn list_resources(
-    State(state): State<ApiState>,
-    Query(params): Query<ResourceQuery>,
-) -> impl IntoResponse {
+async fn list_resources(State(state): State<ApiState>, Query(params): Query<ResourceQuery>) -> impl IntoResponse {
     let keys = match &params.cluster {
         Some(c) => state.aggregator.list_keys_by_cluster(c),
         None => state.aggregator.list_all_keys(),
     };
     let keys: Vec<ResourceKeyDto> = match &params.kind {
-        Some(k) => keys.into_iter().filter(|key| &key.kind == k).map(ResourceKeyDto::from).collect(),
+        Some(k) => keys
+            .into_iter()
+            .filter(|key| &key.kind == k)
+            .map(ResourceKeyDto::from)
+            .collect(),
         None => keys.into_iter().map(ResourceKeyDto::from).collect(),
     };
     Json(keys)
 }
 
-async fn reload_controller(
-    State(state): State<ApiState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    match state.commander.send_command(&id, Command::Reload(ReloadCommand {})).await {
+async fn reload_controller(State(state): State<ApiState>, Path(id): Path<String>) -> impl IntoResponse {
+    match state
+        .commander
+        .send_command(&id, Command::Reload(ReloadCommand {}))
+        .await
+    {
         Ok(resp) if resp.success => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Ok(resp) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": resp.message}))),
+        Ok(resp) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": resp.message})),
+        ),
         Err(e) => {
             if e.to_string().contains("timed out") {
-                (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": e.to_string()})))
+                (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
             } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
             }
         }
     }

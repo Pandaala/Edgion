@@ -284,14 +284,12 @@ impl EdgionControllerCli {
                 .map(|s| s.to_string())
                 .collect();
 
-            tokio::spawn(
-                crate::core::controller::fed_sync::fed_client::run(
-                    center_config,
-                    center_api,
-                    kinds,
-                    shutdown_rx,
-                )
-            );
+            tokio::spawn(crate::core::controller::fed_sync::fed_client::run(
+                center_config,
+                center_api,
+                kinds,
+                shutdown_rx,
+            ));
 
             Some(shutdown_tx) // kept alive for duration of process
         } else {

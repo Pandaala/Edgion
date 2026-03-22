@@ -1,15 +1,14 @@
 //! CommandDispatcher: sends CommandRequest to a specific controller and awaits response.
 
+use anyhow::{anyhow, Result};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
-use anyhow::{anyhow, Result};
 
 use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::fed_sync::server::PendingCommandMap;
 use crate::core::common::fed_sync::proto::{
-    center_message::Payload as CenterPayload,
-    CenterMessage, CommandRequest, CommandResponse,
+    center_message::Payload as CenterPayload, CenterMessage, CommandRequest, CommandResponse,
 };
 
 pub struct Commander {
@@ -32,7 +31,9 @@ impl Commander {
         controller_id: &str,
         command: crate::core::common::fed_sync::proto::command_request::Command,
     ) -> Result<CommandResponse> {
-        let session = self.registry.get_session(controller_id)
+        let session = self
+            .registry
+            .get_session(controller_id)
             .ok_or_else(|| anyhow!("Controller {} not found or offline", controller_id))?;
 
         if session.offline_since.is_some() {
@@ -50,13 +51,13 @@ impl Commander {
             })),
         };
 
-        session.stream_tx.send(msg).await
-            .map_err(|_| {
-                self.pending.lock().unwrap().remove(&request_id);
-                anyhow!("Failed to send command: stream closed")
-            })?;
+        session.stream_tx.send(msg).await.map_err(|_| {
+            self.pending.lock().unwrap().remove(&request_id);
+            anyhow!("Failed to send command: stream closed")
+        })?;
 
-        tokio::time::timeout(self.timeout, rx).await
+        tokio::time::timeout(self.timeout, rx)
+            .await
             .map_err(|_| {
                 self.pending.lock().unwrap().remove(&request_id);
                 anyhow!("Command timed out after {}s", self.timeout.as_secs())

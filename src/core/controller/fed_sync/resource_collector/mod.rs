@@ -7,13 +7,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 /// Resource kinds excluded from federation sync (controller side filter).
-pub const FED_NO_SYNC_KINDS: &[&str] = &[
-    "Secret",
-    "ConfigMap",
-    "Endpoint",
-    "EndpointSlice",
-    "ReferenceGrant",
-];
+pub const FED_NO_SYNC_KINDS: &[&str] = &["Secret", "ConfigMap", "Endpoint", "EndpointSlice", "ReferenceGrant"];
 
 pub fn is_fed_no_sync_kind(kind: &str) -> bool {
     FED_NO_SYNC_KINDS.iter().any(|k| *k == kind)

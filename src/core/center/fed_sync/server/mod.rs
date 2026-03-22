@@ -17,10 +17,8 @@ use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::config::CenterSyncConfig;
 use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::common::fed_sync::proto::{
-    center_message::Payload as CenterPayload,
-    controller_message::Payload as CtrlPayload,
-    federation_sync_server::FederationSync,
-    CenterMessage, ControllerMessage, Ping, RegisterAck,
+    center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
+    federation_sync_server::FederationSync, CenterMessage, ControllerMessage, Ping, RegisterAck,
 };
 
 pub struct PendingListEntry {
@@ -28,14 +26,8 @@ pub struct PendingListEntry {
     pub created_at: std::time::Instant,
 }
 pub type PendingListMap = Arc<Mutex<HashMap<String, PendingListEntry>>>;
-pub type PendingCommandMap = Arc<
-    Mutex<
-        HashMap<
-            String,
-            oneshot::Sender<crate::core::common::fed_sync::proto::CommandResponse>,
-        >,
-    >,
->;
+pub type PendingCommandMap =
+    Arc<Mutex<HashMap<String, oneshot::Sender<crate::core::common::fed_sync::proto::CommandResponse>>>>;
 
 pub struct FederationGrpcServer {
     pub registry: ControllerRegistry,
@@ -65,10 +57,7 @@ impl FederationGrpcServer {
 impl FederationSync for FederationGrpcServer {
     type SyncStream = tokio_stream::wrappers::ReceiverStream<Result<CenterMessage, Status>>;
 
-    async fn sync(
-        &self,
-        request: Request<Streaming<ControllerMessage>>,
-    ) -> Result<Response<Self::SyncStream>, Status> {
+    async fn sync(&self, request: Request<Streaming<ControllerMessage>>) -> Result<Response<Self::SyncStream>, Status> {
         let mut inbound = request.into_inner();
         let (out_tx, out_rx) = mpsc::channel::<Result<CenterMessage, Status>>(32);
         let (inner_tx, mut inner_rx) = mpsc::channel::<CenterMessage>(32);
@@ -76,21 +65,13 @@ impl FederationSync for FederationGrpcServer {
         // 1. Wait for RegisterRequest (5s timeout)
         let first_msg = tokio::time::timeout(Duration::from_secs(5), inbound.message())
             .await
-            .map_err(|_| {
-                Status::deadline_exceeded(
-                    "Registration timeout: no RegisterRequest within 5s",
-                )
-            })?
+            .map_err(|_| Status::deadline_exceeded("Registration timeout: no RegisterRequest within 5s"))?
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::cancelled("Stream closed before RegisterRequest"))?;
 
         let register_req = match first_msg.payload {
             Some(CtrlPayload::Register(r)) => r,
-            _ => {
-                return Err(Status::invalid_argument(
-                    "First message must be RegisterRequest",
-                ))
-            }
+            _ => return Err(Status::invalid_argument("First message must be RegisterRequest")),
         };
 
         let controller_id = register_req.controller_id.clone();
@@ -154,9 +135,7 @@ impl FederationSync for FederationGrpcServer {
                         .unwrap_or(0);
                     if inner_tx
                         .send(CenterMessage {
-                            payload: Some(CenterPayload::Ping(Ping {
-                                timestamp: now_ms,
-                            })),
+                            payload: Some(CenterPayload::Ping(Ping { timestamp: now_ms })),
                         })
                         .await
                         .is_err()
@@ -212,17 +191,13 @@ impl FederationSync for FederationGrpcServer {
                             match msg.payload {
                                 Some(CtrlPayload::Pong(_)) => {}
                                 Some(CtrlPayload::ListResponse(resp)) => {
-                                    if let Some(entry) =
-                                        pending_lists.lock().unwrap().remove(&resp.request_id)
-                                    {
+                                    if let Some(entry) = pending_lists.lock().unwrap().remove(&resp.request_id) {
                                         let _ = entry.sender.send(resp.keys.clone());
                                     }
                                     aggregator.update_snapshot(&cid, resp.keys);
                                 }
                                 Some(CtrlPayload::CommandResponse(resp)) => {
-                                    if let Some(sender) =
-                                        pending_commands.lock().unwrap().remove(&resp.request_id)
-                                    {
+                                    if let Some(sender) = pending_commands.lock().unwrap().remove(&resp.request_id) {
                                         let _ = sender.send(resp);
                                     }
                                 }
@@ -234,8 +209,6 @@ impl FederationSync for FederationGrpcServer {
             }
         });
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
-            out_rx,
-        )))
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(out_rx)))
     }
 }

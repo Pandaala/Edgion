@@ -7,19 +7,17 @@
 //! 4. Loop: handle CenterMessage (Ping, ListRequest, CommandRequest, RegisterAck)
 //! 5. On error: exponential backoff, reconnect
 
+use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::Result;
 use tokio::sync::watch;
 use tonic::transport::Channel;
 
 use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
-    federation_sync_client::FederationSyncClient,
-    center_message::Payload as CenterPayload,
-    controller_message::Payload as CtrlPayload,
-    CenterMessage, ControllerMessage,
-    Pong, RegisterRequest, ListResponse, CommandResponse,
+    center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
+    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage, ListResponse,
+    Pong, RegisterRequest,
 };
 use crate::core::controller::conf_mgr::conf_center::traits::CenterApi;
 use crate::core::controller::fed_sync::resource_collector;
@@ -30,16 +28,22 @@ pub struct ReconnectBackoff {
 }
 
 impl ReconnectBackoff {
-    pub fn new() -> Self { Self { current: 1 } }
+    pub fn new() -> Self {
+        Self { current: 1 }
+    }
 
-    pub fn current_secs(&self) -> u64 { self.current }
+    pub fn current_secs(&self) -> u64 {
+        self.current
+    }
 
     /// Advance to next backoff value (doubles, capped at 60s).
     pub fn next(&mut self) {
         self.current = (self.current * 2).min(60);
     }
 
-    pub fn reset(&mut self) { self.current = 1; }
+    pub fn reset(&mut self) {
+        self.current = 1;
+    }
 }
 
 /// Runs the federation client loop. Should be spawned as a background task.
@@ -94,9 +98,7 @@ async fn connect_and_run(
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
 ) -> Result<()> {
-    let channel = Channel::from_shared(config.address.clone())?
-        .connect()
-        .await?;
+    let channel = Channel::from_shared(config.address.clone())?.connect().await?;
 
     let mut client = FederationSyncClient::new(channel);
 
@@ -171,7 +173,8 @@ async fn handle_center_message(
                 payload: Some(CtrlPayload::Pong(Pong {
                     timestamp: ping.timestamp,
                 })),
-            }).await?;
+            })
+            .await?;
         }
 
         CenterPayload::ListRequest(req) => {
@@ -180,10 +183,7 @@ async fn handle_center_message(
                 request_id = %req.request_id,
                 "ListRequest received"
             );
-            let keys = match resource_collector::collect_resource_keys(
-                conf_center.as_ref(),
-                supported_kinds,
-            ).await {
+            let keys = match resource_collector::collect_resource_keys(conf_center.as_ref(), supported_kinds).await {
                 Ok(keys) => keys,
                 Err(e) => {
                     tracing::error!(component = "fed_client", error = %e, "collect_resource_keys failed");
@@ -195,7 +195,8 @@ async fn handle_center_message(
                     request_id: req.request_id,
                     keys,
                 })),
-            }).await?;
+            })
+            .await?;
         }
 
         CenterPayload::Command(cmd) => {
@@ -212,7 +213,8 @@ async fn handle_center_message(
                     success: false,
                     message: "Command execution not yet implemented".to_string(),
                 })),
-            }).await?;
+            })
+            .await?;
         }
     }
     Ok(())

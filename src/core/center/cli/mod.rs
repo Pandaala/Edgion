@@ -20,7 +20,9 @@ pub struct EdgionCenterCli {
 }
 
 impl EdgionCenterCli {
-    pub fn parse_args() -> Self { Self::parse() }
+    pub fn parse_args() -> Self {
+        Self::parse()
+    }
 
     pub async fn run(&self) -> Result<()> {
         let content = std::fs::read_to_string(&self.config_file).unwrap_or_default();
@@ -30,11 +32,7 @@ impl EdgionCenterCli {
         let aggregator = Arc::new(ResourceAggregator::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        let grpc_server = FederationGrpcServer::new(
-            registry.clone(),
-            aggregator.clone(),
-            config.sync.clone(),
-        );
+        let grpc_server = FederationGrpcServer::new(registry.clone(), aggregator.clone(), config.sync.clone());
         let pending_lists = grpc_server.pending_lists.clone();
         let pending_commands = grpc_server.pending_commands.clone();
 
@@ -44,7 +42,10 @@ impl EdgionCenterCli {
             config.sync.command_timeout_secs,
         ));
 
-        let api_state = ApiState { aggregator: aggregator.clone(), commander };
+        let api_state = ApiState {
+            aggregator: aggregator.clone(),
+            commander,
+        };
         let http_addr: std::net::SocketAddr = config.server.http_addr.parse()?;
         let grpc_addr: std::net::SocketAddr = config.server.grpc_addr.parse()?;
 
@@ -54,7 +55,7 @@ impl EdgionCenterCli {
         let grpc_handle = tokio::spawn(
             tonic::transport::Server::builder()
                 .add_service(FederationSyncServer::new(grpc_server))
-                .serve(grpc_addr)
+                .serve(grpc_addr),
         );
 
         // HTTP Admin API
