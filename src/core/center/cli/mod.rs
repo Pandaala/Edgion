@@ -25,8 +25,30 @@ impl EdgionCenterCli {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let content = std::fs::read_to_string(&self.config_file).unwrap_or_default();
-        let config: CenterConfig = toml::from_str(&content).unwrap_or_default();
+        let content = match std::fs::read_to_string(&self.config_file) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    component = "center",
+                    path = %self.config_file,
+                    error = %e,
+                    "Config file not readable, using defaults"
+                );
+                String::new()
+            }
+        };
+        let config: CenterConfig = match toml::from_str(&content) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    component = "center",
+                    path = %self.config_file,
+                    error = %e,
+                    "Config parse error, using defaults"
+                );
+                CenterConfig::default()
+            }
+        };
 
         let registry = ControllerRegistry::new();
         let aggregator = Arc::new(ResourceAggregator::new());

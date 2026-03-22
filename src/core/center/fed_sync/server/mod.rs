@@ -154,6 +154,7 @@ impl FederationSync for FederationGrpcServer {
         // 5. Main message loop
         tokio::spawn({
             let registry = registry.clone();
+            let aggregator_for_offline = aggregator.clone();
             let cid = cid.clone();
             async move {
                 loop {
@@ -165,6 +166,7 @@ impl FederationSync for FederationGrpcServer {
                                 "Heartbeat timeout, marking offline"
                             );
                             registry.mark_offline(&cid);
+                            aggregator_for_offline.mark_offline(&cid);
                             break;
                         }
                         Ok(Err(e)) => {
@@ -175,6 +177,7 @@ impl FederationSync for FederationGrpcServer {
                                 "Stream error"
                             );
                             registry.mark_offline(&cid);
+                            aggregator_for_offline.mark_offline(&cid);
                             break;
                         }
                         Ok(Ok(None)) => {
@@ -184,6 +187,7 @@ impl FederationSync for FederationGrpcServer {
                                 "Stream closed"
                             );
                             registry.mark_offline(&cid);
+                            aggregator_for_offline.mark_offline(&cid);
                             break;
                         }
                         Ok(Ok(Some(msg))) => {
