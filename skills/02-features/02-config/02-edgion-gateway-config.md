@@ -7,6 +7,22 @@ description: EdgionGatewayConfig CRD Schema：GatewayClass 级别的运行时配
 
 > API Group: `edgion.io/v1alpha1` | Scope: Cluster | 通过 GatewayClass.spec.parametersRef 引用
 
+## 什么时候改这一层
+
+改这里，而不是改 Gateway TOML 的场景：
+
+- 某个 GatewayClass 想要自己的 server / timeout / security 默认值
+- 想配置全局插件引用
+- 想开启 preflight policy
+- 想把 real IP / ReferenceGrant 校验作为 GatewayClass 级策略
+
+入口关系：`GatewayClass.spec.parametersRef` -> `EdgionGatewayConfig`
+
+## 看哪些文件
+
+- 示例文件：`examples/test/conf/base/EdgionGatewayConfig.yaml`
+- 代码定义：`src/types/resources/edgion_gateway_config.rs`
+
 ## 关联方式
 
 ```yaml
@@ -60,7 +76,7 @@ spec:
   realIp:
     trustedIps: []                          # Vec<String>, 可信代理 IP/CIDR 列表
     realIpHeader: "X-Forwarded-For"         # string, 提取真实 IP 的请求头
-    # recursive: 从右向左遍历 header，跳过 trustedIps，取第一个非信任 IP
+    recursive: true                         # bool, 从右向左遍历 header，跳过 trustedIps，取第一个非信任 IP
 
   # ─── 安全防护 ───
   securityProtect:
@@ -121,6 +137,7 @@ spec:
 |------|------|------|------|
 | `trustedIps` | `Vec<String>` | `[]` | 可信代理 IP/CIDR 列表 |
 | `realIpHeader` | `String` | `X-Forwarded-For` | 真实 IP 提取的请求头名称 |
+| `recursive` | `bool` | `true` | 是否按 nginx 风格从右向左跳过受信代理 |
 
 提取逻辑：从右向左遍历 `realIpHeader`，跳过 `trustedIps` 中的地址，取第一个非信任 IP。
 
@@ -158,4 +175,10 @@ globalPluginsRef:
 | 变更方式 | 重启进程 | 动态生效（CRD 更新） |
 | 适合 | 进程连接参数、日志路径 | 业务级超时、安全策略、全局插件 |
 
-详细参考见 [references/config-reference-edgion-gateway-config.md](references/config-reference-edgion-gateway-config.md)。
+## 什么时候不要改这一层
+
+不要用 `EdgionGatewayConfig` 解决这些问题：
+
+- Gateway 进程连哪个 Controller：那是 Gateway TOML 的 `server_addr`
+- Gateway Admin / Metrics 端口：这是进程启动层
+- Controller 用 file_system 还是 kubernetes：这是 Controller TOML 的 `conf_center`

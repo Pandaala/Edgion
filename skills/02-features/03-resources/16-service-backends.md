@@ -79,4 +79,4 @@ Edgion 支持 5 种负载均衡算法：
 
 ## BackendTLSPolicy
 
-网关到后端的 TLS 配置详见 [../05-tls/02-backend-tls-policy.md](../05-tls/02-backend-tls-policy.md)。
+网关到后端的 TLS 配置详见 [12-backend-tls-policy.md](12-backend-tls-policy.md)。

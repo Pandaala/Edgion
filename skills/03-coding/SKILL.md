@@ -32,6 +32,12 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 | [00-logging-and-tracing-ids.md](00-logging-and-tracing-ids.md) | 日志 ID 传播：rv / sv / key_name 三元组，确保控制面→数据面可关联 |
 | [01-log-safety.md](01-log-safety.md) | 日志安全：敏感信息不入日志、配置不泄漏、数据面禁用 tracing |
 
+### Rust 编码规范
+
+| 文件 | 主题 |
+|------|------|
+| [02-rust-coding-rules.md](02-rust-coding-rules.md) | Rust 编码规范：import 短路径、unwrap 禁令、Clone 审慎、错误信息可操作性 |
+
 ### 可观测性 — [observability/](observability/)
 
 | 文件 | 主题 |
@@ -48,6 +54,13 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 - [ ] 日志中是否包含完整的 resource spec / backend 地址？如果是，降级到 debug
 - [ ] 控制面新增日志是否包含 `kind` + `name/namespace` + `rv`？
 - [ ] 如果资源已同步到数据面，access log 中是否有 `sv`？
+
+### Rust 编码
+- [ ] 是否有超过 2 层的 `crate::` 路径内联？应提取为 `use` 导入
+- [ ] 是否有裸 `unwrap()`？应改为 `?` / `expect("reason")` / `match`
+- [ ] `expect()` 消息是否解释了为什么不会 panic？
+- [ ] 是否有不必要的 `.clone()`？能否用引用或 `Arc` 替代？
+- [ ] 错误信息是否包含足够上下文？
 
 ### 可观测性
 - [ ] PluginLog 每条 ≤ 40 字节，以 `; ` 结尾

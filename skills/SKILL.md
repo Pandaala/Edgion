@@ -16,7 +16,10 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
    - **查功能/配置**（怎么用/怎么配） → `02-features/`
    - **写代码**（编码规范） → `03-coding/`
 3. **跨领域任务**：修改一个资源的 Handler 通常需要 architecture（理解处理流程）→ features（功能/Schema 参考）→ coding（编码约束）→ testing（验证），按需逐层加载。
-4. **资源相关任务**：先到 [05-resources/](01-architecture/05-resources/SKILL.md) 找到该资源的架构文档，再到 [02-features/](02-features/SKILL.md) 查功能 Schema。
+4. **资源相关任务**——两个目录按编号对齐，职责互补：
+   - [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) — **内部实现**：Handler 流程、requeue 关联、匹配引擎、源码位置
+   - [02-features/03-resources/](02-features/03-resources/SKILL.md) — **外部契约**：YAML Schema、字段类型与默认值、配置示例
+   - 改代码通常两边都要看：02 查 Schema 确认字段定义，01 查实现确认处理逻辑
 
 ## 快速定位
 
@@ -29,13 +32,9 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **某种资源的处理链路** — 20 种资源的架构 | [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) |
 | **二进制启动与部署** — CLI 参数、部署模式 | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
 | **TOML 配置 Schema** — Controller/Gateway 配置 | [02-features/02-config/](02-features/02-config/SKILL.md) |
-| **Gateway 资源功能** — Listener、协议、TLS 绑定 | [02-features/03-gateway/](02-features/03-gateway/SKILL.md) |
-| **路由功能与 Schema** — HTTPRoute/GRPCRoute/TCP/TLS/UDP | [02-features/04-routes/](02-features/04-routes/SKILL.md) |
-| **TLS 功能** — EdgionTls/ACME/BackendTLSPolicy | [02-features/05-tls/](02-features/05-tls/SKILL.md) |
-| **插件目录** — 28 个 HTTP 插件 + Stream 插件 | [02-features/06-plugins/](02-features/06-plugins/SKILL.md) |
-| **后端与负载均衡** — Service 发现、健康检查、LB 策略 | [02-features/07-backends/](02-features/07-backends/SKILL.md) |
-| **可观测性** — Access Log、Metrics、协议日志 | [02-features/08-observability/](02-features/08-observability/SKILL.md) |
-| **注解参考** — 所有 edgion.io/* 键 | [02-features/10-annotations/](02-features/10-annotations/SKILL.md) |
+| **资源功能 Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
+| **可观测性** — Access Log、Metrics、协议日志 | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
+| **注解参考** — 所有 edgion.io/* 键 | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
 | **开发新资源/插件** — 添加 CRD、插件、连接器 | [01-architecture/01-controller/09-add-new-resource/](01-architecture/01-controller/09-add-new-resource/00-guide.md) |
 | **路由匹配规则** — 各引擎匹配逻辑 | [01-architecture/02-gateway/03-routes/00-route-matching.md](01-architecture/02-gateway/03-routes/00-route-matching.md) |
 | **编码规范** — 日志 ID、日志安全、可观测性 | [03-coding/SKILL.md](03-coding/SKILL.md) |
@@ -46,7 +45,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | # | 目录 | 用途 |
 |---|------|------|
 | 01 | [architecture/](01-architecture/SKILL.md) | 系统架构 + 开发指南：Controller、Gateway、gRPC 同步、资源处理、插件/资源/连接器开发 |
-| 02 | [features/](02-features/SKILL.md) | 功能与配置参考：二进制部署、配置 Schema、Gateway/路由/TLS/插件/后端/可观测性/注解 |
+| 02 | [features/](02-features/SKILL.md) | 功能与配置参考：二进制部署、配置 Schema、资源功能 Schema、可观测性、注解 |
 | 03 | [coding/](03-coding/SKILL.md) | 编码规范：日志 ID、日志安全、可观测性（Access Log / Metrics / Tracing） |
 | 04 | [review/](04-review/SKILL.md) | Review 沉淀：误报判定、可观测性审查 |
 | 05 | [testing/](05-testing/SKILL.md) | 测试：单元测试、集成测试、K8s 测试、专项测试 |

@@ -1,12 +1,12 @@
 ---
-name: resources-architecture
+name: 05-resources
 description: 资源分类与处理：通用处理流程、每种资源的功能点/特殊处理/跨资源关联。
 ---
 
 # 05 资源架构
 
-> 本目录描述每种资源从 Controller 到 Gateway 的完整处理流程，
-> 以及每种资源的特有功能点和跨资源关联关系。
+> 本目录描述每种资源从 Controller 到 Gateway 的**内部处理流程**：Handler 各阶段逻辑、requeue 关联、源码位置。
+> 资源的**外部契约**（YAML Schema、字段类型与默认值）见 [02-features/03-resources/](../../02-features/03-resources/SKILL.md)——两边编号一一对齐，改代码通常两边都要看。
 >
 > 每篇资源文档遵循统一结构：
 > 1. **通用流程引用** — 指向 [00-resource-flow.md](00-resource-flow.md) 的通用流程

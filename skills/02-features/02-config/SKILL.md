@@ -22,7 +22,6 @@ description: 配置 Schema 参考：Controller/Gateway TOML 配置和 EdgionGate
 | [00-controller-config.md](00-controller-config.md) | Controller TOML 完整 Schema |
 | [01-gateway-config.md](01-gateway-config.md) | Gateway TOML 完整 Schema |
 | [02-edgion-gateway-config.md](02-edgion-gateway-config.md) | EdgionGatewayConfig CRD Schema |
-| [references/](references/) | 各配置层的详细参考文件 |
 
 ## 快速决策：改哪一层？
 

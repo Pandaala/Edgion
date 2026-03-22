@@ -48,7 +48,7 @@
   3. 当相对路径行为相关时：`docs/zh-CN/dev-guide/work-directory.md`
 
 - 在修改清单或文档之前了解 `edgion.io/*` 键：
-  1. `skills/02-features/10-annotations/00-annotations-overview.md`
+  1. `skills/02-features/05-annotations/00-annotations-overview.md`
   2. 加载 `metadata.annotations`、`options` 或保留/仅测试键的对应参考
   3. 更新过时的示例，而不是向前复制遗留键
 
@@ -59,7 +59,7 @@
 
 - 添加或调试 Stream 插件行为：
   1. `skills/01-architecture/02-gateway/13-stream-plugin-dev.md`
-  2. `skills/02-features/10-annotations/00-annotations-overview.md`
+  2. `skills/02-features/05-annotations/00-annotations-overview.md`
   3. `skills/05-testing/00-integration-testing.md`
 
 - 修改 CI 或发布自动化：

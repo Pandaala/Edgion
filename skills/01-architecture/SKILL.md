@@ -132,7 +132,8 @@ CLI 工具：3 种 target 模式（center/server/client）、apply/delete/get/re
 
 ### [05-resources/](05-resources/SKILL.md) — 资源架构
 
-通用处理流程 + 20 种资源的功能点、特殊处理、跨资源关联：
+通用处理流程 + 20 种资源的功能点、特殊处理、跨资源关联。
+资源 Schema（字段定义、默认值）见 [02-features/03-resources/](../02-features/03-resources/SKILL.md)（编号对齐，职责互补）。
 
 | 分类 | 资源 |
 |------|------|

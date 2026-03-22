@@ -3,7 +3,7 @@ name: annotations-features
 description: Edgion 注解和 Options 键完整参考：metadata.annotations、tls.options、spec.options、系统保留键。
 ---
 
-# 10 注解与 Options 参考
+# 05 注解与 Options 参考
 
 > 所有 `edgion.io/*` 键的完整列表和使用指南。
 
