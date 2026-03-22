@@ -356,7 +356,7 @@ where
     ///
     /// Called on config reload or full invalidation. Prior hit-rate statistics
     /// are not meaningful after the cache population changes completely.
-    /// If you need to preserve historical stats, call [`stats()`] before `clear()`.
+    /// If you need to preserve historical stats, call [`Self::stats`] before `clear()`.
     pub fn clear(&self) {
         self.inner.lock().clear();
         // Reset counters after the lock is released — the inner clear has no
