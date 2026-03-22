@@ -1,7 +1,43 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
+
+/// A point-in-time snapshot of cache operation counts.
+///
+/// Obtained via [`LocalLruCache::stats`]. Because the four counters are read
+/// with `Relaxed` ordering and are not loaded atomically as a group, this
+/// snapshot may reflect a transient state under concurrent writes. Treat
+/// `hit_ratio()` as an approximation suitable for metrics and dashboards,
+/// not as a strongly consistent value.
+#[derive(Debug, Clone, Default)]
+pub struct CacheStats {
+    /// Number of `get` calls that returned a live cached value.
+    pub hits: u64,
+    /// Number of `get` calls where the key was not found.
+    pub misses: u64,
+    /// Number of `get` calls where the key was found but its TTL had expired.
+    pub expirations: u64,
+    /// Number of `insert` calls that displaced a live (non-expired) entry
+    /// because the cache was at capacity. Entries cleared by
+    /// `prune_expired_from_tail` or explicit `remove` do not count.
+    pub evictions: u64,
+}
+
+impl CacheStats {
+    /// Hit ratio over all `get` operations: `hits / (hits + misses + expirations)`.
+    ///
+    /// Returns `0.0` if no `get` calls have been made yet.
+    pub fn hit_ratio(&self) -> f64 {
+        let total = self.hits + self.misses + self.expirations;
+        if total == 0 {
+            0.0
+        } else {
+            self.hits as f64 / total as f64
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheStatus {
@@ -259,6 +295,10 @@ where
 #[derive(Debug)]
 pub struct LocalLruCache<K, V> {
     inner: Mutex<LocalLruCacheInner<K, V>>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    expirations: AtomicU64,
+    evictions: AtomicU64,
 }
 
 impl<K, V> LocalLruCache<K, V>
@@ -270,6 +310,23 @@ where
         assert!(capacity > 0, "LocalLruCache capacity must be greater than 0");
         Self {
             inner: Mutex::new(LocalLruCacheInner::new(capacity)),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            expirations: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+        }
+    }
+
+    /// Returns a point-in-time snapshot of cache operation counters.
+    ///
+    /// Reads four atomic counters with `Relaxed` ordering — no lock is
+    /// acquired. See [`CacheStats`] for the approximation caveat.
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits.load(Relaxed),
+            misses: self.misses.load(Relaxed),
+            expirations: self.expirations.load(Relaxed),
+            evictions: self.evictions.load(Relaxed),
         }
     }
 
@@ -313,7 +370,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheStatus, LocalLruCache};
+    use super::{CacheStats, CacheStatus, LocalLruCache};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -418,6 +475,25 @@ mod tests {
 
         let cached = cache.get(&"a").unwrap();
         assert!(Arc::ptr_eq(&cached, &value));
+    }
+
+    #[test]
+    fn test_stats_initial_zeros() {
+        let cache: LocalLruCache<&str, i32> = LocalLruCache::new(4);
+        let s = cache.stats();
+        assert_eq!(s.hits, 0);
+        assert_eq!(s.misses, 0);
+        assert_eq!(s.expirations, 0);
+        assert_eq!(s.evictions, 0);
+        assert_eq!(s.hit_ratio(), 0.0);
+    }
+
+    #[test]
+    fn test_hit_ratio_zero_when_no_gets() {
+        // hit_ratio() must return 0.0 (not NaN) when denominator is zero
+        let s = CacheStats::default();
+        assert_eq!(s.hit_ratio(), 0.0);
+        assert!(!s.hit_ratio().is_nan());
     }
 
     #[test]
