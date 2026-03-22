@@ -20,6 +20,10 @@ path = "src/bin/edgion_controller.rs"
 name = "edgion-ctl"
 path = "src/bin/edgion_ctl.rs"
 
+[[bin]]
+name = "edgion-center"
+path = "src/bin/edgion_center.rs"
+
 [[example]]
 name = "build_test_proto"
 path = "examples/code/build_test_proto.rs"
