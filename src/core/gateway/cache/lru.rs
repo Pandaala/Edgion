@@ -386,10 +386,9 @@ where
     /// Returns current cache keys in MRU order (most-recently-used first).
     ///
     /// Acquires the mutex and walks the full LRU list — O(n). All concurrent
-    /// `get`, `insert`, `remove`, `clear`, and other operations that acquire
-    /// the lock will block for the entire duration of the walk. Do not call
-    /// on large caches from latency-sensitive code paths. Intended for
-    /// debugging and admin inspection only.
+    /// `get`, `insert`, `remove`, and `clear` calls will block for the entire
+    /// duration of the walk. Do not call on large caches from latency-sensitive
+    /// code paths. Intended for debugging and admin inspection only.
     ///
     /// Expired-but-not-yet-pruned entries are excluded from the result.
     /// As a result, `get_keys().len()` may be less than `len()` when lazy-expired
@@ -398,7 +397,7 @@ where
     pub fn get_keys(&self) -> Vec<K> {
         let inner = self.inner.lock();
         let now = Instant::now();
-        let mut keys = Vec::with_capacity(inner.len);
+        let mut keys = Vec::with_capacity(inner.len); // may over-allocate if expired entries are present
         let mut cursor = inner.head;
         while let Some(idx) = cursor {
             let node = &inner.nodes[idx];
