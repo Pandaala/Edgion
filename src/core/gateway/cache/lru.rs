@@ -364,7 +364,13 @@ where
     }
 
     pub fn get_with_status(&self, key: &K) -> (Option<V>, CacheStatus) {
-        self.inner.lock().get(key)
+        let result = self.inner.lock().get(key); // MutexGuard dropped here
+        match result.1 {
+            CacheStatus::Hit     => { self.hits.fetch_add(1, Relaxed); }
+            CacheStatus::Miss    => { self.misses.fetch_add(1, Relaxed); }
+            CacheStatus::Expired => { self.expirations.fetch_add(1, Relaxed); }
+        }
+        result
     }
 }
 
@@ -494,6 +500,64 @@ mod tests {
         let s = CacheStats::default();
         assert_eq!(s.hit_ratio(), 0.0);
         assert!(!s.hit_ratio().is_nan());
+    }
+
+    #[test]
+    fn test_stats_hit_miss_expiration_counts() {
+        let cache = LocalLruCache::new(4);
+
+        // Two misses
+        assert_eq!(cache.get(&"x"), None);
+        assert_eq!(cache.get(&"y"), None);
+
+        // One insert + one hit
+        cache.insert("a", 1, None);
+        assert_eq!(cache.get(&"a"), Some(1));
+
+        // One insert with short TTL, wait, then one expiration
+        cache.insert("b", 2, Some(Duration::from_millis(10)));
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cache.get(&"b"), None);
+
+        let s = cache.stats();
+        assert_eq!(s.hits, 1);
+        assert_eq!(s.misses, 2);
+        assert_eq!(s.expirations, 1);
+    }
+
+    #[test]
+    fn test_hit_ratio_calculation() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, None);
+        cache.get(&"a"); // hit
+        cache.get(&"b"); // miss
+
+        let s = cache.stats();
+        // 1 hit, 1 miss, 0 expirations -> ratio = 0.5
+        assert!((s.hit_ratio() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hit_ratio_zero_when_all_misses() {
+        let cache: LocalLruCache<&str, i32> = LocalLruCache::new(4);
+        cache.get(&"a");
+        cache.get(&"b");
+        let s = cache.stats();
+        assert_eq!(s.hits, 0);
+        assert_eq!(s.hit_ratio(), 0.0);
+    }
+
+    #[test]
+    fn test_remove_does_not_affect_stats() {
+        let cache = LocalLruCache::new(4);
+        cache.insert("a", 1, None);
+        cache.remove(&"a");
+        let s = cache.stats();
+        assert_eq!(s.hits, 0);
+        assert_eq!(s.misses, 0);
+        assert_eq!(s.expirations, 0);
+        assert_eq!(s.evictions, 0);
     }
 
     #[test]
