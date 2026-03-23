@@ -10,40 +10,44 @@
 
 ### P0 — 必须完成
 
-- [ ] **CRD 文件替换** (~0.5天)
-  - 替换 `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml` (已完成)
-  - 替换 `config/crd/gateway-api/gateway-api-experimental-v1.5.0.yaml` (已完成)
+- [x] **CRD 文件替换**
+  - 替换 `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml` ✅
+  - 替换 `config/crd/gateway-api/gateway-api-experimental-v1.5.0.yaml` ✅
+  - 删除旧版 v1.4.0 CRD 文件 ✅
+  - `deploy/kubernetes/scripts/install_crds.sh` 脚本已同步更新 ✅
 
-- [x] **TLSRoute v1alpha2 → v1** (~2-3天)
-  - `src/types/resources/tls_route.rs` — apiVersion 更新
-  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/tls_route.rs` — 处理器适配
-  - `src/core/gateway/routes/tls/` — 路由管理逻辑适配
+- [x] **TLSRoute v1alpha2 → v1**
+  - `src/types/resources/tls_route.rs` — apiVersion 更新 ✅
+  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/` — 处理器适配 ✅
+  - `src/core/gateway/routes/tls/` — 路由管理逻辑适配 ✅
   - 所有 TLSRoute 测试 YAML 文件 apiVersion 从 `v1alpha2` → `v1` ✅
   - 注意：v1alpha2 将在 v1.6 中移除
 
 ### P1 — 应该完成
 
-- [ ] **Go Conformance 模块升级** (~1-2天)
-  - `examples/gateway-api-conformance/go.mod` 中 `sigs.k8s.io/gateway-api` v1.4.0 → v1.5.0 ✅
-  - 适配新增的 conformance 测试用例
+- [x] **HTTP Redirect 新增状态码支持（303/307/308）**
+  - 代码无需改动 — `request_redirect.rs` 使用 `StatusCode::from_u16()` 转换，天然支持所有标准状态码，未做白名单限制
+  - 测试 YAML 已创建：`examples/test/conf/HTTPRoute/Filters/Redirect/EdgionPlugins_default_redirect-{303,307,308}.yaml` ✅
 
-- [ ] **HTTP Redirect 新增状态码支持** (~0.5天)
-  - 支持 303、307、308 状态码
-  - 涉及 `src/types/resources/http_route.rs` 和对应路由处理逻辑
+- [ ] **Go Conformance 模块升级**
+  - `examples/gateway-api-conformance/go.mod` 已将 `sigs.k8s.io/gateway-api` 升到 v1.5.0 ✅
+  - 待完成：适配新增的 conformance 测试用例
 
-- [ ] **Gateway ResolvedRefs 状态条件** (~1天)
+- [ ] **Gateway ResolvedRefs 状态条件**
   - Gateway status 新增 ResolvedRefs condition 上报
   - 涉及 `src/types/resources/gateway.rs` 和状态上报逻辑
 
-- [ ] **BackendTLSPolicy targetRef 限制检查** (~0.5天)
+- [ ] **BackendTLSPolicy targetRef 限制检查**
   - 确认实现是否已符合单 targetRef conformance 要求
+  - 涉及 `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs`
 
-- [ ] **CORS Origin CEL 验证收紧** (~0.5天)
+- [ ] **CORS Origin CEL 验证收紧**
   - 检查实验性 CORS 字段是否有不合规值
+  - 涉及 `src/core/gateway/plugins/runtime/gateway_api_filters/cors_filter.rs`
 
 ### P2 — 可选
 
-- [ ] **ListenerSet 支持** (~3-5天)
+- [ ] **ListenerSet 支持**
   - 新增 ListenerSet 类型定义和资源处理器
   - 已升级到 v1 (Standard channel)，可作为新功能单独规划
 
@@ -52,7 +56,10 @@
 - 确认项目最低支持的 Kubernetes 版本 — TLSRoute v1 的 CEL 验证要求 **K8s 1.31+**
 - 实验性 CRD 安装需使用 `kubectl apply --server-side`
 
-## 预计总工作量
+## 当前进度（2026-03-22）
 
-- 不含 ListenerSet：**5-8 个工作日**
-- 含 ListenerSet：**8-13 个工作日**
+**已完成：** P0 全部完成，P1 中 HTTP Redirect 已完成（代码天然兼容，测试配置已就位）
+
+**进行中：** Go Conformance 模块 go.mod 已升级，需适配新测试用例
+
+**未开始：** Gateway ResolvedRefs、BackendTLSPolicy targetRef 检查、CORS 验证收紧、ListenerSet

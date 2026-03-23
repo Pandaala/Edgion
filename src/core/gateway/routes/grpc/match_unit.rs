@@ -217,10 +217,7 @@ impl GrpcRouteRuleUnit {
     pub fn identifier(&self) -> String {
         format!(
             "{}/{} (rule:{}, match:{})",
-            self.matched_info.rsc.ns,
-            self.matched_info.rsc.name,
-            self.matched_info.rule_id,
-            self.matched_info.match_id
+            self.matched_info.rsc.ns, self.matched_info.rsc.name, self.matched_info.rule_id, self.matched_info.match_id
         )
     }
 }

@@ -1108,7 +1108,6 @@ impl DslTestSuite {
     // ==================== 场景 15: Range Iterate ====================
 
     fn test_range_iterate() -> TestCase {
-
         TestCase::new(
             "dsl_range_iterate",
             "DSL: range(1,4) iterate → X-Range-Sum: 6, X-Range-Len: 3 in response headers",
@@ -1163,10 +1162,7 @@ impl DslTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!(
-                        "http://{}:31180/test/dsl-regex-replace/v2/users",
-                        ctx.target_host
-                    );
+                    let url = format!("http://{}:31180/test/dsl-regex-replace/v2/users", ctx.target_host);
                     let response = ctx
                         .http_client
                         .get(url)
@@ -1181,10 +1177,7 @@ impl DslTestSuite {
                                 .and_then(|v| v.to_str().ok())
                                 .unwrap_or("");
                             if cleaned.contains("/latest/") && !cleaned.contains("/v2/") {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("X-Cleaned-Path: {}", cleaned),
-                                )
+                                TestResult::passed_with_message(start.elapsed(), format!("X-Cleaned-Path: {}", cleaned))
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
@@ -1206,10 +1199,7 @@ impl DslTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!(
-                        "http://{}:31180/test/dsl-regex-replace/users",
-                        ctx.target_host
-                    );
+                    let url = format!("http://{}:31180/test/dsl-regex-replace/users", ctx.target_host);
                     let response = ctx
                         .http_client
                         .get(url)
@@ -1224,15 +1214,9 @@ impl DslTestSuite {
                                 .and_then(|v| v.to_str().ok())
                                 .unwrap_or("");
                             if cleaned.contains("/test/dsl-regex-replace/users") {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Path unchanged: {}", cleaned),
-                                )
+                                TestResult::passed_with_message(start.elapsed(), format!("Path unchanged: {}", cleaned))
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Unexpected path: '{}'", cleaned),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Unexpected path: '{}'", cleaned))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -1251,10 +1235,7 @@ impl DslTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!(
-                        "http://{}:31180/test/dsl-trim-split/api",
-                        ctx.target_host
-                    );
+                    let url = format!("http://{}:31180/test/dsl-trim-split/api", ctx.target_host);
                     let response = ctx
                         .http_client
                         .get(url)
@@ -1282,10 +1263,7 @@ impl DslTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "X-Is-Admin='{}' X-Role-Count='{}'",
-                                        is_admin, count
-                                    ),
+                                    format!("X-Is-Admin='{}' X-Role-Count='{}'", is_admin, count),
                                 )
                             }
                         }
@@ -1303,10 +1281,7 @@ impl DslTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!(
-                        "http://{}:31180/test/dsl-trim-split/api",
-                        ctx.target_host
-                    );
+                    let url = format!("http://{}:31180/test/dsl-trim-split/api", ctx.target_host);
                     let response = ctx
                         .http_client
                         .get(url)
@@ -1330,10 +1305,7 @@ impl DslTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "has_admin={} X-Role-Count='{}'",
-                                        has_admin, count
-                                    ),
+                                    format!("has_admin={} X-Role-Count='{}'", has_admin, count),
                                 )
                             }
                         }
@@ -1353,10 +1325,7 @@ impl DslTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!(
-                        "http://{}:31180/test/dsl-break-continue/api",
-                        ctx.target_host
-                    );
+                    let url = format!("http://{}:31180/test/dsl-break-continue/api", ctx.target_host);
                     let response = ctx
                         .http_client
                         .get(url)
@@ -1376,10 +1345,7 @@ impl DslTestSuite {
                                 .and_then(|v| v.to_str().ok())
                                 .unwrap_or("");
                             if found == "target" && skipped == "1" {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "X-Found: target, X-Skipped: 1".into(),
-                                )
+                                TestResult::passed_with_message(start.elapsed(), "X-Found: target, X-Skipped: 1".into())
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),

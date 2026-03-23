@@ -25,8 +25,8 @@ use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::{MatchedInfo, Rsc};
 use crate::types::ResourceMeta;
+use crate::types::{MatchedInfo, Rsc};
 
 /// TLS Passthrough proxy service.
 ///

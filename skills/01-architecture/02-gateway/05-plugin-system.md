@@ -128,13 +128,74 @@ Gateway API 标准 filter（通过 `add_from_httproute_filters` 添加的）不�
 | 插件 | 模块 | 说明 |
 |------|------|------|
 | Mock | `mock` | 返回模拟响应（不转发到上游） |
-| DslPlugin | `dsl` | DSL 脚本引擎（内含 AST 解析器、编译器、VM） |
+| DslPlugin | `dsl` | DSL 脚本引擎（Parser→AST→Compiler→Bytecode→VM，~4700 行，详见下方 DSL 引擎章节） |
 | CtxSet | `ctx_set` | 设置请求上下文变量 |
 | JweDecrypt | `jwe_decrypt` | JWE 加密令牌解密 |
 | RequestMirrorPlugin | `request_mirror` | 请求镜像（复制请求到另一个后端） |
 | RequestRestriction | `request_restriction` | 请求限制（按路径、方法等） |
 | AllEndpointStatus | `all_endpoint_status` | 返回所有后端端点状态 |
 | DebugAccessLogToHeader | `debug_access_log` | 将 access log 信息写入响应头（调试用，UpstreamResponseFilter 阶段） |
+
+## DSL 脚本引擎（DslPlugin）
+
+> 源码：`src/core/gateway/plugins/http/dsl/`（~4700 行，含 `lang/` 子目录）
+> 增强设计文档：`docs/superpowers/specs/2026-03-22-dsl-plugin-enhancement-design.md`
+
+EdgionDSL 是轻量级请求/响应规则引擎，基于自研字节码 VM，定位为"零运行时依赖、编译时安全保证、亚毫秒级执行"。
+
+### 架构
+
+```
+源码/YAML → Parser(nom) → AST → Compiler → Bytecode(JSON/base64) → VM 执行
+```
+
+- **Parser**：nom combinator，解析预算 50k 次调用
+- **AST**：节点上限 2000，嵌套深度 ≤64
+- **Compiler**：类型检查、函数签名校验、正则编译期验证，输出字节码（≤256KB）
+- **VM**：同步栈式 VM，`catch_unwind` 隔离 panic
+
+### 已实现能力（39 个 Builtin）
+
+| 类别 | API |
+|------|-----|
+| Request 读取（15） | `req.header`/`method`/`path`/`query`/`query_string`/`cookie`/`client_ip`/`remote_ip`/`path_param`/`header_names`/`scheme`/`host`/`uri`/`content_type`/`has_header` |
+| Request 修改（6） | `req.set_header`/`append_header`/`remove_header`/`set_uri`/`set_host`/`set_method` |
+| Response 修改（3） | `resp.set_header`/`append_header`/`remove_header` |
+| Context KV（3） | `ctx.get`/`set`/`remove` |
+| 工具函数（12） | `log`/`len`/`substr`/`to_int`/`to_str`/`to_upper`/`to_lower`/`base64_encode`/`base64_decode`/`url_encode`/`url_decode`/`time_now` |
+
+语言特性：变量（let/let mut）、if/else、while、for-range、for-in、逻辑/比较/算术运算符、字符串方法（starts_with/ends_with/contains/matches）、`return deny(status, body)` / `return next()`。
+
+### 沙箱安全模型
+
+| 层 | 限制 |
+|----|------|
+| 解析 | 源码 ≤64KB，解析预算 50k，AST ≤2000 节点，嵌套 ≤64 |
+| 编译 | 指令 ≤1000，locals ≤64，常量 ≤256，正则语法检查 |
+| 运行时 | steps ≤10k，loop ≤100 次，calls ≤500，stack ≤128，string ≤8KB（均可 per-plugin 配置） |
+
+### 待实现增强（设计已完成）
+
+分三步实现（详见设计文档）：
+1. **Step-1（P0）**：实现 5 个 stub 函数（sha256/md5/regex_find/regex_replace/range-as-expr），仅改 `builtins.rs`
+2. **Step-2（P1）**：resp 读取（resp.status/resp.header/resp.has_header）+ break/continue
+3. **Step-3（P2）**：实现 UpstreamResponseFilter trait，支持响应阶段执行
+
+### 配置方式
+
+```yaml
+type: Dsl
+config:
+  name: "my-script"
+  source: |          # 内联源码（或用 bytecode: 预编译）
+    let auth = req.header("Authorization")
+    if auth == nil {
+      return deny(401, "Unauthorized")
+    }
+  errorPolicy: deny  # ignore | deny | denyWith
+  vmLimits:          # 可选，覆盖默认限制
+    maxSteps: 50000
+```
 
 ## Stream 插件
 

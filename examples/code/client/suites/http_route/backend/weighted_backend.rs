@@ -48,7 +48,8 @@ impl WeightedBackendTestSuite {
                                     if let Some(backend_name) = entry
                                         .data
                                         .get("backend_context")
-                                        .and_then(|bc| bc.get("rsc")).and_then(|rsc| rsc.get("name"))
+                                        .and_then(|bc| bc.get("rsc"))
+                                        .and_then(|rsc| rsc.get("name"))
                                         .and_then(|n| n.as_str())
                                     {
                                         *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;
@@ -125,7 +126,8 @@ impl WeightedBackendTestSuite {
                                     if let Some(backend_name) = entry
                                         .data
                                         .get("backend_context")
-                                        .and_then(|bc| bc.get("rsc")).and_then(|rsc| rsc.get("name"))
+                                        .and_then(|bc| bc.get("rsc"))
+                                        .and_then(|rsc| rsc.get("name"))
                                         .and_then(|n| n.as_str())
                                     {
                                         *backend_counts.entry(backend_name.to_string()).or_insert(0) += 1;

@@ -397,11 +397,15 @@ impl EdgionTlsTcpProxy {
                 listener_port: self.listener_port,
                 sni: sni.to_string(),
                 tls_id: ctx.tls_id.clone(),
-                rsc: ctx.matched.as_ref().map(|m| m.rsc.clone()).unwrap_or_else(|| crate::types::Rsc {
-                    kind: "TLSRoute".to_string(),
-                    ns: String::new(),
-                    name: String::new(),
-                }),
+                rsc: ctx
+                    .matched
+                    .as_ref()
+                    .map(|m| m.rsc.clone())
+                    .unwrap_or_else(|| crate::types::Rsc {
+                        kind: "TLSRoute".to_string(),
+                        ns: String::new(),
+                        name: String::new(),
+                    }),
                 is_mtls: ctx.is_mtls,
             };
             return match tls_runtime.run(&tls_ctx).await {

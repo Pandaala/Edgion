@@ -340,9 +340,21 @@ mod tests {
         assert!(engine.regex_set.is_some());
 
         // Find routes by name (since they're sorted by length)
-        let uuid_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "uuid").unwrap();
-        let date_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "date").unwrap();
-        let version_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "version").unwrap();
+        let uuid_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "uuid")
+            .unwrap();
+        let date_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "date")
+            .unwrap();
+        let version_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "version")
+            .unwrap();
 
         // Test UUID pattern
         assert!(uuid_route.matches_path("/items/550e8400-e29b-41d4-a716-446655440000"));
@@ -411,9 +423,21 @@ mod tests {
         let engine = RegexRoutesEngine::build(routes);
 
         // Find routes by name (since they're sorted by length)
-        let dots_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "dots").unwrap();
-        let question_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "question").unwrap();
-        let brackets_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "brackets").unwrap();
+        let dots_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "dots")
+            .unwrap();
+        let question_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "question")
+            .unwrap();
+        let brackets_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "brackets")
+            .unwrap();
 
         // Test escaped dot - literal dot, not any character
         assert!(dots_route.matches_path("/api.json"));

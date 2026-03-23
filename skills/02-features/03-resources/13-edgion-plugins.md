@@ -92,7 +92,7 @@ spec:
 |------|------|
 | `Mock` | Mock 响应（测试/原型） |
 | `DebugAccessLogToHeader` | 调试用：Access Log 注入响应头 |
-| `Dsl` | DSL 脚本插件（沙箱 VM 执行） |
+| `Dsl` | DSL 脚本插件（沙箱 VM 执行，详见架构 `01-architecture/02-gateway/05-plugin-system.md` DSL 引擎章节） |
 
 ## 插件执行阶段
 
