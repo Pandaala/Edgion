@@ -1,6 +1,6 @@
 use super::*;
-use crate::core::gateway::cache::lru::LocalLruCache;
-use crate::core::gateway::cli::config::get_default_auth_cache_capacity;
+use crate::core::gateway::cache::ShardedLruCache;
+use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay as auth_delay;
 
 impl OpenidConnect {
@@ -13,22 +13,30 @@ impl OpenidConnect {
             discovery_refresh: Arc::new(Mutex::new(())),
             jwks_state: Arc::new(RwLock::new(JwksState::default())),
             jwks_refresh: Arc::new(Mutex::new(())),
-            introspection_cache: Arc::new(LocalLruCache::new({
-                let cap = config.introspection_cache_capacity;
-                if cap == 0 {
+            introspection_cache: Arc::new(ShardedLruCache::new(
+                if config.introspection.lru_cache.capacity == 0 {
                     get_default_auth_cache_capacity()
                 } else {
-                    cap
-                }
-            })),
-            access_token_cache: Arc::new(LocalLruCache::new({
-                let cap = config.access_token_cache_capacity;
-                if cap == 0 {
+                    config.introspection.lru_cache.capacity
+                },
+                if config.introspection.lru_cache.shards > 0 {
+                    config.introspection.lru_cache.shards
+                } else {
+                    get_default_auth_cache_shards()
+                },
+            )),
+            access_token_cache: Arc::new(ShardedLruCache::new(
+                if config.access_token.lru_cache.capacity == 0 {
                     get_default_auth_cache_capacity()
                 } else {
-                    cap
-                }
-            })),
+                    config.access_token.lru_cache.capacity
+                },
+                if config.access_token.lru_cache.shards > 0 {
+                    config.access_token.lru_cache.shards
+                } else {
+                    get_default_auth_cache_shards()
+                },
+            )),
             refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),
             refresh_singleflight_results: Arc::new(Mutex::new(HashMap::new())),
         }

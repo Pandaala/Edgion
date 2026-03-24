@@ -1,5 +1,6 @@
 //! LDAP Auth plugin configuration
 
+use super::lru_cache_config::LruCacheConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -66,10 +67,10 @@ pub struct LdapAuthConfig {
     #[serde(default = "default_cache_ttl")]
     pub cache_ttl: u64,
 
-    /// LRU cache capacity (number of entries).
-    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    /// LRU cache configuration (capacity and sharding).
+    /// Omit or set fields to 0 to use global defaults.
     #[serde(default)]
-    pub cache_capacity: usize,
+    pub lru_cache: LruCacheConfig,
 
     /// LDAP connect/bind timeout in milliseconds
     #[serde(default = "default_timeout")]
@@ -147,7 +148,7 @@ impl Default for LdapAuthConfig {
             anonymous: None,
             realm: default_realm(),
             cache_ttl: default_cache_ttl(),
-            cache_capacity: 0,
+            lru_cache: LruCacheConfig::default(),
             timeout: default_timeout(),
             keepalive: default_keepalive(),
             credential_identifier_header: default_credential_identifier_header(),
@@ -247,7 +248,7 @@ mod tests {
     #[test]
     fn test_ldap_auth_cache_capacity_default_zero() {
         let cfg = LdapAuthConfig::default();
-        assert_eq!(cfg.cache_capacity, 0, "0 means use global default");
+        assert_eq!(cfg.lru_cache.capacity, 0, "0 means use global default");
     }
 
     #[test]

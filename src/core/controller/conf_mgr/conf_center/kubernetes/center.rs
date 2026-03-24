@@ -19,7 +19,7 @@ use super::config::{HaMode, KubernetesConfig};
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::storage::KubernetesStorage;
-use super::version_detection::resolve_endpoint_mode;
+use super::version_detection::{preflight_check_gateway_api_crds, resolve_endpoint_mode, validate_no_watch_kinds};
 use crate::core::controller::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -204,6 +204,7 @@ impl KubernetesCenter {
             "Creating Kubernetes controller"
         );
 
+        let no_watch_kinds = config.no_watch_kinds.iter().cloned().collect();
         KubernetesController::with_metadata_filter(
             client.clone(),
             config.gateway_class.clone(),
@@ -213,6 +214,7 @@ impl KubernetesCenter {
             config.label_selector.clone(),
             config.metadata_filter.clone(),
             endpoint_mode,
+            no_watch_kinds,
         )
     }
 
@@ -469,6 +471,11 @@ impl KubernetesCenter {
         );
 
         crate::core::gateway::backends::init_global_endpoint_mode(resolved_mode);
+
+        // 1.5 Validate and preflight check Gateway API CRDs
+        validate_no_watch_kinds(&self.config.no_watch_kinds);
+        let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
+        preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
 
         // 2. Create ConfigSyncServer (will be populated when caches are ready)
         let config_sync_server = Arc::new(ConfigSyncServer::new());
@@ -813,6 +820,11 @@ impl KubernetesCenter {
         };
 
         crate::core::gateway::backends::init_global_endpoint_mode(resolved_mode);
+
+        // Validate and preflight check Gateway API CRDs
+        validate_no_watch_kinds(&self.config.no_watch_kinds);
+        let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
+        preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
 
         let config_sync_server = Arc::new(ConfigSyncServer::new());
         config_sync_server.set_endpoint_mode(resolved_mode);

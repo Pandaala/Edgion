@@ -161,6 +161,23 @@ enum LifecycleEvent {
 
 ## Watcher 任务
 
+### Gateway API CRD 预检
+
+`start_event_watchers()` 和 `start_event_watchers_all_serve()` 在 endpoint mode 解析之后、创建 Controller 之前执行 CRD 预检（`preflight_check_gateway_api_crds()`）。
+
+预检逻辑（`version_detection.rs`）：
+- 对所有 Gateway API 资源（GatewayClass、Gateway、HTTPRoute、GRPCRoute、TLSRoute、ReferenceGrant、TCPRoute、UDPRoute、BackendTLSPolicy）逐个用 `Api::<DynamicObject>::list(limit=1)` 探测
+- `no_watch_kinds` 中列出的资源跳过探测
+- 任何未跳过但不存在的 CRD → 收集后一次性报错，controller 启动失败
+- 错误信息包含缺失资源列表、CRD 安装命令和 `no_watch_kinds` 配置提示
+
+`no_watch_kinds` 配置（`KubernetesConfig`）：
+- 值为 PascalCase kind name，如 `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`
+- 列出的资源：不探测、不 spawn watcher、从 `all_processor_kinds()` 排除
+- 只在 Kubernetes 模式下生效，FileSystem 模式无此配置
+
+### Watcher 任务
+
 `start_event_watchers()` 启动四个后台 tokio 任务：
 
 | Task | 职责 | 发送事件 |

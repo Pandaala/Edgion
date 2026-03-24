@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::cache::lru::LocalLruCache;
+use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::plugins::http::common::auth_common::{
     send_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
@@ -133,8 +133,8 @@ pub struct OpenidConnect {
     discovery_refresh: Arc<Mutex<()>>,
     jwks_state: Arc<RwLock<JwksState>>,
     jwks_refresh: Arc<Mutex<()>>,
-    introspection_cache: Arc<LocalLruCache<String, IntrospectionCacheEntry>>,
-    access_token_cache: Arc<LocalLruCache<String, AccessTokenCacheEntry>>,
+    introspection_cache: Arc<ShardedLruCache<String, IntrospectionCacheEntry>>,
+    access_token_cache: Arc<ShardedLruCache<String, AccessTokenCacheEntry>>,
     refresh_singleflight_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     refresh_singleflight_results: Arc<Mutex<HashMap<String, RefreshSingleflightResult>>>,
 }

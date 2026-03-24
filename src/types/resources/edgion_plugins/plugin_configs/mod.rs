@@ -17,6 +17,7 @@ mod jwe_decrypt;
 mod jwt_auth;
 mod key_auth;
 mod ldap_auth;
+mod lru_cache_config;
 mod mock;
 mod openid_connect;
 mod proxy_rewrite;
@@ -52,6 +53,7 @@ pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, 
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};
 pub use key_auth::{KeyAuthConfig, KeyMetadata};
 pub use ldap_auth::LdapAuthConfig;
+pub use lru_cache_config::LruCacheConfig;
 pub use mock::MockConfig;
 pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};
 pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, ProxyRewriteConfig, RegexUri};

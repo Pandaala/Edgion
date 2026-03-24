@@ -4,6 +4,7 @@
 //! If the auth service responds with 2xx, the request is forwarded to upstream.
 //! Otherwise, the auth service's response is returned to the client.
 
+use super::lru_cache_config::LruCacheConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -121,10 +122,10 @@ pub struct ForwardAuthConfig {
     #[serde(default)]
     pub cache_ttl: u64,
 
-    /// LRU cache capacity (number of entries).
-    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    /// LRU cache configuration (capacity and sharding).
+    /// Omit or set fields to 0 to use global defaults.
     #[serde(default)]
-    pub cache_capacity: usize,
+    pub lru_cache: LruCacheConfig,
 }
 
 fn default_method() -> String {
@@ -154,7 +155,7 @@ impl Default for ForwardAuthConfig {
             hide_credentials: false,
             auth_failure_delay_ms: 0,
             cache_ttl: 0,
-            cache_capacity: 0,
+            lru_cache: LruCacheConfig::default(),
         }
     }
 }

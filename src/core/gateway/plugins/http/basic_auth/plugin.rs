@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::cache::lru::LocalLruCache;
-use crate::core::gateway::cli::config::get_default_auth_cache_capacity;
+use crate::core::gateway::cache::ShardedLruCache;
+use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -35,7 +35,7 @@ pub struct BasicAuth {
     // or a pre-supplied hash (from htpasswd).
     user_passwords: Arc<HashMap<String, String>>,
     /// LRU cache: auth header value -> username (TTL-based, managed by LocalLruCache)
-    auth_cache: Arc<LocalLruCache<String, String>>,
+    auth_cache: Arc<ShardedLruCache<String, String>>,
     sf_group: Arc<DefaultGroup<bool>>,
     plugin_namespace: String,
     config: BasicAuthConfig,
@@ -44,15 +44,20 @@ pub struct BasicAuth {
 impl BasicAuth {
     /// Create a new BasicAuth plugin from configuration
     pub fn new(config: &BasicAuthConfig, plugin_namespace: String) -> Self {
-        let capacity = if config.cache_capacity == 0 {
+        let capacity = if config.lru_cache.capacity == 0 {
             get_default_auth_cache_capacity()
         } else {
-            config.cache_capacity
+            config.lru_cache.capacity
+        };
+        let shards = if config.lru_cache.shards > 0 {
+            config.lru_cache.shards
+        } else {
+            get_default_auth_cache_shards()
         };
         let mut plugin = BasicAuth {
             name: "BasicAuth".to_string(),
             user_passwords: Arc::new(HashMap::new()),
-            auth_cache: Arc::new(LocalLruCache::new(capacity)),
+            auth_cache: Arc::new(ShardedLruCache::new(capacity, shards)),
             sf_group: Arc::new(DefaultGroup::new()),
             plugin_namespace,
             config: config.clone(),
@@ -353,13 +358,17 @@ impl RequestFilter for BasicAuth {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+    use crate::types::resources::edgion_plugins::LruCacheConfig;
     use base64::engine::general_purpose;
 
     fn create_basic_auth_with_users() -> BasicAuth {
         let config = BasicAuthConfig {
             realm: "Test Realm".to_string(),
             cache_ttl: 300,
-            cache_capacity: 10,
+            lru_cache: LruCacheConfig {
+                capacity: 10,
+                ..Default::default()
+            },
             singleflight: false, // disable for deterministic tests
             ..Default::default()
         };
@@ -549,7 +558,10 @@ mod tests {
     fn test_basic_auth_cache_is_lru() {
         let config = BasicAuthConfig {
             cache_ttl: 60,
-            cache_capacity: 10,
+            lru_cache: LruCacheConfig {
+                capacity: 10,
+                ..Default::default()
+            },
             singleflight: false,
             resolved_users: Some(std::collections::HashMap::from([("u".to_string(), "p".to_string())])),
             ..Default::default()
@@ -563,7 +575,10 @@ mod tests {
         use std::collections::HashMap as StdMap;
         let config = BasicAuthConfig {
             cache_ttl: 300,
-            cache_capacity: 10,
+            lru_cache: LruCacheConfig {
+                capacity: 10,
+                ..Default::default()
+            },
             singleflight: false,
             resolved_users: Some(StdMap::from([("alice".to_string(), "pw".to_string())])),
             ..Default::default()
@@ -587,7 +602,10 @@ mod tests {
         use std::collections::HashMap as StdMap;
         let config = BasicAuthConfig {
             cache_ttl: 60,
-            cache_capacity: 10,
+            lru_cache: LruCacheConfig {
+                capacity: 10,
+                ..Default::default()
+            },
             singleflight: true, // enable singleflight
             resolved_users: Some(StdMap::from([("alice".to_string(), bcrypt_hash)])),
             ..Default::default()
@@ -615,7 +633,10 @@ mod tests {
         use std::collections::HashMap as StdMap;
         let config = BasicAuthConfig {
             cache_ttl: 0, // disable cache so we test the slow path
-            cache_capacity: 10,
+            lru_cache: LruCacheConfig {
+                capacity: 10,
+                ..Default::default()
+            },
             singleflight: true,
             resolved_users: Some(StdMap::from([("user".to_string(), sha1_hash.to_string())])),
             ..Default::default()

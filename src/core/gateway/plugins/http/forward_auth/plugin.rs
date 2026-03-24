@@ -55,8 +55,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::gateway::cache::lru::LocalLruCache;
-use crate::core::gateway::cli::config::get_default_auth_cache_capacity;
+use crate::core::gateway::cache::ShardedLruCache;
+use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::core::gateway::plugins::http::common::http_client::{get_http_client, is_hop_by_hop};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -66,18 +66,23 @@ use crate::types::resources::edgion_plugins::ForwardAuthConfig;
 pub struct ForwardAuth {
     name: String,
     config: ForwardAuthConfig,
-    auth_cache: Option<Arc<LocalLruCache<String, u16>>>,
+    auth_cache: Option<Arc<ShardedLruCache<String, u16>>>,
 }
 
 impl ForwardAuth {
     pub fn new(config: &ForwardAuthConfig) -> Self {
         let auth_cache = if config.cache_ttl > 0 {
-            let capacity = if config.cache_capacity == 0 {
+            let capacity = if config.lru_cache.capacity == 0 {
                 get_default_auth_cache_capacity()
             } else {
-                config.cache_capacity
+                config.lru_cache.capacity
             };
-            Some(Arc::new(LocalLruCache::new(capacity)))
+            let shards = if config.lru_cache.shards > 0 {
+                config.lru_cache.shards
+            } else {
+                get_default_auth_cache_shards()
+            };
+            Some(Arc::new(ShardedLruCache::new(capacity, shards)))
         } else {
             None
         };
@@ -351,6 +356,7 @@ impl RequestFilter for ForwardAuth {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+    use crate::types::resources::edgion_plugins::LruCacheConfig;
 
     fn create_valid_config() -> ForwardAuthConfig {
         ForwardAuthConfig {
@@ -507,7 +513,10 @@ mod tests {
         let config = ForwardAuthConfig {
             uri: "http://auth:8080/verify".to_string(),
             cache_ttl: 30,
-            cache_capacity: 10,
+            lru_cache: LruCacheConfig {
+                capacity: 10,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let plugin = ForwardAuth::new(&config);

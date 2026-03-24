@@ -1,11 +1,41 @@
 //! OpenID Connect plugin configuration
 
+use super::lru_cache_config::LruCacheConfig;
 use crate::types::resources::gateway::SecretObjectReference;
 use jsonwebtoken::Algorithm;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+
+/// A sub-section that holds LRU cache configuration.
+///
+/// Used inside `OpenidConnectConfig` so that both the introspection and
+/// access-token caches share the same `lruCache` key name:
+///
+/// ```yaml
+/// introspection:
+///   lruCache:
+///     capacity: 4096
+///     shards: 4
+/// accessToken:
+///   lruCache:
+///     capacity: 2048
+/// ```
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OidcCacheSection {
+    #[serde(default)]
+    pub lru_cache: LruCacheConfig,
+}
+
+impl Default for OidcCacheSection {
+    fn default() -> Self {
+        Self {
+            lru_cache: LruCacheConfig::default(),
+        }
+    }
+}
 
 /// Behavior when request is unauthenticated.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
@@ -125,15 +155,14 @@ pub struct OpenidConnectConfig {
     pub introspection_endpoint_auth_method: EndpointAuthMethod,
     #[serde(default)]
     pub introspection_cache_ttl: u64,
-    /// LRU capacity for introspection result cache.
-    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    /// Introspection result cache settings.
     #[serde(default)]
-    pub introspection_cache_capacity: usize,
+    pub introspection: OidcCacheSection,
 
-    /// LRU capacity for access token cache.
-    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    /// Access token cache settings.
     #[serde(default)]
-    pub access_token_cache_capacity: usize,
+    pub access_token: OidcCacheSection,
+
     #[serde(default)]
     pub token_endpoint_auth_method: EndpointAuthMethod,
 
@@ -281,8 +310,8 @@ impl Default for OpenidConnectConfig {
             introspection_endpoint: None,
             introspection_endpoint_auth_method: EndpointAuthMethod::default(),
             introspection_cache_ttl: 0,
-            introspection_cache_capacity: 0,
-            access_token_cache_capacity: 0,
+            introspection: OidcCacheSection::default(),
+            access_token: OidcCacheSection::default(),
             token_endpoint_auth_method: EndpointAuthMethod::default(),
             set_access_token_header: false,
             set_id_token_header: false,
@@ -453,8 +482,8 @@ mod tests {
     #[test]
     fn test_oidc_cache_capacity_defaults_zero() {
         let cfg = OpenidConnectConfig::default();
-        assert_eq!(cfg.introspection_cache_capacity, 0);
-        assert_eq!(cfg.access_token_cache_capacity, 0);
+        assert_eq!(cfg.introspection.lru_cache.capacity, 0);
+        assert_eq!(cfg.access_token.lru_cache.capacity, 0);
     }
 
     #[test]

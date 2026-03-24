@@ -10,8 +10,8 @@ use ldap3::{LdapConnAsync, LdapConnSettings};
 use pingora_http::ResponseHeader;
 use sha2::{Digest, Sha256};
 
-use crate::core::gateway::cache::lru::LocalLruCache;
-use crate::core::gateway::cli::config::get_default_auth_cache_capacity;
+use crate::core::gateway::cache::ShardedLruCache;
+use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -22,7 +22,7 @@ pub struct LdapAuth {
     name: String,
     config: LdapAuthConfig,
     ldap_url: String,
-    auth_cache: Arc<LocalLruCache<String, String>>,
+    auth_cache: Arc<ShardedLruCache<String, String>>,
 }
 
 #[derive(Debug)]
@@ -50,16 +50,21 @@ impl LdapAuth {
         let scheme = if config.ldaps { "ldaps" } else { "ldap" };
         let ldap_url = format!("{}://{}:{}", scheme, config.ldap_host, config.ldap_port);
 
-        let capacity = if config.cache_capacity == 0 {
+        let capacity = if config.lru_cache.capacity == 0 {
             get_default_auth_cache_capacity()
         } else {
-            config.cache_capacity
+            config.lru_cache.capacity
+        };
+        let shards = if config.lru_cache.shards > 0 {
+            config.lru_cache.shards
+        } else {
+            get_default_auth_cache_shards()
         };
         Self {
             name: "LdapAuth".to_string(),
             config: config.clone(),
             ldap_url,
-            auth_cache: Arc::new(LocalLruCache::new(capacity)),
+            auth_cache: Arc::new(ShardedLruCache::new(capacity, shards)),
         }
     }
 
@@ -321,6 +326,7 @@ impl RequestFilter for LdapAuth {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+    use crate::types::resources::edgion_plugins::LruCacheConfig;
 
     fn test_config() -> LdapAuthConfig {
         LdapAuthConfig {
@@ -412,7 +418,10 @@ mod tests {
     fn test_ldap_auth_cache_is_lru() {
         let config = LdapAuthConfig {
             cache_ttl: 60,
-            cache_capacity: 5,
+            lru_cache: LruCacheConfig {
+                capacity: 5,
+                ..Default::default()
+            },
             ldap_host: "localhost".to_string(),
             ldap_port: 389,
             base_dn: "dc=test,dc=com".to_string(),
@@ -426,7 +435,10 @@ mod tests {
     fn test_ldap_auth_store_and_check_cache() {
         let config = LdapAuthConfig {
             cache_ttl: 60,
-            cache_capacity: 5,
+            lru_cache: LruCacheConfig {
+                capacity: 5,
+                ..Default::default()
+            },
             ldap_host: "localhost".to_string(),
             ldap_port: 389,
             base_dn: "dc=test,dc=com".to_string(),
@@ -456,7 +468,10 @@ mod tests {
     fn test_ldap_auth_lru_evicts_oldest() {
         let config = LdapAuthConfig {
             cache_ttl: 60,
-            cache_capacity: 2,
+            lru_cache: LruCacheConfig {
+                capacity: 2,
+                ..Default::default()
+            },
             ldap_host: "localhost".to_string(),
             ldap_port: 389,
             base_dn: "dc=test,dc=com".to_string(),

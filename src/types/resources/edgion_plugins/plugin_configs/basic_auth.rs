@@ -1,5 +1,6 @@
 //! Basic Auth plugin configuration
 
+use super::lru_cache_config::LruCacheConfig;
 use crate::types::resources::gateway::SecretObjectReference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -29,10 +30,10 @@ pub struct BasicAuthConfig {
     #[serde(default = "default_basic_auth_cache_ttl")]
     pub cache_ttl: u64,
 
-    /// LRU cache capacity (number of entries).
-    /// Default: 0 (uses global auth_cache.default_capacity = 1024).
+    /// LRU cache configuration (capacity and sharding).
+    /// Omit or set fields to 0 to use global defaults.
     #[serde(default)]
-    pub cache_capacity: usize,
+    pub lru_cache: LruCacheConfig,
 
     /// Enable singleflight deduplication for concurrent bcrypt verifications.
     /// Only applies to bcrypt hashes (passwords starting with `$2`).
@@ -79,7 +80,7 @@ impl Default for BasicAuthConfig {
             hide_credentials: false,
             auth_failure_delay_ms: 0,
             cache_ttl: default_basic_auth_cache_ttl(),
-            cache_capacity: 0,
+            lru_cache: LruCacheConfig::default(),
             singleflight: default_basic_auth_singleflight(),
             realm: default_realm(),
             anonymous: None,
@@ -140,7 +141,7 @@ mod tests {
     fn test_basic_auth_cache_config_defaults() {
         let cfg = BasicAuthConfig::default();
         assert_eq!(cfg.cache_ttl, 300);
-        assert_eq!(cfg.cache_capacity, 0);
+        assert_eq!(cfg.lru_cache.capacity, 0);
         assert!(cfg.singleflight);
     }
 

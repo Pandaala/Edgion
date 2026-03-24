@@ -92,6 +92,15 @@ pub struct KubernetesConfig {
     /// - "all-serve": all replicas run watchers + gRPC; leader handles status + ACME
     #[serde(default)]
     pub ha_mode: HaMode,
+
+    /// Resource kinds to skip during CRD preflight check and not watch.
+    /// Listed kinds will not be probed, not spawned as watchers, and excluded
+    /// from processor readiness gating.
+    ///
+    /// Values are PascalCase kind names matching `ResourceKind::as_str()`.
+    /// Example: `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`
+    #[serde(default)]
+    pub no_watch_kinds: Vec<String>,
 }
 
 impl KubernetesConfig {
@@ -107,6 +116,7 @@ impl KubernetesConfig {
             endpoint_mode: EndpointMode::default(),
             gateway_address: None,
             ha_mode: HaMode::default(),
+            no_watch_kinds: Vec::new(),
         }
     }
 
@@ -189,6 +199,11 @@ impl KubernetesConfig {
     /// Get HA mode
     pub fn ha_mode(&self) -> HaMode {
         self.ha_mode
+    }
+
+    /// Get no_watch_kinds
+    pub fn no_watch_kinds(&self) -> &[String] {
+        &self.no_watch_kinds
     }
 }
 

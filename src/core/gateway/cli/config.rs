@@ -505,6 +505,7 @@ pub fn get_min_estimator_slots() -> usize {
 // ============================================
 
 const DEFAULT_AUTH_CACHE_CAPACITY: usize = 1024;
+const DEFAULT_AUTH_CACHE_SHARDS: usize = 0;
 
 fn default_auth_cache_capacity() -> usize {
     DEFAULT_AUTH_CACHE_CAPACITY
@@ -517,6 +518,7 @@ fn default_auth_cache_capacity() -> usize {
 /// ```toml
 /// [auth_cache]
 /// default_capacity = 1024
+/// default_shards = 0
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -524,13 +526,20 @@ pub struct AuthCacheGlobalConfig {
     /// Default LRU capacity for all auth plugins (default: 1024 entries).
     #[serde(default = "default_auth_cache_capacity")]
     pub default_capacity: usize,
+
+    /// Default number of cache shards for all auth plugins (default: 0 = disabled).
+    /// When > 1, the cache is split into N independent LRU shards to reduce
+    /// lock contention under high concurrency. Each shard holds
+    /// `ceil(capacity / shards)` entries.
+    #[serde(default)]
+    pub default_shards: usize,
 }
 
 impl Default for AuthCacheGlobalConfig {
     fn default() -> Self {
-        // Uses the same constant as default_auth_cache_capacity() to prevent drift
         Self {
             default_capacity: DEFAULT_AUTH_CACHE_CAPACITY,
+            default_shards: DEFAULT_AUTH_CACHE_SHARDS,
         }
     }
 }
@@ -550,6 +559,15 @@ pub fn get_default_auth_cache_capacity() -> usize {
         .get()
         .map(|c| c.default_capacity)
         .unwrap_or(DEFAULT_AUTH_CACHE_CAPACITY)
+}
+
+/// Get the default auth cache shard count.
+/// Returns 0 (disabled) if not configured.
+pub fn get_default_auth_cache_shards() -> usize {
+    AUTH_CACHE_GLOBAL_CONFIG
+        .get()
+        .map(|c| c.default_shards)
+        .unwrap_or(DEFAULT_AUTH_CACHE_SHARDS)
 }
 
 impl EdgionGatewayConfig {

@@ -42,6 +42,7 @@ use kube::runtime::WatchStreamExt;
 use kube::{Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -333,6 +334,8 @@ pub struct KubernetesController {
     endpoint_mode: EndpointMode,
     /// Leader handle for gating status writes in all-serve HA mode
     leader_handle: Option<super::leader_election::LeaderHandle>,
+    /// Resource kinds to skip (not watch, not register, not probe)
+    no_watch_kinds: HashSet<String>,
 }
 
 impl KubernetesController {
@@ -355,6 +358,7 @@ impl KubernetesController {
             label_selector,
             MetadataFilterConfig::default(),
             endpoint_mode,
+            HashSet::new(),
         )
     }
 
@@ -371,6 +375,7 @@ impl KubernetesController {
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
         endpoint_mode: EndpointMode,
+        no_watch_kinds: HashSet<String>,
     ) -> Result<Self> {
         let watch_mode = NamespaceWatchMode::from_namespaces(watch_namespaces);
 
@@ -383,6 +388,7 @@ impl KubernetesController {
             gateway_address = ?gateway_address,
             metadata_filter_enabled = true,
             endpoint_mode = ?endpoint_mode,
+            no_watch_kinds = ?no_watch_kinds,
             "Creating Kubernetes controller"
         );
 
@@ -396,6 +402,7 @@ impl KubernetesController {
             metadata_filter: Some(metadata_filter),
             endpoint_mode,
             leader_handle: None,
+            no_watch_kinds,
         })
     }
 
@@ -447,6 +454,7 @@ impl KubernetesController {
         if self.endpoint_mode.uses_endpoint_slice() {
             kinds.push("EndpointSlice");
         }
+        kinds.retain(|k| !self.no_watch_kinds.contains(*k));
         kinds
     }
 
@@ -455,24 +463,34 @@ impl KubernetesController {
     /// This includes both Phase 1 foundation resources and Phase 2 dependent
     /// resources. The namespace watcher is intentionally excluded because it
     /// does not participate in PROCESSOR_REGISTRY readiness gating.
+    /// Kinds listed in `no_watch_kinds` are excluded.
     pub(crate) fn all_processor_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.phase1_kinds();
-        kinds.extend([
-            "HTTPRoute",
-            "GRPCRoute",
-            "TCPRoute",
-            "UDPRoute",
-            "TLSRoute",
-            "EdgionTls",
-            "BackendTLSPolicy",
-            "EdgionPlugins",
-            "EdgionStreamPlugins",
-            "PluginMetaData",
-            "LinkSys",
-            "EdgionAcme",
-            "EdgionGatewayConfig",
-        ]);
+        kinds.extend(
+            [
+                "HTTPRoute",
+                "GRPCRoute",
+                "TCPRoute",
+                "UDPRoute",
+                "TLSRoute",
+                "EdgionTls",
+                "BackendTLSPolicy",
+                "EdgionPlugins",
+                "EdgionStreamPlugins",
+                "PluginMetaData",
+                "LinkSys",
+                "EdgionAcme",
+                "EdgionGatewayConfig",
+            ]
+            .into_iter()
+            .filter(|k| !self.no_watch_kinds.contains(*k)),
+        );
         kinds
+    }
+
+    /// Check if a resource kind should be watched
+    fn should_watch(&self, kind: &str) -> bool {
+        !self.no_watch_kinds.contains(kind)
     }
 
     /// Internal method to run all controllers with phased initialization.
@@ -521,34 +539,44 @@ impl KubernetesController {
         );
 
         // Cluster-scoped foundation
-        h.push(spawn_cluster::<GatewayClass, _>(
-            self,
-            "GatewayClass",
-            GatewayClassHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
+        if self.should_watch("GatewayClass") {
+            h.push(spawn_cluster::<GatewayClass, _>(
+                self,
+                "GatewayClass",
+                GatewayClassHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
 
         // Gateway (needs GatewayClass, filter by gateway_class)
-        h.push(spawn::<Gateway, _>(
-            self,
-            "Gateway",
-            GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
-            &ctx,
-        ));
+        if self.should_watch("Gateway") {
+            h.push(spawn::<Gateway, _>(
+                self,
+                "Gateway",
+                GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
+                &ctx,
+            ));
+        }
 
         // Secret (TLS certificates, auth credentials)
-        h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
+        if self.should_watch("Secret") {
+            h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
+        }
 
         // ReferenceGrant (cross-namespace reference validation)
-        h.push(spawn::<ReferenceGrant, _>(
-            self,
-            "ReferenceGrant",
-            ReferenceGrantHandler::new(),
-            &ctx,
-        ));
+        if self.should_watch("ReferenceGrant") {
+            h.push(spawn::<ReferenceGrant, _>(
+                self,
+                "ReferenceGrant",
+                ReferenceGrantHandler::new(),
+                &ctx,
+            ));
+        }
 
         // Service (Route backend references)
-        h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
+        if self.should_watch("Service") {
+            h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
+        }
 
         // Endpoint resources (Route backend address resolution)
         if self.endpoint_mode.uses_endpoint() {
@@ -620,87 +648,113 @@ impl KubernetesController {
         );
 
         // Route resources
-        h.push(spawn::<HTTPRoute, _>(
-            self,
-            "HTTPRoute",
-            HttpRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<GRPCRoute, _>(
-            self,
-            "GRPCRoute",
-            GrpcRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<TCPRoute, _>(
-            self,
-            "TCPRoute",
-            TcpRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<UDPRoute, _>(
-            self,
-            "UDPRoute",
-            UdpRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<TLSRoute, _>(
-            self,
-            "TLSRoute",
-            TlsRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
+        if self.should_watch("HTTPRoute") {
+            h.push(spawn::<HTTPRoute, _>(
+                self,
+                "HTTPRoute",
+                HttpRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("GRPCRoute") {
+            h.push(spawn::<GRPCRoute, _>(
+                self,
+                "GRPCRoute",
+                GrpcRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("TCPRoute") {
+            h.push(spawn::<TCPRoute, _>(
+                self,
+                "TCPRoute",
+                TcpRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("UDPRoute") {
+            h.push(spawn::<UDPRoute, _>(
+                self,
+                "UDPRoute",
+                UdpRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("TLSRoute") {
+            h.push(spawn::<TLSRoute, _>(
+                self,
+                "TLSRoute",
+                TlsRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
 
         // TLS related (depend on Secret being in cache)
-        h.push(spawn::<EdgionTls, _>(
-            self,
-            "EdgionTls",
-            EdgionTlsHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<BackendTLSPolicy, _>(
-            self,
-            "BackendTLSPolicy",
-            BackendTlsPolicyHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
+        if self.should_watch("EdgionTls") {
+            h.push(spawn::<EdgionTls, _>(
+                self,
+                "EdgionTls",
+                EdgionTlsHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("BackendTLSPolicy") {
+            h.push(spawn::<BackendTLSPolicy, _>(
+                self,
+                "BackendTLSPolicy",
+                BackendTlsPolicyHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
 
         // Plugin resources
-        h.push(spawn::<EdgionPlugins, _>(
-            self,
-            "EdgionPlugins",
-            EdgionPluginsHandler::new(),
-            &ctx,
-        ));
-        h.push(spawn::<EdgionStreamPlugins, _>(
-            self,
-            "EdgionStreamPlugins",
-            EdgionStreamPluginsHandler::new(),
-            &ctx,
-        ));
-        h.push(spawn::<PluginMetaData, _>(
-            self,
-            "PluginMetaData",
-            PluginMetadataHandler::new(),
-            &ctx,
-        ));
-        h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
+        if self.should_watch("EdgionPlugins") {
+            h.push(spawn::<EdgionPlugins, _>(
+                self,
+                "EdgionPlugins",
+                EdgionPluginsHandler::new(),
+                &ctx,
+            ));
+        }
+        if self.should_watch("EdgionStreamPlugins") {
+            h.push(spawn::<EdgionStreamPlugins, _>(
+                self,
+                "EdgionStreamPlugins",
+                EdgionStreamPluginsHandler::new(),
+                &ctx,
+            ));
+        }
+        if self.should_watch("PluginMetaData") {
+            h.push(spawn::<PluginMetaData, _>(
+                self,
+                "PluginMetaData",
+                PluginMetadataHandler::new(),
+                &ctx,
+            ));
+        }
+        if self.should_watch("LinkSys") {
+            h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
+        }
 
         // ACME
-        h.push(spawn::<EdgionAcme, _>(
-            self,
-            "EdgionAcme",
-            EdgionAcmeHandler::new(),
-            &ctx,
-        ));
+        if self.should_watch("EdgionAcme") {
+            h.push(spawn::<EdgionAcme, _>(
+                self,
+                "EdgionAcme",
+                EdgionAcmeHandler::new(),
+                &ctx,
+            ));
+        }
 
         // Cluster-scoped dependent
-        h.push(spawn_cluster::<EdgionGatewayConfig, _>(
-            self,
-            "EdgionGatewayConfig",
-            EdgionGatewayConfigHandler::new(),
-            &ctx,
-        ));
+        if self.should_watch("EdgionGatewayConfig") {
+            h.push(spawn_cluster::<EdgionGatewayConfig, _>(
+                self,
+                "EdgionGatewayConfig",
+                EdgionGatewayConfigHandler::new(),
+                &ctx,
+            ));
+        }
 
         // Drop our copy of the sender so we can detect when all controllers stop
         drop(relink_tx);

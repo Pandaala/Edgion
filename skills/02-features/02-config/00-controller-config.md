@@ -66,6 +66,7 @@ endpoint_mode = "EndpointSlice"            # EndpointSlice | Endpoints | Both
 # endpoint_mode = "EndpointSlice"
 # gateway_address = ""                     # Gateway status 报告地址
 # ha_mode = "leader-only"                  # "leader-only" | "all-serve"
+# no_watch_kinds = ["TCPRoute", "UDPRoute"] # 跳过 CRD 预检和 watch 的资源 kind
 #
 # [conf_center.leader_election]
 # lease_name = "edgion-controller-leader"
@@ -148,6 +149,7 @@ CLI 特例：
 | `endpoint_mode` | `String` | `EndpointSlice` | 后端发现模式 |
 | `gateway_address` | `String?` | — | Gateway status 中报告的地址 |
 | `ha_mode` | `String` | — | `"leader-only"` 或 `"all-serve"` |
+| `no_watch_kinds` | `Vec<String>` | `[]` | 不探测/不 watch 的资源 kind（PascalCase），如 `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`。启动时跳过 CRD 预检，不 spawn watcher，从 processor readiness 中排除 |
 
 ### [conf_center.leader_election]
 
