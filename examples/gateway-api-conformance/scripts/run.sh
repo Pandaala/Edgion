@@ -9,6 +9,9 @@ CLEANUP="${CLEANUP:-false}"
 DEBUG="${DEBUG:-true}"
 RUN_TEST="${RUN_TEST:-}"
 REPORT_OUTPUT="${REPORT_OUTPUT:-$CONFORMANCE_ROOT/conformance-report.yaml}"
+# ⚠ GATEWAY-GRPC declared but not yet validated against real conformance run.
+# GATEWAY-TLS not declared — needs SupportTLSRoute + status condition work first.
+CONFORMANCE_PROFILES="${CONFORMANCE_PROFILES:-GATEWAY-HTTP,GATEWAY-GRPC}"
 TIMEOUT="${TIMEOUT:-30m}"
 
 # Default: Core features only.
@@ -30,6 +33,8 @@ Options:
   --no-debug                   Disable debug output
   --timeout <duration>         Test timeout (default: 30m)
   --report <path>              Conformance report output path
+  --conformance-profiles <list> Comma-separated conformance profile list
+                               (default: GATEWAY-HTTP; options: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS)
   --port-forward               Auto-start kubectl port-forward and route traffic
                                through localhost (for clusters with unreachable pod IPs)
   -h, --help                   Show this help
@@ -56,6 +61,7 @@ PORT_FORWARD="${PORT_FORWARD:-false}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gateway-class)       GATEWAY_CLASS="$2";       shift 2 ;;
+    --conformance-profiles) CONFORMANCE_PROFILES="$2"; shift 2 ;;
     --supported-features)  SUPPORTED_FEATURES="$2";  shift 2 ;;
     --run-test)            RUN_TEST="$2";             shift 2 ;;
     --cleanup)             CLEANUP=true;              shift   ;;
@@ -85,6 +91,7 @@ done
 
 echo "=== Gateway API Conformance Tests ==="
 echo "  GatewayClass      : ${GATEWAY_CLASS}"
+echo "  Conformance profiles: ${CONFORMANCE_PROFILES}"
 echo "  Supported features: ${SUPPORTED_FEATURES:-<all>}"
 echo "  Cleanup            : ${CLEANUP}"
 echo "  Debug              : ${DEBUG}"
@@ -107,6 +114,7 @@ ARGS=(
   "-version=dev"
   "-contact=@edgion"
   "-report-output=${REPORT_OUTPUT}"
+  "-conformance-profiles=${CONFORMANCE_PROFILES}"
 )
 
 if [[ -n "${SUPPORTED_FEATURES}" ]]; then

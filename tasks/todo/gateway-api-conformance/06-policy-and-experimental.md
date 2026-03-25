@@ -2,11 +2,13 @@
 
 优先级: P2
 
+---
+
 ## 1. BackendTrafficPolicy
 
 ### 规范描述
 
-Gateway API v1.4 引入实验性 BackendTrafficPolicy，用于在策略附着层级配置：
+Gateway API v1.4 引入实验性 BackendTrafficPolicy CRD，在策略附着层级配置：
 - 连接池管理（max connections、idle timeout）
 - 熔断器（circuit breaking）
 - 健康检查策略
@@ -14,35 +16,29 @@ Gateway API v1.4 引入实验性 BackendTrafficPolicy，用于在策略附着层
 
 ### 当前状态
 
-Edgion 无此资源定义。相关功能分散在：
-- `health_check.rs` — 健康检查配置
-- `edgion_gateway_config.rs` — 全局连接配置
-- `tasks/todo/circuit-breaker/` — 熔断器已在计划中
+- **无 BackendTrafficPolicy CRD 或类型定义**
+- 熔断器已通过 Service annotation `edgion.io/circuit-breaker` 完整实现（`src/core/gateway/backends/circuit_breaker/`），包含弹出逻辑、LB 过滤、Prometheus 指标、集成测试
+- 健康检查通过 `health_check.rs` 配置
+- 全局连接配置在 `edgion_gateway_config.rs`
+- 这些功能分散实现，未统一到标准 BTP 模型
+
+### 差距
+
+Edgion 的功能实质已部分覆盖 BTP 的范围，但通过 annotation 而非标准 CRD 暴露，不符合 Gateway API 标准路径。
 
 ### 建议
 
-- 先完成 circuit-breaker 任务
-- 后续考虑将连接池、熔断、健康检查统一到 BackendTrafficPolicy 模型
+- 低优先级：等 BTP 从实验性毕业到 GA 后再考虑统一
+- 当前 annotation 方式对用户可用，功能完整
 
 ---
 
-## 2. externalAuth 原生过滤器 (GEP-1494)
+## ~~2. ExternalAuth 原生过滤器 (GEP-1494)~~ ✅ 已完成
 
-### 规范描述
-
-Gateway API 实验性 `type: ExternalAuth` 过滤器，标准化外部认证机制。
-
-### 当前状态
-
-- Edgion 有 `ForwardAuth` 插件，功能等价
-- 但仅通过 `ExtensionRef` 使用，非一等过滤器类型
-- 用户需要知道 Edgion 特有的插件名称
-
-### 建议
-
-- 在 `HTTPRouteFilterType` 枚举中添加 `ExternalAuth` 变体
-- 内部映射到现有 `ForwardAuth` 实现
-- 保持 ExtensionRef 方式的向后兼容
+- `HTTPRouteFilterType` 添加 `ExternalAuth` 变体
+- `HTTPRouteFilter` 添加 `external_auth: Option<ForwardAuthConfig>` 字段
+- `plugin_runtime.rs` 中 `ExternalAuth` 分支映射到 `ForwardAuth::new`
+- ExtensionRef 方式保留向后兼容
 
 ---
 
@@ -50,11 +46,11 @@ Gateway API 实验性 `type: ExternalAuth` 过滤器，标准化外部认证机�
 
 ### 规范描述
 
-Extended 功能，允许用户请求基础设施资源（如 IP 地址、负载均衡器类型等）。
+Extended 功能，允许用户请求基础设施资源（IP 地址、负载均衡器类型等）。
 
 ### 当前状态
 
-`GatewaySpec` 无 `infrastructure` 字段。
+- `GatewaySpec`（`src/types/resources/gateway.rs:29-40`）仅有 `gateway_class_name`、`listeners`、`addresses`，无 `infrastructure` 字段
 
 ### 建议
 
@@ -62,30 +58,29 @@ Extended 功能，允许用户请求基础设施资源（如 IP 地址、负载�
 
 ---
 
-## 4. frontendValidation 标准化
+## ~~4. frontendValidation 标准化~~ ✅ 已完成
 
-### 现状
+### 实现方案
 
-- mTLS 客户端认证通过 Edgion 私有 `EdgionTls.client_auth` 实现
-- 功能完整：CA ref、验证深度、SAN/CN 白名单
-- 但不遵循 Gateway API 标准 `listener.tls.frontendValidation` 字段
-
-### 建议
-
-- 添加 `frontendValidation` 字段到 Gateway listener TLS 配置
-- 与 EdgionTls 的 client_auth 配置做合并/映射
-- EdgionTls 保留作为更丰富的扩展方式
+- `GatewayTLSConfig` 新增 `frontend_validation` 字段（`FrontendTLSValidation` 结构体，含 `ca_certificate_refs`）
+- Controller 侧：`parse()` 解析 CA Secret 引用并填充 `resolved_frontend_ca_secrets`；`validate_listener_resolved_refs()` 校验 CA cert refs（kind、group、Secret 存在性、`ca.crt` key、跨命名空间 ReferenceGrant）
+- Gateway 侧：`GatewayTlsEntry` 携带 frontendValidation 数据；TLS 握手时 `configure_gateway_frontend_mtls()` 创建 X509Store 并设置 `PEER | FAIL_IF_NO_PEER_CERT` verify mode
+- `handshake_complete_callback` 中增加 `is_mtls` 条件提取客户端证书信息
+- `supportedFeatures` 声明 `GatewayFrontendClientCertificateValidation`
+- 与 EdgionTls `client_auth`（SAN/CN 白名单、verify depth 等）完全独立，两条路径互不映射
 
 ---
 
 ## 5. ConformanceProfiles 声明
 
-### 现状
+### 规范描述
 
-- conformance test 使用 `SupportedFeatures` 集合但未声明 ConformanceProfiles
-- v1.1+ conformance 框架支持基于 profile 的报告
+v1.1+ conformance 框架支持基于 profile 的报告，声明 `HTTPConformanceProfile`、`GRPCConformanceProfile` 等。
 
-### 建议
+### 当前状态
 
-- 在 conformance test 中声明 `HTTPConformanceProfile`、`GRPCConformanceProfile` 等
-- 生成标准化的 conformance 报告
+- ✅ 已实现：`conformance_test.go` 声明 `GATEWAY-HTTP` ConformanceProfile
+- ⚠️ 已声明：`GATEWAY-GRPC` profile 已加入 conformance_test.go 和 run.sh，但未实际跑过 conformance test。GRPCRoute 功能（exact/header/hostname/weight 匹配）已实现，可能需要修 status condition 才能全部通过。
+- ✅ 已实现：`run.sh` 支持 `--conformance-profiles` 参数，默认 `GATEWAY-HTTP,GATEWAY-GRPC`
+- ✅ 报告生成已由 `-report-output` 和 `-conformance-profiles` 联动支持
+- 待实现：GATEWAY-TLS profile — TLS Passthrough 已实现，但 conformance tests 从未跑过，需加 `SupportTLSRoute` 并修 status conditions（ResolvedRefs、supportedKinds）后再声明

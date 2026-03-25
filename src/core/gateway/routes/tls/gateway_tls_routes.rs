@@ -132,30 +132,6 @@ mod tests {
         }
     }
 
-    fn create_test_tls_route_no_hostname(namespace: &str, name: &str) -> TLSRoute {
-        TLSRoute {
-            metadata: kube::api::ObjectMeta {
-                namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            spec: TLSRouteSpec {
-                parent_refs: Some(vec![ParentReference {
-                    group: Some("gateway.networking.k8s.io".to_string()),
-                    kind: Some("Gateway".to_string()),
-                    namespace: Some(namespace.to_string()),
-                    name: "test-gateway".to_string(),
-                    section_name: None,
-                    port: None,
-                }]),
-                hostnames: None,
-                rules: Some(vec![]),
-                resolved_ports: None,
-            },
-            status: None,
-        }
-    }
-
     #[test]
     fn test_exact_match() {
         let route1 = Arc::new(create_test_tls_route("default", "route1", "test.example.com"));

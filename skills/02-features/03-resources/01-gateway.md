@@ -53,6 +53,11 @@ spec:
             namespace: default                   # 可选：跨命名空间需 ReferenceGrant
             kind: Secret                         # 默认 Secret
             group: ""                            # 默认 core group
+        frontendValidation:                      # 可选：Gateway API 标准 mTLS 客户端证书验证
+          caCertificateRefs:                     # CA 证书 Secret 引用（必须含 ca.crt key）
+            - name: client-ca
+              kind: Secret
+              group: ""
         options:                                 # Edgion 扩展选项
           edgion.io/cert-provider: "edgion-tls"  # 证书来源："secret"(默认) | "edgion-tls"
 

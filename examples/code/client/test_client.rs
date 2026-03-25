@@ -122,6 +122,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "tls-passthrough" | "tlspassthrough" => "TLSRoute/Passthrough".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
+            "frontend-validation" | "frontendvalidation" | "fv-mtls" => "Gateway/FrontendValidation".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
@@ -190,6 +191,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
         "Gateway/TLS/NoHostnameListener" => "Gateway/TLS/NoHostnameListener",
+        "Gateway/FrontendValidation" => "Gateway/FrontendValidation",
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
@@ -515,6 +517,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GatewayTlsNoHostnameListenerTestSuite));
+        }
+        "Gateway/FrontendValidation" => {
+            if !gateway {
+                eprintln!("Error: Gateway/FrontendValidation tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::FrontendValidationTestSuite));
         }
         "EdgionPlugins/DebugAccessLog" => {
             if !gateway {

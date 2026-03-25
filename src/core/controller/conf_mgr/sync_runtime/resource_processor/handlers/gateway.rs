@@ -216,6 +216,48 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         tls_config.secrets = Some(resolved_secrets);
                     }
                 }
+
+                // Resolve frontend validation CA certificates
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
+                if let Some(ref fv) = tls_config.frontend_validation {
+                    if let Some(ca_refs) = &fv.ca_certificate_refs {
+                        let mut resolved_ca_secrets = Vec::new();
+
+                        for ca_ref in ca_refs {
+                            let ca_ns = ca_ref.namespace.as_ref().or(g.metadata.namespace.as_ref());
+                            let secret_key = format_secret_key(ca_ns, &ca_ref.name);
+
+                            ctx.secret_ref_manager()
+                                .add_ref(secret_key.clone(), resource_ref.clone());
+
+                            let ca_ns_str = ca_ns.map(|s| s.as_str()).unwrap_or("");
+                            if ca_ns_str != gateway_ns {
+                                cross_ns_manager.add_ref(ca_ns_str.to_string(), cross_ns_ref.clone());
+                            }
+
+                            if let Some(secret) = get_secret(ca_ns.map(|s| s.as_str()), &ca_ref.name) {
+                                resolved_ca_secrets.push(secret);
+                                tracing::debug!(
+                                    gateway = %resource_ref.key(),
+                                    listener = %listener.name,
+                                    secret_key = %secret_key,
+                                    "Frontend CA Secret resolved"
+                                );
+                            } else {
+                                tracing::info!(
+                                    gateway = %resource_ref.key(),
+                                    listener = %listener.name,
+                                    secret_key = %secret_key,
+                                    "Frontend CA Secret not found yet, will be updated when Secret arrives"
+                                );
+                            }
+                        }
+
+                        if !resolved_ca_secrets.is_empty() {
+                            tls_config.resolved_frontend_ca_secrets = Some(resolved_ca_secrets);
+                        }
+                    }
+                }
             }
         }
 
@@ -739,6 +781,81 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
                     namespace: cert_ns.to_string(),
                     name: cert_ref.name.clone(),
                 });
+            }
+        }
+    }
+
+    // Validate frontend validation CA certificate refs
+    if let Some(ref fv) = tls.frontend_validation {
+        if let Some(ca_refs) = &fv.ca_certificate_refs {
+            for ca_ref in ca_refs {
+                let ca_kind = ca_ref.kind.as_deref().unwrap_or("Secret");
+                if ca_kind != "Secret" {
+                    errors.push(GatewayResolvedRefsError::InvalidCertRef {
+                        kind: format!("frontendValidation: unsupported kind '{}'", ca_kind),
+                    });
+                    continue;
+                }
+
+                let ca_group = ca_ref.group.as_deref().unwrap_or("");
+                if !is_core_api_group(ca_group) {
+                    errors.push(GatewayResolvedRefsError::InvalidCertRef {
+                        kind: format!("frontendValidation: unsupported group '{}'", ca_group),
+                    });
+                    continue;
+                }
+
+                let ca_ns = ca_ref
+                    .namespace
+                    .as_deref()
+                    .or(gateway.metadata.namespace.as_deref())
+                    .unwrap_or("default");
+
+                match get_secret(Some(ca_ns), &ca_ref.name) {
+                    None => {
+                        errors.push(GatewayResolvedRefsError::SecretNotFound {
+                            namespace: ca_ns.to_string(),
+                            name: ca_ref.name.clone(),
+                        });
+                    }
+                    Some(secret) => {
+                        use crate::types::constants::secret_keys::tls;
+                        if let Some(data) = &secret.data {
+                            if !data.contains_key(tls::CA_CERT) {
+                                errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                    namespace: ca_ns.to_string(),
+                                    name: ca_ref.name.clone(),
+                                    reason: format!("missing required key '{}'", tls::CA_CERT),
+                                });
+                            }
+                        } else {
+                            errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                namespace: ca_ns.to_string(),
+                                name: ca_ref.name.clone(),
+                                reason: "Secret has no data".to_string(),
+                            });
+                        }
+                    }
+                }
+
+                // Cross-namespace ReferenceGrant check for frontend CA refs
+                if gateway_ns != ca_ns && is_reference_grant_validation_enabled() {
+                    let allowed = get_global_reference_grant_store().check_reference_allowed(
+                        gateway_ns,
+                        "gateway.networking.k8s.io",
+                        "Gateway",
+                        ca_ns,
+                        "",
+                        "Secret",
+                        Some(&ca_ref.name),
+                    );
+                    if !allowed {
+                        errors.push(GatewayResolvedRefsError::RefNotPermitted {
+                            namespace: ca_ns.to_string(),
+                            name: ca_ref.name.clone(),
+                        });
+                    }
+                }
             }
         }
     }

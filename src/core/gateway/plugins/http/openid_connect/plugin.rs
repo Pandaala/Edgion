@@ -120,7 +120,7 @@ struct IntrospectionCacheEntry {
 #[derive(Debug, Clone)]
 struct AccessTokenCacheEntry {
     token: String,
-    expires_at: Option<u64>,
+    _expires_at: Option<u64>,
 }
 
 /// OpenID Connect request filter plugin.

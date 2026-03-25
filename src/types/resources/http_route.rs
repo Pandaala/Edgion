@@ -311,6 +311,10 @@ pub struct HTTPRouteFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cors: Option<HTTPCORSFilter>,
 
+    /// ExternalAuth defines a Gateway API native external authentication filter (GEP-1494)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_auth: Option<crate::types::resources::edgion_plugins::ForwardAuthConfig>,
+
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_ref: Option<LocalObjectReference>,
@@ -337,6 +341,9 @@ pub enum HTTPRouteFilterType {
     ExtensionRef,
     /// CORS defines a Gateway API native CORS filter (GEP-1767)
     CORS,
+    /// ExternalAuth defines a Gateway API native external authentication filter (GEP-1494)
+    /// Maps internally to ForwardAuth plugin
+    ExternalAuth,
 }
 
 /// HTTPHeaderFilter defines a filter that modifies the headers of an HTTP request or response
@@ -850,6 +857,19 @@ impl ParsedRouteTimeouts {
                 .ok()
         });
 
+        // Clamp: backendRequest must be <= request (Gateway API spec)
+        let backend_request_timeout = match (backend_request_timeout, request_timeout) {
+            (Some(br), Some(req)) if br > req => {
+                tracing::warn!(
+                    "backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping to request timeout",
+                    br,
+                    req
+                );
+                Some(req)
+            }
+            (br, _) => br,
+        };
+
         // Only create if at least one timeout is configured
         if request_timeout.is_some() || backend_request_timeout.is_some() {
             Some(Self {
@@ -881,4 +901,43 @@ pub struct RouteParentStatus {
 
     /// Conditions describe the current conditions of this route.
     pub conditions: Vec<Condition>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_backend_request_clamped_to_request() {
+        let config = HTTPRouteTimeouts {
+            request: Some("10s".to_string()),
+            backend_request: Some("30s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn test_backend_request_within_limit() {
+        let config = HTTPRouteTimeouts {
+            request: Some("30s".to_string()),
+            backend_request: Some("10s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn test_backend_request_only_no_clamp() {
+        let config = HTTPRouteTimeouts {
+            request: None,
+            backend_request: Some("10s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, None);
+        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+    }
 }

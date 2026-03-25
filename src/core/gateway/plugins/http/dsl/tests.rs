@@ -43,13 +43,6 @@ fn run_with_limits(source: &str, session: MockPluginSession, limits: VmLimits) -
     execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny)
 }
 
-fn run_with_policy(source: &str, session: MockPluginSession, policy: DslErrorPolicy) -> PluginRunningResult {
-    let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &policy)
-}
-
 fn good_next() -> PluginRunningResult {
     PluginRunningResult::GoodNext
 }
@@ -549,8 +542,6 @@ mod response_builtins {
     fn test_upstream_response_filter_phase() {
         use crate::core::gateway::plugins::http::dsl::config::DslConfig;
         use crate::core::gateway::plugins::http::dsl::plugin::DslPlugin;
-        use crate::core::gateway::plugins::runtime::traits::UpstreamResponseFilter;
-
         let mut session = MockPluginSession::new();
         session
             .expect_set_response_header()
@@ -1002,8 +993,6 @@ mod error_policy {
 }
 
 mod compile_errors {
-    use super::*;
-
     fn compile_err(source: &str) {
         use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
         let result = compile_dsl_source(source, &ValidationLimits::default());

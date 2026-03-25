@@ -40,23 +40,21 @@ control plane:
 | **ResolvedRefs** | All references to other objects (Secrets, Services, etc.) are resolved |
 | **PartiallyInvalid** | Some rules in the route have invalid backend refs but other rules are valid (HTTPRoute/GRPCRoute only) |
 
-### Conditions We Do NOT Set (Yet): Programmed and Ready
+### Conditions We Do NOT Set: Programmed and Ready
+
+**决定：不实现。**
 
 `Programmed` and `Ready` require **data-plane feedback** to be accurate.
-Our Controller-Gateway architecture uses async gRPC config sync without a
-status-back channel. The Controller cannot know whether the Gateway has
-actually loaded the configuration or is serving traffic. Setting these from
-the control plane would be misleading, so they are intentionally omitted.
+Our Controller-Gateway architecture uses async gRPC config sync where
+Gateway actively pulls config via Watch/List. The Controller cannot confirm
+whether the Gateway has loaded any specific configuration. Setting these
+from the control plane would be misleading.
 
-A planned enhancement will introduce a **data-plane status query mechanism**
-where the Controller queries the Gateway's Admin API for actual runtime state.
-See [tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)
-for the full design. Key points:
+曾评估过 Controller → Gateway HTTP Pull 反查方案（设计完成到文件级实现计划），
+但引入全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。
 
-- Controller → Gateway HTTP pull (not part of gRPC config sync)
-- Delayed query (10s after resource change), max 2 retries
-- Only the status query worker sets Programmed/Ready; handlers never set them directly
-- Generation check prevents stale updates
+- 方案设计保留备查：[tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)
+- 不实现决策记录：[skills/08-gateway-api/01-not-implemented.md](../../../skills/08-gateway-api/01-not-implemented.md)
 
 ## 4. Resource Categories and Status Patterns
 
@@ -299,7 +297,7 @@ standard conditions, no stale condition values survive re-processing.
 - [ ] **No duplicate checks**: if validate() already checks something, update_status uses `validation_errors` instead of re-checking
 - [ ] **No backend ref existence in validate()**: service-not-found and kind checks go in update_status only (via resolved_refs_errors + find_invalid_rule_indices), not in validate()
 - [ ] **No "route" in non-route contexts**: use `resource_ns`, `set_parent_conditions_full`, etc.
-- [ ] **No Programmed/Ready conditions**: these require data-plane feedback and must not be set from the control plane
+- [ ] **No Programmed/Ready conditions**: permanently not implemented — requires data-plane feedback that is not available in current architecture
 - [ ] **Status diff registration**: new resource kind added to `status_diff::status_semantically_changed()` match arms
 - [ ] **Status diff tests**: new resource kind has test cases in `status_diff.rs` covering no-change and changed scenarios
 

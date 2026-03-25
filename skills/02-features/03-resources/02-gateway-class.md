@@ -10,6 +10,8 @@ description: GatewayClass 资源 Schema：控制器绑定和运行时配置引�
 
 GatewayClass 定义了 Gateway 的"类型"，关联到特定的控制器实现，并可引用运行时配置。
 
+> **设计决策**：Edgion 采用 1 Controller : 1 GatewayClass 模式（与 Envoy Gateway、NGINX Gateway Fabric 一致），明确不支持单实例管理多个 GatewayClass。`parametersRef` 可选——未设置时 Gateway 使用内置默认值；设置时必须引用 `edgion.io/EdgionGatewayConfig`。
+
 ## 完整 Schema
 
 ```yaml

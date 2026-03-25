@@ -20,8 +20,8 @@ use std::sync::Arc;
 ///
 /// Within regex tiers, routes are sorted by pattern length (longest first).
 pub struct GrpcMatchEngine {
-    /// Exact match: (service, method) -> routes
-    exact_routes: HashMap<(String, String), Vec<Arc<GrpcRouteRuleUnit>>>,
+    /// Exact match: service -> method -> routes (nested for zero-alloc &str lookup)
+    exact_routes: HashMap<String, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>,
 
     /// Service-level exact match: service -> routes (method not specified)
     service_routes: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
@@ -44,7 +44,7 @@ pub struct GrpcMatchEngine {
 
 impl GrpcMatchEngine {
     pub fn new(routes: Vec<Arc<GrpcRouteRuleUnit>>) -> Self {
-        let mut exact_routes: HashMap<(String, String), Vec<Arc<GrpcRouteRuleUnit>>> = HashMap::new();
+        let mut exact_routes: HashMap<String, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
         let mut service_routes: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>> = HashMap::new();
         let mut exact_service_regex_method = Vec::new();
         let mut regex_service_exact_method = Vec::new();
@@ -60,8 +60,10 @@ impl GrpcMatchEngine {
                     // Exact service + Exact method
                     (Some(service), Some(method), false) => {
                         exact_routes
-                            .entry((service.clone(), method.clone()))
-                            .or_insert_with(Vec::new)
+                            .entry(service.clone())
+                            .or_default()
+                            .entry(method.clone())
+                            .or_default()
                             .push(route);
                     }
                     // Exact service only (no method)
@@ -88,8 +90,10 @@ impl GrpcMatchEngine {
                                     "RegularExpression match type but no regex compiled, treating as exact"
                                 );
                                 exact_routes
-                                    .entry((_service.clone(), _method.clone()))
-                                    .or_insert_with(Vec::new)
+                                    .entry(_service.clone())
+                                    .or_default()
+                                    .entry(_method.clone())
+                                    .or_default()
                                     .push(route);
                             }
                         }
@@ -201,7 +205,7 @@ impl GrpcMatchEngine {
         let (service, method) = parse_grpc_path(path)?;
 
         // Priority 1: Exact service + Exact method
-        if let Some(routes) = self.exact_routes.get(&(service.clone(), method.clone())) {
+        if let Some(routes) = self.exact_routes.get(service).and_then(|m| m.get(method)) {
             for route_unit in routes {
                 if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
                     return Ok((route_unit.clone(), matched_gi));
@@ -267,7 +271,7 @@ impl GrpcMatchEngine {
         }
 
         // Priority 5: Exact service only (method not specified)
-        if let Some(routes) = self.service_routes.get(&service) {
+        if let Some(routes) = self.service_routes.get(service) {
             for route_unit in routes {
                 if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
                     return Ok((route_unit.clone(), matched_gi));
@@ -299,14 +303,15 @@ impl GrpcMatchEngine {
 
 /// Parse gRPC path: /{service}/{method}
 /// Example: "/helloworld.Greeter/SayHello" → ("helloworld.Greeter", "SayHello")
-pub fn parse_grpc_path(path: &str) -> Result<(String, String), EdError> {
-    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-
-    if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-        Ok((parts[0].to_string(), parts[1].to_string()))
-    } else {
-        Err(EdError::InvalidGrpcPath(path.to_string()))
+/// Returns string slices into the original path to avoid heap allocation.
+pub fn parse_grpc_path(path: &str) -> Result<(&str, &str), EdError> {
+    let trimmed = path.strip_prefix('/').unwrap_or(path);
+    if let Some((service, method)) = trimmed.split_once('/') {
+        if !service.is_empty() && !method.is_empty() && !method.contains('/') {
+            return Ok((service, method));
+        }
     }
+    Err(EdError::InvalidGrpcPath(path.to_string()))
 }
 
 #[cfg(test)]
@@ -387,11 +392,14 @@ mod tests {
         let route2 = make_route(Some("test.Service"), Some("Method"), None, "route2");
 
         let engine = GrpcMatchEngine::new(vec![route1, route2]);
-        let key = ("test.Service".to_string(), "Method".to_string());
-        let routes = engine.exact_routes.get(&key).unwrap();
+        let routes = engine
+            .exact_routes
+            .get("test.Service")
+            .and_then(|m| m.get("Method"))
+            .unwrap();
         assert_eq!(routes.len(), 2);
-        assert_eq!(routes[0].matched_info.rsc.name, "route1");
-        assert_eq!(routes[1].matched_info.rsc.name, "route2");
+        assert_eq!(routes[0].resource_key, "default/route1");
+        assert_eq!(routes[1].resource_key, "default/route2");
     }
 
     #[test]

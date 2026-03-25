@@ -157,6 +157,11 @@ impl PluginRuntime {
                         }
                     }
                 }
+                HTTPRouteFilterType::ExternalAuth => {
+                    if let Some(config) = &filter.external_auth {
+                        self.add_request_filter(Box::new(ForwardAuth::new(config)));
+                    }
+                }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
                         let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);

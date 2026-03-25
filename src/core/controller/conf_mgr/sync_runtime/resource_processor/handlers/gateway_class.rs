@@ -31,6 +31,27 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
         gc.spec.controller_name == self.controller_name
     }
 
+    fn validate(&self, gc: &GatewayClass, _ctx: &HandlerContext) -> Vec<String> {
+        let mut errors = Vec::new();
+        // Validate parametersRef if present: must reference EdgionGatewayConfig
+        if let Some(ref params_ref) = gc.spec.parameters_ref {
+            if params_ref.group != "edgion.io" {
+                errors.push(format!(
+                    "parametersRef.group must be \"edgion.io\", got \"{}\"",
+                    params_ref.group
+                ));
+            }
+            if params_ref.kind != "EdgionGatewayConfig" {
+                errors.push(format!(
+                    "parametersRef.kind must be \"EdgionGatewayConfig\", got \"{}\"",
+                    params_ref.kind
+                ));
+            }
+        }
+        // parametersRef is optional — when absent, Gateway uses built-in defaults
+        errors
+    }
+
     async fn parse(&self, gc: GatewayClass, _ctx: &HandlerContext) -> ProcessResult<GatewayClass> {
         ProcessResult::Continue(gc)
     }
@@ -90,6 +111,11 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
             "HTTPRouteSchemeRedirect".to_string(),
             "HTTPRouteRequestPercentageMirror".to_string(),
             "HTTPRouteParentRefPort".to_string(),
+            "GRPCRoute".to_string(),
+            "TLSRoute".to_string(),
+            "TCPRoute".to_string(),
+            "UDPRoute".to_string(),
+            "GatewayFrontendClientCertificateValidation".to_string(),
         ]);
     }
 }

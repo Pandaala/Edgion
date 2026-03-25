@@ -3,6 +3,7 @@ use crate::core::gateway::observe::access_log::get_access_logger_unchecked;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::server::listener_builder;
 use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_port_gateway_infos};
+use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
 use crate::types::{Gateway, ResourceMeta};
 use anyhow::{anyhow, Result};
 use kube::ResourceExt;
@@ -106,27 +107,25 @@ impl GatewayBase {
             };
 
             // 3.2 Get EdgionGatewayConfig for this Gateway
-            let edgion_gateway_config_name = match gateway_class.spec.parameters_ref.as_ref() {
-                Some(params_ref) => &params_ref.name,
+            let edgion_gateway_config = match gateway_class.spec.parameters_ref.as_ref() {
+                Some(params_ref) => match self.config_client.get_edgion_gateway_config(&params_ref.name) {
+                    Some(egwc) => egwc,
+                    None => {
+                        tracing::warn!(
+                            gateway = %gateway.key_name(),
+                            edgion_gateway_config = %params_ref.name,
+                            "EdgionGatewayConfig not found, skipping Gateway"
+                        );
+                        continue;
+                    }
+                },
                 None => {
-                    tracing::warn!(
+                    tracing::info!(
                         gateway = %gateway.key_name(),
                         gateway_class = %gateway_class_name,
-                        "GatewayClass has no parametersRef, skipping Gateway"
+                        "GatewayClass has no parametersRef, using built-in defaults"
                     );
-                    continue;
-                }
-            };
-
-            let edgion_gateway_config = match self.config_client.get_edgion_gateway_config(edgion_gateway_config_name) {
-                Some(egwc) => egwc,
-                None => {
-                    tracing::warn!(
-                        gateway = %gateway.key_name(),
-                        edgion_gateway_config = %edgion_gateway_config_name,
-                        "EdgionGatewayConfig not found, skipping Gateway"
-                    );
-                    continue;
+                    EdgionGatewayConfig::new("default", EdgionGatewayConfigSpec::default())
                 }
             };
 

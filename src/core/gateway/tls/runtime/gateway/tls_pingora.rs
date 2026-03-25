@@ -5,7 +5,7 @@ use crate::core::gateway::runtime::matching::{match_gateway_tls_with_port, Gatew
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
 use crate::core::gateway::tls::store::cert_matcher::match_sni_with_port;
-use crate::types::constants::secret_keys::tls::{CERT, KEY};
+use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
 use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
@@ -246,6 +246,9 @@ impl TlsAccept for TlsCallback {
                 if edgion_tls.is_mtls_enabled() && edgion_tls.should_expose_client_cert() {
                     ssl_ctx.meta.client_cert_info = extract_client_cert_info(ssl);
                 }
+            } else if ssl_ctx.meta.is_mtls {
+                // Gateway frontendValidation mTLS: always extract client cert info
+                ssl_ctx.meta.client_cert_info = extract_client_cert_info(ssl);
             }
 
             ssl_ctx.meta.handshake_complete_time = Some(ssl_ctx.meta.start_at.elapsed().as_millis() as u64);
@@ -441,6 +444,26 @@ impl TlsCallback {
         };
 
         self.apply_secret_to_ssl(ssl, &secret, ssl_ctx);
+
+        // Skip mTLS if server cert setup failed
+        if ssl_ctx.meta.err_log.is_some() {
+            return;
+        }
+
+        // Apply frontend validation mTLS if configured
+        if gateway_tls.frontend_validation.is_some() {
+            if let Err(e) = self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
+                tracing::error!(
+                    gateway = %gateway_tls.gateway_name,
+                    listener = %gateway_tls.listener_name,
+                    error = %e,
+                    "Failed to configure frontendValidation mTLS"
+                );
+                ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e));
+            } else {
+                ssl_ctx.meta.is_mtls = true;
+            }
+        }
     }
 
     /// Helper: Get Secret from global SecretStore (fallback for legacy behavior)
@@ -529,6 +552,61 @@ impl TlsCallback {
             ssl_ctx.meta.err_log = Some(format!("gw: set key: {e}"));
             return;
         }
+    }
+
+    /// Configure mTLS for Gateway standard frontendValidation.
+    /// Uses resolved CA secrets to verify client certificates.
+    fn configure_gateway_frontend_mtls(
+        &self,
+        ssl: &mut SslRef,
+        gateway_tls: &GatewayTlsEntry,
+    ) -> Result<(), Box<PingoraError>> {
+        let ca_secrets = match &gateway_tls.resolved_frontend_ca_secrets {
+            Some(secrets) if !secrets.is_empty() => secrets,
+            _ => return Ok(()),
+        };
+
+        let mut store_builder = X509StoreBuilder::new().map_err(|e| {
+            PingoraError::explain(ErrorType::InvalidCert, format!("Failed to create X509 store: {}", e))
+        })?;
+
+        for secret in ca_secrets {
+            if let Some(data) = &secret.data {
+                if let Some(ca_bytes) = data.get(CA_CERT) {
+                    let ca_pem = std::str::from_utf8(&ca_bytes.0).map_err(|e| {
+                        PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA cert UTF-8: {}", e))
+                    })?;
+                    let ca_cert = X509::from_pem(ca_pem.as_bytes()).map_err(|e| {
+                        PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA certificate PEM: {}", e))
+                    })?;
+                    store_builder.add_cert(ca_cert).map_err(|e| {
+                        PingoraError::explain(ErrorType::InvalidCert, format!("Failed to add CA cert to store: {}", e))
+                    })?;
+                }
+            }
+        }
+
+        let store = store_builder.build();
+        ssl.set_verify_cert_store(store)
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
+
+        let verify_mode = SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT;
+        ssl.set_verify(verify_mode);
+
+        #[cfg(feature = "boringssl")]
+        {
+            ssl.set_verify_depth(10);
+        }
+
+        tracing::debug!(
+            port = self.port,
+            gateway_ns = %gateway_tls.gateway_namespace,
+            gateway = %gateway_tls.gateway_name,
+            listener = %gateway_tls.listener_name,
+            "Configured Gateway frontendValidation mTLS"
+        );
+
+        Ok(())
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification

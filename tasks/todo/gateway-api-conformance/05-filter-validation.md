@@ -25,22 +25,12 @@
 
 ---
 
-## 2. backendRequest <= request 超时约束
+## ~~2. backendRequest <= request 超时约束~~ ✅ 已完成
 
-### 现状
+在 `ParsedRouteTimeouts::from_config()` 中实现 clamp：`backendRequest > request` 时自动截断到 request 值并输出 warn 日志。
 
-- `request` 和 `backendRequest` 超时均已实现
-- 规范要求 `backendRequest` 必须 <= `request`
-- 当前无此约束校验
-
-### 需要实现
-
-1. 在 route pre-parse 阶段（`ParsedRouteTimeouts::from_config`）验证约束
-2. 不满足时：拒绝该 rule 或自动截断 backendRequest 到 request 值
-
-### 涉及文件
-
-- `src/types/resources/http_route_preparse.rs`
+- 涉及文件：`src/types/resources/http_route.rs:860-868`
+- 单元测试：3 个（clamp、within limit、backend only）
 
 ---
 
@@ -64,14 +54,16 @@
 
 ---
 
-## 4. parametersRef 消费
+## 4. ~~parametersRef 消费~~ ✅ 已完成
 
-### 现状
+### 实现方案
 
-- `GatewayClassSpec` 有 `ParametersReference` 字段
-- handler 的 `parse()` 是空操作，用户设置后被静默忽略
+- **Controller 侧**：`GatewayClassHandler::validate()` 校验 `parametersRef`（如设置），`group` 必须为 `edgion.io`，`kind` 必须为 `EdgionGatewayConfig`，不合法则 `Accepted: False`。未设置 `parametersRef` 不报错。
+- **Gateway 侧**：`parametersRef` 为空时使用 `EdgionGatewayConfigSpec::default()` 内置默认值，不再跳过 Gateway。
+- **设计决策**：明确 1 Controller : 1 GatewayClass（与 Envoy Gateway、NGINX Gateway Fabric 一致），不支持单实例多 GatewayClass。
 
-### 建议
+### 涉及文件
 
-- 短期：在校验阶段对设置了 parametersRef 的 GatewayClass 发出 warning condition
-- 长期：解析 parametersRef 引用的资源，用于 Gateway 级别配置
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs` — `validate()`
+- `src/core/gateway/runtime/server/base.rs` — 默认值回退
+- `src/types/resources/edgion_gateway_config.rs` — `Default for EdgionGatewayConfigSpec`

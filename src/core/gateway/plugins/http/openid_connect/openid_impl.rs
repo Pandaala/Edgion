@@ -1179,7 +1179,7 @@ impl OpenidConnect {
             session_ref.to_string(),
             AccessTokenCacheEntry {
                 token: token.to_string(),
-                expires_at,
+                _expires_at: expires_at,
             },
             Some(ttl),
         );

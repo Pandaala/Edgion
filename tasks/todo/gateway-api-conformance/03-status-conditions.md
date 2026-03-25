@@ -4,28 +4,11 @@
 
 > **已完成：** supportedFeatures (Task 2) 和 PartiallyInvalid (Task 3) 已实现，见 `skills/01-architecture/01-controller/10-status-management.md`。
 > **不实现：** Gateway addresses (Task 4)，见 `skills/08-gateway-api/01-not-implemented.md`。
-> **待定：** Programmed (Task 1)。
+> **不实现：** Programmed (Task 1)，见 `skills/08-gateway-api/01-not-implemented.md`。
 
-## 1. Programmed 条件 [P0]
+## ~~1. Programmed 条件 [P0]~~ ❌ 不实现
 
-### 现状
-
-- `status_utils.rs:9-12` 注释明确说明：因 Controller-Gateway 异步 gRPC sync 架构，无数据面状态回传通道，故意省略 Programmed 和 Ready 条件
-- Gateway API 规范将 `Programmed` 列为 Core 必需条件
-
-### 建议方案
-
-规范允许在配置**发送到**数据面后设置 `Programmed: True`（不要求数据面确认生效）。方案：
-
-1. gRPC ConfigSync `Watch`/`List` 推送成功后，Controller 标记对应资源 `Programmed: True`
-2. 若无 gateway 连接或推送失败，设置 `Programmed: False`，reason `NoConnectedDataPlane`
-3. Gateway 级别和 Listener 级别均需设置
-
-### 涉及文件
-
-- `src/core/controller/sync_runtime/resource_processor/handlers/gateway.rs`
-- `src/core/controller/sync_runtime/status_utils.rs`
-- `src/core/controller/conf_sync/` — 推送结果回调
+Controller-Gateway 架构为 Gateway 主动 Watch/List 拉取，Controller 无法确认配置是否已到达数据面。HTTP Pull 反查方案（`tasks/todo/data-plane-status-feedback.md`）设计完整但复杂度过高，决定不实施。
 
 ---
 

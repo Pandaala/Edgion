@@ -7,7 +7,7 @@
 //!
 //! The store maintains two data structures:
 //! 1. **Primary map**: `namespace/name -> BackendTLSPolicy` for direct lookups (RwLock)
-//! 2. **Reverse index**: `namespace/group/kind/name -> Vec<BackendTLSPolicy>` for target lookups (ArcSwap)
+//! 2. **Reverse index**: `namespace/name -> Vec<BackendTLSPolicy>` for target lookups (ArcSwap)
 //!
 //! The reverse index enables O(1) lookup when finding policies that apply to a specific
 //! Service, instead of O(n) iteration over all policies. Policies in the reverse index
@@ -49,7 +49,7 @@ pub struct BackendTLSPolicyStore {
     /// Main policy map (namespace/name -> policy), protected by RwLock
     policies: RwLock<BackendTLSPolicyMap>,
     /// Reverse index (target identifier -> sorted policies) for O(1) query
-    /// Key format: "namespace/group/kind/name"
+    /// Key format: "namespace/name" (group/kind omitted — targetRef can only reference Services)
     reverse_index: ArcSwap<ReverseIndexMap>,
 }
 
@@ -108,7 +108,8 @@ impl BackendTLSPolicyStore {
 
     /// Build a target key from target reference components
     /// Key format: namespace/name
-    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy.
+    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy,
+    /// and can only target `group: ""`, `kind: "Service"`, so namespace/name is sufficient.
     #[inline]
     fn build_target_key(
         policy_namespace: &str,

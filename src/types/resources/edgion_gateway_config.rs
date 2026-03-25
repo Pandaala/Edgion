@@ -209,6 +209,21 @@ fn default_max_retries() -> u32 {
     3
 }
 
+impl Default for EdgionGatewayConfigSpec {
+    fn default() -> Self {
+        Self {
+            server: None,
+            http_timeout: None,
+            max_retries: default_max_retries(),
+            real_ip: None,
+            security_protect: None,
+            global_plugins_ref: None,
+            preflight_policy: None,
+            enable_reference_grant_validation: false,
+        }
+    }
+}
+
 impl Default for ClientTimeout {
     fn default() -> Self {
         Self {

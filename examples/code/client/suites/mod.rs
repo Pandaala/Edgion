@@ -40,8 +40,9 @@ pub use edgion_tls::{
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
     AllowedRoutesSelectorNamespaceTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite,
-    GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite, ListenerHostnameTestSuite,
-    PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite, UpdatePhaseTestSuite,
+    FrontendValidationTestSuite, GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
+    ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite,
+    UpdatePhaseTestSuite,
 };
 
 // EdgionPlugins tests
