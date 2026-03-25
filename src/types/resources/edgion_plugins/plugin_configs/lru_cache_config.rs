@@ -1,7 +1,7 @@
 //! Shared LRU cache configuration for plugins that use `ShardedLruCache`.
 //!
 //! Embed this struct in any plugin config that needs an LRU cache.
-//! Per-plugin values of `0` fall back to the global defaults in `AuthCacheGlobalConfig`.
+//! Per-plugin values of `0` fall back to the global defaults in `LruCacheGlobalConfig`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -16,17 +16,17 @@ use serde::{Deserialize, Serialize};
 /// ```
 ///
 /// Both fields default to `0`, which means "use the global
-/// `auth_cache.default_capacity` / `auth_cache.default_shards`".
+/// `lru_cache.default_capacity` / `lru_cache.default_shards`".
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct LruCacheConfig {
     /// LRU cache capacity (number of entries).
-    /// Default: 0 (uses global `auth_cache.default_capacity`, typically 1024).
+    /// Default: 0 (uses global `lru_cache.default_capacity`, typically 1024).
     #[serde(default)]
     pub capacity: usize,
 
     /// Number of cache shards to reduce lock contention under high concurrency.
-    /// Default: 0 (uses global `auth_cache.default_shards`; 0 = single shard, no sharding).
+    /// Default: 0 (uses global `lru_cache.default_shards`; 0 = single shard, no sharding).
     #[serde(default)]
     pub shards: usize,
 }

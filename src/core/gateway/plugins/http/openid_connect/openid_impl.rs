@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
+use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay as auth_delay;
 
 impl OpenidConnect {
@@ -15,26 +15,26 @@ impl OpenidConnect {
             jwks_refresh: Arc::new(Mutex::new(())),
             introspection_cache: Arc::new(ShardedLruCache::new(
                 if config.introspection.lru_cache.capacity == 0 {
-                    get_default_auth_cache_capacity()
+                    get_default_lru_cache_capacity()
                 } else {
                     config.introspection.lru_cache.capacity
                 },
                 if config.introspection.lru_cache.shards > 0 {
                     config.introspection.lru_cache.shards
                 } else {
-                    get_default_auth_cache_shards()
+                    get_default_lru_cache_shards()
                 },
             )),
             access_token_cache: Arc::new(ShardedLruCache::new(
                 if config.access_token.lru_cache.capacity == 0 {
-                    get_default_auth_cache_capacity()
+                    get_default_lru_cache_capacity()
                 } else {
                     config.access_token.lru_cache.capacity
                 },
                 if config.access_token.lru_cache.shards > 0 {
                     config.access_token.lru_cache.shards
                 } else {
-                    get_default_auth_cache_shards()
+                    get_default_lru_cache_shards()
                 },
             )),
             refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),

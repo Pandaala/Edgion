@@ -11,7 +11,7 @@ use pingora_http::ResponseHeader;
 use sha2::{Digest, Sha256};
 
 use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
+use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -51,14 +51,14 @@ impl LdapAuth {
         let ldap_url = format!("{}://{}:{}", scheme, config.ldap_host, config.ldap_port);
 
         let capacity = if config.lru_cache.capacity == 0 {
-            get_default_auth_cache_capacity()
+            get_default_lru_cache_capacity()
         } else {
             config.lru_cache.capacity
         };
         let shards = if config.lru_cache.shards > 0 {
             config.lru_cache.shards
         } else {
-            get_default_auth_cache_shards()
+            get_default_lru_cache_shards()
         };
         Self {
             name: "LdapAuth".to_string(),

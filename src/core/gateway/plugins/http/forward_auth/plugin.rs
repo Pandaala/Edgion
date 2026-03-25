@@ -56,7 +56,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
+use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::core::gateway::plugins::http::common::http_client::{get_http_client, is_hop_by_hop};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -73,14 +73,14 @@ impl ForwardAuth {
     pub fn new(config: &ForwardAuthConfig) -> Self {
         let auth_cache = if config.cache_ttl > 0 {
             let capacity = if config.lru_cache.capacity == 0 {
-                get_default_auth_cache_capacity()
+                get_default_lru_cache_capacity()
             } else {
                 config.lru_cache.capacity
             };
             let shards = if config.lru_cache.shards > 0 {
                 config.lru_cache.shards
             } else {
-                get_default_auth_cache_shards()
+                get_default_lru_cache_shards()
             };
             Some(Arc::new(ShardedLruCache::new(capacity, shards)))
         } else {

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
 use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_auth_cache_capacity, get_default_auth_cache_shards};
+use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -45,14 +45,14 @@ impl BasicAuth {
     /// Create a new BasicAuth plugin from configuration
     pub fn new(config: &BasicAuthConfig, plugin_namespace: String) -> Self {
         let capacity = if config.lru_cache.capacity == 0 {
-            get_default_auth_cache_capacity()
+            get_default_lru_cache_capacity()
         } else {
             config.lru_cache.capacity
         };
         let shards = if config.lru_cache.shards > 0 {
             config.lru_cache.shards
         } else {
-            get_default_auth_cache_shards()
+            get_default_lru_cache_shards()
         };
         let mut plugin = BasicAuth {
             name: "BasicAuth".to_string(),

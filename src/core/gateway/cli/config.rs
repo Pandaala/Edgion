@@ -75,10 +75,10 @@ pub struct EdgionGatewayConfig {
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
 
-    /// AuthCache plugin global configuration
+    /// Global LRU cache configuration for plugins
     #[arg(skip)]
-    #[serde(default)]
-    pub auth_cache: AuthCacheGlobalConfig,
+    #[serde(default, alias = "auth_cache")]
+    pub lru_cache: LruCacheGlobalConfig,
 
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
@@ -501,33 +501,33 @@ pub fn get_min_estimator_slots() -> usize {
 }
 
 // ============================================
-// Auth Cache Global Configuration
+// LRU Cache Global Configuration
 // ============================================
 
-const DEFAULT_AUTH_CACHE_CAPACITY: usize = 1024;
-const DEFAULT_AUTH_CACHE_SHARDS: usize = 0;
+const DEFAULT_LRU_CACHE_CAPACITY: usize = 1024;
+const DEFAULT_LRU_CACHE_SHARDS: usize = 0;
 
-fn default_auth_cache_capacity() -> usize {
-    DEFAULT_AUTH_CACHE_CAPACITY
+fn default_lru_cache_capacity() -> usize {
+    DEFAULT_LRU_CACHE_CAPACITY
 }
 
-/// Global auth cache configuration.
-/// Per-plugin `cache_capacity = 0` falls back to this value.
+/// Global LRU cache configuration for plugins.
+/// Per-plugin `capacity = 0` falls back to this value.
 ///
 /// ## TOML Configuration Example:
 /// ```toml
-/// [auth_cache]
+/// [lru_cache]
 /// default_capacity = 1024
 /// default_shards = 0
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct AuthCacheGlobalConfig {
-    /// Default LRU capacity for all auth plugins (default: 1024 entries).
-    #[serde(default = "default_auth_cache_capacity")]
+pub struct LruCacheGlobalConfig {
+    /// Default LRU capacity for all plugins (default: 1024 entries).
+    #[serde(default = "default_lru_cache_capacity")]
     pub default_capacity: usize,
 
-    /// Default number of cache shards for all auth plugins (default: 0 = disabled).
+    /// Default number of cache shards for all plugins (default: 0 = disabled).
     /// When > 1, the cache is split into N independent LRU shards to reduce
     /// lock contention under high concurrency. Each shard holds
     /// `ceil(capacity / shards)` entries.
@@ -535,39 +535,39 @@ pub struct AuthCacheGlobalConfig {
     pub default_shards: usize,
 }
 
-impl Default for AuthCacheGlobalConfig {
+impl Default for LruCacheGlobalConfig {
     fn default() -> Self {
         Self {
-            default_capacity: DEFAULT_AUTH_CACHE_CAPACITY,
-            default_shards: DEFAULT_AUTH_CACHE_SHARDS,
+            default_capacity: DEFAULT_LRU_CACHE_CAPACITY,
+            default_shards: DEFAULT_LRU_CACHE_SHARDS,
         }
     }
 }
 
-static AUTH_CACHE_GLOBAL_CONFIG: OnceLock<AuthCacheGlobalConfig> = OnceLock::new();
+static LRU_CACHE_GLOBAL_CONFIG: OnceLock<LruCacheGlobalConfig> = OnceLock::new();
 
-/// Initialize the global auth cache configuration (call once at startup).
-pub fn init_auth_cache_global_config(config: &AuthCacheGlobalConfig) {
-    let _ = AUTH_CACHE_GLOBAL_CONFIG.set(config.clone());
+/// Initialize the global LRU cache configuration (call once at startup).
+pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) {
+    let _ = LRU_CACHE_GLOBAL_CONFIG.set(config.clone());
 }
 
-/// Get the default auth cache capacity.
+/// Get the default LRU cache capacity.
 /// Returns the configured value, or compile-time fallback 1024 if not yet initialized.
-/// Never returns 0 — safe to pass directly to `LocalLruCache::new()`.
-pub fn get_default_auth_cache_capacity() -> usize {
-    AUTH_CACHE_GLOBAL_CONFIG
+/// Never returns 0 — safe to pass directly to `ShardedLruCache::new()`.
+pub fn get_default_lru_cache_capacity() -> usize {
+    LRU_CACHE_GLOBAL_CONFIG
         .get()
         .map(|c| c.default_capacity)
-        .unwrap_or(DEFAULT_AUTH_CACHE_CAPACITY)
+        .unwrap_or(DEFAULT_LRU_CACHE_CAPACITY)
 }
 
-/// Get the default auth cache shard count.
+/// Get the default LRU cache shard count.
 /// Returns 0 (disabled) if not configured.
-pub fn get_default_auth_cache_shards() -> usize {
-    AUTH_CACHE_GLOBAL_CONFIG
+pub fn get_default_lru_cache_shards() -> usize {
+    LRU_CACHE_GLOBAL_CONFIG
         .get()
         .map(|c| c.default_shards)
-        .unwrap_or(DEFAULT_AUTH_CACHE_SHARDS)
+        .unwrap_or(DEFAULT_LRU_CACHE_SHARDS)
 }
 
 impl EdgionGatewayConfig {
@@ -692,16 +692,16 @@ mod tests {
     }
 
     #[test]
-    fn test_auth_cache_global_config_default() {
-        let config = AuthCacheGlobalConfig::default();
+    fn test_lru_cache_global_config_default() {
+        let config = LruCacheGlobalConfig::default();
         assert_eq!(config.default_capacity, 1024);
     }
 
     #[test]
-    fn test_get_default_auth_cache_capacity_fallback() {
+    fn test_get_default_lru_cache_capacity_fallback() {
         // Before init (or after init with default), capacity must be >= 1
-        // so LocalLruCache::new() never panics
-        let cap = get_default_auth_cache_capacity();
+        // so ShardedLruCache::new() never panics
+        let cap = get_default_lru_cache_capacity();
         assert!(cap >= 1, "capacity must be > 0");
     }
 
