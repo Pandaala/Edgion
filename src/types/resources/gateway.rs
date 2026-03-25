@@ -273,7 +273,11 @@ spec:
         let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
         let json = serde_json::to_string_pretty(&gw).unwrap();
         println!("JSON:\n{}", json);
-        assert!(json.contains("frontendValidation"), "frontendValidation missing in JSON: {}", json);
+        assert!(
+            json.contains("frontendValidation"),
+            "frontendValidation missing in JSON: {}",
+            json
+        );
     }
 
     #[test]
@@ -303,7 +307,10 @@ spec:
         let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
         let listener = &gw.spec.listeners.unwrap()[0];
         let tls = listener.tls.as_ref().unwrap();
-        assert!(tls.frontend_validation.is_some(), "frontendValidation should be present");
+        assert!(
+            tls.frontend_validation.is_some(),
+            "frontendValidation should be present"
+        );
         let fv = tls.frontend_validation.as_ref().unwrap();
         let ca_refs = fv.ca_certificate_refs.as_ref().unwrap();
         assert_eq!(ca_refs.len(), 1);
