@@ -98,9 +98,12 @@ spec:
 | `method` | `String?` | gRPC method 名称 |
 
 匹配逻辑：
-- `service` + `method` 都指定 → 精确匹配单个方法
+- `type: Exact`（默认）：按字面值精确匹配
+- `type: RegularExpression`：service 和 method 都按正则匹配（`type` 同时作用于两个字段）
+- `service` + `method` 都指定 → 匹配单个方法
 - 只指定 `service` → 匹配该 service 的所有方法
 - 都不指定 → 匹配所有 gRPC 请求
+- 精确匹配优先于正则匹配；正则间按模式长度降序排优先级
 
 ### GRPCHeaderMatch
 

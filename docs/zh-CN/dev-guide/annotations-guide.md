@@ -49,7 +49,7 @@
 | `edgion.io/upstream-tls` | `TLSRoute` | 控制到上游是否走 TLS |
 | `edgion.io/max-connect-retries` | `TLSRoute` | 上游连接重试次数 |
 | `edgion.io/expose-client-cert` | `EdgionTls` | 把 mTLS 客户端证书信息暴露给插件层 |
-| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | 主动健康检查 YAML 配置 |
+| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | 主动健康检查 YAML 配置（type: http/tcp/grpc） |
 
 ## 不是 annotations 的高频键
 

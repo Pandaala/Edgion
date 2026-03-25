@@ -39,6 +39,7 @@ impl_resource_meta!(HTTPRoute, HTTPRoute, "HTTPRoute", |self| {
     self.preparse();
     self.parse_timeouts();
     self.parse_annotations();
+    self.parse_retry();
 });
 
 impl_resource_meta!(GRPCRoute, GRPCRoute, "GRPCRoute", |self| {

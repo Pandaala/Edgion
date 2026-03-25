@@ -20,7 +20,7 @@ struct ListResult {
 }
 
 impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> for ClientCache<T> {
-    fn apply_change(&self, change: ResourceChange, resource: T)
+    fn apply_change(&self, change: ResourceChange, resource: T, _sv: Option<u64>)
     where
         T: Resource + Send + 'static,
     {

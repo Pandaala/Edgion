@@ -17,14 +17,14 @@ Controller                         Gateway (Data Plane)
 ┌──────────────────┐               ┌──────────────────────────┐
 │ ResourceProcessor│               │ event_dispatch.rs        │
 │   process_resource()             │   list_and_reset()       │
-│   log: kind/name/rv              │     ↓ set_sync_version() │
-│         ↓                        │   watch loop             │
-│ ServerCache.apply_change()       │     ↓ set_sync_version() │
-│   assign new sync_version        │         ↓                │
-│         ↓                        │ ConfHandler.full_set()   │
-│ gRPC WatcherEvent                │   / partial_update()     │
-│   {type, sync_version, data}  ──►│         ↓                │
-│                                  │ RouteManager / TlsStore  │
+│   ① generate sv (early)         │     ↓ set_sync_version() │
+│   ② info_span(rv, sv, ...)      │   watch loop             │
+│         ↓                        │     ↓ set_sync_version() │
+│ ServerCache.apply_change(sv)     │         ↓                │
+│   use provided sv                │ ConfHandler.full_set()   │
+│         ↓                        │   / partial_update()     │
+│ gRPC WatcherEvent                │         ↓                │
+│   {type, sync_version, data}  ──►│ RouteManager / TlsStore  │
 │                                  │   get_sync_version()     │
 │                                  │         ↓                │
 │                                  │ MatchInfo.sv / MatchedInfo.sv
@@ -32,6 +32,8 @@ Controller                         Gateway (Data Plane)
 │                                  │ AccessLog (sv field)     │
 └──────────────────┘               └──────────────────────────┘
 ```
+
+**sv 提前生成**：sv 在 `process_resource()` 入口通过 `next_resource_version()` 生成，而非在 `apply_change()` 中。这样整个处理流程的 span 都携带 sv，Controller 和 Gateway 日志可用同一个 sv 一步关联。`apply_change` 接受 `sv: Option<u64>`，有则用传入值，无则自行生成。
 
 ## sv 存储方式
 
@@ -52,20 +54,19 @@ let sv = resource.get_sync_version(); // 来自 ResourceMeta trait
 
 ## 控制面日志规范
 
-`processor.rs` 的 `process_resource()` 是所有资源处理的统一入口，关键日志 **必须** 包含 `rv`：
+`processor.rs` 的 `process_resource()` / `process_delete()` 使用 `info_span` + `.instrument()` 包裹整个处理流程，span 自动携带 `kind/name/ns/rv/sv`。
+
+**span 内的日志不需要重复写这些字段**，只需写消息和额外字段：
 
 ```rust
-tracing::warn!(
-    kind = self.kind,
-    name = %name,
-    namespace = %namespace,
-    rv,                          // ← 必须
-    error = %error,
-    "Resource validation error"
-);
+// ✅ span 自动提供 kind/name/ns/rv/sv
+tracing::warn!(error = %error, "Resource validation error");
+
+// ❌ 不再需要手动写（span 已包含）
+tracing::warn!(kind = self.kind, name = %name, namespace = %namespace, rv, ...);
 ```
 
-各 Handler 的 `parse()` / `on_change()` 中如需日志，应包含 `kind` + `key_name` + `rv`。
+各 Handler 的 `parse()` / `on_change()` 在 span 内执行，也自动继承这些字段。如在 span 外记录日志，仍需手动包含 `kind` + `key_name` + `rv`。
 
 ## 数据面日志规范
 
@@ -99,7 +100,7 @@ MatchedInfo { kind, ns, name, section, sv: resource.get_sync_version() }
 
 1. Secret 变更 → `SecretRefManager` → requeue EdgionTls
 2. EdgionTls 重新 `parse()`，拉取最新 Secret，填入 `spec.secret`
-3. `ServerCache.apply_change()` 分配 **新的 sync_version**
+3. `process_resource()` 入口生成 sv，经 `apply_change(Some(sv))` 传入 cache
 4. 数据面收到更新后的 EdgionTls，带有新 sv
 
 同理适用于所有依赖关系：

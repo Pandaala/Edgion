@@ -23,13 +23,17 @@ src/core/gateway/routes/grpc/
 
 ## Service/Method 匹配
 
-`GrpcMatchEngine` 使用 HashMap 实现三级优先级匹配：
+`GrpcMatchEngine` 支持 Exact 和 RegularExpression 两种匹配类型，实现七级优先级匹配：
 
 | 优先级 | 匹配类型 | 数据结构 | 说明 |
 |--------|----------|----------|------|
-| 1 | (service, method) 精确匹配 | `HashMap<(String, String), Vec<Arc<GrpcRouteRuleUnit>>>` | 同时指定 service 和 method |
-| 2 | service 级匹配 | `HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>` | 仅指定 service，匹配所有 method |
-| 3 | catch-all | `Option<Arc<GrpcRouteRuleUnit>>` | 未指定 service 和 method |
+| 1 | Exact service + Exact method | `HashMap<(String, String), Vec<...>>` | 精确匹配，O(1) |
+| 2 | Exact service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | service 精确 + method 正则 |
+| 3 | Regex service + Exact method | `Vec<Arc<GrpcRouteRuleUnit>>` | service 正则 + method 精确 |
+| 4 | Regex service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | 双正则匹配 |
+| 5 | Exact service only | `HashMap<String, Vec<...>>` | 仅指定 service，匹配所有 method |
+| 6 | Regex service only | `Vec<Arc<GrpcRouteRuleUnit>>` | service 正则，method 未指定 |
+| 7 | catch-all | `Option<Arc<GrpcRouteRuleUnit>>` | 未指定 service 和 method |
 
 gRPC 路径解析规则（`parse_grpc_path` 函数）：
 
@@ -39,7 +43,11 @@ gRPC 路径解析规则（`parse_grpc_path` 函数）：
 
 同一个 (service, method) 组合可以有多条路由（不同 hostname 或 header 条件），存储为 `Vec<Arc<GrpcRouteRuleUnit>>`，按顺序执行 `deep_match` 直到首个匹配。
 
-当前仅支持 `Exact` 匹配类型（Gateway API 默认行为）。
+### 正则匹配
+
+当 `GRPCMethodMatch.type = RegularExpression` 时，`type` 同时作用于 service 和 method 两个字段（Gateway API 规范语义）。正则模式在路由加载时预编译为 `Arc<Regex>`，存储在 `GrpcMatchInfo` 的 `compiled_service_regex` / `compiled_method_regex` 字段中。正则路由按模式长度降序排列（更长 = 更具体 = 更高优先级）。
+
+与 HTTPRoute 的 `RegexRoutesEngine` 不同，gRPC 正则匹配不使用 `RegexSet`，而是线性遍历预编译正则——因为 gRPC 正则路由数量通常很少。
 
 ## gRPC-Web 支持
 

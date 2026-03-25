@@ -41,6 +41,14 @@ pub struct GrpcMatchInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
+    /// Pre-compiled regex for service name matching (when match_type is RegularExpression)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_service_regex: Option<Arc<Regex>>,
+    /// Pre-compiled regex for method name matching (when match_type is RegularExpression)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_method_regex: Option<Arc<Regex>>,
 }
 
 impl GrpcMatchInfo {
@@ -83,6 +91,38 @@ impl GrpcMatchInfo {
             Vec::new()
         };
 
+        // Pre-compile regex patterns for service/method matching
+        use crate::types::resources::grpc_route::GRPCMethodMatchType;
+        let (compiled_service_regex, compiled_method_regex) = if let Some(ref method_match) = matched.method {
+            let is_regex = method_match.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression);
+            let compile = |field: &Option<String>, label: &str| -> Option<Arc<Regex>> {
+                if !is_regex {
+                    return None;
+                }
+                field.as_ref().and_then(|pattern| match Regex::new(pattern) {
+                    Ok(re) => Some(Arc::new(re)),
+                    Err(e) => {
+                        tracing::warn!(
+                            route = %format!("{}/{}", route_ns, route_name),
+                            rule_id = rule_id,
+                            match_id = match_id,
+                            field = label,
+                            pattern = %pattern,
+                            error = %e,
+                            "Failed to compile gRPC method regex pattern, match will fail"
+                        );
+                        None
+                    }
+                })
+            };
+            (
+                compile(&method_match.service, "service"),
+                compile(&method_match.method, "method"),
+            )
+        } else {
+            (None, None)
+        };
+
         Self {
             rsc: crate::types::Rsc {
                 kind: "GRPCRoute".to_string(),
@@ -94,6 +134,8 @@ impl GrpcMatchInfo {
             sv,
             matched,
             compiled_header_regexes,
+            compiled_service_regex,
+            compiled_method_regex,
         }
     }
 }

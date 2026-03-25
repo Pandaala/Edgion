@@ -49,7 +49,7 @@ If the placement is wrong, the code path and the documentation usually drift wit
 | `edgion.io/upstream-tls` | `TLSRoute` | Controls whether upstream connections use TLS |
 | `edgion.io/max-connect-retries` | `TLSRoute` | Max upstream connection attempts |
 | `edgion.io/expose-client-cert` | `EdgionTls` | Exposes mTLS client certificate info to the plugin/session layer |
-| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | Active health-check YAML config |
+| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | Active health-check YAML config (type: http/tcp/grpc) |
 
 ## Common Keys That Are Not Annotations
 

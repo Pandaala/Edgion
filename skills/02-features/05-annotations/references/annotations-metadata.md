@@ -71,11 +71,12 @@ Current implementation note:
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
-| `edgion.io/health-check` | YAML string | none | Configures active backend health checks. Parsed from object metadata and validated before use. |
+| `edgion.io/health-check` | YAML string | none | Configures active backend health checks (type: http/tcp/grpc). For gRPC, supports `grpcServiceName` field. Parsed from object metadata and validated before use. |
 
 Notes:
 
 - The parser accepts YAML text, not flat key-value options.
+- Supported probe types: `http` (default), `tcp`, `grpc` (gRPC Health Check Protocol).
 - The user-facing health-check guide remains the best place for schema examples:
   - `docs/zh-CN/user-guide/http-route/backends/health-check.md`
   - `docs/en/user-guide/http-route/backends/health-check.md`

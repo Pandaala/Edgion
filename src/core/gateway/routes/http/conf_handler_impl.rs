@@ -332,6 +332,15 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
         let effective_hostnames = get_effective_hostnames(route);
         for hostname in &effective_hostnames {
             for (rule_id, rule) in validated.rules.iter().enumerate() {
+                // Skip rules marked invalid by Controller
+                if route
+                    .spec
+                    .invalid_rule_indices
+                    .as_ref()
+                    .is_some_and(|inv| inv.contains(&rule_id))
+                {
+                    continue;
+                }
                 let rule_arc = Arc::new(rule.clone());
 
                 let default_matches = vec![HTTPRouteMatch {

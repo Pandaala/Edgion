@@ -622,7 +622,7 @@ Edgion 正在积极演进，以下是近期和中期的重点方向：
 
 **Circuit Breaker 熔断器。** 引入熔断器插件，当后端服务错误率超过阈值时自动切断流量，进入半开状态后逐步恢复。支持基于滑动窗口的错误率统计和可配置的熔断/恢复策略，防止故障级联扩散。
 
-**gRPC 健康检查。** 实现 gRPC Health Checking Protocol（`grpc.health.v1.Health`），使 Gateway 能够对 gRPC 上游执行主动健康检查。与现有的 HTTP 健康检查机制并行，由后端协议类型自动选择对应的探测方式。
+**gRPC 健康检查（已实现）。** 已实现 gRPC Health Checking Protocol（`grpc.health.v1.Health`），Gateway 能够对 gRPC 上游执行主动健康检查。通过 `type: grpc` 配置，支持可选的 `grpcServiceName` 参数指定检查的服务。与 HTTP/TCP 探针并行，通过 annotation 中的 `type` 字段选择探测方式。
 
 **请求延迟直方图增强。** 在现有 `edgion_gateway_request_duration_ms` 基础上，引入 Native Histogram（Prometheus 原生直方图）支持，提供更高精度的延迟分布数据。同时增加上游连接建立耗时、TLS 握手耗时等细分阶段的独立直方图。
 

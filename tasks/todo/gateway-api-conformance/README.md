@@ -6,11 +6,11 @@
 
 | 文件 | 内容 | 优先级 |
 |------|------|--------|
-| [01-httproute-retry-session.md](01-httproute-retry-session.md) | HTTPRoute Retry 策略运行时接入 + Session Persistence 实现 | P0 |
-| [02-tls-passthrough.md](02-tls-passthrough.md) | TLS Passthrough 模式实现 | P0 |
-| [03-status-conditions.md](03-status-conditions.md) | Programmed 条件、supportedFeatures、PartiallyInvalid 等状态上报 | P0/P1 |
-| [04-grpcroute-gaps.md](04-grpcroute-gaps.md) | GRPCRoute 正则匹配 + UNIMPLEMENTED 错误码 | P1 |
-| [05-filter-validation.md](05-filter-validation.md) | Filter 冲突校验 + 版本更新 + 约束执行 | P1 |
+| ~~01-httproute-retry-session.md~~ | ~~HTTPRoute Retry 策略运行时接入~~ | ~~P0~~ **已完成** |
+| ~~02-tls-passthrough.md~~ | ~~TLS Passthrough 模式实现~~ | ~~P0~~ **已完成** |
+| [03-status-conditions.md](03-status-conditions.md) | ~~supportedFeatures~~ ✅ / ~~PartiallyInvalid~~ ✅ / Programmed 待定 / Gateway addresses 不实现 | P0/P1 |
+| [04-grpcroute-gaps.md](04-grpcroute-gaps.md) | ~~GRPCRoute 正则匹配~~ ✅ / UNIMPLEMENTED 错误码 / Hostname 唯一性 | P1 |
+| [05-filter-validation.md](05-filter-validation.md) | ~~URLRewrite+Redirect 冲突~~ ✅ / 超时约束 / TCP/UDP 单路由 / parametersRef | P1 |
 | [06-policy-and-experimental.md](06-policy-and-experimental.md) | BackendTrafficPolicy、externalAuth、infrastructure 等前瞻性功能 | P2 |
 | [07-code-quality.md](07-code-quality.md) | 性能优化与代码质量改进 | P2 |
 

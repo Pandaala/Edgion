@@ -6,6 +6,7 @@ pub mod test_metrics;
 
 pub use api::{create_metrics_router, serve};
 pub use registry::{
-    global_metrics, record_backend_request, record_mirror_metric, record_request_duration, status_group, GatewayMetrics,
+    global_metrics, record_backend_request, record_cb_ejection, record_cb_recovery, record_cb_rejection,
+    record_mirror_metric, record_request_duration, status_group, GatewayMetrics,
 };
 pub use test_metrics::{set_latency_test_data, set_lb_test_data, set_retry_test_data, TestData, TestType};

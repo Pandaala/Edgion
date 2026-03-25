@@ -2,6 +2,10 @@
 
 优先级: P0/P1
 
+> **已完成：** supportedFeatures (Task 2) 和 PartiallyInvalid (Task 3) 已实现，见 `skills/01-architecture/01-controller/10-status-management.md`。
+> **不实现：** Gateway addresses (Task 4)，见 `skills/08-gateway-api/01-not-implemented.md`。
+> **待定：** Programmed (Task 1)。
+
 ## 1. Programmed 条件 [P0]
 
 ### 现状
@@ -25,56 +29,33 @@
 
 ---
 
-## 2. GatewayClass.status.supportedFeatures [P1]
+## ~~2. GatewayClass.status.supportedFeatures [P1]~~ ✅ 已完成
 
-### 现状
+### 实现摘要
 
-- `GatewayClassStatus` 只有 `conditions: Vec<Condition>`
-- conformance test 已声明支持的特性列表（HTTPRoute、ReferenceGrant、query param matching、method matching 等）
-- 该列表未反映到 CRD status
-
-### 需要实现
-
-1. 在 `GatewayClassStatus` 添加 `supported_features: Option<Vec<String>>` 字段
-2. 在 `gateway_class.rs` handler 的 `parse()` 中填充已知支持特性
-3. 特性列表应与 conformance test 声明保持一致
-
-### 涉及文件
-
-- `src/types/resources/gateway_class.rs`
-- `src/core/controller/sync_runtime/resource_processor/handlers/gateway_class.rs`
+- `GatewayClassStatus` 添加 `supported_features: Option<Vec<String>>` 字段
+- `gateway_class.rs` handler 的 `update_status()` 中填充 23 个已支持特性（与 conformance test 声明一致）
+- 涉及文件：`src/types/resources/gateway_class.rs`、`handlers/gateway_class.rs`
 
 ---
 
-## 3. PartiallyInvalid 条件 [P1]
+## ~~3. PartiallyInvalid 条件 [P1]~~ ✅ 已完成
 
-### 现状
+### 实现摘要
 
-- Route 验证是全有或全无：所有规则有效则 Accepted，任一无效则整体 rejected
-- Gateway API 规范要求：部分规则有效时设置 `PartiallyInvalid` 条件，有效规则继续生效
-
-### 需要实现
-
-1. 定义 `PartiallyInvalid` 条件类型
-2. 逐规则验证，收集有效/无效规则
-3. 若部分有效：设置 `Accepted: True` + `PartiallyInvalid: True`，message 中列出无效规则
-4. 仅转发有效规则到数据面
-
-### 涉及文件
-
-- `src/types/resources/common.rs` — 条件类型
-- `src/core/controller/sync_runtime/resource_processor/handlers/http_route.rs`
-- `src/core/controller/sync_runtime/resource_processor/handlers/grpc_route.rs`
+- Controller 逐 rule 验证 backend ref，结果存入 `spec.invalid_rule_indices: Option<Vec<usize>>`
+- 部分 rule 无效：`Accepted: True` + `PartiallyInvalid: True`；全部 rule 无效：`Accepted: False`
+- Gateway 编译路由时 skip `invalid_rule_indices` 中的 rule
+- Backend ref 存在性检查从 `validate()` 移至 `update_status()`，避免误标整条路由 Accepted: False
+- HTTPRoute 和 GRPCRoute 均已实现
+- 集成测试：`HTTPRoute/Backend/PartiallyInvalid`（3 cases: valid rule 代理、invalid rule 跳过、全部无效拒绝）
+- 详细架构见 `skills/01-architecture/01-controller/10-status-management.md`
 
 ---
 
-## 4. Gateway addresses 状态 [P2]
-
-### 现状
+## 4. Gateway addresses 状态 [P2] — 不实现
 
 - 从 spec.addresses、Service ClusterIP、默认配置、fallback `0.0.0.0` 推导
 - 不反映数据面实际绑定地址（受限于无状态回传通道）
-
-### 长期方案
-
-- 若实现数据面状态回传（为 Programmed 条件），可顺带上报实际绑定地址
+- 若未来为 Programmed 条件建立状态回传通道，可顺带解决
+- 详见 `skills/08-gateway-api/01-not-implemented.md`

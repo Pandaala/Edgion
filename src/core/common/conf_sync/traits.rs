@@ -19,8 +19,9 @@ pub enum ResourceChange {
 
 /// Trait for handling resource events in cache
 pub trait CacheEventDispatch<T> {
-    /// Apply a change to the resource cache
-    fn apply_change(&self, change: ResourceChange, resource: T)
+    /// Apply a change to the resource cache.
+    /// When `sv` is `Some`, use the provided sync_version; otherwise generate one internally.
+    fn apply_change(&self, change: ResourceChange, resource: T, sv: Option<u64>)
     where
         T: Send + 'static;
 

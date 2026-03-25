@@ -6,7 +6,7 @@
 
 ## 概述
 
-主动健康检查会在网关侧周期性探测后端实例（HTTP/TCP），并在负载均衡选择时自动跳过不健康实例。  
+主动健康检查会在网关侧周期性探测后端实例（HTTP/TCP/gRPC），并在负载均衡选择时自动跳过不健康实例。  
 该功能主要用于后端可达但应用层异常、或非 K8s 场景下的就绪判断补充。
 
 ## 快速开始
@@ -66,7 +66,7 @@ active:
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `type` | `http` \| `tcp` | ❌ | `http` | 探测类型 |
+| `type` | `http` \| `tcp` \| `grpc` | ❌ | `http` | 探测类型 |
 | `path` | string | ❌ | `/` | HTTP 探测路径（仅 `http` 有效） |
 | `port` | uint16 | ❌ | 使用后端端口 | 探测端口覆盖 |
 | `interval` | duration string | ❌ | `10s` | 探测周期 |
@@ -75,6 +75,7 @@ active:
 | `unhealthyThreshold` | uint32 | ❌ | `3` | 连续失败多少次标记不健康 |
 | `expectedStatuses` | `[]uint16` | ❌ | `[200]` | HTTP 期望状态码（仅 `http` 有效） |
 | `host` | string | ❌ | 无 | HTTP Host 头覆盖（仅 `http` 有效） |
+| `grpcServiceName` | string | ❌ | `""`（整个服务器） | gRPC Health Check 的 service name（仅 `grpc` 有效） |
 
 ## 行为细节与优先级
 
@@ -145,7 +146,27 @@ metadata:
         timeout: 1s
 ```
 
-### 场景 3：EndpointSlice 层覆盖 Service 层
+### 场景 3：gRPC 后端健康检查
+
+对于实现了标准 [gRPC Health Checking Protocol](https://github.com/grpc/grpc/blob/master/doc/health-checking.md)（`grpc.health.v1.Health`）的 gRPC 后端：
+
+```yaml
+metadata:
+  annotations:
+    edgion.io/health-check: |
+      active:
+        type: grpc
+        port: 9090
+        interval: 10s
+        timeout: 3s
+        healthyThreshold: 2
+        unhealthyThreshold: 3
+        grpcServiceName: "my.package.MyService"  # 可选，空字符串=检查整个服务器
+```
+
+网关会调用 `Health/Check` RPC，仅当响应状态为 `SERVING` 时标记后端为健康。
+
+### 场景 4：EndpointSlice 层覆盖 Service 层
 
 ```yaml
 # Service 层默认配置
@@ -168,10 +189,11 @@ metadata:
 
 ## 注意事项
 
-1. `expectedStatuses` 仅对 `http` 生效，`tcp` 模式会忽略该字段。
-2. `path` 必须以 `/` 开头，否则配置会被判定为无效并忽略。
+1. `expectedStatuses` 仅对 `http` 生效，`tcp` 和 `grpc` 模式会忽略该字段。
+2. `path` 必须以 `/` 开头，否则配置会被判定为无效并忽略。仅对 `http` 模式有效。
 3. `healthyThreshold` 和 `unhealthyThreshold` 必须大于等于 `1`。
-4. 未配置健康检查的服务不会做探测，默认按“健康”参与负载均衡。
+4. 未配置健康检查的服务不会做探测，默认按”健康”参与负载均衡。
+5. `grpcServiceName` 仅对 `grpc` 模式有效。空字符串（默认）表示检查整个服务器的健康状态。
 
 ## 当前限制
 

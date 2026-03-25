@@ -202,6 +202,57 @@ impl HTTPRoute {
             );
         }
     }
+    /// Parse and pre-process retry configurations for all rules
+    pub fn parse_retry(&mut self) {
+        let Some(rules) = self.spec.rules.as_mut() else {
+            return;
+        };
+
+        for rule in rules.iter_mut() {
+            let Some(retry) = &rule.retry else {
+                continue;
+            };
+
+            let attempts = retry.attempts.map(|a| a.max(0) as u32);
+
+            let backoff = retry.backoff.as_deref().and_then(|s| {
+                crate::core::common::utils::parse_duration(s)
+                    .map_err(|e| {
+                        tracing::warn!(
+                            route = %format!("{}/{}",
+                                self.metadata.namespace.as_deref().unwrap_or("default"),
+                                self.metadata.name.as_deref().unwrap_or("")),
+                            value = %s,
+                            error = %e,
+                            "Invalid retry backoff duration, backoff disabled"
+                        );
+                    })
+                    .ok()
+            });
+
+            let codes = retry.codes.as_ref().map(|codes| {
+                codes
+                    .iter()
+                    .filter_map(|&c| {
+                        if (100..=599).contains(&c) {
+                            Some(c as u16)
+                        } else {
+                            tracing::warn!(code = c, "Invalid HTTP status code in retry.codes, ignoring");
+                            None
+                        }
+                    })
+                    .collect::<Vec<u16>>()
+            });
+
+            if attempts.is_some() || backoff.is_some() || codes.is_some() {
+                rule.parsed_retry = Some(crate::types::resources::http_route::ParsedRouteRetry {
+                    attempts,
+                    backoff,
+                    codes,
+                });
+            }
+        }
+    }
 }
 
 #[cfg(test)]

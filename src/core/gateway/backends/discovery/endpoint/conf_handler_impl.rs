@@ -22,12 +22,14 @@ fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &
             removed_count = removed.len(),
             "Cleaning stale backend runtime state"
         );
+        let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
         for addr in &removed {
             if runtime_state::get_count(service_key, addr) > 0 {
                 runtime_state::mark_backend_draining(service_key, addr);
             } else {
                 runtime_state::remove_backend(service_key, addr);
             }
+            cb_store.remove_backend(service_key, addr);
         }
     }
 }

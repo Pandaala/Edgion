@@ -1,19 +1,42 @@
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
+use crate::types::resources::grpc_route::GRPCMethodMatchType;
 use pingora_proxy::Session;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// gRPC match engine for service/method based routing with optimized lookup
+/// gRPC match engine for service/method based routing with optimized lookup.
+///
+/// Supports both Exact and RegularExpression match types.
+/// Match priority (highest first):
+///   1. Exact service + Exact method
+///   2. Exact service + Regex method
+///   3. Regex service + Exact method
+///   4. Regex service + Regex method
+///   5. Exact service only (method not specified)
+///   6. Regex service only (method not specified)
+///   7. Catch-all (neither service nor method specified)
+///
+/// Within regex tiers, routes are sorted by pattern length (longest first).
 pub struct GrpcMatchEngine {
     /// Exact match: (service, method) -> routes
-    /// Multiple routes may exist for same service/method with different hostnames or headers
     exact_routes: HashMap<(String, String), Vec<Arc<GrpcRouteRuleUnit>>>,
 
-    /// Service-level match: service -> routes (method not specified)
-    /// Multiple routes may exist for same service with different hostnames or headers
+    /// Service-level exact match: service -> routes (method not specified)
     service_routes: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
+
+    /// Exact service + Regex method, sorted by method pattern length desc
+    exact_service_regex_method: Vec<Arc<GrpcRouteRuleUnit>>,
+
+    /// Regex service + Exact method, sorted by service pattern length desc
+    regex_service_exact_method: Vec<Arc<GrpcRouteRuleUnit>>,
+
+    /// Regex service + Regex method, sorted by combined pattern length desc
+    regex_service_regex_method: Vec<Arc<GrpcRouteRuleUnit>>,
+
+    /// Regex service only (method not specified), sorted by service pattern length desc
+    regex_service_only: Vec<Arc<GrpcRouteRuleUnit>>,
 
     /// Catch-all route (both service and method not specified)
     catch_all_route: Option<Arc<GrpcRouteRuleUnit>>,
@@ -21,41 +44,77 @@ pub struct GrpcMatchEngine {
 
 impl GrpcMatchEngine {
     pub fn new(routes: Vec<Arc<GrpcRouteRuleUnit>>) -> Self {
-        let mut exact_routes = HashMap::new();
-        let mut service_routes = HashMap::new();
+        let mut exact_routes: HashMap<(String, String), Vec<Arc<GrpcRouteRuleUnit>>> = HashMap::new();
+        let mut service_routes: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>> = HashMap::new();
+        let mut exact_service_regex_method = Vec::new();
+        let mut regex_service_exact_method = Vec::new();
+        let mut regex_service_regex_method = Vec::new();
+        let mut regex_service_only = Vec::new();
         let mut catch_all_route = None;
 
         for route in routes {
             if let Some(ref grpc_method_match) = route.matched_info.matched.method {
-                // Classify based on service and method presence
-                // Note: We only support Exact match type (default behavior)
-                match (&grpc_method_match.service, &grpc_method_match.method) {
-                    (Some(service), Some(method)) => {
-                        // Exact match: both service and method specified
-                        // Use entry().or_insert_with() to append routes instead of overwriting
+                let is_regex = grpc_method_match.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression);
+
+                match (&grpc_method_match.service, &grpc_method_match.method, is_regex) {
+                    // Exact service + Exact method
+                    (Some(service), Some(method), false) => {
                         exact_routes
                             .entry((service.clone(), method.clone()))
                             .or_insert_with(Vec::new)
                             .push(route);
                     }
-                    (Some(service), None) => {
-                        // Service-level match: only service specified
-                        // Use entry().or_insert_with() to append routes instead of overwriting
+                    // Exact service only (no method)
+                    (Some(service), None, false) => {
                         service_routes
                             .entry(service.clone())
                             .or_insert_with(Vec::new)
                             .push(route);
                     }
-                    (None, None) => {
-                        // Catch-all: neither service nor method specified
+                    // Regex: service + method both present
+                    (Some(_service), Some(_method), true) => {
+                        // Determine sub-category based on which fields have compiled regexes
+                        let has_service_regex = route.matched_info.compiled_service_regex.is_some();
+                        let has_method_regex = route.matched_info.compiled_method_regex.is_some();
+
+                        match (has_service_regex, has_method_regex) {
+                            (false, true) => exact_service_regex_method.push(route),
+                            (true, false) => regex_service_exact_method.push(route),
+                            (true, true) => regex_service_regex_method.push(route),
+                            // Both failed to compile — treat as exact fallback
+                            (false, false) => {
+                                tracing::warn!(
+                                    route = %route.identifier(),
+                                    "RegularExpression match type but no regex compiled, treating as exact"
+                                );
+                                exact_routes
+                                    .entry((_service.clone(), _method.clone()))
+                                    .or_insert_with(Vec::new)
+                                    .push(route);
+                            }
+                        }
+                    }
+                    // Regex: service only (no method)
+                    (Some(_), None, true) => {
+                        if route.matched_info.compiled_service_regex.is_some() {
+                            regex_service_only.push(route);
+                        } else {
+                            tracing::warn!(
+                                route = %route.identifier(),
+                                "RegularExpression service but regex compilation failed, skipping"
+                            );
+                        }
+                    }
+                    // Catch-all: neither service nor method
+                    (None, None, _) => {
                         if catch_all_route.is_none() {
                             catch_all_route = Some(route);
                         } else {
                             tracing::warn!("Multiple catch-all routes found, using first one");
                         }
                     }
-                    (None, Some(_)) => {
-                        // Invalid: method without service (should not happen)
+                    // Method without service — not valid per Gateway API spec
+                    (None, Some(_), _) => {
                         tracing::warn!(
                             route = %route.identifier(),
                             "Invalid gRPC route: method specified without service"
@@ -65,9 +124,66 @@ impl GrpcMatchEngine {
             }
         }
 
+        // Sort regex routes by pattern length descending (longer = more specific = higher priority)
+        let sort_by_pattern_len = |routes: &mut Vec<Arc<GrpcRouteRuleUnit>>,
+                                   service_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize,
+                                   method_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize| {
+            routes.sort_by(|a, b| {
+                let len_a = service_len(a) + method_len(a);
+                let len_b = service_len(b) + method_len(b);
+                len_b.cmp(&len_a)
+            });
+        };
+
+        let service_regex_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
+            r.matched_info
+                .compiled_service_regex
+                .as_ref()
+                .map(|re| re.as_str().len())
+                .unwrap_or(0)
+        };
+        let method_regex_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
+            r.matched_info
+                .compiled_method_regex
+                .as_ref()
+                .map(|re| re.as_str().len())
+                .unwrap_or(0)
+        };
+        let service_exact_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
+            r.matched_info
+                .matched
+                .method
+                .as_ref()
+                .and_then(|m| m.service.as_ref())
+                .map(|s| s.len())
+                .unwrap_or(0)
+        };
+        let method_exact_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
+            r.matched_info
+                .matched
+                .method
+                .as_ref()
+                .and_then(|m| m.method.as_ref())
+                .map(|s| s.len())
+                .unwrap_or(0)
+        };
+
+        sort_by_pattern_len(&mut exact_service_regex_method, service_exact_len, method_regex_len);
+        sort_by_pattern_len(&mut regex_service_exact_method, service_regex_len, method_exact_len);
+        sort_by_pattern_len(&mut regex_service_regex_method, service_regex_len, method_regex_len);
+        regex_service_only.sort_by(|a, b| {
+            let len_a = service_regex_len(a);
+            let len_b = service_regex_len(b);
+            len_b.cmp(&len_a)
+        });
+
         Self {
             exact_routes,
             service_routes,
+            exact_service_regex_method,
+            regex_service_exact_method,
+            regex_service_regex_method,
+            regex_service_only,
             catch_all_route,
         }
     }
@@ -75,11 +191,6 @@ impl GrpcMatchEngine {
     /// Match gRPC route based on service/method with optimized lookup.
     ///
     /// Returns matched route unit and the specific `GatewayInfo` that passed validation.
-    ///
-    /// # Parameters
-    /// - `session`: The HTTP session
-    /// - `gateway_infos`: All gateway/listener contexts available on this listener
-    /// - `hostname`: Request hostname for route-level hostname matching
     pub fn match_route(
         &self,
         session: &Session,
@@ -87,10 +198,9 @@ impl GrpcMatchEngine {
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         let path = session.req_header().uri.path();
-
         let (service, method) = parse_grpc_path(path)?;
 
-        // Priority 1: Try exact match (service, method)
+        // Priority 1: Exact service + Exact method
         if let Some(routes) = self.exact_routes.get(&(service.clone(), method.clone())) {
             for route_unit in routes {
                 if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
@@ -99,7 +209,64 @@ impl GrpcMatchEngine {
             }
         }
 
-        // Priority 2: Try service-level match (service only)
+        // Priority 2: Exact service + Regex method
+        for route_unit in &self.exact_service_regex_method {
+            let method_match = route_unit.matched_info.matched.method.as_ref();
+            let service_matches = method_match
+                .and_then(|m| m.service.as_ref())
+                .map_or(false, |s| s == &service);
+            if !service_matches {
+                continue;
+            }
+            if let Some(ref re) = route_unit.matched_info.compiled_method_regex {
+                if re.is_match(&method) {
+                    if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                        return Ok((route_unit.clone(), matched_gi));
+                    }
+                }
+            }
+        }
+
+        // Priority 3: Regex service + Exact method
+        for route_unit in &self.regex_service_exact_method {
+            if let Some(ref re) = route_unit.matched_info.compiled_service_regex {
+                if re.is_match(&service) {
+                    let method_matches = route_unit
+                        .matched_info
+                        .matched
+                        .method
+                        .as_ref()
+                        .and_then(|m| m.method.as_ref())
+                        .map_or(false, |m| m == &method);
+                    if method_matches {
+                        if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                            return Ok((route_unit.clone(), matched_gi));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Priority 4: Regex service + Regex method
+        for route_unit in &self.regex_service_regex_method {
+            let service_ok = route_unit
+                .matched_info
+                .compiled_service_regex
+                .as_ref()
+                .map_or(false, |re| re.is_match(&service));
+            let method_ok = route_unit
+                .matched_info
+                .compiled_method_regex
+                .as_ref()
+                .map_or(false, |re| re.is_match(&method));
+            if service_ok && method_ok {
+                if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                    return Ok((route_unit.clone(), matched_gi));
+                }
+            }
+        }
+
+        // Priority 5: Exact service only (method not specified)
         if let Some(routes) = self.service_routes.get(&service) {
             for route_unit in routes {
                 if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
@@ -108,6 +275,18 @@ impl GrpcMatchEngine {
             }
         }
 
+        // Priority 6: Regex service only (method not specified)
+        for route_unit in &self.regex_service_only {
+            if let Some(ref re) = route_unit.matched_info.compiled_service_regex {
+                if re.is_match(&service) {
+                    if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                        return Ok((route_unit.clone(), matched_gi));
+                    }
+                }
+            }
+        }
+
+        // Priority 7: Catch-all
         if let Some(ref route_unit) = self.catch_all_route {
             if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
                 return Ok((route_unit.clone(), matched_gi));
@@ -161,27 +340,29 @@ mod tests {
         assert!(parse_grpc_path("//method").is_err());
     }
 
-    #[test]
-    fn test_multiple_routes_same_service_method() {
-        // Test that multiple routes with same service/method are stored correctly
-        // This verifies the fix for HashMap collision issue
+    fn make_route(
+        service: Option<&str>,
+        method: Option<&str>,
+        match_type: Option<GRPCMethodMatchType>,
+        name: &str,
+    ) -> Arc<GrpcRouteRuleUnit> {
         use crate::core::gateway::lb::BackendSelector;
         use crate::core::gateway::plugins::PluginRuntime;
+        use crate::core::gateway::routes::grpc::GrpcRouteInfo;
 
-        // Create route 1: test.Service/Method with hostname api.example.com
-        let match1 = GRPCRouteMatch {
+        let grpc_match = GRPCRouteMatch {
             method: Some(GRPCMethodMatch {
-                match_type: None, // Use default (Exact)
-                service: Some("test.Service".to_string()),
-                method: Some("Method".to_string()),
+                match_type,
+                service: service.map(|s| s.to_string()),
+                method: method.map(|m| m.to_string()),
             }),
             headers: None,
         };
-        let route_info1 = Arc::new(crate::core::gateway::routes::grpc::GrpcRouteInfo {
+        let route_info = Arc::new(GrpcRouteInfo {
             parent_refs: None,
             effective_hostnames: vec!["*".to_string()],
         });
-        let rule1 = Arc::new(GRPCRouteRule {
+        let rule = Arc::new(GRPCRouteRule {
             matches: None,
             filters: None,
             backend_refs: None,
@@ -192,49 +373,100 @@ mod tests {
             plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
         });
-        let route1 = Arc::new(GrpcRouteRuleUnit {
-            resource_key: "default/route1".to_string(),
-            matched_info: GrpcMatchInfo::new("default".to_string(), "route1".to_string(), 0, 0, match1, 0),
-            rule: rule1.clone(),
-            route_info: route_info1,
-        });
+        Arc::new(GrpcRouteRuleUnit {
+            resource_key: format!("default/{}", name),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0),
+            rule,
+            route_info,
+        })
+    }
 
-        // Create route 2: test.Service/Method with hostname grpc.example.com
-        let match2 = GRPCRouteMatch {
-            method: Some(GRPCMethodMatch {
-                match_type: None, // Use default (Exact)
-                service: Some("test.Service".to_string()),
-                method: Some("Method".to_string()),
-            }),
-            headers: None,
-        };
-        let route_info2 = Arc::new(crate::core::gateway::routes::grpc::GrpcRouteInfo {
-            parent_refs: None,
-            effective_hostnames: vec!["*".to_string()],
-        });
-        let route2 = Arc::new(GrpcRouteRuleUnit {
-            resource_key: "default/route2".to_string(),
-            matched_info: GrpcMatchInfo::new("default".to_string(), "route2".to_string(), 0, 0, match2, 0),
-            rule: rule1,
-            route_info: route_info2,
-        });
+    #[test]
+    fn test_multiple_routes_same_service_method() {
+        let route1 = make_route(Some("test.Service"), Some("Method"), None, "route1");
+        let route2 = make_route(Some("test.Service"), Some("Method"), None, "route2");
 
-        // Create match engine with both routes
-        let engine = GrpcMatchEngine::new(vec![route1.clone(), route2.clone()]);
-
-        // Verify both routes are stored in the exact_routes HashMap
+        let engine = GrpcMatchEngine::new(vec![route1, route2]);
         let key = ("test.Service".to_string(), "Method".to_string());
-        assert!(engine.exact_routes.contains_key(&key));
-
         let routes = engine.exact_routes.get(&key).unwrap();
-        assert_eq!(routes.len(), 2, "Should have 2 routes for same service/method");
-
-        // Verify route identifiers
+        assert_eq!(routes.len(), 2);
         assert_eq!(routes[0].matched_info.rsc.name, "route1");
         assert_eq!(routes[1].matched_info.rsc.name, "route2");
+    }
 
-        // Verify route identifiers distinguish the two routes
-        assert_eq!(routes[0].resource_key, "default/route1");
-        assert_eq!(routes[1].resource_key, "default/route2");
+    #[test]
+    fn test_regex_method_routes_classified() {
+        // When type=RegularExpression, both service and method are compiled as regex.
+        // "test.Service" is a valid regex (matches "testXService" etc.), so both compile.
+        let route = make_route(
+            Some("test.Service"),
+            Some("Say.*"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "regex-method",
+        );
+        assert!(route.matched_info.compiled_method_regex.is_some());
+        // type applies to both fields, so service is also compiled as regex
+        assert!(route.matched_info.compiled_service_regex.is_some());
+
+        let engine = GrpcMatchEngine::new(vec![route]);
+        // Both compiled → goes to regex_service_regex_method
+        assert_eq!(engine.regex_service_regex_method.len(), 1);
+        assert!(engine.exact_service_regex_method.is_empty());
+        assert!(engine.regex_service_exact_method.is_empty());
+    }
+
+    #[test]
+    fn test_regex_service_routes_classified() {
+        // Regex service + Exact method (both fields present, type=Regex → both compiled)
+        // When type=Regex and both service+method present, both are compiled as regex
+        let route = make_route(
+            Some("test\\..*"),
+            Some("Method.*"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "regex-both",
+        );
+        // Both should be compiled since match_type applies to both
+        assert!(route.matched_info.compiled_service_regex.is_some());
+        assert!(route.matched_info.compiled_method_regex.is_some());
+
+        let engine = GrpcMatchEngine::new(vec![route]);
+        assert_eq!(engine.regex_service_regex_method.len(), 1);
+    }
+
+    #[test]
+    fn test_regex_service_only_classified() {
+        let route = make_route(
+            Some("test\\..*"),
+            None,
+            Some(GRPCMethodMatchType::RegularExpression),
+            "regex-svc-only",
+        );
+        assert!(route.matched_info.compiled_service_regex.is_some());
+
+        let engine = GrpcMatchEngine::new(vec![route]);
+        assert_eq!(engine.regex_service_only.len(), 1);
+    }
+
+    #[test]
+    fn test_regex_routes_sorted_by_pattern_length() {
+        let short = make_route(
+            Some("a"),
+            Some("b.*"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "short",
+        );
+        let long = make_route(
+            Some("a"),
+            Some("very-long-pattern-.*"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "long",
+        );
+
+        let engine = GrpcMatchEngine::new(vec![short, long]);
+        // Both service and method compiled as regex → regex_service_regex_method
+        assert_eq!(engine.regex_service_regex_method.len(), 2);
+        // Longest combined pattern first
+        assert_eq!(engine.regex_service_regex_method[0].matched_info.rsc.name, "long");
+        assert_eq!(engine.regex_service_regex_method[1].matched_info.rsc.name, "short");
     }
 }

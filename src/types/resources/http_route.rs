@@ -49,6 +49,11 @@ pub struct HTTPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_ports: Option<Vec<u16>>,
 
+    /// Controller-identified invalid rule indices.
+    /// Gateway skips these rules during route compilation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invalid_rule_indices: Option<Vec<usize>>,
+
     /// Rules defines the HTTP routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HTTPRouteRule>>,
@@ -112,6 +117,12 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_max_retries: Option<u32>,
+
+    /// Pre-parsed retry configuration from HTTPRouteRule.retry (not serialized)
+    /// Parsed once when route is loaded, used at runtime
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_retry: Option<ParsedRouteRetry>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -130,6 +141,7 @@ impl Clone for HTTPRouteRule {
             plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_max_retries: self.parsed_max_retries,
+            parsed_retry: self.parsed_retry.clone(),
         }
     }
 }
@@ -776,6 +788,22 @@ pub enum CookieLifetimeType {
     Permanent,
     /// Session cookies are deleted when the client session ends
     Session,
+}
+
+// ============================================
+// Pre-parsed Route Retry
+// ============================================
+
+/// Pre-parsed retry configuration from HTTPRouteRule.retry
+/// Stored in HTTPRouteRule for zero-cost runtime access
+#[derive(Debug, Clone)]
+pub struct ParsedRouteRetry {
+    /// Max retry attempts (from retry.attempts)
+    pub attempts: Option<u32>,
+    /// Base backoff duration (from retry.backoff, parsed from string)
+    pub backoff: Option<std::time::Duration>,
+    /// HTTP status codes that trigger retry (from retry.codes, validated to 100-599)
+    pub codes: Option<Vec<u16>>,
 }
 
 // ============================================

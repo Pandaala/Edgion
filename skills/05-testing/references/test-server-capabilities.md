@@ -9,7 +9,7 @@
 | 能力 | 端口 |
 |------|------|
 | HTTP backends | `30001,30002,30003` |
-| gRPC backends | `30021,30022,30023` |
+| gRPC backends (TestService + Health) | `30021,30022,30023` |
 | WebSocket | `30005` |
 | TCP echo | `30010` |
 | UDP echo | `30011` |

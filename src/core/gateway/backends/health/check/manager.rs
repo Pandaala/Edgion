@@ -1,6 +1,6 @@
 use super::backend_hash;
 use super::config_store::{get_hc_config_store, HealthCheckConfigStore};
-use super::probes::{build_http_probe_client, probe_http, probe_http_with_client, probe_tcp};
+use super::probes::{build_http_probe_client, probe_grpc, probe_http, probe_http_with_client, probe_tcp};
 use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::core::common::utils::duration::parse_duration;
 use crate::core::controller::conf_mgr::conf_center::EndpointMode;
@@ -103,6 +103,7 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
         config.expected_statuses.clone()
     };
     let http_host = config.host.clone();
+    let grpc_service_name = config.grpc_service_name.clone().unwrap_or_default();
 
     let mut http_client = if matches!(config.r#type, HealthCheckType::Http) {
         match build_http_probe_client(timeout) {
@@ -198,6 +199,7 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                     }
                 }
                 HealthCheckType::Tcp => probe_tcp(*addr, config.port, timeout).await,
+                HealthCheckType::Grpc => probe_grpc(*addr, config.port, &grpc_service_name, timeout).await,
             };
 
             health_store.record_check(

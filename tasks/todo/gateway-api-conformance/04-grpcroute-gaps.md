@@ -2,25 +2,12 @@
 
 优先级: P1
 
-## 1. RegularExpression 方法匹配
+## 1. ~~RegularExpression 方法匹配~~ ✅ 已完成
 
-### 现状
+已在 `GrpcMatchEngine` 中实现七级优先级匹配（Exact 优先于 Regex），正则模式预编译并按长度排序。集成测试通过。
 
-- `GRPCMethodMatchType` 枚举定义了 `Exact` 和 `RegularExpression` 两种类型
-- `match_engine.rs:31` 注释明确说明 "We only support Exact match type"
-- 匹配引擎使用 HashMap 以 `(service, method)` 为 key 做精确查找
-- 正则模式被静默忽略，用户配置了也不生效
-
-### 需要实现
-
-1. 类似 HTTPRoute 的双引擎架构：精确匹配走 HashMap，正则匹配走 `RegexSet`
-2. 精确匹配优先于正则匹配（规范要求）
-3. 正则匹配间按模式长度排序
-4. 若不实现，至少在配置验证阶段拒绝正则类型并报错，而非静默忽略
-
-### 涉及文件
-
-- `src/core/gateway/routes/grpc/match_engine.rs`
+改动文件：`match_engine.rs`、`match_unit.rs`
+测试：`examples/test/conf/GRPCRoute/Match/GRPCRoute_edge_regex-*.yaml` + `matches.rs` 中 3 个 regex 测试用例
 
 ---
 

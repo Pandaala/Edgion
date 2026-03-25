@@ -99,7 +99,10 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
+            "retry-on-status" | "retryonstatus" => "HTTPRoute/Backend/RetryOnStatus".to_string(),
+            "circuit-breaker" | "circuitbreaker" => "HTTPRoute/Backend/CircuitBreaker".to_string(),
             "health-check" | "healthcheck" => "HTTPRoute/Backend/HealthCheck".to_string(),
+            "grpc-health-check" | "grpchealthcheck" => "HTTPRoute/Backend/GrpcHealthCheck".to_string(),
             "health-check-transition" | "healthcheck-transition" => {
                 "HTTPRoute/Backend/HealthCheckTransition".to_string()
             }
@@ -155,8 +158,13 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/LBConsistentHash" => "HTTPRoute/Backend/LBConsistentHash",
         "HTTPRoute/Backend/WeightedBackend" => "HTTPRoute/Backend/WeightedBackend",
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
+        "HTTPRoute/Backend/RetryOnStatus" => "HTTPRoute/Backend/RetryOnStatus",
+        "HTTPRoute/Backend/CircuitBreaker" => "HTTPRoute/Backend/CircuitBreaker",
         "HTTPRoute/Backend/HealthCheck" => "HTTPRoute/Backend/HealthCheck",
+        "HTTPRoute/Backend/GrpcHealthCheck" => "HTTPRoute/Backend/GrpcHealthCheck",
         "HTTPRoute/Backend/HealthCheckTransition" => "HTTPRoute/Backend/HealthCheckTransition",
+        "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
+        "HTTPRoute/Filters/FilterConflict" => "HTTPRoute/Filters/FilterConflict",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
         "HTTPRoute/Filters/Security" => "HTTPRoute/Filters/Security",
         "HTTPRoute/Protocol" | "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
@@ -246,6 +254,9 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
             runner.add_suite(Box::new(suites::HealthCheckTestSuite));
+            runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
+            runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
+            runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
         }
         "HTTPRoute/Backend/LBRoundRobin" => {
             if !gateway {
@@ -275,6 +286,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
         }
+        "HTTPRoute/Backend/RetryOnStatus" => {
+            if !gateway {
+                eprintln!("Error: RetryOnStatus tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
+        }
+        "HTTPRoute/Backend/CircuitBreaker" => {
+            if !gateway {
+                eprintln!("Error: CircuitBreaker tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
+        }
         "HTTPRoute/Backend/HealthCheck" => {
             if !gateway {
                 eprintln!("Error: HealthCheck tests require --gateway flag");
@@ -282,12 +307,26 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::HealthCheckTestSuite));
         }
+        "HTTPRoute/Backend/GrpcHealthCheck" => {
+            if !gateway {
+                eprintln!("Error: GrpcHealthCheck tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
+        }
         "HTTPRoute/Backend/HealthCheckTransition" => {
             if !gateway {
                 eprintln!("Error: HealthCheckTransition tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::HealthCheckTransitionTestSuite));
+        }
+        "HTTPRoute/Backend/PartiallyInvalid" => {
+            if !gateway {
+                eprintln!("Error: PartiallyInvalid tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PartiallyInvalidTestSuite));
         }
         "HTTPRoute/Filters" => {
             if !gateway {
@@ -297,6 +336,14 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::HttpRedirectTestSuite));
             runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
             runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
+            runner.add_suite(Box::new(suites::FilterConflictTestSuite));
+        }
+        "HTTPRoute/Filters/FilterConflict" => {
+            if !gateway {
+                eprintln!("Error: FilterConflict tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::FilterConflictTestSuite));
         }
         "HTTPRoute/Filters/Redirect" => {
             if !gateway {
@@ -817,6 +864,9 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
                 runner.add_suite(Box::new(suites::TimeoutTestSuite));
                 runner.add_suite(Box::new(suites::HealthCheckTestSuite));
+                runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
+                runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
+                runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
                 runner.add_suite(Box::new(suites::MtlsTestSuite));
             }
         }

@@ -13,9 +13,10 @@ pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    HeaderModifierTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite,
-    HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite,
-    MultiPortTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, HeaderModifierTestSuite,
+    HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite,
+    HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
+    PartiallyInvalidTestSuite, RetryOnStatusTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};

@@ -65,5 +65,31 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
                 generation,
             ),
         );
+
+        status.supported_features = Some(vec![
+            "Gateway".to_string(),
+            "HTTPRoute".to_string(),
+            "ReferenceGrant".to_string(),
+            "HTTPRouteQueryParamMatching".to_string(),
+            "HTTPRouteMethodMatching".to_string(),
+            "HTTPRouteResponseHeaderModification".to_string(),
+            "HTTPRouteHostRewrite".to_string(),
+            "HTTPRoutePathRewrite".to_string(),
+            "HTTPRouteRequestMirror".to_string(),
+            "HTTPRouteRequestMultipleMirrors".to_string(),
+            "HTTPRouteRequestTimeout".to_string(),
+            "HTTPRouteBackendTimeout".to_string(),
+            "HTTPRouteBackendRequestHeaderModification".to_string(),
+            "HTTPRouteBackendProtocolH2C".to_string(),
+            "HTTPRouteBackendProtocolWebSocket".to_string(),
+            "HTTPRouteNamedRouteRule".to_string(),
+            "GatewayHTTPListenerIsolation".to_string(),
+            "GatewayPort8080".to_string(),
+            "HTTPRoutePathRedirect".to_string(),
+            "HTTPRoutePortRedirect".to_string(),
+            "HTTPRouteSchemeRedirect".to_string(),
+            "HTTPRouteRequestPercentageMirror".to_string(),
+            "HTTPRouteParentRefPort".to_string(),
+        ]);
     }
 }

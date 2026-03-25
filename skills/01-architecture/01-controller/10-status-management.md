@@ -38,6 +38,7 @@ control plane:
 |-----------|---------|
 | **Accepted** | Resource is syntactically/semantically valid and accepted by the Controller |
 | **ResolvedRefs** | All references to other objects (Secrets, Services, etc.) are resolved |
+| **PartiallyInvalid** | Some rules in the route have invalid backend refs but other rules are valid (HTTPRoute/GRPCRoute only) |
 
 ### Conditions We Do NOT Set (Yet): Programmed and Ready
 
@@ -62,6 +63,10 @@ for the full design. Key points:
 ### 4.1 Simple resources (flat status with conditions)
 
 **Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy
+
+**GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
+populated in `update_status()` with the full list of supported Gateway API features (matching
+the conformance test declaration in `examples/gateway-api-conformance/conformance_test.go`).
 
 ```rust
 fn update_status(&self, obj: &mut T, _ctx: &HandlerContext, validation_errors: &[String]) {
@@ -93,7 +98,11 @@ fn update_status(&self, resource: &mut T, _ctx: &HandlerContext, validation_erro
     // 1. Compute resolved_refs_errors (handler-specific)
     let resolved_refs_errors = ...;
 
-    // 2. Per-parent loop
+    // 2. Per-rule validation (HTTPRoute/GRPCRoute only)
+    let invalid_indices = find_invalid_rule_indices(route, route_ns);
+    route.spec.invalid_rule_indices = if invalid_indices.is_empty() { None } else { Some(invalid_indices) };
+
+    // 3. Per-parent loop
     if let Some(parent_refs) = &resource.spec.parent_refs {
         for parent_ref in parent_refs {
             let mut accepted_errors = validate_parent_ref_accepted(resource_ns, parent_ref, ...);
@@ -101,6 +110,11 @@ fn update_status(&self, resource: &mut T, _ctx: &HandlerContext, validation_erro
 
             // Set Accepted and ResolvedRefs conditions
             set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, gen);
+
+            // Set PartiallyInvalid if some (but not all) rules are invalid
+            if !invalid_indices.is_empty() && valid_rules > 0 {
+                update_condition(conditions, condition_true(PARTIALLY_INVALID, RULE_INVALID, ...));
+            }
         }
         retain_current_parent_statuses(&mut status.parents, parent_refs);
     } else {
@@ -109,6 +123,31 @@ fn update_status(&self, resource: &mut T, _ctx: &HandlerContext, validation_erro
     }
 }
 ```
+
+#### PartiallyInvalid and invalid_rule_indices
+
+For HTTPRoute and GRPCRoute, per-rule backend ref validation determines which rules
+are invalid (all backend refs missing/denied). The result is stored in
+`spec.invalid_rule_indices: Option<Vec<usize>>` and synced to the Gateway via gRPC.
+
+**Controller side:** `find_invalid_rule_indices()` checks each rule — a rule is invalid
+if it has backend refs and ALL of them are unreachable (wrong kind, service not found,
+or cross-namespace ref denied). Three outcomes:
+
+| Scenario | Accepted | PartiallyInvalid | invalid_rule_indices |
+|----------|----------|------------------|---------------------|
+| All rules valid | True | (not set) | None |
+| Some rules invalid | True | True | Some([indices]) |
+| All rules invalid | False (Invalid) | (not set) | Some([all indices]) |
+
+**Gateway side:** During route compilation (`conf_handler_impl.rs`), the rule iteration
+loop skips any rule whose index appears in `invalid_rule_indices`. The Gateway does NOT
+need to know why the rule is invalid — it simply trusts the Controller's decision.
+
+**Important:** Backend ref existence checks (service not found, wrong kind) must NOT be
+in `validate()`. They belong in `update_status()` only, via `resolved_refs_errors` and
+`find_invalid_rule_indices()`. Putting them in `validate()` would cause the entire route
+to be Accepted: False even when only some rules have bad backends.
 
 ### 4.3 Gateway (hybrid: gateway-level + per-listener)
 
@@ -258,12 +297,26 @@ standard conditions, no stale condition values survive re-processing.
 - [ ] **parent_refs None → clear parents**: `else` branch calls `status.parents.clear()`
 - [ ] **Status struct serialization**: `skip_serializing_if` does not hide error information
 - [ ] **No duplicate checks**: if validate() already checks something, update_status uses `validation_errors` instead of re-checking
+- [ ] **No backend ref existence in validate()**: service-not-found and kind checks go in update_status only (via resolved_refs_errors + find_invalid_rule_indices), not in validate()
 - [ ] **No "route" in non-route contexts**: use `resource_ns`, `set_parent_conditions_full`, etc.
 - [ ] **No Programmed/Ready conditions**: these require data-plane feedback and must not be set from the control plane
 - [ ] **Status diff registration**: new resource kind added to `status_diff::status_semantically_changed()` match arms
 - [ ] **Status diff tests**: new resource kind has test cases in `status_diff.rs` covering no-change and changed scenarios
 
 ## 10. Historical Fixes
+
+### 2026-03-25: PartiallyInvalid condition and invalid_rule_indices
+Added per-rule backend ref validation for HTTPRoute and GRPCRoute. When some rules
+have all-invalid backend refs, the Controller sets `PartiallyInvalid: True` and stores
+the invalid indices in `spec.invalid_rule_indices`. The Gateway skips these rules during
+route compilation. Also added `supported_features` to GatewayClassStatus.
+
+Key changes:
+- `find_invalid_rule_indices()` in both http_route.rs and grpc_route.rs handlers
+- `invalid_rule_indices: Option<Vec<usize>>` field in HTTPRouteSpec and GRPCRouteSpec
+- Gateway skip logic in `conf_handler_impl.rs` for HTTP and gRPC route compilation
+- Moved backend ref existence checks OUT of `validate()` into `update_status()` only
+- `PARTIALLY_INVALID` condition type and `RULE_INVALID` reason in status_utils.rs
 
 ### 2026-03-18: Semantic status diff for minimized K8s API writes
 Replaced raw JSON string comparison with semantic status diffing

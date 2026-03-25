@@ -42,6 +42,8 @@ tracing::info!(component = "k8s_status", ...);
 tracing::info!(component = "conf_client", ...);
 ```
 
+**span 继承规则**：如果 `component` 已在外层 span 中声明，span 内的日志自动继承，无需重复写。例如 `process_resource` 的 span 已带 `component = "resource_processor"`，内部所有日志不需要再写 `component`、`kind`、`name`、`ns`、`rv`、`sv`。
+
 ---
 
 ## Level 选择
@@ -92,7 +94,7 @@ let json = serde_json::to_string(&entry).unwrap();
 
 ---
 
-## instrument 命名
+## instrument 与 span 命名
 
 涉及异步任务的长运行逻辑，善用 `instrument` 给 span 命名：
 
@@ -105,7 +107,18 @@ pub async fn start_watch_server_meta(self: Arc<Self>) {
 }
 ```
 
-这样在分布式追踪系统（如 Jaeger）中可以按 span 名称过滤和关联。
+### Processor 的 span 模式
+
+`process_resource` / `process_delete` 使用 `info_span` + `.instrument()` 包裹整个处理流程（async 兼容，不能用 `.entered()`）：
+
+```rust
+let span = tracing::info_span!("process_resource", kind = self.kind, name = %name, ns = %namespace, rv, sv);
+self.process_resource_inner(obj, ctx, is_init, existing_status_json, sv)
+    .instrument(span)
+    .await
+```
+
+span 内的所有日志自动继承 `kind/name/ns/rv/sv`，**不需要手动重复这些字段**，只写消息和额外字段（如 `error`、`reason`、`phase`）。
 
 ---
 

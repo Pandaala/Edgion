@@ -1,5 +1,5 @@
 {
-  "current_max": 31301,
+  "current_max": 31311,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -23,8 +23,14 @@
     "HTTPRoute/Backend/HealthCheck": {
       "http": 31141
     },
+    "HTTPRoute/Backend/GrpcHealthCheck": {
+      "http": 31144
+    },
     "HTTPRoute/Backend/HealthCheckTransition": {
       "http": 31142
+    },
+    "HTTPRoute/Backend/RetryOnStatus": {
+      "http": 31143
     },
     "HTTPRoute/Filters/Redirect": {
       "http": 31040
@@ -130,6 +136,15 @@
     },
     "HTTPRoute/MultiPort": {
       "http": 31300
+    },
+    "HTTPRoute/Backend/CircuitBreaker": {
+      "http": 31302
+    },
+    "HTTPRoute/Backend/PartiallyInvalid": {
+      "http": 31310
+    },
+    "HTTPRoute/Filters/FilterConflict": {
+      "http": 31311
     }
   }
 }

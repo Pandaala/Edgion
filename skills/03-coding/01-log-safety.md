@@ -90,6 +90,8 @@ tracing::info!(backend = ?backend_ref, "Selected backend");  // 包含 IP/Port
 
 **禁止在请求/连接处理热路径中使用任何 `tracing::` 宏**，包括 `debug!`。
 
+**全局禁止 `println!` / `eprintln!`**：生产代码中不允许使用 `println!` 或 `eprintln!`，必须使用 `tracing::` 宏并带 `component` 字段。启动阶段致命错误用 `tracing::error!` + `std::process::exit(1)`。
+
 ### 原因
 
 1. **性能**：tracing 在高并发下有 lock contention（`debug!` 虽然可通过 `EnvFilter` 过滤，但 format 开销仍存在）
@@ -129,10 +131,11 @@ tracing::info!("Selected backend: {:?}", backend_ref);  // 泄漏 + 性能
 
 在 code review 时使用：
 
+- [ ] 是否使用了 `println!` / `eprintln!`？必须改为 `tracing::` 宏
 - [ ] 新增的 `tracing::info!/warn!/error!` 是否在数据面热路径？如果是，改为 ctx-based
 - [ ] 日志中是否包含 Secret / Token / 密钥等敏感数据？
 - [ ] 日志中是否包含完整的 resource spec / backend 地址？如果是，降级到 debug
-- [ ] 控制面新增日志是否包含 `kind` + `name/namespace` + `rv`？
+- [ ] 控制面新增日志是否包含 `kind` + `name/namespace` + `rv`？（在 span 内可省略，由 span 自动提供）
 - [ ] 如果资源已同步到数据面，access log 中是否有 `sv`？
 - [ ] `ctx_map` 中新增的 key 是否可能包含敏感信息？如果是，需要做过滤
 - [ ] 插件 stage_logs 中是否记录了完整 username / token？应只记录前缀

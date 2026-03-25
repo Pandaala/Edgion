@@ -79,6 +79,7 @@ health/
 |------|------|------|
 | HTTP | `probe_http()` / `probe_http_with_client()` | HTTP GET 检查，支持自定义 client |
 | TCP | `probe_tcp()` | TCP 连接检查 |
+| gRPC | `probe_grpc()` | gRPC Health Check Protocol（grpc.health.v1.Health/Check），手写 prost 结构体实现，无需 proto 文件 |
 
 ### 健康状态
 
@@ -89,7 +90,61 @@ health/
 
 ### backend_hash
 
-用于健康状态键的计算：对 Backend 的 `addr` 和 `weight` 进行 DefaultHasher 哈希。
+用于健康状态和熔断器状态键的计算：对 Backend 的 `addr` 进行 DefaultHasher 哈希。
+
+## 熔断器（Circuit Breaker）
+
+被动逐出机制，防止级联故障。参考 Envoy `outlier_detection` 精简版。
+
+### 组件结构
+
+```
+circuit_breaker/
+├── config.rs     # CircuitBreakerConfig — 配置结构体 + annotation 解析
+├── store.rs      # CircuitBreakerStore — DashMap 逐出状态存储
+└── mod.rs
+```
+
+### 核心机制
+
+- **连续失败计数**：连接失败 / 代理错误 / 上游 5xx 各算一次，非 5xx 响应重置计数
+- **自动逐出**：连续失败达到阈值后标记 `ejected_at`，LB 选择时跳过
+- **自动恢复**：`is_ejected()` 检查时发现冷却到期，自动清除逐出状态
+- **最大逐出比例**：防止所有后端同时被逐出（0 = 不限制）
+
+### 数据存储
+
+`CircuitBreakerStore`（全局 LazyLock 单例）：
+- 外层 `DashMap<String, Arc<ServiceCbState>>`：service_key → 配置 + 端点状态
+- 内层 `DashMap<u64, EndpointState>`：backend_hash → 连续失败数 + 逐出时间
+- `record_success` 直接删除 entry（不是重置为 0），防止内存增长
+- 未配置 CB 的 service 无 entry，`has_service()` 返回 false 立即跳过
+
+### 失败计数 Hook
+
+| Hook | 文件 | 触发条件 |
+|------|------|----------|
+| `fail_to_connect` | `pg_fail_to_connect.rs` | 连接失败 |
+| `error_while_proxy` | `pg_error_while_proxy.rs` | 代理错误（非 retry-on-status） |
+| `upstream_response_filter` | `pg_upstream_response_filter.rs` | 5xx 记录失败，非 5xx 记录成功 |
+
+### LB 集成
+
+`is_backend_healthy()` 在健康检查之后增加 CB 逐出检查，所有 LB 算法自动生效。
+
+### 生命周期
+
+- Service 同步时解析 `edgion.io/circuit-breaker` annotation → `set_service_config`
+- EP/EPS `cleanup_removed_backends` 时 → `remove_backend` 清理逐出状态
+- Service 删除时 → `remove_service` 清理整个 CB 配置
+
+### Prometheus 指标
+
+| 指标 | 类型 | Label | 埋点 |
+|------|------|-------|------|
+| `edgion_circuit_breaker_ejections_total` | Counter | `service` | 逐出成功时 |
+| `edgion_circuit_breaker_ejected_endpoints` | Gauge | `service` | 逐出 +1，恢复/清理 -1 |
+| `edgion_circuit_breaker_rejections_total` | Counter | `service` | LB 选择命中逐出后端时 |
 
 ## BackendTLSPolicy
 
@@ -140,6 +195,7 @@ src/core/gateway/backends/
 │   └── services/             # Service 元数据
 ├── health/                   # 健康检查
 │   └── check/                # 检查系统
+├── circuit_breaker/          # 熔断器（被动逐出）
 ├── policy/                   # 后端策略
 │   └── backend_tls/          # BackendTLSPolicy（上游 mTLS）
 ├── preload.rs                # LB 预热

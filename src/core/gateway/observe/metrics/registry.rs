@@ -38,6 +38,10 @@ pub mod names {
     pub const CONTROLLER_CONNECTED_GATEWAYS: &str = "edgion_controller_connected_gateways";
     // Controller: schema validation failures from Admin API (non-K8s mode)
     pub const SCHEMA_VALIDATION_ERRORS: &str = "edgion_controller_schema_validation_errors_total";
+    // Circuit breaker metrics
+    pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
+    pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
+    pub const CB_REJECTIONS_TOTAL: &str = "edgion_circuit_breaker_rejections_total";
 }
 
 /// Global metrics singleton
@@ -356,4 +360,20 @@ pub fn record_request_duration(
     }
 
     histogram!(names::GATEWAY_REQUEST_DURATION_MS, &label_vec).record(duration_ms);
+}
+
+/// Record a circuit breaker ejection event
+pub fn record_cb_ejection(service_key: &str) {
+    counter!(names::CB_EJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
+    gauge!(names::CB_EJECTED_ENDPOINTS, "service" => service_key.to_string()).increment(1.0);
+}
+
+/// Record a circuit breaker recovery event (ejection expired)
+pub fn record_cb_recovery(service_key: &str) {
+    gauge!(names::CB_EJECTED_ENDPOINTS, "service" => service_key.to_string()).decrement(1.0);
+}
+
+/// Record a circuit breaker rejection (request blocked by ejected backend)
+pub fn record_cb_rejection(service_key: &str) {
+    counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
 }

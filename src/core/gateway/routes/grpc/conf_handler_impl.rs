@@ -184,6 +184,15 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
     let mut units = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for (rule_id, rule) in rules.iter().enumerate() {
+            // Skip rules marked invalid by Controller
+            if route
+                .spec
+                .invalid_rule_indices
+                .as_ref()
+                .is_some_and(|inv| inv.contains(&rule_id))
+            {
+                continue;
+            }
             let rule_arc = Arc::new(rule.clone());
 
             if let Some(matches) = &rule.matches {

@@ -400,7 +400,7 @@ impl ConfigClient {
     where
         T: Clone + ResourceMeta + Resource + Send + 'static,
     {
-        cache.apply_change(change, resource);
+        cache.apply_change(change, resource, None);
     }
 
     pub fn list(&self, _key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
@@ -550,21 +550,23 @@ impl ConfigClientEventDispatcher for ConfigClient {
     ) {
         let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
         let Some(resource_type) = resource_type else {
-            eprintln!(
-                "[HUB] apply_resource_change {:?}: Failed to determine resource type from data: {}",
-                change,
-                &data[..data.len().min(200)]
+            tracing::error!(
+                component = "config_client",
+                change = ?change,
+                data_preview = &data[..data.len().min(200)],
+                "Failed to determine resource type"
             );
             return;
         };
 
         let log_error = |kind: &str, err: &serde_yaml::Error| {
-            eprintln!(
-                "[HUB] apply_resource_change {:?}: Failed to parse {}: {} (data: {})",
-                change,
-                kind,
-                err,
-                &data[..data.len().min(200)]
+            tracing::error!(
+                component = "config_client",
+                change = ?change,
+                kind = kind,
+                error = %err,
+                data_preview = &data[..data.len().min(200)],
+                "Failed to parse resource"
             );
         };
 
@@ -580,10 +582,11 @@ impl ConfigClientEventDispatcher for ConfigClient {
 
         match resource_type {
             ResourceKind::Unspecified => {
-                eprintln!(
-                    "[HUB] apply_resource_change {:?}: Unspecified resource kind, skipping (data: {})",
-                    change,
-                    &data[..data.len().min(200)]
+                tracing::warn!(
+                    component = "config_client",
+                    change = ?change,
+                    data_preview = &data[..data.len().min(200)],
+                    "Unspecified resource kind, skipping"
                 );
             }
             ResourceKind::GatewayClass => apply_change!(GatewayClass, gateway_classes, "GatewayClass"),

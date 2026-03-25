@@ -12,11 +12,11 @@
 |------|-----------|-----------|-------------|------|
 | `HTTPRoute/Basic` | `examples/test/conf/HTTPRoute/Basic/` | `examples/code/client/suites/http_route/` | 否 | 直连 HTTP 基础能力 |
 | `HTTPRoute/Match` | `examples/test/conf/HTTPRoute/Match/` | `HttpMatchTestSuite` | 是 | 依赖 gateway 路由匹配 |
-| `HTTPRoute/Backend/*` | `examples/test/conf/HTTPRoute/Backend/` | `LBRoundRobinTestSuite`、`LBConsistentHashTestSuite`、`WeightedBackendTestSuite`、`TimeoutTestSuite`、`HealthCheckTestSuite`、`HealthCheckTransitionTestSuite` | 是 | 负载均衡、超时、健康检查 |
+| `HTTPRoute/Backend/*` | `examples/test/conf/HTTPRoute/Backend/` | `LBRoundRobinTestSuite`、`LBConsistentHashTestSuite`、`WeightedBackendTestSuite`、`TimeoutTestSuite`、`HealthCheckTestSuite`、`GrpcHealthCheckTestSuite`、`HealthCheckTransitionTestSuite`、`PartiallyInvalidTestSuite` | 是 | 负载均衡、超时、健康检查、部分无效规则 |
 | `HTTPRoute/Filters/*` | `examples/test/conf/HTTPRoute/Filters/` | `HttpRedirectTestSuite`、`HttpSecurityTestSuite`、`HeaderModifierTestSuite` | 是 | redirect、安全、header modifier |
 | `HTTPRoute/Protocol/WebSocket` | `examples/test/conf/HTTPRoute/Protocol/WebSocket/` | `WebSocketTestSuite` | 否 | WebSocket 后端验证 |
 | `GRPCRoute/Basic` | `examples/test/conf/GRPCRoute/Basic/` | `GrpcTestSuite` | 否 | gRPC 直连基础 |
-| `GRPCRoute/Match` | `examples/test/conf/GRPCRoute/Match/` | `GrpcMatchTestSuite` | 是 | gRPC 路由匹配 |
+| `GRPCRoute/Match` | `examples/test/conf/GRPCRoute/Match/` | `GrpcMatchTestSuite` | 是 | gRPC 路由匹配（Exact + RegularExpression） |
 | `TCPRoute/Basic` | `examples/test/conf/TCPRoute/Basic/` | `TcpTestSuite` | 否 | TCP echo |
 | `TCPRoute/StreamPlugins` | `examples/test/conf/TCPRoute/StreamPlugins/` | `TcpStreamPluginsTestSuite` | 是 | stream plugin 在 TCP 上的接线 |
 | `TLSRoute/Basic` | `examples/test/conf/TLSRoute/Basic/` | `TlsRouteTestSuite` | 是 | SNI/TLS route 基础 |

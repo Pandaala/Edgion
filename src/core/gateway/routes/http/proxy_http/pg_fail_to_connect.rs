@@ -30,6 +30,13 @@ pub fn fail_to_connect(
         upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
     }
 
+    // Record circuit breaker failure
+    if let Some(upstream) = ctx.get_current_upstream() {
+        if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+            crate::core::gateway::backends::get_circuit_breaker_store().record_failure_by_addr(service_key, addr);
+        }
+    }
+
     // Check request timeout dynamically before allowing retry
     // If timeout is exceeded, block all retries and return 504
     let request_timeout = ctx
@@ -56,11 +63,17 @@ pub fn fail_to_connect(
         }
     }
 
-    // Determine max_retries: route annotation > global config
+    // Determine max_retries: rule.retry.attempts > annotation > global
     let max_retries = ctx
         .route_unit
         .as_ref()
-        .and_then(|unit| unit.rule.parsed_max_retries)
+        .and_then(|unit| {
+            unit.rule
+                .parsed_retry
+                .as_ref()
+                .and_then(|r| r.attempts)
+                .or(unit.rule.parsed_max_retries)
+        })
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
     if ctx.try_cnt <= max_retries {

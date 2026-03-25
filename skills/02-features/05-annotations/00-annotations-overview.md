@@ -51,6 +51,7 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 | 注解 | 值 | 说明 |
 |------|---|------|
 | `edgion.io/health-check` | YAML 字符串 | 健康检查配置 |
+| `edgion.io/circuit-breaker` | YAML 字符串 | 熔断器配置（consecutiveErrors/ejectionSeconds/maxEjectionPercent） |
 
 ## Options 键
 

@@ -13,6 +13,7 @@ use std::time::Duration;
 use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tracing::Instrument;
 
 /// Result of processing a work item
 ///
@@ -329,16 +330,16 @@ where
         self.cache.list_owned().data
     }
 
-    /// Save resource to cache
-    pub fn save(&self, obj: K) {
-        self.cache.apply_change(ResourceChange::EventUpdate, obj);
+    /// Save resource to cache with an optional pre-assigned sync_version
+    pub fn save(&self, obj: K, sv: Option<u64>) {
+        self.cache.apply_change(ResourceChange::EventUpdate, obj, sv);
     }
 
-    /// Remove resource from cache by key
-    pub fn remove(&self, key: &str) {
+    /// Remove resource from cache by key with an optional pre-assigned sync_version
+    pub fn remove(&self, key: &str, sv: Option<u64>) {
         // Get the cached object first to properly delete
         if let Some(cached) = self.cache.get_by_key(key) {
-            self.cache.apply_change(ResourceChange::EventDelete, cached);
+            self.cache.apply_change(ResourceChange::EventDelete, cached, sv);
         }
     }
 
@@ -422,27 +423,43 @@ where
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
         let rv = crate::types::resource::meta::extract_version(obj.meta());
 
+        // Generate sv early so the entire processing span carries it for telemetry correlation
+        let sv = crate::core::common::utils::next_resource_version();
+        let span = tracing::info_span!(
+            "process_resource",
+            component = "resource_processor",
+            kind = self.kind,
+            name = %name,
+            ns = %namespace,
+            rv,
+            sv,
+        );
+        self.process_resource_inner(obj, ctx, is_init, existing_status_json, sv)
+            .instrument(span)
+            .await
+    }
+
+    async fn process_resource_inner(
+        &self,
+        obj: K,
+        ctx: &HandlerContext,
+        is_init: bool,
+        existing_status_json: Option<String>,
+        sv: u64,
+    ) -> WorkItemResult<K> {
+        let namespace = obj.meta().namespace.clone().unwrap_or_default();
+
         // 1. Check namespace filter
         if let Some(allowed_ns) = ctx.namespace_filter() {
             if !namespace.is_empty() && !allowed_ns.iter().any(|n| n == &namespace) {
-                tracing::trace!(
-                    kind = self.kind,
-                    name = %name,
-                    namespace = %namespace,
-                    "Skipped by namespace filter"
-                );
+                tracing::trace!("Skipped by namespace filter");
                 return WorkItemResult::Skipped;
             }
         }
 
         // 2. Check handler filter
         if !self.handler.filter(&obj) {
-            tracing::trace!(
-                kind = self.kind,
-                name = %name,
-                namespace = %namespace,
-                "Skipped by handler filter"
-            );
+            tracing::trace!("Skipped by handler filter");
             return WorkItemResult::Skipped;
         }
 
@@ -456,27 +473,13 @@ where
         // 4. Validate (log warnings but continue)
         let mut all_errors = self.handler.validate(&obj, ctx);
         for error in &all_errors {
-            tracing::warn!(
-                kind = self.kind,
-                name = %name,
-                namespace = %namespace,
-                rv,
-                error = %error,
-                "Resource validation error"
-            );
+            tracing::warn!(error = %error, "Resource validation error");
         }
 
         // 5. Preparse (build runtime structures, validate configs)
         let preparse_errors = self.handler.preparse(&mut obj, ctx);
         for error in &preparse_errors {
-            tracing::warn!(
-                kind = self.kind,
-                name = %name,
-                namespace = %namespace,
-                rv,
-                error = %error,
-                "Resource preparse error"
-            );
+            tracing::warn!(error = %error, "Resource preparse error");
         }
         all_errors.extend(preparse_errors);
 
@@ -493,12 +496,7 @@ where
 
                 // Log serialization errors
                 if matches!(old_status, StatusExtractResult::SerializationError) {
-                    tracing::warn!(
-                        kind = self.kind,
-                        name = %name,
-                        namespace = %namespace,
-                        "Failed to serialize old status for comparison"
-                    );
+                    tracing::warn!("Failed to serialize old status for comparison");
                 }
 
                 // 8. Update status (handler sets Gateway API conditions)
@@ -509,34 +507,19 @@ where
 
                 // Log serialization errors
                 if matches!(new_status, StatusExtractResult::SerializationError) {
-                    tracing::warn!(
-                        kind = self.kind,
-                        name = %name,
-                        namespace = %namespace,
-                        "Failed to serialize new status for comparison"
-                    );
+                    tracing::warn!("Failed to serialize new status for comparison");
                 }
 
                 let status_changed = status_has_changed(self.kind, &old_status, &new_status);
 
                 if status_changed {
-                    tracing::debug!(
-                        kind = self.kind,
-                        name = %name,
-                        namespace = %namespace,
-                        "Status semantically changed, will persist"
-                    );
+                    tracing::debug!("Status semantically changed, will persist");
                 } else if matches!(
                     (&old_status, &new_status),
                     (StatusExtractResult::Present(_), StatusExtractResult::Present(_))
                 ) {
                     crate::core::controller::conf_mgr::sync_runtime::record_status_write_skipped(self.kind);
-                    tracing::trace!(
-                        kind = self.kind,
-                        name = %name,
-                        namespace = %namespace,
-                        "Status unchanged by semantic diff, skipping persist"
-                    );
+                    tracing::trace!("Status unchanged by semantic diff, skipping persist");
                 }
 
                 // 10. Call on_change
@@ -550,10 +533,6 @@ where
 
                 let phase = if is_init { "init" } else { "runtime" };
                 tracing::debug!(
-                    kind = self.kind,
-                    name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
-                    namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
-                    rv,
                     phase = phase,
                     status_changed = status_changed,
                     "Resource processed and saving"
@@ -563,9 +542,9 @@ where
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
                 let obj_for_result = parsed_obj.clone();
                 if is_init {
-                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj);
+                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, Some(sv));
                 } else {
-                    self.save(parsed_obj);
+                    self.save(parsed_obj, Some(sv));
                 }
 
                 WorkItemResult::Processed {
@@ -574,11 +553,7 @@ where
                 }
             }
             ProcessResult::Skip { reason } => {
-                tracing::debug!(
-                    kind = self.kind,
-                    reason = %reason,
-                    "Resource skipped after parse"
-                );
+                tracing::debug!(reason = %reason, "Resource skipped after parse");
                 WorkItemResult::Skipped
             }
         }
@@ -587,18 +562,26 @@ where
     /// Process resource deletion
     async fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
         let key = make_resource_key(cached_obj);
-
-        // 1. Execute handler's delete cleanup
-        self.handler.on_delete(cached_obj, ctx).await;
-
-        // 2. Remove from cache
-        self.remove(&key);
-
-        tracing::debug!(
+        let sv = crate::core::common::utils::next_resource_version();
+        let span = tracing::info_span!(
+            "process_delete",
+            component = "resource_processor",
             kind = self.kind,
             key = %key,
-            "Resource deleted from cache"
+            sv,
         );
+
+        async {
+            // 1. Execute handler's delete cleanup
+            self.handler.on_delete(cached_obj, ctx).await;
+
+            // 2. Remove from cache
+            self.remove(&key, Some(sv));
+
+            tracing::debug!("Resource deleted from cache");
+        }
+        .instrument(span)
+        .await
     }
 }
 
@@ -803,6 +786,7 @@ mod tests {
                     last_transition_time: "1970-01-01T00:00:00Z".to_string(),
                     observed_generation: None,
                 }],
+                supported_features: None,
             }),
         };
 

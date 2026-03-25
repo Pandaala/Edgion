@@ -6,7 +6,7 @@
 
 ## Overview
 
-Active health checks periodically probe backend instances (HTTP/TCP) from the gateway side, and automatically skip unhealthy instances during load balancing selection.
+Active health checks periodically probe backend instances (HTTP/TCP/gRPC) from the gateway side, and automatically skip unhealthy instances during load balancing selection.
 This feature is primarily used when backends are reachable but the application layer is abnormal, or as a supplementary readiness check in non-Kubernetes scenarios.
 
 ## Quick Start
@@ -66,7 +66,7 @@ YAML structure of `edgion.io/health-check`:
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `type` | `http` \| `tcp` | No | `http` | Probe type |
+| `type` | `http` \| `tcp` \| `grpc` | No | `http` | Probe type |
 | `path` | string | No | `/` | HTTP probe path (only effective for `http`) |
 | `port` | uint16 | No | Uses backend port | Probe port override |
 | `interval` | duration string | No | `10s` | Probe interval |
@@ -75,6 +75,7 @@ YAML structure of `edgion.io/health-check`:
 | `unhealthyThreshold` | uint32 | No | `3` | Number of consecutive failures to mark unhealthy |
 | `expectedStatuses` | `[]uint16` | No | `[200]` | Expected HTTP status codes (only effective for `http`) |
 | `host` | string | No | None | HTTP Host header override (only effective for `http`) |
+| `grpcServiceName` | string | No | `""` (whole server) | gRPC Health Check service name (only effective for `grpc`) |
 
 ## Behavior Details and Priority
 
@@ -145,7 +146,27 @@ metadata:
         timeout: 1s
 ```
 
-### Scenario 3: EndpointSlice-Level Overrides Service-Level
+### Scenario 3: gRPC Backend Health Check
+
+For gRPC backends that implement the standard [gRPC Health Checking Protocol](https://github.com/grpc/grpc/blob/master/doc/health-checking.md) (`grpc.health.v1.Health`):
+
+```yaml
+metadata:
+  annotations:
+    edgion.io/health-check: |
+      active:
+        type: grpc
+        port: 9090
+        interval: 10s
+        timeout: 3s
+        healthyThreshold: 2
+        unhealthyThreshold: 3
+        grpcServiceName: "my.package.MyService"  # optional, empty = check whole server
+```
+
+The gateway calls the `Health/Check` RPC and marks the backend as healthy only when the response status is `SERVING`.
+
+### Scenario 4: EndpointSlice-Level Overrides Service-Level
 
 ```yaml
 # Service-level default configuration
@@ -168,10 +189,11 @@ metadata:
 
 ## Notes
 
-1. `expectedStatuses` only applies to `http` mode; `tcp` mode ignores this field.
-2. `path` must start with `/`, otherwise the configuration is considered invalid and ignored.
+1. `expectedStatuses` only applies to `http` mode; `tcp` and `grpc` modes ignore this field.
+2. `path` must start with `/`, otherwise the configuration is considered invalid and ignored. Only applies to `http` mode.
 3. `healthyThreshold` and `unhealthyThreshold` must be greater than or equal to `1`.
 4. Services without health check configuration are not probed and participate in load balancing as "healthy" by default.
+5. `grpcServiceName` only applies to `grpc` mode. An empty string (default) checks the overall server health.
 
 ## Current Limitations
 

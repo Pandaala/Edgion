@@ -16,6 +16,5 @@ pub use status_store::{get_health_status_store, HealthStatusStore};
 pub(crate) fn backend_hash(backend: &Backend) -> u64 {
     let mut hasher = DefaultHasher::new();
     backend.addr.hash(&mut hasher);
-    backend.weight.hash(&mut hasher);
     hasher.finish()
 }

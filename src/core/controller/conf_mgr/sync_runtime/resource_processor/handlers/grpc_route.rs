@@ -10,7 +10,8 @@ use super::{
     update_attached_route_tracker, update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
+    AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::GRPCRoute;
 use crate::types::resources::common::RefDenied;
@@ -95,14 +96,9 @@ impl Default for GrpcRouteHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     fn validate(&self, route: &GRPCRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let mut errors = validate_grpc_route_if_enabled(route);
-        let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        errors.extend(
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples)
-                .iter()
-                .map(|e| e.message()),
-        );
+        let errors = validate_grpc_route_if_enabled(route);
+        // Note: backend ref validation (service existence, kind check) is handled by
+        // update_status() via ResolvedRefs condition and per-rule invalid_rule_indices.
         errors
     }
 
@@ -271,6 +267,19 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(&ref_denied_list));
 
+        // Per-rule validation: find rules where ALL backend refs are invalid
+        let invalid_indices = find_invalid_rule_indices(route, route_ns);
+        let total_rules = route.spec.rules.as_ref().map_or(0, |r| r.len());
+        let valid_rules = total_rules - invalid_indices.len();
+
+        route.spec.invalid_rule_indices = if invalid_indices.is_empty() {
+            None
+        } else {
+            Some(invalid_indices.clone())
+        };
+
+        let all_rules_invalid = total_rules > 0 && valid_rules == 0;
+
         let status = route.status.get_or_insert_with(|| GRPCRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
 
@@ -280,14 +289,19 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                     super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                let parent_status = status.parents.iter_mut().find(|ps| {
+                if all_rules_invalid {
+                    accepted_errors.push(AcceptedError::Invalid {
+                        message: format!("All {} rules have invalid backend refs", total_rules),
+                    });
+                }
+
+                let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
                         && ps.parent_ref.namespace == parent_ref.namespace
                         && ps.parent_ref.section_name == parent_ref.section_name
-                });
-
-                if let Some(ps) = parent_status {
+                }) {
                     set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
+                    &mut ps.conditions
                 } else {
                     let mut conditions = Vec::new();
                     set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
@@ -297,6 +311,33 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                         controller_name: self.controller_name.clone(),
                         conditions,
                     });
+                    &mut status.parents.last_mut().unwrap().conditions
+                };
+
+                // Set PartiallyInvalid condition
+                if !invalid_indices.is_empty() && valid_rules > 0 {
+                    update_condition(
+                        conditions,
+                        condition_true(
+                            condition_types::PARTIALLY_INVALID,
+                            condition_reasons::RULE_INVALID,
+                            format!(
+                                "Rules at indices {:?} are invalid; {} of {} rules are active",
+                                invalid_indices, valid_rules, total_rules
+                            ),
+                            generation,
+                        ),
+                    );
+                } else if conditions.iter().any(|c| c.type_ == condition_types::PARTIALLY_INVALID) {
+                    update_condition(
+                        conditions,
+                        condition_false(
+                            condition_types::PARTIALLY_INVALID,
+                            condition_reasons::ALL_RULES_VALID,
+                            "All rules are valid",
+                            generation,
+                        ),
+                    );
                 }
             }
 
@@ -387,4 +428,33 @@ fn collect_ref_denied_list(route: &GRPCRoute) -> Vec<Option<&RefDenied>> {
         }
     }
     list
+}
+
+/// Find rule indices where ALL backend refs are invalid.
+fn find_invalid_rule_indices(route: &GRPCRoute, route_ns: &str) -> Vec<usize> {
+    let mut invalid_indices = Vec::new();
+    if let Some(rules) = &route.spec.rules {
+        for (idx, rule) in rules.iter().enumerate() {
+            if let Some(backend_refs) = &rule.backend_refs {
+                if backend_refs.is_empty() {
+                    continue;
+                }
+                let all_invalid = backend_refs.iter().all(|br| {
+                    let kind = br.kind.as_deref().unwrap_or("Service");
+                    if kind != "Service" {
+                        return true;
+                    }
+                    let ns = br.namespace.as_deref().unwrap_or(route_ns);
+                    if !super::route_utils::service_exists(ns, &br.name) {
+                        return true;
+                    }
+                    br.ref_denied.is_some()
+                });
+                if all_invalid {
+                    invalid_indices.push(idx);
+                }
+            }
+        }
+    }
+    invalid_indices
 }

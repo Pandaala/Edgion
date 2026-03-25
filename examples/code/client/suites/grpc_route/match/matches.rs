@@ -266,6 +266,208 @@ impl GrpcMatchTestSuite {
         )
     }
 
+    /// Test regex method match: hostname grpc-regex.example.com only has regex rules,
+    /// so SayHello must be matched by the regex rule "Say.*" to succeed.
+    fn test_regex_method_match() -> TestCase {
+        TestCase::new(
+            "grpc_regex_method_match",
+            "Test gRPC RegularExpression method match (Say.*)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
+                    let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
+                        Ok(mut ep) => {
+                            let origin_uri = match format!("http://grpc-regex.example.com:{}", ctx.grpc_port).parse() {
+                                Ok(uri) => uri,
+                                Err(e) => {
+                                    return TestResult::failed(start.elapsed(), format!("Invalid origin URI: {}", e));
+                                }
+                            };
+                            ep = ep.origin(origin_uri);
+                            ep
+                        }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Invalid endpoint: {}", e));
+                        }
+                    };
+
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to connect: {}", e));
+                        }
+                    };
+
+                    let request = tonic::Request::new(HelloRequest {
+                        name: "RegexMethodTest".to_string(),
+                    });
+
+                    match client.say_hello(request).await {
+                        Ok(response) => {
+                            let reply = response.into_inner();
+                            if reply.message.contains("Hello, RegexMethodTest!") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Regex method match (Say.*) successful: {}", reply.message),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Unexpected response: {}", reply.message))
+                            }
+                        }
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Regex method match failed (code={:?}): {}. \
+                                 This likely means RegularExpression match type is not implemented.",
+                                e.code(),
+                                e.message()
+                            ),
+                        ),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test regex service-only match: hostname grpc-regex-svc.example.com only has
+    /// a regex service rule "test\\..*" (no method specified), so any method on
+    /// test.TestService should match.
+    fn test_regex_service_only_match() -> TestCase {
+        TestCase::new(
+            "grpc_regex_service_only_match",
+            "Test gRPC RegularExpression service-only match (test\\..*)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
+                    let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
+                        Ok(mut ep) => {
+                            let origin_uri = match format!("http://grpc-regex-svc.example.com:{}", ctx.grpc_port)
+                                .parse()
+                            {
+                                Ok(uri) => uri,
+                                Err(e) => {
+                                    return TestResult::failed(start.elapsed(), format!("Invalid origin URI: {}", e));
+                                }
+                            };
+                            ep = ep.origin(origin_uri);
+                            ep
+                        }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Invalid endpoint: {}", e));
+                        }
+                    };
+
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to connect: {}", e));
+                        }
+                    };
+
+                    let request = tonic::Request::new(HelloRequest {
+                        name: "RegexServiceTest".to_string(),
+                    });
+
+                    match client.say_hello(request).await {
+                        Ok(response) => {
+                            let reply = response.into_inner();
+                            if reply.message.contains("Hello, RegexServiceTest!") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Regex service-only match (test\\..*) successful: {}", reply.message),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Unexpected response: {}", reply.message))
+                            }
+                        }
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Regex service-only match failed (code={:?}): {}. \
+                                 This likely means RegularExpression match type is not implemented.",
+                                e.code(),
+                                e.message()
+                            ),
+                        ),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test that regex method does NOT match a wrong hostname (negative case).
+    /// Uses grpc-regex.example.com's rules but with a different hostname,
+    /// so no route should match.
+    fn test_regex_no_match_wrong_hostname() -> TestCase {
+        TestCase::new(
+            "grpc_regex_no_match_wrong_hostname",
+            "Test gRPC regex route does not match wrong hostname",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
+                    let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
+                        Ok(mut ep) => {
+                            // Use a hostname that no GRPCRoute matches
+                            let origin_uri =
+                                match format!("http://grpc-regex-nonexistent.example.com:{}", ctx.grpc_port).parse() {
+                                    Ok(uri) => uri,
+                                    Err(e) => {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Invalid origin URI: {}", e),
+                                        );
+                                    }
+                                };
+                            ep = ep.origin(origin_uri);
+                            ep
+                        }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Invalid endpoint: {}", e));
+                        }
+                    };
+
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to connect: {}", e));
+                        }
+                    };
+
+                    let request = tonic::Request::new(HelloRequest {
+                        name: "ShouldNotMatch".to_string(),
+                    });
+
+                    match client.say_hello(request).await {
+                        Ok(_) => TestResult::failed(
+                            start.elapsed(),
+                            "Expected failure but got success (wrong hostname should not match regex route)"
+                                .to_string(),
+                        ),
+                        Err(e) => {
+                            if e.code() == tonic::Code::NotFound
+                                || e.code() == tonic::Code::Unavailable
+                                || e.code() == tonic::Code::Internal
+                            {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Correctly rejected wrong hostname for regex route: {:?}", e.code()),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Unexpected error code: {:?}", e.code()))
+                            }
+                        }
+                    }
+                })
+            },
+        )
+    }
+
     /// Test exact with headermatch
     fn test_header_match() -> TestCase {
         TestCase::new("grpc_header_match", "Test gRPC header match", |ctx: TestContext| {
@@ -332,6 +534,9 @@ impl TestSuite for GrpcMatchTestSuite {
             Self::test_exact_service_method_match(),
             Self::test_header_match(),
             Self::test_section_name_mismatch(),
+            Self::test_regex_method_match(),
+            Self::test_regex_service_only_match(),
+            Self::test_regex_no_match_wrong_hostname(),
         ]
     }
 }

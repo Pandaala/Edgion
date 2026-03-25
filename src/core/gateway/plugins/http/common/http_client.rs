@@ -62,7 +62,7 @@ pub fn get_http_client() -> &'static Client {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|e| {
-                eprintln!("FATAL: Failed to build HTTP client: {}", e);
+                tracing::error!(component = "http_client", error = %e, "Failed to build HTTP client");
                 std::process::exit(1);
             })
     })
@@ -86,7 +86,7 @@ pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
             .danger_accept_invalid_certs(true)
             .build()
             .unwrap_or_else(|e| {
-                eprintln!("FATAL: Failed to build insecure HTTP client: {}", e);
+                tracing::error!(component = "http_client", error = %e, "Failed to build insecure HTTP client");
                 std::process::exit(1);
             })
     })

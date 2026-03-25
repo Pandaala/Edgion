@@ -6,10 +6,10 @@
 //! - Condition update helpers
 //! - Time formatting
 //!
-//! Note: Programmed and Ready conditions are intentionally omitted. These conditions
+//! Note: Programmed and Ready conditions are not yet implemented. These conditions
 //! require data-plane feedback to be accurate, and our Controller-Gateway architecture
-//! uses async gRPC sync without a status-back channel. Setting them from the control
-//! plane would be misleading.
+//! uses async gRPC sync without a status-back channel.
+//! PartiallyInvalid condition is supported for routes with partially invalid rules.
 
 use crate::types::resources::common::Condition;
 use chrono::{SecondsFormat, Utc};
@@ -24,6 +24,8 @@ pub mod condition_types {
     pub const CONFLICTED: &str = "Conflicted";
     /// Gateway has listeners that are not valid (used at Gateway level)
     pub const LISTENERS_NOT_VALID: &str = "ListenersNotValid";
+    /// Some rules in the route are invalid but others are valid
+    pub const PARTIALLY_INVALID: &str = "PartiallyInvalid";
 }
 
 /// Standard Gateway API condition reasons
@@ -48,6 +50,10 @@ pub mod condition_reasons {
     // Conflicted reasons (for Listener port conflicts)
     pub const LISTENER_CONFLICT: &str = "ListenerConflict";
     pub const NO_CONFLICTS: &str = "NoConflicts";
+
+    // PartiallyInvalid reasons
+    pub const RULE_INVALID: &str = "RuleInvalid";
+    pub const ALL_RULES_VALID: &str = "AllRulesValid";
 }
 
 // ============================================================================

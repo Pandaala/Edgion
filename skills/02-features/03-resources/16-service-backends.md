@@ -52,9 +52,13 @@ metadata:
 
 ```yaml
 edgion.io/health-check: |
-  type: String              # http | tcp
+  type: String              # http | tcp | grpc
   # HTTP 模式
   path: String              # 健康检查路径（http 必填）
+  expectedStatuses: [u16]   # 期望 HTTP 状态码（仅 http）
+  host: String              # Host 头覆盖（仅 http）
+  # gRPC 模式
+  grpcServiceName: String   # gRPC Health Check 的 service name（仅 grpc，默认空=检查整个服务器）
   # 通用
   interval: Duration        # 检查间隔
   timeout: Duration         # 超时
@@ -62,6 +66,33 @@ edgion.io/health-check: |
   healthyThreshold: u32     # 健康恢复阈值
   port: u16                 # 检查端口（可选，默认使用 Service 端口）
 ```
+
+## 熔断器
+
+通过 Service 注解配置被动熔断（per-endpoint 逐出）：
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+  annotations:
+    edgion.io/circuit-breaker: |
+      consecutiveErrors: 5
+      ejectionSeconds: 30
+      maxEjectionPercent: 50
+```
+
+### 熔断器 Schema
+
+```yaml
+edgion.io/circuit-breaker: |
+  consecutiveErrors: u32    # 连续失败次数后逐出（默认 5，最小 1）
+  ejectionSeconds: u64      # 逐出冷却时间秒数（默认 30，最小 1）
+  maxEjectionPercent: u32   # 最大逐出比例百分比（默认 50，0=不限制）
+```
+
+配置挂在 Service 上，逐出跟踪在 EP/EPS 内部独立工作，与健康检查互补。
 
 ## 负载均衡策略
 

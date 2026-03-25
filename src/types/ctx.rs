@@ -427,6 +427,11 @@ pub struct EdgionHttpContext {
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
+    /// Signal set by upstream_response_filter when upstream status code matches retry.codes.
+    /// Consumed by error_while_proxy to trigger retry via e.set_retry(true).
+    /// Reset to false after each retry attempt.
+    pub retry_on_status: bool,
+
     /// Time when first upstream connection was initiated
     /// Set only once on first connection attempt
     pub upstream_start_time: Option<Instant>,
@@ -490,6 +495,7 @@ impl EdgionHttpContext {
             plugin_ref_stack: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
+            retry_on_status: false,
             upstream_start_time: None,
             hash_key: None,
             ctx_map: HashMap::new(),

@@ -2,24 +2,26 @@
 
 优先级: P1
 
-## 1. URLRewrite + RequestRedirect 冲突校验
+## 1. ~~URLRewrite + RequestRedirect 冲突校验~~ ✅ 已完成
 
-### 现状
+### 实现方案
 
-- Gateway API 规范明确禁止同一 rule 同时使用 URLRewrite 和 RequestRedirect
-- `plugin_runtime.rs` 按顺序执行 filters，不检查冲突
-- 若两者共存：rewrite 先修改 header，redirect 再短路返回，产生未定义行为
+在 Controller 侧 `find_invalid_rule_indices()` 中检测冲突，走 `PartiallyInvalid` 条件链路（per-rule 粒度），非冲突 rule 不受影响。
 
-### 需要实现
-
-1. 在 `PluginRuntime::from_httproute_filters()` 中添加校验
-2. 检测到冲突时拒绝该 rule，设置 Route condition `Accepted: False`，reason `UnsupportedValue`
-3. 同样适用于 per-backend filters
+覆盖三种冲突场景：
+1. Rule-level：同一 rule 的 filters 同时含 URLRewrite + RequestRedirect
+2. Backend-level：同一 backend ref 的 filters 同时含两者
+3. Cross-level：rule filters 含其一 + backend filters 含另一
 
 ### 涉及文件
 
-- `src/core/gateway/plugins/runtime/plugin_runtime.rs`
-- `src/core/controller/sync_runtime/resource_processor/handlers/http_route.rs` — controller 侧也可校验
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs` — `has_rewrite_redirect_conflict()` + `find_invalid_rule_indices()`
+
+### 集成测试
+
+- `examples/test/conf/HTTPRoute/Filters/FilterConflict/` — 3 rule 场景（rewrite-only → 200、conflict → 404、redirect-only → 302）
+- `examples/code/client/suites/http_route/filters/filter_conflict.rs`
+- 运行：`./examples/test/scripts/integration/run_integration.sh --no-prepare -r HTTPRoute -i Filters/FilterConflict`
 
 ---
 

@@ -43,6 +43,32 @@ pub async fn upstream_peer(
         }
     }
 
+    // Apply backoff delay on retry attempts
+    if ctx.try_cnt >= 1 {
+        let base_backoff = ctx
+            .route_unit
+            .as_ref()
+            .and_then(|unit| unit.rule.parsed_retry.as_ref())
+            .and_then(|r| r.backoff);
+
+        if let Some(base) = base_backoff {
+            // Exponential: base * 2^(try_cnt - 1), capped at 30s
+            let exponent = (ctx.try_cnt - 1).min(5);
+            let delay = base.saturating_mul(1u32.checked_shl(exponent).unwrap_or(u32::MAX));
+            let delay = delay.min(std::time::Duration::from_secs(30));
+
+            // Only sleep if remaining time allows
+            if let Some(timeout) = request_timeout {
+                let remaining = timeout.saturating_sub(ctx.start_time.elapsed());
+                if delay < remaining {
+                    tokio::time::sleep(delay).await;
+                }
+            } else {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
     // Route to appropriate handler based on matched route type (not protocol)
     if ctx.is_grpc_route_matched {
         upstream_peer_grpc(edgion_http, session, ctx).await

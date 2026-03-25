@@ -1,11 +1,17 @@
 ---
 name: gateway-api
-description: Compatibility notes for Edgion's Gateway API handling, especially intentional deviations in TLS certificate selection such as no hostname-less catch-all matching and no cross-port certificate fallback.
+description: Compatibility notes for Edgion's Gateway API handling, including intentional deviations and not-implemented features.
 ---
 
 # Gateway API Compatibility Notes
 
 Use this note when changing Gateway API behavior in Edgion and you need to understand intentional compatibility boundaries.
+
+## 文件索引
+
+| 文件 | 内容 |
+|------|------|
+| [01-not-implemented.md](01-not-implemented.md) | 明确不实现的 Gateway API 功能清单及原因 |
 
 ## TLS Certificate Selection
 
