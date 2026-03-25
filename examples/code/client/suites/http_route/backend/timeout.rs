@@ -286,6 +286,10 @@ impl TestSuite for TimeoutTestSuite {
         "Timeout"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Backend/Timeout")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_normal_response(),

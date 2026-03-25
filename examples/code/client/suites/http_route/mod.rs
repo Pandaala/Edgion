@@ -3,6 +3,7 @@
 
 // basic tests
 mod basic;
+mod multi_port;
 
 // Sub-modules - by function
 mod backend;
@@ -12,12 +13,14 @@ mod protocol;
 
 // basic tests
 pub use basic::HttpTestSuite;
+pub use multi_port::MultiPortTestSuite;
 
 // Export sub-module tests
 pub use backend::{
-    HealthCheckTestSuite, HealthCheckTransitionTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite,
+    CircuitBreakerTestSuite, GrpcHealthCheckTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite,
+    LBConsistentHashTestSuite, LBRoundRobinTestSuite, PartiallyInvalidTestSuite, RetryOnStatusTestSuite,
     TimeoutTestSuite, WeightedBackendTestSuite,
 };
-pub use filters::{HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite};
+pub use filters::{FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite};
 pub use protocol::WebSocketTestSuite;
 pub use r#match::HttpMatchTestSuite;

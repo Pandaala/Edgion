@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/gateway-api/conformance"
 	"sigs.k8s.io/gateway-api/conformance/utils/config"
 	"sigs.k8s.io/gateway-api/conformance/utils/roundtripper"
+	"sigs.k8s.io/gateway-api/conformance/utils/suite"
 	"sigs.k8s.io/gateway-api/pkg/features"
 )
 
@@ -78,6 +79,24 @@ func TestConformance(t *testing.T) {
 
 	// B-class: HTTPRoute parentRef port matching
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteParentRefPort)
+
+	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
+	// ⚠ Not yet validated against real conformance run.
+	opts.SupportedFeatures.Insert(features.SupportGRPCRoute)
+
+	// Conformance profiles — declare which profiles Edgion claims to support.
+	// This enables profile-based conformance reporting per GEP-1709.
+	//
+	// GATEWAY-HTTP: declared, core features implemented.
+	// GATEWAY-GRPC: declared, core features implemented (exact/header/hostname/weight matching).
+	//               ⚠ Not yet validated against real conformance run — may need status condition fixes.
+	// GATEWAY-TLS:  NOT declared yet. TLS Passthrough implemented but conformance tests never run.
+	//               Likely needs status condition work (ResolvedRefs, supportedKinds for TLSRoute).
+	//               Add GatewayTLSConformanceProfileName + SupportTLSRoute when core tests pass.
+	opts.ConformanceProfiles = sets.New[suite.ConformanceProfileName](
+		suite.GatewayHTTPConformanceProfileName,
+		suite.GatewayGRPCConformanceProfileName,
+	)
 
 	opts.AllowCRDsMismatch = true
 

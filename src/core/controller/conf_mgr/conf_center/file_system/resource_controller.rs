@@ -134,7 +134,7 @@ where
                                     // Read existing status from .status file for comparison
                                     let existing_status_json = status_handler.read_status_json(kind, &key);
 
-                                    let result = self.processor.on_init_apply(obj, existing_status_json);
+                                    let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                     // Handle status persistence (same as runtime)
                                     match result {
@@ -143,16 +143,30 @@ where
                                             if status_changed {
                                                 match extract_status_value(&obj) {
                                                     Some(status_value) => {
-                                                        if let Err(e) =
-                                                            status_handler.write_status_value(kind, &key, &status_value)
-                                                        {
-                                                            tracing::warn!(
-                                                                component = "fs_resource_controller",
-                                                                kind = kind,
-                                                                key = %key,
-                                                                error = %e,
-                                                                "Failed to write status file during init"
-                                                            );
+                                                        match status_handler.write_status_value(
+                                                            kind,
+                                                            &key,
+                                                            &status_value,
+                                                        ) {
+                                                            Ok(()) => {
+                                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
+                                                                tracing::info!(
+                                                                    component = "fs_resource_controller",
+                                                                    kind = kind,
+                                                                    key = %key,
+                                                                    "Persisted status to filesystem during init"
+                                                                );
+                                                            }
+                                                            Err(e) => {
+                                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "filesystem");
+                                                                tracing::warn!(
+                                                                    component = "fs_resource_controller",
+                                                                    kind = kind,
+                                                                    key = %key,
+                                                                    error = %e,
+                                                                    "Failed to write status file during init"
+                                                                );
+                                                            }
                                                         }
                                                     }
                                                     None => {
@@ -231,22 +245,32 @@ where
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         let existing_status_json = status_handler.read_status_json(kind, &key);
-                                        let result = self.processor.on_init_apply(obj, existing_status_json);
+                                        let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                         if let WorkItemResult::Processed { obj, status_changed } = result {
                                             init_count += 1;
                                             if status_changed {
                                                 if let Some(status_value) = extract_status_value(&obj) {
-                                                    if let Err(e) =
-                                                        status_handler.write_status_value(kind, &key, &status_value)
-                                                    {
-                                                        tracing::warn!(
-                                                            component = "fs_resource_controller",
-                                                            kind = kind,
-                                                            key = %key,
-                                                            error = %e,
-                                                            "Failed to write status file during apply-as-init"
-                                                        );
+                                                    match status_handler.write_status_value(kind, &key, &status_value) {
+                                                        Ok(()) => {
+                                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
+                                                            tracing::info!(
+                                                                component = "fs_resource_controller",
+                                                                kind = kind,
+                                                                key = %key,
+                                                                "Persisted status to filesystem during apply-as-init"
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "filesystem");
+                                                            tracing::warn!(
+                                                                component = "fs_resource_controller",
+                                                                kind = kind,
+                                                                key = %key,
+                                                                error = %e,
+                                                                "Failed to write status file during apply-as-init"
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }
@@ -266,7 +290,7 @@ where
                                 // Runtime phase - parse and enqueue
                                 match serde_yaml::from_str::<K>(&content) {
                                     Ok(obj) => {
-                                        self.processor.on_apply(&obj);
+                                        self.processor.on_apply(&obj).await;
                                     }
                                     Err(e) => {
                                         tracing::warn!(
@@ -293,7 +317,7 @@ where
                                     // For delete, we need to get the cached object
                                     // The worker will handle the actual deletion
                                     if let Some(obj) = self.processor.get(&key) {
-                                        self.processor.on_delete(&obj);
+                                        self.processor.on_delete(&obj).await;
                                     } else {
                                         tracing::trace!(
                                             component = "fs_resource_controller",
@@ -466,34 +490,47 @@ where
                     let existing_status_json = status_handler.read_status_json(kind, &work_item.key);
 
                     // Use processor's process_work_item which handles the reconciliation logic
-                    let result = processor.process_work_item(
-                        &work_item.key,
-                        store_obj,
-                        existing_status_json,
-                        work_item.trigger_chain.clone(),
-                    );
+                    let result = processor
+                        .process_work_item(
+                            &work_item.key,
+                            store_obj,
+                            existing_status_json,
+                            work_item.trigger_chain.clone(),
+                        )
+                        .await;
 
                     // Persist status based on result
                     match result {
                         WorkItemResult::Processed { obj, status_changed } => {
                             if status_changed {
-                                // Extract and persist native status
                                 match extract_status_value(&obj) {
                                     Some(status_value) => {
-                                        if let Err(e) =
-                                            status_handler.write_status_value(kind, &work_item.key, &status_value)
-                                        {
-                                            tracing::warn!(
-                                                component = "fs_resource_controller",
-                                                kind = kind,
-                                                key = %work_item.key,
-                                                error = %e,
-                                                "Failed to write status file"
-                                            );
+                                        match status_handler.write_status_value(kind, &work_item.key, &status_value) {
+                                            Ok(()) => {
+                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write(
+                                                    kind,
+                                                    "filesystem",
+                                                );
+                                                tracing::info!(
+                                                    component = "fs_resource_controller",
+                                                    kind = kind,
+                                                    key = %work_item.key,
+                                                    "Persisted status to filesystem"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "filesystem");
+                                                tracing::warn!(
+                                                    component = "fs_resource_controller",
+                                                    kind = kind,
+                                                    key = %work_item.key,
+                                                    error = %e,
+                                                    "Failed to write status file"
+                                                );
+                                            }
                                         }
                                     }
                                     None => {
-                                        // Status changed but extraction failed - log warning
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,

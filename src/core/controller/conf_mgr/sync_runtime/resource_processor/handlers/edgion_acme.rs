@@ -36,6 +36,7 @@ impl Default for EdgionAcmeHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
     fn validate(&self, acme: &EdgionAcme, _ctx: &HandlerContext) -> Vec<String> {
         let mut warnings = Vec::new();
@@ -99,7 +100,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         warnings
     }
 
-    fn parse(&self, mut acme: EdgionAcme, ctx: &HandlerContext) -> ProcessResult<EdgionAcme> {
+    async fn parse(&self, mut acme: EdgionAcme, ctx: &HandlerContext) -> ProcessResult<EdgionAcme> {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionAcme,
             acme.metadata.namespace.clone(),
@@ -147,7 +148,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         ProcessResult::Continue(acme)
     }
 
-    fn on_delete(&self, acme: &EdgionAcme, ctx: &HandlerContext) {
+    async fn on_delete(&self, acme: &EdgionAcme, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionAcme,
             acme.metadata.namespace.clone(),

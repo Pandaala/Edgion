@@ -5,9 +5,12 @@
 use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_tcp_route_if_enabled,
 };
-use super::{remove_from_attached_route_tracker, requeue_parent_gateways, update_attached_route_tracker};
+use super::{
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
+    update_attached_route_tracker, update_gateway_route_index,
+};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    set_route_parent_conditions_full, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::TCPRoute;
 use crate::types::resources::common::RefDenied;
@@ -89,6 +92,7 @@ impl Default for TcpRouteHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
     fn validate(&self, route: &TCPRoute, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = validate_tcp_route_if_enabled(route);
@@ -102,7 +106,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         errors
     }
 
-    fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
+    async fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route);
 
@@ -145,12 +149,81 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             }
         }
 
+        // Treat resolved_ports as controller-derived state.
+        // Clear any stale value before recomputing from current parentRefs.
+        route.spec.resolved_ports = None;
+
+        // Resolve listener ports from parentRefs (mirrors UDPRoute pattern)
+        if let Some(parent_refs) = &route.spec.parent_refs {
+            let mut ports = Vec::new();
+            for parent_ref in parent_refs {
+                if let Some(port) = parent_ref.port {
+                    ports.push(port as u16);
+                } else {
+                    let gw_ns = parent_ref
+                        .namespace
+                        .as_deref()
+                        .or(route.metadata.namespace.as_deref())
+                        .unwrap_or("default");
+                    if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
+                        if let Some(listeners) = &gateway.spec.listeners {
+                            if let Some(section_name) = &parent_ref.section_name {
+                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
+                                    if super::route_utils::listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        route_ns,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
+                            } else {
+                                for listener in listeners {
+                                    if super::route_utils::listener_allows_route_namespace(
+                                        &listener.allowed_routes,
+                                        route_ns,
+                                        gw_ns,
+                                    ) {
+                                        ports.push(listener.port as u16);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !ports.is_empty() {
+                ports.sort_unstable();
+                ports.dedup();
+                route.spec.resolved_ports = Some(ports);
+            }
+        }
+
+        if route.spec.resolved_ports.is_none() {
+            tracing::debug!(
+                route = %route.metadata.name.as_deref().unwrap_or(""),
+                ns = route_ns,
+                "TCPRoute has no resolved_ports: Gateway not yet available or no matching listeners"
+            );
+        }
+
         ProcessResult::Continue(route)
     }
 
-    fn on_change(&self, route: &TCPRoute, ctx: &HandlerContext) {
+    async fn on_change(&self, route: &TCPRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+
+        // Register in gateway_route_index so Gateway changes trigger requeue
+        // (required because parse() calls lookup_gateway() for resolved_ports)
+        update_gateway_route_index(
+            ResourceKind::TCPRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
+
         let tracker_changed = update_attached_route_tracker(
             ResourceKind::TCPRoute,
             route_ns,
@@ -158,11 +231,11 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
-    fn on_delete(&self, route: &TCPRoute, ctx: &HandlerContext) {
+    async fn on_delete(&self, route: &TCPRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -170,15 +243,19 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         super::route_utils::clear_service_backend_refs(ResourceKind::TCPRoute, route_ns, route_name);
 
+        remove_from_gateway_route_index(ResourceKind::TCPRoute, route_ns, route_name);
+
         let tracker_changed = remove_from_attached_route_tracker(ResourceKind::TCPRoute, route_ns, route_name);
         if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx);
+            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
-    fn update_status(&self, route: &mut TCPRoute, _ctx: &HandlerContext, _validation_errors: &[String]) {
+    fn update_status(&self, route: &mut TCPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+
+        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
         let backend_ref_tuples = collect_backend_ref_tuples(route);
         let mut resolved_refs_errors = super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples);
@@ -189,7 +266,8 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_errors = super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None);
+                let mut accepted_errors = super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None);
+                accepted_errors.extend(validation_accepted_errors.clone());
 
                 let parent_status = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -198,20 +276,10 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
                 });
 
                 if let Some(ps) = parent_status {
-                    set_route_parent_conditions_full(
-                        &mut ps.conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
                 } else {
                     let mut conditions = Vec::new();
-                    set_route_parent_conditions_full(
-                        &mut conditions,
-                        &accepted_errors,
-                        &resolved_refs_errors,
-                        generation,
-                    );
+                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
 
                     status.parents.push(RouteParentStatus {
                         parent_ref: parent_ref.clone(),
@@ -222,6 +290,8 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             }
 
             super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+        } else {
+            status.parents.clear();
         }
     }
 }

@@ -42,9 +42,11 @@ use kube::runtime::WatchStreamExt;
 use kube::{Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -198,18 +200,19 @@ fn spawn_namespace_watcher(
     shutdown: ShutdownSignal,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
+        use kube::runtime::watcher::Event;
+
         let api: kube::Api<Namespace> = kube::Api::all(client);
         let store =
             crate::core::controller::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store();
 
         tracing::info!(component = "namespace_watcher", "Starting Namespace label watcher");
 
-        let stream = watcher::watcher(api, watcher_config)
-            .default_backoff()
-            .applied_objects();
+        let stream = watcher::watcher(api, watcher_config).default_backoff();
 
         futures::pin_mut!(stream);
 
+        let mut init_batch: Option<Vec<Namespace>> = None;
         let mut shutdown = shutdown;
         loop {
             tokio::select! {
@@ -219,20 +222,52 @@ fn spawn_namespace_watcher(
                 }
                 event = stream.try_next() => {
                     match event {
-                        Ok(Some(ns)) => {
-                            let name = ns.name_any();
-                            let changed = if ns.metadata.deletion_timestamp.is_some() {
-                                store.remove(&name)
-                            } else {
-                                store.upsert(ns)
-                            };
-                            if changed {
-                                tracing::debug!(
-                                    component = "namespace_watcher",
-                                    namespace = %name,
-                                    "Namespace labels changed, requeuing Selector Gateways"
-                                );
-                                requeue_selector_gateways();
+                        Ok(Some(ev)) => match ev {
+                            Event::Init => {
+                                init_batch = Some(Vec::new());
+                            }
+                            Event::InitApply(ns) => {
+                                if let Some(ref mut batch) = init_batch {
+                                    batch.push(ns);
+                                }
+                            }
+                            Event::InitDone => {
+                                if let Some(batch) = init_batch.take() {
+                                    let count = batch.len();
+                                    store.replace_all(batch);
+                                    tracing::info!(
+                                        component = "namespace_watcher",
+                                        count = count,
+                                        "NamespaceStore authoritative replace_all on init_done"
+                                    );
+                                }
+                            }
+                            Event::Apply(ns) => {
+                                let name = ns.name_any();
+                                let changed = if ns.metadata.deletion_timestamp.is_some() {
+                                    store.remove(&name)
+                                } else {
+                                    store.upsert(ns)
+                                };
+                                if changed {
+                                    tracing::debug!(
+                                        component = "namespace_watcher",
+                                        namespace = %name,
+                                        "Namespace labels changed, requeuing Selector Gateways"
+                                    );
+                                    requeue_selector_gateways().await;
+                                }
+                            }
+                            Event::Delete(ns) => {
+                                let name = ns.name_any();
+                                if store.remove(&name) {
+                                    tracing::debug!(
+                                        component = "namespace_watcher",
+                                        namespace = %name,
+                                        "Namespace deleted, requeuing Selector Gateways"
+                                    );
+                                    requeue_selector_gateways().await;
+                                }
                             }
                         }
                         Ok(None) => {
@@ -252,7 +287,7 @@ fn spawn_namespace_watcher(
 
 /// Requeue all Gateways that use Selector namespace policy so they
 /// re-evaluate listener namespace constraints.
-fn requeue_selector_gateways() {
+async fn requeue_selector_gateways() {
     let Some(processor) = PROCESSOR_REGISTRY.get("Gateway") else {
         return;
     };
@@ -277,7 +312,7 @@ fn requeue_selector_gateways() {
                 gw.metadata.namespace.as_deref().unwrap_or("default"),
                 gw.metadata.name.as_deref().unwrap_or("")
             );
-            PROCESSOR_REGISTRY.requeue("Gateway", key);
+            PROCESSOR_REGISTRY.requeue("Gateway", key).await;
         }
     }
 }
@@ -299,6 +334,8 @@ pub struct KubernetesController {
     endpoint_mode: EndpointMode,
     /// Leader handle for gating status writes in all-serve HA mode
     leader_handle: Option<super::leader_election::LeaderHandle>,
+    /// Resource kinds to skip (not watch, not register, not probe)
+    no_watch_kinds: HashSet<String>,
 }
 
 impl KubernetesController {
@@ -321,6 +358,7 @@ impl KubernetesController {
             label_selector,
             MetadataFilterConfig::default(),
             endpoint_mode,
+            HashSet::new(),
         )
     }
 
@@ -337,6 +375,7 @@ impl KubernetesController {
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
         endpoint_mode: EndpointMode,
+        no_watch_kinds: HashSet<String>,
     ) -> Result<Self> {
         let watch_mode = NamespaceWatchMode::from_namespaces(watch_namespaces);
 
@@ -349,6 +388,7 @@ impl KubernetesController {
             gateway_address = ?gateway_address,
             metadata_filter_enabled = true,
             endpoint_mode = ?endpoint_mode,
+            no_watch_kinds = ?no_watch_kinds,
             "Creating Kubernetes controller"
         );
 
@@ -362,6 +402,7 @@ impl KubernetesController {
             metadata_filter: Some(metadata_filter),
             endpoint_mode,
             leader_handle: None,
+            no_watch_kinds,
         })
     }
 
@@ -396,13 +437,78 @@ impl KubernetesController {
         self.run_controllers(shutdown_signal).await
     }
 
-    /// Internal method to run all controllers
-    /// Returns when shutdown is triggered or a relink signal is received
+    /// Phase 1 foundation resource kinds that must be ready before Phase 2 starts.
+    ///
+    /// These are the resources that Phase 2 resources (Routes, EdgionTls, etc.)
+    /// depend on during their init processing:
+    /// - GatewayClass: Gateway validation requires GatewayClass reference
+    /// - Gateway: Route lookup_gateway() needs Gateway in cache
+    /// - Secret: Gateway TLS listeners and Route auth need Secret
+    /// - ReferenceGrant: Cross-namespace reference validation
+    /// - Service: Route backend references need Service info
+    fn phase1_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = vec!["GatewayClass", "Gateway", "Secret", "ReferenceGrant", "Service"];
+        if self.endpoint_mode.uses_endpoint() {
+            kinds.push("Endpoints");
+        }
+        if self.endpoint_mode.uses_endpoint_slice() {
+            kinds.push("EndpointSlice");
+        }
+        kinds.retain(|k| !self.no_watch_kinds.contains(*k));
+        kinds
+    }
+
+    /// All resource kinds that should register processors during controller startup.
+    ///
+    /// This includes both Phase 1 foundation resources and Phase 2 dependent
+    /// resources. The namespace watcher is intentionally excluded because it
+    /// does not participate in PROCESSOR_REGISTRY readiness gating.
+    /// Kinds listed in `no_watch_kinds` are excluded.
+    pub(crate) fn all_processor_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.phase1_kinds();
+        kinds.extend(
+            [
+                "HTTPRoute",
+                "GRPCRoute",
+                "TCPRoute",
+                "UDPRoute",
+                "TLSRoute",
+                "EdgionTls",
+                "BackendTLSPolicy",
+                "EdgionPlugins",
+                "EdgionStreamPlugins",
+                "PluginMetaData",
+                "LinkSys",
+                "EdgionAcme",
+                "EdgionGatewayConfig",
+            ]
+            .into_iter()
+            .filter(|k| !self.no_watch_kinds.contains(*k)),
+        );
+        kinds
+    }
+
+    /// Check if a resource kind should be watched
+    fn should_watch(&self, kind: &str) -> bool {
+        !self.no_watch_kinds.contains(kind)
+    }
+
+    /// Internal method to run all controllers with phased initialization.
+    ///
+    /// Phase 1 (Foundation): GatewayClass, Gateway, Secret, ReferenceGrant,
+    ///   Service, Endpoints/EndpointSlice, Namespace watcher
+    /// Phase 2 (Dependent): Routes, EdgionTls, BackendTLSPolicy, Plugins, etc.
+    ///
+    /// Phase 2 waits for Phase 1 to complete init before starting, so that
+    /// dependent resources find their references already in cache on first
+    /// processing — reducing post-init revalidation and duplicate status writes.
+    ///
+    /// Returns when shutdown is triggered or a relink signal is received.
     #[allow(clippy::vec_init_then_push)]
     async fn run_controllers(&self, mut shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
         tracing::info!(
             component = "k8s_controller",
-            "Starting Kubernetes controller - spawning independent ResourceControllers"
+            "Starting Kubernetes controller - spawning ResourceControllers with phased init"
         );
 
         // Create relink signal channel
@@ -423,48 +529,61 @@ impl KubernetesController {
 
         let mut h = Vec::new();
 
-        // ==================== Namespaced Resources ====================
-        // Route resources
-        h.push(spawn::<HTTPRoute, _>(
-            self,
-            "HTTPRoute",
-            HttpRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<GRPCRoute, _>(
-            self,
-            "GRPCRoute",
-            GrpcRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<TCPRoute, _>(
-            self,
-            "TCPRoute",
-            TcpRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<UDPRoute, _>(
-            self,
-            "UDPRoute",
-            UdpRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<TLSRoute, _>(
-            self,
-            "TLSRoute",
-            TlsRouteHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
+        // ==================== Phase 1: Foundation Resources ====================
+        // These must be ready before Phase 2 resources start, so that
+        // Routes can resolve Gateway/Secret/Service references on first processing.
 
-        // Backend resources
-        h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
+        tracing::info!(
+            component = "k8s_controller",
+            "Phase 1: Spawning foundation resource controllers"
+        );
 
-        // Register endpoint handlers based on endpoint mode
+        // Cluster-scoped foundation
+        if self.should_watch("GatewayClass") {
+            h.push(spawn_cluster::<GatewayClass, _>(
+                self,
+                "GatewayClass",
+                GatewayClassHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+
+        // Gateway (needs GatewayClass, filter by gateway_class)
+        if self.should_watch("Gateway") {
+            h.push(spawn::<Gateway, _>(
+                self,
+                "Gateway",
+                GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
+                &ctx,
+            ));
+        }
+
+        // Secret (TLS certificates, auth credentials)
+        if self.should_watch("Secret") {
+            h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
+        }
+
+        // ReferenceGrant (cross-namespace reference validation)
+        if self.should_watch("ReferenceGrant") {
+            h.push(spawn::<ReferenceGrant, _>(
+                self,
+                "ReferenceGrant",
+                ReferenceGrantHandler::new(),
+                &ctx,
+            ));
+        }
+
+        // Service (Route backend references)
+        if self.should_watch("Service") {
+            h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
+        }
+
+        // Endpoint resources (Route backend address resolution)
         if self.endpoint_mode.uses_endpoint() {
             tracing::info!(
                 component = "k8s_controller",
                 mode = ?self.endpoint_mode,
-                "Registering Endpoints controller"
+                "Registering Endpoints controller (Phase 1)"
             );
             h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
         }
@@ -473,7 +592,7 @@ impl KubernetesController {
             tracing::info!(
                 component = "k8s_controller",
                 mode = ?self.endpoint_mode,
-                "Registering EndpointSlice controller"
+                "Registering EndpointSlice controller (Phase 1)"
             );
             h.push(spawn::<EndpointSlice, _>(
                 self,
@@ -488,92 +607,164 @@ impl KubernetesController {
             unreachable!("EndpointMode::Auto should be resolved before run_controllers");
         }
 
-        // TLS related (special processing)
-        h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
-        h.push(spawn::<EdgionTls, _>(
-            self,
-            "EdgionTls",
-            EdgionTlsHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn::<BackendTLSPolicy, _>(
-            self,
-            "BackendTLSPolicy",
-            BackendTlsPolicyHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-
-        // Gateway (special processing: filter by gateway_class)
-        h.push(spawn::<Gateway, _>(
-            self,
-            "Gateway",
-            GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
-            &ctx,
-        ));
-
-        // Other namespaced resources
-        h.push(spawn::<ReferenceGrant, _>(
-            self,
-            "ReferenceGrant",
-            ReferenceGrantHandler::new(),
-            &ctx,
-        ));
-        h.push(spawn::<EdgionPlugins, _>(
-            self,
-            "EdgionPlugins",
-            EdgionPluginsHandler::new(),
-            &ctx,
-        ));
-        h.push(spawn::<EdgionStreamPlugins, _>(
-            self,
-            "EdgionStreamPlugins",
-            EdgionStreamPluginsHandler::new(),
-            &ctx,
-        ));
-        h.push(spawn::<PluginMetaData, _>(
-            self,
-            "PluginMetaData",
-            PluginMetadataHandler::new(),
-            &ctx,
-        ));
-        h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
-
-        // ==================== ACME Resources ====================
-        h.push(spawn::<EdgionAcme, _>(
-            self,
-            "EdgionAcme",
-            EdgionAcmeHandler::new(),
-            &ctx,
-        ));
-
-        // ==================== Cluster-Scoped Resources ====================
-        h.push(spawn_cluster::<GatewayClass, _>(
-            self,
-            "GatewayClass",
-            GatewayClassHandler::new(self.controller_name.clone()),
-            &ctx,
-        ));
-        h.push(spawn_cluster::<EdgionGatewayConfig, _>(
-            self,
-            "EdgionGatewayConfig",
-            EdgionGatewayConfigHandler::new(),
-            &ctx,
-        ));
-
-        // ==================== Auxiliary Watchers ====================
+        // Namespace watcher (Gateway Selector namespace policy)
         h.push(spawn_namespace_watcher(
             self.client.clone(),
             watcher::Config::default(),
             ctx.shutdown.clone(),
         ));
 
+        let phase1_count = h.len();
+        tracing::info!(
+            component = "k8s_controller",
+            count = phase1_count,
+            "Phase 1 foundation controllers spawned, waiting for init completion"
+        );
+
+        // Wait for Phase 1 resources to complete their init phase
+        const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
+        let phase1_ready = PROCESSOR_REGISTRY
+            .wait_kinds_ready(&self.phase1_kinds(), PHASE1_TIMEOUT)
+            .await;
+
+        if phase1_ready {
+            tracing::info!(
+                component = "k8s_controller",
+                "Phase 1 complete: all foundation resources ready, starting Phase 2"
+            );
+        } else {
+            tracing::warn!(
+                component = "k8s_controller",
+                "Phase 1 timeout: starting Phase 2 anyway (fallback to parallel init)"
+            );
+        }
+
+        // ==================== Phase 2: Dependent Resources ====================
+        // These resources depend on Phase 1 resources being in cache.
+
+        tracing::info!(
+            component = "k8s_controller",
+            "Phase 2: Spawning dependent resource controllers"
+        );
+
+        // Route resources
+        if self.should_watch("HTTPRoute") {
+            h.push(spawn::<HTTPRoute, _>(
+                self,
+                "HTTPRoute",
+                HttpRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("GRPCRoute") {
+            h.push(spawn::<GRPCRoute, _>(
+                self,
+                "GRPCRoute",
+                GrpcRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("TCPRoute") {
+            h.push(spawn::<TCPRoute, _>(
+                self,
+                "TCPRoute",
+                TcpRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("UDPRoute") {
+            h.push(spawn::<UDPRoute, _>(
+                self,
+                "UDPRoute",
+                UdpRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("TLSRoute") {
+            h.push(spawn::<TLSRoute, _>(
+                self,
+                "TLSRoute",
+                TlsRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+
+        // TLS related (depend on Secret being in cache)
+        if self.should_watch("EdgionTls") {
+            h.push(spawn::<EdgionTls, _>(
+                self,
+                "EdgionTls",
+                EdgionTlsHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+        if self.should_watch("BackendTLSPolicy") {
+            h.push(spawn::<BackendTLSPolicy, _>(
+                self,
+                "BackendTLSPolicy",
+                BackendTlsPolicyHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
+        }
+
+        // Plugin resources
+        if self.should_watch("EdgionPlugins") {
+            h.push(spawn::<EdgionPlugins, _>(
+                self,
+                "EdgionPlugins",
+                EdgionPluginsHandler::new(),
+                &ctx,
+            ));
+        }
+        if self.should_watch("EdgionStreamPlugins") {
+            h.push(spawn::<EdgionStreamPlugins, _>(
+                self,
+                "EdgionStreamPlugins",
+                EdgionStreamPluginsHandler::new(),
+                &ctx,
+            ));
+        }
+        if self.should_watch("PluginMetaData") {
+            h.push(spawn::<PluginMetaData, _>(
+                self,
+                "PluginMetaData",
+                PluginMetadataHandler::new(),
+                &ctx,
+            ));
+        }
+        if self.should_watch("LinkSys") {
+            h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
+        }
+
+        // ACME
+        if self.should_watch("EdgionAcme") {
+            h.push(spawn::<EdgionAcme, _>(
+                self,
+                "EdgionAcme",
+                EdgionAcmeHandler::new(),
+                &ctx,
+            ));
+        }
+
+        // Cluster-scoped dependent
+        if self.should_watch("EdgionGatewayConfig") {
+            h.push(spawn_cluster::<EdgionGatewayConfig, _>(
+                self,
+                "EdgionGatewayConfig",
+                EdgionGatewayConfigHandler::new(),
+                &ctx,
+            ));
+        }
+
         // Drop our copy of the sender so we can detect when all controllers stop
         drop(relink_tx);
 
         tracing::info!(
             component = "k8s_controller",
-            count = h.len(),
-            "All ResourceControllers spawned - each running independently"
+            phase1_count = phase1_count,
+            phase2_count = h.len() - phase1_count,
+            total = h.len(),
+            "All ResourceControllers spawned (Phase 1 + Phase 2)"
         );
 
         // Wait for either:

@@ -22,13 +22,22 @@ impl Cors {
 
         // Log warnings for force wildcard usage
         if config.allow_origins == "**" {
-            println!("CORS: Using '**' for allow_origins bypasses security checks!");
+            tracing::warn!(
+                component = "cors",
+                "Using '**' for allow_origins bypasses security checks"
+            );
         }
         if config.allow_methods == "**" {
-            println!("CORS: Using '**' for allow_methods bypasses security checks!");
+            tracing::warn!(
+                component = "cors",
+                "Using '**' for allow_methods bypasses security checks"
+            );
         }
         if config.allow_headers == "**" {
-            println!("CORS: Using '**' for allow_headers will reflect client headers!");
+            tracing::warn!(
+                component = "cors",
+                "Using '**' for allow_headers will reflect client headers"
+            );
         }
 
         Cors {
@@ -53,7 +62,6 @@ impl Cors {
 
         // Check if origin is allowed
         if !self.config.is_origin_allowed(&origin) {
-            println!("CORS: Origin '{}' not allowed", origin);
             return None;
         }
 

@@ -47,8 +47,8 @@ pub async fn try_match_grpc_route(
     gateway_infos: &[GatewayInfo],
 ) -> Result<bool, EdError> {
     if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.path) {
-        ctx.request_info.grpc_service = Some(service);
-        ctx.request_info.grpc_method = Some(method);
+        ctx.request_info.grpc_service = Some(service.to_string());
+        ctx.request_info.grpc_method = Some(method.to_string());
     }
 
     match grpc_routes.match_route(session, gateway_infos, &ctx.request_info.hostname) {
@@ -89,7 +89,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     let service_namespace = backend_ref
         .namespace
         .as_deref()
-        .or(Some(grpc_route_unit.matched_info.route_ns.as_str()));
+        .or(Some(grpc_route_unit.matched_info.rsc.ns.as_str()));
 
     backend_ref.backend_tls_policy =
         crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace);

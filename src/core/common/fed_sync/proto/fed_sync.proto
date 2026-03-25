@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package fed_sync;
+
+// Controller (client) 连接 Center (server) 的持久双向流
+// Controller 第一条消息必须是 RegisterRequest
+service FederationSync {
+    rpc Sync(stream ControllerMessage) returns (stream CenterMessage);
+}
+
+// ── Controller → Center ──────────────────────────────────────
+
+message ControllerMessage {
+    oneof payload {
+        RegisterRequest register         = 1;  // 首条消息，注册自身信息
+        Pong            pong             = 2;  // 心跳响应
+        ListResponse    list_response    = 3;  // 响应 center 的 ListRequest
+        CommandResponse command_response = 4;  // 响应 center 的命令
+    }
+}
+
+message RegisterRequest {
+    string          controller_id   = 1;  // 稳定标识：cluster + name 拼接，跨重启不变
+    string          cluster         = 2;  // 集群标识（固定 string）
+    repeated string env             = 3;  // 环境标签列表
+    repeated string tag             = 4;  // 扩展标签列表
+    repeated string supported_kinds = 5;  // 本 controller 持有的资源 kind 列表（已排除 no_sync_kinds）
+}
+
+message Pong {
+    uint64 timestamp = 1;  // echo Ping.timestamp，毫秒时间戳
+}
+
+message ListResponse {
+    string               request_id = 1;  // echo ListRequest.request_id
+    repeated ResourceKey keys       = 2;
+}
+
+// 资源 key：只含元信息，无原始 spec/status
+message ResourceKey {
+    string              kind             = 1;
+    string              namespace        = 2;
+    string              name             = 3;
+    string              resource_version = 4;
+    map<string, string> labels           = 5;
+    map<string, string> annotations      = 6;
+}
+
+message CommandResponse {
+    string request_id = 1;
+    bool   success    = 2;
+    string message    = 3;  // 失败时的错误信息
+}
+
+// ── Center → Controller ──────────────────────────────────────
+
+message CenterMessage {
+    oneof payload {
+        RegisterAck    register_ack = 1;  // 注册确认
+        Ping           ping         = 2;  // 心跳
+        ListRequest    list_request = 3;  // 定期拉取资源 key
+        CommandRequest command      = 4;  // 下发命令
+    }
+}
+
+message RegisterAck {
+    // session_id 是 center 内部概念，仅用于日志追踪，controller 不需要回传
+    string session_id = 1;
+}
+
+message Ping {
+    uint64 timestamp = 1;  // 毫秒时间戳
+}
+
+message ListRequest {
+    string          request_id = 1;  // 由 scheduler 生成（UUID），server 维护 pending map 做响应关联
+    repeated string kinds      = 2;  // 空 = 所有 supported_kinds（controller 侧已排除 no_sync_kinds）
+}
+
+message CommandRequest {
+    string request_id = 1;
+    oneof command {
+        ReloadCommand reload = 2;
+        ApplyCommand  apply  = 3;
+        DeleteCommand delete = 4;
+    }
+}
+
+message ReloadCommand {}
+
+message ApplyCommand {
+    string kind = 1;
+    string data = 2;  // 资源 JSON（ConfCenter 原始格式）
+}
+
+message DeleteCommand {
+    string kind      = 1;
+    string namespace = 2;
+    string name      = 3;
+}

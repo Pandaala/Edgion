@@ -97,11 +97,16 @@ pub async fn end_response_421(
 }
 
 /// Send 404 Not Found error response (nginx-style)
+/// For gRPC requests, returns gRPC UNIMPLEMENTED (status 12) per Gateway API spec.
 pub async fn end_response_404(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
+    if ctx.request_info.is_grpc_request {
+        return end_response_grpc_unimplemented(session, ctx, server_header_opts).await;
+    }
+
     ctx.request_info.status = Some(404);
 
     let mut resp = ResponseHeader::build(404, None)?;
@@ -119,6 +124,28 @@ pub async fn end_response_404(
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await?;
+    session.shutdown().await;
+
+    Ok(())
+}
+
+/// Send gRPC UNIMPLEMENTED (status 12) error response.
+/// Per Gateway API spec, unmatched gRPC requests should return grpc-status 12.
+async fn end_response_grpc_unimplemented(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+) -> pingora_core::Result<()> {
+    ctx.request_info.status = Some(200);
+
+    let mut resp = ResponseHeader::build(200, None)?;
+    server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "application/grpc").unwrap();
+    resp.insert_header("grpc-status", "12").unwrap();
+    resp.insert_header("grpc-message", "no matching gRPC route").unwrap();
+
+    let resp_box = Box::new(resp);
+    session.write_response_header(resp_box, true).await?;
     session.shutdown().await;
 
     Ok(())

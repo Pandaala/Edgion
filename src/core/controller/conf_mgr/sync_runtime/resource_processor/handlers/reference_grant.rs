@@ -47,14 +47,14 @@ impl ReferenceGrantHandler {
     }
 
     /// Dispatch change event to listeners
-    fn dispatch_change_event(affected_namespaces: HashSet<String>) {
+    async fn dispatch_change_event(affected_namespaces: HashSet<String>) {
         if affected_namespaces.is_empty() {
             return;
         }
 
         let dispatcher = get_global_dispatcher();
         let event = ReferenceGrantChangedEvent { affected_namespaces };
-        dispatcher.dispatch(&event);
+        dispatcher.dispatch(&event).await;
     }
 }
 
@@ -64,8 +64,9 @@ impl Default for ReferenceGrantHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
-    fn parse(&self, rg: ReferenceGrant, _ctx: &HandlerContext) -> ProcessResult<ReferenceGrant> {
+    async fn parse(&self, rg: ReferenceGrant, _ctx: &HandlerContext) -> ProcessResult<ReferenceGrant> {
         // Parse is called during both add and update
         // We update the store here
         let key = Self::build_key(&rg);
@@ -83,7 +84,7 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         ProcessResult::Continue(rg)
     }
 
-    fn on_change(&self, obj: &ReferenceGrant, _ctx: &HandlerContext) {
+    async fn on_change(&self, obj: &ReferenceGrant, _ctx: &HandlerContext) {
         // Collect affected namespaces from the grant
         let affected_namespaces = Self::identify_affected_namespaces(obj);
 
@@ -96,10 +97,10 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         );
 
         // Dispatch change event to trigger revalidation of affected resources
-        Self::dispatch_change_event(affected_namespaces);
+        Self::dispatch_change_event(affected_namespaces).await;
     }
 
-    fn on_delete(&self, rg: &ReferenceGrant, _ctx: &HandlerContext) {
+    async fn on_delete(&self, rg: &ReferenceGrant, _ctx: &HandlerContext) {
         let key = Self::build_key(rg);
         let store = get_global_reference_grant_store();
 
@@ -117,6 +118,6 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         );
 
         // Dispatch change event to trigger revalidation
-        Self::dispatch_change_event(affected_namespaces);
+        Self::dispatch_change_event(affected_namespaces).await;
     }
 }

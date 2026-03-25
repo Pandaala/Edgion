@@ -12,11 +12,22 @@ use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilte
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::HTTPCORSFilter;
 
+#[derive(Debug)]
 pub struct GapiCorsFilter {
     config: HTTPCORSFilter,
 }
 
 impl GapiCorsFilter {
+    /// Create a new CORS filter, validating origin format per Gateway API v1.5 rules.
+    /// Returns an error if any origin contains path components, query strings,
+    /// fragments, or other malformed host values.
+    pub fn try_new(config: HTTPCORSFilter) -> Result<Self, String> {
+        if let Err(errors) = config.validate() {
+            return Err(format!("CORS filter origin validation failed: {}", errors.join("; ")));
+        }
+        Ok(Self { config })
+    }
+
     pub fn new(config: HTTPCORSFilter) -> Self {
         Self { config }
     }
@@ -276,5 +287,107 @@ mod tests {
         let (host, port) = split_origin_port("http://localhost:3000").unwrap();
         assert_eq!(host, "http://localhost");
         assert_eq!(port, ":3000");
+    }
+
+    #[test]
+    fn test_v15_origin_validation_accepts_valid() {
+        let config = HTTPCORSFilter {
+            allow_origins: Some(vec![
+                "https://example.com".to_string(),
+                "https://example.com:8443".to_string(),
+                "http://localhost:3000".to_string(),
+                "https://*.example.com".to_string(),
+                "*".to_string(),
+            ]),
+            allow_credentials: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: 0,
+        };
+        assert!(GapiCorsFilter::try_new(config).is_ok());
+    }
+
+    #[test]
+    fn test_v15_origin_validation_rejects_path() {
+        let config = HTTPCORSFilter {
+            allow_origins: Some(vec!["https://example.com/path".to_string()]),
+            allow_credentials: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: 0,
+        };
+        let err = GapiCorsFilter::try_new(config).unwrap_err();
+        assert!(err.contains("path component"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_v15_origin_validation_rejects_trailing_slash() {
+        let config = HTTPCORSFilter {
+            allow_origins: Some(vec!["https://example.com/".to_string()]),
+            allow_credentials: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: 0,
+        };
+        assert!(GapiCorsFilter::try_new(config).is_err());
+    }
+
+    #[test]
+    fn test_v15_origin_validation_rejects_query() {
+        let config = HTTPCORSFilter {
+            allow_origins: Some(vec!["https://example.com?q=1".to_string()]),
+            allow_credentials: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: 0,
+        };
+        let err = GapiCorsFilter::try_new(config).unwrap_err();
+        assert!(err.contains("query string"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_v15_origin_validation_rejects_fragment() {
+        let config = HTTPCORSFilter {
+            allow_origins: Some(vec!["https://example.com#sec".to_string()]),
+            allow_credentials: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: 0,
+        };
+        let err = GapiCorsFilter::try_new(config).unwrap_err();
+        assert!(err.contains("fragment"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_v15_origin_validation_rejects_no_scheme() {
+        let config = HTTPCORSFilter {
+            allow_origins: Some(vec!["example.com".to_string()]),
+            allow_credentials: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: 0,
+        };
+        let err = GapiCorsFilter::try_new(config).unwrap_err();
+        assert!(err.contains("scheme"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_v15_origin_validation_rejects_bad_wildcard() {
+        let config = HTTPCORSFilter {
+            allow_origins: Some(vec!["https://exam*ple.com".to_string()]),
+            allow_credentials: None,
+            allow_methods: None,
+            allow_headers: None,
+            expose_headers: None,
+            max_age: 0,
+        };
+        let err = GapiCorsFilter::try_new(config).unwrap_err();
+        assert!(err.contains("wildcard"), "got: {}", err);
     }
 }

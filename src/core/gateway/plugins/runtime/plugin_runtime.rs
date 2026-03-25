@@ -53,8 +53,8 @@ use crate::core::gateway::plugins::http::request_restriction::RequestRestriction
 use crate::core::gateway::plugins::http::response_rewrite::ResponseRewrite;
 use crate::core::gateway::plugins::runtime::gateway_api_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::gateway::plugins::runtime::gateway_api_filters::{
-    DebugAccessLogToHeaderFilter, ExtensionRefFilter, RequestHeaderModifierFilter, RequestRedirectFilter,
-    ResponseHeaderModifierFilter, URLRewriteFilter,
+    DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
+    RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
 };
 
 pub struct PluginRuntime {
@@ -143,6 +143,23 @@ impl PluginRuntime {
                             config.clone(),
                             namespace.to_string(),
                         )));
+                    }
+                }
+                HTTPRouteFilterType::CORS => {
+                    if let Some(config) = &filter.cors {
+                        match GapiCorsFilter::try_new(config.clone()) {
+                            Ok(cors_filter) => {
+                                self.add_request_filter(Box::new(cors_filter));
+                            }
+                            Err(e) => {
+                                tracing::error!("CORS filter config rejected: {}", e);
+                            }
+                        }
+                    }
+                }
+                HTTPRouteFilterType::ExternalAuth => {
+                    if let Some(config) = &filter.external_auth {
+                        self.add_request_filter(Box::new(ForwardAuth::new(config)));
                     }
                 }
                 HTTPRouteFilterType::ExtensionRef => {
@@ -392,6 +409,7 @@ impl PluginRuntime {
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
+            EdgionPlugin::Dsl(config) => DslPlugin::from_config_response(config),
             _ => None,
         }
     }

@@ -181,14 +181,12 @@ impl TlsStreamPluginsTestSuite {
                                 "TLS handshake rejected (before route plugin)".to_string(),
                             ),
                         },
-                        Ok(Err(_e)) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "Connection refused".to_string(),
-                        ),
-                        Err(_) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "Connection dropped (timeout)".to_string(),
-                        ),
+                        Ok(Err(_e)) => {
+                            TestResult::passed_with_message(start.elapsed(), "Connection refused".to_string())
+                        }
+                        Err(_) => {
+                            TestResult::passed_with_message(start.elapsed(), "Connection dropped (timeout)".to_string())
+                        }
                     }
                 })
             },

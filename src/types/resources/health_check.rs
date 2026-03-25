@@ -17,12 +17,13 @@ pub struct ServiceHealthCheck {
 pub enum HealthCheckType {
     Http,
     Tcp,
+    Grpc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveHealthCheckConfig {
-    /// Probe type: "http" (default) or "tcp".
+    /// Probe type: "http" (default), "tcp", or "grpc".
     #[serde(default = "default_hc_type")]
     pub r#type: HealthCheckType,
 
@@ -58,6 +59,12 @@ pub struct ActiveHealthCheckConfig {
     /// Optional Host header override for HTTP checks.
     #[serde(default)]
     pub host: Option<String>,
+
+    /// gRPC Health Check service name.
+    /// Empty string (default) checks the overall server health.
+    /// Only used when type is "grpc".
+    #[serde(default)]
+    pub grpc_service_name: Option<String>,
 }
 
 fn default_hc_type() -> HealthCheckType {
@@ -94,6 +101,7 @@ impl Default for ActiveHealthCheckConfig {
             unhealthy_threshold: default_unhealthy_threshold(),
             expected_statuses: default_expected_statuses(),
             host: None,
+            grpc_service_name: None,
         }
     }
 }
@@ -203,6 +211,42 @@ active:
     }
 
     #[test]
+    fn test_deserialize_grpc_config() {
+        let yaml = r#"
+active:
+  type: grpc
+  port: 9090
+  interval: 10s
+  timeout: 3s
+  healthyThreshold: 2
+  unhealthyThreshold: 3
+  grpcServiceName: "my.package.MyService"
+"#;
+
+        let cfg: ServiceHealthCheck = serde_yaml::from_str(yaml).expect("deserialize grpc config");
+        assert!(cfg.get_validation_error().is_none());
+        let active = cfg.active.expect("active config");
+        assert_eq!(active.r#type, HealthCheckType::Grpc);
+        assert_eq!(active.port, Some(9090));
+        assert_eq!(active.grpc_service_name.as_deref(), Some("my.package.MyService"));
+    }
+
+    #[test]
+    fn test_grpc_config_without_service_name() {
+        let yaml = r#"
+active:
+  type: grpc
+  port: 9090
+"#;
+
+        let cfg: ServiceHealthCheck = serde_yaml::from_str(yaml).expect("deserialize grpc config");
+        assert!(cfg.get_validation_error().is_none());
+        let active = cfg.active.expect("active config");
+        assert_eq!(active.r#type, HealthCheckType::Grpc);
+        assert!(active.grpc_service_name.is_none());
+    }
+
+    #[test]
     fn test_validation_rejects_invalid_config() {
         let yaml = r#"
 active:
@@ -230,6 +274,7 @@ active:
                 unhealthy_threshold: 3,
                 expected_statuses: vec![200, 204],
                 host: Some("svc.local".to_string()),
+                grpc_service_name: None,
             }),
         };
 

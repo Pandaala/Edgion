@@ -1,6 +1,7 @@
 use super::EdgionHttpProxy;
+use crate::core::gateway::cli::config::get_request_duration_config;
 use crate::core::gateway::observe::metrics::{
-    global_metrics, record_backend_request, status_group, TestData, TestType,
+    global_metrics, record_backend_request, record_request_duration, status_group, TestData, TestType,
 };
 use crate::core::gateway::observe::AccessLogEntry;
 use crate::types::EdgionHttpContext;
@@ -26,10 +27,7 @@ pub async fn logging(
     // Record proxied response bytes for bandwidth monitoring
     global_metrics().add_response_bytes(session.upstream_body_bytes_received() as u64);
     if let Some(upstream) = ctx.get_current_upstream() {
-        if let (Some(service_key), Some(addr)) = (
-            upstream.service_key.as_deref(),
-            upstream.lb_backend_addr.as_ref(),
-        ) {
+        if let (Some(service_key), Some(addr)) = (upstream.service_key.as_deref(), upstream.lb_backend_addr.as_ref()) {
             match &upstream.lb_policy {
                 Some(crate::types::ParsedLBPolicy::LeastConn) => {
                     crate::core::gateway::lb::runtime_state::decrement(service_key, addr);
@@ -123,13 +121,13 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     // Get matched route information (HTTP or gRPC)
     let (route_ns, route_name) = if let Some(ref route_unit) = ctx.route_unit {
         (
-            route_unit.matched_info.rns.as_str(),
-            route_unit.matched_info.rn.as_str(),
+            route_unit.matched_info.rsc.ns.as_str(),
+            route_unit.matched_info.rsc.name.as_str(),
         )
     } else if let Some(ref grpc_unit) = ctx.grpc_route_unit {
         (
-            grpc_unit.matched_info.route_ns.as_str(),
-            grpc_unit.matched_info.route_name.as_str(),
+            grpc_unit.matched_info.rsc.ns.as_str(),
+            grpc_unit.matched_info.rsc.name.as_str(),
         )
     } else {
         ("unknown", "unknown")
@@ -139,7 +137,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     let (backend_ns, backend_name) = ctx
         .backend_context
         .as_ref()
-        .map(|bc| (bc.namespace.as_str(), bc.name.as_str()))
+        .map(|bc| (bc.rsc.ns.as_str(), bc.rsc.name.as_str()))
         .unwrap_or(("unknown", "unknown"));
 
     // Get protocol from discover_protocol (default "http", could be "grpc", "websocket", etc.)
@@ -156,6 +154,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     };
 
     // Record the metric
+    let status = status_group(ctx.request_info.status);
     record_backend_request(
         gateway_ns,
         gateway_name,
@@ -164,9 +163,24 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         backend_ns,
         backend_name,
         protocol,
-        status_group(ctx.request_info.status),
+        status,
         test_key,
         &test_data,
+    );
+
+    // Record request duration histogram
+    let duration_ms = ctx.start_time.elapsed().as_secs_f64() * 1000.0;
+    record_request_duration(
+        get_request_duration_config(),
+        gateway_ns,
+        gateway_name,
+        route_ns,
+        route_name,
+        backend_ns,
+        backend_name,
+        protocol,
+        status,
+        duration_ms,
     );
 }
 

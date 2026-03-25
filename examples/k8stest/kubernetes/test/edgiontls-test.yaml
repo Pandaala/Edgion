@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: test-example-tls
+  namespace: edgion-test
+spec:
+  hosts:
+    - "test.example.com"
+  parentRefs:
+    - name: gateway-443
+      namespace: edgion-system
+      sectionName: https
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

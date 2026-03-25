@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-regex-replace
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "regex-replace"
+        source: |
+          let path = req.path
+          let cleaned = regex_replace(path, "/v[0-9]+/", "/latest/")
+          req.set_header("X-Cleaned-Path", cleaned)
+          resp.set_header("X-Cleaned-Path", cleaned)
+        errorPolicy: deny

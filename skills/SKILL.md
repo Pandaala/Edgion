@@ -1,115 +1,71 @@
-# Edgion Skills — 项目知识库总目录
+---
+name: edgion-skills
+description: Root navigation for the Edgion knowledge base. Read this first, then drill into the relevant subtree.
+---
 
-> 基于 Rust + Pingora + Gateway API 的 Kubernetes 网关。Controller–Gateway 分离架构，通过 gRPC 做配置同步。
-> 支持 HTTP/1.1、HTTP/2、gRPC、TCP、UDP、TLS、WebSocket，具备插件系统、多种负载均衡策略和 TLS/mTLS 能力。
+# Edgion Skills
 
-## 使用方式
+> Rust + Pingora + Gateway API 的 Kubernetes 网关。Controller–Gateway 分离，gRPC 配置同步。
+> 支持 HTTP/1.1、HTTP/2、gRPC、TCP、UDP、TLS、WebSocket，含插件系统、负载均衡、TLS/mTLS。
 
-本知识库采用**渐进式披露**（Progressive Disclosure）组织：
-1. **本文件**是总入口，AI 首次阅读时只需读取本文件
-2. **分类 SKILL.md** 提供该领域的概述和文件清单，按需深入
-3. **具体文件** 包含完整的技术细节，仅在需要时加载
+## 导航规则
 
-## 知识库目录
+1. **渐进式披露**：本文件 → 分类 SKILL.md → 具体文件。只加载当前任务需要的最小子树。
+2. **三层定位**：
+   - **理解架构**（内部怎么实现） → `01-architecture/`
+   - **查功能/配置**（怎么用/怎么配） → `02-features/`
+   - **写代码**（编码规范） → `03-coding/`
+3. **跨领域任务**：修改一个资源的 Handler 通常需要 architecture（理解处理流程）→ features（功能/Schema 参考）→ coding（编码约束）→ testing（验证），按需逐层加载。
+4. **资源相关任务**——两个目录按编号对齐，职责互补：
+   - [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) — **内部实现**：Handler 流程、requeue 关联、匹配引擎、源码位置
+   - [02-features/03-resources/](02-features/03-resources/SKILL.md) — **外部契约**：YAML Schema、字段类型与默认值、配置示例
+   - 改代码通常两边都要看：02 查 Schema 确认字段定义，01 查实现确认处理逻辑
 
-### 00 [00-architecture/](00-architecture/SKILL.md) — 架构与核心功能
-项目整体架构设计、Controller/Gateway 分离模型、各核心子系统的设计原理。
+## 快速定位
 
-| 文件 | 主题 |
-|------|------|
-| [00-overview.md](00-architecture/00-overview.md) | 项目总览：高层架构图、Crate 结构、代码组织、EdgionHttpContext、edgion-ctl、关键依赖 |
-| [01-config-center/](00-architecture/01-config-center/SKILL.md) | 配置中心：ConfCenter、Workqueue、ResourceProcessor、K8s HA、文件系统模式 |
-| [02-grpc-sync.md](00-architecture/02-grpc-sync.md) | gRPC 配置同步：Proto 定义、同步流程、Server/Client 端实现 |
-| [03-data-plane.md](00-architecture/03-data-plane.md) | 数据面：Gateway 启动流程、Pingora ProxyHttp 生命周期、ConnectionFilter |
-| [04-route-matching.md](00-architecture/04-route-matching.md) | 路由匹配：匹配流水线、RadixPath/Regex 引擎、优先级、多 Gateway 端口共享 |
-| [05-plugin-system.md](00-architecture/05-plugin-system.md) | 插件系统：4 阶段 trait、PluginRuntime、条件执行、预解析机制 |
-| [06-load-balancing.md](00-architecture/06-load-balancing.md) | 负载均衡：EWMA、LeastConn、WeightedSelector、健康检查、后端发现 |
-| [07-gateway-api.md](00-architecture/07-gateway-api.md) | Gateway API：v1.4.0 支持范围、资源映射、一致性测试、Edgion 扩展点 |
-| [08-resource-system.md](00-architecture/08-resource-system.md) | 资源系统：define_resources! 宏、ResourceMeta trait、ResourceKind、Preparse 机制 |
-| [09-core-layout.md](00-architecture/09-core-layout.md) | Core 分层定版：模块放置规范，避免回到旧目录结构 |
+| 你想了解… | 直接入口 |
+|-----------|---------|
+| **架构全貌** — Controller/Gateway/Ctl 三 bin 关系 | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
+| **Controller 内部** — ConfCenter、Workqueue、ResourceProcessor、Requeue | [01-architecture/01-controller/](01-architecture/01-controller/SKILL.md) |
+| **Gateway 内部** — Pingora 生命周期、路由匹配、插件执行、负载均衡 | [01-architecture/02-gateway/](01-architecture/02-gateway/SKILL.md) |
+| **Controller↔Gateway 配置同步** — gRPC Watch/List | [01-architecture/03-controller-gateway-link/](01-architecture/03-controller-gateway-link/SKILL.md) |
+| **某种资源的处理链路** — 20 种资源的架构 | [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) |
+| **二进制启动与部署** — CLI 参数、部署模式 | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
+| **TOML 配置 Schema** — Controller/Gateway 配置 | [02-features/02-config/](02-features/02-config/SKILL.md) |
+| **资源功能 Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
+| **可观测性** — Access Log、Metrics、协议日志 | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
+| **注解参考** — 所有 edgion.io/* 键 | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
+| **开发新资源/插件** — 添加 CRD、插件、连接器 | [01-architecture/01-controller/09-add-new-resource/](01-architecture/01-controller/09-add-new-resource/00-guide.md) |
+| **路由匹配规则** — 各引擎匹配逻辑 | [01-architecture/02-gateway/03-routes/00-route-matching.md](01-architecture/02-gateway/03-routes/00-route-matching.md) |
+| **编码规范** — 日志 ID、日志安全、可观测性 | [03-coding/SKILL.md](03-coding/SKILL.md) |
+| **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 
-### 01 [01-development/](01-development/SKILL.md) — 开发指南
-功能开发、插件编写、资源添加、配置参考等开发者日常所需。
+## 目录总览
 
-| 文件 | 主题 |
-|------|------|
-| [00-add-new-resource.md](01-development/00-add-new-resource.md) | 添加新 CRD 资源类型的完整流程 |
-| [01-edgion-plugin-dev.md](01-development/01-edgion-plugin-dev.md) | EdgionPlugin (HTTP 层) 插件开发 |
-| [02-stream-plugin-dev.md](01-development/02-stream-plugin-dev.md) | StreamPlugin (TCP 层) 插件开发 |
-| [03-link-sys-dev.md](01-development/03-link-sys-dev.md) | LinkSys 外部系统连接器开发 |
-| [04-config-reference.md](01-development/04-config-reference.md) | TOML 配置文件参考 |
-| [05-annotations-reference.md](01-development/05-annotations-reference.md) | `edgion.io/*` 注解参考 |
-| [06-feature-flags.md](01-development/06-feature-flags.md) | Cargo Feature Flags 参考 |
-| [07-documentation-writing.md](01-development/07-documentation-writing.md) | 文档编写规范 |
-| [08-conf-handler-guidelines.md](01-development/08-conf-handler-guidelines.md) | ConfHandler 开发规范：分类、增量更新、ArcSwap、配置泄漏防护 |
+| # | 目录 | 用途 |
+|---|------|------|
+| 01 | [architecture/](01-architecture/SKILL.md) | 系统架构 + 开发指南：Controller、Gateway、gRPC 同步、资源处理、插件/资源/连接器开发 |
+| 02 | [features/](02-features/SKILL.md) | 功能与配置参考：二进制部署、配置 Schema、资源功能 Schema、可观测性、注解 |
+| 03 | [coding/](03-coding/SKILL.md) | 编码规范：日志 ID、日志安全、可观测性（Access Log / Metrics / Tracing） |
+| 04 | [review/](04-review/SKILL.md) | Review 沉淀：误报判定、可观测性审查 |
+| 05 | [testing/](05-testing/SKILL.md) | 测试：单元测试、集成测试、K8s 测试、专项测试 |
+| 06 | [tracing/](06-tracing/SKILL.md) | 调试：Admin API、edgion-ctl、常见问题 |
+| 07 | [tasks/](07-tasks/SKILL.md) | 任务管理：目录规则、模板、生命周期阶段、完成检查清单 |
+| 08 | [gateway-api/](08-gateway-api/SKILL.md) | Gateway API 兼容性备忘 |
+| 09 | [misc/](09-misc/) | 杂项（TLS 排查等） |
 
-### 02 [02-observability/](02-observability/SKILL.md) — 可观测性
-Access Log、Metrics、控制面日志的设计原则与操作规范。
+## 开发生命周期速查
 
-| 文件 | 主题 |
-|------|------|
-| [00-access-log.md](02-observability/00-access-log.md) | Access Log 设计：字段结构、PluginLog 格式、常见场景、检查清单 |
-| [01-metrics.md](02-observability/01-metrics.md) | Metrics 规范：添加步骤、Label 约束、Test Metrics、禁止事项 |
-| [02-tracing-and-logging.md](02-observability/02-tracing-and-logging.md) | 控制面日志：结构化 Tracing、Level 选择、热路径约束、安全最佳实践 |
+任务按阶段推进，每阶段加载对应 skills（详见 [07-tasks/SKILL.md](07-tasks/SKILL.md)）：
 
-### 03 [03-testing/](03-testing/SKILL.md) — 测试
-集成测试、K8s 测试、LinkSys 测试、调试排错。
-
-| 文件 | 主题 |
-|------|------|
-| [00-integration-testing.md](03-testing/00-integration-testing.md) | 集成测试：架构、运行流程、新增测试步骤、调试指南 |
-| [01-k8s-integration-testing.md](03-testing/01-k8s-integration-testing.md) | K8s 集成测试：与本地测试差异、改造清单、执行阶段 |
-| [02-link-sys-testing.md](03-testing/02-link-sys-testing.md) | LinkSys 集成测试：bash 测试流程、Admin API 验证、Docker Compose |
-| [03-debugging.md](03-testing/03-debugging.md) | 调试与排错：本地环境、Admin API、edgion-ctl、常见问题速查 |
-| [04-conf-sync-leak-testing.md](03-testing/04-conf-sync-leak-testing.md) | 配置同步泄漏检测：基础循环测试 + 高级边界场景（wildcard/乱序/并发/orphan 等） |
-
-### 04 [04-cicd/](04-cicd/SKILL.md) — CI/CD 与构建
-编译、Docker 镜像、GitHub Actions、发布流程。
-
-| 文件 | 主题 |
-|------|------|
-| [00-local-build.md](04-cicd/00-local-build.md) | 本地编译：Cargo 命令、Feature 组合、常见编译问题 |
-| [01-docker-build.md](04-cicd/01-docker-build.md) | Docker 编译：多阶段构建、cargo-chef、多架构支持 |
-| [02-github-workflow.md](04-cicd/02-github-workflow.md) | GitHub Workflow：CI 流水线、Release 发布、镜像推送 |
-
-### 05 [05-coding-standards/](05-coding-standards/SKILL.md) — 编码规范
-日志 ID 传播、敏感信息防泄漏、控制面/数据面日志分离等通用编码规范。
-
-| 文件 | 主题 |
-|------|------|
-| [00-logging-and-tracing-ids.md](05-coding-standards/00-logging-and-tracing-ids.md) | 日志 ID 传播：rv / sv / key_name 三元组，确保控制面→数据面可关联 |
-| [01-log-safety.md](05-coding-standards/01-log-safety.md) | 日志安全：敏感信息不入日志、配置不泄漏、数据面禁用 tracing |
-
-### 06 [review/](review/SKILL.md) — Review 知识沉淀
-代码审查中的项目特定结论、常见误报、可直接复用的判定标准。
-
-| 文件 | 主题 |
-|------|------|
-| [SKILL.md](review/SKILL.md) | Review 目录总览与使用方式 |
-| [memory-leak/not-a-memory-leak.md](review/memory-leak/not-a-memory-leak.md) | 非内存泄漏场景判定，避免重复误报 |
-
-### 07 [task/](task/SKILL.md) — 任务记录规范
-任务如何在 `tasks/` 下组织、拆 step、记录状态，以及各阶段如何关联到对应的 skills 知识。
-
-| 文件 | 主题 |
-|------|------|
-| [SKILL.md](task/SKILL.md) | 任务流程规范：目录规则、step 命名、状态约定、各阶段 skills 关联、完成后检查清单 |
-
-### 08 [gateway-api/](gateway-api/SKILL.md) — Gateway API 兼容性备忘
-Gateway API 实现中的有意偏差和边界决策。
-
-| 文件 | 主题 |
-|------|------|
-| [SKILL.md](gateway-api/SKILL.md) | TLS 证书选择策略：不支持 hostname-less catch-all、不支持 cross-port fallback |
-
-### misc [mis/](mis/) — 杂项知识
-不属于上述分类的诊断指南和临时记录。
-
-| 文件 | 主题 |
-|------|------|
-| [debugging-tls-gateway.md](mis/debugging-tls-gateway.md) | TLS Gateway 路由问题排查流程 |
+| Phase | 做什么 | 加载 |
+|-------|--------|------|
+| 1 Analysis | 需求分析、影响评估 | `01-architecture/` |
+| 2 Design | 方案设计、Schema 确认 | `01-architecture/`, `02-features/` |
+| 3 Implementation | 编码 | `01-architecture/`（开发指南）, `02-features/`（配置 Schema）, `03-coding/` |
+| 4 Testing | 测试验证 | `05-testing/` |
+| 5 Review | 代码审查 | `04-review/` |
 
 ## 用户文档
 
-用户文档位于 `docs/` 目录，按语言分目录（en、zh-CN、ja）。
-完整目录树见 [docs/DIRECTORY.md](../docs/DIRECTORY.md)。
+位于 `docs/`，按语言分目录（en、zh-CN、ja）。完整目录树见 [docs/DIRECTORY.md](../docs/DIRECTORY.md)。

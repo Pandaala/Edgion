@@ -12,7 +12,7 @@
 | ResponseHeaderModifier | 修改响应头 | [详情](./gateway-api/response-header-modifier.md) |
 | RequestRedirect | 请求重定向 | [详情](./gateway-api/request-redirect.md) |
 | URLRewrite | URL 重写 | [详情](./gateway-api/url-rewrite.md) |
-| RequestMirror | 请求镜像 | 即将推出 |
+| RequestMirror | 请求镜像 | [详情](./gateway-api/request-mirror.md) |
 
 ### Edgion 扩展过滤器
 

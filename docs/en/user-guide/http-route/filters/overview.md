@@ -12,7 +12,7 @@ Filters are used to modify requests or responses during the routing process.
 | ResponseHeaderModifier | Modify response headers | [Details](./gateway-api/response-header-modifier.md) |
 | RequestRedirect | Request redirect | [Details](./gateway-api/request-redirect.md) |
 | URLRewrite | URL rewrite | [Details](./gateway-api/url-rewrite.md) |
-| RequestMirror | Request mirroring | Coming soon |
+| RequestMirror | Request mirroring | [Details](./gateway-api/request-mirror.md) |
 
 ### Edgion Extension Filters
 

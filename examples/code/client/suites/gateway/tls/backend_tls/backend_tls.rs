@@ -16,9 +16,9 @@
 // - GatewayClass__public-gateway.yaml        # GatewayClass config
 //
 // Generated certificate files:
-// - examples/testing/certs/backend/server.crt   # backend server certificate
-// - examples/testing/certs/backend/server.key   # backend server private key
-// - examples/testing/certs/backend/ca.crt       # CA certificate
+// - examples/test/certs/backend/server.crt      # backend server certificate
+// - examples/test/certs/backend/server.key      # backend server private key
+// - examples/test/certs/backend/ca.crt          # CA certificate
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -293,6 +293,10 @@ impl BackendTlsTestSuite {
 impl TestSuite for BackendTlsTestSuite {
     fn name(&self) -> &str {
         "backend_tls"
+    }
+
+    fn port_key(&self) -> Option<&str> {
+        Some("Gateway/TLS/BackendTLS")
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

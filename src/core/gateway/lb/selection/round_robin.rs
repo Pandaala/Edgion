@@ -15,10 +15,16 @@ pub struct RoundRobinSelector {
 impl RoundRobinSelector {
     /// Build from a slice of backends. Weight < 1 is treated as 1.
     pub fn build(backends: &[Backend]) -> Self {
-        assert!(
-            backends.len() <= u16::MAX as usize,
-            "RoundRobinSelector supports up to 2^16 backends"
-        );
+        let backends = if backends.len() > u16::MAX as usize {
+            tracing::warn!(
+                count = backends.len(),
+                max = u16::MAX,
+                "RoundRobinSelector: backend count exceeds u16::MAX, truncating"
+            );
+            &backends[..u16::MAX as usize]
+        } else {
+            backends
+        };
         let mut sorted = backends.to_vec();
         sorted.sort_by(|a, b| a.addr.cmp(&b.addr));
 
@@ -38,11 +44,7 @@ impl RoundRobinSelector {
 
     /// Select the next healthy backend. Returns `None` if all backends are
     /// rejected after `max_iterations` attempts.
-    pub fn select(
-        &self,
-        max_iterations: usize,
-        health_filter: impl Fn(&Backend) -> bool,
-    ) -> Option<Backend> {
+    pub fn select(&self, max_iterations: usize, health_filter: impl Fn(&Backend) -> bool) -> Option<Backend> {
         if self.weighted.is_empty() {
             return None;
         }

@@ -92,4 +92,4 @@ rules:
 ## Related Documentation
 
 - [Service Reference](./service-ref.md)
-- Canary Release (coming soon)
+- Canary and blue-green rollout patterns currently build on the weight configuration described on this page.

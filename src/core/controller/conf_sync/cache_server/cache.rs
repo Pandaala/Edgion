@@ -188,9 +188,11 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                         }
                     },
                     Err(err) => {
-                        eprintln!(
-                            "[CenterCache] watcher {} error fetching events: {}",
-                            watcher.client_id, err
+                        tracing::error!(
+                            component = "cache_server",
+                            client_id = %watcher.client_id,
+                            error = %err,
+                            "Watcher error fetching events"
                         );
 
                         let response = WatchResponse::from_error(err.clone(), from_version);
@@ -391,12 +393,12 @@ where
 }
 
 impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispatch<T> for ServerCache<T> {
-    fn apply_change(&self, change: ResourceChange, resource: T)
+    fn apply_change(&self, change: ResourceChange, resource: T, sv: Option<u64>)
     where
         T: Resource + Send + 'static,
     {
-        // Generate sync_version independently, no longer dependent on resource's version
-        let sync_version = utils::next_resource_version();
+        // Use provided sync_version or generate one
+        let sync_version = sv.unwrap_or_else(utils::next_resource_version);
 
         tracing::info!(
             component = "cache_server",
@@ -536,7 +538,7 @@ mod tests {
         let cache = ServerCache::<TestResource>::new(10);
         let resource = make_resource("foo", 1);
 
-        cache.apply_change(ResourceChange::EventAdd, resource.clone());
+        cache.apply_change(ResourceChange::EventAdd, resource.clone(), None);
 
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
@@ -554,8 +556,8 @@ mod tests {
         // Set cache as ready before applying changes
         CacheEventDispatch::set_ready(&cache);
 
-        cache.apply_change(ResourceChange::EventAdd, original.clone());
-        cache.apply_change(ResourceChange::EventUpdate, updated.clone());
+        cache.apply_change(ResourceChange::EventAdd, original.clone(), None);
+        cache.apply_change(ResourceChange::EventUpdate, updated.clone(), None);
 
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
@@ -573,8 +575,8 @@ mod tests {
         // Set cache as ready before applying changes
         CacheEventDispatch::set_ready(&cache);
 
-        cache.apply_change(ResourceChange::EventAdd, resource.clone());
-        cache.apply_change(ResourceChange::EventDelete, resource_delete.clone());
+        cache.apply_change(ResourceChange::EventAdd, resource.clone(), None);
+        cache.apply_change(ResourceChange::EventDelete, resource_delete.clone(), None);
 
         let snapshot = cache.list_owned();
         assert!(snapshot.data.is_empty());
@@ -594,7 +596,7 @@ mod tests {
         let n: u64 = 50;
         for i in 1..=n {
             let r = make_resource(&format!("state-{}", i), i);
-            cache.apply_change(ResourceChange::EventUpdate, r);
+            cache.apply_change(ResourceChange::EventUpdate, r, None);
         }
 
         // Final snapshot must reflect the last update

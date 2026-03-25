@@ -24,8 +24,9 @@ pub struct GrpcRouteInfo {
 /// gRPC route match information
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct GrpcMatchInfo {
-    pub route_ns: String,
-    pub route_name: String,
+    /// Resource identifier (kind="GRPCRoute")
+    #[schemars(skip)]
+    pub rsc: crate::types::Rsc,
     /// Rule id in GRPCRoute
     pub rule_id: usize,
     /// Match id at rule id
@@ -40,10 +41,25 @@ pub struct GrpcMatchInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
+    /// Pre-compiled regex for service name matching (when match_type is RegularExpression)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_service_regex: Option<Arc<Regex>>,
+    /// Pre-compiled regex for method name matching (when match_type is RegularExpression)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_method_regex: Option<Arc<Regex>>,
 }
 
 impl GrpcMatchInfo {
-    pub fn new(route_ns: String, route_name: String, rule_id: usize, match_id: usize, matched: GRPCRouteMatch, sv: u64) -> Self {
+    pub fn new(
+        route_ns: String,
+        route_name: String,
+        rule_id: usize,
+        match_id: usize,
+        matched: GRPCRouteMatch,
+        sv: u64,
+    ) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
             headers
@@ -75,14 +91,51 @@ impl GrpcMatchInfo {
             Vec::new()
         };
 
+        // Pre-compile regex patterns for service/method matching
+        use crate::types::resources::grpc_route::GRPCMethodMatchType;
+        let (compiled_service_regex, compiled_method_regex) = if let Some(ref method_match) = matched.method {
+            let is_regex = method_match.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression);
+            let compile = |field: &Option<String>, label: &str| -> Option<Arc<Regex>> {
+                if !is_regex {
+                    return None;
+                }
+                field.as_ref().and_then(|pattern| match Regex::new(pattern) {
+                    Ok(re) => Some(Arc::new(re)),
+                    Err(e) => {
+                        tracing::warn!(
+                            route = %format!("{}/{}", route_ns, route_name),
+                            rule_id = rule_id,
+                            match_id = match_id,
+                            field = label,
+                            pattern = %pattern,
+                            error = %e,
+                            "Failed to compile gRPC method regex pattern, match will fail"
+                        );
+                        None
+                    }
+                })
+            };
+            (
+                compile(&method_match.service, "service"),
+                compile(&method_match.method, "method"),
+            )
+        } else {
+            (None, None)
+        };
+
         Self {
-            route_ns,
-            route_name,
+            rsc: crate::types::Rsc {
+                kind: "GRPCRoute".to_string(),
+                ns: route_ns,
+                name: route_name,
+            },
             rule_id,
             match_id,
             sv,
             matched,
             compiled_header_regexes,
+            compiled_service_regex,
+            compiled_method_regex,
         }
     }
 }
@@ -125,9 +178,9 @@ impl GrpcRouteRuleUnit {
                 parent_refs,
                 gateway_infos,
                 hostname,
-                &self.matched_info.route_ns,
+                &self.matched_info.rsc.ns,
                 "GRPCRoute",
-                &self.matched_info.route_name,
+                &self.matched_info.rsc.name,
             ) {
                 Some(gi) => gi,
                 None => return Ok(None),
@@ -206,10 +259,7 @@ impl GrpcRouteRuleUnit {
     pub fn identifier(&self) -> String {
         format!(
             "{}/{} (rule:{}, match:{})",
-            self.matched_info.route_ns,
-            self.matched_info.route_name,
-            self.matched_info.rule_id,
-            self.matched_info.match_id
+            self.matched_info.rsc.ns, self.matched_info.rsc.name, self.matched_info.rule_id, self.matched_info.match_id
         )
     }
 }

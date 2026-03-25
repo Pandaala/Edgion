@@ -1,16 +1,17 @@
 //! LDAP Authentication plugin implementation
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
-use dashmap::DashMap;
 use ldap3::{LdapConnAsync, LdapConnSettings};
 use pingora_http::ResponseHeader;
 use sha2::{Digest, Sha256};
 
+use crate::core::gateway::cache::ShardedLruCache;
+use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -21,8 +22,7 @@ pub struct LdapAuth {
     name: String,
     config: LdapAuthConfig,
     ldap_url: String,
-    /// Cache key: SHA-256(username:password), value: (username, expiry)
-    auth_cache: Arc<DashMap<String, (String, Instant)>>,
+    auth_cache: Arc<ShardedLruCache<String, String>>,
 }
 
 #[derive(Debug)]
@@ -50,11 +50,21 @@ impl LdapAuth {
         let scheme = if config.ldaps { "ldaps" } else { "ldap" };
         let ldap_url = format!("{}://{}:{}", scheme, config.ldap_host, config.ldap_port);
 
+        let capacity = if config.lru_cache.capacity == 0 {
+            get_default_lru_cache_capacity()
+        } else {
+            config.lru_cache.capacity
+        };
+        let shards = if config.lru_cache.shards > 0 {
+            config.lru_cache.shards
+        } else {
+            get_default_lru_cache_shards()
+        };
         Self {
             name: "LdapAuth".to_string(),
             config: config.clone(),
             ldap_url,
-            auth_cache: Arc::new(DashMap::new()),
+            auth_cache: Arc::new(ShardedLruCache::new(capacity, shards)),
         }
     }
 
@@ -110,29 +120,34 @@ impl LdapAuth {
         if self.config.cache_ttl == 0 {
             return None;
         }
-
         let key = Self::cache_key(username, password);
-        if let Some(entry) = self.auth_cache.get(&key) {
-            let (cached_username, expiry) = entry.value();
-            if Instant::now() < *expiry {
-                return Some(cached_username.clone());
-            }
-
-            drop(entry);
-            self.auth_cache.remove(&key);
-        }
-
-        None
+        self.auth_cache.get(&key)
     }
 
     fn store_cache(&self, username: &str, password: &str) {
         if self.config.cache_ttl == 0 {
             return;
         }
-
         let key = Self::cache_key(username, password);
-        let expiry = Instant::now() + Duration::from_secs(self.config.cache_ttl);
-        self.auth_cache.insert(key, (username.to_string(), expiry));
+        self.auth_cache.insert(
+            key,
+            username.to_string(),
+            Some(Duration::from_secs(self.config.cache_ttl)),
+        );
+
+        // Anomaly detection: very low hit ratio after enough samples may indicate brute-force
+        const LOW_HIT_RATIO_WARN_THRESHOLD: f64 = 0.5;
+        const MIN_SAMPLE_SIZE: u64 = 100;
+        let stats = self.auth_cache.stats();
+        let total = stats.hits + stats.misses + stats.expirations;
+        if total >= MIN_SAMPLE_SIZE && stats.hit_ratio() < LOW_HIT_RATIO_WARN_THRESHOLD {
+            tracing::warn!(
+                hit_ratio = stats.hit_ratio(),
+                hits = stats.hits,
+                misses = stats.misses,
+                "LdapAuth cache hit ratio low — possible brute-force attack"
+            );
+        }
     }
 
     fn build_bind_dn(&self, username: &str) -> Result<String, &'static str> {
@@ -311,6 +326,7 @@ impl RequestFilter for LdapAuth {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+    use crate::types::resources::edgion_plugins::LruCacheConfig;
 
     fn test_config() -> LdapAuthConfig {
         LdapAuthConfig {
@@ -389,10 +405,84 @@ mod tests {
         auth.store_cache("alice", "secret");
         assert_eq!(auth.check_cache("alice", "secret"), Some("alice".to_string()));
 
-        let key = LdapAuth::cache_key("bob", "secret");
-        auth.auth_cache
-            .insert(key, ("bob".to_string(), Instant::now() - Duration::from_secs(1)));
+        auth.auth_cache.insert(
+            LdapAuth::cache_key("bob", "secret"),
+            "bob".to_string(),
+            Some(std::time::Duration::from_millis(10)),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
         assert_eq!(auth.check_cache("bob", "secret"), None);
+    }
+
+    #[test]
+    fn test_ldap_auth_cache_is_lru() {
+        let config = LdapAuthConfig {
+            cache_ttl: 60,
+            lru_cache: LruCacheConfig {
+                capacity: 5,
+                ..Default::default()
+            },
+            ldap_host: "localhost".to_string(),
+            ldap_port: 389,
+            base_dn: "dc=test,dc=com".to_string(),
+            ..Default::default()
+        };
+        let auth = LdapAuth::new(&config);
+        assert_eq!(auth.auth_cache.len(), 0);
+    }
+
+    #[test]
+    fn test_ldap_auth_store_and_check_cache() {
+        let config = LdapAuthConfig {
+            cache_ttl: 60,
+            lru_cache: LruCacheConfig {
+                capacity: 5,
+                ..Default::default()
+            },
+            ldap_host: "localhost".to_string(),
+            ldap_port: 389,
+            base_dn: "dc=test,dc=com".to_string(),
+            ..Default::default()
+        };
+        let auth = LdapAuth::new(&config);
+        auth.store_cache("alice", "secret");
+        assert_eq!(auth.check_cache("alice", "secret"), Some("alice".to_string()));
+        assert_eq!(auth.check_cache("alice", "wrong"), None);
+    }
+
+    #[test]
+    fn test_ldap_auth_cache_disabled_when_ttl_zero() {
+        let config = LdapAuthConfig {
+            cache_ttl: 0,
+            ldap_host: "localhost".to_string(),
+            ldap_port: 389,
+            base_dn: "dc=test,dc=com".to_string(),
+            ..Default::default()
+        };
+        let auth = LdapAuth::new(&config);
+        auth.store_cache("alice", "secret"); // no-op
+        assert_eq!(auth.check_cache("alice", "secret"), None);
+    }
+
+    #[test]
+    fn test_ldap_auth_lru_evicts_oldest() {
+        let config = LdapAuthConfig {
+            cache_ttl: 60,
+            lru_cache: LruCacheConfig {
+                capacity: 2,
+                ..Default::default()
+            },
+            ldap_host: "localhost".to_string(),
+            ldap_port: 389,
+            base_dn: "dc=test,dc=com".to_string(),
+            ..Default::default()
+        };
+        let auth = LdapAuth::new(&config);
+        auth.store_cache("user1", "pw1");
+        auth.store_cache("user2", "pw2");
+        auth.store_cache("user3", "pw3"); // evicts user1 (LRU)
+        assert_eq!(auth.check_cache("user1", "pw1"), None); // evicted
+        assert_eq!(auth.check_cache("user3", "pw3"), Some("user3".to_string()));
     }
 
     #[tokio::test]

@@ -46,6 +46,15 @@ jobs:
       - name: Run cargo fmt
         run: cargo fmt --all -- --check
 
+  agent-docs:
+    name: Agent Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate agent docs
+        run: make check-agent-docs
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -84,7 +93,7 @@ jobs:
   # Summary job for branch protection
   ci-success:
     name: CI Success
-    needs: [check, fmt, clippy, test]
+    needs: [check, fmt, agent-docs, clippy, test]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -92,6 +101,7 @@ jobs:
         run: |
           if [[ "${{ needs.check.result }}" != "success" ]] || \
              [[ "${{ needs.fmt.result }}" != "success" ]] || \
+             [[ "${{ needs.agent-docs.result }}" != "success" ]] || \
              [[ "${{ needs.clippy.result }}" != "success" ]] || \
              [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "One or more jobs failed"

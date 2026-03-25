@@ -135,10 +135,10 @@ Check if route has CORS plugin configured?
 
 ### Q: How to view preflight request processing logs?
 
-**A:** Preflight requests are recorded in `access.log` and can be filtered by the HTTP method `OPTIONS`:
+**A:** Preflight requests are recorded in `edgion_access.log` and can be filtered by the HTTP method `OPTIONS`:
 
 ```bash
-grep "OPTIONS" logs/access.log
+grep "OPTIONS" logs/edgion_access.log
 ```
 
 ## Related Documentation

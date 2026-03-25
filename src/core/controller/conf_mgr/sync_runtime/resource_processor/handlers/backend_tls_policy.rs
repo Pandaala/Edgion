@@ -31,13 +31,27 @@ impl Default for BackendTlsPolicyHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
-    fn parse(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
+    async fn parse(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
             btp.metadata.namespace.clone(),
             btp.metadata.name.clone().unwrap_or_default(),
         );
+
+        // Gateway API v1.5 restricts BackendTLSPolicy to a single targetRef.
+        // Warn if multiple are provided; only the first will be effective for matching.
+        if btp.spec.target_refs.len() > 1 {
+            tracing::warn!(
+                policy = %resource_ref.key(),
+                count = btp.spec.target_refs.len(),
+                "BackendTLSPolicy has {} targetRefs, but Gateway API v1.5 requires exactly one; \
+                 only the first targetRef is guaranteed to be conformant",
+                btp.spec.target_refs.len()
+            );
+        }
+
         // Clear old references first to handle updates safely.
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -103,7 +117,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         ProcessResult::Continue(btp)
     }
 
-    fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+    async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
             btp.metadata.namespace.clone(),
@@ -187,6 +201,9 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
             &mut status.ancestors.last_mut().expect("just inserted").conditions
         };
 
+        let has_validation_errors = !validation_errors.is_empty();
+        let has_ref_errors = !resolved_ref_errors.is_empty();
+
         if validation_errors.is_empty() {
             update_condition(
                 conditions,
@@ -202,7 +219,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
                 conditions,
                 condition_false(
                     condition_types::ACCEPTED,
-                    condition_reasons::INVALID_KIND,
+                    "Invalid",
                     validation_errors.join("; "),
                     generation,
                 ),
@@ -224,31 +241,16 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
                 conditions,
                 condition_false(
                     condition_types::RESOLVED_REFS,
-                    condition_reasons::REF_NOT_PERMITTED,
+                    condition_reasons::BACKEND_NOT_FOUND,
                     resolved_ref_errors.join("; "),
                     generation,
                 ),
             );
         }
 
-        update_condition(
-            conditions,
-            condition_true(
-                condition_types::PROGRAMMED,
-                condition_reasons::PROGRAMMED,
-                "Configuration programmed",
-                generation,
-            ),
-        );
-        update_condition(
-            conditions,
-            condition_true(
-                condition_types::READY,
-                condition_reasons::READY,
-                "Policy is ready",
-                generation,
-            ),
-        );
+        // Programmed and Ready conditions intentionally omitted:
+        // they require data-plane feedback which is not available in our architecture.
+        let _ = (has_validation_errors, has_ref_errors);
     }
 }
 

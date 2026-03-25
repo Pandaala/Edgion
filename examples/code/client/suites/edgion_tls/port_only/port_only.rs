@@ -39,9 +39,7 @@ impl PortOnlyEdgionTlsTestSuite {
                                 }
                             }
                         }
-                        Err(e) => {
-                            TestResult::failed(start.elapsed(), format!("HTTPS request failed: {}", e))
-                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("HTTPS request failed: {}", e)),
                     }
                 })
             },

@@ -44,6 +44,16 @@ pub struct HTTPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_hostnames: Option<Vec<String>>,
 
+    /// Pre-computed listener ports from parentRef resolution (set by Controller).
+    /// Used by Gateway to bind this route to per-port route tables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_ports: Option<Vec<u16>>,
+
+    /// Controller-identified invalid rule indices.
+    /// Gateway skips these rules during route compilation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invalid_rule_indices: Option<Vec<usize>>,
+
     /// Rules defines the HTTP routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HTTPRouteRule>>,
@@ -107,6 +117,12 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_max_retries: Option<u32>,
+
+    /// Pre-parsed retry configuration from HTTPRouteRule.retry (not serialized)
+    /// Parsed once when route is loaded, used at runtime
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_retry: Option<ParsedRouteRetry>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -125,6 +141,7 @@ impl Clone for HTTPRouteRule {
             plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_max_retries: self.parsed_max_retries,
+            parsed_retry: self.parsed_retry.clone(),
         }
     }
 }
@@ -290,6 +307,14 @@ pub struct HTTPRouteFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_mirror: Option<HTTPRequestMirrorFilter>,
 
+    /// CORS defines a Gateway API native CORS filter (GEP-1767)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cors: Option<HTTPCORSFilter>,
+
+    /// ExternalAuth defines a Gateway API native external authentication filter (GEP-1494)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_auth: Option<crate::types::resources::edgion_plugins::ForwardAuthConfig>,
+
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_ref: Option<LocalObjectReference>,
@@ -314,6 +339,11 @@ pub enum HTTPRouteFilterType {
     RequestMirror,
     /// ExtensionRef is used for configuring custom HTTP plugins
     ExtensionRef,
+    /// CORS defines a Gateway API native CORS filter (GEP-1767)
+    CORS,
+    /// ExternalAuth defines a Gateway API native external authentication filter (GEP-1494)
+    /// Maps internally to ForwardAuth plugin
+    ExternalAuth,
 }
 
 /// HTTPHeaderFilter defines a filter that modifies the headers of an HTTP request or response
@@ -470,6 +500,143 @@ fn default_mirror_log_enabled() -> bool {
 
 fn default_mirror_max_concurrent() -> usize {
     1024
+}
+
+/// HTTPCORSFilter defines a Gateway API native CORS filter (GEP-1767).
+///
+/// Per Gateway API v1.5, origin values are validated to reject malformed entries
+/// containing path components, query strings, fragments, or trailing slashes in
+/// the host portion.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HTTPCORSFilter {
+    /// AllowOrigins defines the origins that are permitted to make CORS requests.
+    /// Each value must be a valid origin: `scheme://host[:port]` or `*`.
+    /// Wildcard `*` is allowed only in the subdomain position (e.g. `https://*.example.com`).
+    /// Origins with paths, query strings, fragments, or trailing slashes are rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_origins: Option<Vec<String>>,
+
+    /// AllowCredentials indicates whether the request can include user credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_credentials: Option<bool>,
+
+    /// AllowMethods defines the HTTP methods that are permitted in CORS requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_methods: Option<Vec<String>>,
+
+    /// AllowHeaders defines the HTTP headers that are permitted in CORS requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_headers: Option<Vec<String>>,
+
+    /// ExposeHeaders defines the HTTP headers that browsers are allowed to access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expose_headers: Option<Vec<String>>,
+
+    /// MaxAge defines the maximum time (in seconds) a preflight response can be cached.
+    #[serde(default)]
+    pub max_age: u32,
+}
+
+impl HTTPCORSFilter {
+    /// Validate the CORS filter configuration per Gateway API v1.5 tightened CEL rules.
+    ///
+    /// Rejects origins that contain:
+    /// - Path components (e.g. `https://example.com/path`)
+    /// - Query strings (e.g. `https://example.com?q=1`)
+    /// - Fragments (e.g. `https://example.com#section`)
+    /// - Trailing slashes (e.g. `https://example.com/`)
+    /// - Missing scheme (e.g. `example.com`)
+    /// - Empty host (e.g. `https://`)
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if let Some(ref origins) = self.allow_origins {
+            for (i, origin) in origins.iter().enumerate() {
+                if origin == "*" {
+                    continue;
+                }
+                if let Err(e) = Self::validate_origin(origin) {
+                    errors.push(format!("allowOrigins[{}] \"{}\": {}", i, origin, e));
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Validate a single origin value per Gateway API v1.5 rules.
+    /// Valid format: `scheme://host[:port]` where host may use `*` only as
+    /// a subdomain wildcard prefix (e.g. `*.example.com`).
+    fn validate_origin(origin: &str) -> Result<(), String> {
+        // Must contain ://
+        let Some(scheme_end) = origin.find("://") else {
+            return Err("missing scheme (expected scheme://host)".to_string());
+        };
+
+        let scheme = &origin[..scheme_end];
+        if scheme.is_empty() {
+            return Err("empty scheme".to_string());
+        }
+
+        // Scheme must be alphanumeric (+ hyphen)
+        if !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
+            return Err("invalid scheme characters".to_string());
+        }
+
+        let after_scheme = &origin[scheme_end + 3..];
+
+        if after_scheme.is_empty() {
+            return Err("empty host".to_string());
+        }
+
+        // Reject path components, query strings, fragments
+        if after_scheme.contains('/') {
+            return Err("origin must not contain a path component".to_string());
+        }
+        if after_scheme.contains('?') {
+            return Err("origin must not contain a query string".to_string());
+        }
+        if after_scheme.contains('#') {
+            return Err("origin must not contain a fragment".to_string());
+        }
+
+        // Extract host (strip port if present)
+        let host = if let Some(colon_pos) = after_scheme.rfind(':') {
+            let port_candidate = &after_scheme[colon_pos + 1..];
+            if port_candidate.chars().all(|c| c.is_ascii_digit()) && !port_candidate.is_empty() {
+                &after_scheme[..colon_pos]
+            } else {
+                after_scheme
+            }
+        } else {
+            after_scheme
+        };
+
+        if host.is_empty() {
+            return Err("empty host".to_string());
+        }
+
+        // Wildcard is only valid as `*.suffix` (subdomain wildcard)
+        if host.contains('*') {
+            if !host.starts_with("*.") {
+                return Err("wildcard '*' is only valid as a subdomain prefix (e.g. *.example.com)".to_string());
+            }
+            let suffix = &host[2..];
+            if suffix.is_empty() || suffix.contains('*') {
+                return Err("invalid wildcard pattern in host".to_string());
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// BackendObjectReference identifies an API object within the namespace of the referrer
@@ -631,6 +798,22 @@ pub enum CookieLifetimeType {
 }
 
 // ============================================
+// Pre-parsed Route Retry
+// ============================================
+
+/// Pre-parsed retry configuration from HTTPRouteRule.retry
+/// Stored in HTTPRouteRule for zero-cost runtime access
+#[derive(Debug, Clone)]
+pub struct ParsedRouteRetry {
+    /// Max retry attempts (from retry.attempts)
+    pub attempts: Option<u32>,
+    /// Base backoff duration (from retry.backoff, parsed from string)
+    pub backoff: Option<std::time::Duration>,
+    /// HTTP status codes that trigger retry (from retry.codes, validated to 100-599)
+    pub codes: Option<Vec<u16>>,
+}
+
+// ============================================
 // Pre-parsed Route Timeouts
 // ============================================
 
@@ -674,6 +857,19 @@ impl ParsedRouteTimeouts {
                 .ok()
         });
 
+        // Clamp: backendRequest must be <= request (Gateway API spec)
+        let backend_request_timeout = match (backend_request_timeout, request_timeout) {
+            (Some(br), Some(req)) if br > req => {
+                tracing::warn!(
+                    "backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping to request timeout",
+                    br,
+                    req
+                );
+                Some(req)
+            }
+            (br, _) => br,
+        };
+
         // Only create if at least one timeout is configured
         if request_timeout.is_some() || backend_request_timeout.is_some() {
             Some(Self {
@@ -705,4 +901,43 @@ pub struct RouteParentStatus {
 
     /// Conditions describe the current conditions of this route.
     pub conditions: Vec<Condition>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_backend_request_clamped_to_request() {
+        let config = HTTPRouteTimeouts {
+            request: Some("10s".to_string()),
+            backend_request: Some("30s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn test_backend_request_within_limit() {
+        let config = HTTPRouteTimeouts {
+            request: Some("30s".to_string()),
+            backend_request: Some("10s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn test_backend_request_only_no_clamp() {
+        let config = HTTPRouteTimeouts {
+            request: None,
+            backend_request: Some("10s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, None);
+        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+    }
 }

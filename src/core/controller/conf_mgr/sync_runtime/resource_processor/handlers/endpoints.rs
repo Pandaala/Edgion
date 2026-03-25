@@ -23,8 +23,9 @@ impl Default for EndpointsHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<Endpoints> for EndpointsHandler {
-    fn parse(&self, ep: Endpoints, _ctx: &HandlerContext) -> ProcessResult<Endpoints> {
+    async fn parse(&self, ep: Endpoints, _ctx: &HandlerContext) -> ProcessResult<Endpoints> {
         ProcessResult::Continue(ep)
     }
 }

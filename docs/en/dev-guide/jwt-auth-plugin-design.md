@@ -161,7 +161,7 @@ The following table compares Edgion's current design with Kong JWT and APISIX jw
 - Implement plugin **runtime logic** (parse JWT, select key, validate signature and exp/nbf, set headers/anonymous/401).  
 - **Credential loading**: Parse secret_ref / secret_refs from K8s Secrets (if pulling in conf sync or request path, plan required).  
 - **Unit tests**: Mock session, cover with-token/no-token/bad-token/anonymous/hide_credentials.  
-- **Integration tests**: Scripts and config directories per "plugin development" docs (`run_integration_test.sh`, `EdgionPlugins/PluginJwtAuth`, client suite).  
+- **Integration tests**: Scripts and config directories per "plugin development" docs (`run_integration.sh`, `EdgionPlugins/JwtAuth`, client suite).  
 - **User documentation**: `Edgion/docs/zh-CN/user-guide/edgion-plugins/jwt-auth.md` (or corresponding path).
 
 ---

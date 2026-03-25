@@ -1,0 +1,22 @@
+# Gateway for TLSRoute BothAbsentParentRef testing.
+# Single TLS listener — TLSRoute and EdgionTls reference this Gateway
+# WITHOUT specifying sectionName or port in their parentRefs.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-route-both-absent-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/backend-protocol: "tcp"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls-both-absent
+      protocol: TLS
+      port: 31288
+      hostname: "*.both-absent.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test

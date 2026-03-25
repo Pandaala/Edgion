@@ -155,7 +155,21 @@ impl Vm {
                 Ok(Value::Nil)
             }
 
-            // ===== resp.* =====
+            // ===== resp.* read =====
+            BuiltinId::RespStatus => match session.get_response_status() {
+                Some(s) => Ok(Value::Int(s as i64)),
+                None => Ok(Value::Nil),
+            },
+            BuiltinId::RespHeader => {
+                let name = state.pop()?.into_string();
+                checked_value_opt_str(session.get_response_header(&name), self.limits.max_string_len)
+            }
+            BuiltinId::RespHasHeader => {
+                let name = state.pop()?.into_string();
+                Ok(Value::Bool(session.get_response_header(&name).is_some()))
+            }
+
+            // ===== resp.* mutation =====
             BuiltinId::RespSetHeader => {
                 let value = state.pop()?.into_string();
                 let name = state.pop()?.into_string();
@@ -347,28 +361,68 @@ impl Vm {
                 Ok(Value::Str(decoded))
             }
             BuiltinId::Sha256 => {
-                // Not implemented — return error so users know
-                Err(RuntimeError::ApiError {
-                    function: "sha256".into(),
-                    message: "sha256() is not yet implemented".into(),
-                })
+                use sha2::Digest;
+                let s = state.pop()?.into_string();
+                let hash = sha2::Sha256::digest(s.as_bytes());
+                Ok(Value::Str(hex::encode(hash)))
             }
-            BuiltinId::Md5 => Err(RuntimeError::ApiError {
-                function: "md5".into(),
-                message: "md5() is not yet implemented".into(),
-            }),
-            BuiltinId::RegexFind => Err(RuntimeError::ApiError {
-                function: "regex_find".into(),
-                message: "regex_find() is not yet implemented".into(),
-            }),
-            BuiltinId::RegexReplace => Err(RuntimeError::ApiError {
-                function: "regex_replace".into(),
-                message: "regex_replace() is not yet implemented".into(),
-            }),
-            BuiltinId::Range => Err(RuntimeError::ApiError {
-                function: "range".into(),
-                message: "range() is not yet implemented".into(),
-            }),
+            BuiltinId::Md5 => {
+                use md5::Digest;
+                let s = state.pop()?.into_string();
+                let hash = md5::Md5::digest(s.as_bytes());
+                Ok(Value::Str(hex::encode(hash)))
+            }
+            BuiltinId::RegexFind => {
+                let pattern = state.pop()?.into_string();
+                let s = state.pop()?.into_string();
+                if pattern.len() > 1024 {
+                    return Err(RuntimeError::RegexError {
+                        message: "pattern too long (max 1024 bytes)".into(),
+                    });
+                }
+                let re =
+                    regex::Regex::new(&pattern).map_err(|e| RuntimeError::RegexError { message: e.to_string() })?;
+                match re.find(&s) {
+                    Some(m) => {
+                        let found = m.as_str().to_string();
+                        check_string_len(&found, self.limits.max_string_len)?;
+                        Ok(Value::Str(found))
+                    }
+                    None => Ok(Value::Nil),
+                }
+            }
+            BuiltinId::RegexReplace => {
+                let replacement = state.pop()?.into_string();
+                let pattern = state.pop()?.into_string();
+                let s = state.pop()?.into_string();
+                if pattern.len() > 1024 {
+                    return Err(RuntimeError::RegexError {
+                        message: "pattern too long (max 1024 bytes)".into(),
+                    });
+                }
+                let re =
+                    regex::Regex::new(&pattern).map_err(|e| RuntimeError::RegexError { message: e.to_string() })?;
+                let result = re.replace_all(&s, replacement.as_str()).into_owned();
+                check_string_len(&result, self.limits.max_string_len)?;
+                Ok(Value::Str(result))
+            }
+            BuiltinId::Trim => {
+                let s = state.pop()?.into_string();
+                Ok(Value::Str(s.trim().to_string()))
+            }
+            BuiltinId::Split => {
+                let delim = state.pop()?.into_string();
+                let s = state.pop()?.into_string();
+                let parts: Vec<String> = s.split(&*delim).map(|p| p.to_string()).collect();
+                Ok(Value::List(parts))
+            }
+            BuiltinId::Range => {
+                let end = state.pop()?.as_int().unwrap_or(0);
+                let start = state.pop()?.as_int().unwrap_or(0);
+                let count = (end - start).max(0).min(1000) as usize;
+                let list: Vec<String> = (start..start + count as i64).map(|i| i.to_string()).collect();
+                Ok(Value::List(list))
+            }
         }
     }
 }

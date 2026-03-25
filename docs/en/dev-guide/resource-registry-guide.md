@@ -1,216 +1,92 @@
 # Resource Registry Guide
 
-## Overview
+> Human-facing explanation of the current unified resource registry model.
 
-The resource registry (`resource_registry`) is a centralized global registry for managing all resource type metadata. It provides a Single Source of Truth for defining all resource types and their attributes in the system.
+## Current Model
 
-## Location
+Edgion no longer uses a single handwritten `resource_registry.rs` file as the primary source of truth.
+The current model is split into three layers:
 
-- **Module path**: `src/types/resource_registry.rs`
-- **Export**: Via the `crate::types` module
+1. `src/types/resource/kind.rs`
+   - defines the exhaustive `ResourceKind` enum and conversions
+2. `src/types/resource/defs.rs`
+   - uses `define_resources!` as the single source of truth for resource metadata
+3. `src/types/resource/registry.rs`
+   - exposes compatibility helpers such as `RESOURCE_TYPES`, `all_resource_type_names()`, and `get_resource_metadata()`
 
-## Core Concepts
-
-### ResourceTypeMetadata
-
-Each resource type has the following metadata:
-
-```rust
-pub struct ResourceTypeMetadata {
-    /// Resource type name (for display and logging)
-    pub name: &'static str,
-    /// Resource type description (optional)
-    pub description: Option<&'static str>,
-    /// Whether it is a base configuration resource
-    pub is_base_conf: bool,
-}
+```mermaid
+graph LR
+    Kind["kind.rs<br/>ResourceKind"] --> Defs["defs.rs<br/>define_resources!"]
+    Defs --> Infos["ALL_RESOURCE_INFOS"]
+    Infos --> Registry["registry.rs<br/>compatibility helpers"]
+    Registry --> Controller["Controller readiness / API"]
+    Registry --> Gateway["Gateway readiness / cache selection"]
 ```
 
-### Global Registry
+## What Lives In `define_resources!`
 
-`RESOURCE_TYPES` is a global static variable containing all registered resource types:
+Each resource entry in `src/types/resource/defs.rs` carries the metadata that the rest of the system depends on:
 
-```rust
-pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|| {
-    vec![
-        // Base configuration resources
-        ResourceTypeMetadata::new("gateway_classes")
-            .with_description("GatewayClass resources")
-            .base_conf(),
-        ResourceTypeMetadata::new("gateways")
-            .with_description("Gateway resources")
-            .base_conf(),
-        // ... more resources
-    ]
-});
-```
+- `enum_value`
+- `kind_name`
+- `kind_aliases`
+- `cache_field`
+- `capacity_field`
+- `default_capacity`
+- `cluster_scoped`
+- `is_base_conf`
+- `in_registry`
 
-## Usage
+That metadata is then reused by helper functions and registry views instead of being copied again in multiple places.
 
-### 1. Get All Resource Type Names
+## Key APIs
 
-```rust
-use crate::types::all_resource_type_names;
+| API | Current path | Purpose |
+|-----|--------------|---------|
+| `resource_kind_from_name()` | `src/types/resource/defs.rs` | Resolve a kind from CLI/API/user input |
+| `get_resource_info()` | `src/types/resource/defs.rs` | Fetch metadata for a `ResourceKind` |
+| `all_resource_kind_names()` | `src/types/resource/defs.rs` | List cache-field names for all defined kinds |
+| `registry_resource_names()` | `src/types/resource/defs.rs` | List only registry-visible kinds |
+| `all_resource_type_names()` | `src/types/resource/registry.rs` | Registry-visible names after endpoint-mode filtering |
+| `base_conf_resource_names()` | `src/types/resource/registry.rs` | Registry-visible base-conf names |
+| `get_resource_metadata()` | `src/types/resource/registry.rs` | Compatibility lookup for `RESOURCE_TYPES` |
 
-let resource_names = all_resource_type_names();
-// Returns: ["gateway_classes", "gateways", "routes", ...]
-```
+## What `in_registry` Means
 
-### 2. Get Base Configuration Resources
+`in_registry` controls whether a kind appears in registry-facing helper views.
 
-```rust
-use crate::types::base_conf_resource_names;
+- `in_registry: true`: included in `RESOURCE_TYPES` and registry-based readiness logic
+- `in_registry: false`: excluded from compatibility registry views
 
-let base_conf_resources = base_conf_resource_names();
-// Returns: ["gateway_classes", "gateways", "edgion_gateway_configs"]
-```
+Current example:
 
-### 3. Query Metadata for a Specific Resource
+- `Secret` is intentionally excluded from the registry-facing list because it follows related resources instead of being treated as a primary synced kind.
 
-```rust
-use crate::types::get_resource_metadata;
+`all_resource_type_names()` also applies endpoint-mode filtering, so `Endpoint` and `EndpointSlice` visibility depends on the configured endpoint mode.
 
-if let Some(metadata) = get_resource_metadata("gateway_classes") {
-    println!("Name: {}", metadata.name);
-    println!("Is base conf: {}", metadata.is_base_conf);
-    if let Some(desc) = metadata.description {
-        println!("Description: {}", desc);
-    }
-}
-```
+## Adding a New Resource
 
-### 4. Iterate Over All Resources
+Adding a new resource is not “edit one registry file”.
+The current flow is:
 
-```rust
-use crate::types::RESOURCE_TYPES;
+1. Add the Rust resource type under `src/types/resources/`.
+2. Add the enum variant and conversions in `src/types/resource/kind.rs`.
+3. Add the metadata entry to `define_resources!` in `src/types/resource/defs.rs`.
+4. Add the `ResourceMeta` implementation in `src/types/resource/meta/impls.rs`.
+5. Wire controller processing, sync behavior, and gateway runtime as needed.
 
-for resource in RESOURCE_TYPES.iter() {
-    println!("{}: {}", 
-        resource.name, 
-        resource.description.unwrap_or("No description")
-    );
-}
-```
+For the full workflow, use [Adding New Resource Types Guide](./add-new-resource-guide.md).
 
-## Practical Usage Examples
+## Anti-Patterns
 
-### Usage in ConfigClient
+Avoid these old assumptions:
 
-In the `ConfigClient::is_ready()` method, the global registry is used to dynamically check the ready status of all resources:
+- Do not re-introduce a new top-level handwritten registry file as the primary registry source.
+- Do not treat `registry.rs` as the only place to register a new kind.
+- Do not forget that registry visibility, sync visibility, and gateway caching are related but not identical concerns.
 
-```rust
-fn all_caches_status(&self) -> Vec<(&'static str, bool)> {
-    all_resource_type_names()
-        .into_iter()
-        .filter_map(|name| {
-            self.get_cache_status(name).map(|ready| (name, ready))
-        })
-        .collect()
-}
+## Related Docs
 
-pub fn is_ready(&self) -> Result<(), String> {
-    let not_ready: Vec<&str> = self.all_caches_status()
-        .into_iter()
-        .filter_map(|(name, ready)| if !ready { Some(name) } else { None })
-        .collect();
-    
-    if not_ready.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("wait [{}] ready", not_ready.join(", ")))
-    }
-}
-```
-
-## Advantages
-
-### 1. Centralized Management
-All resource type definitions are in one place, making them easy to maintain and extend.
-
-### 2. Type Safety
-Uses `&'static str` to ensure resource names are compile-time constants.
-
-### 3. Extensibility
-When adding a new resource type:
-1. Add one line to `RESOURCE_TYPES`
-2. Add the corresponding match branch where the resource is used (e.g., `ConfigClient::get_cache_status`)
-3. All features depending on the global registry automatically include the new resource
-
-### 4. Metadata Support
-Additional metadata can be easily added to resource types:
-- Description information
-- Classification markers (e.g., `is_base_conf`)
-- Future additions: priority, dependency relationships, etc.
-
-### 5. Consistency
-Ensures all parts of the system have a consistent understanding of resource types.
-
-## Adding a New Resource Type
-
-### Step 1: Add Resource to the Registry
-
-Edit `src/types/resource_registry.rs`:
-
-```rust
-pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|| {
-    vec![
-        // ... existing resources
-        
-        // New resource
-        ResourceTypeMetadata::new("my_new_resource")
-            .with_description("My new resource type"),
-    ]
-});
-```
-
-### Step 2: Add Cache in ConfigClient
-
-Edit `src/core/conf_sync/conf_client/config_client.rs`:
-
-1. Add field:
-```rust
-pub struct ConfigClient {
-    // ... existing fields
-    my_new_resources: ClientCache<MyNewResource>,
-}
-```
-
-2. Initialize in `new()`:
-```rust
-let my_new_resources_cache = ClientCache::new(...);
-```
-
-3. Add to `get_cache_status()`:
-```rust
-fn get_cache_status(&self, name: &str) -> Option<bool> {
-    match name {
-        // ... existing branches
-        "my_new_resource" => Some(self.my_new_resources.is_ready()),
-        _ => None,
-    }
-}
-```
-
-### Step 3: Add Access Method
-
-```rust
-pub fn my_new_resources(&self) -> &ClientCache<MyNewResource> {
-    &self.my_new_resources
-}
-```
-
-## Future Extensions
-
-The global registry provides a foundation for future features:
-
-1. **Dependency management**: Define dependencies between resources
-2. **Priority**: Control resource loading order
-3. **Resource groups**: Group related resources (e.g., all Route types)
-4. **Validation rules**: Define validation rules for resource types
-5. **Access control**: Define access permissions for each resource type
-
-## Related Files
-
-- `src/types/resource_registry.rs` - Registry implementation
-- `src/types/mod.rs` - Module exports
-- `src/core/conf_sync/conf_client/config_client.rs` - Primary consumer
+- [Architecture Overview](./architecture-overview.md)
+- [Resource Architecture Overview](./resource-architecture-overview.md)
+- [Adding New Resource Types Guide](./add-new-resource-guide.md)

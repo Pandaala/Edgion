@@ -43,6 +43,10 @@ pub struct GatewayClassStatus {
     /// Conditions describe the current conditions of the GatewayClass.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
+
+    /// SupportedFeatures is the set of features the GatewayClass supports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_features: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]

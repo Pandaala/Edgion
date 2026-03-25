@@ -31,8 +31,7 @@ cargo test --all --tests
 ### Running Local Integration Tests
 
 ```bash
-cd examples/testing
-./run_integration_test.sh
+./test/scripts/integration/run_integration.sh
 ```
 
 ### Running Kubernetes Integration Tests

@@ -1,0 +1,107 @@
+name: Setup Rust
+description: Install the Rust toolchain, optional Ubuntu build dependencies, and shared Cargo caches for Edgion CI.
+
+inputs:
+  toolchain:
+    description: Rust toolchain version or channel to install.
+    required: false
+    default: "1.92"
+  components:
+    description: Comma- or space-separated rustup components.
+    required: false
+    default: ""
+  targets:
+    description: Comma- or space-separated rustup targets.
+    required: false
+    default: ""
+  install-deps:
+    description: Whether to install the Ubuntu packages required by Edgion builds.
+    required: false
+    default: "false"
+  cache-enabled:
+    description: Whether to restore/save Cargo cache entries.
+    required: false
+    default: "true"
+  cache-key-prefix:
+    description: Prefix used when constructing the cache key.
+    required: false
+    default: "cargo"
+  cache-path:
+    description: Newline-separated cache paths passed to actions/cache.
+    required: false
+    default: |
+      ~/.cargo/bin
+      ~/.cargo/registry/index
+      ~/.cargo/registry/cache
+      ~/.cargo/git/db
+      target
+
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies
+      if: ${{ inputs.install-deps == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          build-essential \
+          cmake \
+          pkg-config \
+          protobuf-compiler \
+          libssl-dev \
+          libclang-dev \
+          clang \
+          curl \
+          ca-certificates
+
+    - name: Restore Cargo cache
+      if: ${{ inputs.cache-enabled == 'true' }}
+      uses: actions/cache@v5
+      with:
+        path: ${{ inputs.cache-path }}
+        key: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ inputs.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ inputs.toolchain }}-
+          ${{ runner.os }}-${{ inputs.cache-key-prefix }}-
+
+    - name: Ensure rustup exists
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v rustup >/dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+        fi
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+    - name: Install Rust toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.cargo/bin:$PATH"
+
+        TOOLCHAIN="${{ inputs.toolchain }}"
+        COMPONENTS="${{ inputs.components }}"
+        TARGETS="${{ inputs.targets }}"
+
+        rustup set profile minimal
+        rustup toolchain install "$TOOLCHAIN" --no-self-update
+        rustup default "$TOOLCHAIN"
+
+        COMPONENTS="${COMPONENTS//,/ }"
+        if [[ -n "${COMPONENTS// }" ]]; then
+          for component in $COMPONENTS; do
+            rustup component add --toolchain "$TOOLCHAIN" "$component"
+          done
+        fi
+
+        TARGETS="${TARGETS//,/ }"
+        if [[ -n "${TARGETS// }" ]]; then
+          for target in $TARGETS; do
+            rustup target add --toolchain "$TOOLCHAIN" "$target"
+          done
+        fi
+
+        rustc --version
+        cargo --version

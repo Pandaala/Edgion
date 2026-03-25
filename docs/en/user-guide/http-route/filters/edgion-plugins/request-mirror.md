@@ -2,7 +2,8 @@
 
 > **🔌 Edgion Extension**
 > 
-> RequestMirror is a request mirroring plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+> Edgion supports both the standard Gateway API `RequestMirror` filter and the reusable `EdgionPlugins` `RequestMirror` configuration.
+> This page focuses on the reusable `EdgionPlugins` form and the shared runtime behavior behind both entry points.
 
 ## Overview
 

@@ -66,6 +66,10 @@ help: ## Show this help message
 	@echo "  RUST_VERSION     = $(YELLOW)$(RUST_VERSION)$(NC)"
 	@echo "  FEATURES         = $(YELLOW)$(FEATURES)$(NC)"
 
+.PHONY: check-agent-docs
+check-agent-docs: ## Validate AGENTS/skills/dev-guide links and metadata
+	python3 tools/validate_agent_docs.py
+
 .PHONY: check-docker
 check-docker: ## Check if Docker is available
 	@which docker > /dev/null || (echo "$(RED)Error: Docker not found. Please install Docker.$(NC)" && exit 1)
@@ -239,4 +243,3 @@ version: ## Show current version
 	@echo "$(BLUE)Version:$(NC) $(YELLOW)$(VERSION)$(NC)"
 
 .DEFAULT_GOAL := help
-

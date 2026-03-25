@@ -14,9 +14,10 @@ pub struct ReferenceGrantChangedEvent {
 }
 
 /// Revalidation listener trait
+#[async_trait::async_trait]
 pub trait RevalidationListener: Send + Sync {
     /// Called when ReferenceGrant changes
-    fn on_reference_grant_changed(&self, event: &ReferenceGrantChangedEvent);
+    async fn on_reference_grant_changed(&self, event: &ReferenceGrantChangedEvent);
 }
 
 /// Global event dispatcher
@@ -39,8 +40,8 @@ impl ReferenceGrantEventDispatcher {
     }
 
     /// Dispatch event to all listeners
-    pub fn dispatch(&self, event: &ReferenceGrantChangedEvent) {
-        let listeners = self.listeners.read().unwrap();
+    pub async fn dispatch(&self, event: &ReferenceGrantChangedEvent) {
+        let listeners: Vec<_> = self.listeners.read().unwrap().clone();
         tracing::info!(
             component = "ref_grant_events",
             affected_ns_count = event.affected_namespaces.len(),
@@ -48,8 +49,8 @@ impl ReferenceGrantEventDispatcher {
             "Dispatching ReferenceGrantChanged event"
         );
 
-        for listener in listeners.iter() {
-            listener.on_reference_grant_changed(event);
+        for listener in &listeners {
+            listener.on_reference_grant_changed(event).await;
         }
     }
 }
@@ -78,14 +79,15 @@ mod tests {
         call_count: AtomicUsize,
     }
 
+    #[async_trait::async_trait]
     impl RevalidationListener for TestListener {
-        fn on_reference_grant_changed(&self, _event: &ReferenceGrantChangedEvent) {
+        async fn on_reference_grant_changed(&self, _event: &ReferenceGrantChangedEvent) {
             self.call_count.fetch_add(1, Ordering::SeqCst);
         }
     }
 
-    #[test]
-    fn test_dispatcher_registers_and_dispatches() {
+    #[tokio::test]
+    async fn test_dispatcher_registers_and_dispatches() {
         let dispatcher = ReferenceGrantEventDispatcher::new();
         let listener = Arc::new(TestListener {
             call_count: AtomicUsize::new(0),
@@ -97,7 +99,7 @@ mod tests {
             affected_namespaces: HashSet::new(),
         };
 
-        dispatcher.dispatch(&event);
+        dispatcher.dispatch(&event).await;
 
         assert_eq!(listener.call_count.load(Ordering::SeqCst), 1);
     }

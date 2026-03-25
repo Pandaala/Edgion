@@ -54,7 +54,7 @@ impl EdgionGatewayCli {
     }
 
     /// Start auxiliary services
-    async fn start_auxiliary_services(config_client: Arc<ConfigClient>) {
+    async fn start_auxiliary_services(config_client: Arc<ConfigClient>, config: &EdgionGatewayConfig) {
         // Start backend cleaner
         let cleaner = BackendCleaner::new();
         cleaner.start();
@@ -86,8 +86,9 @@ impl EdgionGatewayCli {
         );
 
         // Spawn Metrics API server
+        let metrics_cfg = config.metrics.clone();
         tokio::spawn(async move {
-            if let Err(e) = metrics::serve(5901).await {
+            if let Err(e) = metrics::serve(&metrics_cfg).await {
                 tracing::error!(
                     component = "metrics_api",
                     event = "server_error",
@@ -100,7 +101,7 @@ impl EdgionGatewayCli {
         tracing::info!(
             component = "metrics_api",
             event = "server_spawned",
-            port = 5901,
+            listen = %config.metrics.listen,
             "Metrics API server spawned"
         );
     }
@@ -154,6 +155,7 @@ impl EdgionGatewayCli {
 
         // 5. Initialize RateLimit global configuration
         config::init_rate_limit_global_config(&config.rate_limit);
+        config::init_lru_cache_global_config(&config.lru_cache);
 
         // 5.1 Initialize AllEndpointStatus global configuration
         crate::core::gateway::plugins::http::all_endpoint_status::plugin::init_all_endpoint_status_global_config(
@@ -229,8 +231,11 @@ impl EdgionGatewayCli {
             sync_client_for_meta.start_watch_server_meta().await;
         });
 
+        // 5.2 Initialize metrics configuration (global OnceLock for hot-path access)
+        config::init_request_duration_config(config.metrics.request_duration.clone());
+
         // 6. Start auxiliary services
-        runtime.block_on(Self::start_auxiliary_services(config_client.clone()));
+        runtime.block_on(Self::start_auxiliary_services(config_client.clone(), &config));
 
         // 7. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;

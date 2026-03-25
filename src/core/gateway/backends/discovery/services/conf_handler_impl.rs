@@ -1,5 +1,8 @@
 use super::{get_global_service_store, ServiceStore};
 use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::gateway::backends::circuit_breaker::{
+    config::parse_circuit_breaker_annotation, get_circuit_breaker_store,
+};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
@@ -31,6 +34,7 @@ impl ConfHandler<Service> for ServiceStore {
 
         let config_store = get_hc_config_store();
         let hc_manager = get_health_check_manager();
+        let cb_store = get_circuit_breaker_store();
         let incoming_keys: HashSet<String> = data.keys().cloned().collect();
 
         for old_key in config_store.service_keys() {
@@ -38,6 +42,7 @@ impl ConfHandler<Service> for ServiceStore {
                 config_store.set_service_config(&old_key, None);
                 hc_manager.reconcile_service(&old_key);
                 runtime_state::remove_service(&old_key);
+                cb_store.remove_service(&old_key);
             }
         }
 
@@ -45,6 +50,8 @@ impl ConfHandler<Service> for ServiceStore {
             let active_config = parse_health_check_annotation(&service.metadata);
             config_store.set_service_config(key, active_config);
             hc_manager.reconcile_service(key);
+            let cb_config = parse_circuit_breaker_annotation(&service.metadata);
+            cb_store.set_service_config(key, cb_config);
         }
     }
 
@@ -59,17 +66,21 @@ impl ConfHandler<Service> for ServiceStore {
 
         let config_store = get_hc_config_store();
         let hc_manager = get_health_check_manager();
+        let cb_store = get_circuit_breaker_store();
 
         for (key, service) in add.iter().chain(update.iter()) {
             let active_config = parse_health_check_annotation(&service.metadata);
             config_store.set_service_config(key, active_config);
             hc_manager.reconcile_service(key);
+            let cb_config = parse_circuit_breaker_annotation(&service.metadata);
+            cb_store.set_service_config(key, cb_config);
         }
 
         for key in &remove {
             config_store.set_service_config(key, None);
             hc_manager.reconcile_service(key);
             runtime_state::remove_service(key);
+            cb_store.remove_service(key);
         }
 
         // Merge add and update for storage

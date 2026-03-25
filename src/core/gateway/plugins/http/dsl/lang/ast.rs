@@ -57,6 +57,12 @@ pub enum StmtKind {
     /// `return next()`
     ReturnNext,
 
+    /// `break` — exit current loop
+    Break,
+
+    /// `continue` — skip to next loop iteration
+    Continue,
+
     /// Expression statement — result is discarded
     ExprStmt { expr: Expr },
 }

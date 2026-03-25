@@ -15,7 +15,7 @@
 #   # For example type
 #   docker build -f docker/Dockerfile.runtime --build-arg BINARY=test_server --build-arg BUILD_TYPE=example --build-arg BINARY_PATH=target/release -t edgion/edgion-test-server:0.1.0 .
 
-ARG RUNTIME_BASE=debian:bookworm-slim
+ARG RUNTIME_BASE=ubuntu:24.04
 FROM ${RUNTIME_BASE}
 
 # Build arguments

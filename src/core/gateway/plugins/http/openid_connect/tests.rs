@@ -21,6 +21,15 @@ fn base_config() -> OpenidConnectConfig {
 }
 
 #[test]
+fn test_introspection_cache_entry_has_no_expires_at() {
+    // Compile-time check: IntrospectionCacheEntry must not have expires_at
+    let _entry = IntrospectionCacheEntry {
+        claims: serde_json::json!({"sub": "test"}),
+        // If expires_at still exists, this will fail to compile with "missing field"
+    };
+}
+
+#[test]
 fn test_can_refresh_min_interval() {
     let now = Instant::now();
     assert!(OpenidConnect::can_refresh(None, now, Duration::from_secs(10)));
@@ -853,28 +862,29 @@ async fn test_introspection_cache_put_and_get() {
 
 #[tokio::test]
 async fn test_introspection_cache_prunes_expired_entries_on_insert() {
+    use std::time::Duration as StdDuration;
     let mut cfg = base_config();
     cfg.introspection_cache_ttl = 60;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
     let expired_key = OpenidConnect::introspection_cache_key("expired-token");
-    {
-        let mut cache = plugin.introspection_cache.write().await;
-        cache.insert(
-            expired_key.clone(),
-            IntrospectionCacheEntry {
-                claims: json!({"active": true, "sub": "old"}),
-                expires_at: Instant::now() - Duration::from_secs(1),
-            },
-        );
-    }
+    // Insert with a 1ms TTL so it expires immediately
+    plugin.introspection_cache.insert(
+        expired_key.clone(),
+        IntrospectionCacheEntry {
+            claims: json!({"active": true, "sub": "old"}),
+        },
+        Some(StdDuration::from_millis(1)),
+    );
+    // Wait for it to expire
+    tokio::time::sleep(StdDuration::from_millis(10)).await;
 
     plugin
         .cache_introspection_claims("fresh-token", &json!({"active": true, "sub": "new"}))
         .await;
 
-    let cache = plugin.introspection_cache.read().await;
-    assert!(!cache.contains_key(&expired_key));
+    // Expired entry should not be retrievable
+    assert!(plugin.introspection_cache.get(&expired_key).is_none());
 }
 
 #[tokio::test]
@@ -1185,4 +1195,31 @@ fn test_http_client_selection_respects_ssl_verify() {
         secure_plugin.http_client(),
         insecure_plugin.http_client()
     ));
+}
+
+#[tokio::test]
+async fn test_remove_cached_access_token() {
+    let cfg = base_config();
+    let oidc = OpenidConnect::new(&cfg, "default".to_string());
+    let now = OpenidConnect::now_unix_secs();
+
+    // Insert a token
+    oidc.cache_access_token("session-abc", "token-xyz", Some(now + 60))
+        .await;
+    assert_eq!(
+        oidc.get_cached_access_token("session-abc").await,
+        Some("token-xyz".to_string()),
+        "token should be cached before removal"
+    );
+
+    // Remove it
+    oidc.remove_cached_access_token("session-abc").await;
+    assert_eq!(
+        oidc.get_cached_access_token("session-abc").await,
+        None,
+        "token should be gone after removal"
+    );
+
+    // No-op on empty string
+    oidc.remove_cached_access_token("").await; // should not panic
 }

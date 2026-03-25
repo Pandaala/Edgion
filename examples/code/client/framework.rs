@@ -107,6 +107,13 @@ impl TestContext {
         }
     }
 
+    /// Create a copy with an overridden HTTP port.
+    pub fn with_http_port(&self, port: u16) -> Self {
+        let mut ctx = self.clone();
+        ctx.http_port = port;
+        ctx
+    }
+
     pub fn http_url(&self) -> String {
         format!("http://{}:{}", self.target_host, self.http_port)
     }
@@ -181,6 +188,96 @@ impl TestContext {
         test_key: &str,
     ) -> anyhow::Result<crate::metrics_helper::LbDistributionAnalysis> {
         self.metrics_client().analyze_lb_distribution(test_key).await
+    }
+
+    /// Apply a YAML/JSON resource to the Controller via Admin API.
+    /// Extracts kind and namespace from the resource metadata to build the
+    /// correct `/api/v1/namespaced/{kind}/{namespace}` URL.
+    /// Uses PUT (update) first; falls back to POST (create) on 404.
+    pub async fn apply_yaml(&self, yaml_content: &str) -> Result<(), String> {
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(yaml_content).map_err(|e| format!("Invalid YAML: {}", e))?;
+
+        let kind = value["kind"].as_str().ok_or("Missing 'kind' in YAML")?;
+        let namespace = value["metadata"]["namespace"].as_str().unwrap_or("default");
+        let name = value["metadata"]["name"]
+            .as_str()
+            .ok_or("Missing 'metadata.name' in YAML")?;
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        let update_url = format!(
+            "{}/api/v1/namespaced/{}/{}/{}",
+            self.admin_api_url(),
+            kind,
+            namespace,
+            name
+        );
+        let response = client
+            .put(&update_url)
+            .header("Content-Type", "application/x-yaml")
+            .body(yaml_content.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("Admin API PUT failed: {}", e))?;
+
+        if response.status().is_success() {
+            return Ok(());
+        }
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            let create_url = format!("{}/api/v1/namespaced/{}/{}", self.admin_api_url(), kind, namespace);
+            let response = client
+                .post(&create_url)
+                .header("Content-Type", "application/x-yaml")
+                .body(yaml_content.to_string())
+                .send()
+                .await
+                .map_err(|e| format!("Admin API POST failed: {}", e))?;
+
+            if response.status().is_success() {
+                return Ok(());
+            }
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Admin API POST returned {}: {}", status, body));
+        }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(format!("Admin API PUT returned {}: {}", status, body))
+    }
+
+    /// Delete a resource from the Controller via Admin API.
+    pub async fn delete_resource(&self, kind: &str, namespace: &str, name: &str) -> Result<(), String> {
+        let url = format!(
+            "{}/api/v1/namespaced/{}/{}/{}",
+            self.admin_api_url(),
+            kind,
+            namespace,
+            name
+        );
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        let response = client
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Admin API request failed: {}", e))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            Err(format!("Admin API returned {}: {}", status, body))
+        }
     }
 }
 
@@ -280,6 +377,14 @@ pub trait TestSuite: Send + Sync {
     fn name(&self) -> &str;
     fn test_cases(&self) -> Vec<TestCase>;
 
+    /// Override the port config key for this suite.
+    /// When `Some("HTTPRoute/Backend/WeightedBackend")`, the runner will look up
+    /// the HTTP port for that key in ports.json and create a per-suite context.
+    /// Default is None (use the runner-level port).
+    fn port_key(&self) -> Option<&str> {
+        None
+    }
+
     async fn setup(&self) -> anyhow::Result<()> {
         Ok(())
     }
@@ -326,6 +431,8 @@ pub trait TestSuite: Send + Sync {
 pub struct TestRunner {
     context: TestContext,
     suites: Vec<Box<dyn TestSuite>>,
+    /// Resolves a port config key (e.g. "HTTPRoute/Backend/WeightedBackend") to an HTTP port.
+    port_resolver: Option<Box<dyn Fn(&str) -> Option<u16> + Send + Sync>>,
 }
 
 impl TestRunner {
@@ -333,6 +440,7 @@ impl TestRunner {
         Self {
             context,
             suites: Vec::new(),
+            port_resolver: None,
         }
     }
 
@@ -340,11 +448,25 @@ impl TestRunner {
         self.suites.push(suite);
     }
 
+    pub fn set_port_resolver(&mut self, resolver: Box<dyn Fn(&str) -> Option<u16> + Send + Sync>) {
+        self.port_resolver = Some(resolver);
+    }
+
     pub async fn run(&self) -> TestResults {
         let mut suite_results = Vec::new();
 
         for suite in &self.suites {
-            let result = suite.run(&self.context).await;
+            let ctx = match (suite.port_key(), &self.port_resolver) {
+                (Some(key), Some(resolver)) => {
+                    if let Some(port) = resolver(key) {
+                        self.context.with_http_port(port)
+                    } else {
+                        self.context.clone()
+                    }
+                }
+                _ => self.context.clone(),
+            };
+            let result = suite.run(&ctx).await;
             suite_results.push(result);
         }
 

@@ -43,6 +43,14 @@ struct MirrorCapture {
 static MIRROR_STORE: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Vec<MirrorCapture>>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
+/// Retry-sequence counter: tracks how many times each test-id has been called
+static RETRY_SEQUENCE_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Vec<u16>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Circuit-breaker test counter: tracks calls per test-id
+static CB_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u32>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
 #[derive(Parser, Debug)]
 #[command(name = "test-server")]
 #[command(about = "Edgion Unified Test Server - Supports all protocols")]
@@ -265,6 +273,12 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/mirror/slow/{ms}", get(mirror_slow_handler).post(mirror_slow_handler))
         // GET /mirror/reset: clear all stored mirror captures (between test cases)
         .route("/mirror/reset", get(mirror_reset_handler))
+        // --- Retry-sequence endpoints (for retry-on-status integration tests) ---
+        .route("/retry-sequence/{test_id}/{status_list}", get(retry_sequence_handler))
+        .route("/retry-sequence-reset", get(retry_sequence_reset_handler))
+        // --- Circuit-breaker endpoints (for circuit-breaker integration tests) ---
+        .route("/cb-fail/{test_id}/{fail_count}", get(cb_fail_handler))
+        .route("/cb-reset", get(cb_reset_handler))
         .route("/{*path}", get(catch_all_handler))
         .layer(Extension(server_addr_str))
 }
@@ -551,6 +565,106 @@ async fn mirror_reset_handler() -> impl IntoResponse {
     (StatusCode::OK, "mirror-store-reset")
 }
 
+/// /retry-sequence/{test_id}/{status_list}
+/// Returns status codes in sequence per test_id.
+/// status_list format: "502,503,200" — returns 502 on 1st call, 503 on 2nd, 200 on 3rd+
+async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, String)>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let statuses: Vec<u16> = status_list
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u16>().ok())
+        .collect();
+
+    if statuses.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            [
+                ("x-error".to_string(), "empty or invalid status_list".to_string()),
+                ("x-attempt-number".to_string(), "0".to_string()),
+                ("x-attempt-history".to_string(), String::new()),
+                ("x-test-id".to_string(), test_id),
+            ],
+            "Bad status_list".to_string(),
+        )
+            .into_response();
+    }
+
+    let (attempt, current_status) = {
+        let mut store = RETRY_SEQUENCE_COUNTER.lock().unwrap();
+        let history = store.entry(test_id.clone()).or_default();
+        let idx = history.len();
+        // Use last status code for out-of-range attempts
+        let status = statuses.get(idx).copied().unwrap_or(*statuses.last().unwrap());
+        history.push(status);
+        (idx + 1, status)
+    };
+
+    let history_str = {
+        let store = RETRY_SEQUENCE_COUNTER.lock().unwrap();
+        store
+            .get(&test_id)
+            .map(|h| h.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(","))
+            .unwrap_or_default()
+    };
+
+    let status = StatusCode::from_u16(current_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
+    (
+        status,
+        [
+            ("x-attempt-number".to_string(), attempt.to_string()),
+            ("x-attempt-history".to_string(), history_str),
+            ("x-test-id".to_string(), test_id),
+        ],
+        format!("attempt={}, status={}", attempt, current_status),
+    )
+        .into_response()
+}
+
+/// /retry-sequence-reset — clear all retry sequence state
+async fn retry_sequence_reset_handler() -> impl IntoResponse {
+    let mut store = RETRY_SEQUENCE_COUNTER.lock().unwrap();
+    let count = store.len();
+    store.clear();
+    info!("retry-sequence/reset: cleared {} test entries", count);
+    (axum::http::StatusCode::OK, format!("cleared {} entries", count))
+}
+
+/// /cb-fail/{test_id}/{fail_count}
+/// Returns 502 for the first `fail_count` calls per test_id, then 200.
+async fn cb_fail_handler(Path((test_id, fail_count)): Path<(String, u32)>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let attempt = {
+        let mut store = CB_COUNTER.lock().unwrap();
+        let count = store.entry(test_id.clone()).or_insert(0);
+        *count += 1;
+        *count
+    };
+
+    let status = if attempt <= fail_count {
+        StatusCode::BAD_GATEWAY // 502
+    } else {
+        StatusCode::OK
+    };
+
+    (
+        status,
+        [("x-cb-attempt", attempt.to_string()), ("x-cb-test-id", test_id)],
+        format!("attempt={}", attempt),
+    )
+}
+
+/// /cb-reset — clear all CB test state
+async fn cb_reset_handler() -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let mut store = CB_COUNTER.lock().unwrap();
+    store.clear();
+    (StatusCode::OK, "cb-reset-ok")
+}
+
 async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::http::StatusCode;
     use axum::response::Json;
@@ -681,6 +795,106 @@ impl TestService for TestServiceImpl {
     }
 }
 
+// --------------------------------------------------------------------------
+// gRPC Health Check Protocol (grpc.health.v1)
+// Hand-written prost definitions — standard protocol, no proto file needed.
+// --------------------------------------------------------------------------
+mod grpc_health {
+    #[derive(Clone, prost::Message)]
+    pub struct HealthCheckRequest {
+        #[prost(string, tag = "1")]
+        pub service: String,
+    }
+
+    #[derive(Clone, prost::Message)]
+    pub struct HealthCheckResponse {
+        #[prost(int32, tag = "1")]
+        pub status: i32,
+    }
+
+    pub const SERVING: i32 = 1;
+    pub const NOT_SERVING: i32 = 2;
+}
+
+/// gRPC Health service implementation.
+/// Service name "unhealthy" returns NOT_SERVING; everything else returns SERVING.
+#[derive(Debug, Clone)]
+struct GrpcHealthService;
+
+impl GrpcHealthService {
+    async fn check(
+        &self,
+        request: Request<grpc_health::HealthCheckRequest>,
+    ) -> Result<Response<grpc_health::HealthCheckResponse>, Status> {
+        let service_name = request.into_inner().service;
+        let status = if service_name == "unhealthy" {
+            grpc_health::NOT_SERVING
+        } else {
+            grpc_health::SERVING
+        };
+        Ok(Response::new(grpc_health::HealthCheckResponse { status }))
+    }
+}
+
+/// Server-side implementation of grpc.health.v1.Health as a tonic service.
+/// Follows the same pattern as tonic-generated server code.
+#[derive(Debug, Clone)]
+struct GrpcHealthServer {
+    inner: std::sync::Arc<GrpcHealthService>,
+}
+
+impl tonic::server::NamedService for GrpcHealthServer {
+    const NAME: &'static str = "grpc.health.v1.Health";
+}
+
+impl<B> tower::Service<http::Request<B>> for GrpcHealthServer
+where
+    B: tonic::codegen::Body + Send + 'static,
+    B::Error: Into<tonic::codegen::StdError> + Send + 'static,
+{
+    type Response = http::Response<tonic::body::BoxBody>;
+    type Error = std::convert::Infallible;
+    type Future = tonic::codegen::BoxFuture<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: http::Request<B>) -> Self::Future {
+        #[allow(non_camel_case_types)]
+        struct CheckSvc(std::sync::Arc<GrpcHealthService>);
+        impl tonic::server::UnaryService<grpc_health::HealthCheckRequest> for CheckSvc {
+            type Response = grpc_health::HealthCheckResponse;
+            type Future = tonic::codegen::BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+            fn call(&mut self, request: tonic::Request<grpc_health::HealthCheckRequest>) -> Self::Future {
+                let inner = std::sync::Arc::clone(&self.0);
+                let fut = async move { inner.check(request).await };
+                Box::pin(fut)
+            }
+        }
+
+        let inner = self.inner.clone();
+        match req.uri().path() {
+            "/grpc.health.v1.Health/Check" => {
+                let fut = async move {
+                    let mut grpc = tonic::server::Grpc::new(tonic::codec::ProstCodec::default());
+                    let resp = grpc.unary(CheckSvc(inner), req).await;
+                    Ok(resp)
+                };
+                Box::pin(fut)
+            }
+            _ => Box::pin(async move {
+                Ok(http::Response::builder()
+                    .status(200)
+                    .header("grpc-status", "12") // UNIMPLEMENTED
+                    .header("content-type", "application/grpc")
+                    .body(tonic::body::empty_body())
+                    .unwrap())
+            }),
+        }
+    }
+}
+
 async fn start_grpc_server(port: u16) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let server_addr_str = format!("0.0.0.0:{}", port);
@@ -691,6 +905,9 @@ async fn start_grpc_server(port: u16) -> Result<()> {
 
     Server::builder()
         .add_service(TestServiceServer::new(service))
+        .add_service(GrpcHealthServer {
+            inner: std::sync::Arc::new(GrpcHealthService),
+        })
         .serve(addr)
         .await?;
 

@@ -197,7 +197,7 @@ pub fn validate_parent_ref_accepted(
 
     if !ns_allowed {
         errors.push(AcceptedError::NotAllowedByListeners {
-            route_ns: route_ns.to_string(),
+            resource_ns: route_ns.to_string(),
         });
         return errors;
     }

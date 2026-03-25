@@ -43,6 +43,32 @@ pub async fn upstream_peer(
         }
     }
 
+    // Apply backoff delay on retry attempts
+    if ctx.try_cnt >= 1 {
+        let base_backoff = ctx
+            .route_unit
+            .as_ref()
+            .and_then(|unit| unit.rule.parsed_retry.as_ref())
+            .and_then(|r| r.backoff);
+
+        if let Some(base) = base_backoff {
+            // Exponential: base * 2^(try_cnt - 1), capped at 30s
+            let exponent = (ctx.try_cnt - 1).min(5);
+            let delay = base.saturating_mul(1u32.checked_shl(exponent).unwrap_or(u32::MAX));
+            let delay = delay.min(std::time::Duration::from_secs(30));
+
+            // Only sleep if remaining time allows
+            if let Some(timeout) = request_timeout {
+                let remaining = timeout.saturating_sub(ctx.start_time.elapsed());
+                if delay < remaining {
+                    tokio::time::sleep(delay).await;
+                }
+            } else {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
     // Route to appropriate handler based on matched route type (not protocol)
     if ctx.is_grpc_route_matched {
         upstream_peer_grpc(edgion_http, session, ctx).await
@@ -193,24 +219,22 @@ pub async fn select_http_backend(
             &route_unit.rule,
             &jump.backend_ref_name,
             jump.backend_ref_namespace.as_deref(),
-            &route_unit.matched_info.rns,
+            &route_unit.matched_info.rsc.ns,
         ) {
             Ok(backend) => backend,
-            Err(_) => {
-                match RouteRules::select_backend(&route_unit.rule) {
-                    Ok(backend) => backend,
-                    Err(e) => {
-                        ctx.add_error(match &e {
-                            EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-                            EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                            EdError::RefDenied { .. } => EdgionStatus::RefDenied,
-                            _ => EdgionStatus::Unknown,
-                        });
-                        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-                        return Err(PingoraError::new(ErrorType::InternalError));
-                    }
+            Err(_) => match RouteRules::select_backend(&route_unit.rule) {
+                Ok(backend) => backend,
+                Err(e) => {
+                    ctx.add_error(match &e {
+                        EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+                        EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+                        EdError::RefDenied { .. } => EdgionStatus::RefDenied,
+                        _ => EdgionStatus::Unknown,
+                    });
+                    end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+                    return Err(PingoraError::new(ErrorType::InternalError));
                 }
-            }
+            },
         }
     } else {
         // ===== Normal: weighted round-robin selection =====
@@ -235,7 +259,7 @@ pub async fn select_http_backend(
     let service_namespace = backend_ref
         .namespace
         .as_deref()
-        .or(Some(route_unit.matched_info.rns.as_str()));
+        .or(Some(route_unit.matched_info.rsc.ns.as_str()));
 
     backend_ref.backend_tls_policy =
         crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace);
@@ -315,7 +339,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         let ns = grpc_br.namespace.clone().unwrap_or_else(|| {
             ctx.grpc_route_unit
                 .as_ref()
-                .map(|unit| unit.matched_info.route_ns.clone())
+                .map(|unit| unit.matched_info.rsc.ns.clone())
                 .unwrap_or_default()
         });
         (grpc_br.name.clone(), ns)
@@ -323,7 +347,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         let ns = http_br.namespace.clone().unwrap_or_else(|| {
             ctx.route_unit
                 .as_ref()
-                .map(|unit| unit.matched_info.rns.clone())
+                .map(|unit| unit.matched_info.rsc.ns.clone())
                 .unwrap_or_default()
         });
         (http_br.name.clone(), ns)
@@ -352,9 +376,9 @@ async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::ne
         )
     })?;
 
-    let addr = addrs.next().ok_or_else(|| {
-        PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain))
-    })?;
+    let addr = addrs
+        .next()
+        .ok_or_else(|| PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain)))?;
 
     if addr.ip().is_loopback() {
         return Err(PingoraError::explain(

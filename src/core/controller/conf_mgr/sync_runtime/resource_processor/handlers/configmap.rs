@@ -18,7 +18,7 @@ impl ConfigMapHandler {
         Self
     }
 
-    fn trigger_cascading_requeue(&self, cm_key: &str, event: &str, ctx: &HandlerContext) {
+    async fn trigger_cascading_requeue(&self, cm_key: &str, event: &str, ctx: &HandlerContext) {
         let refs = ctx.secret_ref_manager().get_refs(cm_key);
         if !refs.is_empty() {
             tracing::info!(
@@ -33,7 +33,7 @@ impl ConfigMapHandler {
                 Some(ns) => format!("{}/{}", ns, resource_ref.name),
                 None => resource_ref.name.clone(),
             };
-            ctx.requeue(resource_ref.kind.as_str(), key);
+            ctx.requeue(resource_ref.kind.as_str(), key).await;
         }
     }
 }
@@ -44,8 +44,9 @@ impl Default for ConfigMapHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
-    fn parse(&self, cm: ConfigMap, _ctx: &HandlerContext) -> ProcessResult<ConfigMap> {
+    async fn parse(&self, cm: ConfigMap, _ctx: &HandlerContext) -> ProcessResult<ConfigMap> {
         let cm_key = format_secret_key(
             cm.metadata.namespace.as_ref(),
             cm.metadata.name.as_deref().unwrap_or(""),
@@ -59,12 +60,12 @@ impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
         ProcessResult::Continue(cm)
     }
 
-    fn on_change(&self, cm: &ConfigMap, ctx: &HandlerContext) {
+    async fn on_change(&self, cm: &ConfigMap, ctx: &HandlerContext) {
         let cm_key = format_secret_key(
             cm.metadata.namespace.as_ref(),
             cm.metadata.name.as_deref().unwrap_or(""),
         );
-        self.trigger_cascading_requeue(&cm_key, "updated", ctx);
+        self.trigger_cascading_requeue(&cm_key, "updated", ctx).await;
     }
 
     fn on_delete(&self, cm: &ConfigMap, ctx: &HandlerContext) {

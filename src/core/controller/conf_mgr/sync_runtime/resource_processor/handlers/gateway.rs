@@ -7,8 +7,6 @@
 //! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
-use std::collections::HashSet;
-
 use crate::core::common::config::is_reference_grant_validation_enabled;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
@@ -122,6 +120,7 @@ impl GatewayHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<Gateway> for GatewayHandler {
     fn filter(&self, g: &Gateway) -> bool {
         match &self.gateway_class_name {
@@ -130,7 +129,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         }
     }
 
-    fn parse(&self, mut g: Gateway, ctx: &HandlerContext) -> ProcessResult<Gateway> {
+    async fn parse(&self, mut g: Gateway, ctx: &HandlerContext) -> ProcessResult<Gateway> {
         let resource_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
@@ -217,33 +216,69 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         tls_config.secrets = Some(resolved_secrets);
                     }
                 }
+
+                // Resolve frontend validation CA certificates
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
+                if let Some(ref fv) = tls_config.frontend_validation {
+                    if let Some(ca_refs) = &fv.ca_certificate_refs {
+                        let mut resolved_ca_secrets = Vec::new();
+
+                        for ca_ref in ca_refs {
+                            let ca_ns = ca_ref.namespace.as_ref().or(g.metadata.namespace.as_ref());
+                            let secret_key = format_secret_key(ca_ns, &ca_ref.name);
+
+                            ctx.secret_ref_manager()
+                                .add_ref(secret_key.clone(), resource_ref.clone());
+
+                            let ca_ns_str = ca_ns.map(|s| s.as_str()).unwrap_or("");
+                            if ca_ns_str != gateway_ns {
+                                cross_ns_manager.add_ref(ca_ns_str.to_string(), cross_ns_ref.clone());
+                            }
+
+                            if let Some(secret) = get_secret(ca_ns.map(|s| s.as_str()), &ca_ref.name) {
+                                resolved_ca_secrets.push(secret);
+                                tracing::debug!(
+                                    gateway = %resource_ref.key(),
+                                    listener = %listener.name,
+                                    secret_key = %secret_key,
+                                    "Frontend CA Secret resolved"
+                                );
+                            } else {
+                                tracing::info!(
+                                    gateway = %resource_ref.key(),
+                                    listener = %listener.name,
+                                    secret_key = %secret_key,
+                                    "Frontend CA Secret not found yet, will be updated when Secret arrives"
+                                );
+                            }
+                        }
+
+                        if !resolved_ca_secrets.is_empty() {
+                            tls_config.resolved_frontend_ca_secrets = Some(resolved_ca_secrets);
+                        }
+                    }
+                }
             }
         }
 
         ProcessResult::Continue(g)
     }
 
-    fn on_change(&self, gateway: &Gateway, ctx: &HandlerContext) {
+    async fn on_change(&self, gateway: &Gateway, ctx: &HandlerContext) {
         let gateway_key = format!(
             "{}/{}",
             gateway.metadata.namespace.as_deref().unwrap_or(""),
             gateway.metadata.name.as_deref().unwrap_or("")
         );
 
-        // Bidirectional conflict marking: requeue all conflicting Gateways
-        let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
-
-        let mut requeued = HashSet::new();
-        for conflicting_gateway_key in conflicting_gateways {
-            if !requeued.contains(&conflicting_gateway_key) {
-                ctx.requeue("Gateway", conflicting_gateway_key.clone());
-                requeued.insert(conflicting_gateway_key.clone());
-                tracing::info!(
-                    gateway = %gateway_key,
-                    conflicting_gateway = %conflicting_gateway_key,
-                    "Requeue conflicting Gateway for Conflicted status update"
-                );
-            }
+        // Only requeue Gateways whose conflict relation actually changed.
+        for conflicting_gateway_key in get_listener_port_manager().take_affected_gateways(&gateway_key) {
+            ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
+            tracing::info!(
+                gateway = %gateway_key,
+                conflicting_gateway = %conflicting_gateway_key,
+                "Requeue affected Gateway for Conflicted status update"
+            );
         }
 
         // Requeue routes when listener hostnames or ports actually changed.
@@ -253,15 +288,16 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         let listeners = gateway.spec.listeners.as_deref().unwrap_or_default();
 
-        let current_hostnames: Vec<String> = listeners
-            .iter()
-            .filter_map(|l| l.hostname.clone())
-            .collect();
+        let current_hostnames: Vec<String> = listeners.iter().filter_map(|l| l.hostname.clone()).collect();
         let current_ports: Vec<i32> = listeners.iter().map(|l| l.port).collect();
 
         let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
         let ports_changed = route_index.update_gateway_ports(&gateway_key, current_ports);
 
+        // Only requeue referencing routes when listener hostnames or ports
+        // actually changed. Previously this was unconditional, causing every
+        // attached-route-count update to fan out and reprocess all routes on
+        // the Gateway (e.g. adding 1 route would requeue the other 99).
         if hostnames_changed || ports_changed {
             let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
             if !referencing_routes.is_empty() {
@@ -270,16 +306,21 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     route_count = referencing_routes.len(),
                     hostnames_changed,
                     ports_changed,
-                    "Listener config changed, requeue referencing routes"
+                    "Gateway listener config changed, requeue referencing routes"
                 );
                 for (route_kind, route_key) in referencing_routes {
-                    ctx.requeue(route_kind.as_str(), route_key);
+                    ctx.requeue(route_kind.as_str(), route_key).await;
                 }
             }
+        } else {
+            tracing::trace!(
+                gateway = %gateway_key,
+                "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
+            );
         }
     }
 
-    fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
+    async fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
@@ -298,16 +339,14 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         get_global_cross_ns_ref_manager().clear_resource_refs(&cross_ns_ref);
 
-        // Get conflicting gateways BEFORE unregistering (they need to be requeued)
-        let conflicting_gateways = get_listener_port_manager().get_conflicting_gateways(&gateway_key);
-
-        // Clear ListenerPortManager registration
-        get_listener_port_manager().unregister_gateway(&gateway_key);
+        // Clear ListenerPortManager registration and requeue only those Gateways
+        // whose conflict status may change as a result.
+        let conflicting_gateways = get_listener_port_manager().unregister_gateway_and_get_affected(&gateway_key);
 
         // Requeue previously conflicting Gateways so they can update their Conflicted status
         // (change from Conflicted=True to Conflicted=False)
         for conflicting_gateway_key in conflicting_gateways {
-            ctx.requeue("Gateway", conflicting_gateway_key.clone());
+            ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
             tracing::info!(
                 deleted_gateway = %gateway_key,
                 conflicting_gateway = %conflicting_gateway_key,
@@ -396,6 +435,19 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
+        // Gateway-level ResolvedRefs (Gateway API v1.5): indicates whether non-Listener
+        // object references (e.g. infrastructure, backendTLS) on the Gateway are resolved.
+        // Currently no such references exist in the spec, so this is always True.
+        {
+            let cond = condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "All gateway-level references resolved",
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        }
+
         // ListenersNotValid: True if any listener has port conflicts
         if !conflicts.is_empty() {
             let conflicting_names: Vec<&String> = conflicts.keys().collect();
@@ -410,19 +462,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             // Remove ListenersNotValid condition if no conflicts
             conditions.retain(|c| c.type_ != condition_types::LISTENERS_NOT_VALID);
         }
-
-        // Programmed: Always True after parsing (configuration accepted)
-        let programmed = condition_true(
-            condition_types::PROGRAMMED,
-            "Programmed",
-            "Gateway configuration programmed",
-            generation,
-        );
-        update_gateway_condition(conditions, programmed);
-
-        // Ready: True (data plane ready)
-        let ready = condition_true(condition_types::READY, "Ready", "Gateway is ready", generation);
-        update_gateway_condition(conditions, ready);
 
         // Update listener statuses using pre-computed info
         if !listener_infos.is_empty() {
@@ -621,56 +660,7 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, resolved);
     }
 
-    // Programmed: False if conflicted or has unresolved refs
-    if is_conflicted {
-        let programmed = condition_false(
-            condition_types::PROGRAMMED,
-            condition_reasons::LISTENER_CONFLICT,
-            "Listener not programmed due to port conflict",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, programmed);
-    } else if has_unresolved_refs {
-        let programmed = condition_false(
-            condition_types::PROGRAMMED,
-            condition_reasons::INVALID,
-            "Listener not programmed due to unresolved references",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, programmed);
-    } else {
-        let programmed = condition_true(
-            condition_types::PROGRAMMED,
-            condition_reasons::PROGRAMMED,
-            "Listener configuration programmed",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, programmed);
-    }
-
-    // Ready: False if conflicted or has unresolved refs
-    if is_conflicted || has_unresolved_refs {
-        let reason = if is_conflicted {
-            condition_reasons::LISTENER_CONFLICT
-        } else {
-            condition_reasons::PENDING
-        };
-        let msg = if is_conflicted {
-            "Listener not ready due to port conflict".to_string()
-        } else {
-            "Listener not ready due to unresolved references".to_string()
-        };
-        let ready = condition_false(condition_types::READY, reason, msg, generation);
-        update_gateway_condition(&mut ls.conditions, ready);
-    } else {
-        let ready = condition_true(
-            condition_types::READY,
-            condition_reasons::READY,
-            "Listener is ready",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, ready);
-    }
+    let _ = is_conflicted;
 }
 
 fn is_valid_pem(data: &[u8]) -> bool {
@@ -799,6 +789,81 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
                     namespace: cert_ns.to_string(),
                     name: cert_ref.name.clone(),
                 });
+            }
+        }
+    }
+
+    // Validate frontend validation CA certificate refs
+    if let Some(ref fv) = tls.frontend_validation {
+        if let Some(ca_refs) = &fv.ca_certificate_refs {
+            for ca_ref in ca_refs {
+                let ca_kind = ca_ref.kind.as_deref().unwrap_or("Secret");
+                if ca_kind != "Secret" {
+                    errors.push(GatewayResolvedRefsError::InvalidCertRef {
+                        kind: format!("frontendValidation: unsupported kind '{}'", ca_kind),
+                    });
+                    continue;
+                }
+
+                let ca_group = ca_ref.group.as_deref().unwrap_or("");
+                if !is_core_api_group(ca_group) {
+                    errors.push(GatewayResolvedRefsError::InvalidCertRef {
+                        kind: format!("frontendValidation: unsupported group '{}'", ca_group),
+                    });
+                    continue;
+                }
+
+                let ca_ns = ca_ref
+                    .namespace
+                    .as_deref()
+                    .or(gateway.metadata.namespace.as_deref())
+                    .unwrap_or("default");
+
+                match get_secret(Some(ca_ns), &ca_ref.name) {
+                    None => {
+                        errors.push(GatewayResolvedRefsError::SecretNotFound {
+                            namespace: ca_ns.to_string(),
+                            name: ca_ref.name.clone(),
+                        });
+                    }
+                    Some(secret) => {
+                        use crate::types::constants::secret_keys::tls;
+                        if let Some(data) = &secret.data {
+                            if !data.contains_key(tls::CA_CERT) {
+                                errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                    namespace: ca_ns.to_string(),
+                                    name: ca_ref.name.clone(),
+                                    reason: format!("missing required key '{}'", tls::CA_CERT),
+                                });
+                            }
+                        } else {
+                            errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                namespace: ca_ns.to_string(),
+                                name: ca_ref.name.clone(),
+                                reason: "Secret has no data".to_string(),
+                            });
+                        }
+                    }
+                }
+
+                // Cross-namespace ReferenceGrant check for frontend CA refs
+                if gateway_ns != ca_ns && is_reference_grant_validation_enabled() {
+                    let allowed = get_global_reference_grant_store().check_reference_allowed(
+                        gateway_ns,
+                        "gateway.networking.k8s.io",
+                        "Gateway",
+                        ca_ns,
+                        "",
+                        "Secret",
+                        Some(&ca_ref.name),
+                    );
+                    if !allowed {
+                        errors.push(GatewayResolvedRefsError::RefNotPermitted {
+                            namespace: ca_ns.to_string(),
+                            name: ca_ref.name.clone(),
+                        });
+                    }
+                }
             }
         }
     }

@@ -1,14 +1,14 @@
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
-use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::observe::logs::ssl_log::log_ssl;
+use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::runtime::matching::{match_gateway_tls_with_port, GatewayTlsEntry};
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
 use crate::core::gateway::tls::store::cert_matcher::match_sni_with_port;
-use crate::types::constants::secret_keys::tls::{CERT, KEY};
+use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
-use crate::types::{MatchedInfo, ResourceMeta, TlsConnMeta};
+use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use anyhow::anyhow;
 use anyhow::Result;
 use pingora_core::listeners::tls::TlsSettings;
@@ -171,7 +171,7 @@ mod ssl_ctx_ex_data {
         let _ = log_meta
             .log
             .get_or_insert_with(LogBuffer::new)
-                    .push("no boringssl exdata");
+            .push("no boringssl exdata");
         crate::core::gateway::observe::logs::ssl_log::log_ssl(&log_meta);
         false
     }
@@ -231,7 +231,11 @@ impl TlsAccept for TlsCallback {
 
         // 3. Store SslCtx for handshake_complete_callback
         if !store_ssl_ctx(ssl, &ssl_ctx) {
-            let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("store ctx failed");
+            let _ = ssl_ctx
+                .meta
+                .log
+                .get_or_insert_with(LogBuffer::new)
+                .push("store ctx failed");
         }
     }
 
@@ -242,6 +246,9 @@ impl TlsAccept for TlsCallback {
                 if edgion_tls.is_mtls_enabled() && edgion_tls.should_expose_client_cert() {
                     ssl_ctx.meta.client_cert_info = extract_client_cert_info(ssl);
                 }
+            } else if ssl_ctx.meta.is_mtls {
+                // Gateway frontendValidation mTLS: always extract client cert info
+                ssl_ctx.meta.client_cert_info = extract_client_cert_info(ssl);
             }
 
             ssl_ctx.meta.handshake_complete_time = Some(ssl_ctx.meta.start_at.elapsed().as_millis() as u64);
@@ -318,12 +325,7 @@ impl TlsCallback {
     ///
     /// `apply_edgion_tls_cert` / `apply_gateway_tls_cert` handle ssl_log
     /// population internally (cert, mtls, error fields).
-    fn match_and_apply_cert(
-        &self,
-        ssl: &mut SslRef,
-        sni: &str,
-        ssl_ctx: &mut SslCtx,
-    ) -> bool {
+    fn match_and_apply_cert(&self, ssl: &mut SslRef, sni: &str, ssl_ctx: &mut SslCtx) -> bool {
         // Layer 1: EdgionTls (port-aware)
         if let Some(edgion_tls) = match_sni_with_port(self.port, sni) {
             ssl_ctx.meta.is_mtls = edgion_tls.spec.client_auth.is_some();
@@ -347,9 +349,11 @@ impl TlsCallback {
         let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
         let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
         ssl_ctx.meta.matched = Some(MatchedInfo {
-            kind: "EdgionTls".to_string(),
-            ns: ns.to_string(),
-            name: name.to_string(),
+            rsc: Rsc {
+                kind: "EdgionTls".to_string(),
+                ns: ns.to_string(),
+                name: name.to_string(),
+            },
             section: None,
             sv: edgion_tls.get_sync_version(),
         });
@@ -420,9 +424,11 @@ impl TlsCallback {
     /// Apply certificate from Gateway Listener TLS configuration (from Secret)
     fn apply_gateway_tls_cert(&self, ssl: &mut SslRef, gateway_tls: &GatewayTlsEntry, ssl_ctx: &mut SslCtx) {
         ssl_ctx.meta.matched = Some(MatchedInfo {
-            kind: "Gateway".to_string(),
-            ns: gateway_tls.gateway_namespace.clone(),
-            name: gateway_tls.gateway_name.clone(),
+            rsc: Rsc {
+                kind: "Gateway".to_string(),
+                ns: gateway_tls.gateway_namespace.clone(),
+                name: gateway_tls.gateway_name.clone(),
+            },
             section: Some(gateway_tls.listener_name.clone()),
             sv: 0,
         });
@@ -438,6 +444,26 @@ impl TlsCallback {
         };
 
         self.apply_secret_to_ssl(ssl, &secret, ssl_ctx);
+
+        // Skip mTLS if server cert setup failed
+        if ssl_ctx.meta.err_log.is_some() {
+            return;
+        }
+
+        // Apply frontend validation mTLS if configured
+        if gateway_tls.frontend_validation.is_some() {
+            if let Err(e) = self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
+                tracing::error!(
+                    gateway = %gateway_tls.gateway_name,
+                    listener = %gateway_tls.listener_name,
+                    error = %e,
+                    "Failed to configure frontendValidation mTLS"
+                );
+                ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e));
+            } else {
+                ssl_ctx.meta.is_mtls = true;
+            }
+        }
     }
 
     /// Helper: Get Secret from global SecretStore (fallback for legacy behavior)
@@ -466,12 +492,7 @@ impl TlsCallback {
     }
 
     /// Helper: Extract cert/key from Secret and apply to SSL
-    fn apply_secret_to_ssl(
-        &self,
-        ssl: &mut SslRef,
-        secret: &k8s_openapi::api::core::v1::Secret,
-        ssl_ctx: &mut SslCtx,
-    ) {
+    fn apply_secret_to_ssl(&self, ssl: &mut SslRef, secret: &k8s_openapi::api::core::v1::Secret, ssl_ctx: &mut SslCtx) {
         let data = match &secret.data {
             Some(d) => d,
             None => {
@@ -531,7 +552,61 @@ impl TlsCallback {
             ssl_ctx.meta.err_log = Some(format!("gw: set key: {e}"));
             return;
         }
+    }
 
+    /// Configure mTLS for Gateway standard frontendValidation.
+    /// Uses resolved CA secrets to verify client certificates.
+    fn configure_gateway_frontend_mtls(
+        &self,
+        ssl: &mut SslRef,
+        gateway_tls: &GatewayTlsEntry,
+    ) -> Result<(), Box<PingoraError>> {
+        let ca_secrets = match &gateway_tls.resolved_frontend_ca_secrets {
+            Some(secrets) if !secrets.is_empty() => secrets,
+            _ => return Ok(()),
+        };
+
+        let mut store_builder = X509StoreBuilder::new().map_err(|e| {
+            PingoraError::explain(ErrorType::InvalidCert, format!("Failed to create X509 store: {}", e))
+        })?;
+
+        for secret in ca_secrets {
+            if let Some(data) = &secret.data {
+                if let Some(ca_bytes) = data.get(CA_CERT) {
+                    let ca_pem = std::str::from_utf8(&ca_bytes.0).map_err(|e| {
+                        PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA cert UTF-8: {}", e))
+                    })?;
+                    let ca_cert = X509::from_pem(ca_pem.as_bytes()).map_err(|e| {
+                        PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA certificate PEM: {}", e))
+                    })?;
+                    store_builder.add_cert(ca_cert).map_err(|e| {
+                        PingoraError::explain(ErrorType::InvalidCert, format!("Failed to add CA cert to store: {}", e))
+                    })?;
+                }
+            }
+        }
+
+        let store = store_builder.build();
+        ssl.set_verify_cert_store(store)
+            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
+
+        let verify_mode = SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT;
+        ssl.set_verify(verify_mode);
+
+        #[cfg(feature = "boringssl")]
+        {
+            ssl.set_verify_depth(10);
+        }
+
+        tracing::debug!(
+            port = self.port,
+            gateway_ns = %gateway_tls.gateway_namespace,
+            gateway = %gateway_tls.gateway_name,
+            listener = %gateway_tls.listener_name,
+            "Configured Gateway frontendValidation mTLS"
+        );
+
+        Ok(())
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification
@@ -655,7 +730,6 @@ impl TlsCallback {
                     return Ok(());
                 }
             }
-
         }
 
         #[cfg(not(feature = "boringssl"))]

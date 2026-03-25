@@ -53,8 +53,7 @@ cargo fmt --all
 ### Running Integration Tests
 
 ```bash
-cd examples/testing
-./run_integration_test.sh
+./examples/test/scripts/integration/run_integration.sh
 ```
 
 ## How to Contribute
@@ -140,7 +139,7 @@ src/
 ### Testing
 
 - Write unit tests in the same file using `#[cfg(test)]`
-- Integration tests go in `examples/testing/`
+- Local integration manifests live under `examples/test/conf/`, and Rust test code lives under `examples/code/`
 - Aim for meaningful test coverage
 
 ## Commit Message Guidelines
@@ -184,4 +183,3 @@ refactor(plugins): simplify filter chain logic
 - Check existing [Documentation](docs/)
 
 Thank you for contributing! 🚀
-

@@ -499,7 +499,7 @@ spec:
 如果遇到问题：
 
 1. 检查浏览器控制台的错误信息
-2. 查看网关日志：`logs/access.log` 和 `logs/edgion-gateway.log`
+2. 查看网关日志：`logs/edgion_access.log` 和 `logs/edgion-gateway.log`
 3. 参考本文档的常见问题部分
 4. 提交 Issue 到 GitHub
 

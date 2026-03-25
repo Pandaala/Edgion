@@ -80,5 +80,5 @@ This section is intended for application developers and covers how to configure 
 
 ### Advanced Features
 
-- Canary Release (coming soon)
-- Blue-Green Deployment (coming soon)
+- Canary Release: start with [Weight Configuration](./http-route/backends/weight.md)
+- Blue-Green Deployment: start with [Weight Configuration](./http-route/backends/weight.md)

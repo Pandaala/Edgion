@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cb-test
+  namespace: edgion-default
+  annotations:
+    edgion.io/circuit-breaker: |
+      consecutiveErrors: 3
+      ejectionSeconds: 3
+      maxEjectionPercent: 0
+spec:
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

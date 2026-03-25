@@ -9,6 +9,28 @@ pub enum ProbeError {
     UnexpectedStatus(u16),
     RequestFailed(reqwest::Error),
     InvalidPath,
+    GrpcConnectionFailed(tonic::transport::Error),
+    GrpcNotServing(i32),
+    GrpcCallFailed(tonic::Status),
+}
+
+/// gRPC Health Check protocol structures (grpc.health.v1).
+/// Hand-written prost definitions — no proto file needed for this standard protocol.
+mod grpc_health_proto {
+    #[derive(prost::Message)]
+    pub struct HealthCheckRequest {
+        #[prost(string, tag = "1")]
+        pub service: String,
+    }
+
+    #[derive(prost::Message)]
+    pub struct HealthCheckResponse {
+        #[prost(int32, tag = "1")]
+        pub status: i32,
+    }
+
+    /// ServingStatus.SERVING
+    pub const SERVING: i32 = 1;
 }
 
 /// Build reusable HTTP probe client with per-probe timeout.
@@ -68,6 +90,56 @@ pub async fn probe_http(
 ) -> Result<(), ProbeError> {
     let client = build_http_probe_client(timeout).map_err(ProbeError::RequestFailed)?;
     probe_http_with_client(&client, addr, path, port_override, host, expected_statuses).await
+}
+
+/// gRPC Health Check probe (grpc.health.v1.Health/Check).
+pub async fn probe_grpc(
+    addr: SocketAddr,
+    port_override: Option<u16>,
+    service_name: &str,
+    timeout: Duration,
+) -> Result<(), ProbeError> {
+    use grpc_health_proto::{HealthCheckRequest, HealthCheckResponse, SERVING};
+    use http::uri::Uri;
+    use tonic::codec::ProstCodec;
+
+    let port = port_override.unwrap_or(addr.port());
+    let uri: Uri = format!("http://{}:{}", addr.ip(), port)
+        .parse()
+        .expect("valid URI from SocketAddr");
+
+    let channel = tokio::time::timeout(
+        timeout,
+        tonic::transport::Endpoint::from(uri)
+            .timeout(timeout)
+            .connect_timeout(timeout)
+            .connect(),
+    )
+    .await
+    .map_err(|_| ProbeError::Timeout)?
+    .map_err(ProbeError::GrpcConnectionFailed)?;
+
+    let mut grpc_client = tonic::client::Grpc::new(channel);
+    grpc_client.ready().await.map_err(ProbeError::GrpcConnectionFailed)?;
+
+    let request = tonic::Request::new(HealthCheckRequest {
+        service: service_name.to_string(),
+    });
+
+    let path = http::uri::PathAndQuery::from_static("/grpc.health.v1.Health/Check");
+    let codec: ProstCodec<HealthCheckRequest, HealthCheckResponse> = ProstCodec::default();
+
+    let response = tokio::time::timeout(timeout, grpc_client.unary(request, path, codec))
+        .await
+        .map_err(|_| ProbeError::Timeout)?
+        .map_err(ProbeError::GrpcCallFailed)?;
+
+    let status = response.into_inner().status;
+    if status == SERVING {
+        Ok(())
+    } else {
+        Err(ProbeError::GrpcNotServing(status))
+    }
 }
 
 /// TCP active health probe.

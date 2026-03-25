@@ -15,14 +15,14 @@ use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::select_roundrobin_backend;
-use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::logs::LogBuffer;
+use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
 use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::{MatchedInfo, ResourceMeta, TlsConnMeta};
+use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use serde::Serialize;
 
 fn is_zero_u64(v: &u64) -> bool {
@@ -79,7 +79,7 @@ pub struct TlsContext {
 }
 
 impl TlsContext {
-    fn new(listener_port: u16, client_addr: String, client_port: u16) -> Self {
+    pub(super) fn new(listener_port: u16, client_addr: String, client_port: u16) -> Self {
         Self {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -100,11 +100,11 @@ impl TlsContext {
         }
     }
 
-    fn push_log(&mut self, message: &str) {
+    pub(super) fn push_log(&mut self, message: &str) {
         let _ = self.log.get_or_insert_with(LogBuffer::new).push(message);
     }
 
-    fn current_upstream_mut(&mut self) -> Option<&mut TlsUpstreamInfo> {
+    pub(super) fn current_upstream_mut(&mut self) -> Option<&mut TlsUpstreamInfo> {
         self.upstream_info.last_mut()
     }
 }
@@ -197,9 +197,11 @@ impl EdgionTlsTcpProxy {
         };
 
         ctx.matched = Some(MatchedInfo {
-            kind: "TLSRoute".to_string(),
-            ns: tls_route.metadata.namespace.clone().unwrap_or_default(),
-            name: tls_route.metadata.name.clone().unwrap_or_default(),
+            rsc: Rsc {
+                kind: "TLSRoute".to_string(),
+                ns: tls_route.metadata.namespace.clone().unwrap_or_default(),
+                name: tls_route.metadata.name.clone().unwrap_or_default(),
+            },
             section: None,
             sv: tls_route.get_sync_version(),
         });
@@ -260,9 +262,11 @@ impl EdgionTlsTcpProxy {
                 addr: parsed_upstream_addr.as_ref().map(|addr| addr.ip().to_string()),
                 port: parsed_upstream_addr.as_ref().map(|addr| addr.port()),
                 backend: Some(MatchedInfo {
-                    kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
-                    ns: namespace.to_string(),
-                    name: backend_ref.name.clone(),
+                    rsc: Rsc {
+                        kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
+                        ns: namespace.to_string(),
+                        name: backend_ref.name.clone(),
+                    },
                     section: None,
                     sv: 0,
                 }),
@@ -337,9 +341,9 @@ impl EdgionTlsTcpProxy {
         };
 
         let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
-        let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
-            std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
-        });
+        let dst_addr: std::net::SocketAddr = upstream_addr_str
+            .parse()
+            .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
         let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
         builder.add_authority(sni);
         let pp2_header = builder.build();
@@ -393,8 +397,15 @@ impl EdgionTlsTcpProxy {
                 listener_port: self.listener_port,
                 sni: sni.to_string(),
                 tls_id: ctx.tls_id.clone(),
-                matched_route_ns: ctx.matched.as_ref().map(|m| m.ns.clone()).unwrap_or_default(),
-                matched_route_name: ctx.matched.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
+                rsc: ctx
+                    .matched
+                    .as_ref()
+                    .map(|m| m.rsc.clone())
+                    .unwrap_or_else(|| crate::types::Rsc {
+                        kind: "TLSRoute".to_string(),
+                        ns: String::new(),
+                        name: String::new(),
+                    }),
                 is_mtls: ctx.is_mtls,
             };
             return match tls_runtime.run(&tls_ctx).await {

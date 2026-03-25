@@ -270,10 +270,36 @@ impl EdgionControllerCli {
             }
         });
 
-        // 6. Load CRD schemas for validation (skip in K8s mode)
+        // 6. Start federation client if center config is present.
+        // Must be after conf_mgr.start() so PROCESSOR_REGISTRY is populated.
+        let _fed_shutdown_tx = if let Some(center_config) = config.center.clone() {
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+            let center_api: Arc<dyn crate::core::controller::conf_mgr::conf_center::traits::CenterApi> =
+                conf_mgr.clone();
+
+            let kinds: Vec<String> = crate::core::controller::conf_mgr::processor_registry::PROCESSOR_REGISTRY
+                .all_kinds()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            tokio::spawn(crate::core::controller::fed_sync::fed_client::run(
+                center_config,
+                center_api,
+                kinds,
+                shutdown_rx,
+            ));
+
+            Some(shutdown_tx) // kept alive for duration of process
+        } else {
+            None
+        };
+
+        // 7. Load CRD schemas for validation (skip in K8s mode)
         let schema_validator = Self::load_schemas(config.is_k8s_mode());
 
-        // 7. Parse addresses and start services with shutdown support
+        // 8. Parse addresses and start services with shutdown support
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
         let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:8080")?;

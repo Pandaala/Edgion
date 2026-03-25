@@ -391,9 +391,9 @@ start_gateway() {
     log_section "Start edgion-gateway"
     local gateway_rust_log="info,pingora_proxy=error,pingora_core=error"
     
-    EDGION_ACCESS_LOG="${LOG_DIR}/access.log" \
+    EDGION_ACCESS_LOG="${LOG_DIR}/edgion_access.log" \
     RUST_LOG="${gateway_rust_log}" \
-    EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log" \
+    EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --work-dir "${WORK_DIR}" \
@@ -729,7 +729,7 @@ Logs:
   - ${LOG_DIR}/test_server.log
   - ${LOG_DIR}/controller.log
   - ${LOG_DIR}/gateway.log
-  - ${LOG_DIR}/access.log
+  - ${LOG_DIR}/edgion_access.log
 
 Generated Secrets:
   - ${GENERATED_SECRET_DIR}

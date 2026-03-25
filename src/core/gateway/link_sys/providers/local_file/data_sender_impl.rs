@@ -43,18 +43,15 @@ impl DataSender<String> for LocalFileWriter {
             let mut current_size: u64 = 0;
             let mut size_index: u32 = 0;
 
-            // Determine initial file path
-            let mut current_path = match &strategy {
-                RotationStrategy::Size(_) => {
-                    // For size strategy, always start with base file (index 0)
-                    // Get existing file size if resuming
-                    if base_path.exists() {
-                        current_size = fs::metadata(&base_path).map(|m| m.len()).unwrap_or(0);
-                    }
-                    base_path.clone()
+            // Active file always uses the base path (nginx-style).
+            // On time-based rotation, the old file is renamed to include
+            // a date/hour suffix and a new base-path file is opened.
+            let mut current_path = base_path.clone();
+            if let RotationStrategy::Size(_) = &strategy {
+                if base_path.exists() {
+                    current_size = fs::metadata(&base_path).map(|m| m.len()).unwrap_or(0);
                 }
-                _ => get_rotated_path(&base_path, &strategy),
-            };
+            }
 
             // Open initial file with buffered writer for better performance
             let mut file = match open_log_file(&current_path) {
@@ -108,17 +105,34 @@ impl DataSender<String> for LocalFileWriter {
                             let new_key = get_rotation_key(&strategy);
                             if new_key != current_key {
                                 let _ = file.flush();
+                                // Rename current file to date-suffixed archive
+                                let archive_path = get_rotated_path(&base_path, &strategy);
+                                if current_path.exists() && !archive_path.exists() {
+                                    if let Err(e) = fs::rename(&current_path, &archive_path) {
+                                        tracing::warn!(
+                                            error = %e,
+                                            from = %current_path.display(),
+                                            to = %archive_path.display(),
+                                            "Failed to rename log for rotation, continuing with base path"
+                                        );
+                                    } else {
+                                        tracing::info!(
+                                            archived = %archive_path.display(),
+                                            "Log file archived on rotation"
+                                        );
+                                    }
+                                }
                                 current_key = new_key;
-                                current_path = get_rotated_path(&base_path, &strategy);
+                                current_path = base_path.clone();
 
                                 match open_log_file(&current_path) {
                                     Ok(f) => {
                                         file = BufWriter::new(f);
-                                        tracing::info!(path = %current_path.display(), "Log file rotated");
+                                        tracing::info!(path = %current_path.display(), "New log file opened after rotation");
                                         cleanup_old_files(&base_path, max_files);
                                     }
                                     Err(e) => {
-                                        tracing::error!(error = %e, path = %current_path.display(), "Failed to rotate log file");
+                                        tracing::error!(error = %e, path = %current_path.display(), "Failed to open new log file after rotation");
                                     }
                                 }
                             }
@@ -177,7 +191,7 @@ impl DataSender<String> for LocalFileWriter {
                     LogType::Access => global_metrics().access_log_dropped(),
                     LogType::Ssl => global_metrics().ssl_log_dropped(),
                     LogType::Tcp => global_metrics().tcp_log_dropped(),
-                    LogType::Tls => global_metrics().tcp_log_dropped(),
+                    LogType::Tls => global_metrics().tls_log_dropped(),
                     LogType::Udp => global_metrics().udp_log_dropped(),
                 }
             }

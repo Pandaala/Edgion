@@ -67,31 +67,52 @@ impl AccessLogEntry {
     /// Get the matched route namespace
     pub fn route_namespace(&self) -> Option<&str> {
         self.data
-            .get("matched_route")
-            .and_then(|mr| mr.get("rns"))
+            .get("match_info")
+            .and_then(|mi| mi.get("rsc"))
+            .and_then(|rsc| rsc.get("ns"))
             .and_then(|v| v.as_str())
     }
 
     /// Get the matched route name
     pub fn route_name(&self) -> Option<&str> {
         self.data
-            .get("matched_route")
-            .and_then(|mr| mr.get("rn"))
+            .get("match_info")
+            .and_then(|mi| mi.get("rsc"))
+            .and_then(|rsc| rsc.get("name"))
+            .and_then(|v| v.as_str())
+    }
+
+    /// Get the matched route kind (e.g., "HTTPRoute", "GRPCRoute")
+    pub fn route_kind(&self) -> Option<&str> {
+        self.data
+            .get("match_info")
+            .and_then(|mi| mi.get("rsc"))
+            .and_then(|rsc| rsc.get("kind"))
             .and_then(|v| v.as_str())
     }
 
     /// Get backend name
     pub fn backend_name(&self) -> Option<&str> {
         self.data
-            .get("backend")
-            .and_then(|b| b.get("name"))
+            .get("backend_context")
+            .and_then(|bc| bc.get("rsc"))
+            .and_then(|rsc| rsc.get("name"))
+            .and_then(|v| v.as_str())
+    }
+
+    /// Get backend namespace
+    pub fn backend_namespace(&self) -> Option<&str> {
+        self.data
+            .get("backend_context")
+            .and_then(|bc| bc.get("rsc"))
+            .and_then(|rsc| rsc.get("ns"))
             .and_then(|v| v.as_str())
     }
 
     /// Get the number of upstream connection attempts
     pub fn upstream_count(&self) -> usize {
         self.data
-            .get("backend")
+            .get("backend_context")
             .and_then(|b| b.get("upstreams"))
             .and_then(|u| u.as_array())
             .map(|a| a.len())

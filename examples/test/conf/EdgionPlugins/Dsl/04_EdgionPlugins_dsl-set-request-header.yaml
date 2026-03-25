@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-set-request-header
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "set-request-header"
+        source: |
+          let user_id = req.header("X-User-Id")
+          if user_id != nil {
+              req.set_header("X-Processed-User", "uid-" + user_id)
+              resp.set_header("X-Processed-User", "uid-" + user_id)
+          }
+        errorPolicy: deny

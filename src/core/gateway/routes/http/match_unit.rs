@@ -37,24 +37,32 @@ impl HttpRouteRuleUnit {
     /// Pre-compile RegularExpression regexes for header and query param matchers.
     /// Call once at route creation time; the returned vecs are positionally aligned
     /// with the `headers` / `query_params` slices in `HTTPRouteMatch`.
-    pub fn compile_match_regexes(match_item: &crate::types::HTTPRouteMatch) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
+    pub fn compile_match_regexes(
+        match_item: &crate::types::HTTPRouteMatch,
+    ) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
         let header_regexes = match_item.headers.as_ref().map_or_else(Vec::new, |headers| {
-            headers.iter().map(|hm| {
-                if hm.match_type.as_deref() == Some("RegularExpression") {
-                    Regex::new(&hm.value).ok().map(|r| Arc::new(r))
-                } else {
-                    None
-                }
-            }).collect()
+            headers
+                .iter()
+                .map(|hm| {
+                    if hm.match_type.as_deref() == Some("RegularExpression") {
+                        Regex::new(&hm.value).ok().map(|r| Arc::new(r))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         });
         let query_regexes = match_item.query_params.as_ref().map_or_else(Vec::new, |params| {
-            params.iter().map(|qm| {
-                if qm.match_type.as_deref() == Some("RegularExpression") {
-                    Regex::new(&qm.value).ok().map(|r| Arc::new(r))
-                } else {
-                    None
-                }
-            }).collect()
+            params
+                .iter()
+                .map(|qm| {
+                    if qm.match_type.as_deref() == Some("RegularExpression") {
+                        Regex::new(&qm.value).ok().map(|r| Arc::new(r))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         });
         (header_regexes, query_regexes)
     }
@@ -101,7 +109,7 @@ impl HttpRouteRuleUnit {
 
     /// Get route identifier
     pub fn identifier(&self) -> String {
-        format!("{}/{}", self.matched_info.rns, self.matched_info.rn)
+        format!("{}/{}", self.matched_info.rsc.ns, self.matched_info.rsc.name)
     }
 
     /// Parse query string (already extracted by Pingora)
@@ -249,9 +257,9 @@ impl HttpRouteRuleUnit {
                 parent_refs,
                 gateway_infos,
                 &ctx.request_info.hostname,
-                &matched_info.rns,
+                &matched_info.rsc.ns,
                 "HTTPRoute",
-                &matched_info.rn,
+                &matched_info.rsc.name,
             ) {
                 Some(gi) => gi,
                 None => return Ok(None),

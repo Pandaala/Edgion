@@ -307,6 +307,1058 @@ impl DslTestSuite {
             },
         )
     }
+
+    // ==================== 场景 4: Set Request Header ====================
+
+    fn test_set_request_header_with_user_id() -> TestCase {
+        TestCase::new(
+            "dsl_set_request_header_with_user_id",
+            "DSL: X-User-Id: 42 → X-Processed-User: uid-42 in response header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-set-request-header/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-set-request-header.example.com")
+                        .header("X-User-Id", "42")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let processed = resp
+                                .headers()
+                                .get("x-processed-user")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && processed == "uid-42" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Processed-User: uid-42 in response".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-processed-user='{}'", status, processed),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_set_request_header_without_user_id() -> TestCase {
+        TestCase::new(
+            "dsl_set_request_header_without_user_id",
+            "DSL: no X-User-Id → no X-Processed-User in response",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-set-request-header/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-set-request-header.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let has_processed = resp.headers().contains_key("x-processed-user");
+                            if status == 200 && !has_processed {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "No X-Processed-User as expected".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_processed_user={}", status, has_processed),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 5: Deny by Header ====================
+
+    fn test_deny_by_header_blocked() -> TestCase {
+        TestCase::new(
+            "dsl_deny_by_header_blocked",
+            "DSL: X-Block: 1 → 403 blocked",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-deny-by-header/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-deny-by-header.example.com")
+                        .header("X-Block", "1")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 403 && body.contains("blocked") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 403/blocked, got {}/{}", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_deny_by_header_allowed() -> TestCase {
+        TestCase::new(
+            "dsl_deny_by_header_allowed",
+            "DSL: no X-Block → 200 pass through",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-deny-by-header/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-deny-by-header.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 6: Cookie Read ====================
+
+    fn test_cookie_read_present() -> TestCase {
+        TestCase::new(
+            "dsl_cookie_read_present",
+            "DSL: session_id=abc123 cookie → X-Session: abc123 in response header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-cookie-read/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-cookie-read.example.com")
+                        .header("Cookie", "session_id=abc123")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let session = resp
+                                .headers()
+                                .get("x-session")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && session == "abc123" {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-session='{}'", status, session),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_cookie_read_absent() -> TestCase {
+        TestCase::new(
+            "dsl_cookie_read_absent",
+            "DSL: no session_id cookie → X-Session: anonymous in response header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-cookie-read/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-cookie-read.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let session = resp
+                                .headers()
+                                .get("x-session")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && session == "anonymous" {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-session='{}'", status, session),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 7: Ctx Chain ====================
+
+    fn test_ctx_chain_with_tenant() -> TestCase {
+        TestCase::new(
+            "dsl_ctx_chain_with_tenant",
+            "DSL ctx chain: X-Tenant → X-Internal-Tenant + X-Pipeline in response headers",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-ctx-chain/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-ctx-chain.example.com")
+                        .header("X-Tenant", "acme")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let internal = resp
+                                .headers()
+                                .get("x-internal-tenant")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let pipeline = resp
+                                .headers()
+                                .get("x-pipeline")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && internal == "acme" && pipeline == "dsl-ok" {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} x-internal-tenant='{}' x-pipeline='{}'",
+                                        status, internal, pipeline
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_ctx_chain_without_tenant() -> TestCase {
+        TestCase::new(
+            "dsl_ctx_chain_without_tenant",
+            "DSL ctx chain: no X-Tenant → no X-Internal-Tenant, no X-Pipeline in response",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-ctx-chain/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-ctx-chain.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let no_internal = !resp.headers().contains_key("x-internal-tenant");
+                            let no_pipeline = !resp.headers().contains_key("x-pipeline");
+                            if status == 200 && no_internal && no_pipeline {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} has_internal={} has_pipeline={}",
+                                        status, !no_internal, !no_pipeline
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 8: Multi Header Ops ====================
+
+    fn test_multi_header_ops() -> TestCase {
+        TestCase::new(
+            "dsl_multi_header_ops",
+            "DSL: set/append/remove/set_host verified via response headers",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-multi-header-ops/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-multi-header-ops.example.com")
+                        .header("User-Agent", "test-runner/1.0")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let x_set = resp.headers().get("x-set").and_then(|v| v.to_str().ok()).unwrap_or("");
+                            let x_multi = resp
+                                .headers()
+                                .get("x-multi")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let ua_removed = resp
+                                .headers()
+                                .get("x-ua-removed")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200
+                                && x_set == "value1"
+                                && x_multi.contains("first")
+                                && x_multi.contains("second")
+                                && ua_removed == "true"
+                            {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} x-set='{}' x-multi='{}' x-ua-removed='{}'",
+                                        status, x_set, x_multi, ua_removed
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 9: URI Rewrite ====================
+
+    fn test_uri_rewrite_v1() -> TestCase {
+        TestCase::new(
+            "dsl_uri_rewrite_v1",
+            "DSL: GET /v1/users → path rewritten (X-Rewritten: true)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-uri-rewrite/v1/users", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-uri-rewrite.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let rewritten = resp
+                                .headers()
+                                .get("x-rewritten")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let new_path = resp
+                                .headers()
+                                .get("x-new-path")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && rewritten == "true" && new_path.contains("/api/users") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} x-rewritten='{}' x-new-path='{}'",
+                                        status, rewritten, new_path
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_uri_rewrite_v2_unchanged() -> TestCase {
+        TestCase::new(
+            "dsl_uri_rewrite_v2_unchanged",
+            "DSL: GET /v2/items → path NOT rewritten (no X-Rewritten header)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-uri-rewrite/v2/items", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-uri-rewrite.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let has_rewritten = resp.headers().contains_key("x-rewritten");
+                            if status == 200 && !has_rewritten {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_rewritten={}", status, has_rewritten),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 10: SHA256 Sign ====================
+
+    fn test_sha256_sign() -> TestCase {
+        TestCase::new(
+            "dsl_sha256_sign",
+            "DSL: X-Token: hello → X-Token-Hash: sha256(hello) in response header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-sha256-sign/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-sha256-sign.example.com")
+                        .header("X-Token", "hello")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let hash = resp
+                                .headers()
+                                .get("x-token-hash")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+                            if status == 200 && hash == expected {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-token-hash='{}'", status, hash),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 11: Regex Extract ====================
+
+    fn test_regex_extract_chrome() -> TestCase {
+        TestCase::new(
+            "dsl_regex_extract_chrome",
+            "DSL: User-Agent Chrome/120 → X-Chrome-Ver in response header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-regex-extract/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-regex-extract.example.com")
+                        .header("User-Agent", "Mozilla/5.0 Chrome/120.0 Safari/537.36")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let chrome_ver = resp
+                                .headers()
+                                .get("x-chrome-ver")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && chrome_ver.contains("Chrome/120") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-chrome-ver='{}'", status, chrome_ver),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_regex_extract_no_chrome() -> TestCase {
+        TestCase::new(
+            "dsl_regex_extract_no_chrome",
+            "DSL: curl User-Agent → no X-Chrome-Ver in response",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-regex-extract/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-regex-extract.example.com")
+                        .header("User-Agent", "curl/7.0")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let has_chrome = resp.headers().contains_key("x-chrome-ver");
+                            if status == 200 && !has_chrome {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_chrome_ver={}", status, has_chrome),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 12: Response Inject ====================
+
+    fn test_response_inject() -> TestCase {
+        TestCase::new(
+            "dsl_response_inject",
+            "DSL upstreamResponseFilter: CORS headers injected in response",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-response-inject/health", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-response-inject.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let acao = resp
+                                .headers()
+                                .get("access-control-allow-origin")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let powered_by = resp
+                                .headers()
+                                .get("x-powered-by")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let vary = resp.headers().get("vary").and_then(|v| v.to_str().ok()).unwrap_or("");
+                            if status == 200 && acao == "*" && powered_by == "Edgion-DSL" && vary.contains("Origin") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} acao='{}' powered_by='{}' vary='{}'",
+                                        status, acao, powered_by, vary
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 13: Resp Status Conditional ====================
+
+    fn test_resp_status_404() -> TestCase {
+        TestCase::new(
+            "dsl_resp_status_404",
+            "DSL upstreamResponseFilter: 404 → X-Not-Found: true",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-resp-status-conditional/status/404",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-resp-status-conditional.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let not_found = resp
+                                .headers()
+                                .get("x-not-found")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 404 && not_found == "true" {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-not-found='{}'", status, not_found),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_resp_status_200_no_header() -> TestCase {
+        TestCase::new(
+            "dsl_resp_status_200_no_header",
+            "DSL upstreamResponseFilter: 200 → no X-Not-Found",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-resp-status-conditional/status/200",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-resp-status-conditional.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let has_not_found = resp.headers().contains_key("x-not-found");
+                            if status == 200 && !has_not_found {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} has_x_not_found={}", status, has_not_found),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 14: Deny with Body ====================
+
+    fn test_deny_with_body_no_auth() -> TestCase {
+        TestCase::new(
+            "dsl_deny_with_body_no_auth",
+            "DSL: no Authorization → 401 with JSON error body",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-deny-with-body/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-deny-with-body.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 401 && body.contains("unauthorized") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 401/unauthorized, got {}/{}", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_deny_with_body_wrong_method() -> TestCase {
+        TestCase::new(
+            "dsl_deny_with_body_wrong_method",
+            "DSL: Authorization + POST → 405 method not allowed",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-deny-with-body/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .post(url)
+                        .header("host", "dsl-deny-with-body.example.com")
+                        .header("Authorization", "Bearer token123")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 405 && body.contains("method not allowed") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 405, got {}/{}", status, body))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_deny_with_body_get_allowed() -> TestCase {
+        TestCase::new(
+            "dsl_deny_with_body_get_allowed",
+            "DSL: Authorization + GET → 200 pass through",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-deny-with-body/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-deny-with-body.example.com")
+                        .header("Authorization", "Bearer token123")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                let body = resp.text().await.unwrap_or_default();
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}/{}", status, body))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+    // ==================== 场景 15: Range Iterate ====================
+
+    fn test_range_iterate() -> TestCase {
+        TestCase::new(
+            "dsl_range_iterate",
+            "DSL: range(1,4) iterate → X-Range-Sum: 6, X-Range-Len: 3 in response headers",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-range-iterate/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-range-iterate.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let sum = resp
+                                .headers()
+                                .get("x-range-sum")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let len = resp
+                                .headers()
+                                .get("x-range-len")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && sum == "6" && len == "3" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Range-Sum: 6, X-Range-Len: 3 in response".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} x-range-sum='{}' x-range-len='{}'", status, sum, len),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 16: Regex Replace ====================
+
+    fn test_regex_replace_versioned_path() -> TestCase {
+        TestCase::new(
+            "dsl_regex_replace_versioned_path",
+            "DSL: regex_replace /v2/ → /latest/ in path",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-regex-replace/v2/users", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-regex-replace.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let cleaned = resp
+                                .headers()
+                                .get("x-cleaned-path")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if cleaned.contains("/latest/") && !cleaned.contains("/v2/") {
+                                TestResult::passed_with_message(start.elapsed(), format!("X-Cleaned-Path: {}", cleaned))
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected /latest/ in path, got '{}'", cleaned),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_regex_replace_no_match() -> TestCase {
+        TestCase::new(
+            "dsl_regex_replace_no_match",
+            "DSL: regex_replace no version in path → unchanged",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-regex-replace/users", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-regex-replace.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let cleaned = resp
+                                .headers()
+                                .get("x-cleaned-path")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if cleaned.contains("/test/dsl-regex-replace/users") {
+                                TestResult::passed_with_message(start.elapsed(), format!("Path unchanged: {}", cleaned))
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Unexpected path: '{}'", cleaned))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 17: Trim + Split ====================
+
+    fn test_trim_split_with_admin() -> TestCase {
+        TestCase::new(
+            "dsl_trim_split_with_admin",
+            "DSL: split+trim X-Roles containing admin → X-Is-Admin: true",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-trim-split/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-trim-split.example.com")
+                        .header("X-Roles", "viewer, admin , editor")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let is_admin = resp
+                                .headers()
+                                .get("x-is-admin")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let count = resp
+                                .headers()
+                                .get("x-role-count")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if is_admin == "true" && count == "3" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Is-Admin: true, X-Role-Count: 3".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("X-Is-Admin='{}' X-Role-Count='{}'", is_admin, count),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_trim_split_without_admin() -> TestCase {
+        TestCase::new(
+            "dsl_trim_split_without_admin",
+            "DSL: split+trim X-Roles without admin → no X-Is-Admin header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-trim-split/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-trim-split.example.com")
+                        .header("X-Roles", "viewer, editor")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let has_admin = resp.headers().get("x-is-admin").is_some();
+                            let count = resp
+                                .headers()
+                                .get("x-role-count")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if !has_admin && count == "2" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "No X-Is-Admin, X-Role-Count: 2".into(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("has_admin={} X-Role-Count='{}'", has_admin, count),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 场景 18: Break + Continue ====================
+
+    fn test_break_continue() -> TestCase {
+        TestCase::new(
+            "dsl_break_continue",
+            "DSL: break stops at 'target', continue skips 'skip' → X-Found: target, X-Skipped: 1",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-break-continue/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-break-continue.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let found = resp
+                                .headers()
+                                .get("x-found")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let skipped = resp
+                                .headers()
+                                .get("x-skipped")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if found == "target" && skipped == "1" {
+                                TestResult::passed_with_message(start.elapsed(), "X-Found: target, X-Skipped: 1".into())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("X-Found='{}' X-Skipped='{}'", found, skipped),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for DslTestSuite {
@@ -325,6 +1377,36 @@ impl TestSuite for DslTestSuite {
             // Scenario 3: Path deny (blocked / allowed)
             Self::test_deny_path_blocked(),
             Self::test_deny_path_allowed(),
+            // 新场景
+            Self::test_set_request_header_with_user_id(),
+            Self::test_set_request_header_without_user_id(),
+            Self::test_deny_by_header_blocked(),
+            Self::test_deny_by_header_allowed(),
+            Self::test_cookie_read_present(),
+            Self::test_cookie_read_absent(),
+            Self::test_ctx_chain_with_tenant(),
+            Self::test_ctx_chain_without_tenant(),
+            Self::test_multi_header_ops(),
+            Self::test_uri_rewrite_v1(),
+            Self::test_uri_rewrite_v2_unchanged(),
+            Self::test_sha256_sign(),
+            Self::test_regex_extract_chrome(),
+            Self::test_regex_extract_no_chrome(),
+            Self::test_response_inject(),
+            Self::test_resp_status_404(),
+            Self::test_resp_status_200_no_header(),
+            Self::test_deny_with_body_no_auth(),
+            Self::test_deny_with_body_wrong_method(),
+            Self::test_deny_with_body_get_allowed(),
+            Self::test_range_iterate(),
+            // Scenario 16: Regex replace
+            Self::test_regex_replace_versioned_path(),
+            Self::test_regex_replace_no_match(),
+            // Scenario 17: Trim + Split
+            Self::test_trim_split_with_admin(),
+            Self::test_trim_split_without_admin(),
+            // Scenario 18: Break + Continue
+            Self::test_break_continue(),
         ]
     }
 }

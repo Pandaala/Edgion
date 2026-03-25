@@ -92,8 +92,8 @@ let config_dir = work_dir().config(); // work_dir/config
 let runtime_dir = work_dir().runtime(); // work_dir/runtime
 
 // 3. 解析相对/绝对路径
-let log_path = work_dir().resolve("logs/access.log");
-// 相对路径 -> work_dir/logs/access.log
+let log_path = work_dir().resolve("logs/edgion_access.log");
+// 相对路径 -> work_dir/logs/edgion_access.log
 // 绝对路径 -> 保持不变
 ```
 
@@ -101,7 +101,7 @@ let log_path = work_dir().resolve("logs/access.log");
 
 | 输入路径 | work_dir | 解析结果 |
 |---------|---------|---------|
-| `logs/access.log` | `/usr/local/edgion` | `/usr/local/edgion/logs/access.log` |
+| `logs/edgion_access.log` | `/usr/local/edgion` | `/usr/local/edgion/logs/edgion_access.log` |
 | `/var/log/edgion.log` | `/usr/local/edgion` | `/var/log/edgion.log`（保持绝对路径） |
 | `config/gateway.toml` | `.` | `./config/gateway.toml` |
 
@@ -168,9 +168,9 @@ impl WorkDir {
 
 ```rust
 // 日志系统初始化
-let log_path = work_dir().resolve("logs/access.log");
+let log_path = work_dir().resolve("logs/edgion_access.log");
 let writer = LocalFileWriter::new(LocalFileWriterConfig {
-    path: "logs/access.log".to_string(),  // 相对路径
+    path: "logs/edgion_access.log".to_string(),  // 相对路径
     ..Default::default()
 });
 
@@ -185,16 +185,16 @@ let writer = LocalFileWriter::new(LocalFileWriterConfig {
 ```rust
 use crate::types::global_def::prefix_dir;
 
-let log_path = prefix_dir().join("logs/access.log");
+let log_path = prefix_dir().join("logs/edgion_access.log");
 ```
 
 #### 新代码
 ```rust
 use crate::types::work_dir;
 
-let log_path = work_dir().resolve("logs/access.log");
+let log_path = work_dir().resolve("logs/edgion_access.log");
 // 或
-let log_path = work_dir().logs().join("access.log");
+let log_path = work_dir().logs().join("edgion_access.log");
 ```
 
 ### 配置文件迁移
@@ -222,7 +222,7 @@ fn test_work_dir_resolve() {
     let wd = WorkDir::new(temp.path().to_path_buf()).unwrap();
     
     // 测试相对路径
-    let relative = wd.resolve("logs/access.log");
+    let relative = wd.resolve("logs/edgion_access.log");
     assert!(relative.starts_with(temp.path()));
     
     // 测试绝对路径
@@ -286,10 +286,10 @@ Error: Cannot create work_dir /nonexistent/path
 **解决**：
 ```rust
 // ❌ 错误：直接使用相对路径
-let path = PathBuf::from("logs/access.log");
+let path = PathBuf::from("logs/edgion_access.log");
 
 // ✅ 正确：通过 work_dir 解析
-let path = work_dir().resolve("logs/access.log");
+let path = work_dir().resolve("logs/edgion_access.log");
 ```
 
 ## 最佳实践
@@ -316,10 +316,10 @@ WORKDIR /usr/local/edgion
 ```toml
 # 推荐（相对于 work_dir）
 [access_log.output.localFile]
-path = "logs/access.log"
+path = "logs/edgion_access.log"
 
 # 不推荐（绝对路径破坏了 work_dir 的统一管理）
-path = "/var/log/edgion/access.log"
+path = "/var/log/edgion/edgion_access.log"
 ```
 
 ### 4. 启动前验证
@@ -363,4 +363,3 @@ mkdir -p /usr/local/edgion/{config,logs,runtime}
 
 **最后更新**：2025-01-05  
 **版本**：Edgion v0.1.0
-

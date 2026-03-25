@@ -12,7 +12,7 @@ Logs are output in JSON format by default for easy parsing by log analysis tools
 
 ## Log Location
 
-- **Default path**: `logs/access.log`
+- **Default path**: `logs/edgion_access.log`
 - **Format**: JSON (one log entry per line)
 
 ## Log Structure
@@ -401,16 +401,16 @@ Records errors during request processing:
 
 ```bash
 # View all 4xx errors
-cat logs/access.log | jq 'select(.request_info.status >= 400 and .request_info.status < 500)'
+cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request_info.status < 500)'
 
 # Find slowest requests (by ht)
-cat logs/access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
+cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
 # View plugin execution times
-cat logs/access.log | jq '.plugin_logs[] | .logs[] | select(.time_cost > 100)'
+cat logs/edgion_access.log | jq '.plugin_logs[] | .logs[] | select(.time_cost > 100)'
 
 # View all authentication failures
-cat logs/access.log | jq 'select(.plugin_logs[]?.logs[]? | select(.name == "BasicAuth" and (.log[] | contains("Auth failed"))))'
+cat logs/edgion_access.log | jq 'select(.plugin_logs[]?.logs[]? | select(.name == "BasicAuth" and (.log[] | contains("Auth failed"))))'
 ```
 
 ### 2. Key Metrics to Watch
@@ -430,9 +430,9 @@ cat logs/access.log | jq 'select(.plugin_logs[]?.logs[]? | select(.name == "Basi
 ## Best Practices
 
 1. **Set X-Trace-ID**: Include an `X-Trace-ID` header in client requests for request tracing
-2. **Rotate logs regularly**: Use `logrotate` or similar tools to regularly rotate access.log
-3. **Integrate with log systems**: Integrate access.log with ELK, Loki, or other log analysis platforms
-4. **Monitor key metrics**: Set up alerts based on access.log for high latency, high error rates, etc.
+2. **Rotate logs regularly**: Use `logrotate` or similar tools to regularly rotate `edgion_access.log`
+3. **Integrate with log systems**: Integrate `edgion_access.log` with ELK, Loki, or other log analysis platforms
+4. **Monitor key metrics**: Set up alerts based on `edgion_access.log` for high latency, high error rates, etc.
 
 ## Related Features
 

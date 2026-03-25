@@ -1,11 +1,13 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, TcpRouteManager};
+use crate::core::gateway::routes::tcp::routes_mgr::{
+    get_global_tcp_route_managers, resolved_ports_for_route, GlobalTcpRouteManagers,
+};
 use crate::types::{ResourceMeta, TCPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Implement ConfHandler for Arc<TcpRouteManager>
-impl ConfHandler<TCPRoute> for Arc<TcpRouteManager> {
+/// Implement ConfHandler for &'static GlobalTcpRouteManagers
+impl ConfHandler<TCPRoute> for &'static GlobalTcpRouteManagers {
     fn full_set(&self, data: &HashMap<String, TCPRoute>) {
         (**self).full_set(data)
     }
@@ -20,49 +22,33 @@ impl ConfHandler<TCPRoute> for Arc<TcpRouteManager> {
     }
 }
 
-/// Implement ConfHandler for &'static TcpRouteManager
-impl ConfHandler<TCPRoute> for &'static TcpRouteManager {
-    fn full_set(&self, data: &HashMap<String, TCPRoute>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, TCPRoute>,
-        update: HashMap<String, TCPRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
-
-/// Create a TcpRouteManager handler for registration with ConfigClient
+/// Create a handler for registration with ConfigClient.
 pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync> {
-    Box::new(get_global_tcp_route_manager())
+    Box::new(get_global_tcp_route_managers())
 }
 
-impl ConfHandler<TCPRoute> for TcpRouteManager {
+impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
     fn full_set(&self, data: &HashMap<String, TCPRoute>) {
         tracing::info!(component = "tcp_route_manager", cnt = data.len(), "full set");
 
-        // Initialize all routes
-        let mut processed_routes = HashMap::new();
+        self.clear_route_cache();
+
         for (key, route) in data {
             match self.initialize_route(route.clone()) {
-                Ok(initialized_route) => {
-                    processed_routes.insert(key.clone(), initialized_route);
+                Ok(initialized) => {
+                    self.insert_route(initialized);
                 }
                 Err(e) => {
                     tracing::error!(
                         resource_key = %key,
                         error = %e,
-                        "Failed to initialize TCPRoute"
+                        "Failed to initialize TCPRoute during full_set"
                     );
                 }
             }
         }
 
-        self.replace_all(processed_routes);
+        self.rebuild_all_port_managers();
     }
 
     fn partial_update(
@@ -79,31 +65,32 @@ impl ConfHandler<TCPRoute> for TcpRouteManager {
             "partial update"
         );
 
-        // Process additions
-        for (key, route) in add {
-            match self.initialize_route(route) {
-                Ok(initialized_route) => {
-                    self.add_route(initialized_route);
-                    tracing::debug!(resource_key = %key, "Added TCPRoute");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        resource_key = %key,
-                        error = %e,
-                        "Failed to add TCPRoute"
-                    );
+        let mut affected_ports: HashSet<u16> = HashSet::new();
+
+        // Collect old ports from routes being removed or updated BEFORE modifying the cache
+        for key in remove.iter().chain(update.keys()) {
+            if let Some(existing) = self.get_route(key) {
+                for &port in resolved_ports_for_route(&existing) {
+                    affected_ports.insert(port);
                 }
             }
         }
 
-        // Process updates
+        // Process removals
+        for key in &remove {
+            self.remove_route(key);
+            tracing::debug!(resource_key = %key, "Removed TCPRoute");
+        }
+
+        // Process updates (remove old, add new)
         for (key, route) in update {
+            self.remove_route(&key);
             match self.initialize_route(route) {
-                Ok(initialized_route) => {
-                    // Remove old version first
-                    self.remove_route(&key);
-                    // Add new version
-                    self.add_route(initialized_route);
+                Ok(initialized) => {
+                    for &port in resolved_ports_for_route(&initialized) {
+                        affected_ports.insert(port);
+                    }
+                    self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Updated TCPRoute");
                 }
                 Err(e) => {
@@ -116,11 +103,27 @@ impl ConfHandler<TCPRoute> for TcpRouteManager {
             }
         }
 
-        // Process removals
-        for key in remove {
-            self.remove_route(&key);
-            tracing::debug!(resource_key = %key, "Removed TCPRoute");
+        // Process additions
+        for (key, route) in add {
+            match self.initialize_route(route) {
+                Ok(initialized) => {
+                    for &port in resolved_ports_for_route(&initialized) {
+                        affected_ports.insert(port);
+                    }
+                    self.insert_route(initialized);
+                    tracing::debug!(resource_key = %key, "Added TCPRoute");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        resource_key = %key,
+                        error = %e,
+                        "Failed to add TCPRoute"
+                    );
+                }
+            }
         }
+
+        self.rebuild_affected_port_managers(&affected_ports);
     }
 }
 
@@ -129,18 +132,15 @@ impl ConfHandler<TCPRoute> for TcpRouteManager {
 /// Value format: "namespace/name" or just "name" (namespace inferred from TCPRoute).
 const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
 
-impl TcpRouteManager {
-    /// Initialize a TCPRoute by setting up BackendSelector and stream plugin store key
+impl GlobalTcpRouteManagers {
+    /// Initialize a TCPRoute by setting up BackendSelector and stream plugin store key.
     fn initialize_route(&self, mut route: TCPRoute) -> Result<Arc<TCPRoute>, String> {
         let route_key = route.key_name();
 
-        // Resolve stream plugin store key from annotation (for dynamic lookup at connection time)
         let store_key = Self::resolve_stream_plugin_store_key(&route);
 
-        // Initialize rules
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
-                // Initialize BackendSelector
                 if let Some(backend_refs) = &rule.backend_refs {
                     let backends: Vec<_> = backend_refs.to_vec();
                     let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
@@ -155,7 +155,6 @@ impl TcpRouteManager {
                     );
                 }
 
-                // Set stream plugin store key for dynamic lookup at connection time
                 if let Some(ref key) = store_key {
                     rule.stream_plugin_store_key = Some(key.clone());
                     tracing::info!(
@@ -171,8 +170,7 @@ impl TcpRouteManager {
         Ok(Arc::new(route))
     }
 
-    /// Resolve the stream plugin store key from the TCPRoute's `edgion.io/edgion-stream-plugins` annotation.
-    /// Returns the resolved "namespace/name" key for dynamic lookup at connection time.
+    /// Resolve the stream plugin store key from the TCPRoute's annotation.
     fn resolve_stream_plugin_store_key(route: &TCPRoute) -> Option<String> {
         let annotations = route.metadata.annotations.as_ref()?;
         let annotation_value = annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS)?;
@@ -181,7 +179,6 @@ impl TcpRouteManager {
             return None;
         }
 
-        // Resolve store_key: if value contains '/', use as-is; otherwise prepend namespace
         let store_key = if trimmed.contains('/') {
             trimmed.to_string()
         } else {
@@ -196,11 +193,11 @@ impl TcpRouteManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::common::conf_sync::traits::ConfHandler;
     use crate::types::resources::common::ParentReference;
+    use crate::types::resources::tcp_route::*;
 
-    fn create_test_tcp_route(namespace: &str, name: &str, gateway: &str, listener_name: &str, port: i32) -> TCPRoute {
-        use crate::types::resources::tcp_route::*;
-
+    fn create_test_tcp_route(namespace: &str, name: &str, gateway: &str, listener_name: &str, port: u16) -> TCPRoute {
         TCPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
@@ -214,7 +211,7 @@ mod tests {
                     namespace: Some(namespace.to_string()),
                     name: gateway.to_string(),
                     section_name: Some(listener_name.to_string()),
-                    port: Some(port),
+                    port: Some(port as i32),
                 }]),
                 rules: Some(vec![TCPRouteRule {
                     backend_refs: Some(vec![TCPBackendRef {
@@ -230,6 +227,7 @@ mod tests {
                     stream_plugin_store_key: None,
                     backend_finder: Default::default(),
                 }]),
+                resolved_ports: Some(vec![port]),
             },
             status: None,
         }
@@ -237,7 +235,9 @@ mod tests {
 
     #[test]
     fn test_tcp_route_full_set() {
-        let manager = TcpRouteManager::new();
+        let managers = GlobalTcpRouteManagers::new();
+        let _ = managers.get_or_create_port_manager(9000);
+        let _ = managers.get_or_create_port_manager(9001);
 
         let mut data = HashMap::new();
         let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000);
@@ -246,34 +246,15 @@ mod tests {
         data.insert("default/route1".to_string(), route1);
         data.insert("default/route2".to_string(), route2);
 
-        manager.full_set(&data);
+        managers.full_set(&data);
 
-        // Test via GatewayTcpRoutes
-        let gateway_routes = manager.get_or_create_gateway_tcp_routes("default", "gateway1");
-        assert!(gateway_routes.match_route("tcp-9000", 9000).is_some());
-        assert!(gateway_routes.match_route("tcp-9001", 9001).is_some());
-        assert!(gateway_routes.match_route("tcp-9002", 9002).is_none());
-    }
+        let mgr9000 = managers.get_or_create_port_manager(9000);
+        assert!(mgr9000.load_route_table().match_route().is_some());
 
-    #[test]
-    fn test_tcp_route_partial_update() {
-        let manager = TcpRouteManager::new();
+        let mgr9001 = managers.get_or_create_port_manager(9001);
+        assert!(mgr9001.load_route_table().match_route().is_some());
 
-        // Add a route
-        let mut add = HashMap::new();
-        let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000);
-        add.insert("default/route1".to_string(), route1);
-
-        manager.partial_update(add, HashMap::new(), HashSet::new());
-
-        // Test via GatewayTcpRoutes
-        let gateway_routes = manager.get_or_create_gateway_tcp_routes("default", "gateway1");
-        assert!(gateway_routes.match_route("tcp-9000", 9000).is_some());
-
-        // Remove the route
-        let mut remove = HashSet::new();
-        remove.insert("default/route1".to_string());
-        manager.partial_update(HashMap::new(), HashMap::new(), remove);
-        assert!(gateway_routes.match_route("tcp-9000", 9000).is_none());
+        let mgr9002 = managers.get_or_create_port_manager(9002);
+        assert!(mgr9002.load_route_table().match_route().is_none());
     }
 }

@@ -26,8 +26,9 @@ impl Default for EdgionStreamPluginsHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
-    fn parse(&self, esp: EdgionStreamPlugins, _ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
+    async fn parse(&self, esp: EdgionStreamPlugins, _ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
         ProcessResult::Continue(esp)
     }
 
@@ -51,10 +52,6 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             )
         };
         update_k8s_condition(&mut status.conditions, accepted);
-
-        // Set Ready condition (always ready after parsing)
-        let ready = k8s_condition_true(condition_types::READY, "Ready", "Resource is ready", generation);
-        update_k8s_condition(&mut status.conditions, ready);
     }
 }
 

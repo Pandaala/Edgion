@@ -3,8 +3,8 @@
 //! Handles EdgionGatewayConfig resources with Gateway API standard status management.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_types, ready_condition, update_condition, HandlerContext,
-    ProcessResult, ProcessorHandler,
+    accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
+    ProcessorHandler,
 };
 use crate::types::prelude_resources::EdgionGatewayConfig;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
@@ -24,8 +24,9 @@ impl Default for EdgionGatewayConfigHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
-    fn parse(&self, egc: EdgionGatewayConfig, _ctx: &HandlerContext) -> ProcessResult<EdgionGatewayConfig> {
+    async fn parse(&self, egc: EdgionGatewayConfig, _ctx: &HandlerContext) -> ProcessResult<EdgionGatewayConfig> {
         ProcessResult::Continue(egc)
     }
 
@@ -37,7 +38,6 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             .status
             .get_or_insert_with(|| EdgionGatewayConfigStatus { conditions: vec![] });
 
-        // Set Accepted condition
         if validation_errors.is_empty() {
             update_condition(&mut status.conditions, accepted_condition(generation));
         } else {
@@ -51,8 +51,5 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
                 ),
             );
         }
-
-        // Set Ready condition (always ready after parsing)
-        update_condition(&mut status.conditions, ready_condition(generation));
     }
 }

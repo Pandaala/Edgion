@@ -65,13 +65,10 @@ pub fn extract_sync_version(metadata: &ObjectMeta) -> u64 {
 
 /// Inject sync_version into a resource's `edgion.io/sync-version` annotation.
 pub fn set_sync_version(metadata: &mut ObjectMeta, sv: u64) {
-    metadata
-        .annotations
-        .get_or_insert_with(Default::default)
-        .insert(
-            crate::types::constants::annotations::edgion::SYNC_VERSION.to_string(),
-            sv.to_string(),
-        );
+    metadata.annotations.get_or_insert_with(Default::default).insert(
+        crate::types::constants::annotations::edgion::SYNC_VERSION.to_string(),
+        sv.to_string(),
+    );
 }
 
 /// Helper function to generate key_name from ObjectMeta

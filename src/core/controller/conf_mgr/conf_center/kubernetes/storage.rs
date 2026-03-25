@@ -81,11 +81,7 @@ impl KubernetesStorage {
                 Scope::Namespaced,
             ),
             "TLSRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk(
-                    "gateway.networking.k8s.io",
-                    "v1alpha2",
-                    "TLSRoute",
-                )),
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
                 Scope::Namespaced,
             ),
             "ReferenceGrant" => (

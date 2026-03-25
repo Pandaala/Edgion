@@ -1,0 +1,11 @@
+# Backend HTTPS service for TLS Passthrough testing
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-https-backend
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30051
+      targetPort: 30051
+      protocol: TCP

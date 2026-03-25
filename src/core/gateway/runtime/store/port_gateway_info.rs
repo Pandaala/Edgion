@@ -50,6 +50,12 @@ impl PortGatewayInfoStore {
         data.get(&port).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
+    /// Return all ports that have at least one registered Gateway/Listener.
+    pub fn all_ports(&self) -> Vec<u16> {
+        let data = self.flat_data.load();
+        data.keys().copied().collect()
+    }
+
     /// Get GatewayInfo contexts grouped by Gateway key for a given port.
     #[inline]
     pub fn get_grouped(&self, port: u16) -> Arc<HashMap<String, Arc<Vec<GatewayInfo>>>> {

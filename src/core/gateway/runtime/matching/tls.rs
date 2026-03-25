@@ -17,7 +17,7 @@
 
 use crate::core::common::matcher::HashHost;
 use crate::types::prelude_resources::Gateway;
-use crate::types::resources::gateway::SecretObjectReference;
+use crate::types::resources::gateway::{FrontendTLSValidation, SecretObjectReference};
 use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
@@ -41,6 +41,10 @@ pub struct GatewayTlsEntry {
     pub certificate_refs: Vec<SecretObjectReference>,
     /// Resolved Secret data (filled by Controller)
     pub secrets: Option<Vec<Secret>>,
+    /// Frontend validation configuration (Gateway API standard mTLS)
+    pub frontend_validation: Option<FrontendTLSValidation>,
+    /// Resolved CA Secrets for frontend validation
+    pub resolved_frontend_ca_secrets: Option<Vec<Secret>>,
 }
 
 /// Combined matcher data atomically swapped via `ArcSwap`.
@@ -155,6 +159,8 @@ impl GatewayTlsMatcher {
                             hostname: hostname.clone(),
                             certificate_refs: cert_refs,
                             secrets: tls_config.secrets.clone(),
+                            frontend_validation: tls_config.frontend_validation.clone(),
+                            resolved_frontend_ca_secrets: tls_config.resolved_frontend_ca_secrets.clone(),
                         };
 
                         let host_matcher = port_map.entry(port).or_insert_with(|| {
@@ -294,6 +300,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         }
     }
 
@@ -348,6 +356,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
 
         let listener = create_test_listener("https", None, Some(tls_config));
@@ -374,6 +384,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
 
         // Gateway with wildcard hostname
@@ -413,6 +425,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
         let listener1 = create_test_listener("api-https", Some("api.example.com"), Some(tls_config1));
         let gateway1 = create_test_gateway("api-gateway", "prod", vec![listener1]);
@@ -428,6 +442,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
         let tls_config3 = GatewayTLSConfig {
             mode: Some("Terminate".to_string()),
@@ -439,6 +455,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
         let listener2 = create_test_listener("www-https", Some("www.example.com"), Some(tls_config2));
         let listener3 = create_test_listener("admin-https", Some("admin.example.com"), Some(tls_config3));
@@ -489,6 +507,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
 
         let listener = create_test_listener("https", Some("test.example.com"), Some(tls_config));
@@ -550,6 +570,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
         let listener = create_test_listener("https", Some("example.com"), Some(tls_config));
         let gateway = create_test_gateway("test-gw", "default", vec![listener]);
@@ -587,6 +609,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
 
         let tls_config_8443 = GatewayTLSConfig {
@@ -599,6 +623,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
 
         let listener_443 =
@@ -627,7 +653,6 @@ mod tests {
         // Test non-existent port
         let result = matcher.match_sni_with_port(9443, "api.example.com");
         assert!(result.is_none(), "Should not find cert for port 9443");
-
     }
 
     #[test]
@@ -644,6 +669,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
 
         let tls_config_admin = GatewayTLSConfig {
@@ -656,6 +683,8 @@ mod tests {
             }]),
             options: None,
             secrets: None,
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
         };
 
         // Port 443: api.example.com

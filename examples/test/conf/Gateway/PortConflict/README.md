@@ -4,7 +4,7 @@ This test suite validates the port conflict detection feature as per Gateway API
 
 ## Gateway API Requirements
 
-According to Gateway API spec (gateway-api-standard-v1.4.0.yaml):
+According to Gateway API spec (gateway-api-standard-v1.5.0.yaml):
 
 1. **MUST**: Set `Conflicted` condition to `True` on conflicting Listeners
 2. **MUST NOT**: Pick a "winner" - all indistinct Listeners must not be accepted

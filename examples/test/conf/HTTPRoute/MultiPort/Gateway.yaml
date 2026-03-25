@@ -1,0 +1,15 @@
+# Multi-port HTTP Gateway for testing per-port route isolation
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: multiport-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http-port-a
+      protocol: HTTP
+      port: 31300
+    - name: http-port-b
+      protocol: HTTP
+      port: 31301

@@ -81,6 +81,9 @@ pub struct ListenerPortManager {
 
     /// Reverse index: gateway_key → port_keys it uses
     gateway_to_ports: RwLock<HashMap<String, HashSet<PortKey>>>,
+
+    /// Latest conflict-impact set produced by a gateway registration change
+    pending_affected_gateways: RwLock<HashMap<String, HashSet<String>>>,
 }
 
 impl ListenerPortManager {
@@ -89,7 +92,58 @@ impl ListenerPortManager {
         Self {
             port_to_listeners: RwLock::new(HashMap::new()),
             gateway_to_ports: RwLock::new(HashMap::new()),
+            pending_affected_gateways: RwLock::new(HashMap::new()),
         }
+    }
+
+    fn current_listener_registrations_locked(
+        gateway_key: &str,
+        gw_map: &HashMap<String, HashSet<PortKey>>,
+        port_map: &HashMap<PortKey, HashSet<ListenerRef>>,
+    ) -> HashSet<(String, PortKey)> {
+        let mut registrations = HashSet::new();
+
+        let Some(port_keys) = gw_map.get(gateway_key) else {
+            return registrations;
+        };
+
+        for port_key in port_keys {
+            if let Some(listeners) = port_map.get(port_key) {
+                for listener in listeners {
+                    if listener.gateway_key == gateway_key {
+                        registrations.insert((listener.listener_name.clone(), port_key.clone()));
+                    }
+                }
+            }
+        }
+
+        registrations
+    }
+
+    fn conflicting_gateways_locked(
+        gateway_key: &str,
+        gw_map: &HashMap<String, HashSet<PortKey>>,
+        port_map: &HashMap<PortKey, HashSet<ListenerRef>>,
+    ) -> HashSet<String> {
+        let mut conflicting_gateways = HashSet::new();
+
+        let Some(port_keys) = gw_map.get(gateway_key) else {
+            return conflicting_gateways;
+        };
+
+        for port_key in port_keys {
+            if let Some(listeners) = port_map.get(port_key) {
+                if listeners.len() > 1 {
+                    for listener in listeners {
+                        if listener.gateway_key != gateway_key {
+                            conflicting_gateways.insert(listener.gateway_key.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        conflicting_gateways
     }
 
     /// Register a gateway's listeners
@@ -108,6 +162,8 @@ impl ListenerPortManager {
         // Acquire both locks in consistent order to prevent deadlock
         let mut gw_map = self.gateway_to_ports.write().unwrap();
         let mut port_map = self.port_to_listeners.write().unwrap();
+        let previous_registrations = Self::current_listener_registrations_locked(gateway_key, &gw_map, &port_map);
+        let previous_conflicting = Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map);
 
         // Clear old registrations first (inline to avoid lock order issues)
         if let Some(old_port_keys) = gw_map.remove(gateway_key) {
@@ -135,6 +191,29 @@ impl ListenerPortManager {
             gw_map.insert(gateway_key.to_string(), port_keys);
         }
 
+        let current_registrations: HashSet<(String, PortKey)> = listeners.iter().cloned().collect();
+        let registrations_changed = previous_registrations != current_registrations;
+        let affected_gateways = if registrations_changed {
+            let mut affected = previous_conflicting;
+            affected.extend(Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map));
+            affected.remove(gateway_key);
+            affected
+        } else {
+            HashSet::new()
+        };
+
+        drop(port_map);
+        drop(gw_map);
+
+        if registrations_changed {
+            self.pending_affected_gateways
+                .write()
+                .unwrap()
+                .insert(gateway_key.to_string(), affected_gateways);
+        } else {
+            self.pending_affected_gateways.write().unwrap().remove(gateway_key);
+        }
+
         tracing::debug!(
             gateway = %gateway_key,
             listener_count = listeners.len(),
@@ -150,14 +229,21 @@ impl ListenerPortManager {
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
     /// to prevent deadlocks.
     pub fn unregister_gateway(&self, gateway_key: &str) {
+        let _ = self.unregister_gateway_and_get_affected(gateway_key);
+    }
+
+    /// Unregister a gateway and return gateways whose conflict status may change.
+    pub fn unregister_gateway_and_get_affected(&self, gateway_key: &str) -> HashSet<String> {
         // Acquire both locks in consistent order to prevent deadlock
         let mut gw_map = self.gateway_to_ports.write().unwrap();
         let mut port_map = self.port_to_listeners.write().unwrap();
+        let affected_gateways = Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map);
 
         let port_keys = gw_map.remove(gateway_key).unwrap_or_default();
 
         if port_keys.is_empty() {
-            return;
+            self.pending_affected_gateways.write().unwrap().remove(gateway_key);
+            return HashSet::new();
         }
 
         for port_key in &port_keys {
@@ -174,6 +260,9 @@ impl ListenerPortManager {
             port_count = port_keys.len(),
             "Unregistered gateway from port manager"
         );
+
+        self.pending_affected_gateways.write().unwrap().remove(gateway_key);
+        affected_gateways
     }
 
     /// Get all listeners using a specific port
@@ -244,30 +333,18 @@ impl ListenerPortManager {
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
     /// to prevent deadlocks.
     pub fn get_conflicting_gateways(&self, gateway_key: &str) -> HashSet<String> {
-        let mut conflicting_gateways = HashSet::new();
-
-        // Acquire locks in consistent order
         let gw_map = self.gateway_to_ports.read().unwrap();
         let port_map = self.port_to_listeners.read().unwrap();
+        Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map)
+    }
 
-        let port_keys = match gw_map.get(gateway_key) {
-            Some(keys) => keys,
-            None => return conflicting_gateways,
-        };
-
-        for port_key in port_keys {
-            if let Some(listeners) = port_map.get(port_key) {
-                if listeners.len() > 1 {
-                    for listener in listeners {
-                        if listener.gateway_key != gateway_key {
-                            conflicting_gateways.insert(listener.gateway_key.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        conflicting_gateways
+    /// Take and clear the latest affected gateway set produced by this gateway's registration change.
+    pub fn take_affected_gateways(&self, gateway_key: &str) -> HashSet<String> {
+        self.pending_affected_gateways
+            .write()
+            .unwrap()
+            .remove(gateway_key)
+            .unwrap_or_default()
     }
 
     /// Clear all registrations
@@ -283,6 +360,7 @@ impl ListenerPortManager {
         let mut port_map = self.port_to_listeners.write().unwrap();
         gw_map.clear();
         port_map.clear();
+        self.pending_affected_gateways.write().unwrap().clear();
         tracing::info!("ListenerPortManager cleared");
     }
 

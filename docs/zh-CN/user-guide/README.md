@@ -80,5 +80,5 @@
 
 ### 高级特性
 
-- 灰度发布（即将推出）
-- 蓝绿部署（即将推出）
+- 灰度发布：优先参考 [权重配置](./http-route/backends/weight.md)
+- 蓝绿部署：优先参考 [权重配置](./http-route/backends/weight.md)

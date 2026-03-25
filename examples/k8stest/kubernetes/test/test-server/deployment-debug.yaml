@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-test-server
+  namespace: edgion-test
+  labels:
+    app: edgion-test-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edgion-test-server
+  template:
+    metadata:
+      labels:
+        app: edgion-test-server
+    spec:
+      containers:
+      - name: test-server
+        image: ubuntu:24.04
+        command: ["sleep", "infinity"]
+        ports:
+        - name: http-1
+          containerPort: 30001
+          protocol: TCP
+        - name: http-2
+          containerPort: 30002
+          protocol: TCP
+        - name: http-3
+          containerPort: 30003
+          protocol: TCP
+        - name: http-4
+          containerPort: 30004
+          protocol: TCP
+        - name: grpc-1
+          containerPort: 30021
+          protocol: TCP
+        - name: grpc-2
+          containerPort: 30022
+          protocol: TCP
+        - name: websocket
+          containerPort: 30005
+          protocol: TCP
+        - name: tcp
+          containerPort: 30010
+          protocol: TCP
+        - name: auth
+          containerPort: 30040
+          protocol: TCP
+        - name: udp
+          containerPort: 30011
+          protocol: UDP
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi

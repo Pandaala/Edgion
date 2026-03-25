@@ -268,7 +268,7 @@ where
                         }
                         Event::InitApply(obj) => {
                             if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                let result = self.processor.on_init_apply(obj, None);
+                                let result = self.processor.on_init_apply(obj, None).await;
 
                                 if let WorkItemResult::Processed { obj, status_changed } = result {
                                     init_count += 1;
@@ -340,11 +340,12 @@ where
                                     "Received Apply event during init phase, treating as InitApply"
                                 );
                                 if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    let result = self.processor.on_init_apply(obj, None);
+                                    let result = self.processor.on_init_apply(obj, None).await;
 
                                     if let WorkItemResult::Processed { obj, status_changed } = result {
                                         init_count += 1;
-                                        let can_write_status = self.leader_handle.as_ref().is_none_or(|h| h.is_leader());
+                                        let can_write_status =
+                                            self.leader_handle.as_ref().is_none_or(|h| h.is_leader());
                                         if status_changed && can_write_status {
                                             if let Some(status_value) = extract_status_value(&obj) {
                                                 let name = obj.meta().name.as_deref().unwrap_or("");
@@ -374,7 +375,7 @@ where
                             } else {
                                 // Runtime phase - enqueue key for worker
                                 if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    self.processor.on_apply(&obj);
+                                    self.processor.on_apply(&obj).await;
                                 }
                             }
                         }
@@ -388,7 +389,7 @@ where
                             } else {
                                 // Runtime phase - enqueue key for worker
                                 if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    self.processor.on_delete(&obj);
+                                    self.processor.on_delete(&obj).await;
                                 }
                             }
                         }
@@ -545,12 +546,9 @@ where
 
                     if should_process {
                         // K8s mode: pass None for existing_status_json (status is already in store_obj from K8s API)
-                        let result = processor.process_work_item(
-                            &work_item.key,
-                            store_obj,
-                            None,
-                            work_item.trigger_chain.clone(),
-                        );
+                        let result = processor
+                            .process_work_item(&work_item.key, store_obj, None, work_item.trigger_chain.clone())
+                            .await;
 
                         if let WorkItemResult::Processed { obj, status_changed } = result {
                             let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
@@ -633,29 +631,40 @@ where
         &K::plural(&dt),
     );
 
+    let kind_str = K::kind(&dt).to_string();
+
     let patch = serde_json::json!({ "status": status_value });
     let params = PatchParams::default();
 
-    match api_scope {
+    let result = match api_scope {
         ApiScope::Namespaced(_) => {
             let ns = namespace.unwrap_or("default");
             let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &api_resource);
-            api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
+            api.patch_status(name, &params, &Patch::Merge(&patch)).await
         }
         ApiScope::ClusterScoped => {
             let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-            api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
+            api.patch_status(name, &params, &Patch::Merge(&patch)).await
+        }
+    };
+
+    match &result {
+        Ok(_) => {
+            crate::core::controller::conf_mgr::sync_runtime::record_status_write(&kind_str, "kubernetes");
+            tracing::info!(
+                component = "resource_controller",
+                kind = %kind_str,
+                name = name,
+                namespace = namespace,
+                "Persisted status to K8s API"
+            );
+        }
+        Err(_) => {
+            crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(&kind_str, "kubernetes");
         }
     }
 
-    tracing::trace!(
-        component = "resource_controller",
-        name = name,
-        namespace = namespace,
-        "Persisted status to K8s API"
-    );
-
-    Ok(())
+    result.map(|_| ())
 }
 
 /// Check if resource passes namespace filter

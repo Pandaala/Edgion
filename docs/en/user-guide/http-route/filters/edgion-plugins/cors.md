@@ -499,7 +499,7 @@ spec:
 If you encounter issues:
 
 1. Check the browser console for error messages
-2. Review gateway logs: `logs/access.log` and `logs/edgion-gateway.log`
+2. Review gateway logs: `logs/edgion_access.log` and `logs/edgion-gateway.log`
 3. Refer to the FAQ section in this document
 4. Submit an Issue on GitHub
 

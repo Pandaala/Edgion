@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-regex-extract
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "regex-extract"
+        source: |
+          let ua = req.header("User-Agent")
+          if ua != nil {
+              let ver = regex_find(ua, "Chrome/[0-9]+")
+              if ver != nil {
+                  req.set_header("X-Chrome-Ver", ver)
+                  resp.set_header("X-Chrome-Ver", ver)
+              }
+          }
+        errorPolicy: deny

@@ -216,11 +216,24 @@ verify_store_stats_empty() {
 
     local all_ok=true
     local check_fields=(
-        ".data.http_routes.http_routes"  ".data.http_routes.exact_domains"  ".data.http_routes.wildcard_domains"
+        # HTTP route manager
+        ".data.http_routes.http_routes"  ".data.http_routes.exact_domains"
+        ".data.http_routes.wildcard_domains" ".data.http_routes.port_count"
+        # gRPC route manager
         ".data.grpc_routes.grpc_routes"  ".data.grpc_routes.resource_keys"
-        ".data.tcp_routes.routes_by_key" ".data.udp_routes.routes_by_key"
-        ".data.tls_routes.route_cache"   ".data.tls_store.entries"  ".data.tls_cert_matcher.port_count"
+        ".data.grpc_routes.route_units_cache" ".data.grpc_routes.port_count"
+        # TCP/UDP/TLS route managers
+        ".data.tcp_routes.route_cache"   ".data.tcp_routes.port_count"
+        ".data.udp_routes.route_cache"   ".data.udp_routes.port_count"
+        ".data.tls_routes.route_cache"   ".data.tls_routes.port_count"
+        # Gateway-level stores
+        ".data.gateway_config.gateways"
+        ".data.port_gateway_info.port_count"
+        # TLS cert stores
+        ".data.tls_store.entries"  ".data.tls_cert_matcher.port_count"
+        # Plugin stores
         ".data.plugin_store.plugins"     ".data.stream_plugin_store.plugins"
+        # Link / policy stores
         ".data.link_sys_store.resources" ".data.policy_store.total_services"
         ".data.backend_tls_policy.policies" ".data.backend_tls_policy.reverse_index_targets"
     )
@@ -297,7 +310,17 @@ run_cycle() {
         FAILED=$((FAILED + 1))
         return 1
     fi
-    log_success "Configs synced"
+
+    # Snapshot port_counts after injection for diagnostic
+    local mid_stats
+    mid_stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    local pc_http pc_grpc pc_tcp pc_udp pc_tls
+    pc_http=$(json_field "$mid_stats" ".data.http_routes.port_count")
+    pc_grpc=$(json_field "$mid_stats" ".data.grpc_routes.port_count")
+    pc_tcp=$(json_field "$mid_stats" ".data.tcp_routes.port_count")
+    pc_udp=$(json_field "$mid_stats" ".data.udp_routes.port_count")
+    pc_tls=$(json_field "$mid_stats" ".data.tls_routes.port_count")
+    log_success "Configs synced (port_counts: http=${pc_http} grpc=${pc_grpc} tcp=${pc_tcp} udp=${pc_udp} tls=${pc_tls})"
 
     delete_injected_configs
     log_info "Waiting ${CLEANUP_WAIT}s for cleanup..."
@@ -309,8 +332,24 @@ run_cycle() {
         PASSED=$((PASSED + 1))
     else
         log_error "Cycle ${cycle}: LEAK DETECTED — stores not fully cleaned"
-        curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null \
-            | python3 -m json.tool 2>/dev/null || true
+        log_error "  Dumping current store-stats vs baseline:"
+        local leak_stats
+        leak_stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+        local leak_fields=(
+            ".data.http_routes.http_routes" ".data.http_routes.port_count"
+            ".data.grpc_routes.grpc_routes" ".data.grpc_routes.port_count"
+            ".data.tcp_routes.route_cache"  ".data.tcp_routes.port_count"
+            ".data.udp_routes.route_cache"  ".data.udp_routes.port_count"
+            ".data.tls_routes.route_cache"  ".data.tls_routes.port_count"
+        )
+        for f in "${leak_fields[@]}"; do
+            local cur bl
+            cur=$(json_field "$leak_stats" "$f")
+            bl=$(json_field "$BASELINE_STORE_STATS" "$f")
+            if [ "$cur" != "$bl" ]; then
+                log_error "    ${f}: current=${cur} baseline=${bl}"
+            fi
+        done
         FAILED=$((FAILED + 1))
         return 1
     fi

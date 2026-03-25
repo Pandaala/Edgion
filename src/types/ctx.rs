@@ -1,3 +1,4 @@
+use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
@@ -7,8 +8,7 @@ use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
-use crate::core::gateway::observe::logs::LogBuffer;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::AtomicBool;
@@ -17,12 +17,19 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+/// Unified resource identifier for access log.
+/// Provides consistent `kind`/`ns`/`name` across all resource types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rsc {
+    pub kind: String,
+    pub ns: String,
+    pub name: String,
+}
+
 #[derive(Clone, Serialize)]
 pub struct MatchInfo {
-    /// route namespace
-    pub rns: String,
-    /// route name
-    pub rn: String,
+    /// Resource identifier (kind="HTTPRoute")
+    pub rsc: Rsc,
 
     /// Rule id in HTTPROUTE
     pub rule_id: usize,
@@ -43,10 +50,13 @@ pub fn is_zero(v: &u64) -> bool {
 }
 
 impl MatchInfo {
-    pub fn new(rns: String, rn: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch, sv: u64) -> Self {
+    pub fn new(ns: String, name: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch, sv: u64) -> Self {
         Self {
-            rns,
-            rn,
+            rsc: Rsc {
+                kind: "HTTPRoute".to_string(),
+                ns,
+                name,
+            },
             m,
             rule_id,
             match_id,
@@ -60,7 +70,7 @@ impl fmt::Display for MatchInfo {
         write!(
             f,
             "{}/{} (rule:{}, match:{})",
-            self.rns, self.rn, self.rule_id, self.match_id
+            self.rsc.ns, self.rsc.name, self.rule_id, self.match_id
         )
     }
 }
@@ -86,9 +96,7 @@ pub struct TlsConnId(pub u64);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MatchedInfo {
-    pub kind: String,
-    pub ns: String,
-    pub name: String,
+    pub rsc: Rsc,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
     /// sync_version from gRPC sync (0 = not set)
@@ -276,10 +284,8 @@ impl UpstreamInfo {
 /// Backend context containing service info and upstream attempt history
 #[derive(Debug, Clone, Serialize)]
 pub struct BackendContext {
-    /// Backend service name
-    pub name: String,
-    /// Backend service namespace
-    pub namespace: String,
+    /// Resource identifier (kind="Service")
+    pub rsc: Rsc,
     /// List of upstream connection attempts (for retry tracking and access log)
     pub upstreams: Vec<UpstreamInfo>,
     /// Current upstream index (for status updates)
@@ -421,6 +427,11 @@ pub struct EdgionHttpContext {
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
+    /// Signal set by upstream_response_filter when upstream status code matches retry.codes.
+    /// Consumed by error_while_proxy to trigger retry via e.set_retry(true).
+    /// Reset to false after each retry attempt.
+    pub retry_on_status: bool,
+
     /// Time when first upstream connection was initiated
     /// Set only once on first connection attempt
     pub upstream_start_time: Option<Instant>,
@@ -484,6 +495,7 @@ impl EdgionHttpContext {
             plugin_ref_stack: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
+            retry_on_status: false,
             upstream_start_time: None,
             hash_key: None,
             ctx_map: HashMap::new(),
@@ -504,8 +516,11 @@ impl EdgionHttpContext {
     /// Initialize backend context with name and namespace (call once)
     pub fn init_backend_context(&mut self, name: String, namespace: String) {
         self.backend_context = Some(BackendContext {
-            name,
-            namespace,
+            rsc: Rsc {
+                kind: "Service".to_string(),
+                ns: namespace,
+                name,
+            },
             upstreams: Vec::new(),
             current_upstream_id: None,
         });

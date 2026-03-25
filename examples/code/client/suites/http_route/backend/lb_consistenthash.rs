@@ -433,6 +433,10 @@ impl TestSuite for LBConsistentHashTestSuite {
         "LB ConsistentHash Tests"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Backend/LBConsistentHash")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_chash_header_eps(),

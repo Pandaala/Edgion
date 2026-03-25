@@ -1,4 +1,6 @@
 use super::*;
+use crate::core::gateway::cache::ShardedLruCache;
+use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay as auth_delay;
 
 impl OpenidConnect {
@@ -11,8 +13,30 @@ impl OpenidConnect {
             discovery_refresh: Arc::new(Mutex::new(())),
             jwks_state: Arc::new(RwLock::new(JwksState::default())),
             jwks_refresh: Arc::new(Mutex::new(())),
-            introspection_cache: Arc::new(RwLock::new(HashMap::new())),
-            access_token_cache: Arc::new(RwLock::new(HashMap::new())),
+            introspection_cache: Arc::new(ShardedLruCache::new(
+                if config.introspection.lru_cache.capacity == 0 {
+                    get_default_lru_cache_capacity()
+                } else {
+                    config.introspection.lru_cache.capacity
+                },
+                if config.introspection.lru_cache.shards > 0 {
+                    config.introspection.lru_cache.shards
+                } else {
+                    get_default_lru_cache_shards()
+                },
+            )),
+            access_token_cache: Arc::new(ShardedLruCache::new(
+                if config.access_token.lru_cache.capacity == 0 {
+                    get_default_lru_cache_capacity()
+                } else {
+                    config.access_token.lru_cache.capacity
+                },
+                if config.access_token.lru_cache.shards > 0 {
+                    config.access_token.lru_cache.shards
+                } else {
+                    get_default_lru_cache_shards()
+                },
+            )),
             refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),
             refresh_singleflight_results: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -1109,14 +1133,7 @@ impl OpenidConnect {
             return None;
         }
         let key = Self::introspection_cache_key(token);
-        let now = Instant::now();
-        let mut cache = self.introspection_cache.write().await;
-        let entry = cache.get(&key)?;
-        if now < entry.expires_at {
-            return Some(entry.claims.clone());
-        }
-        cache.remove(&key);
-        None
+        self.introspection_cache.get(&key).map(|e| e.claims)
     }
 
     pub(super) async fn cache_introspection_claims(&self, token: &str, claims: &Value) {
@@ -1124,14 +1141,19 @@ impl OpenidConnect {
             return;
         }
         let key = Self::introspection_cache_key(token);
-        let now = Instant::now();
-        let entry = IntrospectionCacheEntry {
-            claims: claims.clone(),
-            expires_at: now + Duration::from_secs(self.config.introspection_cache_ttl),
+        let config_ttl = Duration::from_secs(self.config.introspection_cache_ttl);
+        // Cap TTL at token's remaining lifetime
+        let token_remaining = claims["exp"]
+            .as_u64()
+            .and_then(|exp| exp.checked_sub(Self::now_unix_secs()))
+            .map(Duration::from_secs);
+        let ttl = match token_remaining {
+            Some(remaining) => config_ttl.min(remaining),
+            None => config_ttl,
         };
-        let mut cache = self.introspection_cache.write().await;
-        cache.retain(|_, v| now < v.expires_at);
-        cache.insert(key, entry);
+        self.introspection_cache
+            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, Some(ttl));
+        // No retain/len check needed — LocalLruCache handles eviction automatically
     }
 
     pub(super) fn generate_session_ref() -> String {
@@ -1145,48 +1167,39 @@ impl OpenidConnect {
         if session_ref.is_empty() || token.is_empty() {
             return;
         }
-        let now = Self::now_unix_secs();
-        let mut cache = self.access_token_cache.write().await;
-        cache.retain(|_, entry| {
-            entry
-                .expires_at
-                .is_none_or(|exp| now <= exp.saturating_add(self.config.clock_skew_seconds))
-        });
-        if cache.len() > 4096 {
-            cache.clear();
-        }
-        cache.insert(
+        let clock_skew = self.config.clock_skew_seconds;
+        // TTL = token exp - now - clock_skew, capped at 1 hour, fallback 5 min
+        let ttl = expires_at
+            .and_then(|exp| exp.checked_sub(Self::now_unix_secs()))
+            .and_then(|secs| secs.checked_sub(clock_skew))
+            .map(|secs| Duration::from_secs(secs).min(Duration::from_secs(3600)))
+            .filter(|d| !d.is_zero())
+            .unwrap_or(Duration::from_secs(300));
+        self.access_token_cache.insert(
             session_ref.to_string(),
             AccessTokenCacheEntry {
                 token: token.to_string(),
-                expires_at,
+                _expires_at: expires_at,
             },
+            Some(ttl),
         );
+        // The old `retain` and `len > 4096` emergency-clear are removed.
+        // LocalLruCache provides LRU eviction at configured capacity.
     }
 
     pub(super) async fn get_cached_access_token(&self, session_ref: &str) -> Option<String> {
         if session_ref.is_empty() {
             return None;
         }
-        let now = Self::now_unix_secs();
-        let mut cache = self.access_token_cache.write().await;
-        let entry = cache.get(session_ref)?;
-        if entry
-            .expires_at
-            .is_some_and(|exp| now > exp.saturating_add(self.config.clock_skew_seconds))
-        {
-            cache.remove(session_ref);
-            return None;
-        }
-        Some(entry.token.clone())
+        // Expiry (including clock_skew) was baked into TTL at insert time — no manual check needed.
+        self.access_token_cache.get(&session_ref.to_string()).map(|e| e.token)
     }
 
     pub(super) async fn remove_cached_access_token(&self, session_ref: &str) {
         if session_ref.is_empty() {
             return;
         }
-        let mut cache = self.access_token_cache.write().await;
-        cache.remove(session_ref);
+        self.access_token_cache.remove(&session_ref.to_string());
     }
 
     pub(super) async fn resolve_access_token_from_session(&self, session_cookie: &OidcSessionCookie) -> Option<String> {

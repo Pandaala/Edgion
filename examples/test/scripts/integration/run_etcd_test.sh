@@ -380,8 +380,8 @@ sleep 1
 # =============================================================================
 log_section "Starting Gateway"
 
-EDGION_ACCESS_LOG="${LOG_DIR}/access.log" \
-EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log" \
+EDGION_ACCESS_LOG="${LOG_DIR}/edgion_access.log" \
+EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
 "$GATEWAY_BIN" \
     -c "$GATEWAY_CONFIG" \
     --work-dir "$WORK_DIR" \

@@ -24,6 +24,51 @@ pub fn upstream_response_filter(
         upstream.status = Some(status_code);
     }
 
+    // Check if status code triggers retry based on rule.retry.codes
+    if let Some(route_unit) = ctx.route_unit.as_ref() {
+        if let Some(parsed_retry) = route_unit.rule.parsed_retry.as_ref() {
+            if let Some(codes) = parsed_retry.codes.as_ref() {
+                if codes.contains(&status_code) {
+                    // Determine max_retries: rule.retry.attempts > annotation > global
+                    let max_retries = parsed_retry
+                        .attempts
+                        .or(route_unit.rule.parsed_max_retries)
+                        .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
+
+                    // Check request timeout
+                    let timeout_exceeded = route_unit
+                        .rule
+                        .parsed_timeouts
+                        .as_ref()
+                        .and_then(|t| t.request_timeout)
+                        .map(|timeout| ctx.start_time.elapsed() >= timeout)
+                        .unwrap_or(false);
+
+                    let buffer_ok = !session.as_ref().retry_buffer_truncated();
+                    if ctx.try_cnt <= max_retries && !timeout_exceeded && buffer_ok {
+                        ctx.retry_on_status = true;
+                        return Err(pingora_core::Error::explain(
+                            pingora_core::ErrorType::HTTPStatus(status_code),
+                            format!("retry on status {}", status_code),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Record circuit breaker success/failure based on status code
+    if let Some(upstream) = ctx.get_current_upstream() {
+        if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+            let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
+            if status_code >= 500 {
+                cb_store.record_failure_by_addr(service_key, addr);
+            } else {
+                cb_store.record_success_by_addr(service_key, addr);
+            }
+        }
+    }
+
     // Run rule-level upstream_response edgion_plugins (sync)
     if let Some(route_unit) = ctx.route_unit.clone() {
         route_unit

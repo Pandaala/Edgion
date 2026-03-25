@@ -38,6 +38,10 @@ pub struct Compiler {
     scope_depth: u16,
     loop_depth: u16,
     max_loop_depth: u16,
+    /// Per-loop break jump placeholder indices for backpatching
+    break_patch_stacks: Vec<Vec<usize>>,
+    /// Per-loop continue jump placeholder indices for backpatching
+    continue_patch_stacks: Vec<Vec<usize>>,
 }
 
 impl Default for Compiler {
@@ -58,6 +62,8 @@ impl Compiler {
             scope_depth: 0,
             loop_depth: 0,
             max_loop_depth: 0,
+            break_patch_stacks: Vec::new(),
+            continue_patch_stacks: Vec::new(),
         }
     }
 
@@ -266,6 +272,22 @@ impl Compiler {
                 self.emit(OpCode::ReturnDeny);
             }
 
+            StmtKind::Break => {
+                if self.break_patch_stacks.is_empty() {
+                    return Err(CompileError::new("'break' outside of loop"));
+                }
+                let idx = self.emit(OpCode::Jump(0));
+                self.break_patch_stacks.last_mut().unwrap().push(idx);
+            }
+
+            StmtKind::Continue => {
+                if self.continue_patch_stacks.is_empty() {
+                    return Err(CompileError::new("'continue' outside of loop"));
+                }
+                let idx = self.emit(OpCode::Jump(0));
+                self.continue_patch_stacks.last_mut().unwrap().push(idx);
+            }
+
             StmtKind::ReturnNext => {
                 self.emit(OpCode::ReturnNext);
             }
@@ -339,6 +361,9 @@ impl Compiler {
             self.max_loop_depth = self.loop_depth;
         }
 
+        self.break_patch_stacks.push(vec![]);
+        self.continue_patch_stacks.push(vec![]);
+
         // Evaluate end expression ONCE before the loop and store in a local
         self.compile_expr(end)?;
         let end_slot = self.declare_local("__range_end__", false)?;
@@ -365,6 +390,9 @@ impl Compiler {
         }
         self.leave_scope();
 
+        // continue target = start of increment
+        let continue_target = self.current_offset();
+
         // Increment: i = i + 1
         self.emit(OpCode::GetLocal(var_slot));
         let one = self.add_int_const(1)?;
@@ -378,6 +406,22 @@ impl Compiler {
 
         self.patch_jump(exit_jump);
         self.emit(OpCode::LoopEnd);
+
+        let break_target = self.current_offset();
+
+        for idx in self.break_patch_stacks.pop().unwrap() {
+            let offset = break_target as i32 - (idx as i32 + 1);
+            if let OpCode::Jump(ref mut o) = self.code[idx] {
+                *o = offset;
+            }
+        }
+        for idx in self.continue_patch_stacks.pop().unwrap() {
+            let offset = continue_target as i32 - (idx as i32 + 1);
+            if let OpCode::Jump(ref mut o) = self.code[idx] {
+                *o = offset;
+            }
+        }
+
         self.loop_depth -= 1;
         self.leave_scope();
 
@@ -396,6 +440,9 @@ impl Compiler {
         if self.loop_depth > self.max_loop_depth {
             self.max_loop_depth = self.loop_depth;
         }
+
+        self.break_patch_stacks.push(vec![]);
+        self.continue_patch_stacks.push(vec![]);
 
         // Evaluate iterable → list
         self.compile_expr(iterable)?;
@@ -432,6 +479,9 @@ impl Compiler {
         }
         self.leave_scope();
 
+        // continue target = start of increment
+        let continue_target = self.current_offset();
+
         // Increment: idx = idx + 1
         self.emit(OpCode::GetLocal(idx_slot));
         let one = self.add_int_const(1)?;
@@ -445,6 +495,22 @@ impl Compiler {
 
         self.patch_jump(exit_jump);
         self.emit(OpCode::LoopEnd);
+
+        let break_target = self.current_offset();
+
+        for idx in self.break_patch_stacks.pop().unwrap() {
+            let offset = break_target as i32 - (idx as i32 + 1);
+            if let OpCode::Jump(ref mut o) = self.code[idx] {
+                *o = offset;
+            }
+        }
+        for idx in self.continue_patch_stacks.pop().unwrap() {
+            let offset = continue_target as i32 - (idx as i32 + 1);
+            if let OpCode::Jump(ref mut o) = self.code[idx] {
+                *o = offset;
+            }
+        }
+
         self.loop_depth -= 1;
         self.leave_scope();
 
@@ -458,8 +524,11 @@ impl Compiler {
             self.max_loop_depth = self.loop_depth;
         }
 
+        self.break_patch_stacks.push(vec![]);
+        self.continue_patch_stacks.push(vec![]);
+
         self.emit(OpCode::LoopInit);
-        let loop_start = self.current_offset();
+        let loop_start = self.current_offset(); // continue target = condition check
 
         self.compile_expr(condition)?;
         let exit_jump = self.emit(OpCode::JumpIfFalse(0));
@@ -470,11 +539,31 @@ impl Compiler {
         }
         self.leave_scope();
 
+        let continue_target = loop_start;
+
         let back_offset = loop_start as i32 - (self.current_offset() as i32 + 1);
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
         self.emit(OpCode::LoopEnd);
+
+        let break_target = self.current_offset();
+
+        // Backpatch break jumps → after LoopEnd
+        for idx in self.break_patch_stacks.pop().unwrap() {
+            let offset = break_target as i32 - (idx as i32 + 1);
+            if let OpCode::Jump(ref mut o) = self.code[idx] {
+                *o = offset;
+            }
+        }
+        // Backpatch continue jumps → condition check (loop_start)
+        for idx in self.continue_patch_stacks.pop().unwrap() {
+            let offset = continue_target as i32 - (idx as i32 + 1);
+            if let OpCode::Jump(ref mut o) = self.code[idx] {
+                *o = offset;
+            }
+        }
+
         self.loop_depth -= 1;
         self.leave_scope();
 
@@ -686,6 +775,9 @@ impl Compiler {
             "time_now" => (BuiltinId::TimeNow, Some(0)),
             "regex_find" => (BuiltinId::RegexFind, Some(2)),
             "regex_replace" => (BuiltinId::RegexReplace, Some(3)),
+            "trim" => (BuiltinId::Trim, Some(1)),
+            "split" => (BuiltinId::Split, Some(2)),
+            "range" => (BuiltinId::Range, Some(2)),
             _ => {
                 return Err(CompileError::new(format!("unknown function: {}()", name)));
             }
@@ -739,10 +831,15 @@ fn resolve_namespace_method(namespace: &str, method: &str) -> Option<BuiltinId> 
         ("req", "set_host") => Some(BuiltinId::ReqSetHost),
         ("req", "set_method") => Some(BuiltinId::ReqSetMethod),
 
-        // resp.*
+        // resp.* mutation
         ("resp", "set_header") => Some(BuiltinId::RespSetHeader),
         ("resp", "append_header") => Some(BuiltinId::RespAppendHeader),
         ("resp", "remove_header") => Some(BuiltinId::RespRemoveHeader),
+
+        // resp.* read
+        ("resp", "status") => Some(BuiltinId::RespStatus),
+        ("resp", "header") => Some(BuiltinId::RespHeader),
+        ("resp", "has_header") => Some(BuiltinId::RespHasHeader),
 
         // ctx.*
         ("ctx", "get") => Some(BuiltinId::CtxGet),
@@ -782,9 +879,12 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         // req.* mutation — 2-arg
         BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => 2,
 
-        // resp.* — 1-arg
+        // resp.* read
+        BuiltinId::RespStatus => 0,
+        BuiltinId::RespHeader | BuiltinId::RespHasHeader => 1,
+        // resp.* mutation — 1-arg
         BuiltinId::RespRemoveHeader => 1,
-        // resp.* — 2-arg
+        // resp.* mutation — 2-arg
         BuiltinId::RespSetHeader | BuiltinId::RespAppendHeader => 2,
 
         // ctx.*
@@ -803,10 +903,11 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         | BuiltinId::UrlEncode
         | BuiltinId::UrlDecode
         | BuiltinId::Sha256
-        | BuiltinId::Md5 => 1,
+        | BuiltinId::Md5
+        | BuiltinId::Trim => 1,
         BuiltinId::Substr | BuiltinId::RegexReplace => 3,
         BuiltinId::TimeNow => 0,
-        BuiltinId::RegexFind => 2,
+        BuiltinId::RegexFind | BuiltinId::Split => 2,
         BuiltinId::Range => 2,
     }
 }
@@ -896,6 +997,70 @@ mod tests {
         let prog = parse_program(source).unwrap();
         let compiled = Compiler::new().compile(&prog).unwrap();
         assert!(compiled.constants.iter().any(|c| matches!(c, Constant::Regex(_))));
+    }
+
+    #[test]
+    fn test_compile_break_in_while() {
+        let source = r#"
+            let mut i = 0
+            while i < 10 {
+                if i == 5 {
+                    break
+                }
+                i = i + 1
+            }
+        "#;
+        let prog = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&prog).unwrap();
+        assert!(compiled.max_loop_depth >= 1);
+    }
+
+    #[test]
+    fn test_compile_continue_in_while() {
+        let source = r#"
+            let mut i = 0
+            while i < 10 {
+                i = i + 1
+                if i == 5 {
+                    continue
+                }
+                log(to_str(i))
+            }
+        "#;
+        let prog = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&prog).unwrap();
+        assert!(compiled.max_loop_depth >= 1);
+    }
+
+    #[test]
+    fn test_compile_break_in_for_range() {
+        let source = r#"
+            for i in range(0, 10) {
+                if i == 5 {
+                    break
+                }
+                log(to_str(i))
+            }
+        "#;
+        let prog = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&prog).unwrap();
+        assert!(compiled.max_loop_depth >= 1);
+    }
+
+    #[test]
+    fn test_compile_break_outside_loop_error() {
+        let source = r#"break"#;
+        let prog = parse_program(source).unwrap();
+        let result = Compiler::new().compile(&prog);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compile_continue_outside_loop_error() {
+        let source = r#"continue"#;
+        let prog = parse_program(source).unwrap();
+        let result = Compiler::new().compile(&prog);
+        assert!(result.is_err());
     }
 
     #[test]

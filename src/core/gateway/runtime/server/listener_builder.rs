@@ -19,13 +19,14 @@ use tokio::net::UdpSocket;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
 use crate::core::gateway::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
-use crate::core::gateway::routes::tcp::{get_global_tcp_route_manager, EdgionTcpProxy};
-use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsTcpProxy};
-use crate::core::gateway::routes::udp::{get_global_udp_route_manager, EdgionUdpProxy};
+use crate::core::gateway::routes::tcp::{get_global_tcp_route_managers, EdgionTcpProxy};
+use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsPassthroughProxy, EdgionTlsTcpProxy};
+use crate::core::gateway::routes::udp::{get_global_udp_route_managers, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
+use tokio_util::sync::CancellationToken;
 
 /// Annotation key to control HTTP/2 support
 /// Set to "false" to disable HTTP/2 (both h2c and ALPN)
@@ -258,18 +259,11 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    // Pre-fetch TCP routes for this gateway (similar to HTTP approach)
-    let tcp_route_manager = get_global_tcp_route_manager();
-    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
-    let gateway_tcp_routes = tcp_route_manager.get_or_create_gateway_tcp_routes(namespace_str, &context.gateway_name);
+    let tcp_route_manager = get_global_tcp_route_managers().get_or_create_port_manager(port);
 
-    // Create TCP proxy service
     let edgion_tcp = EdgionTcpProxy {
-        gateway_name: context.gateway_name.clone(),
-        gateway_namespace: context.gateway_namespace.clone(),
-        listener_name: listener_name.clone(), // Pass listener name for sectionName matching
         listener_port: port,
-        gateway_tcp_routes, // Pass in pre-fetched routes
+        tcp_route_manager,
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),
     };
@@ -296,36 +290,29 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
 
 /// Add a UDP listener to the Pingora server
 ///
-/// UDP listeners don't use Pingora's Service abstraction - they run as independent tokio tasks
+/// UDP listeners don't use Pingora's Service abstraction — they run as
+/// independent tokio tasks.  Each listener gets a per-port route manager
+/// (mirroring TLS pattern) and a `CancellationToken` for graceful shutdown.
 pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Result<()> {
     let listener_name = context.listener.name.clone();
-    // Hostname is for SNI matching, not for binding - always bind to 0.0.0.0
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    // Get UDP routes for this gateway
-    let udp_route_manager = get_global_udp_route_manager();
-    let namespace_str = context.gateway_namespace.as_deref().unwrap_or("");
-    let gateway_udp_routes = udp_route_manager.get_or_create_gateway_udp_routes(namespace_str, &context.gateway_name);
+    let udp_route_manager = get_global_udp_route_managers().get_or_create_port_manager(port);
 
-    // Create UDP socket
-    // Note: This is blocking, but it's called during server initialization
     let socket = std::net::UdpSocket::bind(&addr)?;
     socket.set_nonblocking(true)?;
     let socket = UdpSocket::from_std(socket)?;
 
-    // Create UDP proxy service
+    let cancel_token = CancellationToken::new();
     let edgion_udp = Arc::new(EdgionUdpProxy::new(
-        context.gateway_name.clone(),
-        context.gateway_namespace.clone(),
-        listener_name.clone(), // Pass listener name for sectionName matching
         port,
-        gateway_udp_routes,
+        udp_route_manager,
         context.edgion_gateway_config.clone(),
         socket,
+        cancel_token,
     ));
 
-    // Start UDP service in a background task
     tokio::spawn(async move {
         edgion_udp.serve().await;
     });
@@ -388,6 +375,47 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     Ok(())
 }
 
+/// Add a TLS Passthrough listener to the Pingora server.
+///
+/// This creates a **plain TCP** listener that extracts SNI from the TLS
+/// ClientHello without performing a TLS handshake, then transparently
+/// relays the encrypted traffic to the matched backend.
+pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerContext) -> Result<()> {
+    let listener_name = context.listener.name.clone();
+    let addr = format!("0.0.0.0:{}", context.listener.port);
+    let port = context.listener.port as u16;
+
+    let tls_route_manager = get_global_tls_route_managers().get_or_create_port_manager(port);
+
+    let proxy = EdgionTlsPassthroughProxy {
+        listener_port: port,
+        tls_route_manager,
+        access_logger: context.access_logger.clone(),
+        edgion_gateway_config: context.edgion_gateway_config.clone(),
+        connector: TransportConnector::new(None),
+    };
+
+    let mut service = Service::with_listeners(
+        format!("TLS-Passthrough-{}", listener_name),
+        Listeners::tcp(&addr),
+        proxy,
+    );
+
+    apply_connection_filter(&mut service, context);
+
+    server.add_service(service);
+
+    tracing::info!(
+        gateway=%context.gateway_key,
+        listener=%listener_name,
+        addr=%addr,
+        protocol="TLS-Passthrough",
+        "Adding TLS passthrough listener"
+    );
+
+    Ok(())
+}
+
 /// Main entry point for adding a listener to the server
 ///
 /// This function dispatches to the appropriate listener builder based on the
@@ -399,26 +427,39 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
         "TCP" => add_tcp_listener(server, &context),
         "UDP" => add_udp_listener(server, &context),
         "TLS" => {
-            #[cfg(any(feature = "boringssl", feature = "openssl"))]
-            {
-                // Check Gateway annotation for backend protocol
-                let backend_protocol = context
-                    .gateway_annotations
-                    .get(ANNOTATION_BACKEND_PROTOCOL)
-                    .map(|s| s.as_str());
+            // Check listener TLS mode: Passthrough or Terminate (default)
+            let tls_mode = context
+                .listener
+                .tls
+                .as_ref()
+                .and_then(|t| t.mode.as_deref())
+                .unwrap_or("Terminate");
 
-                match backend_protocol {
-                    Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
-                    _ => anyhow::bail!(
-                        "TLS protocol requires '{}' annotation set to 'tcp'",
-                        ANNOTATION_BACKEND_PROTOCOL
-                    ),
+            match tls_mode {
+                "Passthrough" => add_tls_passthrough_listener(server, &context),
+                _ => {
+                    // Terminate mode
+                    #[cfg(any(feature = "boringssl", feature = "openssl"))]
+                    {
+                        let backend_protocol = context
+                            .gateway_annotations
+                            .get(ANNOTATION_BACKEND_PROTOCOL)
+                            .map(|s| s.as_str());
+
+                        match backend_protocol {
+                            Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
+                            _ => anyhow::bail!(
+                                "TLS Terminate mode requires '{}' annotation set to 'tcp'",
+                                ANNOTATION_BACKEND_PROTOCOL
+                            ),
+                        }
+                    }
+
+                    #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+                    {
+                        anyhow::bail!("TLS protocol requires either 'boringssl' or 'openssl' feature")
+                    }
                 }
-            }
-
-            #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
-            {
-                anyhow::bail!("TLS protocol requires either 'boringssl' or 'openssl' feature")
             }
         }
         protocol => {

@@ -20,6 +20,10 @@ path = "src/bin/edgion_controller.rs"
 name = "edgion-ctl"
 path = "src/bin/edgion_ctl.rs"
 
+[[bin]]
+name = "edgion-center"
+path = "src/bin/edgion_center.rs"
+
 [[example]]
 name = "build_test_proto"
 path = "examples/code/build_test_proto.rs"
@@ -80,6 +84,7 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 
 # Core async runtime and error handling
 tokio = { version = "1.49", features = ["full"] }
+tokio-util = "0.7"
 tokio-stream = "0.1"
 anyhow = "1.0"
 async-trait = "0.1"
@@ -159,6 +164,7 @@ boring-sys = { version = "4", optional = true }
 # Metrics
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
+metrics-util = "0.20"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -185,6 +191,7 @@ cookie = "0.18.1"
 instant-acme = "0.8.4"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 sha1 = "0.10.6"
+async_singleflight = "0.6"
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 proxy-header = "0.1.2"

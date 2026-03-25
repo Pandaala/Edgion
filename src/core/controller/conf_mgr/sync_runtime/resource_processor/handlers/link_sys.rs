@@ -3,8 +3,8 @@
 //! Handles LinkSys resources with Gateway API standard status management.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    accepted_condition, condition_false, condition_types, ready_condition, update_condition, HandlerContext,
-    ProcessResult, ProcessorHandler,
+    accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
+    ProcessorHandler,
 };
 use crate::types::prelude_resources::LinkSys;
 use crate::types::resources::link_sys::LinkSysStatus;
@@ -24,8 +24,9 @@ impl Default for LinkSysHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessorHandler<LinkSys> for LinkSysHandler {
-    fn parse(&self, ls: LinkSys, _ctx: &HandlerContext) -> ProcessResult<LinkSys> {
+    async fn parse(&self, ls: LinkSys, _ctx: &HandlerContext) -> ProcessResult<LinkSys> {
         ProcessResult::Continue(ls)
     }
 
@@ -35,7 +36,6 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         // Initialize status if not present
         let status = ls.status.get_or_insert_with(|| LinkSysStatus { conditions: vec![] });
 
-        // Set Accepted condition
         if validation_errors.is_empty() {
             update_condition(&mut status.conditions, accepted_condition(generation));
         } else {
@@ -49,8 +49,5 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                 ),
             );
         }
-
-        // Set Ready condition (always ready after parsing)
-        update_condition(&mut status.conditions, ready_condition(generation));
     }
 }

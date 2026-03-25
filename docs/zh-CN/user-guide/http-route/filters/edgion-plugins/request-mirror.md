@@ -2,7 +2,8 @@
 
 > **🔌 Edgion 扩展**
 > 
-> RequestMirror 是 `EdgionPlugins` CRD 提供的请求镜像插件，不属于标准 Gateway API。
+> Edgion 同时支持标准 Gateway API `RequestMirror` filter 和可复用的 `EdgionPlugins` `RequestMirror` 配置。
+> 本页重点说明可复用的 `EdgionPlugins` 形式，以及两种入口共享的运行时行为。
 
 ## 概述
 

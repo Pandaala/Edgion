@@ -15,6 +15,7 @@ pub mod names {
     pub const ACCESS_LOG_DROPPED: &str = "edgion_access_log_dropped_total";
     pub const SSL_LOG_DROPPED: &str = "edgion_ssl_log_dropped_total";
     pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
+    pub const TLS_LOG_DROPPED: &str = "edgion_tls_log_dropped_total";
     pub const UDP_LOG_DROPPED: &str = "edgion_udp_log_dropped_total";
     // K8s Status update metrics
     pub const STATUS_UPDATE_TOTAL: &str = "edgion_status_update_total";
@@ -31,10 +32,16 @@ pub mod names {
     // Request mirror metrics
     pub const MIRROR_REQUESTS_TOTAL: &str = "edgion_mirror_requests_total";
     pub const MIRROR_DURATION_MS: &str = "edgion_mirror_duration_ms";
+    // End-to-end request duration histogram
+    pub const GATEWAY_REQUEST_DURATION_MS: &str = "edgion_gateway_request_duration_ms";
     // Controller: number of gateway instances connected via gRPC long-poll
     pub const CONTROLLER_CONNECTED_GATEWAYS: &str = "edgion_controller_connected_gateways";
     // Controller: schema validation failures from Admin API (non-K8s mode)
     pub const SCHEMA_VALIDATION_ERRORS: &str = "edgion_controller_schema_validation_errors_total";
+    // Circuit breaker metrics
+    pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
+    pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
+    pub const CB_REJECTIONS_TOTAL: &str = "edgion_circuit_breaker_rejections_total";
 }
 
 /// Global metrics singleton
@@ -64,6 +71,8 @@ pub struct GatewayMetrics {
     ssl_log_dropped: Counter,
     /// Total TCP logs dropped (channel full)
     tcp_log_dropped: Counter,
+    /// Total TLS access logs dropped (channel full)
+    tls_log_dropped: Counter,
     /// Total UDP logs dropped (channel full)
     udp_log_dropped: Counter,
     /// Total K8s status updates attempted
@@ -97,6 +106,7 @@ impl GatewayMetrics {
             access_log_dropped: counter!(names::ACCESS_LOG_DROPPED),
             ssl_log_dropped: counter!(names::SSL_LOG_DROPPED),
             tcp_log_dropped: counter!(names::TCP_LOG_DROPPED),
+            tls_log_dropped: counter!(names::TLS_LOG_DROPPED),
             udp_log_dropped: counter!(names::UDP_LOG_DROPPED),
             status_update_total: counter!(names::STATUS_UPDATE_TOTAL),
             status_update_failed: counter!(names::STATUS_UPDATE_FAILED),
@@ -152,6 +162,12 @@ impl GatewayMetrics {
     #[inline]
     pub fn tcp_log_dropped(&self) {
         self.tcp_log_dropped.increment(1);
+    }
+
+    /// Record a dropped TLS access log entry
+    #[inline]
+    pub fn tls_log_dropped(&self) {
+        self.tls_log_dropped.increment(1);
     }
 
     /// Record a dropped UDP log entry
@@ -291,4 +307,73 @@ pub fn record_mirror_metric(status: &'static str, duration_ms: f64) {
     )
     .increment(1);
     histogram!(names::MIRROR_DURATION_MS).record(duration_ms);
+}
+
+/// Record end-to-end request duration histogram.
+///
+/// Labels are conditionally included based on `RequestDurationConfig.labels`.
+/// When a label is disabled, it is not written at all (not an empty string),
+/// which truly reduces cardinality.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn record_request_duration(
+    cfg: &crate::core::gateway::cli::config::RequestDurationConfig,
+    gateway_namespace: &str,
+    gateway_name: &str,
+    route_namespace: &str,
+    route_name: &str,
+    backend_namespace: &str,
+    backend_name: &str,
+    protocol: &str,
+    status: &str,
+    duration_ms: f64,
+) {
+    if !cfg.enabled {
+        return;
+    }
+    let labels = &cfg.labels;
+
+    let mut label_vec: Vec<(&'static str, String)> = Vec::with_capacity(8);
+    if labels.gateway_namespace {
+        label_vec.push(("gateway_namespace", gateway_namespace.to_string()));
+    }
+    if labels.gateway_name {
+        label_vec.push(("gateway_name", gateway_name.to_string()));
+    }
+    if labels.route_namespace {
+        label_vec.push(("route_namespace", route_namespace.to_string()));
+    }
+    if labels.route_name {
+        label_vec.push(("route_name", route_name.to_string()));
+    }
+    if labels.backend_namespace {
+        label_vec.push(("backend_namespace", backend_namespace.to_string()));
+    }
+    if labels.backend_name {
+        label_vec.push(("backend_name", backend_name.to_string()));
+    }
+    if labels.protocol {
+        label_vec.push(("protocol", protocol.to_string()));
+    }
+    if labels.status {
+        label_vec.push(("status", status.to_string()));
+    }
+
+    histogram!(names::GATEWAY_REQUEST_DURATION_MS, &label_vec).record(duration_ms);
+}
+
+/// Record a circuit breaker ejection event
+pub fn record_cb_ejection(service_key: &str) {
+    counter!(names::CB_EJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
+    gauge!(names::CB_EJECTED_ENDPOINTS, "service" => service_key.to_string()).increment(1.0);
+}
+
+/// Record a circuit breaker recovery event (ejection expired)
+pub fn record_cb_recovery(service_key: &str) {
+    gauge!(names::CB_EJECTED_ENDPOINTS, "service" => service_key.to_string()).decrement(1.0);
+}
+
+/// Record a circuit breaker rejection (request blocked by ejected backend)
+pub fn record_cb_rejection(service_key: &str) {
+    counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
 }

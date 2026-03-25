@@ -15,6 +15,9 @@ pub mod edgion {
     /// Active health check configuration for backend endpoints.
     /// Value format: YAML string.
     pub const HEALTH_CHECK: &str = "edgion.io/health-check";
+    /// Circuit breaker configuration for backend endpoints.
+    /// Value format: YAML string.
+    pub const CIRCUIT_BREAKER: &str = "edgion.io/circuit-breaker";
 
     /// Proxy Protocol version to send to upstream.
     /// Value: "v2" to enable PP2.

@@ -110,7 +110,7 @@ impl RequestFilter for DynamicInternalUpstream {
                 return PluginRunningResult::GoodNext; // No route matched, skip
             }
         };
-        let route_ns = &route_unit.matched_info.rns;
+        let route_ns = &route_unit.matched_info.rsc.ns;
         let backend_refs = match route_unit.rule.backend_refs.as_ref() {
             Some(refs) if !refs.is_empty() => refs,
             _ => {

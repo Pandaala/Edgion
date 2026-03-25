@@ -43,12 +43,7 @@ impl TlsRouteTable {
         let mut catch_all: Vec<Arc<TLSRoute>> = Vec::new();
 
         for route in routes.values() {
-            let hostnames: Vec<String> = route
-                .spec
-                .hostnames
-                .as_ref()
-                .map(|h| h.to_vec())
-                .unwrap_or_default();
+            let hostnames: Vec<String> = route.spec.hostnames.as_ref().map(|h| h.to_vec()).unwrap_or_default();
 
             if hostnames.is_empty() {
                 catch_all.push(route.clone());
@@ -68,11 +63,7 @@ impl TlsRouteTable {
 
         Self {
             host_map,
-            catch_all_routes: if catch_all.is_empty() {
-                None
-            } else {
-                Some(catch_all)
-            },
+            catch_all_routes: if catch_all.is_empty() { None } else { Some(catch_all) },
         }
     }
 
@@ -141,30 +132,6 @@ mod tests {
         }
     }
 
-    fn create_test_tls_route_no_hostname(namespace: &str, name: &str) -> TLSRoute {
-        TLSRoute {
-            metadata: kube::api::ObjectMeta {
-                namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            spec: TLSRouteSpec {
-                parent_refs: Some(vec![ParentReference {
-                    group: Some("gateway.networking.k8s.io".to_string()),
-                    kind: Some("Gateway".to_string()),
-                    namespace: Some(namespace.to_string()),
-                    name: "test-gateway".to_string(),
-                    section_name: None,
-                    port: None,
-                }]),
-                hostnames: None,
-                rules: Some(vec![]),
-                resolved_ports: None,
-            },
-            status: None,
-        }
-    }
-
     #[test]
     fn test_exact_match() {
         let route1 = Arc::new(create_test_tls_route("default", "route1", "test.example.com"));
@@ -180,7 +147,7 @@ mod tests {
         assert!(table.match_route("api.example.com").is_some());
         assert!(table.match_route("other.example.com").is_none());
     }
-    
+
     #[test]
     fn test_empty_table() {
         let table = TlsRouteTable::new();

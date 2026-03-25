@@ -64,6 +64,17 @@ pub struct Listener {
     pub allowed_routes: Option<AllowedRoutes>,
 }
 
+/// FrontendTLSValidation holds configuration for validating client certificates
+/// at the Gateway listener level (Gateway API standard mTLS).
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendTLSValidation {
+    /// CACertificateRefs references Secrets containing CA certificate bundles
+    /// for validating client certificates. Secret must contain `ca.crt` key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_certificate_refs: Option<Vec<SecretObjectReference>>,
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayTLSConfig {
@@ -83,6 +94,14 @@ pub struct GatewayTLSConfig {
     /// Contains the actual TLS certificates referenced by certificate_refs
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<Secret>>,
+
+    /// Frontend TLS validation for client certificates (Gateway API standard mTLS)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend_validation: Option<FrontendTLSValidation>,
+
+    /// Resolved CA Secret data for frontend validation (filled by Controller, not user-configured)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_frontend_ca_secrets: Option<Vec<Secret>>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -224,5 +243,77 @@ mod tests {
         let yaml = serde_yaml::to_string(&gateway).unwrap();
         println!("{}", yaml);
         assert!(yaml.contains("gatewayClassName"));
+    }
+
+    #[test]
+    fn test_frontend_validation_json_roundtrip() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: test-fv
+  namespace: default
+spec:
+  gatewayClassName: test-class
+  listeners:
+    - name: https
+      hostname: test.example.com
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: server-cert
+        frontendValidation:
+          caCertificateRefs:
+            - name: client-ca
+              kind: Secret
+              group: ""
+"#;
+        let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
+        let json = serde_json::to_string_pretty(&gw).unwrap();
+        println!("JSON:\n{}", json);
+        assert!(
+            json.contains("frontendValidation"),
+            "frontendValidation missing in JSON: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_frontend_validation_deserialization() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: test-fv
+  namespace: default
+spec:
+  gatewayClassName: test-class
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: server-cert
+        frontendValidation:
+          caCertificateRefs:
+            - name: client-ca
+              kind: Secret
+              group: ""
+"#;
+        let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
+        let listener = &gw.spec.listeners.unwrap()[0];
+        let tls = listener.tls.as_ref().unwrap();
+        assert!(
+            tls.frontend_validation.is_some(),
+            "frontendValidation should be present"
+        );
+        let fv = tls.frontend_validation.as_ref().unwrap();
+        let ca_refs = fv.ca_certificate_refs.as_ref().unwrap();
+        assert_eq!(ca_refs.len(), 1);
+        assert_eq!(ca_refs[0].name, "client-ca");
     }
 }

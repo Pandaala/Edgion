@@ -19,7 +19,7 @@ use super::config::{HaMode, KubernetesConfig};
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::storage::KubernetesStorage;
-use super::version_detection::resolve_endpoint_mode;
+use super::version_detection::{preflight_check_gateway_api_crds, resolve_endpoint_mode, validate_no_watch_kinds};
 use crate::core::controller::conf_mgr::conf_center::traits::{
     CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -204,6 +204,7 @@ impl KubernetesCenter {
             "Creating Kubernetes controller"
         );
 
+        let no_watch_kinds = config.no_watch_kinds.iter().cloned().collect();
         KubernetesController::with_metadata_filter(
             client.clone(),
             config.gateway_class.clone(),
@@ -213,6 +214,7 @@ impl KubernetesCenter {
             config.label_selector.clone(),
             config.metadata_filter.clone(),
             endpoint_mode,
+            no_watch_kinds,
         )
     }
 
@@ -470,13 +472,20 @@ impl KubernetesCenter {
 
         crate::core::gateway::backends::init_global_endpoint_mode(resolved_mode);
 
+        // 1.5 Validate and preflight check Gateway API CRDs
+        validate_no_watch_kinds(&self.config.no_watch_kinds);
+        let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
+        preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
+
         // 2. Create ConfigSyncServer (will be populated when caches are ready)
         let config_sync_server = Arc::new(ConfigSyncServer::new());
         config_sync_server.set_endpoint_mode(resolved_mode);
 
         // 3. Create Controller with resolved endpoint mode and leader handle
-        let controller = self.create_k8s_controller(client, resolved_mode)?
+        let controller = self
+            .create_k8s_controller(client, resolved_mode)?
             .with_leader_handle(leader_handle.clone());
+        let expected_processor_kinds = controller.all_processor_kinds();
 
         // 4. Spawn controller.run task
         let shutdown_signal = shutdown_handle.signal();
@@ -500,24 +509,36 @@ impl KubernetesCenter {
         let acme_client = client.clone();
         // Get no_sync_kinds from global config (or use default)
         let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
+        let expected_sync_kinds: Vec<&'static str> = expected_processor_kinds
+            .iter()
+            .copied()
+            .filter(|k| !no_sync_kinds.iter().any(|ns| ns == k))
+            .collect();
         let caches_handle = tokio::spawn(async move {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
             let start = Instant::now();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
 
-            // Treat no_sync_kinds as optional for cache readiness as well:
-            // if those resources are unavailable in the cluster (e.g. experimental CRDs),
-            // they should not block ConfigSyncServer startup.
             let pending_sync_kinds = || -> Vec<&'static str> {
-                PROCESSOR_REGISTRY
-                    .not_ready_kinds()
-                    .into_iter()
-                    .filter(|k| !no_sync_refs.contains(k))
+                let missing_registration: Vec<&'static str> = expected_processor_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).is_none())
+                    .collect();
+                if !missing_registration.is_empty() {
+                    return missing_registration;
+                }
+
+                expected_sync_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).map(|p| !p.is_ready()).unwrap_or(true))
                     .collect()
             };
 
-            // Wait for PROCESSOR_REGISTRY to be ready
+            // Wait until all phased processors are registered and all sync kinds
+            // are ready before publishing ConfigSyncServer.
             while !pending_sync_kinds().is_empty() && start.elapsed() < timeout {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
@@ -530,11 +551,19 @@ impl KubernetesCenter {
                 // Trigger full cross-namespace revalidation
                 // This ensures Routes processed before ReferenceGrants are revalidated
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
-                );
+                )
+                .await;
 
                 // Requeue Gateways with TLS cert refs so they re-check SecretStore
                 // (Secrets may have been processed after Gateways during init)
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation()
+                    .await;
+
+                // Requeue all routes in gateway_route_index to pick up Gateways
+                // that were processed before routes registered their parentRefs
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+                )
+                .await;
 
                 // Start ACME background service (certificate issuance/renewal)
                 crate::core::controller::services::acme::start_acme_service(acme_client);
@@ -623,7 +652,11 @@ impl KubernetesCenter {
 
             match exit_reason {
                 MainFlowExit::Shutdown => {
-                    tracing::info!(component = "kubernetes_center", ha_mode = "leader-only", "Normal shutdown");
+                    tracing::info!(
+                        component = "kubernetes_center",
+                        ha_mode = "leader-only",
+                        "Normal shutdown"
+                    );
                     crate::core::controller::services::acme::stop_acme_service();
                     PROCESSOR_REGISTRY.clear_registry();
                     return Ok(());
@@ -788,12 +821,18 @@ impl KubernetesCenter {
 
         crate::core::gateway::backends::init_global_endpoint_mode(resolved_mode);
 
+        // Validate and preflight check Gateway API CRDs
+        validate_no_watch_kinds(&self.config.no_watch_kinds);
+        let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
+        preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
+
         let config_sync_server = Arc::new(ConfigSyncServer::new());
         config_sync_server.set_endpoint_mode(resolved_mode);
 
         // Create controller with leader_handle for status write gating
         let mut controller = self.create_k8s_controller(client, resolved_mode)?;
         controller = controller.with_leader_handle(leader_handle.clone());
+        let expected_processor_kinds = controller.all_processor_kinds();
 
         let shutdown_signal = shutdown_handle.signal();
         let tx = event_tx.clone();
@@ -813,6 +852,11 @@ impl KubernetesCenter {
         let css = config_sync_server.clone();
         let tx = event_tx.clone();
         let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
+        let expected_sync_kinds: Vec<&'static str> = expected_processor_kinds
+            .iter()
+            .copied()
+            .filter(|k| !no_sync_kinds.iter().any(|ns| ns == k))
+            .collect();
         let caches_handle = tokio::spawn(async move {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
@@ -820,10 +864,19 @@ impl KubernetesCenter {
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
 
             let pending_sync_kinds = || -> Vec<&'static str> {
-                PROCESSOR_REGISTRY
-                    .not_ready_kinds()
-                    .into_iter()
-                    .filter(|k| !no_sync_refs.contains(k))
+                let missing_registration: Vec<&'static str> = expected_processor_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).is_none())
+                    .collect();
+                if !missing_registration.is_empty() {
+                    return missing_registration;
+                }
+
+                expected_sync_kinds
+                    .iter()
+                    .copied()
+                    .filter(|k| PROCESSOR_REGISTRY.get(k).map(|p| !p.is_ready()).unwrap_or(true))
                     .collect()
             };
 
@@ -833,8 +886,14 @@ impl KubernetesCenter {
 
             if pending_sync_kinds().is_empty() {
                 css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation();
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation();
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
+                )
+                .await;
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation()
+                    .await;
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+                )
+                .await;
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
             } else {
                 let not_ready: Vec<String> = pending_sync_kinds().into_iter().map(|s| s.to_string()).collect();
@@ -853,9 +912,7 @@ impl KubernetesCenter {
         let tx_leader = event_tx.clone();
         let leader_watcher_handle = tokio::spawn(async move {
             let mut current_leader = lh.is_leader();
-            if current_leader
-                && tx_leader.send(LifecycleEvent::LeadershipAcquired).await.is_err()
-            {
+            if current_leader && tx_leader.send(LifecycleEvent::LeadershipAcquired).await.is_err() {
                 return;
             }
             loop {
@@ -901,7 +958,7 @@ impl KubernetesCenter {
     async fn start_leader_services(&self, client: &Client) {
         tracing::info!(component = "kubernetes_center", "Starting leader-only services");
         crate::core::controller::services::acme::start_acme_service(client.clone());
-        PROCESSOR_REGISTRY.requeue_all();
+        PROCESSOR_REGISTRY.requeue_all().await;
     }
 
     /// Stop leader-only services

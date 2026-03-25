@@ -1,4 +1,4 @@
-//! DslPlugin — implements RequestFilter for EdgionDSL scripts
+//! DslPlugin — implements RequestFilter and UpstreamResponseFilter for EdgionDSL scripts
 //!
 //! Created from DslConfig by compiling source or deserializing bytecode,
 //! then instantiating a sandboxed VM. Execution is wrapped via execute_safe()
@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 
+use crate::core::gateway::plugins::runtime::traits::UpstreamResponseFilter;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 
@@ -72,8 +73,8 @@ impl DslPlugin {
         Err("either source or bytecode must be provided".to_string())
     }
 
-    /// Create from DslConfig (used by PluginRuntime factory)
-    pub fn from_config(config: &DslConfig) -> Option<Box<dyn RequestFilter>> {
+    /// Extract script, limits, and error policy from DslConfig (shared by factory methods)
+    fn resolve_parts(config: &DslConfig) -> Option<(CompiledScript, VmLimits, DslErrorPolicy)> {
         let script = match Self::resolve_script(config) {
             Ok(s) => s,
             Err(e) => {
@@ -81,7 +82,6 @@ impl DslPlugin {
                 return None;
             }
         };
-
         let limits = VmLimits {
             max_steps: config.max_steps.unwrap_or(10_000),
             max_loop_iterations: config.max_loop_iterations.unwrap_or(100),
@@ -89,16 +89,32 @@ impl DslPlugin {
             max_stack_depth: config.max_stack_depth.unwrap_or(128),
             max_string_len: config.max_string_len.unwrap_or(8192),
         };
-
         let policy = config.error_policy.clone().unwrap_or_default();
-        let plugin = match DslPlugin::new(config.name.clone(), script, limits, policy) {
-            Ok(p) => p,
+        Some((script, limits, policy))
+    }
+
+    /// Create from DslConfig (used by PluginRuntime factory for request stage)
+    pub fn from_config(config: &DslConfig) -> Option<Box<dyn RequestFilter>> {
+        let (script, limits, policy) = Self::resolve_parts(config)?;
+        match DslPlugin::new(config.name.clone(), script, limits, policy) {
+            Ok(p) => Some(Box::new(p)),
             Err(e) => {
                 tracing::error!("DSL plugin '{}' VM init failed: {}", config.name, e);
-                return None;
+                None
             }
-        };
-        Some(Box::new(plugin))
+        }
+    }
+
+    /// Create from DslConfig (used by PluginRuntime factory for upstream response filter stage)
+    pub fn from_config_response(config: &DslConfig) -> Option<Box<dyn UpstreamResponseFilter>> {
+        let (script, limits, policy) = Self::resolve_parts(config)?;
+        match DslPlugin::new(config.name.clone(), script, limits, policy) {
+            Ok(p) => Some(Box::new(p)),
+            Err(e) => {
+                tracing::error!("DSL plugin '{}' VM init failed: {}", config.name, e);
+                None
+            }
+        }
     }
 }
 
@@ -109,6 +125,20 @@ impl RequestFilter for DslPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        execute_safe(&self.vm, session, log, &self.error_policy)
+    }
+}
+
+impl UpstreamResponseFilter for DslPlugin {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn run_upstream_response_filter(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> PluginRunningResult {
         execute_safe(&self.vm, session, log, &self.error_policy)
     }
 }

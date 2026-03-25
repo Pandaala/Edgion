@@ -260,8 +260,8 @@ start_controller() {
 start_gateway() {
     log_section "Start edgion-gateway"
     
-    EDGION_ACCESS_LOG="${LOG_DIR}/access.log" \
-    EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log" \
+    EDGION_ACCESS_LOG="${LOG_DIR}/edgion_access.log" \
+    EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --integration-testing-mode \
@@ -324,7 +324,7 @@ Logs:
   - ${LOG_DIR}/test_server.log
   - ${LOG_DIR}/controller.log
   - ${LOG_DIR}/gateway.log
-  - ${LOG_DIR}/access.log
+  - ${LOG_DIR}/edgion_access.log
 
 Stop: ./examples/test/scripts/utils/kill_all.sh
 EOF

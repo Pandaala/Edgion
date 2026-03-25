@@ -13,6 +13,7 @@ use std::time::Duration;
 use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tracing::Instrument;
 
 /// Result of processing a work item
 ///
@@ -76,16 +77,17 @@ fn extract_status_json<T: Serialize>(obj: &T) -> StatusExtractResult {
     }
 }
 
-/// Check if status has changed based on extraction results
-fn status_has_changed(old: &StatusExtractResult, new: &StatusExtractResult) -> bool {
+/// Check if status has changed using semantic comparison.
+///
+/// Uses `status_diff::status_semantically_changed` to ignore non-semantic
+/// fields like `lastTransitionTime`, avoiding unnecessary K8s API writes.
+fn status_has_changed(kind: &str, old: &StatusExtractResult, new: &StatusExtractResult) -> bool {
     match (old, new) {
-        // Both present - compare values
-        (StatusExtractResult::Present(old_val), StatusExtractResult::Present(new_val)) => old_val != new_val,
-        // Both empty - no change
+        (StatusExtractResult::Present(old_val), StatusExtractResult::Present(new_val)) => {
+            super::status_diff::status_semantically_changed(kind, old_val, new_val)
+        }
         (StatusExtractResult::Empty, StatusExtractResult::Empty) => false,
-        // One has error - assume change to trigger persistence attempt
         (StatusExtractResult::SerializationError, _) | (_, StatusExtractResult::SerializationError) => true,
-        // One empty, one present - change
         _ => true,
     }
 }
@@ -112,6 +114,7 @@ pub fn extract_status_value<T: Serialize>(obj: &T) -> Option<serde_json::Value> 
 ///
 /// This trait allows storing different ResourceProcessor<T> types in a HashMap
 /// and provides common operations without knowing the concrete type.
+#[async_trait::async_trait]
 pub trait ProcessorObj: Send + Sync {
     /// Get the resource kind name
     fn kind(&self) -> &'static str;
@@ -120,13 +123,13 @@ pub trait ProcessorObj: Send + Sync {
     fn as_watch_obj(&self) -> Arc<dyn WatchObj>;
 
     /// Enqueue a key for immediate processing (original events, init revalidation)
-    fn requeue(&self, key: String);
+    async fn requeue(&self, key: String);
 
     /// Enqueue a key with delay (unused legacy; prefer requeue_with_chain)
-    fn requeue_after(&self, key: String, duration: Duration);
+    async fn requeue_after(&self, key: String, duration: Duration);
 
     /// Cross-resource requeue with trigger chain (goes through delay subsystem)
-    fn requeue_with_chain(&self, key: String, chain: TriggerChain);
+    async fn requeue_with_chain(&self, key: String, chain: TriggerChain);
 
     /// Check if cache is ready
     fn is_ready(&self) -> bool;
@@ -156,7 +159,7 @@ pub trait ProcessorObj: Send + Sync {
     fn contains_key(&self, key: &str) -> bool;
 
     /// Requeue all keys in cache (used for leader status reconciliation)
-    fn requeue_all_keys(&self) -> usize;
+    async fn requeue_all_keys(&self) -> usize;
 }
 
 /// Enhanced ResourceProcessor that holds ServerCache<T>
@@ -285,13 +288,16 @@ where
     ///   - FileSystem mode: pass content of .status file as JSON string
     ///
     /// Returns WorkItemResult for status persistence handling by caller.
-    pub fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
+    pub async fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
         let ctx = self.create_context(TriggerChain::default());
-        self.process_resource(obj, &ctx, true, existing_status_json)
+        self.process_resource(obj, &ctx, true, existing_status_json).await
     }
 
     /// Handle InitDone event (LIST completed)
     pub fn on_init_done(&self) {
+        let ctx = self.create_context(TriggerChain::default());
+        self.handler.on_init_done(&ctx);
+
         WatchObj::set_ready(self.cache.as_ref());
         tracing::info!(
             component = "resource_processor",
@@ -301,23 +307,15 @@ where
     }
 
     /// Handle Apply event (enqueue for runtime processing)
-    pub fn on_apply(&self, obj: &K) {
+    pub async fn on_apply(&self, obj: &K) {
         let key = make_resource_key(obj);
-        let workqueue = self.workqueue.clone();
-
-        tokio::spawn(async move {
-            workqueue.enqueue(key).await;
-        });
+        self.workqueue.enqueue(key).await;
     }
 
     /// Handle Delete event (enqueue for runtime processing)
-    pub fn on_delete(&self, obj: &K) {
+    pub async fn on_delete(&self, obj: &K) {
         let key = make_resource_key(obj);
-        let workqueue = self.workqueue.clone();
-
-        tokio::spawn(async move {
-            workqueue.enqueue(key).await;
-        });
+        self.workqueue.enqueue(key).await;
     }
 
     // ==================== Cache Operations ====================
@@ -332,16 +330,16 @@ where
         self.cache.list_owned().data
     }
 
-    /// Save resource to cache
-    pub fn save(&self, obj: K) {
-        self.cache.apply_change(ResourceChange::EventUpdate, obj);
+    /// Save resource to cache with an optional pre-assigned sync_version
+    pub fn save(&self, obj: K, sv: Option<u64>) {
+        self.cache.apply_change(ResourceChange::EventUpdate, obj, sv);
     }
 
-    /// Remove resource from cache by key
-    pub fn remove(&self, key: &str) {
+    /// Remove resource from cache by key with an optional pre-assigned sync_version
+    pub fn remove(&self, key: &str, sv: Option<u64>) {
         // Get the cached object first to properly delete
         if let Some(cached) = self.cache.get_by_key(key) {
-            self.cache.apply_change(ResourceChange::EventDelete, cached);
+            self.cache.apply_change(ResourceChange::EventDelete, cached, sv);
         }
     }
 
@@ -362,7 +360,7 @@ where
     ///
     /// Returns `WorkItemResult` indicating what action was taken and whether
     /// status needs to be persisted.
-    pub fn process_work_item(
+    pub async fn process_work_item(
         &self,
         key: &str,
         store_obj: Option<K>,
@@ -376,11 +374,11 @@ where
         match (store_obj, cache_obj) {
             (Some(obj), _) => {
                 // Object exists in store -> process it
-                self.process_resource(obj, &ctx, false, existing_status_json)
+                self.process_resource(obj, &ctx, false, existing_status_json).await
             }
             (None, Some(cached)) => {
                 // Object deleted from store but exists in cache -> delete
-                self.process_delete(&cached, &ctx);
+                self.process_delete(&cached, &ctx).await;
                 WorkItemResult::Deleted { key: key.to_string() }
             }
             (None, None) => {
@@ -413,7 +411,7 @@ where
     /// * `existing_status_json` - Existing status from config center as JSON string
     ///   - K8s mode: None (status is in obj)
     ///   - FileSystem mode: content of .status file
-    fn process_resource(
+    async fn process_resource(
         &self,
         obj: K,
         ctx: &HandlerContext,
@@ -425,27 +423,43 @@ where
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
         let rv = crate::types::resource::meta::extract_version(obj.meta());
 
+        // Generate sv early so the entire processing span carries it for telemetry correlation
+        let sv = crate::core::common::utils::next_resource_version();
+        let span = tracing::info_span!(
+            "process_resource",
+            component = "resource_processor",
+            kind = self.kind,
+            name = %name,
+            ns = %namespace,
+            rv,
+            sv,
+        );
+        self.process_resource_inner(obj, ctx, is_init, existing_status_json, sv)
+            .instrument(span)
+            .await
+    }
+
+    async fn process_resource_inner(
+        &self,
+        obj: K,
+        ctx: &HandlerContext,
+        is_init: bool,
+        existing_status_json: Option<String>,
+        sv: u64,
+    ) -> WorkItemResult<K> {
+        let namespace = obj.meta().namespace.clone().unwrap_or_default();
+
         // 1. Check namespace filter
         if let Some(allowed_ns) = ctx.namespace_filter() {
             if !namespace.is_empty() && !allowed_ns.iter().any(|n| n == &namespace) {
-                tracing::trace!(
-                    kind = self.kind,
-                    name = %name,
-                    namespace = %namespace,
-                    "Skipped by namespace filter"
-                );
+                tracing::trace!("Skipped by namespace filter");
                 return WorkItemResult::Skipped;
             }
         }
 
         // 2. Check handler filter
         if !self.handler.filter(&obj) {
-            tracing::trace!(
-                kind = self.kind,
-                name = %name,
-                namespace = %namespace,
-                "Skipped by handler filter"
-            );
+            tracing::trace!("Skipped by handler filter");
             return WorkItemResult::Skipped;
         }
 
@@ -459,32 +473,18 @@ where
         // 4. Validate (log warnings but continue)
         let mut all_errors = self.handler.validate(&obj, ctx);
         for error in &all_errors {
-            tracing::warn!(
-                kind = self.kind,
-                name = %name,
-                namespace = %namespace,
-                rv,
-                error = %error,
-                "Resource validation error"
-            );
+            tracing::warn!(error = %error, "Resource validation error");
         }
 
         // 5. Preparse (build runtime structures, validate configs)
         let preparse_errors = self.handler.preparse(&mut obj, ctx);
         for error in &preparse_errors {
-            tracing::warn!(
-                kind = self.kind,
-                name = %name,
-                namespace = %namespace,
-                rv,
-                error = %error,
-                "Resource preparse error"
-            );
+            tracing::warn!(error = %error, "Resource preparse error");
         }
         all_errors.extend(preparse_errors);
 
         // 6. Parse/preprocess
-        match self.handler.parse(obj, ctx) {
+        match self.handler.parse(obj, ctx).await {
             ProcessResult::Continue(mut parsed_obj) => {
                 // 7. Determine old status for comparison
                 // - If existing_status_json provided (FileSystem mode): use it
@@ -496,12 +496,7 @@ where
 
                 // Log serialization errors
                 if matches!(old_status, StatusExtractResult::SerializationError) {
-                    tracing::warn!(
-                        kind = self.kind,
-                        name = %name,
-                        namespace = %namespace,
-                        "Failed to serialize old status for comparison"
-                    );
+                    tracing::warn!("Failed to serialize old status for comparison");
                 }
 
                 // 8. Update status (handler sets Gateway API conditions)
@@ -512,36 +507,32 @@ where
 
                 // Log serialization errors
                 if matches!(new_status, StatusExtractResult::SerializationError) {
-                    tracing::warn!(
-                        kind = self.kind,
-                        name = %name,
-                        namespace = %namespace,
-                        "Failed to serialize new status for comparison"
-                    );
+                    tracing::warn!("Failed to serialize new status for comparison");
                 }
 
-                let status_changed = status_has_changed(&old_status, &new_status);
+                let status_changed = status_has_changed(self.kind, &old_status, &new_status);
 
                 if status_changed {
-                    tracing::trace!(
-                        kind = self.kind,
-                        name = %name,
-                        namespace = %namespace,
-                        "Status changed, will persist"
-                    );
+                    tracing::debug!("Status semantically changed, will persist");
+                } else if matches!(
+                    (&old_status, &new_status),
+                    (StatusExtractResult::Present(_), StatusExtractResult::Present(_))
+                ) {
+                    crate::core::controller::conf_mgr::sync_runtime::record_status_write_skipped(self.kind);
+                    tracing::trace!("Status unchanged by semantic diff, skipping persist");
                 }
 
                 // 10. Call on_change
-                if !is_init {
-                    self.handler.on_change(&parsed_obj, ctx);
-                }
+                //
+                // Called in both init and runtime phases. During init, requeued
+                // items are buffered by the workqueue and processed after init
+                // completes, so cross-resource requeue (e.g., Gateway port
+                // changes triggering TLSRoute requeue) works correctly even
+                // when resources arrive out of order during the initial LIST.
+                self.handler.on_change(&parsed_obj, ctx).await;
 
                 let phase = if is_init { "init" } else { "runtime" };
                 tracing::debug!(
-                    kind = self.kind,
-                    name = %parsed_obj.meta().name.as_deref().unwrap_or(""),
-                    namespace = %parsed_obj.meta().namespace.as_deref().unwrap_or(""),
-                    rv,
                     phase = phase,
                     status_changed = status_changed,
                     "Resource processed and saving"
@@ -551,9 +542,9 @@ where
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
                 let obj_for_result = parsed_obj.clone();
                 if is_init {
-                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj);
+                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, Some(sv));
                 } else {
-                    self.save(parsed_obj);
+                    self.save(parsed_obj, Some(sv));
                 }
 
                 WorkItemResult::Processed {
@@ -562,35 +553,40 @@ where
                 }
             }
             ProcessResult::Skip { reason } => {
-                tracing::debug!(
-                    kind = self.kind,
-                    reason = %reason,
-                    "Resource skipped after parse"
-                );
+                tracing::debug!(reason = %reason, "Resource skipped after parse");
                 WorkItemResult::Skipped
             }
         }
     }
 
     /// Process resource deletion
-    fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
+    async fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
         let key = make_resource_key(cached_obj);
-
-        // 1. Execute handler's delete cleanup
-        self.handler.on_delete(cached_obj, ctx);
-
-        // 2. Remove from cache
-        self.remove(&key);
-
-        tracing::debug!(
+        let sv = crate::core::common::utils::next_resource_version();
+        let span = tracing::info_span!(
+            "process_delete",
+            component = "resource_processor",
             kind = self.kind,
             key = %key,
-            "Resource deleted from cache"
+            sv,
         );
+
+        async {
+            // 1. Execute handler's delete cleanup
+            self.handler.on_delete(cached_obj, ctx).await;
+
+            // 2. Remove from cache
+            self.remove(&key, Some(sv));
+
+            tracing::debug!("Resource deleted from cache");
+        }
+        .instrument(span)
+        .await
     }
 }
 
 // Implement ProcessorObj for ResourceProcessor<K>
+#[async_trait::async_trait]
 impl<K> ProcessorObj for ResourceProcessor<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -603,27 +599,19 @@ where
         self.cache.clone()
     }
 
-    fn requeue(&self, key: String) {
-        let workqueue = self.workqueue.clone();
-        tokio::spawn(async move {
-            workqueue.enqueue(key).await;
-        });
+    async fn requeue(&self, key: String) {
+        self.workqueue.enqueue(key).await;
     }
 
-    fn requeue_after(&self, key: String, duration: Duration) {
-        let workqueue = self.workqueue.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(duration).await;
-            workqueue.enqueue(key).await;
-        });
+    async fn requeue_after(&self, key: String, duration: Duration) {
+        self.workqueue
+            .enqueue_after(key, duration, TriggerChain::default())
+            .await;
     }
 
-    fn requeue_with_chain(&self, key: String, chain: TriggerChain) {
-        let workqueue = self.workqueue.clone();
+    async fn requeue_with_chain(&self, key: String, chain: TriggerChain) {
         let delay = self.workqueue.config().default_requeue_delay;
-        tokio::spawn(async move {
-            workqueue.enqueue_after(key, delay, chain).await;
-        });
+        self.workqueue.enqueue_after(key, delay, chain).await;
     }
 
     fn is_ready(&self) -> bool {
@@ -662,15 +650,12 @@ where
         self.cache.get_by_key(key).is_some()
     }
 
-    fn requeue_all_keys(&self) -> usize {
+    async fn requeue_all_keys(&self) -> usize {
         let keys = self.cache.list_keys();
         let count = keys.len();
-        let workqueue = self.workqueue.clone();
-        tokio::spawn(async move {
-            for key in keys {
-                workqueue.enqueue(key).await;
-            }
-        });
+        for key in keys {
+            self.workqueue.enqueue(key).await;
+        }
         count
     }
 }
@@ -763,7 +748,7 @@ mod tests {
         processor.on_init();
         assert!(!processor.is_ready());
 
-        let result = processor.on_init_apply(resource.clone(), None);
+        let result = processor.on_init_apply(resource.clone(), None).await;
         assert!(matches!(result, WorkItemResult::Processed { .. }));
 
         processor.on_init_done();
@@ -801,6 +786,7 @@ mod tests {
                     last_transition_time: "1970-01-01T00:00:00Z".to_string(),
                     observed_generation: None,
                 }],
+                supported_features: None,
             }),
         };
 
@@ -826,7 +812,7 @@ mod tests {
 
         let new_status = extract_status_json(&gc_modified);
 
-        let changed = status_has_changed(&old_status, &new_status);
+        let changed = status_has_changed("GatewayClass", &old_status, &new_status);
         assert!(changed, "Status should have changed after update_status");
     }
 }

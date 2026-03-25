@@ -1,3 +1,4 @@
+pub mod circuit_breaker;
 pub mod discovery;
 pub mod health;
 pub mod policy;
@@ -5,6 +6,7 @@ pub mod preload;
 pub mod validation;
 
 pub use crate::core::controller::conf_mgr::conf_center::EndpointMode;
+pub use circuit_breaker::{get_circuit_breaker_store, parse_circuit_breaker_annotation};
 pub use discovery::{
     create_endpoint_handler, create_ep_slice_handler, create_service_handler, get_endpoint_roundrobin_store,
     get_global_service_store, get_roundrobin_store, EndpointDiscovery, EndpointExt, EndpointSliceExt, EndpointStore,
@@ -99,10 +101,19 @@ fn is_backend_healthy(
     backend: &pingora_load_balancing::Backend,
     health_store: &health::check::HealthStatusStore,
 ) -> bool {
-    if !health_store.has_service(service_key) {
-        return true;
+    // 1. Active health check filter (existing)
+    if health_store.has_service(service_key)
+        && !health_store.is_healthy(service_key, health::check::backend_hash(backend))
+    {
+        return false;
     }
-    health_store.is_healthy(service_key, health::check::backend_hash(backend))
+    // 2. Circuit breaker filter (new)
+    let cb_store = get_circuit_breaker_store();
+    if cb_store.is_ejected(service_key, health::check::backend_hash(backend)) {
+        crate::core::gateway::observe::metrics::record_cb_rejection(service_key);
+        return false;
+    }
+    true
 }
 
 /// Select backend from a backend list using self-impl round-robin.
@@ -132,7 +143,7 @@ pub fn select_roundrobin_backend(service_key: &str) -> Option<pingora_load_balan
 }
 
 /// Get backend list for a service from the appropriate store based on endpoint mode.
-fn get_backends_for_service(service_key: &str) -> Vec<pingora_load_balancing::Backend> {
+pub(crate) fn get_backends_for_service(service_key: &str) -> Vec<pingora_load_balancing::Backend> {
     match get_global_endpoint_mode() {
         EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
             get_roundrobin_store().get_backends_for_service(service_key)
@@ -472,19 +483,13 @@ fn select_from_backends(
                     .ok_or(not_found_ch)
             }
         }
-        Some(ParsedLBPolicy::LeastConn) => selection::least_conn::select(
-            &backends,
-            service_key,
-            256,
-            |b| is_backend_healthy(service_key, b, &health_store),
-        )
+        Some(ParsedLBPolicy::LeastConn) => selection::least_conn::select(&backends, service_key, 256, |b| {
+            is_backend_healthy(service_key, b, &health_store)
+        })
         .ok_or(not_found_lc),
-        Some(ParsedLBPolicy::Ewma) => selection::ewma::select(
-            &backends,
-            service_key,
-            256,
-            |b| is_backend_healthy(service_key, b, &health_store),
-        )
+        Some(ParsedLBPolicy::Ewma) => selection::ewma::select(&backends, service_key, 256, |b| {
+            is_backend_healthy(service_key, b, &health_store)
+        })
         .ok_or(not_found_ewma),
     }
 }
@@ -691,7 +696,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
     let namespace = ctx
         .backend_context
         .as_ref()
-        .map(|bc| bc.namespace.as_str())
+        .map(|bc| bc.rsc.ns.as_str())
         .ok_or(EdgionStatus::Unknown)?;
 
     let service_key = format!("{}/{}", namespace, br_name);

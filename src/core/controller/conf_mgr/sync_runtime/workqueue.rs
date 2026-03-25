@@ -190,7 +190,7 @@ pub struct WorkqueueConfig {
 impl Default for WorkqueueConfig {
     fn default() -> Self {
         Self {
-            capacity: 1000,
+            capacity: 5000,
             max_retries: 5,
             initial_backoff: Duration::from_millis(100),
             max_backoff: Duration::from_secs(30),
@@ -456,6 +456,16 @@ impl Workqueue {
 
         self.pending.insert(key.clone());
         self.metrics.inc_depth();
+        let depth = self.metrics.get_depth();
+        let capacity = self.config.capacity as u64;
+        if capacity > 0 && depth * 100 >= capacity * 80 && depth % 500 == 0 {
+            tracing::warn!(
+                queue = %self.name,
+                depth = depth,
+                capacity = capacity,
+                "Workqueue depth is above 80% of capacity"
+            );
+        }
 
         let item = WorkItem::new(key.clone());
 
@@ -503,6 +513,17 @@ impl Workqueue {
 
         self.scheduled.insert(key.clone());
         self.metrics.inc_delayed();
+        let outstanding = (self.pending.len() + self.scheduled.len()) as u64;
+        let capacity = self.config.capacity as u64;
+        if capacity > 0 && outstanding * 100 >= capacity * 80 && outstanding % 500 == 0 {
+            tracing::warn!(
+                queue = %self.name,
+                pending = self.pending.len(),
+                scheduled = self.scheduled.len(),
+                capacity = capacity,
+                "Workqueue pending+scheduled load is above 80% of capacity"
+            );
+        }
 
         let delayed = DelayedItem {
             key: key.clone(),

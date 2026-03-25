@@ -4,21 +4,22 @@
 # 
 # :
 #   1. :
-#      ./edgion-controller --config /usr/local/edgion/config/edgion-controller.toml
+#      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.toml
 #   
-#   2.  ( --config):
-#      ./edgion-controller --gateway-class public-gateway
+#   2.  conf_dir:
+#      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.toml --conf-dir ./examples/test/conf
 #   
 #   3. :
-#      ./edgion-controller --config /usr/local/edgion/config/edgion-controller.toml --log-level debug
+#      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.toml --log-level debug
 #
 # ================================================================================
 
 # ============================================================================
 # Working Directory Configuration
 # ============================================================================
-# All relative paths in this configuration file will be relative to work_dir.
+# Most runtime output paths in this configuration file will be relative to work_dir.
 # Absolute paths will be used as-is.
+# Note: conf_center.file_system.conf_dir currently follows the process cwd.
 #
 # Priority order:
 #   1. Command line: --work-dir /path
@@ -39,10 +40,8 @@
 # ============================================================================
 work_dir = "."
 
-# K8s mode (optional, can also use CLI --k8s-mode or auto-detect via env)
-# K8s （， CLI --k8s-mode ）
-# : CLI  >  (KUBERNETES_SERVICE_HOST) >  > (false)
-# k8s_mode = false
+# K8s mode is selected via [conf_center].type = "kubernetes"
+# K8s  [conf_center].type = "kubernetes"
 
 [server]
 # gRPC 
@@ -93,7 +92,7 @@ buffer_size = 10000
 # FileSystem mode example:
 # [conf_center]
 # type = "file_system"
-# conf_dir = "examples/test/conf"  # Directory containing YAML files
+# conf_dir = "examples/test/conf"  # 当前实现里相对路径按进程 cwd 解析，想更稳可用绝对路径
 #
 # Kubernetes mode example (production):
 # [conf_center]

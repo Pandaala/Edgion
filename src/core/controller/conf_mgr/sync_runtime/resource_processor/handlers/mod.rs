@@ -58,7 +58,7 @@ use crate::types::resources::common::ParentReference;
 use crate::types::ResourceKind;
 
 /// Requeue parent Gateways referenced by route parentRefs.
-pub(crate) fn requeue_parent_gateways(
+pub(crate) async fn requeue_parent_gateways(
     parent_refs: Option<&Vec<ParentReference>>,
     route_ns: &str,
     ctx: &HandlerContext,
@@ -75,7 +75,7 @@ pub(crate) fn requeue_parent_gateways(
         }
 
         let gateway_key = parent_ref.build_parent_key(Some(route_ns));
-        ctx.requeue("Gateway", gateway_key);
+        ctx.requeue("Gateway", gateway_key).await;
     }
 }
 

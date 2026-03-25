@@ -13,28 +13,36 @@ pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    HeaderModifierTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite,
-    HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite,
-    TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, HeaderModifierTestSuite,
+    HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite,
+    HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
+    PartiallyInvalidTestSuite, RetryOnStatusTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
 
 pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
 
-pub use tls_route::{TlsMultiSniTestSuite, TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite};
+pub use tls_route::{
+    TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite, TlsProxyProtocolTestSuite,
+    TlsRouteTestSuite, TlsStreamPluginsTestSuite,
+};
 
 pub use udp_route::UdpTestSuite;
 
 // EdgionTls tests
-pub use edgion_tls::{CipherTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite, PortOnlyEdgionTlsTestSuite};
+pub use edgion_tls::{
+    CipherTestSuite, EdgionTlsBothAbsentParentRefTestSuite, GrpcTlsTestSuite, HttpsTestSuite, MtlsTestSuite,
+    PortOnlyEdgionTlsTestSuite,
+};
 
 // Gateway tests
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
     AllowedRoutesSelectorNamespaceTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite,
-    GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite, ListenerHostnameTestSuite,
-    PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite, UpdatePhaseTestSuite,
+    FrontendValidationTestSuite, GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
+    ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite,
+    UpdatePhaseTestSuite,
 };
 
 // EdgionPlugins tests
