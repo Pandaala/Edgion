@@ -68,10 +68,10 @@ GlobalHttpRouteManagers
 
 ## RadixPath 优先级
 
-`RadixPath` 的 `priority_weight` 计算公式：
+`RadixPath` 的 `priority_weight` 计算公式（按 Gateway API spec 使用字符数）：
 
 ```
-priority_weight = segment_count * 4 + type_bonus
+priority_weight = path_char_count * 4 + type_bonus
 ```
 
 `type_bonus` 取值：
@@ -83,9 +83,9 @@ priority_weight = segment_count * 4 + type_bonus
 | 静态前缀 | true | false | 1 |
 | 参数前缀 | true | true | 0 |
 
-排序规则：更高 `priority_weight` 优先；同权时按 `header_matcher_count()` 降序（更多 header 匹配条件更具体）。
+排序规则：更高 `priority_weight` 优先；同权时按 `MatchSpecificity::cmp_precedence()` 执行完整的 Gateway API 优先级链：method match → header count → query param count → creation timestamp → route namespace/name 字母序 → rule/match index。
 
-示例：`/api/users`（静态精确，weight=11）优先于 `/api/:id`（参数精确，weight=10）优先于 `/api/users`（静态前缀，weight=9）。
+示例：`/api/users`（静态精确，10 chars，weight=43）优先于 `/api/users`（静态前缀，weight=41）。同路径同类型时，有 method 匹配的路由优先于无 method 的。
 
 ## Deep match
 

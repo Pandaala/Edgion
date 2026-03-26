@@ -11,7 +11,7 @@ Use this note when changing Gateway API behavior in Edgion and you need to under
 
 | 文件 | 内容 |
 |------|------|
-| [01-not-implemented.md](01-not-implemented.md) | 不实现/暂不实现的 Gateway API 功能：addresses 上报、跨类型 Hostname 冲突、infrastructure、BTP、TLS profile；已完成项：~~frontendValidation~~ ✅ |
+| [01-not-implemented.md](01-not-implemented.md) | 不实现/暂不实现的 Gateway API 功能：addresses 上报、跨类型 Hostname 冲突、infrastructure、`ListenerSet`、`HTTPRouteRequestMultipleMirrors`、BTP、`TLSRouteModeMixed`、TLS profile；已完成项：~~frontendValidation~~ ✅ |
 | [02-conformance-testing.md](02-conformance-testing.md) | 如何运行、调试和逐步验证 Gateway API conformance tests：脚本用法、粒度控制、Port-Forward、调试技巧 |
 
 ## ConformanceProfiles 声明状态
@@ -22,7 +22,7 @@ Edgion 在 conformance 测试中声明以下 profiles（GEP-1709）：
 |---------|------|------|
 | `GATEWAY-HTTP` | ✅ 已声明 | Core: Gateway + HTTPRoute + ReferenceGrant |
 | `GATEWAY-GRPC` | ⚠️ 已声明，未验证 | Core: Gateway + GRPCRoute + ReferenceGrant。功能已实现，但未实际跑过 conformance test，可能需要修 status condition |
-| `GATEWAY-TLS` | ❌ 未声明 | TLS Passthrough 已实现，但 conformance tests 从未跑过。需加 `SupportTLSRoute` 并修 status conditions（ResolvedRefs、supportedKinds）后再声明 |
+| `GATEWAY-TLS` | ❌ 未声明 | TLS Passthrough 已实现；TLS Terminate 走标准 `mode=Terminate` 路径但仍需补 status 与测试。Mixed 明确不支持；需跑通 TLSRoute conformance 后再声明 |
 | `MESH-HTTP` | ❌ 不适用 | Edgion 不是 service mesh |
 | `MESH-GRPC` | ❌ 不适用 | Edgion 不是 service mesh |
 

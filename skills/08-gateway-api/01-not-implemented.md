@@ -50,6 +50,68 @@ Edgion 是自部署网关，不负责创建云基础设施资源，当前无 clo
 - 仅在有云厂商集成需求时考虑实现
 - 相关任务见 [tasks/todo/gateway-api-conformance/06-policy-and-experimental.md](../../tasks/todo/gateway-api-conformance/06-policy-and-experimental.md)
 
+## ListenerSet
+
+**决定：暂不实现**
+
+Gateway API v1.5 引入 `ListenerSet`，允许在不直接修改 `Gateway` 的情况下，
+由其他资源向现有 Gateway 追加 listeners，并通过 `allowedListeners`、
+命名空间约束和 `ReferenceGrant` 控制授权关系。
+
+Edgion 当前不计划实现该能力，原因：
+
+- Edgion 更偏向单团队或单控制面直接管理 `Gateway` 的使用模型，独立 `Gateway` 比共享 `Gateway` + 委托追加 listener 更自然
+- `ListenerSet` 会显著增加资源模型复杂度：listener 合并、优先级、冲突检测、route parentRef 语义、attachedRoutes 统计、status 回写都需要扩展
+- 该能力主要解决多团队共享单个 Gateway 的治理问题，不是 Edgion 当前的核心代理能力缺口
+
+因此：
+
+- 不声明 `SupportListenerSet`
+- 不以 ListenerSet conformance tests 作为当前目标
+- 若未来出现明确的多团队共享 Gateway 诉求，再重新评估
+
+## HTTPRoute Multiple Mirrors
+
+**决定：不实现**
+
+Gateway API 的 `HTTPRouteRequestMultipleMirrors` 允许单条 HTTPRoute 规则同时配置多个 request mirror 目标。
+
+Edgion 当前保留单 mirror 能力，但不计划扩展到多 mirror，原因：
+
+- 多 mirror 属于较弱需求，收益不足以覆盖实现和维护成本
+- 会增加请求复制、body tee、异步任务管理、日志与指标聚合的复杂度
+- 对当前 Edgion 目标场景，单 mirror 已足够覆盖大多数 shadow/审计类用法
+
+因此：
+
+- 不声明 `SupportHTTPRouteRequestMultipleMirrors`
+- 不以 `HTTPRouteRequestMultipleMirrors` conformance test 作为当前目标
+- 保留现有单 mirror 能力，不向多目标镜像扩展
+
+## TLSRouteModeMixed
+
+**决定：不实现**
+
+Edgion 支持：
+
+- `TLSRoute` + `TLS listener(mode=Passthrough)`
+- `TLSRoute` + `TLS listener(mode=Terminate)`
+
+但明确不支持 `TLSRouteModeMixed`，即：
+
+- 在同端口、同 listener 能力域内，按 SNI 动态决定一条 TLS 连接是 passthrough 还是 terminate
+
+原因：
+
+- 需要单个 TCP listener 先读取 `ClientHello` 再动态切换处理路径，架构复杂度明显上升
+- 同一入口混用 passthrough / terminate 会增加证书选择、流量走向和安全边界的排障复杂度
+- 对当前 Edgion 目标场景，标准 `Passthrough` 和标准 `Terminate` 已足够覆盖主要需求
+
+因此：
+
+- `TLSRouteModeTerminate` 可以作为后续 conformance 目标推进
+- `TLSRouteModeMixed` 不作为当前实现目标，也不应在 supported features 中声明
+
 ## BackendTrafficPolicy (BTP)
 
 **决定：暂不实现（等 GA）**
@@ -70,9 +132,10 @@ Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-bre
 
 **决定：暂不声明**
 
-TLS Passthrough 功能已实现，但 TLSRoute conformance tests 从未实际运行过。预计需要修复 status condition 相关逻辑（ResolvedRefs、Accepted、supportedKinds for TLSRoute）才能通过 core tests。
+TLS Passthrough 功能已实现；TLS Terminate 也已有数据面主路径，但 TLSRoute conformance tests 尚未系统跑通。预计需要修复 status condition 相关逻辑（ResolvedRefs、Accepted、supportedKinds for TLSRoute）并补 terminate 测试后，才能声明 profile。
 
-- 需在 SupportedFeatures 中声明 `SupportTLSRoute` 并跑通 8 个 core tests 后再声明 profile
-- Extended tests（Terminate/Mixed 模式）可后续再做
+- 需在 SupportedFeatures 中声明 `SupportTLSRoute` 并跑通 core passthrough tests 后再声明 profile
+- `TLSRouteModeTerminate` 可作为后续增强继续推进
+- `TLSRouteModeMixed` 明确不实现
 - MESH-HTTP / MESH-GRPC：Edgion 不是 service mesh，不适用
 - 相关任务见 [tasks/todo/gateway-api-conformance/06-policy-and-experimental.md](../../tasks/todo/gateway-api-conformance/06-policy-and-experimental.md)

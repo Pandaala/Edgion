@@ -9,7 +9,7 @@ spec:
     - name: https-fv
       hostname: "fv-mtls.example.com"
       protocol: HTTPS
-      port: 31120
+      port: 31312
       tls:
         mode: Terminate
         certificateRefs:

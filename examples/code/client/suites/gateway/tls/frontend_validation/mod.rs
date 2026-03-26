@@ -17,7 +17,7 @@ use std::fs;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;
 
-const PORT: u16 = 31120;
+const PORT: u16 = 31312;
 const HOSTNAME: &str = "fv-mtls.example.com";
 
 pub struct FrontendValidationTestSuite;
