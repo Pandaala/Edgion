@@ -16,4 +16,5 @@ pub use server::{
 };
 pub use store::{
     get_global_gateway_config_store, get_global_gateway_store, get_port_gateway_info_store, rebuild_port_gateway_infos,
+    GatewayInfoIndex,
 };

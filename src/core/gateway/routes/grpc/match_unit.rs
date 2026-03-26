@@ -1,4 +1,5 @@
 use crate::core::gateway::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener};
+use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
@@ -7,7 +8,46 @@ use pingora_proxy::Session;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::sync::Arc;
+
+/// Pre-computed match specificity for GRPCRoute Gateway API precedence ordering.
+///
+/// GRPCRoute precedence (within the same service/method bucket):
+///   header_count > creation_ts > route_key > rule_index > match_index
+///
+/// Service/method-level precedence is handled by the bucket structure in GrpcMatchEngine.
+#[derive(Clone, Debug)]
+pub struct GrpcMatchSpecificity {
+    /// Number of header match conditions
+    pub header_count: u16,
+    /// Route creation timestamp (older = higher priority)
+    pub creation_ts_ms: i64,
+    /// Route "{namespace}/{name}" for alphabetical tie-breaking
+    pub route_key: String,
+    /// Rule index within the route (first wins)
+    pub rule_index: u32,
+    /// Match index within the rule (first wins)
+    pub match_index: u32,
+}
+
+impl GrpcMatchSpecificity {
+    /// Compare two GrpcMatchSpecificity values per Gateway API precedence.
+    /// Returns Ordering where Less means `self` has higher priority.
+    pub fn cmp_precedence(&self, other: &Self) -> Ordering {
+        // More headers = higher priority
+        other
+            .header_count
+            .cmp(&self.header_count)
+            // Older route = higher priority
+            .then(self.creation_ts_ms.cmp(&other.creation_ts_ms))
+            // Alphabetical by namespace/name
+            .then(self.route_key.cmp(&other.route_key))
+            // First rule/match wins
+            .then(self.rule_index.cmp(&other.rule_index))
+            .then(self.match_index.cmp(&other.match_index))
+    }
+}
 
 pub const CATCH_ALL_HOSTNAME: &str = "*";
 
@@ -148,6 +188,8 @@ pub struct GrpcRouteRuleUnit {
     pub rule: Arc<GRPCRouteRule>,
     /// Route level information (parent_refs, hostnames, etc.)
     pub route_info: Arc<GrpcRouteInfo>,
+    /// Pre-computed match specificity for Gateway API precedence ordering.
+    pub specificity: GrpcMatchSpecificity,
 }
 
 impl GrpcRouteRuleUnit {
@@ -161,7 +203,7 @@ impl GrpcRouteRuleUnit {
     pub fn deep_match(
         &self,
         session: &Session,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
@@ -172,16 +214,9 @@ impl GrpcRouteRuleUnit {
             return Ok(None);
         }
 
-        // Check Gateway/Listener constraints (sectionName, AllowedRoutes)
+        // Check Gateway/Listener constraints (sectionName + hostname isolation)
         let matched_gi = if let Some(ref parent_refs) = self.route_info.parent_refs {
-            match check_gateway_listener_match(
-                parent_refs,
-                gateway_infos,
-                hostname,
-                &self.matched_info.rsc.ns,
-                "GRPCRoute",
-                &self.matched_info.rsc.name,
-            ) {
+            match check_gateway_listener_match(parent_refs, index, hostname, &self.matched_info.rsc.ns) {
                 Some(gi) => gi,
                 None => return Ok(None),
             }

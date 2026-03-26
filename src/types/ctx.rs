@@ -144,6 +144,68 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+/// A hostname that has been normalized (port-stripped, FQDN-dot-removed, lowercased).
+///
+/// Construct via `NormalizedHostname::new()` which applies the normalization once.
+/// All downstream consumers can rely on the invariant — no further lowercasing needed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NormalizedHostname(String);
+
+impl NormalizedHostname {
+    /// Normalize and wrap a raw hostname.
+    /// Applies: trim, strip port (IPv4/IPv6), remove trailing FQDN dot, lowercase.
+    pub fn new(raw: &str) -> Self {
+        let h = raw.trim();
+
+        let host = if h.starts_with('[') {
+            match h.find(']') {
+                Some(end) => &h[1..end],
+                None => h,
+            }
+        } else {
+            match h.rfind(':') {
+                Some(pos) if h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => &h[..pos],
+                _ => h,
+            }
+        };
+
+        let host = host.strip_suffix('.').unwrap_or(host);
+        Self(host.to_ascii_lowercase())
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::ops::Deref for NormalizedHostname {
+    type Target = str;
+    #[inline]
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for NormalizedHostname {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for NormalizedHostname {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
@@ -159,9 +221,10 @@ pub struct RequestInfo {
     /// Trace ID from x-trace-id header
     #[serde(rename = "x-trace-id")]
     pub x_trace_id: Option<String>,
-    /// Hostname from the Host header
+    /// Normalized hostname from the Host header (lowercased, port-stripped).
+    /// Construct via `NormalizedHostname::new()` — never apply `to_lowercase()` again.
     #[serde(rename = "host")]
-    pub hostname: String,
+    pub hostname: NormalizedHostname,
     /// Request path from URI
     pub path: String,
     /// Response status code (e.g., 200, 400, 404, 500)

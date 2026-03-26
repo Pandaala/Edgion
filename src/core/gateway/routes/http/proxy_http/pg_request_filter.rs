@@ -4,6 +4,7 @@ use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_mat
 use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
 use crate::core::gateway::runtime::store::get_port_gateway_info_store;
 use crate::core::gateway::{end_response_400, end_response_404, end_response_421, end_response_500};
+use crate::types::ctx::NormalizedHostname;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
 use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
@@ -23,10 +24,9 @@ pub async fn request_filter(
     }
 
     // Step 1: Route matching — single lookup against the global route table.
-    // Load gateway_infos dynamically from the global store so that Gateways
-    // added/removed at runtime are reflected without restart.
+    // Load the pre-built GatewayInfoIndex for O(1) gateway/listener lookups.
     let port = edgion_http.listener.port as u16;
-    let gateway_infos = get_port_gateway_info_store().get(port);
+    let gateway_index = get_port_gateway_info_store().get_index(port);
 
     if ctx.request_info.is_grpc_request {
         if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
@@ -37,13 +37,13 @@ pub async fn request_filter(
 
         let grpc_port_manager = get_global_grpc_route_managers().get_or_create_port_manager(port);
         let grpc_routes = grpc_port_manager.load_route_table();
-        let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos).await;
+        let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_index).await;
     }
 
     if !ctx.is_grpc_route_matched {
         let http_port_manager = get_global_http_route_managers().get_or_create_port_manager(port);
         let port_routes = http_port_manager.load_route_table();
-        match port_routes.match_route(session, ctx, &gateway_infos) {
+        match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
                 ctx.gateway_info = result.matched_gateway;
                 ctx.route_unit = Some(result.route_unit);
@@ -191,24 +191,23 @@ async fn build_request_metadata(
         ctx.request_info.client_addr.clone()
     };
 
-    // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
-    // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
-    // uri.host() returns host without port; Host header may include port so we strip it.
+    // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback).
+    // NormalizedHostname::new() applies trim, port-strip, FQDN-dot-strip, and lowercase once.
     ctx.request_info.hostname = req_header
         .uri
         .host()
-        .map(normalize_host_for_matching)
+        .map(NormalizedHostname::new)
         .or_else(|| {
             req_header
                 .headers
                 .get("host")
-                .and_then(|h| h.to_str().ok().map(normalize_host_for_matching))
+                .and_then(|h| h.to_str().ok().map(NormalizedHostname::new))
         })
         .or_else(|| {
             req_header
                 .headers
                 .get(":authority")
-                .and_then(|h| h.to_str().ok().map(normalize_host_for_matching))
+                .and_then(|h| h.to_str().ok().map(NormalizedHostname::new))
         })
         .unwrap_or_default();
 
@@ -305,7 +304,7 @@ fn listener_hostname_mismatch(listener_hostname: Option<&str>, host: &str) -> bo
     let Some(listener_hostname) = listener_hostname else {
         return false;
     };
-    normalize_host_for_matching(listener_hostname) != normalize_host_for_matching(host)
+    *NormalizedHostname::new(listener_hostname) != *NormalizedHostname::new(host)
 }
 
 #[inline]
@@ -313,33 +312,7 @@ fn is_sni_host_mismatch(sni: Option<&str>, host: &str) -> bool {
     let Some(sni) = sni else {
         return false;
     };
-    normalize_host_for_matching(sni) != normalize_host_for_matching(host)
-}
-
-/// Normalize a hostname from Host / :authority header for route matching:
-/// 1. Trim whitespace
-/// 2. Strip port (handling both IPv4 and IPv6 bracket notation)
-/// 3. Remove trailing dot (FQDN normalization)
-/// 4. Convert to lowercase (case-insensitive matching per RFC 4343)
-#[inline]
-fn normalize_host_for_matching(raw: &str) -> String {
-    let h = raw.trim();
-
-    let host = if h.starts_with('[') {
-        // IPv6 bracket notation: [::1]:port → ::1
-        match h.find(']') {
-            Some(end) => &h[1..end],
-            None => h,
-        }
-    } else {
-        match h.rfind(':') {
-            Some(pos) if h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => &h[..pos],
-            _ => h,
-        }
-    };
-
-    let host = host.strip_suffix('.').unwrap_or(host);
-    host.to_ascii_lowercase()
+    *NormalizedHostname::new(sni) != *NormalizedHostname::new(host)
 }
 
 /// Append client IP to X-Forwarded-For header (inline for performance)

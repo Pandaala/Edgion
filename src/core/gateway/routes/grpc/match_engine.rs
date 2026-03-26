@@ -1,4 +1,5 @@
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
+use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::grpc_route::GRPCMethodMatchType;
@@ -38,8 +39,8 @@ pub struct GrpcMatchEngine {
     /// Regex service only (method not specified), sorted by service pattern length desc
     regex_service_only: Vec<Arc<GrpcRouteRuleUnit>>,
 
-    /// Catch-all route (both service and method not specified)
-    catch_all_route: Option<Arc<GrpcRouteRuleUnit>>,
+    /// Catch-all routes (both service and method not specified), sorted by specificity
+    catch_all_routes: Vec<Arc<GrpcRouteRuleUnit>>,
 }
 
 impl GrpcMatchEngine {
@@ -50,7 +51,7 @@ impl GrpcMatchEngine {
         let mut regex_service_exact_method = Vec::new();
         let mut regex_service_regex_method = Vec::new();
         let mut regex_service_only = Vec::new();
-        let mut catch_all_route = None;
+        let mut catch_all_routes: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 
         for route in routes {
             if let Some(ref grpc_method_match) = route.matched_info.matched.method {
@@ -111,11 +112,7 @@ impl GrpcMatchEngine {
                     }
                     // Catch-all: neither service nor method
                     (None, None, _) => {
-                        if catch_all_route.is_none() {
-                            catch_all_route = Some(route);
-                        } else {
-                            tracing::warn!("Multiple catch-all routes found, using first one");
-                        }
+                        catch_all_routes.push(route);
                     }
                     // Method without service — not valid per Gateway API spec
                     (None, Some(_), _) => {
@@ -128,14 +125,19 @@ impl GrpcMatchEngine {
             }
         }
 
-        // Sort regex routes by pattern length descending (longer = more specific = higher priority)
+        // Sort regex routes by pattern length descending (longer = more specific = higher priority),
+        // with specificity tie-breaking per Gateway API spec.
         let sort_by_pattern_len = |routes: &mut Vec<Arc<GrpcRouteRuleUnit>>,
                                    service_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize,
                                    method_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize| {
             routes.sort_by(|a, b| {
                 let len_a = service_len(a) + method_len(a);
                 let len_b = service_len(b) + method_len(b);
-                len_b.cmp(&len_a)
+                let len_cmp = len_b.cmp(&len_a);
+                if len_cmp != std::cmp::Ordering::Equal {
+                    return len_cmp;
+                }
+                a.specificity.cmp_precedence(&b.specificity)
             });
         };
 
@@ -178,8 +180,23 @@ impl GrpcMatchEngine {
         regex_service_only.sort_by(|a, b| {
             let len_a = service_regex_len(a);
             let len_b = service_regex_len(b);
-            len_b.cmp(&len_a)
+            let len_cmp = len_b.cmp(&len_a);
+            if len_cmp != std::cmp::Ordering::Equal {
+                return len_cmp;
+            }
+            a.specificity.cmp_precedence(&b.specificity)
         });
+
+        // Sort exact and service bucket routes by specificity
+        for method_map in exact_routes.values_mut() {
+            for bucket in method_map.values_mut() {
+                bucket.sort_by(|a, b| a.specificity.cmp_precedence(&b.specificity));
+            }
+        }
+        for bucket in service_routes.values_mut() {
+            bucket.sort_by(|a, b| a.specificity.cmp_precedence(&b.specificity));
+        }
+        catch_all_routes.sort_by(|a, b| a.specificity.cmp_precedence(&b.specificity));
 
         Self {
             exact_routes,
@@ -188,7 +205,7 @@ impl GrpcMatchEngine {
             regex_service_exact_method,
             regex_service_regex_method,
             regex_service_only,
-            catch_all_route,
+            catch_all_routes,
         }
     }
 
@@ -198,7 +215,7 @@ impl GrpcMatchEngine {
     pub fn match_route(
         &self,
         session: &Session,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         let path = session.req_header().uri.path();
@@ -207,7 +224,7 @@ impl GrpcMatchEngine {
         // Priority 1: Exact service + Exact method
         if let Some(routes) = self.exact_routes.get(service).and_then(|m| m.get(method)) {
             for route_unit in routes {
-                if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
                     return Ok((route_unit.clone(), matched_gi));
                 }
             }
@@ -224,7 +241,7 @@ impl GrpcMatchEngine {
             }
             if let Some(ref re) = route_unit.matched_info.compiled_method_regex {
                 if re.is_match(&method) {
-                    if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                    if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
                         return Ok((route_unit.clone(), matched_gi));
                     }
                 }
@@ -243,7 +260,7 @@ impl GrpcMatchEngine {
                         .and_then(|m| m.method.as_ref())
                         .map_or(false, |m| m == &method);
                     if method_matches {
-                        if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                        if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
                             return Ok((route_unit.clone(), matched_gi));
                         }
                     }
@@ -264,7 +281,7 @@ impl GrpcMatchEngine {
                 .as_ref()
                 .map_or(false, |re| re.is_match(&method));
             if service_ok && method_ok {
-                if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
                     return Ok((route_unit.clone(), matched_gi));
                 }
             }
@@ -273,7 +290,7 @@ impl GrpcMatchEngine {
         // Priority 5: Exact service only (method not specified)
         if let Some(routes) = self.service_routes.get(service) {
             for route_unit in routes {
-                if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
                     return Ok((route_unit.clone(), matched_gi));
                 }
             }
@@ -283,16 +300,16 @@ impl GrpcMatchEngine {
         for route_unit in &self.regex_service_only {
             if let Some(ref re) = route_unit.matched_info.compiled_service_regex {
                 if re.is_match(&service) {
-                    if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+                    if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
                         return Ok((route_unit.clone(), matched_gi));
                     }
                 }
             }
         }
 
-        // Priority 7: Catch-all
-        if let Some(ref route_unit) = self.catch_all_route {
-            if let Some(matched_gi) = route_unit.deep_match(session, gateway_infos, hostname)? {
+        // Priority 7: Catch-all (sorted by specificity)
+        for route_unit in &self.catch_all_routes {
+            if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
                 return Ok((route_unit.clone(), matched_gi));
             }
         }
@@ -353,6 +370,7 @@ mod tests {
     ) -> Arc<GrpcRouteRuleUnit> {
         use crate::core::gateway::lb::BackendSelector;
         use crate::core::gateway::plugins::PluginRuntime;
+        use crate::core::gateway::routes::grpc::match_unit::GrpcMatchSpecificity;
         use crate::core::gateway::routes::grpc::GrpcRouteInfo;
 
         let grpc_match = GRPCRouteMatch {
@@ -383,6 +401,13 @@ mod tests {
             matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0),
             rule,
             route_info,
+            specificity: GrpcMatchSpecificity {
+                header_count: 0,
+                creation_ts_ms: 0,
+                route_key: format!("default/{}", name),
+                rule_index: 0,
+                match_index: 0,
+            },
         })
     }
 

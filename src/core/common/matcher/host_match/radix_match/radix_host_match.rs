@@ -52,16 +52,19 @@ impl<T> RadixHostMatchEngine<T> {
         self.hosts.clone()
     }
 
-    /// Match a hostname and return the matched runtime
+    /// Match a hostname and return the matched runtime.
+    ///
+    /// The caller MUST pass a pre-normalized (lowercased) hostname.
+    /// This avoids redundant `to_lowercase()` on the hot path — the
+    /// normalization is done once in `build_request_metadata()`.
     ///
     /// # Arguments
-    /// * `hostname` - The hostname to match (e.g., "api.example.com")
+    /// * `hostname` - Pre-normalized lowercase hostname (e.g., "api.example.com")
     ///
     /// # Returns
     /// `Some(Arc<T>)` if a match is found, `None` otherwise
     pub fn match_host(&self, hostname: &str) -> Option<Arc<T>> {
-        let hostname_lower = hostname.to_lowercase();
-        let reversed = RadixHost::<T>::reverse_hostname(&hostname_lower);
+        let reversed = RadixHost::<T>::reverse_hostname(hostname);
 
         tracing::trace!("========== Radix Host Matching ==========");
         tracing::trace!(
@@ -293,12 +296,13 @@ mod tests {
     fn test_engine_case_insensitive() {
         let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
         let runtime = Arc::new(MockHostRuntime::new("test", vec!["Example.COM"]));
+        // RadixHost::new() lowercases the pattern at init time.
         let host = RadixHost::new("Example.COM", runtime);
         engine.initialize(vec![host]).unwrap();
 
+        // match_host() requires pre-normalized (lowercased) input from the caller.
+        // The normalization happens once in build_request_metadata().
         assert!(engine.match_host("example.com").is_some());
-        assert!(engine.match_host("EXAMPLE.COM").is_some());
-        assert!(engine.match_host("ExAmPlE.CoM").is_some());
     }
 
     #[test]
@@ -351,8 +355,8 @@ mod tests {
         let host = RadixHost::new("localhost", runtime);
         engine.initialize(vec![host]).unwrap();
 
+        // match_host() requires pre-normalized (lowercased) input.
         assert!(engine.match_host("localhost").is_some());
-        assert!(engine.match_host("LOCALHOST").is_some());
         assert!(engine.match_host("api.localhost").is_none());
     }
 

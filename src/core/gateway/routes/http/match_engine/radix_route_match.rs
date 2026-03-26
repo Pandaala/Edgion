@@ -2,7 +2,7 @@ use super::radix_path::RadixPath;
 use crate::core::common::matcher::radix_tree::{MatchKind, RadixTree, RadixTreeBuilder, RouterError};
 use crate::core::gateway::routes::http::match_unit::RouteMatchResult;
 use crate::core::gateway::routes::http::HttpRouteRuleUnit;
-use crate::core::gateway::runtime::GatewayInfo;
+use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::err::EdError::RouteNotFound;
@@ -62,10 +62,10 @@ impl RadixRouteMatchEngine {
         route_idx: usize,
         session: &Session,
         ctx: &EdgionHttpContext,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
     ) -> Result<Option<RouteMatchResult>, EdError> {
         if let Some(route) = self.routes.get(route_idx) {
-            match route.deep_match(session, ctx, gateway_infos) {
+            match route.deep_match(session, ctx, index) {
                 Ok(Some(matched_gi)) => {
                     return Ok(Some(RouteMatchResult {
                         route_unit: route.clone(),
@@ -95,7 +95,7 @@ impl RadixRouteMatchEngine {
         &self,
         session: &mut Session,
         ctx: &EdgionHttpContext,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
     ) -> Result<RouteMatchResult, EdError> {
         let path = session.req_header().uri.path();
         let all_results = self.tree.match_all_ext(path);
@@ -126,19 +126,22 @@ impl RadixRouteMatchEngine {
         }
 
         matched_paths.sort_by(|a, b| {
-            let weight_a = self.radix_paths[*a].priority_weight;
-            let weight_b = self.radix_paths[*b].priority_weight;
-            if weight_a != weight_b {
-                return weight_b.cmp(&weight_a);
+            let pa = &self.radix_paths[*a];
+            let pb = &self.radix_paths[*b];
+            // Level 1-2: path type + char length (Exact > Prefix, longer > shorter)
+            let weight_cmp = pb.priority_weight.cmp(&pa.priority_weight);
+            if weight_cmp != std::cmp::Ordering::Equal {
+                return weight_cmp;
             }
-            let route_a = &self.routes[self.radix_paths[*a].route_idx];
-            let route_b = &self.routes[self.radix_paths[*b].route_idx];
-            route_b.header_matcher_count().cmp(&route_a.header_matcher_count())
+            // Level 3-7: method > headers > query > timestamp > name > rule/match index
+            let ra = &self.routes[pa.route_idx];
+            let rb = &self.routes[pb.route_idx];
+            ra.specificity.cmp_precedence(&rb.specificity)
         });
 
         for path_idx in &matched_paths {
             let radix_path = &self.radix_paths[*path_idx];
-            if let Some(result) = self.try_route_deep_match(radix_path.route_idx, session, ctx, gateway_infos)? {
+            if let Some(result) = self.try_route_deep_match(radix_path.route_idx, session, ctx, index)? {
                 return Ok(result);
             }
         }
