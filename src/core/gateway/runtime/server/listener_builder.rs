@@ -439,6 +439,16 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
 
             match tls_mode {
                 "Passthrough" => add_tls_passthrough_listener(server, &context),
+                "Mixed" => {
+                    // Mixed mode is not supported; the controller sets Accepted=False for
+                    // this listener. Skip silently so the gateway does not crash.
+                    tracing::warn!(
+                        gateway=%context.gateway_key,
+                        listener=%context.listener.name,
+                        "Skipping TLS listener with unsupported mode 'Mixed'"
+                    );
+                    Ok(())
+                }
                 _ => {
                     // Terminate mode
                     #[cfg(any(feature = "boringssl", feature = "openssl"))]

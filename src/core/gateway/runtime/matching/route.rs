@@ -200,7 +200,12 @@ mod tests {
             kinds: None,
         };
 
-        assert!(check_allowed_routes(&Some(allowed.clone()), "default", "HTTPRoute", "default"));
+        assert!(check_allowed_routes(
+            &Some(allowed.clone()),
+            "default",
+            "HTTPRoute",
+            "default"
+        ));
         assert!(!check_allowed_routes(&Some(allowed), "other", "HTTPRoute", "default"));
     }
 
@@ -216,7 +221,12 @@ mod tests {
             kinds: None,
         };
 
-        assert!(check_allowed_routes(&Some(allowed.clone()), "default", "HTTPRoute", "default"));
+        assert!(check_allowed_routes(
+            &Some(allowed.clone()),
+            "default",
+            "HTTPRoute",
+            "default"
+        ));
         assert!(check_allowed_routes(&Some(allowed), "other", "HTTPRoute", "default"));
     }
 
@@ -233,7 +243,12 @@ mod tests {
         };
 
         // Selector is trusted (controller already validated), so both pass
-        assert!(check_allowed_routes(&Some(allowed.clone()), "default", "HTTPRoute", "default"));
+        assert!(check_allowed_routes(
+            &Some(allowed.clone()),
+            "default",
+            "HTTPRoute",
+            "default"
+        ));
         assert!(check_allowed_routes(&Some(allowed), "other", "HTTPRoute", "default"));
     }
 
@@ -253,8 +268,18 @@ mod tests {
             }]),
         };
 
-        assert!(check_allowed_routes(&Some(allowed.clone()), "default", "HTTPRoute", "default"));
-        assert!(!check_allowed_routes(&Some(allowed.clone()), "default", "GRPCRoute", "default"));
+        assert!(check_allowed_routes(
+            &Some(allowed.clone()),
+            "default",
+            "HTTPRoute",
+            "default"
+        ));
+        assert!(!check_allowed_routes(
+            &Some(allowed.clone()),
+            "default",
+            "GRPCRoute",
+            "default"
+        ));
         assert!(!check_allowed_routes(&Some(allowed), "default", "TLSRoute", "default"));
     }
 
@@ -288,7 +313,12 @@ mod tests {
             kinds: Some(vec![]), // empty list = no restriction
         };
 
-        assert!(check_allowed_routes(&Some(allowed.clone()), "default", "HTTPRoute", "default"));
+        assert!(check_allowed_routes(
+            &Some(allowed.clone()),
+            "default",
+            "HTTPRoute",
+            "default"
+        ));
         assert!(check_allowed_routes(&Some(allowed), "default", "GRPCRoute", "default"));
     }
 }

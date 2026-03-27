@@ -896,23 +896,20 @@ impl ParsedRouteTimeouts {
             .unwrap_or(RouteTimeout::Unset);
 
         // Clamp: backendRequest must be <= request (Gateway API spec)
-        let backend_request_timeout =
-            match (backend_request_timeout.as_duration(), request_timeout.as_duration()) {
-                (Some(br), Some(req)) if br > req => {
-                    tracing::warn!(
+        let backend_request_timeout = match (backend_request_timeout.as_duration(), request_timeout.as_duration()) {
+            (Some(br), Some(req)) if br > req => {
+                tracing::warn!(
                     "backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping to request timeout",
                     br,
                     req
                 );
-                    RouteTimeout::Duration(req)
-                }
-                _ => backend_request_timeout,
-            };
+                RouteTimeout::Duration(req)
+            }
+            _ => backend_request_timeout,
+        };
 
         // Only create if at least one timeout is explicitly configured
-        if matches!(request_timeout, RouteTimeout::Unset)
-            && matches!(backend_request_timeout, RouteTimeout::Unset)
-        {
+        if matches!(request_timeout, RouteTimeout::Unset) && matches!(backend_request_timeout, RouteTimeout::Unset) {
             None
         } else {
             Some(Self {
@@ -957,7 +954,10 @@ mod tests {
         };
         let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
         assert_eq!(parsed.request_timeout, RouteTimeout::Duration(Duration::from_secs(10)));
-        assert_eq!(parsed.backend_request_timeout, RouteTimeout::Duration(Duration::from_secs(10)));
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
     }
 
     #[test]
@@ -968,7 +968,10 @@ mod tests {
         };
         let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
         assert_eq!(parsed.request_timeout, RouteTimeout::Duration(Duration::from_secs(30)));
-        assert_eq!(parsed.backend_request_timeout, RouteTimeout::Duration(Duration::from_secs(10)));
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
     }
 
     #[test]
@@ -979,7 +982,10 @@ mod tests {
         };
         let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
         assert_eq!(parsed.request_timeout, RouteTimeout::Unset);
-        assert_eq!(parsed.backend_request_timeout, RouteTimeout::Duration(Duration::from_secs(10)));
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
     }
 
     #[test]
@@ -1002,7 +1008,10 @@ mod tests {
         };
         let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
         assert_eq!(parsed.request_timeout, RouteTimeout::Disabled);
-        assert_eq!(parsed.backend_request_timeout, RouteTimeout::Duration(Duration::from_secs(10)));
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
     }
 
     #[test]

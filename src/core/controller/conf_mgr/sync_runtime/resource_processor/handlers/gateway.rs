@@ -105,6 +105,9 @@ struct ListenerInfo {
     supported_kinds: Vec<RouteGroupKind>,
     route_count: i32,
     resolved_refs_errors: Vec<GatewayResolvedRefsError>,
+    /// True when this listener uses an unsupported TLS mode (e.g. Mixed).
+    /// Causes Accepted=False with reason UnsupportedTLSMode.
+    unsupported_tls_mode: bool,
 }
 
 impl GatewayHandler {
@@ -159,8 +162,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 })
                 .collect();
 
-            // Register to ListenerPortManager for port conflict detection
-            get_listener_port_manager().register_gateway(&resource_ref.key(), &listener_ports);
+            // Register to ListenerPortManager for port conflict detection.
+            // Use resource_key() ("namespace/name") to match the workqueue key format
+            // so that cross-gateway requeues resolve correctly.
+            get_listener_port_manager().register_gateway(&resource_ref.resource_key(), &listener_ports);
 
             for listener in listeners.iter_mut() {
                 let tls_config = match &mut listener.tls {
@@ -261,6 +266,40 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             }
         }
 
+        // Resolve spec.tls.backend.clientCertificateRef (Gateway-level default client cert for upstream mTLS)
+        if let Some(ref mut spec_tls) = g.spec.tls {
+            if let Some(ref mut backend_tls) = spec_tls.backend {
+                if let Some(ref cert_ref) = backend_tls.client_certificate_ref {
+                    let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
+                    let cert_ns = cert_ref.namespace.as_ref().or(g.metadata.namespace.as_ref());
+                    let secret_key = format_secret_key(cert_ns, &cert_ref.name);
+
+                    ctx.secret_ref_manager()
+                        .add_ref(secret_key.clone(), resource_ref.clone());
+
+                    let cert_ns_str = cert_ns.map(|s| s.as_str()).unwrap_or("");
+                    if cert_ns_str != gateway_ns {
+                        cross_ns_manager.add_ref(cert_ns_str.to_string(), cross_ns_ref.clone());
+                    }
+
+                    if let Some(secret) = get_secret(cert_ns.map(|s| s.as_str()), &cert_ref.name) {
+                        backend_tls.resolved_client_certificate = Some(secret);
+                        tracing::debug!(
+                            gateway = %resource_ref.key(),
+                            secret_key = %secret_key,
+                            "Gateway backend client certificate resolved"
+                        );
+                    } else {
+                        tracing::info!(
+                            gateway = %resource_ref.key(),
+                            secret_key = %secret_key,
+                            "Gateway backend client certificate not found yet, will be updated when Secret arrives"
+                        );
+                    }
+                }
+            }
+        }
+
         ProcessResult::Continue(g)
     }
 
@@ -272,6 +311,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
 
         // Only requeue Gateways whose conflict relation actually changed.
+        // Both port_manager and workqueue use "namespace/name" format, so gateway_key works for both.
         for conflicting_gateway_key in get_listener_port_manager().take_affected_gateways(&gateway_key) {
             ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
             tracing::info!(
@@ -318,6 +358,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
             );
         }
+
+        // Note: GatewayBackendTlsStore is populated on the gateway data-plane side
+        // (in src/core/gateway/runtime/handler.rs) when it receives the synced Gateway.
     }
 
     async fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
@@ -326,7 +369,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
         );
-        let gateway_key = resource_ref.key();
+        // Use resource_key() ("namespace/name") to match port_manager and workqueue key formats.
+        let gateway_key = resource_ref.resource_key();
 
         // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
@@ -358,6 +402,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         route_index.remove_gateway_hostnames(&gateway_key);
         route_index.remove_gateway_ports(&gateway_key);
 
+        // Note: GatewayBackendTlsStore cleanup happens on the gateway data-plane side.
+
         tracing::debug!(
             gateway = %gateway_key,
             "Cleared secret, port manager, hostname and port cache on Gateway delete"
@@ -388,14 +434,26 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l);
                 resolved_refs_errors.append(&mut kind_errors);
 
+                // TLS "Mixed" mode is not supported: listeners should report Accepted=False.
+                let unsupported_tls_mode = l.protocol.to_uppercase() == "TLS"
+                    && l.tls
+                        .as_ref()
+                        .and_then(|t| t.mode.as_deref())
+                        .map(|m| m.to_uppercase() == "MIXED")
+                        .unwrap_or(false);
+
                 ListenerInfo {
                     name: l.name.clone(),
                     supported_kinds,
                     route_count,
                     resolved_refs_errors,
+                    unsupported_tls_mode,
                 }
             })
             .collect();
+
+        // Pre-compute gateway-level backend TLS validation while gateway is only immutably borrowed
+        let gw_resolved_errors = validate_gateway_backend_tls(gateway);
 
         let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref());
 
@@ -407,7 +465,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Initialize conditions if not present
         let conditions = status.conditions.get_or_insert_with(Vec::new);
 
-        // Detect port conflicts from ListenerPortManager
+        // Detect port conflicts from ListenerPortManager.
+        // Use "namespace/name" format to match register_gateway (which uses resource_key()).
         let gateway_key = format!(
             "{}/{}",
             gateway.metadata.namespace.as_deref().unwrap_or(""),
@@ -436,16 +495,26 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         }
 
         // Gateway-level ResolvedRefs (Gateway API v1.5): indicates whether non-Listener
-        // object references (e.g. infrastructure, backendTLS) on the Gateway are resolved.
-        // Currently no such references exist in the spec, so this is always True.
+        // object references (e.g. spec.tls.backend.clientCertificateRef) on the Gateway are resolved.
         {
-            let cond = condition_true(
-                condition_types::RESOLVED_REFS,
-                condition_reasons::RESOLVED_REFS,
-                "All gateway-level references resolved",
-                generation,
-            );
-            update_gateway_condition(conditions, cond);
+            if gw_resolved_errors.is_empty() {
+                let cond = condition_true(
+                    condition_types::RESOLVED_REFS,
+                    condition_reasons::RESOLVED_REFS,
+                    "All gateway-level references resolved",
+                    generation,
+                );
+                update_gateway_condition(conditions, cond);
+            } else {
+                let reason = pick_gateway_resolved_refs_reason(&gw_resolved_errors);
+                let message = gw_resolved_errors
+                    .iter()
+                    .map(|e| e.message())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let cond = condition_false(condition_types::RESOLVED_REFS, reason, message, generation);
+                update_gateway_condition(conditions, cond);
+            }
         }
 
         // Programmed: True — configuration has been sent to the data plane.
@@ -485,6 +554,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 supported_kinds,
                 route_count,
                 resolved_refs_errors,
+                unsupported_tls_mode,
             } in listener_infos
             {
                 let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == name);
@@ -527,7 +597,14 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 };
 
                 // Update other listener conditions (pass conflict status for Programmed/Ready)
-                update_listener_conditions(ls, validation_errors, generation, is_conflicted, &resolved_refs_errors);
+                update_listener_conditions(
+                    ls,
+                    validation_errors,
+                    generation,
+                    is_conflicted,
+                    &resolved_refs_errors,
+                    unsupported_tls_mode,
+                );
             }
 
             // Remove stale listener statuses for listeners no longer in the spec
@@ -632,9 +709,19 @@ fn update_listener_conditions(
     generation: Option<i64>,
     is_conflicted: bool,
     resolved_refs_errors: &[GatewayResolvedRefsError],
+    unsupported_tls_mode: bool,
 ) {
-    // Accepted: True if no validation errors (conflict doesn't affect Accepted)
-    if validation_errors.is_empty() {
+    // Accepted: False for unsupported TLS mode, False for gateway-level parse errors, True otherwise.
+    // Conflict does not affect Accepted.
+    if unsupported_tls_mode {
+        let cond = condition_false(
+            condition_types::ACCEPTED,
+            condition_reasons::UNSUPPORTED_TLS_MODE,
+            "TLS Mixed mode is not supported; use Passthrough or Terminate",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if validation_errors.is_empty() {
         let cond = condition_true(
             condition_types::ACCEPTED,
             condition_reasons::ACCEPTED,
@@ -716,6 +803,99 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
         return condition_reasons::REF_NOT_PERMITTED;
     }
     "InvalidCertificateRef"
+}
+
+/// Validate Gateway-level backend TLS clientCertificateRef (spec.tls.backend.clientCertificateRef).
+fn validate_gateway_backend_tls(gateway: &Gateway) -> Vec<GatewayResolvedRefsError> {
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let mut errors = Vec::new();
+
+    let Some(spec_tls) = &gateway.spec.tls else {
+        return errors;
+    };
+    let Some(backend) = &spec_tls.backend else {
+        return errors;
+    };
+    let Some(cert_ref) = &backend.client_certificate_ref else {
+        return errors;
+    };
+
+    // Validate kind
+    let cert_kind = cert_ref.kind.as_deref().unwrap_or("Secret");
+    if cert_kind != "Secret" {
+        errors.push(GatewayResolvedRefsError::InvalidCertRef {
+            kind: cert_kind.to_string(),
+        });
+        return errors;
+    }
+
+    // Validate group
+    let cert_group = cert_ref.group.as_deref().unwrap_or("");
+    if !is_core_api_group(cert_group) {
+        errors.push(GatewayResolvedRefsError::InvalidCertRef {
+            kind: format!("group:{}", cert_group),
+        });
+        return errors;
+    }
+
+    let cert_ns = cert_ref
+        .namespace
+        .as_deref()
+        .or(gateway.metadata.namespace.as_deref())
+        .unwrap_or("default");
+
+    // Cross-namespace ReferenceGrant check
+    if gateway_ns != cert_ns && is_reference_grant_validation_enabled() {
+        let allowed = get_global_reference_grant_store().check_reference_allowed(
+            gateway_ns,
+            "gateway.networking.k8s.io",
+            "Gateway",
+            cert_ns,
+            "",
+            "Secret",
+            Some(&cert_ref.name),
+        );
+        if !allowed {
+            errors.push(GatewayResolvedRefsError::RefNotPermitted {
+                namespace: cert_ns.to_string(),
+                name: cert_ref.name.clone(),
+            });
+        }
+    }
+
+    // Secret existence and validity check
+    match get_secret(Some(cert_ns), &cert_ref.name) {
+        None => {
+            errors.push(GatewayResolvedRefsError::SecretNotFound {
+                namespace: cert_ns.to_string(),
+                name: cert_ref.name.clone(),
+            });
+        }
+        Some(secret) => {
+            use crate::types::constants::secret_keys::tls;
+            if let Some(data) = &secret.data {
+                let cert_bytes = data.get(tls::CERT).map(|b| &b.0);
+                let key_bytes = data.get(tls::KEY).map(|b| &b.0);
+                let cert_empty = cert_bytes.is_none_or(|b| b.is_empty());
+                let key_empty = key_bytes.is_none_or(|b| b.is_empty());
+                if cert_empty || key_empty {
+                    errors.push(GatewayResolvedRefsError::SecretInvalid {
+                        namespace: cert_ns.to_string(),
+                        name: cert_ref.name.clone(),
+                        reason: "empty or missing tls.crt/tls.key data".to_string(),
+                    });
+                }
+            } else {
+                errors.push(GatewayResolvedRefsError::SecretInvalid {
+                    namespace: cert_ns.to_string(),
+                    name: cert_ref.name.clone(),
+                    reason: "no data".to_string(),
+                });
+            }
+        }
+    }
+
+    errors
 }
 
 fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener) -> Vec<GatewayResolvedRefsError> {

@@ -112,7 +112,12 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         // Gateway's on_change can find and requeue it to re-resolve resolved_ports.
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
-        update_gateway_route_index(ResourceKind::TLSRoute, route_ns, route_name, route.spec.parent_refs.as_ref());
+        update_gateway_route_index(
+            ResourceKind::TLSRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
         Vec::new()
     }
 

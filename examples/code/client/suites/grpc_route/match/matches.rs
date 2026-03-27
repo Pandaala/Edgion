@@ -122,18 +122,20 @@ impl GrpcMatchTestSuite {
                             "Expected failure but got success (hostname should not match)".to_string(),
                         ),
                         Err(e) => {
-                            // should fail（404 or other error）
-                            // HTTP 404 may be mapped to Internal by tonic client
-                            if e.code() == tonic::Code::NotFound
-                                || e.code() == tonic::Code::Unavailable
-                                || e.code() == tonic::Code::Internal
-                            {
+                            // should fail with NotFound (grpc-status 5) for unmatched hostname
+                            if e.code() == tonic::Code::NotFound || e.code() == tonic::Code::Unavailable {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!("Correctly rejected wrong hostname: {:?}", e.code()),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Unexpected error code: {:?}", e.code()))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Unexpected error code: {:?} (expected NotFound/Unavailable, got RST_STREAM?)",
+                                        e.code()
+                                    ),
+                                )
                             }
                         }
                     }
@@ -243,12 +245,8 @@ impl GrpcMatchTestSuite {
                             "Expected failure for wrong sectionName but got success".to_string(),
                         ),
                         Err(e) => {
-                            // should fail（404 or other error）
-                            // HTTP 404 may be mapped to Internal by tonic client
-                            if e.code() == tonic::Code::NotFound
-                                || e.code() == tonic::Code::Unavailable
-                                || e.code() == tonic::Code::Internal
-                            {
+                            // should fail with NotFound (grpc-status 5) for wrong sectionName
+                            if e.code() == tonic::Code::NotFound || e.code() == tonic::Code::Unavailable {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!("Correctly rejected wrong sectionName: {:?}", e.code()),
@@ -256,7 +254,11 @@ impl GrpcMatchTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Unexpected error code: {:?}, message: {}", e.code(), e.message()),
+                                    format!(
+                                        "Unexpected error code: {:?}, message: {} (expected NotFound/Unavailable)",
+                                        e.code(),
+                                        e.message()
+                                    ),
                                 )
                             }
                         }
@@ -450,16 +452,19 @@ impl GrpcMatchTestSuite {
                                 .to_string(),
                         ),
                         Err(e) => {
-                            if e.code() == tonic::Code::NotFound
-                                || e.code() == tonic::Code::Unavailable
-                                || e.code() == tonic::Code::Internal
-                            {
+                            if e.code() == tonic::Code::NotFound || e.code() == tonic::Code::Unavailable {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!("Correctly rejected wrong hostname for regex route: {:?}", e.code()),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Unexpected error code: {:?}", e.code()))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Unexpected error code: {:?} (expected NotFound/Unavailable, got RST_STREAM?)",
+                                        e.code()
+                                    ),
+                                )
                             }
                         }
                     }

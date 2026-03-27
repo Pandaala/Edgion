@@ -91,12 +91,17 @@ pub async fn upstream_peer_grpc(
         Ok(None) => {
             ctx.add_error(EdgionStatus::GrpcUpstreamNotRouteMatched);
             end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
+            // gRPC trailers-only response (HTTP 200 + grpc-status: 14, END_STREAM=true) already
+            // written above. Return HTTPStatus(200) so Pingora treats this as "response already
+            // handled" and does NOT send RST_STREAM. InternalError would cause Pingora to reset
+            // the H2 stream, and the client would see code=Internal(13) instead of Unavailable(14).
+            return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
         }
         Err(_) => {
             ctx.add_error(EdgionStatus::GrpcUpstreamNotBackendRefs);
             end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
+            // Same reasoning as Ok(None): response already sent, signal Pingora to stop cleanly.
+            return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
         }
     }
 

@@ -19,15 +19,13 @@ Gateway API 规范将 `Programmed` 列为 Core 必需条件，要求确认配置
 - 详细架构决策见 [skills/01-architecture/01-controller/10-status-management.md](../01-architecture/01-controller/10-status-management.md)
 - 完整方案设计见 [tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)（保留备查，不实施）
 
-## Gateway addresses 实际绑定地址上报
+## Gateway addresses 实际绑定地址上报 / GatewayStaticAddresses / GatewayOptionalAddressValue
 
 **决定：不实现**
 
-Gateway API 规范期望 `Gateway.status.addresses` 反映数据面实际绑定的地址。同样受限于无数据面→Controller 状态回传通道。
+`GatewayStaticAddresses` conformance test 要求 Gateway 实际绑定到 `spec.addresses` 指定的地址。Edgion 是预部署的 binary，监听地址来自 TOML 配置，不会根据 Gateway `spec.addresses` 动态改变绑定行为。同样受限于无数据面→Controller 状态回传通道。
 
-当前行为：从 `spec.addresses`、Service ClusterIP、默认配置、fallback `0.0.0.0` 推导，不反映运行时实际状态。
-
-- 相关合规任务见 [tasks/todo/gateway-api-conformance/03-status-conditions.md](../../tasks/todo/gateway-api-conformance/03-status-conditions.md)
+当前行为：`derive_gateway_addresses()` 将 `spec.addresses` 复制到 `status.addresses`，但数据面实际绑定地址不变（仍由 TOML 配置决定）。不声明 `SupportGatewayStaticAddresses` 和 `SupportGatewayAddressEmpty`。
 
 ## GRPCRoute 与 HTTPRoute 跨类型 Hostname 冲突检测
 

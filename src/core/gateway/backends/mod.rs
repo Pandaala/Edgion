@@ -13,9 +13,9 @@ pub use discovery::{
     get_global_service_store, get_roundrobin_store, EndpointDiscovery, EndpointExt, EndpointSliceExt, EndpointStore,
     EpSliceStore, ServiceStore,
 };
+pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
 pub use policy::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
-pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use preload::preload_load_balancers;
 pub use validation::validate_endpoint_in_route;
 
@@ -575,6 +575,28 @@ fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, E
 }
 
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
+fn build_client_cert_key_from_secret(
+    secret: &k8s_openapi::api::core::v1::Secret,
+) -> Result<Option<Arc<CertKey>>, EdgionStatus> {
+    let data = secret.data.as_ref().ok_or(EdgionStatus::Unknown)?;
+    let cert_pem = data.get(CERT).ok_or(EdgionStatus::Unknown)?;
+    let key_pem = data.get(KEY).ok_or(EdgionStatus::Unknown)?;
+
+    let cert = X509::from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
+    let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
+
+    Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
+}
+
+#[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+fn build_client_cert_key_from_secret(
+    _secret: &k8s_openapi::api::core::v1::Secret,
+) -> Result<Option<Arc<()>>, EdgionStatus> {
+    tracing::warn!("upstream mTLS client cert from Gateway is not supported by this TLS feature set");
+    Ok(None)
+}
+
+#[cfg(any(feature = "boringssl", feature = "openssl"))]
 fn build_ca_chain(policy: &BackendTLSPolicy) -> Option<Arc<CaType>> {
     let mut ca_chain = Vec::new();
     for secret in policy.spec.resolved_ca_certificates.as_ref()? {
@@ -601,8 +623,25 @@ fn build_ca_chain(_policy: &BackendTLSPolicy) -> Option<Arc<()>> {
     None
 }
 
-fn create_tls_peer(addr: SocketAddr, policy: &Option<Arc<BackendTLSPolicy>>) -> Result<Box<HttpPeer>, EdgionStatus> {
+fn create_tls_peer(
+    addr: SocketAddr,
+    policy: &Option<Arc<BackendTLSPolicy>>,
+    gateway_key: Option<&str>,
+) -> Result<Box<HttpPeer>, EdgionStatus> {
     let Some(policy) = policy.as_ref() else {
+        // No BackendTLSPolicy — check Gateway-level default client cert
+        if let Some(gw_key) = gateway_key {
+            if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
+                #[cfg(any(feature = "boringssl", feature = "openssl"))]
+                if let Some(cert_key) = build_client_cert_key_from_secret(&gw_secret)? {
+                    let peer = HttpPeer::new_mtls(addr, String::new(), cert_key);
+                    return Ok(Box::new(peer));
+                }
+
+                #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+                let _ = gw_secret;
+            }
+        }
         return Ok(Box::new(HttpPeer::new(addr, false, String::new())));
     };
 
@@ -611,6 +650,17 @@ fn create_tls_peer(addr: SocketAddr, policy: &Option<Arc<BackendTLSPolicy>>) -> 
     #[cfg(any(feature = "boringssl", feature = "openssl"))]
     let mut peer = if let Some(cert_key) = build_client_cert_key(policy)? {
         HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+    } else if let Some(gw_key) = gateway_key {
+        // Policy exists but has no client cert — fallback to Gateway-level cert
+        if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
+            if let Some(cert_key) = build_client_cert_key_from_secret(&gw_secret)? {
+                HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+            } else {
+                HttpPeer::new(addr, true, sni)
+            }
+        } else {
+            HttpPeer::new(addr, true, sni)
+        }
     } else {
         HttpPeer::new(addr, true, sni)
     };
@@ -708,6 +758,9 @@ pub(crate) fn try_get_peer(
     session: &Session,
     is_grpc: bool,
 ) -> Result<Box<HttpPeer>, EdgionStatus> {
+    let gateway_key = ctx.gateway_info.gateway_key();
+    let gateway_key_ref = Some(gateway_key.as_str());
+
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
     let (br_name, br_port, br_kind, lb_policy, backend_tls_policy) = if is_grpc {
         // gRPC backend
@@ -805,7 +858,7 @@ pub(crate) fn try_get_peer(
                 }
             }
 
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -846,7 +899,7 @@ pub(crate) fn try_get_peer(
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
-            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -887,7 +940,7 @@ pub(crate) fn try_get_peer(
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
-            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -934,7 +987,7 @@ pub(crate) fn try_get_peer(
                 }
             }
 
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -971,7 +1024,7 @@ pub(crate) fn try_get_peer(
                 }
             }
 
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }

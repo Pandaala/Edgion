@@ -71,6 +71,9 @@ is_runtime_generated_secret_template() {
         "HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml")
             return 0
             ;;
+        "Gateway/TLS/BackendTLSGatewayCert/Secret_edge_gateway-client-cert.yaml")
+            return 0
+            ;;
         "EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca.yaml")
             return 0
             ;;

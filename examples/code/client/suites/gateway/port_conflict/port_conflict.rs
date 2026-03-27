@@ -109,7 +109,7 @@ impl PortConflictTestSuite {
                     let start = Instant::now();
 
                     // Fetch all Gateways from Admin API
-                    let admin_url = format!("{}/admin/Gateway", ctx.admin_api_url());
+                    let admin_url = format!("{}/configserver/Gateway/list", ctx.admin_api_url());
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     let response = match client.get(&admin_url).send().await {
@@ -199,7 +199,7 @@ impl PortConflictTestSuite {
                     let start = Instant::now();
 
                     // Fetch all Gateways from Admin API
-                    let admin_url = format!("{}/admin/Gateway", ctx.admin_api_url());
+                    let admin_url = format!("{}/configserver/Gateway/list", ctx.admin_api_url());
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     let response = match client.get(&admin_url).send().await {
@@ -282,7 +282,7 @@ impl PortConflictTestSuite {
                     let start = Instant::now();
 
                     // Fetch all Gateways from Admin API
-                    let admin_url = format!("{}/admin/Gateway", ctx.admin_api_url());
+                    let admin_url = format!("{}/configserver/Gateway/list", ctx.admin_api_url());
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
                     let response = match client.get(&admin_url).send().await {

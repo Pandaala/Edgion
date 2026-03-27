@@ -112,7 +112,8 @@ impl AllowedRoutesKindsTestSuite {
                                 } else {
                                     TestResult::failed(
                                         start.elapsed(),
-                                        "Expected gRPC error for GRPCRoute not in kinds, got grpc-status: 0 (OK)".to_string(),
+                                        "Expected gRPC error for GRPCRoute not in kinds, got grpc-status: 0 (OK)"
+                                            .to_string(),
                                     )
                                 }
                             } else {

@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route::{
-    BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference,
-    ParsedRouteTimeouts as HttpParsedRouteTimeouts, RouteTimeout as HttpRouteTimeout, SessionPersistence,
+    BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
+    RouteTimeout as HttpRouteTimeout, SessionPersistence,
 };
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::gateway::lb::BackendSelector;
@@ -439,11 +439,15 @@ impl GRPCRoute {
             // Parse timeouts for each rule
             if let Some(timeouts) = &rule.timeouts {
                 // Parse GRPCRouteTimeouts manually (same structure as HTTPRouteTimeouts)
-                let request_timeout = timeouts.request.as_ref()
+                let request_timeout = timeouts
+                    .request
+                    .as_ref()
                     .map(|s| HttpRouteTimeout::parse(s, "request"))
                     .unwrap_or(HttpRouteTimeout::Unset);
 
-                let backend_request_timeout = timeouts.backend_request.as_ref()
+                let backend_request_timeout = timeouts
+                    .backend_request
+                    .as_ref()
                     .map(|s| HttpRouteTimeout::parse(s, "backend_request"))
                     .unwrap_or(HttpRouteTimeout::Unset);
 
@@ -453,7 +457,8 @@ impl GRPCRoute {
                         (Some(br), Some(req)) if br > req => {
                             tracing::warn!(
                                 "GRPCRoute backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping",
-                                br, req
+                                br,
+                                req
                             );
                             HttpRouteTimeout::Duration(req)
                         }

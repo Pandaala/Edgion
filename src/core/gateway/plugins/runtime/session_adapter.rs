@@ -343,6 +343,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn shutdown(&mut self) {
+        // gRPC over HTTP/2: shutdown() would send RST_STREAM, corrupting any trailers-only
+        // response already written with END_STREAM=true. gRPC streams are closed by the
+        // END_STREAM flag alone; an explicit shutdown is never needed.
+        if self.ctx.request_info.is_grpc_request {
+            return;
+        }
         self.inner.shutdown().await;
     }
 

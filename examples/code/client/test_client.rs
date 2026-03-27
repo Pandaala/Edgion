@@ -124,6 +124,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "backend-tls-san" | "backendtlssan" => "Gateway/TLS/BackendTLSSAN".to_string(),
+            "backend-tls-gateway-cert" | "backendtlsgatewaycert" => "Gateway/TLS/BackendTLSGatewayCert".to_string(),
             "frontend-validation" | "frontendvalidation" | "fv-mtls" => "Gateway/FrontendValidation".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
@@ -195,6 +196,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
         "Gateway/TLS/BackendTLSSAN" => "Gateway/TLS/BackendTLSSAN",
+        "Gateway/TLS/BackendTLSGatewayCert" => "Gateway/TLS/BackendTLSGatewayCert",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
         "Gateway/TLS/NoHostnameListener" => "Gateway/TLS/NoHostnameListener",
         "Gateway/FrontendValidation" => "Gateway/FrontendValidation",
@@ -524,6 +526,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::BackendTlsSanTestSuite));
+        }
+        "Gateway/TLS/BackendTLSGatewayCert" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/BackendTLSGatewayCert tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsGatewayCertTestSuite));
         }
         "Gateway/TLS/GatewayTLS" => {
             if !gateway {
@@ -875,6 +884,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::BackendTlsStatusTestSuite));
+        }
+        "Status/TLSListenerMode" => {
+            if !gateway {
+                eprintln!("Error: Status/TLSListenerMode tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsListenerModeStatusTestSuite));
         }
         // Services tests (ACME, etc.)
         "Services/acme" => {

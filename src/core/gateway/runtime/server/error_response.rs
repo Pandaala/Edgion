@@ -129,6 +129,29 @@ pub async fn end_response_404(
     Ok(())
 }
 
+/// Send gRPC INTERNAL (status 13) error response for unexpected server-side errors.
+///
+/// Used when a non-gRPC-aware error path (e.g. end_response_500) is hit on a gRPC request.
+/// Produces a proper trailers-only response instead of RST_STREAM.
+async fn end_response_grpc_internal(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+) -> pingora_core::Result<()> {
+    ctx.request_info.status = Some(200);
+
+    let mut resp = ResponseHeader::build(200, None)?;
+    server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "application/grpc").unwrap();
+    resp.insert_header("grpc-status", "13").unwrap();
+    resp.insert_header("grpc-message", "internal server error").unwrap();
+
+    let resp_box = Box::new(resp);
+    session.write_response_header(resp_box, true).await?;
+
+    Ok(())
+}
+
 /// Send gRPC NOT_FOUND (status 5) error response for unmatched gRPC routes.
 ///
 /// Per Gateway API spec, unmatched routes should return 404. The gRPC equivalent
@@ -173,11 +196,16 @@ pub async fn end_response_grpc_unavailable(
 }
 
 /// Send 500 Internal Server Error error response (nginx-style)
+/// For gRPC requests, returns gRPC INTERNAL (status 13) per gRPC protocol spec.
 pub async fn end_response_500(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
+    if ctx.request_info.is_grpc_request {
+        return end_response_grpc_internal(session, ctx, server_header_opts).await;
+    }
+
     ctx.request_info.status = Some(500);
 
     let mut resp = ResponseHeader::build(500, None)?;
