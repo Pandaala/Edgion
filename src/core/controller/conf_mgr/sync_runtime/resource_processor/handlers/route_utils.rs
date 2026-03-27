@@ -3,12 +3,17 @@
 //! Deduplicates common logic used across gateway.rs, http_route.rs,
 //! grpc_route.rs, and other route handlers.
 
+use std::collections::HashSet;
+
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::{ParentReference, RefDenied};
 use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::resources::http_route::RouteParentStatus;
+use crate::types::ResourceKind;
 
 /// Check if a listener's namespace policy allows a route from the given namespace.
 ///
@@ -233,6 +238,47 @@ pub fn retain_current_parent_statuses(parents: &mut Vec<RouteParentStatus>, pare
                 && pr.port == ps.parent_ref.port
         })
     });
+}
+
+/// Update the attached-route tracker with only accepted parentRefs.
+///
+/// Called from `update_status()` in each route handler, after acceptance has
+/// been computed. Only parentRefs that pass all acceptance checks (namespace,
+/// sectionName/port match, hostname intersection) are counted.
+pub fn update_tracker_accepted_only(
+    route_kind: ResourceKind,
+    route_ns: &str,
+    route_name: &str,
+    parent_refs: Option<&Vec<ParentReference>>,
+    route_hostnames: Option<&Vec<String>>,
+) -> bool {
+    let route_key = format!("{}/{}", route_ns, route_name);
+    let Some(parent_refs) = parent_refs else {
+        return get_attached_route_tracker().remove_route(route_kind, &route_key);
+    };
+
+    let mut attachments = HashSet::new();
+
+    for parent_ref in parent_refs {
+        let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+        let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
+        if parent_group != "gateway.networking.k8s.io" || parent_kind != "Gateway" {
+            continue;
+        }
+
+        let accepted_errors = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+        if !accepted_errors.is_empty() {
+            continue;
+        }
+
+        let gateway_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
+        attachments.insert(Attachment {
+            gateway_key: format!("{}/{}", gateway_ns, parent_ref.name),
+            listener_name: parent_ref.section_name.as_deref().unwrap_or("").to_string(),
+        });
+    }
+
+    get_attached_route_tracker().update_route(route_kind, &route_key, attachments)
 }
 
 /// Register Service backend references for a route.

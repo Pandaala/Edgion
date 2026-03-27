@@ -222,6 +222,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                             match_id,
                             match_item.clone(),
                             route_sv,
+                            rule.name.clone(),
                         ),
                         rule: rule_arc.clone(),
                         route_info: route_info.clone(),

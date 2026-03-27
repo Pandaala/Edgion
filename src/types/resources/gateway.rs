@@ -37,6 +37,29 @@ pub struct GatewaySpec {
     /// Addresses requested for this Gateway
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub addresses: Option<Vec<GatewayAddress>>,
+
+    /// Gateway-level TLS configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<GatewaySpecTLS>,
+}
+
+/// Gateway-level TLS configuration (spec.tls)
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySpecTLS {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<GatewayBackendTLS>,
+}
+
+/// Gateway-level backend TLS — default client cert for upstream mTLS
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayBackendTLS {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_certificate_ref: Option<SecretObjectReference>,
+    /// Resolved by Controller, not user-configured
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_client_certificate: Option<Secret>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -236,6 +259,7 @@ mod tests {
                     allowed_routes: None,
                 }]),
                 addresses: None,
+                tls: None,
             },
             status: None,
         };
@@ -278,6 +302,49 @@ spec:
             "frontendValidation missing in JSON: {}",
             json
         );
+    }
+
+    #[test]
+    fn test_gateway_spec_tls_deserialization() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: test-backend-tls
+  namespace: default
+spec:
+  gatewayClassName: test-class
+  tls:
+    backend:
+      clientCertificateRef:
+        name: client-cert
+        kind: Secret
+        group: ""
+"#;
+        let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
+        let spec_tls = gw.spec.tls.as_ref().expect("spec.tls should be present");
+        let backend = spec_tls.backend.as_ref().expect("spec.tls.backend should be present");
+        let cert_ref = backend
+            .client_certificate_ref
+            .as_ref()
+            .expect("clientCertificateRef should be present");
+        assert_eq!(cert_ref.name, "client-cert");
+        assert_eq!(cert_ref.kind.as_deref(), Some("Secret"));
+    }
+
+    #[test]
+    fn test_gateway_spec_without_tls() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: test-no-tls
+  namespace: default
+spec:
+  gatewayClassName: test-class
+"#;
+        let gw: Gateway = serde_yaml::from_str(yaml).unwrap();
+        assert!(gw.spec.tls.is_none(), "spec.tls should be None when not specified");
     }
 
     #[test]

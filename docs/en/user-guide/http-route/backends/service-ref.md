@@ -45,7 +45,7 @@ backendRefs:
 
 ---
 # ReferenceGrant (created in backend-ns)
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-from-default

@@ -22,10 +22,11 @@ use super::common::api_groups_match;
 /// Each ReferenceGrant can be used to represent a unique trust relationship.
 /// Additional Reference Grants can be used to add to the set of trusted sources
 /// of inbound references for the namespace they are defined within.
+/// ReferenceGrant (v1 — canonical internal representation)
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "gateway.networking.k8s.io",
-    version = "v1beta1",
+    version = "v1",
     kind = "ReferenceGrant",
     plural = "referencegrants",
     shortname = "refgrant",
@@ -147,6 +148,38 @@ impl ReferenceGrant {
                 && t.kind == to_kind
                 && (t.name.is_none() || t.name.as_deref() == to_name)
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v1beta1 compat type — used only by the watcher on older clusters
+// ---------------------------------------------------------------------------
+
+/// ReferenceGrant (v1beta1 — legacy, converted to v1 before store insertion)
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[kube(
+    group = "gateway.networking.k8s.io",
+    version = "v1beta1",
+    kind = "ReferenceGrantBeta",
+    plural = "referencegrants",
+    shortname = "refgrant",
+    namespaced
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceGrantBetaSpec {
+    pub from: Vec<ReferenceGrantFrom>,
+    pub to: Vec<ReferenceGrantTo>,
+}
+
+impl From<ReferenceGrantBeta> for ReferenceGrant {
+    fn from(beta: ReferenceGrantBeta) -> Self {
+        ReferenceGrant {
+            metadata: beta.metadata,
+            spec: ReferenceGrantSpec {
+                from: beta.spec.from,
+                to: beta.spec.to,
+            },
+        }
     }
 }
 

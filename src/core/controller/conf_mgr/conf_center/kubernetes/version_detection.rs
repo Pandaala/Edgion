@@ -83,6 +83,48 @@ pub async fn resolve_endpoint_mode(client: &Client, config_mode: EndpointMode) -
     }
 }
 
+/// The API version detected for ReferenceGrant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceGrantVersion {
+    V1,
+    V1Beta1,
+}
+
+/// Detect which ReferenceGrant API version the cluster supports.
+///
+/// Tries v1 first (GA since Gateway API v1.1.0). Falls back to v1beta1 for
+/// older clusters. Returns `None` if neither version is available.
+pub async fn detect_reference_grant_version(client: &Client) -> Option<ReferenceGrantVersion> {
+    // Try v1 first
+    let gvk_v1 = GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "ReferenceGrant");
+    let api_resource_v1 = ApiResource::from_gvk(&gvk_v1);
+    let api_v1: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource_v1);
+
+    if api_v1.list(&kube::api::ListParams::default().limit(1)).await.is_ok() {
+        tracing::info!(component = "k8s_controller", "ReferenceGrant v1 API detected");
+        return Some(ReferenceGrantVersion::V1);
+    }
+
+    // Fall back to v1beta1
+    let gvk_beta = GroupVersionKind::gvk("gateway.networking.k8s.io", "v1beta1", "ReferenceGrant");
+    let api_resource_beta = ApiResource::from_gvk(&gvk_beta);
+    let api_beta: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource_beta);
+
+    if api_beta.list(&kube::api::ListParams::default().limit(1)).await.is_ok() {
+        tracing::info!(
+            component = "k8s_controller",
+            "ReferenceGrant v1beta1 API detected (v1 not available)"
+        );
+        return Some(ReferenceGrantVersion::V1Beta1);
+    }
+
+    tracing::warn!(
+        component = "k8s_controller",
+        "Neither ReferenceGrant v1 nor v1beta1 available"
+    );
+    None
+}
+
 /// Gateway API resource definition for preflight CRD check.
 struct GatewayApiResource {
     kind: &'static str,
@@ -123,7 +165,7 @@ const GATEWAY_API_RESOURCES: &[GatewayApiResource] = &[
     GatewayApiResource {
         kind: "ReferenceGrant",
         group: "gateway.networking.k8s.io",
-        version: "v1beta1",
+        version: "v1",
     },
     GatewayApiResource {
         kind: "TCPRoute",

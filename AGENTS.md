@@ -55,7 +55,7 @@ Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller�
   1. `skills/05-testing/SKILL.md`
   2. Controller 重启/Gateway 日志 `Unknown kind` → `skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md`
   3. Controller↔Gateway gRPC 同步 → `skills/01-architecture/03-controller-gateway-link/SKILL.md`
-  4. Gateway API 语义 → `skills/08-gateway-api/SKILL.md`
+  4. Gateway API 语义 → `skills/08-kubernetes/01-gateway-api/SKILL.md`
   5. TLS 网关路由 → `skills/09-misc/debugging-tls-gateway.md`
 
 - **了解配置和路径行为**：

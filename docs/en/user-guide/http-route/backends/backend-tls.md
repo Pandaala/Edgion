@@ -36,7 +36,11 @@ spec:
 |-------|------|----------|-------------|
 | targetRefs | array | ✓ | Target Service list |
 | validation.caCertificateRefs | array | ✓ | CA certificate Secret |
-| validation.hostname | string | ✓ | Hostname for validation |
+| validation.hostname | string | ✓ | Hostname for SNI and certificate validation |
+| validation.subjectAltNames | array | | Additional SAN validation rules |
+| validation.subjectAltNames[].type | string | ✓ | `Hostname` or `URI` |
+| validation.subjectAltNames[].hostname | string | | DNS name (when type=Hostname), supports wildcards (`*.example.com`) |
+| validation.subjectAltNames[].uri | string | | Full URI (when type=URI), e.g. SPIFFE ID |
 
 ## CA Certificate Secret
 
@@ -49,6 +53,37 @@ type: kubernetes.io/tls
 data:
   ca.crt: <base64-encoded-ca-cert>
 ```
+
+## Subject Alternative Name Validation
+
+When `subjectAltNames` is configured, the Gateway validates the backend certificate's SAN during TLS handshake. The connection is rejected if no SAN matches.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: backend-san-check
+spec:
+  targetRefs:
+    - kind: Service
+      name: secure-backend
+  validation:
+    caCertificateRefs:
+      - kind: Secret
+        name: backend-ca
+    hostname: backend.internal
+    subjectAltNames:
+      - type: Hostname
+        hostname: backend.internal
+      - type: URI
+        uri: spiffe://cluster.local/ns/default/sa/backend
+```
+
+Matching rules:
+- **Hostname**: exact match or wildcard (`*.example.com` matches single-level subdomains)
+- **URI**: exact match (e.g. SPIFFE IDs)
+- Any single match across all entries is sufficient
+- Omitting `subjectAltNames` preserves default behavior (hostname-only validation)
 
 ## Examples
 

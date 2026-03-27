@@ -20,6 +20,7 @@ mod tests;
 
 // HTTP proxy module
 pub mod proxy_http;
+pub mod session_persistence;
 
 pub use conf_handler_impl::create_route_manager_handler;
 pub use match_unit::HttpRouteRuleUnit;

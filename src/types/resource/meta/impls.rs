@@ -23,7 +23,8 @@ impl_resource_meta!(EndpointSlice, EndpointSlice, "EndpointSlice");
 // =============================================================================
 
 use crate::types::resources::{
-    BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, TCPRoute, TLSRoute, UDPRoute,
+    BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, ReferenceGrantBeta, TCPRoute,
+    TLSRoute, UDPRoute,
 };
 
 // Cluster-scoped
@@ -32,6 +33,7 @@ impl_resource_meta!(GatewayClass, GatewayClass, "GatewayClass", cluster_scoped);
 // Namespaced
 impl_resource_meta!(Gateway, Gateway, "Gateway");
 impl_resource_meta!(ReferenceGrant, ReferenceGrant, "ReferenceGrant");
+impl_resource_meta!(ReferenceGrantBeta, ReferenceGrant, "ReferenceGrant");
 impl_resource_meta!(BackendTLSPolicy, BackendTLSPolicy, "BackendTLSPolicy");
 
 // Routes (with pre_parse)

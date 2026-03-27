@@ -10,7 +10,7 @@
 ## Example: Allow Gateway to Reference Cross-Namespace Secret
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-gw-to-secret

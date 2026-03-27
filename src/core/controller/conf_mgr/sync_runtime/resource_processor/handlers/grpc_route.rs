@@ -7,7 +7,7 @@ use super::super::ref_grant::{
 };
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
-    update_attached_route_tracker, update_gateway_route_index,
+    update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
@@ -100,6 +100,13 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         // Note: backend ref validation (service existence, kind check) is handled by
         // update_status() via ResolvedRefs condition and per-rule invalid_rule_indices.
         errors
+    }
+
+    fn preparse(&self, route: &mut GRPCRoute, _ctx: &HandlerContext) -> Vec<String> {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+        update_gateway_route_index(ResourceKind::GRPCRoute, route_ns, route_name, route.spec.parent_refs.as_ref());
+        Vec::new()
     }
 
     async fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
@@ -229,15 +236,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
 
-        let tracker_changed = update_attached_route_tracker(
-            ResourceKind::GRPCRoute,
-            route_ns,
-            route_name,
-            route.spec.parent_refs.as_ref(),
-        );
-        if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        }
+        requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
     }
 
     async fn on_delete(&self, route: &GRPCRoute, ctx: &HandlerContext) {
@@ -345,6 +344,15 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         } else {
             status.parents.clear();
         }
+
+        // Update tracker with only accepted parentRefs so attachedRoutes count is accurate.
+        super::route_utils::update_tracker_accepted_only(
+            ResourceKind::GRPCRoute,
+            route_ns,
+            route.metadata.name.as_deref().unwrap_or(""),
+            route.spec.parent_refs.as_ref(),
+            route.spec.hostnames.as_ref(),
+        );
     }
 }
 

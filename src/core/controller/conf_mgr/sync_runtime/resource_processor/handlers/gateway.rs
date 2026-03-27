@@ -448,6 +448,19 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
+        // Programmed: True — configuration has been sent to the data plane.
+        // Gateway API requires this condition. We set it True because our controller
+        // pushes config to gateway via gRPC sync as soon as the resource is processed.
+        {
+            let cond = condition_true(
+                "Programmed",
+                "Programmed",
+                "Gateway configuration has been sent to the data plane",
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        }
+
         // ListenersNotValid: True if any listener has port conflicts
         if !conflicts.is_empty() {
             let conflicting_names: Vec<&String> = conflicts.keys().collect();
@@ -660,7 +673,26 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, resolved);
     }
 
-    let _ = is_conflicted;
+    // Programmed: True when listener is ready to process traffic.
+    // We set True unless the listener is conflicted or has unresolved refs.
+    if is_conflicted || has_unresolved_refs {
+        let reason = if is_conflicted { "Conflicted" } else { "Invalid" };
+        let message = if is_conflicted {
+            "Listener has port conflicts"
+        } else {
+            "Listener has unresolved references"
+        };
+        let cond = condition_false("Programmed", reason, message, generation);
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else {
+        let cond = condition_true(
+            "Programmed",
+            "Programmed",
+            "Listener has been configured in the data plane",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    }
 }
 
 fn is_valid_pem(data: &[u8]) -> bool {

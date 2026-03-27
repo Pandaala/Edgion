@@ -52,7 +52,7 @@ Edgion 基于 **Gateway API v1.4.0**，支持范围：
 | GatewayClass | `gateway.networking.k8s.io/v1` | Core |
 | HTTPRoute | `gateway.networking.k8s.io/v1` | Core |
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Core |
-| ReferenceGrant | `gateway.networking.k8s.io/v1beta1` | Core |
+| ReferenceGrant | `gateway.networking.k8s.io/v1` (v1beta1 兼容) | Core |
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
 | TLSRoute | `gateway.networking.k8s.io/v1` | GA |
 | UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |

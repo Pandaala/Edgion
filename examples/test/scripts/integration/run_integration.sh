@@ -662,8 +662,14 @@ run_all_tests() {
                     run_test "EdgionTls_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
-            ReferenceGrant)
-                run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
+            Status)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+                    run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+                else
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "Status_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i ${G_ITEM}" || test_failed=true
+                fi
                 ;;
             *)
                 log_error "Unknown resource type: $G_RESOURCE"
@@ -782,8 +788,9 @@ run_all_tests() {
         run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
         run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
         
-        # ReferenceGrant Status Tests
-        run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
+        # Controller Status Tests
+        run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+        run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
         
         # Gateway Dynamic Tests (if enabled)
         if $G_DYNAMIC_TEST; then
@@ -892,9 +899,17 @@ main() {
                     suites="${suites},${G_RESOURCE}/${G_ITEM}"
                 fi
             fi
+        elif [ "$G_RESOURCE" = "Status" ]; then
+            if [ -n "$G_ITEM" ]; then
+                suites="${base_suites},Status/${G_ITEM}"
+            else
+                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy"
+            fi
         elif [ -n "$G_ITEM" ]; then
             if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
                 suites="${base_suites},HTTPRoute/Backend/BackendTLS"
+            elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLSSAN" ]; then
+                suites="${base_suites},HTTPRoute/Backend/BackendTLSSAN,HTTPRoute/Backend/BackendTLS"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi

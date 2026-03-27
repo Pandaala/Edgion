@@ -386,6 +386,7 @@ mod tests {
             effective_hostnames: vec!["*".to_string()],
         });
         let rule = Arc::new(GRPCRouteRule {
+            name: None,
             matches: None,
             filters: None,
             backend_refs: None,
@@ -398,7 +399,7 @@ mod tests {
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),
-            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),
             rule,
             route_info,
             specificity: GrpcMatchSpecificity {

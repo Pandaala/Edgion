@@ -54,7 +54,7 @@ from the control plane would be misleading.
 但引入全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。
 
 - 方案设计保留备查：[tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)
-- 不实现决策记录：[skills/08-gateway-api/01-not-implemented.md](../../../skills/08-gateway-api/01-not-implemented.md)
+- 不实现决策记录：[skills/08-kubernetes/01-gateway-api/01-not-implemented.md](../../../skills/08-kubernetes/01-gateway-api/01-not-implemented.md)
 
 ## 4. Resource Categories and Status Patterns
 

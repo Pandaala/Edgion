@@ -313,7 +313,7 @@ impl HttpRouteRuleUnit {
 
         // 0. Check Gateway/Listener constraints (sectionName + hostname isolation)
         let matched_gi = if let Some(ref parent_refs) = parent_refs {
-            match check_gateway_listener_match(parent_refs, index, &ctx.request_info.hostname, &matched_info.rsc.ns) {
+            match check_gateway_listener_match(parent_refs, index, &ctx.request_info.hostname, &matched_info.rsc.ns, "HTTPRoute") {
                 Some(gi) => gi,
                 None => return Ok(None),
             }

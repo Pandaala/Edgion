@@ -1,5 +1,5 @@
 {
-  "current_max": 31312,
+  "current_max": 31320,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -148,6 +148,12 @@
     },
     "Gateway/FrontendValidation": {
       "https": 31312
+    },
+    "Gateway/TLS/BackendTLSSAN": {
+      "http": 31320
+    },
+    "HTTPRoute/Backend/SessionPersistence": {
+      "http": 31313
     }
   }
 }

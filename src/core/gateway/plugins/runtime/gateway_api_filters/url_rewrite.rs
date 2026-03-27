@@ -53,7 +53,12 @@ impl URLRewriteFilter {
 
                 if let Some(len) = matched_prefix_len {
                     if len <= original_path.len() {
-                        format!("{}{}", replacement, &original_path[len..])
+                        let suffix = &original_path[len..];
+                        if replacement.ends_with('/') && suffix.starts_with('/') {
+                            format!("{}{}", replacement, &suffix[1..])
+                        } else {
+                            format!("{}{}", replacement, suffix)
+                        }
                     } else {
                         replacement
                     }

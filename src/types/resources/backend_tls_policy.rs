@@ -53,6 +53,11 @@ pub struct BackendTLSPolicySpec {
     /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_client_certificate: Option<Secret>,
+
+    /// Whether to use system CA certificates for backend TLS verification (runtime only, filled by controller).
+    /// Set to true when wellKnownCACertificates is "System".
+    #[serde(default, skip_serializing_if = "crate::types::resources::common::is_false")]
+    pub use_system_ca: bool,
 }
 
 /// BackendTLSPolicyTargetRef identifies an API object to apply policy to.
@@ -97,7 +102,7 @@ pub struct BackendTLSPolicyValidation {
 
     /// WellKnownCACertificates specifies whether system CA certificates may be used
     /// in the TLS handshake between the gateway and backend pod.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "wellKnownCACertificates")]
     pub well_known_ca_certificates: Option<WellKnownCACertificates>,
 }
 
@@ -284,6 +289,7 @@ mod tests {
                 options,
                 resolved_ca_certificates: None,
                 resolved_client_certificate: None,
+                use_system_ca: false,
             },
             status: None,
         }
@@ -317,5 +323,47 @@ mod tests {
         );
         let policy = make_policy(Some(options));
         assert!(policy.client_certificate_secret_ref().is_err());
+    }
+
+    #[test]
+    fn test_well_known_ca_certificates_system_serialization() {
+        let validation = BackendTLSPolicyValidation {
+            ca_certificate_refs: None,
+            hostname: "backend.example.com".to_string(),
+            subject_alt_names: None,
+            well_known_ca_certificates: Some(WellKnownCACertificates::System),
+        };
+
+        let json = serde_json::to_value(&validation).unwrap();
+        assert_eq!(json["wellKnownCACertificates"], "System");
+        assert!(json.get("caCertificateRefs").is_none());
+    }
+
+    #[test]
+    fn test_well_known_ca_certificates_deserialization() {
+        let json = serde_json::json!({
+            "hostname": "backend.example.com",
+            "wellKnownCACertificates": "System"
+        });
+
+        let validation: BackendTLSPolicyValidation = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            validation.well_known_ca_certificates,
+            Some(WellKnownCACertificates::System)
+        );
+        assert!(validation.ca_certificate_refs.is_none());
+    }
+
+    #[test]
+    fn test_use_system_ca_default_false() {
+        let policy = make_policy(None);
+        assert!(!policy.spec.use_system_ca);
+    }
+
+    #[test]
+    fn test_use_system_ca_skip_serialization_when_false() {
+        let policy = make_policy(None);
+        let json = serde_json::to_value(&policy.spec).unwrap();
+        assert!(json.get("useSystemCa").is_none());
     }
 }

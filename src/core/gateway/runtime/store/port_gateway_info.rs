@@ -22,6 +22,7 @@ use super::super::gateway_info::GatewayInfo;
 use crate::core::gateway::observe::metrics::TestType;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::types::constants::annotations::edgion as annotations;
+use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::Gateway;
 use arc_swap::ArcSwap;
 use kube::ResourceExt;
@@ -133,12 +134,14 @@ impl GatewayListeners {
 }
 
 /// A single Listener's pre-built matching info.
-/// Combines GatewayInfo (identity/metrics) + ListenerConfig (hostname).
+/// Combines GatewayInfo (identity/metrics) + ListenerConfig (hostname + allowedRoutes).
 #[derive(Clone, Debug)]
 pub struct ListenerEntry {
     pub info: GatewayInfo,
     /// Listener hostname constraint (None = catch-all)
     pub hostname: Option<String>,
+    /// AllowedRoutes from the Listener spec (for kind/namespace filtering)
+    pub allowed_routes: Option<AllowedRoutes>,
 }
 
 pub struct PortGatewayInfoStore {
@@ -230,6 +233,7 @@ impl PortGatewayInfoStore {
                 let entry = ListenerEntry {
                     info: gi.clone(),
                     hostname: listener.hostname.clone(),
+                    allowed_routes: listener.allowed_routes.clone(),
                 };
 
                 index_map

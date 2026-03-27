@@ -1,0 +1,16 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-backend-san-match
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: test-backend-san-match
+addressType: IPv4
+ports:
+  - port: 30051
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

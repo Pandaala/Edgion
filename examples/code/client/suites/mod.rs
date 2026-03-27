@@ -5,8 +5,8 @@ pub mod edgion_tls;
 pub mod gateway;
 pub mod grpc_route;
 pub mod http_route;
-pub mod ref_grant_status;
 pub mod services;
+pub mod status;
 pub mod tcp_route;
 pub mod tls_route;
 pub mod udp_route;
@@ -16,7 +16,8 @@ pub use http_route::{
     CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, HeaderModifierTestSuite,
     HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite,
     HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
-    PartiallyInvalidTestSuite, RetryOnStatusTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    PartiallyInvalidTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite, TimeoutTestSuite,
+    WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
@@ -39,7 +40,7 @@ pub use edgion_tls::{
 // Gateway tests
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
-    AllowedRoutesSelectorNamespaceTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite,
+    AllowedRoutesSelectorNamespaceTestSuite, BackendTlsSanTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite,
     FrontendValidationTestSuite, GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
     ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite,
     UpdatePhaseTestSuite,
@@ -55,8 +56,9 @@ pub use edgion_plugins::{
     RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
-// ReferenceGrant Status tests
-pub use ref_grant_status::RefGrantStatusTestSuite;
+// Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
+pub use status::BackendTlsStatusTestSuite;
+pub use status::RefGrantStatusTestSuite;
 
 // Services tests (ACME, etc.)
 pub use services::AcmeTestSuite;

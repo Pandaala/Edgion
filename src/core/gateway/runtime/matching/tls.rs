@@ -21,6 +21,7 @@ use crate::types::resources::gateway::{FrontendTLSValidation, SecretObjectRefere
 use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -51,6 +52,9 @@ pub struct GatewayTlsEntry {
 struct TlsMatcherData {
     /// Hostname-based matcher: port -> (hostname/SNI -> entries)
     port_map: HashMap<u16, HashHost<Vec<GatewayTlsEntry>>>,
+    /// Catch-all (no hostname) listener entries per port — used as fallback
+    /// when no hostname-specific listener matches the SNI.
+    catchall_map: HashMap<u16, GatewayTlsEntry>,
 }
 
 /// Gateway TLS Matcher for port and hostname-based certificate lookup
@@ -62,6 +66,7 @@ struct TlsMatcherData {
 /// ## Lookup priority (per port)
 /// 1. Exact hostname match (via HashHost)
 /// 2. Wildcard hostname match (via HashHost)
+/// 3. Catch-all fallback (listener without hostname)
 pub struct GatewayTlsMatcher {
     data: ArcSwap<Option<TlsMatcherData>>,
 }
@@ -103,6 +108,11 @@ impl GatewayTlsMatcher {
             }
         }
 
+        // 2) Catch-all fallback: listener without hostname serves as default
+        if let Some(entry) = data.catchall_map.get(&port) {
+            return Some(entry.clone());
+        }
+
         None
     }
 
@@ -112,7 +122,9 @@ impl GatewayTlsMatcher {
     /// a port -> hostname-based matcher for certificate lookup.
     pub fn rebuild_from_gateways(&self, gateways: &[Gateway]) {
         let mut port_map: HashMap<u16, HashHost<Vec<GatewayTlsEntry>>> = HashMap::new();
+        let mut catchall_map: HashMap<u16, GatewayTlsEntry> = HashMap::new();
         let mut hostname_entry_count = 0usize;
+        let mut catchall_entry_count = 0usize;
         let mut port_count = 0usize;
 
         for gateway in gateways {
@@ -175,23 +187,55 @@ impl GatewayTlsMatcher {
                         }
                         hostname_entry_count += 1;
                     }
-                    None => {}
+                    None => {
+                        // Catch-all listener: no hostname means it serves as
+                        // the default/fallback for any SNI on this port.
+                        // Only the first catch-all per port is kept.
+                        match catchall_map.entry(port) {
+                            Entry::Vacant(vacant) => {
+                                let entry = GatewayTlsEntry {
+                                    gateway_namespace: gateway_namespace.clone(),
+                                    gateway_name: gateway_name.clone(),
+                                    listener_name: listener.name.clone(),
+                                    port,
+                                    hostname: String::new(),
+                                    certificate_refs: cert_refs,
+                                    secrets: tls_config.secrets.clone(),
+                                    frontend_validation: tls_config.frontend_validation.clone(),
+                                    resolved_frontend_ca_secrets: tls_config.resolved_frontend_ca_secrets.clone(),
+                                };
+                                vacant.insert(entry);
+                                catchall_entry_count += 1;
+                            }
+                            Entry::Occupied(_) => {
+                                tracing::warn!(
+                                    component = "gateway_tls_matcher",
+                                    port,
+                                    gateway = %gateway_name,
+                                    listener = %listener.name,
+                                    "Duplicate catch-all listener on port; keeping first"
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        let total_entries = hostname_entry_count;
+        let total_entries = hostname_entry_count + catchall_entry_count;
 
         tracing::info!(
             component = "gateway_tls_matcher",
             gateways = gateways.len(),
             ports = port_count,
             hostname_entries = hostname_entry_count,
+            catchall_entries = catchall_entry_count,
             "Rebuilt Gateway TLS matcher"
         );
 
         if total_entries > 0 {
-            self.data.store(Arc::new(Some(TlsMatcherData { port_map })));
+            self.data
+                .store(Arc::new(Some(TlsMatcherData { port_map, catchall_map })));
         } else {
             self.data.store(Arc::new(None));
         }
@@ -264,6 +308,7 @@ mod tests {
                 gateway_class_name: "test-class".to_string(),
                 listeners: Some(listeners),
                 addresses: None,
+                tls: None,
             },
             status: None,
         }
@@ -343,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_hostname() {
+    fn test_no_hostname_catchall() {
         let matcher = GatewayTlsMatcher::new();
 
         let tls_config = GatewayTLSConfig {
@@ -365,9 +410,64 @@ mod tests {
 
         matcher.rebuild_from_gateways(&[gateway]);
 
-        // Hostname-less listeners are ignored for TLS certificate matching.
+        // Hostname-less listener serves as catch-all fallback
         let result = matcher.match_sni_with_port(443, "example.com");
-        assert!(result.is_none());
+        assert!(result.is_some(), "catch-all listener should match any SNI");
+        let entry = result.unwrap();
+        assert_eq!(entry.gateway_name, "test-gw");
+        assert_eq!(entry.hostname, "");
+        assert_eq!(entry.certificate_refs[0].name, "test-cert");
+    }
+
+    #[test]
+    fn test_hostname_specific_takes_priority_over_catchall() {
+        let matcher = GatewayTlsMatcher::new();
+
+        let catchall_tls = make_tls_config("catchall-cert", Some("default"));
+        let specific_tls = make_tls_config("specific-cert", Some("default"));
+
+        let catchall_listener = create_test_listener("https-catchall", None, Some(catchall_tls));
+        let specific_listener =
+            create_test_listener("https-specific", Some("specific.example.com"), Some(specific_tls));
+
+        let gateway = create_test_gateway("test-gw", "default", vec![catchall_listener, specific_listener]);
+
+        matcher.rebuild_from_gateways(&[gateway]);
+
+        // Exact hostname match takes priority
+        let result = matcher.match_sni_with_port(443, "specific.example.com");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().certificate_refs[0].name, "specific-cert");
+
+        // Unknown hostname falls back to catch-all
+        let result = matcher.match_sni_with_port(443, "unknown.example.com");
+        assert!(result.is_some(), "unknown SNI should fall back to catch-all");
+        assert_eq!(result.unwrap().certificate_refs[0].name, "catchall-cert");
+    }
+
+    #[test]
+    fn test_wildcard_takes_priority_over_catchall() {
+        let matcher = GatewayTlsMatcher::new();
+
+        let catchall_tls = make_tls_config("catchall-cert", Some("default"));
+        let wildcard_tls = make_tls_config("wildcard-cert", Some("default"));
+
+        let catchall_listener = create_test_listener("https-catchall", None, Some(catchall_tls));
+        let wildcard_listener = create_test_listener("https-wildcard", Some("*.example.com"), Some(wildcard_tls));
+
+        let gateway = create_test_gateway("test-gw", "default", vec![catchall_listener, wildcard_listener]);
+
+        matcher.rebuild_from_gateways(&[gateway]);
+
+        // Wildcard match takes priority over catch-all
+        let result = matcher.match_sni_with_port(443, "foo.example.com");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().certificate_refs[0].name, "wildcard-cert");
+
+        // Non-matching domain falls back to catch-all
+        let result = matcher.match_sni_with_port(443, "other.test.org");
+        assert!(result.is_some(), "non-matching SNI should fall back to catch-all");
+        assert_eq!(result.unwrap().certificate_refs[0].name, "catchall-cert");
     }
 
     #[test]

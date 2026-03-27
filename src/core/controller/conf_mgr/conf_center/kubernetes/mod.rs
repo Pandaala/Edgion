@@ -57,7 +57,9 @@ pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
 pub use status::{create_shared_handler, KubernetesStatusHandler, SharedStatusHandler};
 pub use storage::KubernetesStorage;
-pub use version_detection::{detect_endpoint_mode, resolve_endpoint_mode};
+pub use version_detection::{
+    detect_endpoint_mode, detect_reference_grant_version, resolve_endpoint_mode, ReferenceGrantVersion,
+};
 
 // Re-export types from sync_runtime
 pub use crate::core::controller::conf_mgr::sync_runtime::{

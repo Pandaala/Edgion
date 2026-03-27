@@ -33,6 +33,28 @@ impl Default for BackendTlsPolicyHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
+    fn validate(&self, btp: &BackendTLSPolicy, _ctx: &HandlerContext) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        let has_ca_refs = btp
+            .spec
+            .validation
+            .ca_certificate_refs
+            .as_ref()
+            .is_some_and(|refs| !refs.is_empty());
+        let has_well_known = btp.spec.validation.well_known_ca_certificates.is_some();
+
+        if has_ca_refs && has_well_known {
+            errors.push("caCertificateRefs and wellKnownCACertificates are mutually exclusive".to_string());
+        }
+
+        if !has_ca_refs && !has_well_known {
+            errors.push("must specify either caCertificateRefs or wellKnownCACertificates".to_string());
+        }
+
+        errors
+    }
+
     async fn parse(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
@@ -57,6 +79,8 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
 
         btp.spec.resolved_ca_certificates = None;
         btp.spec.resolved_client_certificate = None;
+
+        btp.spec.use_system_ca = btp.spec.validation.well_known_ca_certificates.is_some();
 
         let policy_ns = btp.metadata.namespace.as_ref();
         let mut resolved_ca_secrets = Vec::new();
@@ -136,17 +160,19 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         let mut resolved_ref_errors = Vec::new();
         resolved_ref_errors.extend_from_slice(validation_errors);
 
-        if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
-            for ca_ref in refs {
-                if !Self::is_secret_ref(ca_ref) {
-                    resolved_ref_errors.push(format!(
-                        "Unsupported caCertificateRef kind/group: {}/{}",
-                        ca_ref.group, ca_ref.kind
-                    ));
-                    continue;
-                }
-                if !Self::is_ca_secret_resolved(btp, &ca_ref.name) {
-                    resolved_ref_errors.push(format!("CA Secret '{}' not found", ca_ref.name));
+        if !btp.spec.use_system_ca {
+            if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
+                for ca_ref in refs {
+                    if !Self::is_secret_ref(ca_ref) {
+                        resolved_ref_errors.push(format!(
+                            "Unsupported caCertificateRef kind/group: {}/{}",
+                            ca_ref.group, ca_ref.kind
+                        ));
+                        continue;
+                    }
+                    if !Self::is_ca_secret_resolved(btp, &ca_ref.name) {
+                        resolved_ref_errors.push(format!("CA Secret '{}' not found", ca_ref.name));
+                    }
                 }
             }
         }

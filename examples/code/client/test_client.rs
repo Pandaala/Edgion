@@ -106,6 +106,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "health-check-transition" | "healthcheck-transition" => {
                 "HTTPRoute/Backend/HealthCheckTransition".to_string()
             }
+            "session-persistence" | "sp" => "HTTPRoute/Backend/SessionPersistence".to_string(),
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
@@ -122,6 +123,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "tls-passthrough" | "tlspassthrough" => "TLSRoute/Passthrough".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
+            "backend-tls-san" | "backendtlssan" => "Gateway/TLS/BackendTLSSAN".to_string(),
             "frontend-validation" | "frontendvalidation" | "fv-mtls" => "Gateway/FrontendValidation".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
@@ -136,6 +138,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
+            "ref-grant-status" => "Status/RefGrant".to_string(),
+            "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -165,6 +169,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/GrpcHealthCheck" => "HTTPRoute/Backend/GrpcHealthCheck",
         "HTTPRoute/Backend/HealthCheckTransition" => "HTTPRoute/Backend/HealthCheckTransition",
         "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
+        "HTTPRoute/Backend/SessionPersistence" => "HTTPRoute/Backend/SessionPersistence",
         "HTTPRoute/Filters/FilterConflict" => "HTTPRoute/Filters/FilterConflict",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
         "HTTPRoute/Filters/Security" => "HTTPRoute/Filters/Security",
@@ -189,6 +194,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/Security" | "Gateway" => "Gateway/Security",
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
+        "Gateway/TLS/BackendTLSSAN" => "Gateway/TLS/BackendTLSSAN",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
         "Gateway/TLS/NoHostnameListener" => "Gateway/TLS/NoHostnameListener",
         "Gateway/FrontendValidation" => "Gateway/FrontendValidation",
@@ -259,6 +265,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
             runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
             runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
+            runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
         }
         "HTTPRoute/Backend/LBRoundRobin" => {
             if !gateway {
@@ -329,6 +336,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PartiallyInvalidTestSuite));
+        }
+        "HTTPRoute/Backend/SessionPersistence" => {
+            if !gateway {
+                eprintln!("Error: Session Persistence tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
         }
         "HTTPRoute/Filters" => {
             if !gateway {
@@ -503,6 +517,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::BackendTlsTestSuite));
+        }
+        "Gateway/TLS/BackendTLSSAN" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/BackendTLSSAN tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsSanTestSuite));
         }
         "Gateway/TLS/GatewayTLS" => {
             if !gateway {
@@ -840,13 +861,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::CipherTestSuite));
         }
-        // ReferenceGrant Status tests
-        "ReferenceGrant/Status" | "ref-grant-status" => {
+        // Status tests
+        "Status/RefGrant" => {
             if !gateway {
-                eprintln!("Error: ReferenceGrant/Status tests require --gateway flag");
+                eprintln!("Error: Status/RefGrant tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RefGrantStatusTestSuite));
+        }
+        "Status/BackendTLSPolicy" => {
+            if !gateway {
+                eprintln!("Error: Status/BackendTLSPolicy tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsStatusTestSuite));
         }
         // Services tests (ACME, etc.)
         "Services/acme" => {

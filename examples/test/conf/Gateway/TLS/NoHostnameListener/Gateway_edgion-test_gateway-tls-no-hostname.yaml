@@ -1,4 +1,4 @@
-# Gateway TLS listener without hostname should not be used for TLS cert matching
+# Gateway TLS listener without hostname serves as catch-all fallback for TLS cert selection
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

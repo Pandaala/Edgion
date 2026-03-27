@@ -36,7 +36,8 @@
 | `Gateway/Combined` | `examples/test/conf/Gateway/Combined/` | `CombinedScenariosTestSuite` | 是 | 组合场景 |
 | `EdgionPlugins/*` | `examples/test/conf/EdgionPlugins/` | `examples/code/client/suites/edgion_plugins/` | 是 | 绝大多数插件测试共用 `EdgionPlugins` 端口 key |
 | `EdgionTls/*` | `examples/test/conf/EdgionTls/` | `examples/code/client/suites/edgion_tls/` | 是 | HTTPS、gRPC TLS、mTLS、cipher、port-only |
-| `ref-grant-status` | `examples/test/conf/ref-grant-status/` | `RefGrantStatusTestSuite` | 否 | `ReferenceGrant` 状态验证 |
+| `Status/RefGrant` | `examples/test/conf/Status/RefGrant/` | `RefGrantStatusTestSuite` | 否 | `ReferenceGrant` 状态验证 |
+| `Status/BackendTLSPolicy` | `examples/test/conf/Status/BackendTLSPolicy/` | `BackendTlsStatusTestSuite` | 否 | `BackendTLSPolicy` 校验与状态 |
 | `Services/acme` | `examples/test/conf/Services/acme/` | `AcmeTestSuite` | 视场景而定 | 服务级联调 |
 
 `LinkSys` 测试虽然也在 `examples/test/conf/LinkSys/` 下，但它有独立的 bash + Docker Compose 链路，优先看 [../03-link-sys-testing.md](../03-link-sys-testing.md)。

@@ -97,14 +97,14 @@ pub async fn end_response_421(
 }
 
 /// Send 404 Not Found error response (nginx-style)
-/// For gRPC requests, returns gRPC UNIMPLEMENTED (status 12) per Gateway API spec.
+/// For gRPC requests, returns gRPC NOT_FOUND (status 5) per Gateway API spec.
 pub async fn end_response_404(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
     if ctx.request_info.is_grpc_request {
-        return end_response_grpc_unimplemented(session, ctx, server_header_opts).await;
+        return end_response_grpc_not_found(session, ctx, server_header_opts).await;
     }
 
     ctx.request_info.status = Some(404);
@@ -129,9 +129,11 @@ pub async fn end_response_404(
     Ok(())
 }
 
-/// Send gRPC UNIMPLEMENTED (status 12) error response.
-/// Per Gateway API spec, unmatched gRPC requests should return grpc-status 12.
-async fn end_response_grpc_unimplemented(
+/// Send gRPC NOT_FOUND (status 5) error response for unmatched gRPC routes.
+///
+/// Per Gateway API spec, unmatched routes should return 404. The gRPC equivalent
+/// is grpc-status 5 (NOT_FOUND), indicating no route matched the request.
+async fn end_response_grpc_not_found(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
@@ -141,12 +143,31 @@ async fn end_response_grpc_unimplemented(
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
     resp.insert_header("Content-Type", "application/grpc").unwrap();
-    resp.insert_header("grpc-status", "12").unwrap();
+    resp.insert_header("grpc-status", "5").unwrap();
     resp.insert_header("grpc-message", "no matching gRPC route").unwrap();
 
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, true).await?;
-    session.shutdown().await;
+
+    Ok(())
+}
+
+/// Send gRPC UNAVAILABLE (status 14) error response for backend errors.
+pub async fn end_response_grpc_unavailable(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+) -> pingora_core::Result<()> {
+    ctx.request_info.status = Some(200);
+
+    let mut resp = ResponseHeader::build(200, None)?;
+    server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "application/grpc").unwrap();
+    resp.insert_header("grpc-status", "14").unwrap();
+    resp.insert_header("grpc-message", "no healthy upstream").unwrap();
+
+    let resp_box = Box::new(resp);
+    session.write_response_header(resp_box, true).await?;
 
     Ok(())
 }

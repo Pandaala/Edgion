@@ -89,6 +89,7 @@ mod tests {
                 options: None,
                 resolved_ca_certificates: None,
                 resolved_client_certificate: None,
+                use_system_ca: false,
             },
             status: None,
         }

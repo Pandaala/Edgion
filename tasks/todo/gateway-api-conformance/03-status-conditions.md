@@ -3,8 +3,8 @@
 优先级: P0/P1
 
 > **已完成：** supportedFeatures (Task 2) 和 PartiallyInvalid (Task 3) 已实现，见 `skills/01-architecture/01-controller/10-status-management.md`。
-> **不实现：** Gateway addresses (Task 4)，见 `skills/08-gateway-api/01-not-implemented.md`。
-> **不实现：** Programmed (Task 1)，见 `skills/08-gateway-api/01-not-implemented.md`。
+> **不实现：** Gateway addresses (Task 4)，见 `skills/08-kubernetes/01-gateway-api/01-not-implemented.md`。
+> **不实现：** Programmed (Task 1)，见 `skills/08-kubernetes/01-gateway-api/01-not-implemented.md`。
 
 ## ~~1. Programmed 条件 [P0]~~ ❌ 不实现
 
@@ -41,4 +41,4 @@ Controller-Gateway 架构为 Gateway 主动 Watch/List 拉取，Controller 无�
 - 从 spec.addresses、Service ClusterIP、默认配置、fallback `0.0.0.0` 推导
 - 不反映数据面实际绑定地址（受限于无状态回传通道）
 - 若未来为 Programmed 条件建立状态回传通道，可顺带解决
-- 详见 `skills/08-gateway-api/01-not-implemented.md`
+- 详见 `skills/08-kubernetes/01-gateway-api/01-not-implemented.md`

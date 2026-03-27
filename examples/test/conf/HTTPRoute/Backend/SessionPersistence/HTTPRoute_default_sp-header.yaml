@@ -1,0 +1,25 @@
+# Session Persistence with Header
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: sp-header
+  namespace: edgion-default
+  annotations:
+    edgion.io/max-retries: "0"
+spec:
+  parentRefs:
+    - name: sp-gateway
+      namespace: edgion-test
+  hostnames:
+    - "sp-header.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test
+      sessionPersistence:
+        sessionName: "x-session-id"
+        type: Header
+      backendRefs:
+        - name: sp-service
+          port: 8080

@@ -65,8 +65,9 @@ use crate::types::ResourceMeta;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     BackendTlsPolicyHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler,
-    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler,
+    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
+    UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -564,13 +565,27 @@ impl KubernetesController {
         }
 
         // ReferenceGrant (cross-namespace reference validation)
+        // Detect v1 vs v1beta1 at runtime; default to v1 watcher, fall back to v1beta1
         if self.should_watch("ReferenceGrant") {
-            h.push(spawn::<ReferenceGrant, _>(
-                self,
-                "ReferenceGrant",
-                ReferenceGrantHandler::new(),
-                &ctx,
-            ));
+            use super::version_detection::{detect_reference_grant_version, ReferenceGrantVersion};
+            match detect_reference_grant_version(&self.client).await {
+                Some(ReferenceGrantVersion::V1) | None => {
+                    h.push(spawn::<ReferenceGrant, _>(
+                        self,
+                        "ReferenceGrant",
+                        ReferenceGrantHandler::new(),
+                        &ctx,
+                    ));
+                }
+                Some(ReferenceGrantVersion::V1Beta1) => {
+                    h.push(spawn::<ReferenceGrantBeta, _>(
+                        self,
+                        "ReferenceGrant",
+                        ReferenceGrantBetaHandler::new(),
+                        &ctx,
+                    ));
+                }
+            }
         }
 
         // Service (Route backend references)

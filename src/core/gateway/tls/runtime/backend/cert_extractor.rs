@@ -112,6 +112,15 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
     sans
 }
 
+/// Extract Subject Alternative Names from SSL peer certificate.
+/// Returns empty vec if no peer certificate or no SANs.
+pub fn extract_sans_from_ssl(ssl: &SslRef) -> Vec<String> {
+    match ssl.peer_certificate() {
+        Some(cert) => extract_sans(&cert),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -19,7 +19,7 @@ pub use multi_port::MultiPortTestSuite;
 pub use backend::{
     CircuitBreakerTestSuite, GrpcHealthCheckTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite,
     LBConsistentHashTestSuite, LBRoundRobinTestSuite, PartiallyInvalidTestSuite, RetryOnStatusTestSuite,
-    TimeoutTestSuite, WeightedBackendTestSuite,
+    SessionPersistenceTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
 };
 pub use filters::{FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite};
 pub use protocol::WebSocketTestSuite;

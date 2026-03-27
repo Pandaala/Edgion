@@ -1,5 +1,7 @@
 use super::EdgionHttpProxy;
-use crate::types::EdgionHttpContext;
+use crate::core::gateway::routes::http::session_persistence;
+use crate::types::resources::http_route::SessionPersistenceType;
+use crate::types::{EdgionHttpContext, SessionPersistenceState};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
@@ -13,6 +15,45 @@ pub fn upstream_response_filter(
     // Record status code
     let status_code = upstream_response.status.as_u16();
     ctx.request_info.status = Some(status_code);
+
+    // Inject session persistence cookie/header if needed.
+    match ctx.sp_state {
+        SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate => {
+            let sp_config = ctx
+                .route_unit
+                .as_ref()
+                .and_then(|ru| ru.rule.session_persistence.clone());
+
+            if let Some(sp) = sp_config {
+                // Use ip:port from current upstream (set by push_upstream in update_peer_metrics)
+                let backend_addr = ctx.get_current_upstream().and_then(|u| match (&u.ip, u.port) {
+                    (Some(ip), Some(port)) => Some(format!("{}:{}", ip, port)),
+                    _ => None,
+                });
+
+                if let Some(addr) = backend_addr {
+                    let token = session_persistence::generate_session_token(&addr);
+
+                    match session_persistence::get_persistence_type(&sp) {
+                        SessionPersistenceType::Cookie => {
+                            let is_tls = session
+                                .as_downstream()
+                                .digest()
+                                .map_or(false, |d| d.ssl_digest.is_some());
+                            let cookie_value = session_persistence::build_set_cookie_value(&sp, &token, is_tls);
+                            let _ = upstream_response.append_header("Set-Cookie", &cookie_value);
+                        }
+                        SessionPersistenceType::Header => {
+                            let header_name = session_persistence::get_session_name(&sp).to_owned();
+                            let _ = upstream_response.append_header(header_name, &token);
+                        }
+                    }
+                }
+            }
+            ctx.sp_state = SessionPersistenceState::Inactive;
+        }
+        SessionPersistenceState::Inactive => {} // no injection needed
+    }
 
     // Apply custom server headers (including Server header)
     edgion_http.server_header_opts.apply_to_response(upstream_response);
@@ -40,7 +81,7 @@ pub fn upstream_response_filter(
                         .rule
                         .parsed_timeouts
                         .as_ref()
-                        .and_then(|t| t.request_timeout)
+                        .and_then(|t| t.request_timeout.as_duration())
                         .map(|timeout| ctx.start_time.elapsed() >= timeout)
                         .unwrap_or(false);
 

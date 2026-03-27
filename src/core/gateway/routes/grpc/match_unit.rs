@@ -69,6 +69,9 @@ pub struct GrpcMatchInfo {
     pub rsc: crate::types::Rsc,
     /// Rule id in GRPCRoute
     pub rule_id: usize,
+    /// Rule name (from GRPCRouteRule.name, if set)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_name: Option<String>,
     /// Match id at rule id
     pub match_id: usize,
     /// sync_version from gRPC sync (0 = not set)
@@ -99,6 +102,7 @@ impl GrpcMatchInfo {
         match_id: usize,
         matched: GRPCRouteMatch,
         sv: u64,
+        rule_name: Option<String>,
     ) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
@@ -170,6 +174,7 @@ impl GrpcMatchInfo {
                 name: route_name,
             },
             rule_id,
+            rule_name,
             match_id,
             sv,
             matched,
@@ -216,7 +221,7 @@ impl GrpcRouteRuleUnit {
 
         // Check Gateway/Listener constraints (sectionName + hostname isolation)
         let matched_gi = if let Some(ref parent_refs) = self.route_info.parent_refs {
-            match check_gateway_listener_match(parent_refs, index, hostname, &self.matched_info.rsc.ns) {
+            match check_gateway_listener_match(parent_refs, index, hostname, &self.matched_info.rsc.ns, "GRPCRoute") {
                 Some(gi) => gi,
                 None => return Ok(None),
             }
@@ -292,9 +297,23 @@ impl GrpcRouteRuleUnit {
 
     /// Get route identifier with rule and match details
     pub fn identifier(&self) -> String {
-        format!(
-            "{}/{} (rule:{}, match:{})",
-            self.matched_info.rsc.ns, self.matched_info.rsc.name, self.matched_info.rule_id, self.matched_info.match_id
-        )
+        if let Some(ref rule_name) = self.matched_info.rule_name {
+            format!(
+                "{}/{} (rule:{}[{}], match:{})",
+                self.matched_info.rsc.ns,
+                self.matched_info.rsc.name,
+                self.matched_info.rule_id,
+                rule_name,
+                self.matched_info.match_id
+            )
+        } else {
+            format!(
+                "{}/{} (rule:{}, match:{})",
+                self.matched_info.rsc.ns,
+                self.matched_info.rsc.name,
+                self.matched_info.rule_id,
+                self.matched_info.match_id
+            )
+        }
     }
 }

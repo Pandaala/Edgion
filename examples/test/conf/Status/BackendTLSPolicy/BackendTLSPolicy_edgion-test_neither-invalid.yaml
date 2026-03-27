@@ -1,0 +1,12 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: neither-invalid
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: test-backend-neither
+  validation:
+    hostname: backend.example.com

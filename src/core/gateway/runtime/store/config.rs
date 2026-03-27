@@ -386,6 +386,7 @@ mod tests {
                 gateway_class_name: "test-class".to_string(),
                 listeners: Some(listeners),
                 addresses: None,
+                tls: None,
             },
             status: None,
         }

@@ -43,12 +43,12 @@ pub fn fail_to_connect(
         .route_unit
         .as_ref()
         .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .and_then(|timeouts| timeouts.request_timeout)
+        .and_then(|timeouts| timeouts.request_timeout.as_duration())
         .or_else(|| {
             ctx.grpc_route_unit
                 .as_ref()
                 .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-                .and_then(|timeouts| timeouts.request_timeout)
+                .and_then(|timeouts| timeouts.request_timeout.as_duration())
         });
 
     if let Some(timeout) = request_timeout {

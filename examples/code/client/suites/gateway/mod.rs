@@ -26,6 +26,7 @@ pub use port_conflict::PortConflictTestSuite;
 pub use real_ip::RealIpTestSuite;
 pub use security::SecurityTestSuite;
 pub use stream_plugins::StreamPluginsTestSuite;
+pub use tls::BackendTlsSanTestSuite;
 pub use tls::BackendTlsTestSuite;
 pub use tls::FrontendValidationTestSuite;
 pub use tls::GatewayTlsNoHostnameListenerTestSuite;

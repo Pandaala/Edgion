@@ -55,7 +55,7 @@ pub fn error_while_proxy(
         .route_unit
         .as_ref()
         .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .and_then(|t| t.request_timeout)
+        .and_then(|t| t.request_timeout.as_duration())
         .map(|timeout| ctx.start_time.elapsed() >= timeout)
         .unwrap_or(false);
 

@@ -260,9 +260,17 @@ get_all_suites() {
     done
     
     # resource
-    for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls_tcp plugins ref-grant-status; do
+    for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls_tcp plugins; do
         if [ -d "${CONF_DIR}/${resource}" ]; then
             suites="$suites $resource"
+        fi
+    done
+
+    # Status test suites
+    for subdir in "${CONF_DIR}/Status"/*; do
+        if [ -d "$subdir" ]; then
+            local name=$(basename "$subdir")
+            suites="$suites Status/$name"
         fi
     done
     

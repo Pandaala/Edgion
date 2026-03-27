@@ -356,6 +356,17 @@ pub struct BackendContext {
     pub current_upstream_id: Option<usize>,
 }
 
+/// Session persistence state for the current request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionPersistenceState {
+    /// No session persistence configured or token matched healthy backend (no action needed)
+    Inactive,
+    /// First request or stale token — inject new token in response
+    InjectNew,
+    /// Fallback happened — inject updated token in response
+    InjectUpdate,
+}
+
 /// Stored internal jump target info (lightweight, survives retries via Clone)
 ///
 /// Unlike DirectEndpointPreset which specifies an exact endpoint address,
@@ -532,6 +543,14 @@ pub struct EdgionHttpContext {
 
     /// Per-request mirror state for RequestMirror plugin.
     pub mirror_state: Option<MirrorState>,
+
+    /// Session persistence state (set during request phase).
+    /// When InjectNew or InjectUpdate, upstream_response_filter will inject a token.
+    pub sp_state: SessionPersistenceState,
+
+    /// Session persistence: resolved target endpoint from affinity map lookup.
+    /// When Some, try_get_peer will route directly to this addr instead of running LB.
+    pub sp_target_addr: Option<std::net::SocketAddr>,
 }
 
 impl Default for EdgionHttpContext {
@@ -568,6 +587,8 @@ impl EdgionHttpContext {
             external_jump: None,
             response_headers_to_add: Vec::new(),
             mirror_state: None,
+            sp_state: SessionPersistenceState::Inactive,
+            sp_target_addr: None,
         }
     }
 

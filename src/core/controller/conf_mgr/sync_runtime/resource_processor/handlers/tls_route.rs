@@ -7,7 +7,7 @@ use super::super::ref_grant::{
 };
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
-    update_attached_route_tracker, update_gateway_route_index,
+    update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -104,6 +104,16 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
                 .map(|e| e.message()),
         );
         errors
+    }
+
+    fn preparse(&self, route: &mut TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
+        // Register in gateway_route_index at the earliest opportunity (before parse)
+        // so that if this TLSRoute is processed before its parent Gateway, the
+        // Gateway's on_change can find and requeue it to re-resolve resolved_ports.
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+        update_gateway_route_index(ResourceKind::TLSRoute, route_ns, route_name, route.spec.parent_refs.as_ref());
+        Vec::new()
     }
 
     async fn parse(&self, mut route: TLSRoute, _ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
@@ -230,15 +240,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
 
-        let tracker_changed = update_attached_route_tracker(
-            ResourceKind::TLSRoute,
-            route_ns,
-            route_name,
-            route.spec.parent_refs.as_ref(),
-        );
-        if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        }
+        requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
     }
 
     async fn on_delete(&self, route: &TLSRoute, ctx: &HandlerContext) {
@@ -301,6 +303,14 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         } else {
             status.parents.clear();
         }
+
+        super::route_utils::update_tracker_accepted_only(
+            ResourceKind::TLSRoute,
+            route_ns,
+            route.metadata.name.as_deref().unwrap_or(""),
+            route.spec.parent_refs.as_ref(),
+            route.spec.hostnames.as_ref(),
+        );
     }
 }
 

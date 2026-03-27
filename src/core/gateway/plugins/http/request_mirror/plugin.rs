@@ -65,19 +65,31 @@ impl RequestMirrorPlugin {
     }
 
     fn should_mirror(&self) -> bool {
-        let Some(fraction) = &self.config.fraction else {
-            return true;
-        };
-        let denominator = fraction.denominator.unwrap_or(100);
-        if denominator <= 0 || fraction.numerator <= 0 {
-            return false;
+        // fraction takes precedence over percentage
+        if let Some(fraction) = &self.config.fraction {
+            let denominator = fraction.denominator.unwrap_or(100);
+            if denominator <= 0 || fraction.numerator <= 0 {
+                return false;
+            }
+            if fraction.numerator >= denominator {
+                return true;
+            }
+            let mut rng = rand::rng();
+            let sample: i32 = rng.random_range(0..denominator);
+            return sample < fraction.numerator;
         }
-        if fraction.numerator >= denominator {
-            return true;
+        if let Some(pct) = self.config.percentage {
+            if pct <= 0 {
+                return false;
+            }
+            if pct >= 100 {
+                return true;
+            }
+            let mut rng = rand::rng();
+            let sample: i32 = rng.random_range(0..100);
+            return sample < pct;
         }
-        let mut rng = rand::rng();
-        let sample: i32 = rng.random_range(0..denominator);
-        sample < fraction.numerator
+        true
     }
 
     fn mirror_config(&self) -> MirrorConfig {

@@ -61,16 +61,15 @@ impl AllowedRoutesKindsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Use gRPC client to test
-                    // Since we don't have a dedicated gRPC client here, we'll use HTTP/2
-                    // In a real scenario, this would fail at routing level
-                    // Use no_proxy to bypass system proxy for local testing
+                    // Use HTTP/2 client with correct hostname in the URL authority
+                    // so that :authority pseudo-header carries the right hostname.
                     let client = reqwest::Client::builder()
                         .http2_prior_knowledge()
                         .no_proxy()
                         .build()
                         .unwrap();
 
+                    // Resolve the target host but set kinds-grpc.example.com as :authority
                     let url = format!("http://{}:31213/test.TestService/SayHello", ctx.target_host);
 
                     let response = client
@@ -83,20 +82,44 @@ impl AllowedRoutesKindsTestSuite {
 
                     match response {
                         Ok(resp) => {
-                            // Should get 404 or connection error because route is not allowed
+                            // gRPC errors are returned as HTTP 200 with grpc-status in headers/trailers.
+                            // Check grpc-status header for non-zero value (= gRPC error).
+                            let grpc_status = resp
+                                .headers()
+                                .get("grpc-status")
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|s| s.parse::<i32>().ok());
+
                             if resp.status() == 404 || !resp.status().is_success() {
+                                // HTTP-level rejection
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
-                                        "✓ GRPCRoute correctly denied when not in kinds (status: {})",
+                                        "✓ GRPCRoute correctly denied when not in kinds (HTTP status: {})",
                                         resp.status()
                                     ),
                                 )
+                            } else if let Some(code) = grpc_status {
+                                if code != 0 {
+                                    // gRPC-level rejection (HTTP 200 + grpc-status error)
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!(
+                                            "✓ GRPCRoute correctly denied when not in kinds (grpc-status: {})",
+                                            code
+                                        ),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        "Expected gRPC error for GRPCRoute not in kinds, got grpc-status: 0 (OK)".to_string(),
+                                    )
+                                }
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected 404 or error for GRPCRoute not in kinds, got {}",
+                                        "Expected 404 or gRPC error for GRPCRoute not in kinds, got {} with no grpc-status",
                                         resp.status()
                                     ),
                                 )

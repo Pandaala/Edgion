@@ -80,6 +80,28 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo>
 
 该函数主要用于下游 mTLS 场景（`handshake_complete_callback` 中提取客户端证书），但同样可用于上游连接的证书检查。
 
+## 后端证书 SAN 验证
+
+`BackendTLSPolicy.validation.subjectAltNames` 配置后端证书 SAN 验证，支持 Hostname 和 URI（SPIFFE）两种类型。
+
+### 验证流程
+
+1. `create_tls_peer()` 检测到 `subjectAltNames` 非空时，设置 Pingora 的 `upstream_tls_handshake_complete_hook`
+2. TLS 握手完成后，hook 通过 `extract_sans_from_ssl()` 提取后端证书 SAN
+3. `validate_backend_sans()` 比对证书 SAN 与 policy 配置（任一匹配即通过）
+4. 验证结果存入 `SslDigest.extension`
+5. `connected_to_upstream()` 读取结果，不匹配则返回错误断开连接
+
+### 连接池隔离
+
+不同 `subjectAltNames` 配置的 peer 使用不同的 `group_key`（基于 SAN 内容 hash），防止 Pingora 复用不同 SAN 策略的连接。
+
+### 匹配规则
+
+- **Hostname**：精确匹配或通配符（`*.example.com` 匹配单级子域名）
+- **URI**：精确匹配（如 `spiffe://cluster.local/ns/default/sa/myapp`）
+- 未配置 `subjectAltNames` 时保持现有行为
+
 ## 证书验证
 
 `tls/validation/` 模块提供证书有效性验证：
@@ -93,7 +115,8 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo>
 | 文件 | 职责 |
 |------|------|
 | `src/core/gateway/tls/runtime/backend/backend_api.rs` | 统一后端 API、set_mtls_verify_callback |
-| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | 证书信息提取（subject/SAN/fingerprint） |
+| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | 证书信息提取（subject/SAN/fingerprint）+ `extract_sans_from_ssl` |
+| `src/core/gateway/tls/validation/backend_san.rs` | 后端证书 SAN 验证（Hostname/URI 匹配） |
 | `src/core/gateway/tls/validation/cert.rs` | 证书有效性验证 |
 | `src/core/gateway/tls/validation/mtls.rs` | mTLS 相关验证 |
 | `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs` | BackendTLSPolicy 查询与上游 TLS 连接 |
