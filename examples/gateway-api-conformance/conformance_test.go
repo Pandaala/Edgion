@@ -67,7 +67,9 @@ func TestConformance(t *testing.T) {
 
 	// A-class: Gateway features
 	opts.SupportedFeatures.Insert(features.SupportGatewayHTTPListenerIsolation)
-	opts.SupportedFeatures.Insert(features.SupportGatewayPort8080)
+	// GatewayPort8080 requires dynamic listener binding at runtime, which is not supported.
+	// The gateway binds ports at startup only; ports created via Gateway resources after
+	// startup cannot be bound. This feature is permanently deferred.
 
 	// B-class: HTTPRoute redirect (path/port/scheme)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRoutePathRedirect)

@@ -449,7 +449,8 @@ pub struct HTTPRequestMirrorFilter {
     pub fraction: Option<Fraction>,
 
     /// Percentage of requests to mirror (0-100). Gateway API v1.5 feature.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Accepts both "percent" (Gateway API spec field name) and "percentage" (internal alias).
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "percent")]
     pub percentage: Option<i32>,
 
     /// Connection timeout for mirror backend in milliseconds.

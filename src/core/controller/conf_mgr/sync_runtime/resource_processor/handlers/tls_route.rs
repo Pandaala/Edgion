@@ -280,8 +280,9 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let mut accepted_errors =
+                let accepted_result =
                     super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+                let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
                 let parent_status = status.parents.iter_mut().find(|ps| {

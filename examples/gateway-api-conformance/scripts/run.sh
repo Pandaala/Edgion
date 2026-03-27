@@ -79,7 +79,7 @@ HTTPRouteResponseHeaderModification,HTTPRouteBackendRequestHeaderModification,\
 HTTPRoutePortRedirect,HTTPRouteSchemeRedirect,HTTPRoutePathRedirect,\
 HTTPRouteRequestTimeout,HTTPRouteBackendTimeout,\
 HTTPRoute303RedirectStatusCode,HTTPRoute307RedirectStatusCode,HTTPRoute308RedirectStatusCode,\
-GRPCRoute,TCPRoute,GatewayPort8080"
+GRPCRoute,TCPRoute"
       shift ;;
     --all-features)
       SUPPORTED_FEATURES=""

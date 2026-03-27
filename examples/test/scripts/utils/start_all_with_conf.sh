@@ -579,8 +579,9 @@ get_suites_to_load() {
             if [ -d "$resource_dir" ]; then
                 local resource_name=$(basename "$resource_dir")
                 
-                # Skip base directory and Services directory (ACME tests have their own script)
-                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ]; then
+                # Skip base directory, Services directory (ACME tests have their own script),
+                # and conf-sync-leak-test (standalone stress test, port conflicts with normal suites)
+                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ] || [ "$resource_name" = "conf-sync-leak-test" ]; then
                     continue
                 fi
                 

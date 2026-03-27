@@ -1,0 +1,13 @@
+# Service with no active endpoints - for testing AllEndpointStatus 0-endpoint behavior
+apiVersion: v1
+kind: Service
+metadata:
+  name: no-endpoint-svc
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http
+      port: 38999
+      protocol: TCP
+      targetPort: 38999
+  type: ClusterIP

@@ -240,6 +240,125 @@ impl RefGrantStatusTestSuite {
             },
         )
     }
+
+    /// Test: HTTPRoute with invalid backend kind should have ResolvedRefs=False/InvalidKind
+    fn test_invalid_backend_kind() -> TestCase {
+        TestCase::new(
+            "invalid_backend_kind",
+            "HTTPRoute with kind=Foo backend should have ResolvedRefs=False(InvalidKind)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "invalid-kind-route").await
+                    {
+                        Ok(route) => {
+                            if Self::has_resolved_refs_false_with_reason(&route, "InvalidKind") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ResolvedRefs=False(InvalidKind) as expected".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected ResolvedRefs=False(InvalidKind), got status: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: HTTPRoute with non-existent backend should have ResolvedRefs=False/BackendNotFound
+    fn test_nonexistent_backend() -> TestCase {
+        TestCase::new(
+            "nonexistent_backend",
+            "HTTPRoute with non-existent Service should have ResolvedRefs=False(BackendNotFound)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "nonexistent-backend")
+                        .await
+                    {
+                        Ok(route) => {
+                            if Self::has_resolved_refs_false_with_reason(&route, "BackendNotFound") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ResolvedRefs=False(BackendNotFound) as expected".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected ResolvedRefs=False(BackendNotFound), got status: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: HTTPRoute with some invalid rules should have PartiallyInvalid=True
+    fn test_partially_invalid() -> TestCase {
+        TestCase::new(
+            "partially_invalid",
+            "HTTPRoute with one valid and one cross-ns-denied rule should have PartiallyInvalid=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "refgrant-partially-invalid").await
+                    {
+                        Ok(route) => {
+                            let has_partially_invalid = if let Some(parents) = route["status"]["parents"].as_array() {
+                                parents.iter().any(|p| {
+                                    p["conditions"].as_array().is_some_and(|conds| {
+                                        conds.iter().any(|c| {
+                                            c["type"].as_str() == Some("PartiallyInvalid")
+                                                && c["status"].as_str() == Some("True")
+                                        })
+                                    })
+                                })
+                            } else {
+                                false
+                            };
+
+                            if has_partially_invalid {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "PartiallyInvalid=True as expected".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected PartiallyInvalid=True, got status: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -255,6 +374,9 @@ impl TestSuite for RefGrantStatusTestSuite {
             Self::test_cross_ns_allowed(),
             Self::test_cross_ns_denied(),
             Self::test_multi_parent(),
+            Self::test_invalid_backend_kind(),
+            Self::test_nonexistent_backend(),
+            Self::test_partially_invalid(),
         ]
     }
 }

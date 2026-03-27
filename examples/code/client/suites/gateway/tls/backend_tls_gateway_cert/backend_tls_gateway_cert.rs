@@ -12,10 +12,7 @@ impl BackendTlsGatewayCertTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!(
-                        "http://{}:{}/backend-gw-cert/health",
-                        ctx.target_host, ctx.http_port
-                    );
+                    let url = format!("http://{}:{}/backend-gw-cert/health", ctx.target_host, ctx.http_port);
                     let mut request = ctx.http_client.get(&url);
                     if let Some(ref host) = ctx.http_host {
                         request = request.header("Host", host);
@@ -27,10 +24,7 @@ impl BackendTlsGatewayCertTestSuite {
                             if status.is_success() && body.contains("Server: 0.0.0.0:30052") {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!(
-                                        "Gateway client cert mTLS succeeded. Status: {}",
-                                        status
-                                    ),
+                                    format!("Gateway client cert mTLS succeeded. Status: {}", status),
                                 )
                             } else {
                                 TestResult::failed(

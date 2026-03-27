@@ -140,6 +140,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
             "ref-grant-status" => "Status/RefGrant".to_string(),
+            "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
             "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
             _ => cmd.to_string(),
         };
@@ -877,6 +878,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RefGrantStatusTestSuite));
+        }
+        "Status/HostnameIntersection" => {
+            if !gateway {
+                eprintln!("Error: Status/HostnameIntersection tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HostnameIntersectionStatusTestSuite));
         }
         "Status/BackendTLSPolicy" => {
             if !gateway {

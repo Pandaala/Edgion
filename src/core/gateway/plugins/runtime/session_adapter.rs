@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
+use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
 use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
@@ -15,6 +16,9 @@ pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
     ctx: &'a mut EdgionHttpContext,
     response_header: Option<&'a mut ResponseHeader>,
+    /// Set to true after a gRPC trailers-only error response has been sent.
+    /// Subsequent write_response_body and shutdown calls become no-ops.
+    grpc_response_terminated: bool,
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
@@ -24,6 +28,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             inner,
             ctx,
             response_header: None,
+            grpc_response_terminated: false,
         }
     }
 
@@ -37,6 +42,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             inner,
             ctx,
             response_header: Some(response_header),
+            grpc_response_terminated: false,
         }
     }
 
@@ -81,6 +87,23 @@ impl<'a> PingoraSessionAdapter<'a> {
         }
 
         self.ctx.path_params = Some(params);
+    }
+
+    /// Build a gRPC trailers-only response header from an HTTP status code.
+    ///
+    /// Called when a plugin sends a non-200 HTTP response on a gRPC stream.
+    /// Converts it to a proper `grpc-status` trailers-only response so the
+    /// client receives the right gRPC error code instead of RST_STREAM.
+    fn build_grpc_error_response(http_status: u16) -> PluginSessionResult<Box<ResponseHeader>> {
+        let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
+        let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
+        resp.insert_header("content-type", "application/grpc")
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        resp.insert_header("grpc-status", grpc_status.to_string().as_str())
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        resp.insert_header("grpc-message", grpc_message)
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        Ok(Box::new(resp))
     }
 
     /// Parse path parameters from pattern and actual path.
@@ -212,6 +235,17 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         resp: Box<ResponseHeader>,
         end_of_stream: bool,
     ) -> PluginSessionResult<()> {
+        let http_status = resp.status.as_u16();
+        if self.ctx.request_info.is_grpc_request && http_status != 200 {
+            let grpc_resp = Self::build_grpc_error_response(http_status)?;
+            self.ctx.request_info.status = Some(200);
+            self.grpc_response_terminated = true;
+            return self
+                .inner
+                .write_response_header(grpc_resp, true)
+                .await
+                .map_err(|e| Box::new(e) as PluginSessionError);
+        }
         self.inner
             .write_response_header(resp, end_of_stream)
             .await
@@ -224,6 +258,17 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         end_of_stream: bool,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginSessionResult<()>> + Send + 'b>> {
         Box::pin(async move {
+            let http_status = resp.status.as_u16();
+            if self.ctx.request_info.is_grpc_request && http_status != 200 {
+                let grpc_resp = Self::build_grpc_error_response(http_status)?;
+                self.ctx.request_info.status = Some(200);
+                self.grpc_response_terminated = true;
+                return self
+                    .inner
+                    .write_response_header(grpc_resp, true)
+                    .await
+                    .map_err(|e| Box::new(e) as PluginSessionError);
+            }
             self.inner
                 .write_response_header(resp, end_of_stream)
                 .await
@@ -336,6 +381,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn write_response_body(&mut self, body: Option<Bytes>, end_of_stream: bool) -> PluginSessionResult<()> {
+        if self.grpc_response_terminated {
+            // trailers-only response already sent; discard body from HTTP plugin
+            return Ok(());
+        }
         self.inner
             .write_response_body(body, end_of_stream)
             .await
@@ -343,10 +392,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn shutdown(&mut self) {
-        // gRPC over HTTP/2: shutdown() would send RST_STREAM, corrupting any trailers-only
-        // response already written with END_STREAM=true. gRPC streams are closed by the
-        // END_STREAM flag alone; an explicit shutdown is never needed.
         if self.ctx.request_info.is_grpc_request {
+            // gRPC streams are terminated by END_STREAM on the HEADERS frame.
+            // Calling shutdown() would send RST_STREAM on the H2 stream, which
+            // the client interprets as Internal(13) regardless of any grpc-status
+            // already written.
             return;
         }
         self.inner.shutdown().await;

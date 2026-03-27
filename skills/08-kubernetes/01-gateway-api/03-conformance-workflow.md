@@ -97,6 +97,7 @@ go test ./... -run "TestConformance/<TestName>" -v -timeout 10m -count=1 \
    kubectl -n gateway-conformance-infra get httproute -o yaml
    ```
 5. 定位 root cause：controller status？路由匹配？数据面转发？
+6. **批量跑失败但单跑通过？** → 参考 `05-batch-conformance-debugging.md` 进行三路日志采集和时序关联分析
 
 ### 6. 修复 → 重建 → 重测
 

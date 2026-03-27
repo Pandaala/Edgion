@@ -40,10 +40,10 @@ pub use edgion_tls::{
 // Gateway tests
 pub use gateway::{
     AllowedRoutesAllNamespacesTestSuite, AllowedRoutesKindsTestSuite, AllowedRoutesSameNamespaceTestSuite,
-    AllowedRoutesSelectorNamespaceTestSuite, BackendTlsGatewayCertTestSuite, BackendTlsSanTestSuite, BackendTlsTestSuite, CombinedScenariosTestSuite,
-    FrontendValidationTestSuite, GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite,
-    ListenerHostnameTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite,
-    UpdatePhaseTestSuite,
+    AllowedRoutesSelectorNamespaceTestSuite, BackendTlsGatewayCertTestSuite, BackendTlsSanTestSuite,
+    BackendTlsTestSuite, CombinedScenariosTestSuite, FrontendValidationTestSuite,
+    GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite, ListenerHostnameTestSuite,
+    PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite, UpdatePhaseTestSuite,
 };
 
 // EdgionPlugins tests
@@ -58,6 +58,7 @@ pub use edgion_plugins::{
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
 pub use status::BackendTlsStatusTestSuite;
+pub use status::HostnameIntersectionStatusTestSuite;
 pub use status::RefGrantStatusTestSuite;
 pub use status::TlsListenerModeStatusTestSuite;
 

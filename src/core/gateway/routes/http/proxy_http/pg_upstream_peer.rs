@@ -342,7 +342,15 @@ pub async fn select_http_backend(
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         ctx.add_error(EdgionStatus::Unknown);
         end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-        return Err(PingoraError::new(ErrorType::InternalError));
+        // Use HTTPStatus(200) for gRPC so fail_to_proxy does not attempt to write
+        // another error response on an already-closed H2 stream (would set upstream
+        // status to 500 in logs and emit a redundant write attempt).
+        let err_type = if ctx.request_info.is_grpc_request {
+            ErrorType::HTTPStatus(200)
+        } else {
+            ErrorType::InternalError
+        };
+        return Err(PingoraError::new(err_type));
     }
 
     // Session Persistence: resolve token → target addr via affinity map
@@ -400,8 +408,29 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
         _ => Some(backend_timeout.request_timeout), // Unset or no route timeouts → global default
     };
 
-    if let Some(timeout) = effective_backend_timeout {
-        peer.options.connection_timeout = Some(timeout);
+    // connection_timeout: use route backendRequest timeout, or fall back to global default.
+    // "0s" on backendRequest disables I/O timeouts, not connection establishment — always set a floor.
+    // Intentionally NOT bounded by request_timeout: connection establishment is infrastructure
+    // overhead; bounding it would cause spurious 504s when request_timeout is tight.
+    let effective_connection_timeout = effective_backend_timeout.unwrap_or(backend_timeout.connect_timeout);
+    peer.options.connection_timeout = Some(effective_connection_timeout);
+
+    // Apply request_timeout as a ceiling on read/write timeout.
+    // Gateway API spec: request_timeout is end-to-end; remaining time = timeout - elapsed.
+    // Filter out zero remaining time to avoid setting Duration::ZERO on the peer (undefined behaviour).
+    let request_remaining = route_timeouts
+        .and_then(|rt| rt.request_timeout.as_duration())
+        .map(|req| req.saturating_sub(ctx.start_time.elapsed()))
+        .filter(|r| !r.is_zero());
+
+    let effective_read_write_timeout = match (effective_backend_timeout, request_remaining) {
+        (Some(b), Some(r)) => Some(b.min(r)),
+        (Some(b), None) => Some(b),
+        (None, Some(r)) => Some(r),
+        (None, None) => None,
+    };
+
+    if let Some(timeout) = effective_read_write_timeout {
         peer.options.read_timeout = Some(timeout);
         peer.options.write_timeout = Some(timeout);
     }

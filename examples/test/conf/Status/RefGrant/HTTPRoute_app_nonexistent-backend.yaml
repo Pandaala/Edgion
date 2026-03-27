@@ -17,5 +17,4 @@ spec:
       backendRefs:
         # 同命名空间，但 Service 不存在，应触发 ResolvedRefs=False/BackendNotFound
         - name: nonexistent-svc
-          namespace: edgion-default
           port: 80

@@ -15,6 +15,15 @@ use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::ResourceKind;
 
+/// Result of validating a parentRef for acceptance.
+pub struct AcceptedResult {
+    /// Acceptance errors. Non-empty means the route is rejected.
+    pub errors: Vec<AcceptedError>,
+    /// Names of listeners that accept this route (namespace + hostname intersection pass).
+    /// Empty when the route is rejected.
+    pub matched_listeners: Vec<String>,
+}
+
 /// Check if a listener's namespace policy allows a route from the given namespace.
 ///
 /// Per Gateway API spec, the default (no AllowedRoutes or no namespaces field)
@@ -146,23 +155,30 @@ pub fn validate_parent_ref_accepted(
     route_ns: &str,
     parent_ref: &ParentReference,
     route_hostnames: Option<&Vec<String>>,
-) -> Vec<AcceptedError> {
-    let mut errors = Vec::new();
-
+) -> AcceptedResult {
     let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
     if parent_group != "gateway.networking.k8s.io" {
-        return errors;
+        return AcceptedResult {
+            errors: Vec::new(),
+            matched_listeners: Vec::new(),
+        };
     }
     let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
     if parent_kind != "Gateway" {
-        return errors;
+        return AcceptedResult {
+            errors: Vec::new(),
+            matched_listeners: Vec::new(),
+        };
     }
 
     let parent_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
     let parent_name = &parent_ref.name;
 
     let Some(gateway) = lookup_gateway(parent_ns, parent_name) else {
-        return errors;
+        return AcceptedResult {
+            errors: Vec::new(),
+            matched_listeners: Vec::new(),
+        };
     };
 
     let empty_listeners = Vec::new();
@@ -173,18 +189,22 @@ pub fn validate_parent_ref_accepted(
             .iter()
             .any(|l| l.name == *section_name && parent_ref.port.is_none_or(|p| l.port == p));
         if !has_listener {
-            errors.push(AcceptedError::NoMatchingParent {
-                section_name: section_name.clone(),
-            });
-            return errors;
+            return AcceptedResult {
+                errors: vec![AcceptedError::NoMatchingParent {
+                    section_name: section_name.clone(),
+                }],
+                matched_listeners: Vec::new(),
+            };
         }
     } else if let Some(port) = parent_ref.port {
         let has_listener = listeners.iter().any(|l| l.port == port);
         if !has_listener {
-            errors.push(AcceptedError::NoMatchingParent {
-                section_name: format!("port:{}", port),
-            });
-            return errors;
+            return AcceptedResult {
+                errors: vec![AcceptedError::NoMatchingParent {
+                    section_name: format!("port:{}", port),
+                }],
+                matched_listeners: Vec::new(),
+            };
         }
     }
 
@@ -196,34 +216,45 @@ pub fn validate_parent_ref_accepted(
         })
         .collect();
 
-    let ns_allowed = matching_listeners
+    let accepted_listener_names: Vec<String> = matching_listeners
         .iter()
-        .any(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns));
-
-    if !ns_allowed {
-        errors.push(AcceptedError::NotAllowedByListeners {
-            resource_ns: route_ns.to_string(),
-        });
-        return errors;
-    }
-
-    if let Some(route_hs) = route_hostnames {
-        if !route_hs.is_empty() {
-            let hostname_match = matching_listeners.iter().any(|listener| match &listener.hostname {
+        .filter(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns))
+        .filter(|l| match route_hostnames {
+            None => true,
+            Some(route_hs) if route_hs.is_empty() => true,
+            Some(route_hs) => match &l.hostname {
                 None => true,
                 Some(listener_hn) => route_hs
                     .iter()
                     .any(|route_hn| hostnames_intersect(listener_hn, route_hn)),
-            });
-            if !hostname_match {
-                errors.push(AcceptedError::NoMatchingListenerHostname {
-                    hostnames: route_hs.clone(),
-                });
-            }
-        }
+            },
+        })
+        .map(|l| l.name.clone())
+        .collect();
+
+    if accepted_listener_names.is_empty() {
+        let ns_allowed = matching_listeners
+            .iter()
+            .any(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns));
+        let errors = if !ns_allowed {
+            vec![AcceptedError::NotAllowedByListeners {
+                resource_ns: route_ns.to_string(),
+            }]
+        } else {
+            vec![AcceptedError::NoMatchingListenerHostname {
+                hostnames: route_hostnames.cloned().unwrap_or_default(),
+            }]
+        };
+        return AcceptedResult {
+            errors,
+            matched_listeners: Vec::new(),
+        };
     }
 
-    errors
+    AcceptedResult {
+        errors: Vec::new(),
+        matched_listeners: accepted_listener_names,
+    }
 }
 
 /// Remove stale parent statuses for parents no longer in the spec.
@@ -266,16 +297,19 @@ pub fn update_tracker_accepted_only(
             continue;
         }
 
-        let accepted_errors = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
-        if !accepted_errors.is_empty() {
+        let result = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+        if !result.errors.is_empty() {
             continue;
         }
 
         let gateway_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
-        attachments.insert(Attachment {
-            gateway_key: format!("{}/{}", gateway_ns, parent_ref.name),
-            listener_name: parent_ref.section_name.as_deref().unwrap_or("").to_string(),
-        });
+        let gateway_key = format!("{}/{}", gateway_ns, parent_ref.name);
+        for listener_name in &result.matched_listeners {
+            attachments.insert(Attachment {
+                gateway_key: gateway_key.clone(),
+                listener_name: listener_name.clone(),
+            });
+        }
     }
 
     get_attached_route_tracker().update_route(route_kind, &route_key, attachments)
