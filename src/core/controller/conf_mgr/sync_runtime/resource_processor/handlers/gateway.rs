@@ -4,7 +4,7 @@
 //! - Filter by gateway_class_name
 //! - TLS Secret reference resolution
 //! - SecretRefManager registration for cascading updates
-//! - Intra-gateway listener port conflict detection
+//! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
 use crate::core::common::config::is_reference_grant_validation_enabled;
@@ -12,8 +12,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
-    get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_secret, HandlerContext, ProcessResult,
-    ProcessorHandler, ResourceRef,
+    get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_listener_port_manager, get_secret,
+    make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::Gateway;
@@ -32,8 +32,10 @@ use std::collections::BTreeMap;
 /// - filter: Filter by gateway_class_name (optional, None means no filter)
 /// - parse: Parse TLS certificateRefs -> fill tls.secrets
 /// - parse: Register Secret references to SecretRefManager
-/// - on_delete: Clear SecretRefManager references
-/// - update_status: Set Conflicted/ListenersNotValid conditions based on intra-gateway port conflicts
+/// - parse: Register listeners to ListenerPortManager for intra-gateway conflict detection
+/// - on_change: Requeue referencing routes when listener hostnames/ports change
+/// - on_delete: Clear SecretRefManager and ListenerPortManager references
+/// - update_status: Set Conflicted/Programmed/ListenersNotValid conditions based on intra-gateway port conflicts
 pub struct GatewayHandler {
     /// If Some, only process Gateways with matching gatewayClassName
     /// If None, process all Gateways (used by FileSystem mode)
@@ -138,6 +140,8 @@ struct ListenerInfo {
     no_valid_ca_certificate: bool,
     /// True when frontend validation uses AllowInsecureFallback mode
     insecure_fallback_mode: bool,
+    /// True when listener TLS mode is not supported (e.g. Mixed)
+    unsupported_tls_mode: bool,
 }
 
 impl GatewayHandler {
@@ -180,6 +184,25 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         let cross_ns_manager = get_global_cross_ns_ref_manager();
         cross_ns_manager.clear_resource_refs(&cross_ns_ref);
+
+        // Register listeners to ListenerPortManager (empty list clears stale registrations)
+        let listener_ports: Vec<(String, String, Option<String>)> = g
+            .spec
+            .listeners
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|l| {
+                let port_key = make_port_key(l.port, &l.protocol);
+                (l.name.clone(), port_key, l.hostname.clone())
+            })
+            .collect();
+        let gateway_key_for_port_mgr = format!(
+            "{}/{}",
+            g.metadata.namespace.as_deref().unwrap_or(""),
+            g.metadata.name.as_deref().unwrap_or("")
+        );
+        get_listener_port_manager().register_gateway(&gateway_key_for_port_mgr, &listener_ports);
 
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
@@ -381,8 +404,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
         );
-        let gateway_key = resource_ref.key();
-
         // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -394,13 +415,21 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         get_global_cross_ns_ref_manager().clear_resource_refs(&cross_ns_ref);
 
+        // Clear ListenerPortManager registration (use ns/name format, same as parse/update_status)
+        let gateway_key = format!(
+            "{}/{}",
+            g.metadata.namespace.as_deref().unwrap_or(""),
+            g.metadata.name.as_deref().unwrap_or("")
+        );
+        get_listener_port_manager().unregister_gateway(&gateway_key);
+
         let route_index = get_gateway_route_index();
         route_index.remove_gateway_hostnames(&gateway_key);
         route_index.remove_gateway_ports(&gateway_key);
 
         tracing::debug!(
             gateway = %gateway_key,
-            "Cleared secret refs, hostname and port cache on Gateway delete"
+            "Cleared secret, port manager, hostname and port cache on Gateway delete"
         );
     }
 
@@ -439,6 +468,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     .and_then(|fv| fv.mode.as_deref())
                     == Some("AllowInsecureFallback");
 
+                // Check if TLS mode is unsupported (only Terminate and Passthrough are supported)
+                let unsupported_tls_mode = l
+                    .tls
+                    .as_ref()
+                    .and_then(|t| t.mode.as_deref())
+                    .is_some_and(|mode| mode != "Terminate" && mode != "Passthrough");
+
                 ListenerInfo {
                     name: l.name.clone(),
                     supported_kinds,
@@ -446,6 +482,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     resolved_refs_errors,
                     no_valid_ca_certificate,
                     insecure_fallback_mode,
+                    unsupported_tls_mode,
                 }
             })
             .collect();
@@ -460,10 +497,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Initialize conditions if not present
         let conditions = status.conditions.get_or_insert_with(Vec::new);
 
-        // Detect intra-gateway port conflicts (same Gateway only, per Gateway API spec)
-        let conflicts = detect_intra_gateway_conflicts(
-            gateway.spec.listeners.as_deref().unwrap_or_default(),
+        // Detect port conflicts from ListenerPortManager
+        let gateway_key = format!(
+            "{}/{}",
+            gateway.metadata.namespace.as_deref().unwrap_or(""),
+            gateway.metadata.name.as_deref().unwrap_or("")
         );
+        let conflicts = get_listener_port_manager().detect_conflicts(&gateway_key);
 
         // Set Gateway-level conditions
         // Accepted: True if no validation errors
@@ -538,6 +578,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 resolved_refs_errors,
                 no_valid_ca_certificate,
                 insecure_fallback_mode: _,
+                unsupported_tls_mode,
             } in listener_infos
             {
                 let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == name);
@@ -558,7 +599,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 ls.supported_kinds = supported_kinds;
                 ls.attached_routes = route_count;
 
-                // Set Conflicted condition based on intra-gateway port conflicts
+                // Set Conflicted condition based on ListenerPortManager
                 let is_conflicted = if let Some(reason) = conflicts.get(&ls.name) {
                     let cond = condition_true(
                         condition_types::CONFLICTED,
@@ -587,6 +628,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     is_conflicted,
                     &resolved_refs_errors,
                     no_valid_ca_certificate,
+                    unsupported_tls_mode,
                 );
             }
 
@@ -786,9 +828,18 @@ fn update_listener_conditions(
     is_conflicted: bool,
     resolved_refs_errors: &[GatewayResolvedRefsError],
     no_valid_ca_certificate: bool,
+    unsupported_tls_mode: bool,
 ) {
-    // Accepted: False if no valid CA certificate, else True if no validation errors
-    if no_valid_ca_certificate {
+    // Accepted: False if unsupported TLS mode
+    if unsupported_tls_mode {
+        let cond = condition_false(
+            condition_types::ACCEPTED,
+            condition_reasons::UNSUPPORTED_TLS_MODE,
+            "Listener TLS mode is not supported",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if no_valid_ca_certificate {
         let cond = condition_false(
             condition_types::ACCEPTED,
             "NoValidCACertificate",
@@ -835,7 +886,32 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, resolved);
     }
 
-    let _ = is_conflicted;
+    // Programmed: True if listener is accepted and not conflicted; False if conflicted or invalid.
+    if is_conflicted {
+        let cond = condition_false(
+            condition_types::PROGRAMMED,
+            condition_reasons::INVALID_LISTENER,
+            "Listener has port conflicts",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if !validation_errors.is_empty() || no_valid_ca_certificate || unsupported_tls_mode {
+        let cond = condition_false(
+            condition_types::PROGRAMMED,
+            condition_reasons::INVALID_LISTENER,
+            "Listener configuration is invalid",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else {
+        let cond = condition_true(
+            condition_types::PROGRAMMED,
+            condition_reasons::PROGRAMMED,
+            "Listener programmed",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    }
 }
 
 fn is_valid_pem(data: &[u8]) -> bool {
@@ -1142,53 +1218,6 @@ fn has_all_ca_refs_invalid(listener: &GatewayListener, errors: &[GatewayResolved
 
     // All CA refs are invalid if the number of CA errors >= number of CA refs
     ca_error_count >= ca_ref_count
-}
-
-/// Build port key from listener attributes for conflict detection.
-///
-/// According to Gateway API spec:
-/// - HTTP, HTTPS, TLS: Port + Hostname must be different
-/// - TCP, UDP: Port must be different (hostname not considered)
-fn make_port_key(port: i32, protocol: &str, hostname: Option<&str>) -> String {
-    match protocol.to_uppercase().as_str() {
-        "HTTP" | "HTTPS" | "TLS" => format!("{}:{}", port, hostname.unwrap_or("")),
-        _ => format!("{}:", port),
-    }
-}
-
-/// Detect port conflicts within a single Gateway's listeners.
-///
-/// Per Gateway API spec, listener conflicts are scoped to a single Gateway —
-/// different Gateways may use the same port without conflict.
-///
-/// Returns a map of listener_name → conflict reason for conflicted listeners.
-fn detect_intra_gateway_conflicts(
-    listeners: &[crate::types::resources::gateway::Listener],
-) -> std::collections::HashMap<String, String> {
-    use std::collections::HashMap;
-
-    // Group listeners by port key
-    let mut port_to_names: HashMap<String, Vec<&str>> = HashMap::new();
-    for l in listeners {
-        let port_key = make_port_key(l.port, &l.protocol, l.hostname.as_deref());
-        port_to_names.entry(port_key).or_default().push(&l.name);
-    }
-
-    let mut conflicts = HashMap::new();
-    for (port_key, names) in &port_to_names {
-        if names.len() > 1 {
-            for name in names {
-                let others: Vec<&&str> = names.iter().filter(|n| **n != *name).collect();
-                let reason = format!(
-                    "Port {}: conflicts with: {}",
-                    port_key,
-                    others.iter().map(|n| **n).collect::<Vec<_>>().join(", ")
-                );
-                conflicts.insert(name.to_string(), reason);
-            }
-        }
-    }
-    conflicts
 }
 
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.

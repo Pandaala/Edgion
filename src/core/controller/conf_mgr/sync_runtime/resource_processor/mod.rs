@@ -18,6 +18,7 @@ mod context;
 pub mod gateway_route_index;
 mod handler;
 pub mod handlers;
+pub mod listener_port_manager;
 pub mod namespace_store;
 mod processor;
 pub mod ref_grant;
@@ -40,9 +41,8 @@ pub use status_utils::{
 pub use handlers::{
     BackendTlsPolicyHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler,
-    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
-    UdpRouteHandler,
+    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantBetaHandler,
+    ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
 // Re-export generic ref_manager types
@@ -64,6 +64,8 @@ pub use ref_grant::{
     RevalidationListener,
 };
 
+// Re-export listener_port_manager utilities
+pub use listener_port_manager::{get_listener_port_manager, make_port_key, ListenerPortManager, ListenerRef};
 
 // Re-export attached_route_tracker utilities
 pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};
