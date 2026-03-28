@@ -212,6 +212,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     None => continue,
                 };
 
+                // Only Terminate mode needs certificate resolution;
+                // Passthrough proxies raw TLS and unsupported modes (e.g. Mixed) will be rejected later.
+                let mode = tls_config.mode.as_deref().unwrap_or("Terminate");
+                if mode != "Terminate" {
+                    continue;
+                }
+
                 if let Some(cert_refs) = &tls_config.certificate_refs {
                     if cert_refs.is_empty() {
                         continue;
@@ -536,6 +543,38 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 generation,
             );
             update_gateway_condition(conditions, cond);
+        }
+
+        // Gateway-level Programmed condition:
+        // - True when gateway-level validation passes (Accepted=True), meaning
+        //   the controller has fully processed this Gateway at the current generation.
+        // - False only when there are gateway-level validation errors.
+        //
+        // Per Gateway API spec (GEP-1364): gateway-level Programmed indicates the
+        // controller has processed the Gateway spec and sent configuration to the
+        // data plane.  Listener-level issues (port conflicts, invalid TLS refs) are
+        // reflected in per-listener Conflicted/Programmed conditions, not at the
+        // gateway level.  This mirrors how reference implementations behave and is
+        // required by the conformance test framework (NamespacesMustBeReady waits
+        // for Programmed=True on ALL infrastructure gateways).
+        {
+            if validation_errors.is_empty() {
+                let cond = condition_true(
+                    condition_types::PROGRAMMED,
+                    condition_reasons::PROGRAMMED,
+                    "Gateway programmed",
+                    generation,
+                );
+                update_gateway_condition(conditions, cond);
+            } else {
+                let cond = condition_false(
+                    condition_types::PROGRAMMED,
+                    condition_reasons::INVALID_LISTENER,
+                    validation_errors.join("; "),
+                    generation,
+                );
+                update_gateway_condition(conditions, cond);
+            }
         }
 
         // ListenersNotValid: True if any listener has port conflicts
@@ -886,7 +925,7 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, resolved);
     }
 
-    // Programmed: True if listener is accepted and not conflicted; False if conflicted or invalid.
+    // Programmed: True if listener is accepted, not conflicted, and all refs resolved; False otherwise.
     if is_conflicted {
         let cond = condition_false(
             condition_types::PROGRAMMED,
@@ -895,7 +934,7 @@ fn update_listener_conditions(
             generation,
         );
         update_gateway_condition(&mut ls.conditions, cond);
-    } else if !validation_errors.is_empty() || no_valid_ca_certificate || unsupported_tls_mode {
+    } else if has_unresolved_refs || !validation_errors.is_empty() || no_valid_ca_certificate || unsupported_tls_mode {
         let cond = condition_false(
             condition_types::PROGRAMMED,
             condition_reasons::INVALID_LISTENER,
