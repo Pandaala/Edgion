@@ -58,13 +58,30 @@ func TestConformance(t *testing.T) {
 	opts.SupportedFeatures.Insert(features.SupportHTTPRoutePortRedirect)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteSchemeRedirect)
 
-	// B-class: HTTPRoute percentage mirror
+	// B-class: HTTPRoute redirect status codes (303/307/308)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRoute303RedirectStatusCode)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRoute307RedirectStatusCode)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRoute308RedirectStatusCode)
+
+	// B-class: HTTPRoute percentage mirror + multiple mirrors
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestPercentageMirror)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestMultipleMirrors)
+
+	// B-class: HTTPRoute destination port matching (status-only tests)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRouteDestinationPortMatching)
 
 	// B-class: HTTPRoute parentRef port matching
 	// Disabled: requires dynamic listener port binding at runtime (8080/8090),
 	// which Edgion does not support — ports are bound at startup only.
 	// opts.SupportedFeatures.Insert(features.SupportHTTPRouteParentRefPort)
+
+	// TLSRoute support (needed for HTTPRouteDisallowedKind status test)
+	opts.SupportedFeatures.Insert(features.SupportTLSRoute)
+
+	// CORS support — disabled: CORS preflight handling is incomplete
+	// (simple requests work, but preflight OPTIONS with auth/method/header
+	// negotiation fails on several sub-tests)
+	// opts.SupportedFeatures.Insert(features.SupportHTTPRouteCORS)
 
 	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
 	opts.SupportedFeatures.Insert(features.SupportGRPCRoute)
