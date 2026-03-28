@@ -18,7 +18,6 @@
 //!
 //! Within each port key group, hostname intersection determines actual conflicts.
 
-use super::handlers::route_utils::hostnames_intersect;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, RwLock};
 
@@ -72,18 +71,19 @@ pub fn make_port_key(port: i32, protocol: &str) -> PortKey {
     }
 }
 
-/// Check if two listener hostnames have an intersection (i.e. could conflict).
+/// Check if two listener hostnames are identical (i.e. truly conflict).
 ///
-/// Per Gateway API spec:
-/// - None (wildcard) intersects with everything
-/// - `*.example.com` intersects with `foo.example.com` and `*.bar.example.com`
-/// - `api.example.com` does NOT intersect with `web.example.com`
+/// Per Gateway API spec, Conflicted means two listeners have the same
+/// port+protocol+hostname combination — not merely overlapping hostnames.
+/// Overlapping hostnames (e.g. wildcard vs specific) are handled by routing
+/// priority and are explicitly allowed when GatewayHTTPListenerIsolation is supported.
+///
+/// - None == None → conflict (both are wildcard)
+/// - `foo.example.com` == `foo.example.com` → conflict (identical)
+/// - None vs `foo.example.com` → no conflict (different, just overlapping)
+/// - `*.example.com` vs `foo.example.com` → no conflict (different, just overlapping)
 fn hostnames_conflict(a: Option<&str>, b: Option<&str>) -> bool {
-    match (a, b) {
-        // Either is wildcard (None) → always conflicts
-        (None, _) | (_, None) => true,
-        (Some(ha), Some(hb)) => hostnames_intersect(ha, hb),
-    }
+    a == b
 }
 
 /// Manages listener port usage for intra-gateway conflict detection.
@@ -289,30 +289,29 @@ mod tests {
 
     #[test]
     fn test_hostnames_conflict_fn() {
-        // None (wildcard) conflicts with everything
+        // Both wildcard (None) → conflict
         assert!(hostnames_conflict(None, None));
-        assert!(hostnames_conflict(None, Some("example.com")));
-        assert!(hostnames_conflict(Some("example.com"), None));
 
-        // Exact match
+        // Wildcard vs concrete → no conflict (overlapping but not identical)
+        assert!(!hostnames_conflict(None, Some("example.com")));
+        assert!(!hostnames_conflict(Some("example.com"), None));
+
+        // Exact match → conflict
         assert!(hostnames_conflict(Some("example.com"), Some("example.com")));
 
-        // Different concrete hostnames — no conflict
+        // Different concrete hostnames → no conflict
         assert!(!hostnames_conflict(Some("api.example.com"), Some("web.example.com")));
 
-        // Wildcard vs concrete
-        assert!(hostnames_conflict(Some("*.example.com"), Some("foo.example.com")));
-        assert!(hostnames_conflict(Some("foo.example.com"), Some("*.example.com")));
+        // Wildcard pattern vs concrete → no conflict (overlapping but not identical)
+        assert!(!hostnames_conflict(Some("*.example.com"), Some("foo.example.com")));
+        assert!(!hostnames_conflict(Some("foo.example.com"), Some("*.example.com")));
 
-        // Wildcard doesn't match root
-        assert!(!hostnames_conflict(Some("*.example.com"), Some("example.com")));
-
-        // Both wildcards with overlap
-        assert!(hostnames_conflict(Some("*.example.com"), Some("*.bar.example.com")));
-        assert!(hostnames_conflict(Some("*.bar.example.com"), Some("*.example.com")));
-
-        // Both wildcards without overlap
+        // Different wildcard patterns → no conflict
+        assert!(!hostnames_conflict(Some("*.example.com"), Some("*.bar.example.com")));
         assert!(!hostnames_conflict(Some("*.foo.com"), Some("*.bar.com")));
+
+        // Same wildcard pattern → conflict
+        assert!(hostnames_conflict(Some("*.example.com"), Some("*.example.com")));
     }
 
     #[test]
@@ -359,10 +358,10 @@ mod tests {
     }
 
     #[test]
-    fn test_conflict_wildcard_vs_specific() {
+    fn test_no_conflict_wildcard_vs_specific() {
         let manager = ListenerPortManager::new();
 
-        // Wildcard listener (None) should conflict with hostname-specific listener
+        // Wildcard (None) vs concrete hostname — overlapping but not identical, no conflict
         manager.register_gateway(
             "default/gw",
             &[
@@ -371,22 +370,35 @@ mod tests {
             ],
         );
 
-        let conflicts = manager.detect_conflicts("default/gw");
-        assert_eq!(conflicts.len(), 2);
-        assert!(conflicts.contains_key("catchall"));
-        assert!(conflicts.contains_key("specific"));
+        assert!(manager.detect_conflicts("default/gw").is_empty());
     }
 
     #[test]
-    fn test_conflict_wildcard_pattern_vs_concrete() {
+    fn test_no_conflict_wildcard_pattern_vs_concrete() {
         let manager = ListenerPortManager::new();
 
-        // *.example.com conflicts with foo.example.com
+        // *.example.com vs foo.example.com — overlapping but not identical, no conflict
         manager.register_gateway(
             "default/gw",
             &[
                 ("wild".to_string(), "443".to_string(), Some("*.example.com".to_string())),
                 ("concrete".to_string(), "443".to_string(), Some("foo.example.com".to_string())),
+            ],
+        );
+
+        assert!(manager.detect_conflicts("default/gw").is_empty());
+    }
+
+    #[test]
+    fn test_conflict_same_wildcard_pattern() {
+        let manager = ListenerPortManager::new();
+
+        // Two listeners with identical wildcard pattern → conflict
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("wild-1".to_string(), "443".to_string(), Some("*.example.com".to_string())),
+                ("wild-2".to_string(), "443".to_string(), Some("*.example.com".to_string())),
             ],
         );
 
@@ -475,10 +487,10 @@ mod tests {
     }
 
     #[test]
-    fn test_three_listeners_partial_conflict() {
+    fn test_no_conflict_wildcard_and_two_concretes() {
         let manager = ListenerPortManager::new();
 
-        // Three listeners: wildcard conflicts with both, but api and web don't conflict with each other
+        // Wildcard + two concretes — all different hostnames, no conflicts
         manager.register_gateway(
             "default/gw",
             &[
@@ -488,22 +500,27 @@ mod tests {
             ],
         );
 
+        assert!(manager.detect_conflicts("default/gw").is_empty());
+    }
+
+    #[test]
+    fn test_conflict_two_wildcards_and_concrete() {
+        let manager = ListenerPortManager::new();
+
+        // Two wildcard (None) listeners → conflict with each other; concrete is fine
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("catchall-1".to_string(), "443".to_string(), None),
+                ("catchall-2".to_string(), "443".to_string(), None),
+                ("api".to_string(), "443".to_string(), Some("api.example.com".to_string())),
+            ],
+        );
+
         let conflicts = manager.detect_conflicts("default/gw");
-        assert_eq!(conflicts.len(), 3);
-
-        // catchall conflicts with api and web
-        let catchall_reason = conflicts.get("catchall").unwrap();
-        assert!(catchall_reason.contains("api"));
-        assert!(catchall_reason.contains("web"));
-
-        // api conflicts with catchall only, NOT web
-        let api_reason = conflicts.get("api").unwrap();
-        assert!(api_reason.contains("catchall"));
-        assert!(!api_reason.contains("web"));
-
-        // web conflicts with catchall only, NOT api
-        let web_reason = conflicts.get("web").unwrap();
-        assert!(web_reason.contains("catchall"));
-        assert!(!web_reason.contains("api"));
+        assert_eq!(conflicts.len(), 2);
+        assert!(conflicts.contains_key("catchall-1"));
+        assert!(conflicts.contains_key("catchall-2"));
+        assert!(!conflicts.contains_key("api"));
     }
 }

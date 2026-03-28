@@ -196,6 +196,17 @@ define_resources! {
         default_capacity: small,
     },
 
+    // ==================== ConfigMap (CA cert resolution for Gateway frontendValidation) ====================
+    ConfigMap {
+        enum_value: 21,
+        kind_name: "configmap",
+        kind_aliases: [],
+        cache_field: configmaps,
+        capacity_field: configmaps_capacity,
+        default_capacity: normal,
+        in_registry: false,  // ConfigMap follows related resources, not tracked independently
+    },
+
     // ==================== Infrastructure Resources ====================
     LinkSys {
         enum_value: 15,
@@ -214,8 +225,8 @@ mod tests {
 
     #[test]
     fn test_all_resource_infos_count() {
-        // We have 20 resource types (excluding Unspecified)
-        assert_eq!(ALL_RESOURCE_INFOS.len(), 20);
+        // We have 21 resource types (excluding Unspecified)
+        assert_eq!(ALL_RESOURCE_INFOS.len(), 21);
     }
 
     #[test]

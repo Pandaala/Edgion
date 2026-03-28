@@ -9,101 +9,171 @@ description: 如何运行、调试和逐步验证 Gateway API conformance tests
 
 `examples/gateway-api-conformance/scripts/run.sh`
 
+## Feature 声明权威来源
+
+**`conformance_test.go` 是 supported features 的唯一权威来源。**
+
+`run.sh` 默认不传 `-supported-features`，让 `conformance_test.go` 里的 `opts.SupportedFeatures` 生效。
+只有显式传 `--core`、`--extended`、`--supported-features <list>` 时才覆盖。
+
+新增 feature 支持时：
+1. 在 `conformance_test.go` 里 `opts.SupportedFeatures.Insert(features.SupportXxx)` 添加
+2. `run.sh` 无需改动
+
+## 超时配置
+
+`conformance_test.go` 统一配置了短超时（适用于快速响应的本地集群）：
+
+| 参数 | 配置值 | 库默认值 |
+|------|--------|---------|
+| `GatewayMustHaveAddress` | 10s | 180s |
+| `GatewayMustHaveCondition` | 10s | 180s |
+| `GatewayStatusMustHaveListeners` | 10s | 60s |
+| `HTTPRouteMustHaveCondition` | 10s | 60s |
+| `RouteMustHaveParents` | 10s | 60s |
+| `MaxTimeToConsistency` | 30s | 30s |
+| `LatestObservedGenerationSet` | 10s | 60s |
+| `DefaultTestTimeout` | 15s | 60s |
+| `RequiredConsecutiveSuccesses` | 3 | 3 |
+
+**重要**：如果测试等待超时（10s 后 context deadline exceeded），根因几乎总是 status condition 设置错误，而非超时太短。控制器正常时状态在 1s 内更新。
+
 ## 运行粒度
 
-### 单个测试（Profile 模式下正确做法）
-
-在 profile 模式下，`--run-test` 不起作用。应使用 `GO_RUN_FILTER` 环境变量：
+### 单个测试
 
 ```bash
 cd examples/gateway-api-conformance
-GO_RUN_FILTER="TestConformance/GatewayClassObservedGenerationBump" \
-  ./scripts/run.sh --port-forward --timeout 5m
+GO_RUN_FILTER="TestConformance/GatewayObservedGenerationBump" bash scripts/run.sh
 ```
 
-`GO_RUN_FILTER` 会被脚本转换为 `go test -run <filter>`，正确地过滤 profile 内的子测试。
+`GO_RUN_FILTER` 转换为 `go test -run <filter>`，在 profile 模式下正确过滤子测试（`--run-test` 在 profile 模式下无效）。
 
-修复后快速更新二进制（无需重新部署）：
-
-```bash
-# 仅更新 controller
-./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch c
-# 同时更新 controller + gateway
-./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch
-```
-
-然后用同一 `GO_RUN_FILTER` 重新运行验证结果。
-
-### 单个测试（非 Profile 模式）
+### 按名称前缀跑一批
 
 ```bash
-./scripts/run.sh --run-test <TestName>
-```
+# 所有 Gateway/GatewayClass 测试
+GO_RUN_FILTER="TestConformance/Gateway" bash scripts/run.sh
 
-### 按 Profile
-
-```bash
-# HTTP
-./scripts/run.sh --core --conformance-profiles GATEWAY-HTTP
-
-# GRPC
-./scripts/run.sh --conformance-profiles GATEWAY-GRPC \
-  --supported-features "Gateway,GRPCRoute,ReferenceGrant"
-
-# TLS
-./scripts/run.sh --conformance-profiles GATEWAY-TLS \
-  --supported-features "Gateway,TLSRoute,ReferenceGrant"
-```
-
-### 按 Feature 子集
-
-```bash
-./scripts/run.sh --supported-features "Gateway,HTTPRoute,ReferenceGrant,HTTPRoutePathRedirect"
-```
-
-### 用 Go test 正则跑一批
-
-```bash
-cd examples/gateway-api-conformance
-go test ./... -run "TestConformance/HTTPRouteRedirect" -v -timeout 10m -count=1 \
-  -args -gateway-class=edgion -allow-crds-mismatch
+# 所有 HTTPRoute 测试
+GO_RUN_FILTER="TestConformance/HTTPRoute" bash scripts/run.sh
 ```
 
 ### 预设
 
 | 预设 | 命令 | 说明 |
 |------|------|------|
-| Core | `--core` | Gateway + HTTPRoute + ReferenceGrant |
-| Extended | `--extended` | Core + 所有已实现的 Extended features |
-| All | `--all-features` | 所有 feature（含未实现的，会有失败） |
+| 默认（全部声明 features） | `bash scripts/run.sh` | 使用 conformance_test.go 里声明的全套 features |
+| Core only | `--core` | 强制只跑 Gateway+HTTPRoute+ReferenceGrant |
+| Extended | `--extended` | 扩展 feature 集合（含 redirect、mirror 等） |
+| All features | `--all-features` | 所有 feature（含未实现的，会有 FAIL） |
 
-## Port-Forward 模式
+### 单独指定 features（覆盖 conformance_test.go）
+
+```bash
+bash scripts/run.sh --supported-features "Gateway,HTTPRoute,ReferenceGrant"
+```
+
+### Port-Forward 模式
 
 集群 Pod IP 不可达时使用：
 
 ```bash
-./scripts/run.sh --port-forward --run-test HTTPRouteSimpleSameNamespace
+bash scripts/run.sh --port-forward
 ```
 
-自动 `kubectl port-forward` 到 edgion-gateway pod。
+自动 `kubectl port-forward` 到 edgion-gateway pod，HTTP→8080, HTTPS→8443。
+
+## 更新二进制（localpatch）
+
+```bash
+# 只更新 controller
+./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch c
+
+# 更新 controller + gateway
+./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch
+```
+
+**注意 Pod 进程结构**：PID 1 是 shell loop（`while true; do /usr/local/edgion/edgion-controller; done`），不要 kill PID 1，否则 OrbStack 会用原始镜像重启容器（丢失已复制的新二进制）。
+应 kill controller 子进程，让 shell loop 用新二进制重启：
+
+```bash
+POD=$(kubectl get pods -n edgion-system -l app=edgion-controller -o jsonpath='{.items[0].metadata.name}')
+CTRL_PID=$(kubectl exec -n edgion-system $POD -- sh -c \
+  "for p in \$(ls /proc | grep '^[0-9]*$'); do \
+    if [ -f /proc/\$p/cmdline ] && grep -q edgion-controller /proc/\$p/cmdline 2>/dev/null && [ \$p != 1 ]; then echo \$p; fi; \
+  done" | head -1)
+kubectl exec -n edgion-system $POD -- sh -c "kill -9 $CTRL_PID"
+```
+
+## Status Condition 调试
+
+**大多数 conformance test 失败根因是 status condition 设置错误**，而非路由/数据面问题。
+
+### 调试流程
+
+1. 跑单个失败测试，看 `context deadline exceeded` 的具体 condition：
+   ```
+   Programmed condition set to Status False with Reason Invalid, expected Status True
+   ```
+
+2. 检查集群中资源的实际 status：
+   ```bash
+   kubectl get gateway <name> -n gateway-conformance-infra -o yaml | grep -A 30 "status:"
+   ```
+
+3. 对照 `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs` 的 `update_status()` 和 `update_listener_conditions()` 逻辑
+
+### 常见 Status 问题
+
+| 症状 | 根因 | 修复位置 |
+|------|------|---------|
+| `Programmed=False(Invalid)` 但预期 `True` | 冲突检测误判 / unresolved refs 逻辑问题 | `listener_port_manager.rs` / `update_listener_conditions()` |
+| `Programmed=True` 但预期 `False` | 未将 `has_unresolved_refs` 纳入 `Programmed` 判断 | `update_listener_conditions()` |
+| `AttachedRoutes=0` 但预期 `>0` | route tracker 未计数 / gateway 有 unresolved refs 时未计 | `update_status()` 里的 `tracker.count_for_listener()` |
+| `ResolvedRefs=False(RefNotPermitted)` 误判 | ReferenceGrant 解析逻辑 | `validate_listener_resolved_refs()` |
+
+### Hostname 冲突检测规则（重要）
+
+Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 port+protocol+hostname 组合，不是 hostname 相交。
+
+- `None`（wildcard）+ `None` → **Conflicted**（两个都是 wildcard）
+- `foo.example.com` + `foo.example.com` → **Conflicted**
+- `None` + `foo.example.com` → **不冲突**（相交但不同）
+- `*.example.com` + `foo.example.com` → **不冲突**（相交但不同）
+
+错误地将"相交"视为"冲突"会导致多个测试失败（`GatewayHTTPListenerIsolation` 等）。
 
 ## Conformance Profiles 当前状态
 
 | Profile | 声明 | 说明 |
 |---------|------|------|
-| GATEWAY-HTTP | ✅ | 已声明，核心功能已实现 |
-| GATEWAY-GRPC | ⚠️ | 已声明，未实际验证 |
+| GATEWAY-HTTP | ✅ | 已声明，Gateway + HTTPRoute core 已验证 |
+| GATEWAY-GRPC | ✅ | 已声明，GRPCRoute core 已验证 |
 | GATEWAY-TLS | ❌ | 未声明，需通过 core tests 后再声明 |
 
-## 调试失败的测试
+## Gateway 测试当前状态（feature-03-25 分支）
 
-1. **看日志**：`--no-debug` 关闭后默认有详细日志
-2. **status condition 问题**：最常见的失败原因，检查 `handlers/gateway.rs` 的 `update_status()`
-3. **超时**：`--timeout 60m` 延长，或看 `conformance_test.go` 中的 `TimeoutConfig`
-4. **集群状态**：`kubectl get gateways,httproutes,tlsroutes -A` 看资源是否正确创建
-
-## 任务追踪
-
-- 验证进度：`tasks/todo/conformance-validation/`
-- 缺失功能：`tasks/todo/missing-features/`
-- 测试详情：`tasks/todo/gateway-api-1.5-conformance-tests/`
+| 测试 | 状态 | 备注 |
+|------|------|------|
+| GatewayClassObservedGenerationBump | ✅ | |
+| GatewayInvalidRouteKind | ✅ | |
+| GatewayInvalidTLSConfiguration（4个子测试） | ✅ | |
+| GatewayModifyListeners | ✅ | |
+| GatewayObservedGenerationBump | ✅ | |
+| GatewaySecretInvalidReferenceGrant | ✅ | |
+| GatewaySecretMissingReferenceGrant | ✅ | |
+| GatewaySecretReferenceGrantAllInNamespace | ✅ | |
+| GatewaySecretReferenceGrantSpecific | ✅ | |
+| GatewayWithAttachedRoutes（3个子测试） | ✅ | |
+| GatewayHTTPListenerIsolation | ✅ | |
+| GatewayFrontendInvalidDefaultClientCertificateValidation | ✅ | |
+| GatewayFrontendClientCertificateValidation | ❌ | status condition 问题 |
+| GatewayFrontendClientCertificateValidationInsecureFallback | ❌ | status condition 问题 |
+| GatewayInvalidFrontendClientCertificateValidation | ❌ | `default_valid_configuration` 子测试 status 问题 |
+| GatewayStaticAddresses | ⏭ SKIP | 明确不实现（地址由 TOML 配置决定） |
+| GatewayOptionalAddressValue | ⏭ SKIP | 明确不实现 |
+| GatewayWithAttachedRoutesWithPort8080 | ⏭ SKIP | 明确不实现（端口只能启动时绑定） |
+| GatewayInfrastructure | ⏭ SKIP | 明确不实现 |
+| GatewayBackendClientCertificateFeature | ⏭ SKIP | 需要 BackendTLSPolicy CRD |
+| GatewayInvalidTLSBackendConfiguration | ⏭ SKIP | 需要 BackendTLSPolicy CRD |

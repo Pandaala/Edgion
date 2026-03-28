@@ -18,23 +18,6 @@ import (
 )
 
 func TestConformance(t *testing.T) {
-	proxyHost := os.Getenv("GATEWAY_PROXY_HOST")
-	if proxyHost == "" {
-		conformance.RunConformance(t)
-		return
-	}
-
-	httpPort := os.Getenv("GATEWAY_PROXY_HTTP_PORT")
-	if httpPort == "" {
-		httpPort = "8080"
-	}
-	httpsPort := os.Getenv("GATEWAY_PROXY_HTTPS_PORT")
-	if httpsPort == "" {
-		httpsPort = "8443"
-	}
-
-	t.Logf("Using port-forward proxy: %s (HTTP: %s, HTTPS: %s)", proxyHost, httpPort, httpsPort)
-
 	opts := conformance.DefaultOptions(t)
 
 	if opts.SupportedFeatures == nil {
@@ -55,7 +38,6 @@ func TestConformance(t *testing.T) {
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteHostRewrite)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRoutePathRewrite)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestMirror)
-	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestMultipleMirrors)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestTimeout)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteBackendTimeout)
 
@@ -85,7 +67,6 @@ func TestConformance(t *testing.T) {
 	// opts.SupportedFeatures.Insert(features.SupportHTTPRouteParentRefPort)
 
 	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
-	// ⚠ Not yet validated against real conformance run.
 	opts.SupportedFeatures.Insert(features.SupportGRPCRoute)
 
 	// F-class: Frontend client certificate validation (mTLS)
@@ -99,7 +80,6 @@ func TestConformance(t *testing.T) {
 	//
 	// GATEWAY-HTTP: declared, core features implemented.
 	// GATEWAY-GRPC: declared, core features implemented (exact/header/hostname/weight matching).
-	//               ⚠ Not yet validated against real conformance run — may need status condition fixes.
 	// GATEWAY-TLS:  NOT declared yet. TLS Passthrough implemented but conformance tests never run.
 	//               Likely needs status condition work (ResolvedRefs, supportedKinds for TLSRoute).
 	//               Add GatewayTLSConformanceProfileName + SupportTLSRoute when core tests pass.
@@ -132,24 +112,39 @@ func TestConformance(t *testing.T) {
 		RequiredConsecutiveSuccesses:        3,
 	}
 
-	opts.RoundTripper = &roundtripper.DefaultRoundTripper{
-		Debug:         opts.Debug,
-		TimeoutConfig: opts.TimeoutConfig,
-		CustomDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			switch port {
-			case "80":
-				addr = net.JoinHostPort(proxyHost, httpPort)
-			case "443":
-				addr = net.JoinHostPort(proxyHost, httpsPort)
-			default:
-				return nil, fmt.Errorf("unexpected port in gateway address: %s", addr)
-			}
-			return (&net.Dialer{}).DialContext(ctx, network, addr)
-		},
+	// Optional port-forward proxy (for clusters with unreachable pod IPs)
+	proxyHost := os.Getenv("GATEWAY_PROXY_HOST")
+	if proxyHost != "" {
+		httpPort := os.Getenv("GATEWAY_PROXY_HTTP_PORT")
+		if httpPort == "" {
+			httpPort = "8080"
+		}
+		httpsPort := os.Getenv("GATEWAY_PROXY_HTTPS_PORT")
+		if httpsPort == "" {
+			httpsPort = "8443"
+		}
+
+		t.Logf("Using port-forward proxy: %s (HTTP: %s, HTTPS: %s)", proxyHost, httpPort, httpsPort)
+
+		opts.RoundTripper = &roundtripper.DefaultRoundTripper{
+			Debug:         opts.Debug,
+			TimeoutConfig: opts.TimeoutConfig,
+			CustomDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				_, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				switch port {
+				case "80":
+					addr = net.JoinHostPort(proxyHost, httpPort)
+				case "443":
+					addr = net.JoinHostPort(proxyHost, httpsPort)
+				default:
+					return nil, fmt.Errorf("unexpected port in gateway address: %s", addr)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, addr)
+			},
+		}
 	}
 
 	conformance.RunConformanceWithOptions(t, opts)

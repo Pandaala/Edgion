@@ -282,7 +282,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             Some(invalid_indices.clone())
         };
 
-        let all_rules_invalid = total_rules > 0 && valid_rules == 0;
+        let _all_rules_invalid = total_rules > 0 && valid_rules == 0;
 
         let status = route.status.get_or_insert_with(|| GRPCRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
@@ -294,11 +294,10 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                if all_rules_invalid {
-                    accepted_errors.push(AcceptedError::Invalid {
-                        message: format!("All {} rules have invalid backend refs", total_rules),
-                    });
-                }
+                // Note: all_rules_invalid due to backend ref issues should NOT
+                // affect Accepted status. Per Gateway API spec, Accepted reflects
+                // whether the Gateway accepts the route. Backend issues only affect
+                // ResolvedRefs.
 
                 let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -445,32 +444,11 @@ fn collect_ref_denied_list(route: &GRPCRoute) -> Vec<Option<&RefDenied>> {
 }
 
 /// Find rule indices where ALL backend refs are invalid.
-fn find_invalid_rule_indices(route: &GRPCRoute, route_ns: &str) -> Vec<usize> {
-    let mut invalid_indices = Vec::new();
-    if let Some(rules) = &route.spec.rules {
-        for (idx, rule) in rules.iter().enumerate() {
-            if let Some(backend_refs) = &rule.backend_refs {
-                if backend_refs.is_empty() {
-                    continue;
-                }
-                let all_invalid = backend_refs.iter().all(|br| {
-                    let kind = br.kind.as_deref().unwrap_or("Service");
-                    if kind != "Service" {
-                        return true;
-                    }
-                    let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                    if !super::route_utils::service_exists(ns, &br.name) {
-                        return true;
-                    }
-                    // ref_denied backends are NOT treated as invalid here.
-                    // They stay in the route table so Gateway can match and return 500.
-                    false
-                });
-                if all_invalid {
-                    invalid_indices.push(idx);
-                }
-            }
-        }
-    }
-    invalid_indices
+fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> Vec<usize> {
+    // Currently GRPCRoute has no filter conflict detection.
+    // Rules with invalid backends (non-Service kind or non-existent) are NOT
+    // marked as invalid. The Gateway should still register these rules so
+    // requests match and get an error response (per Gateway API spec).
+    let _ = route;
+    Vec::new()
 }

@@ -286,7 +286,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(invalid_indices.clone())
         };
 
-        let all_rules_invalid = total_rules > 0 && valid_rules == 0;
+        let _all_rules_invalid = total_rules > 0 && valid_rules == 0;
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
@@ -298,11 +298,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                if all_rules_invalid {
-                    accepted_errors.push(AcceptedError::Invalid {
-                        message: format!("All {} rules are invalid", total_rules),
-                    });
-                }
+                // Note: all_rules_invalid due to backend ref issues (InvalidKind,
+                // BackendNotFound) should NOT affect Accepted status. Per Gateway API
+                // spec, Accepted reflects whether the Gateway accepts the route, not
+                // whether backends are valid. Backend issues only affect ResolvedRefs.
+                // Only filter conflicts (rewrite+redirect) make a route un-accepted.
 
                 let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -413,7 +413,7 @@ fn has_rewrite_redirect_conflict(filters: Option<&Vec<crate::types::resources::h
 /// A rule is invalid if:
 /// - It has backend refs and every one is unreachable (wrong kind, missing service, or cross-namespace ref denied)
 /// - It has conflicting URLRewrite + RequestRedirect filters
-fn find_invalid_rule_indices(route: &HTTPRoute, route_ns: &str) -> Vec<usize> {
+fn find_invalid_rule_indices(route: &HTTPRoute, _route_ns: &str) -> Vec<usize> {
     let mut invalid_indices = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for (idx, rule) in rules.iter().enumerate() {
@@ -453,27 +453,11 @@ fn find_invalid_rule_indices(route: &HTTPRoute, route_ns: &str) -> Vec<usize> {
                 }
             }
 
-            if let Some(backend_refs) = &rule.backend_refs {
-                if backend_refs.is_empty() {
-                    continue;
-                }
-                let all_invalid = backend_refs.iter().all(|br| {
-                    let kind = br.kind.as_deref().unwrap_or("Service");
-                    if kind != "Service" {
-                        return true;
-                    }
-                    let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                    if !super::route_utils::service_exists(ns, &br.name) {
-                        return true;
-                    }
-                    // ref_denied backends are NOT treated as invalid here.
-                    // They stay in the route table so Gateway can match and return 500.
-                    false
-                });
-                if all_invalid {
-                    invalid_indices.push(idx);
-                }
-            }
+            // Note: rules where all backends are invalid (non-Service kind or
+            // non-existent) are NOT marked as invalid indices. The Gateway should
+            // still register these rules so requests match and get a 500 response
+            // (per Gateway API spec). Only filter conflicts above truly invalidate
+            // a rule.
         }
     }
     invalid_indices

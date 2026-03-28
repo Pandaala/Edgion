@@ -7,8 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use k8s_openapi::api::core::v1::ConfigMap;
 
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::update_configmaps;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, update_configmaps, HandlerContext, ProcessResult, ProcessorHandler,
+    format_secret_key, HandlerContext, ProcessResult, ProcessorHandler,
 };
 
 pub struct ConfigMapHandler;
@@ -68,7 +69,7 @@ impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
         self.trigger_cascading_requeue(&cm_key, "updated", ctx).await;
     }
 
-    fn on_delete(&self, cm: &ConfigMap, ctx: &HandlerContext) {
+    async fn on_delete(&self, cm: &ConfigMap, ctx: &HandlerContext) {
         let cm_key = format_secret_key(
             cm.metadata.namespace.as_ref(),
             cm.metadata.name.as_deref().unwrap_or(""),
@@ -78,6 +79,6 @@ impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
         remove.insert(cm_key.clone());
         update_configmaps(HashMap::new(), &remove);
 
-        self.trigger_cascading_requeue(&cm_key, "deleted", ctx);
+        self.trigger_cascading_requeue(&cm_key, "deleted", ctx).await;
     }
 }
