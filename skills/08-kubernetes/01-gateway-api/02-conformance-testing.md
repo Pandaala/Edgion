@@ -11,7 +11,30 @@ description: 如何运行、调试和逐步验证 Gateway API conformance tests
 
 ## 运行粒度
 
-### 单个测试
+### 单个测试（Profile 模式下正确做法）
+
+在 profile 模式下，`--run-test` 不起作用。应使用 `GO_RUN_FILTER` 环境变量：
+
+```bash
+cd examples/gateway-api-conformance
+GO_RUN_FILTER="TestConformance/GatewayClassObservedGenerationBump" \
+  ./scripts/run.sh --port-forward --timeout 5m
+```
+
+`GO_RUN_FILTER` 会被脚本转换为 `go test -run <filter>`，正确地过滤 profile 内的子测试。
+
+修复后快速更新二进制（无需重新部署）：
+
+```bash
+# 仅更新 controller
+./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch c
+# 同时更新 controller + gateway
+./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch
+```
+
+然后用同一 `GO_RUN_FILTER` 重新运行验证结果。
+
+### 单个测试（非 Profile 模式）
 
 ```bash
 ./scripts/run.sh --run-test <TestName>

@@ -1,5 +1,5 @@
 {
-  "current_max": 31322,
+  "current_max": 31335,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -160,6 +160,13 @@
     },
     "HTTPRoute/Backend/SessionPersistence": {
       "http": 31313
+    },
+    "Status/RefGrant/GatewayCert": {
+      "d1_https": 31330,
+      "d2_https_match": 31331,
+      "d2_https_mismatch": 31332,
+      "d3_https": 31333,
+      "d4_https": 31334
     }
   }
 }

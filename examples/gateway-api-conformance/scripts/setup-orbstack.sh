@@ -5,7 +5,8 @@ set -euo pipefail
 # Builds Docker images locally and deploys to OrbStack K8s.
 #
 # Usage:
-#   ./scripts/setup-orbstack.sh                # Full setup (build + deploy)
+#   ./scripts/setup-orbstack.sh                # Full setup (build + deploy, debug)
+#   ./scripts/setup-orbstack.sh --release      # Build release instead of debug
 #   ./scripts/setup-orbstack.sh --skip-build   # Deploy only (reuse existing images)
 #   ./scripts/setup-orbstack.sh --rebuild      # Force rebuild images (no cache)
 
@@ -19,16 +20,19 @@ MANIFESTS_DIR="$CONFORMANCE_ROOT/manifests"
 
 SKIP_BUILD=false
 NO_CACHE=""
+PROFILE="debug"
 CONTROLLER_REPLICAS="${CONTROLLER_REPLICAS:-1}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=true; shift ;;
     --rebuild)    NO_CACHE="--no-cache"; shift ;;
+    --release)    PROFILE="release"; shift ;;
     -h|--help)
-      echo "Usage: $0 [--skip-build] [--rebuild]"
+      echo "Usage: $0 [--skip-build] [--rebuild] [--release]"
       echo "  --skip-build  Skip Docker image build, use existing images"
       echo "  --rebuild     Force rebuild images without Docker cache"
+      echo "  --release     Build release profile (default: debug)"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -60,13 +64,14 @@ echo "  K8s cluster reachable"
 # 1. Build images (if not skipped)
 # ------------------------------------------------------------------
 if [[ "${SKIP_BUILD}" != "true" ]]; then
-  echo "[1] Building Docker images (this may take a while on first run)..."
+  echo "[1] Building Docker images (profile=${PROFILE})..."
   cd "$PROJECT_ROOT"
 
   echo "  Building controller..."
   docker build ${NO_CACHE} \
     --build-arg BINARY=edgion-controller \
     --build-arg BUILD_TYPE=bin \
+    --build-arg PROFILE="${PROFILE}" \
     -t "${CONTROLLER_IMAGE}" \
     -f docker/Dockerfile .
 
@@ -74,6 +79,7 @@ if [[ "${SKIP_BUILD}" != "true" ]]; then
   docker build ${NO_CACHE} \
     --build-arg BINARY=edgion-gateway \
     --build-arg BUILD_TYPE=bin \
+    --build-arg PROFILE="${PROFILE}" \
     -t "${GATEWAY_IMAGE}" \
     -f docker/Dockerfile .
 
@@ -114,11 +120,12 @@ kubectl apply -f "$K8S_DEPLOY_ROOT/controller/rbac-leader-election.yaml" 2>/dev/
 kubectl apply -f "$MANIFESTS_DIR/controller-configmap.yaml"
 kubectl apply -f "$K8S_DEPLOY_ROOT/controller/deployment.yaml"
 
-# Override image and set replicas
+# Override image, replicas, and inject RUST_BACKTRACE for debug builds
+BACKTRACE_VAL=$([ "${PROFILE}" = "release" ] && echo "0" || echo "full")
 kubectl -n edgion-system set image deployment/edgion-controller \
   edgion-controller="${CONTROLLER_IMAGE}"
 kubectl -n edgion-system patch deployment edgion-controller \
-  -p "{\"spec\":{\"replicas\":${CONTROLLER_REPLICAS},\"template\":{\"spec\":{\"containers\":[{\"name\":\"edgion-controller\",\"imagePullPolicy\":\"Never\"}]}}}}"
+  -p "{\"spec\":{\"replicas\":${CONTROLLER_REPLICAS},\"template\":{\"spec\":{\"containers\":[{\"name\":\"edgion-controller\",\"imagePullPolicy\":\"Never\",\"env\":[{\"name\":\"RUST_BACKTRACE\",\"value\":\"${BACKTRACE_VAL}\"}]}]}}}}"
 
 echo "  Waiting for controller..."
 kubectl rollout status deployment/edgion-controller -n edgion-system --timeout=120s
@@ -148,7 +155,7 @@ kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/deployment.yaml"
 kubectl -n edgion-system set image deployment/edgion-gateway \
   edgion-gateway="${GATEWAY_IMAGE}"
 kubectl -n edgion-system patch deployment edgion-gateway \
-  -p '{"spec":{"template":{"spec":{"containers":[{"name":"edgion-gateway","imagePullPolicy":"Never"}]}}}}'
+  -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"edgion-gateway\",\"imagePullPolicy\":\"Never\",\"env\":[{\"name\":\"RUST_BACKTRACE\",\"value\":\"${BACKTRACE_VAL}\"}]}]}}}}"
 
 echo "  Restarting gateway to pick up pre-created listeners..."
 kubectl rollout restart deployment/edgion-gateway -n edgion-system

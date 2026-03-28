@@ -13,11 +13,11 @@
 //! - `HandlerContext`: Context passed to handler methods
 
 pub mod attached_route_tracker;
+pub mod configmap_utils;
 mod context;
 pub mod gateway_route_index;
 mod handler;
 pub mod handlers;
-pub mod listener_port_manager;
 pub mod namespace_store;
 mod processor;
 pub mod ref_grant;
@@ -64,8 +64,6 @@ pub use ref_grant::{
     RevalidationListener,
 };
 
-// Re-export listener_port_manager utilities
-pub use listener_port_manager::{get_listener_port_manager, make_port_key, ListenerPortManager, ListenerRef};
 
 // Re-export attached_route_tracker utilities
 pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};

@@ -1,15 +1,16 @@
 // Port Conflict Detection Test Suite
 //
 // Tests Gateway API port conflict detection feature.
+// Conflict detection is Gateway-internal only (not cross-Gateway).
 // Validates that:
-// 1. Conflicting Listeners are marked as Conflicted=True
-// 2. Gateway is marked as ListenersNotValid when conflicts exist
-// 3. Same port with different hostnames (HTTP) is NOT a conflict
+// 1. Same Gateway, same port listeners -> Conflicted=True, ListenersNotValid
+// 2. Different Gateways, same port -> NO conflict (each Gateway healthy)
+// 3. Same port with different hostnames (HTTP) -> NOT a conflict
 //
 // Required config files (in examples/test/conf/Gateway/PortConflict/):
 // - Gateway_internal_conflict.yaml     # Single Gateway with internal port conflict
-// - Gateway_cross_conflict_A.yaml      # First Gateway for cross-Gateway conflict
-// - Gateway_cross_conflict_B.yaml      # Second Gateway for cross-Gateway conflict
+// - Gateway_cross_conflict_A.yaml      # First Gateway, same port as B (no conflict)
+// - Gateway_cross_conflict_B.yaml      # Second Gateway, same port as A (no conflict)
 // - Gateway_same_port_diff_hostname.yaml # Same port, different hostnames (no conflict)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -189,11 +190,13 @@ impl PortConflictTestSuite {
         )
     }
 
-    /// Test: Cross-Gateway port conflict
-    fn test_cross_gateway_conflict() -> TestCase {
+    /// Test: Cross-Gateway same port is NOT a conflict
+    /// After fix: conflict detection is Gateway-internal only, so two different
+    /// Gateways using the same port should each be healthy (no Conflicted, no ListenersNotValid).
+    fn test_cross_gateway_no_conflict() -> TestCase {
         TestCase::new(
-            "cross_gateway_port_conflict",
-            "Test cross-Gateway port conflict (two Gateways using same port)",
+            "cross_gateway_no_conflict",
+            "Test cross-Gateway same port is NOT a conflict (conflict is Gateway-internal only)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -235,28 +238,28 @@ impl PortConflictTestSuite {
                             let status_a = status_a.unwrap();
                             let status_b = status_b.unwrap();
 
-                            // Check both Gateways have ListenersNotValid
+                            // Neither Gateway should have ListenersNotValid
                             let a_invalid = has_listeners_not_valid(status_a);
                             let b_invalid = has_listeners_not_valid(status_b);
 
-                            // Check both Listeners are Conflicted
+                            // Neither Listener should be Conflicted
                             let listener_a = find_listener_status(status_a, "http");
                             let listener_b = find_listener_status(status_b, "http");
 
                             let a_conflicted = listener_a.map(is_listener_conflicted).unwrap_or(false);
                             let b_conflicted = listener_b.map(is_listener_conflicted).unwrap_or(false);
 
-                            if a_invalid && b_invalid && a_conflicted && b_conflicted {
+                            if !a_invalid && !b_invalid && !a_conflicted && !b_conflicted {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "✓ Both Gateways have ListenersNotValid, both Listeners Conflicted=True"
+                                    "Both Gateways are healthy: no ListenersNotValid, no Conflicted (cross-Gateway same port is allowed)"
                                         .to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected all conflicts detected. A: invalid={}, conflicted={}. B: invalid={}, conflicted={}",
+                                        "Cross-Gateway same port should NOT conflict. A: invalid={}, conflicted={}. B: invalid={}, conflicted={}",
                                         a_invalid, a_conflicted, b_invalid, b_conflicted
                                     ),
                                 )
@@ -264,7 +267,7 @@ impl PortConflictTestSuite {
                         }
                         _ => TestResult::failed(
                             start.elapsed(),
-                            "Failed to find one or both cross-conflict Gateways".to_string(),
+                            "Failed to find one or both cross-Gateway Gateways".to_string(),
                         ),
                     }
                 })
@@ -370,7 +373,7 @@ impl TestSuite for PortConflictTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_internal_conflict(),
-            Self::test_cross_gateway_conflict(),
+            Self::test_cross_gateway_no_conflict(),
             Self::test_no_conflict_diff_hostname(),
         ]
     }

@@ -142,6 +142,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "ref-grant-status" => "Status/RefGrant".to_string(),
             "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
             "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
+            "grpc-route-status" | "grpcroutestatus" => "Status/GRPCRoute".to_string(),
+            "observed-generation-status" | "observedgeneration" => "Status/ObservedGeneration".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -908,6 +910,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TlsListenerModeStatusTestSuite));
+        }
+        "Status/GRPCRoute" => {
+            if !gateway {
+                eprintln!("Error: Status/GRPCRoute tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcRouteStatusTestSuite));
+        }
+        "Status/ObservedGeneration" => {
+            if !gateway {
+                eprintln!("Error: Status/ObservedGeneration tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ObservedGenerationStatusTestSuite));
         }
         // Services tests (ACME, etc.)
         "Services/acme" => {

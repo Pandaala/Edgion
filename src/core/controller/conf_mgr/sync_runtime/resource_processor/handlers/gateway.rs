@@ -4,7 +4,7 @@
 //! - Filter by gateway_class_name
 //! - TLS Secret reference resolution
 //! - SecretRefManager registration for cascading updates
-//! - ListenerPortManager registration for port conflict detection
+//! - Intra-gateway listener port conflict detection
 //! - Gateway API standard status management
 
 use crate::core::common::config::is_reference_grant_validation_enabled;
@@ -12,17 +12,19 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
-    get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_listener_port_manager, get_secret,
-    make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_secret, HandlerContext, ProcessResult,
+    ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
-    GatewayStatus, GatewayStatusAddress, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
+    GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::ByteString;
+use std::collections::BTreeMap;
 
 /// Gateway handler
 ///
@@ -30,10 +32,8 @@ use k8s_openapi::api::core::v1::Service;
 /// - filter: Filter by gateway_class_name (optional, None means no filter)
 /// - parse: Parse TLS certificateRefs -> fill tls.secrets
 /// - parse: Register Secret references to SecretRefManager
-/// - parse: Register listeners to ListenerPortManager for conflict detection
-/// - on_change: Requeue conflicting Gateways for bidirectional conflict marking
-/// - on_delete: Clear SecretRefManager and ListenerPortManager references
-/// - update_status: Set Conflicted/ListenersNotValid conditions based on port conflicts
+/// - on_delete: Clear SecretRefManager references
+/// - update_status: Set Conflicted/ListenersNotValid conditions based on intra-gateway port conflicts
 pub struct GatewayHandler {
     /// If Some, only process Gateways with matching gatewayClassName
     /// If None, process all Gateways (used by FileSystem mode)
@@ -66,6 +66,16 @@ enum GatewayResolvedRefsError {
         kind: String,
         protocol: String,
     },
+    /// CA certificate ref kind is invalid (not Secret or ConfigMap)
+    InvalidCACertificateKind { kind: String },
+    /// CA certificate ref is invalid (not found, missing key, etc.)
+    InvalidCACertificateRef {
+        namespace: String,
+        name: String,
+        reason: String,
+    },
+    /// CA certificate ref cross-namespace denied by ReferenceGrant
+    CACertRefNotPermitted { namespace: String, name: String },
 }
 
 impl GatewayResolvedRefsError {
@@ -96,6 +106,25 @@ impl GatewayResolvedRefsError {
                     group, kind, protocol
                 )
             }
+            Self::InvalidCACertificateKind { kind } => {
+                format!(
+                    "Invalid CA certificate ref kind '{}', must be 'Secret' or 'ConfigMap'",
+                    kind
+                )
+            }
+            Self::InvalidCACertificateRef {
+                namespace,
+                name,
+                reason,
+            } => {
+                format!("CA certificate '{}/{}' invalid: {}", namespace, name, reason)
+            }
+            Self::CACertRefNotPermitted { namespace, name } => {
+                format!(
+                    "Cross-namespace reference to CA certificate '{}/{}' not allowed by ReferenceGrant",
+                    namespace, name
+                )
+            }
         }
     }
 }
@@ -105,9 +134,10 @@ struct ListenerInfo {
     supported_kinds: Vec<RouteGroupKind>,
     route_count: i32,
     resolved_refs_errors: Vec<GatewayResolvedRefsError>,
-    /// True when this listener uses an unsupported TLS mode (e.g. Mixed).
-    /// Causes Accepted=False with reason UnsupportedTLSMode.
-    unsupported_tls_mode: bool,
+    /// True when all frontendValidation CA refs are invalid (no valid CA certificate)
+    no_valid_ca_certificate: bool,
+    /// True when frontend validation uses AllowInsecureFallback mode
+    insecure_fallback_mode: bool,
 }
 
 impl GatewayHandler {
@@ -153,20 +183,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
-            // Collect listener ports for ListenerPortManager registration
-            let listener_ports: Vec<(String, String)> = listeners
-                .iter()
-                .map(|l| {
-                    let port_key = make_port_key(l.port, &l.protocol, l.hostname.as_deref());
-                    (l.name.clone(), port_key)
-                })
-                .collect();
-
-            // Register to ListenerPortManager for port conflict detection.
-            // Use resource_key() ("namespace/name") to match the workqueue key format
-            // so that cross-gateway requeues resolve correctly.
-            get_listener_port_manager().register_gateway(&resource_ref.resource_key(), &listener_ports);
-
             for listener in listeners.iter_mut() {
                 let tls_config = match &mut listener.tls {
                     Some(tls) => tls,
@@ -226,37 +242,16 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
                 if let Some(ref fv) = tls_config.frontend_validation {
                     if let Some(ca_refs) = &fv.ca_certificate_refs {
-                        let mut resolved_ca_secrets = Vec::new();
-
-                        for ca_ref in ca_refs {
-                            let ca_ns = ca_ref.namespace.as_ref().or(g.metadata.namespace.as_ref());
-                            let secret_key = format_secret_key(ca_ns, &ca_ref.name);
-
-                            ctx.secret_ref_manager()
-                                .add_ref(secret_key.clone(), resource_ref.clone());
-
-                            let ca_ns_str = ca_ns.map(|s| s.as_str()).unwrap_or("");
-                            if ca_ns_str != gateway_ns {
-                                cross_ns_manager.add_ref(ca_ns_str.to_string(), cross_ns_ref.clone());
-                            }
-
-                            if let Some(secret) = get_secret(ca_ns.map(|s| s.as_str()), &ca_ref.name) {
-                                resolved_ca_secrets.push(secret);
-                                tracing::debug!(
-                                    gateway = %resource_ref.key(),
-                                    listener = %listener.name,
-                                    secret_key = %secret_key,
-                                    "Frontend CA Secret resolved"
-                                );
-                            } else {
-                                tracing::info!(
-                                    gateway = %resource_ref.key(),
-                                    listener = %listener.name,
-                                    secret_key = %secret_key,
-                                    "Frontend CA Secret not found yet, will be updated when Secret arrives"
-                                );
-                            }
-                        }
+                        let resolved_ca_secrets = resolve_frontend_ca_refs(
+                            ca_refs,
+                            &g.metadata.namespace,
+                            gateway_ns,
+                            &resource_ref,
+                            &listener.name,
+                            ctx,
+                            &cross_ns_ref,
+                            &cross_ns_manager,
+                        );
 
                         if !resolved_ca_secrets.is_empty() {
                             tls_config.resolved_frontend_ca_secrets = Some(resolved_ca_secrets);
@@ -266,35 +261,66 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             }
         }
 
-        // Resolve spec.tls.backend.clientCertificateRef (Gateway-level default client cert for upstream mTLS)
-        if let Some(ref mut spec_tls) = g.spec.tls {
-            if let Some(ref mut backend_tls) = spec_tls.backend {
-                if let Some(ref cert_ref) = backend_tls.client_certificate_ref {
-                    let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
-                    let cert_ns = cert_ref.namespace.as_ref().or(g.metadata.namespace.as_ref());
-                    let secret_key = format_secret_key(cert_ns, &cert_ref.name);
+        // Merge spec.tls.frontend into each listener's frontend_validation
+        // spec.tls.frontend takes precedence over listener-level frontendValidation
+        if let Some(ref spec_tls) = g.spec.tls {
+            if let Some(ref frontend) = spec_tls.frontend {
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
 
-                    ctx.secret_ref_manager()
-                        .add_ref(secret_key.clone(), resource_ref.clone());
+                if let Some(ref mut listeners) = g.spec.listeners {
+                    for listener in listeners.iter_mut() {
+                        // Only apply to HTTPS/TLS listeners
+                        let protocol_upper = listener.protocol.to_uppercase();
+                        if protocol_upper != "HTTPS" && protocol_upper != "TLS" {
+                            continue;
+                        }
 
-                    let cert_ns_str = cert_ns.map(|s| s.as_str()).unwrap_or("");
-                    if cert_ns_str != gateway_ns {
-                        cross_ns_manager.add_ref(cert_ns_str.to_string(), cross_ns_ref.clone());
-                    }
+                        // Find per-port override for this listener
+                        let per_port_validation = frontend
+                            .per_port
+                            .as_ref()
+                            .and_then(|pp| pp.iter().find(|p| p.port == listener.port))
+                            .and_then(|p| p.tls.as_ref())
+                            .and_then(|t| t.validation.as_ref());
 
-                    if let Some(secret) = get_secret(cert_ns.map(|s| s.as_str()), &cert_ref.name) {
-                        backend_tls.resolved_client_certificate = Some(secret);
-                        tracing::debug!(
-                            gateway = %resource_ref.key(),
-                            secret_key = %secret_key,
-                            "Gateway backend client certificate resolved"
-                        );
-                    } else {
-                        tracing::info!(
-                            gateway = %resource_ref.key(),
-                            secret_key = %secret_key,
-                            "Gateway backend client certificate not found yet, will be updated when Secret arrives"
-                        );
+                        // Use per-port if available, otherwise default
+                        let merged_validation =
+                            per_port_validation.or(frontend.default.as_ref().and_then(|d| d.validation.as_ref()));
+
+                        if let Some(validation) = merged_validation {
+                            // Ensure tls config exists
+                            let tls_config = listener.tls.get_or_insert(GatewayTLSConfig {
+                                mode: None,
+                                certificate_refs: None,
+                                options: None,
+                                secrets: None,
+                                frontend_validation: None,
+                                resolved_frontend_ca_secrets: None,
+                            });
+
+                            // spec.tls.frontend takes precedence over listener-level
+                            tls_config.frontend_validation = Some(validation.clone());
+
+                            // Resolve CA refs from the merged validation
+                            if let Some(ca_refs) = &validation.ca_certificate_refs {
+                                let resolved_ca_secrets = resolve_frontend_ca_refs(
+                                    ca_refs,
+                                    &g.metadata.namespace,
+                                    gateway_ns,
+                                    &resource_ref,
+                                    &listener.name,
+                                    ctx,
+                                    &cross_ns_ref,
+                                    &cross_ns_manager,
+                                );
+
+                                if !resolved_ca_secrets.is_empty() {
+                                    tls_config.resolved_frontend_ca_secrets = Some(resolved_ca_secrets);
+                                } else {
+                                    tls_config.resolved_frontend_ca_secrets = None;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -309,17 +335,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             gateway.metadata.namespace.as_deref().unwrap_or(""),
             gateway.metadata.name.as_deref().unwrap_or("")
         );
-
-        // Only requeue Gateways whose conflict relation actually changed.
-        // Both port_manager and workqueue use "namespace/name" format, so gateway_key works for both.
-        for conflicting_gateway_key in get_listener_port_manager().take_affected_gateways(&gateway_key) {
-            ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
-            tracing::info!(
-                gateway = %gateway_key,
-                conflicting_gateway = %conflicting_gateway_key,
-                "Requeue affected Gateway for Conflicted status update"
-            );
-        }
 
         // Requeue routes when listener hostnames or ports actually changed.
         // Cycle safety: route on_change only requeues Gateways when parentRef
@@ -358,9 +373,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
             );
         }
-
-        // Note: GatewayBackendTlsStore is populated on the gateway data-plane side
-        // (in src/core/gateway/runtime/handler.rs) when it receives the synced Gateway.
     }
 
     async fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
@@ -369,8 +381,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
         );
-        // Use resource_key() ("namespace/name") to match port_manager and workqueue key formats.
-        let gateway_key = resource_ref.resource_key();
+        let gateway_key = resource_ref.key();
 
         // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
@@ -383,30 +394,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         get_global_cross_ns_ref_manager().clear_resource_refs(&cross_ns_ref);
 
-        // Clear ListenerPortManager registration and requeue only those Gateways
-        // whose conflict status may change as a result.
-        let conflicting_gateways = get_listener_port_manager().unregister_gateway_and_get_affected(&gateway_key);
-
-        // Requeue previously conflicting Gateways so they can update their Conflicted status
-        // (change from Conflicted=True to Conflicted=False)
-        for conflicting_gateway_key in conflicting_gateways {
-            ctx.requeue("Gateway", conflicting_gateway_key.clone()).await;
-            tracing::info!(
-                deleted_gateway = %gateway_key,
-                conflicting_gateway = %conflicting_gateway_key,
-                "Requeue previously conflicting Gateway to clear Conflicted status"
-            );
-        }
-
         let route_index = get_gateway_route_index();
         route_index.remove_gateway_hostnames(&gateway_key);
         route_index.remove_gateway_ports(&gateway_key);
 
-        // Note: GatewayBackendTlsStore cleanup happens on the gateway data-plane side.
-
         tracing::debug!(
             gateway = %gateway_key,
-            "Cleared secret, port manager, hostname and port cache on Gateway delete"
+            "Cleared secret refs, hostname and port cache on Gateway delete"
         );
     }
 
@@ -434,26 +428,27 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l);
                 resolved_refs_errors.append(&mut kind_errors);
 
-                // TLS "Mixed" mode is not supported: listeners should report Accepted=False.
-                let unsupported_tls_mode = l.protocol.to_uppercase() == "TLS"
-                    && l.tls
-                        .as_ref()
-                        .and_then(|t| t.mode.as_deref())
-                        .map(|m| m.to_uppercase() == "MIXED")
-                        .unwrap_or(false);
+                // Check if all CA refs are invalid (no valid CA certificate)
+                let no_valid_ca_certificate = has_all_ca_refs_invalid(l, &resolved_refs_errors);
+
+                // Check if insecure fallback mode
+                let insecure_fallback_mode = l
+                    .tls
+                    .as_ref()
+                    .and_then(|t| t.frontend_validation.as_ref())
+                    .and_then(|fv| fv.mode.as_deref())
+                    == Some("AllowInsecureFallback");
 
                 ListenerInfo {
                     name: l.name.clone(),
                     supported_kinds,
                     route_count,
                     resolved_refs_errors,
-                    unsupported_tls_mode,
+                    no_valid_ca_certificate,
+                    insecure_fallback_mode,
                 }
             })
             .collect();
-
-        // Pre-compute gateway-level backend TLS validation while gateway is only immutably borrowed
-        let gw_resolved_errors = validate_gateway_backend_tls(gateway);
 
         let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref());
 
@@ -465,14 +460,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Initialize conditions if not present
         let conditions = status.conditions.get_or_insert_with(Vec::new);
 
-        // Detect port conflicts from ListenerPortManager.
-        // Use "namespace/name" format to match register_gateway (which uses resource_key()).
-        let gateway_key = format!(
-            "{}/{}",
-            gateway.metadata.namespace.as_deref().unwrap_or(""),
-            gateway.metadata.name.as_deref().unwrap_or("")
+        // Detect intra-gateway port conflicts (same Gateway only, per Gateway API spec)
+        let conflicts = detect_intra_gateway_conflicts(
+            gateway.spec.listeners.as_deref().unwrap_or_default(),
         );
-        let conflicts = get_listener_port_manager().detect_conflicts(&gateway_key);
 
         // Set Gateway-level conditions
         // Accepted: True if no validation errors
@@ -495,36 +486,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         }
 
         // Gateway-level ResolvedRefs (Gateway API v1.5): indicates whether non-Listener
-        // object references (e.g. spec.tls.backend.clientCertificateRef) on the Gateway are resolved.
-        {
-            if gw_resolved_errors.is_empty() {
-                let cond = condition_true(
-                    condition_types::RESOLVED_REFS,
-                    condition_reasons::RESOLVED_REFS,
-                    "All gateway-level references resolved",
-                    generation,
-                );
-                update_gateway_condition(conditions, cond);
-            } else {
-                let reason = pick_gateway_resolved_refs_reason(&gw_resolved_errors);
-                let message = gw_resolved_errors
-                    .iter()
-                    .map(|e| e.message())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                let cond = condition_false(condition_types::RESOLVED_REFS, reason, message, generation);
-                update_gateway_condition(conditions, cond);
-            }
-        }
-
-        // Programmed: True — configuration has been sent to the data plane.
-        // Gateway API requires this condition. We set it True because our controller
-        // pushes config to gateway via gRPC sync as soon as the resource is processed.
+        // object references (e.g. infrastructure, backendTLS) on the Gateway are resolved.
+        // Currently no such references exist in the spec, so this is always True.
         {
             let cond = condition_true(
-                "Programmed",
-                "Programmed",
-                "Gateway configuration has been sent to the data plane",
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "All gateway-level references resolved",
                 generation,
             );
             update_gateway_condition(conditions, cond);
@@ -545,6 +513,20 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             conditions.retain(|c| c.type_ != condition_types::LISTENERS_NOT_VALID);
         }
 
+        // InsecureFrontendValidationMode: True if any listener uses AllowInsecureFallback
+        let has_insecure_fallback = listener_infos.iter().any(|li| li.insecure_fallback_mode);
+        if has_insecure_fallback {
+            let cond = condition_true(
+                "InsecureFrontendValidationMode",
+                "ConfigurationChanged",
+                "Frontend validation uses AllowInsecureFallback mode",
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        } else {
+            conditions.retain(|c| c.type_ != "InsecureFrontendValidationMode");
+        }
+
         // Update listener statuses using pre-computed info
         if !listener_infos.is_empty() {
             let listener_statuses = status.listeners.get_or_insert_with(Vec::new);
@@ -554,7 +536,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 supported_kinds,
                 route_count,
                 resolved_refs_errors,
-                unsupported_tls_mode,
+                no_valid_ca_certificate,
+                insecure_fallback_mode: _,
             } in listener_infos
             {
                 let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == name);
@@ -575,8 +558,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 ls.supported_kinds = supported_kinds;
                 ls.attached_routes = route_count;
 
-                // Set Conflicted condition based on ListenerPortManager
-                let is_conflicted = if let Some((reason, _)) = conflicts.get(&ls.name) {
+                // Set Conflicted condition based on intra-gateway port conflicts
+                let is_conflicted = if let Some(reason) = conflicts.get(&ls.name) {
                     let cond = condition_true(
                         condition_types::CONFLICTED,
                         condition_reasons::LISTENER_CONFLICT,
@@ -603,7 +586,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     generation,
                     is_conflicted,
                     &resolved_refs_errors,
-                    unsupported_tls_mode,
+                    no_valid_ca_certificate,
                 );
             }
 
@@ -622,6 +605,99 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             status.listeners = Some(Vec::new());
         }
     }
+}
+
+/// Resolve frontend CA certificate refs, supporting both Secret and ConfigMap kinds.
+/// For ConfigMap refs, creates a synthetic Secret with the `ca.crt` data.
+#[allow(clippy::too_many_arguments)]
+fn resolve_frontend_ca_refs(
+    ca_refs: &[crate::types::resources::gateway::SecretObjectReference],
+    gateway_namespace: &Option<String>,
+    gateway_ns: &str,
+    resource_ref: &ResourceRef,
+    listener_name: &str,
+    ctx: &HandlerContext,
+    cross_ns_ref: &ResourceRef,
+    cross_ns_manager: &crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_grant::CrossNamespaceRefManager,
+) -> Vec<k8s_openapi::api::core::v1::Secret> {
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::get_configmap;
+
+    let mut resolved_ca_secrets = Vec::new();
+
+    for ca_ref in ca_refs {
+        let ca_kind = ca_ref.kind.as_deref().unwrap_or("Secret");
+        let ca_ns = ca_ref.namespace.as_ref().or(gateway_namespace.as_ref());
+        let ca_ns_str = ca_ns.map(|s| s.as_str()).unwrap_or("");
+
+        // Register cross-namespace refs
+        if ca_ns_str != gateway_ns {
+            cross_ns_manager.add_ref(ca_ns_str.to_string(), cross_ns_ref.clone());
+        }
+
+        match ca_kind {
+            "Secret" => {
+                let secret_key = format_secret_key(ca_ns, &ca_ref.name);
+                ctx.secret_ref_manager()
+                    .add_ref(secret_key.clone(), resource_ref.clone());
+
+                if let Some(secret) = get_secret(ca_ns.map(|s| s.as_str()), &ca_ref.name) {
+                    resolved_ca_secrets.push(secret);
+                    tracing::debug!(
+                        gateway = %resource_ref.key(),
+                        listener = %listener_name,
+                        secret_key = %secret_key,
+                        "Frontend CA Secret resolved"
+                    );
+                } else {
+                    tracing::info!(
+                        gateway = %resource_ref.key(),
+                        listener = %listener_name,
+                        secret_key = %secret_key,
+                        "Frontend CA Secret not found yet"
+                    );
+                }
+            }
+            "ConfigMap" => {
+                if let Some(cm) = get_configmap(Some(ca_ns_str), &ca_ref.name) {
+                    if let Some(data) = &cm.data {
+                        if let Some(ca_pem) = data.get("ca.crt") {
+                            // Create a synthetic Secret from ConfigMap data
+                            let mut secret_data = BTreeMap::new();
+                            secret_data.insert("ca.crt".to_string(), ByteString(ca_pem.as_bytes().to_vec()));
+                            let fake_secret = k8s_openapi::api::core::v1::Secret {
+                                data: Some(secret_data),
+                                ..Default::default()
+                            };
+                            resolved_ca_secrets.push(fake_secret);
+                            tracing::debug!(
+                                gateway = %resource_ref.key(),
+                                listener = %listener_name,
+                                configmap = %ca_ref.name,
+                                "Frontend CA ConfigMap resolved"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::info!(
+                        gateway = %resource_ref.key(),
+                        listener = %listener_name,
+                        configmap = %ca_ref.name,
+                        "Frontend CA ConfigMap not found yet"
+                    );
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    gateway = %resource_ref.key(),
+                    listener = %listener_name,
+                    kind = %ca_kind,
+                    "Unsupported CA certificate ref kind"
+                );
+            }
+        }
+    }
+
+    resolved_ca_secrets
 }
 
 fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) -> Vec<GatewayStatusAddress> {
@@ -709,15 +785,14 @@ fn update_listener_conditions(
     generation: Option<i64>,
     is_conflicted: bool,
     resolved_refs_errors: &[GatewayResolvedRefsError],
-    unsupported_tls_mode: bool,
+    no_valid_ca_certificate: bool,
 ) {
-    // Accepted: False for unsupported TLS mode, False for gateway-level parse errors, True otherwise.
-    // Conflict does not affect Accepted.
-    if unsupported_tls_mode {
+    // Accepted: False if no valid CA certificate, else True if no validation errors
+    if no_valid_ca_certificate {
         let cond = condition_false(
             condition_types::ACCEPTED,
-            condition_reasons::UNSUPPORTED_TLS_MODE,
-            "TLS Mixed mode is not supported; use Passthrough or Terminate",
+            "NoValidCACertificate",
+            "All frontend validation CA certificate references are invalid",
             generation,
         );
         update_gateway_condition(&mut ls.conditions, cond);
@@ -760,26 +835,7 @@ fn update_listener_conditions(
         update_gateway_condition(&mut ls.conditions, resolved);
     }
 
-    // Programmed: True when listener is ready to process traffic.
-    // We set True unless the listener is conflicted or has unresolved refs.
-    if is_conflicted || has_unresolved_refs {
-        let reason = if is_conflicted { "Conflicted" } else { "Invalid" };
-        let message = if is_conflicted {
-            "Listener has port conflicts"
-        } else {
-            "Listener has unresolved references"
-        };
-        let cond = condition_false("Programmed", reason, message, generation);
-        update_gateway_condition(&mut ls.conditions, cond);
-    } else {
-        let cond = condition_true(
-            "Programmed",
-            "Programmed",
-            "Listener has been configured in the data plane",
-            generation,
-        );
-        update_gateway_condition(&mut ls.conditions, cond);
-    }
+    let _ = is_conflicted;
 }
 
 fn is_valid_pem(data: &[u8]) -> bool {
@@ -789,7 +845,7 @@ fn is_valid_pem(data: &[u8]) -> bool {
 }
 
 fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'static str {
-    // Priority: InvalidRouteKind > RefNotPermitted > InvalidCertificateRef
+    // Priority: InvalidRouteKind > InvalidCACertificateKind > RefNotPermitted/CACertRefNotPermitted > InvalidCACertificateRef > InvalidCertificateRef
     if errors
         .iter()
         .any(|e| matches!(e, GatewayResolvedRefsError::InvalidRouteKind { .. }))
@@ -798,104 +854,25 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
     }
     if errors
         .iter()
-        .any(|e| matches!(e, GatewayResolvedRefsError::RefNotPermitted { .. }))
+        .any(|e| matches!(e, GatewayResolvedRefsError::InvalidCACertificateKind { .. }))
     {
+        return "InvalidCACertificateKind";
+    }
+    if errors.iter().any(|e| {
+        matches!(
+            e,
+            GatewayResolvedRefsError::RefNotPermitted { .. } | GatewayResolvedRefsError::CACertRefNotPermitted { .. }
+        )
+    }) {
         return condition_reasons::REF_NOT_PERMITTED;
     }
+    if errors
+        .iter()
+        .any(|e| matches!(e, GatewayResolvedRefsError::InvalidCACertificateRef { .. }))
+    {
+        return "InvalidCACertificateRef";
+    }
     "InvalidCertificateRef"
-}
-
-/// Validate Gateway-level backend TLS clientCertificateRef (spec.tls.backend.clientCertificateRef).
-fn validate_gateway_backend_tls(gateway: &Gateway) -> Vec<GatewayResolvedRefsError> {
-    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let mut errors = Vec::new();
-
-    let Some(spec_tls) = &gateway.spec.tls else {
-        return errors;
-    };
-    let Some(backend) = &spec_tls.backend else {
-        return errors;
-    };
-    let Some(cert_ref) = &backend.client_certificate_ref else {
-        return errors;
-    };
-
-    // Validate kind
-    let cert_kind = cert_ref.kind.as_deref().unwrap_or("Secret");
-    if cert_kind != "Secret" {
-        errors.push(GatewayResolvedRefsError::InvalidCertRef {
-            kind: cert_kind.to_string(),
-        });
-        return errors;
-    }
-
-    // Validate group
-    let cert_group = cert_ref.group.as_deref().unwrap_or("");
-    if !is_core_api_group(cert_group) {
-        errors.push(GatewayResolvedRefsError::InvalidCertRef {
-            kind: format!("group:{}", cert_group),
-        });
-        return errors;
-    }
-
-    let cert_ns = cert_ref
-        .namespace
-        .as_deref()
-        .or(gateway.metadata.namespace.as_deref())
-        .unwrap_or("default");
-
-    // Cross-namespace ReferenceGrant check
-    if gateway_ns != cert_ns && is_reference_grant_validation_enabled() {
-        let allowed = get_global_reference_grant_store().check_reference_allowed(
-            gateway_ns,
-            "gateway.networking.k8s.io",
-            "Gateway",
-            cert_ns,
-            "",
-            "Secret",
-            Some(&cert_ref.name),
-        );
-        if !allowed {
-            errors.push(GatewayResolvedRefsError::RefNotPermitted {
-                namespace: cert_ns.to_string(),
-                name: cert_ref.name.clone(),
-            });
-        }
-    }
-
-    // Secret existence and validity check
-    match get_secret(Some(cert_ns), &cert_ref.name) {
-        None => {
-            errors.push(GatewayResolvedRefsError::SecretNotFound {
-                namespace: cert_ns.to_string(),
-                name: cert_ref.name.clone(),
-            });
-        }
-        Some(secret) => {
-            use crate::types::constants::secret_keys::tls;
-            if let Some(data) = &secret.data {
-                let cert_bytes = data.get(tls::CERT).map(|b| &b.0);
-                let key_bytes = data.get(tls::KEY).map(|b| &b.0);
-                let cert_empty = cert_bytes.is_none_or(|b| b.is_empty());
-                let key_empty = key_bytes.is_none_or(|b| b.is_empty());
-                if cert_empty || key_empty {
-                    errors.push(GatewayResolvedRefsError::SecretInvalid {
-                        namespace: cert_ns.to_string(),
-                        name: cert_ref.name.clone(),
-                        reason: "empty or missing tls.crt/tls.key data".to_string(),
-                    });
-                }
-            } else {
-                errors.push(GatewayResolvedRefsError::SecretInvalid {
-                    namespace: cert_ns.to_string(),
-                    name: cert_ref.name.clone(),
-                    reason: "no data".to_string(),
-                });
-            }
-        }
-    }
-
-    errors
 }
 
 fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener) -> Vec<GatewayResolvedRefsError> {
@@ -1005,22 +982,16 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
         }
     }
 
-    // Validate frontend validation CA certificate refs
+    // Validate frontend validation CA certificate refs (supports both Secret and ConfigMap)
     if let Some(ref fv) = tls.frontend_validation {
         if let Some(ca_refs) = &fv.ca_certificate_refs {
             for ca_ref in ca_refs {
                 let ca_kind = ca_ref.kind.as_deref().unwrap_or("Secret");
-                if ca_kind != "Secret" {
-                    errors.push(GatewayResolvedRefsError::InvalidCertRef {
-                        kind: format!("frontendValidation: unsupported kind '{}'", ca_kind),
-                    });
-                    continue;
-                }
 
                 let ca_group = ca_ref.group.as_deref().unwrap_or("");
                 if !is_core_api_group(ca_group) {
-                    errors.push(GatewayResolvedRefsError::InvalidCertRef {
-                        kind: format!("frontendValidation: unsupported group '{}'", ca_group),
+                    errors.push(GatewayResolvedRefsError::InvalidCACertificateKind {
+                        kind: format!("group:{}", ca_group),
                     });
                     continue;
                 }
@@ -1031,48 +1002,106 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
                     .or(gateway.metadata.namespace.as_deref())
                     .unwrap_or("default");
 
-                match get_secret(Some(ca_ns), &ca_ref.name) {
-                    None => {
-                        errors.push(GatewayResolvedRefsError::SecretNotFound {
-                            namespace: ca_ns.to_string(),
-                            name: ca_ref.name.clone(),
-                        });
-                    }
-                    Some(secret) => {
-                        use crate::types::constants::secret_keys::tls;
-                        if let Some(data) = &secret.data {
-                            if !data.contains_key(tls::CA_CERT) {
-                                errors.push(GatewayResolvedRefsError::SecretInvalid {
+                match ca_kind {
+                    "Secret" => {
+                        match get_secret(Some(ca_ns), &ca_ref.name) {
+                            None => {
+                                errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
                                     namespace: ca_ns.to_string(),
                                     name: ca_ref.name.clone(),
-                                    reason: format!("missing required key '{}'", tls::CA_CERT),
+                                    reason: "Secret not found".to_string(),
                                 });
                             }
-                        } else {
-                            errors.push(GatewayResolvedRefsError::SecretInvalid {
-                                namespace: ca_ns.to_string(),
-                                name: ca_ref.name.clone(),
-                                reason: "Secret has no data".to_string(),
-                            });
+                            Some(secret) => {
+                                use crate::types::constants::secret_keys::tls;
+                                if let Some(data) = &secret.data {
+                                    if !data.contains_key(tls::CA_CERT) {
+                                        errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
+                                            namespace: ca_ns.to_string(),
+                                            name: ca_ref.name.clone(),
+                                            reason: format!("missing required key '{}'", tls::CA_CERT),
+                                        });
+                                    }
+                                } else {
+                                    errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
+                                        namespace: ca_ns.to_string(),
+                                        name: ca_ref.name.clone(),
+                                        reason: "Secret has no data".to_string(),
+                                    });
+                                }
+                            }
+                        }
+
+                        // Cross-namespace ReferenceGrant check
+                        if gateway_ns != ca_ns && is_reference_grant_validation_enabled() {
+                            let allowed = get_global_reference_grant_store().check_reference_allowed(
+                                gateway_ns,
+                                "gateway.networking.k8s.io",
+                                "Gateway",
+                                ca_ns,
+                                "",
+                                "Secret",
+                                Some(&ca_ref.name),
+                            );
+                            if !allowed {
+                                errors.push(GatewayResolvedRefsError::CACertRefNotPermitted {
+                                    namespace: ca_ns.to_string(),
+                                    name: ca_ref.name.clone(),
+                                });
+                            }
                         }
                     }
-                }
+                    "ConfigMap" => {
+                        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::get_configmap;
+                        match get_configmap(Some(ca_ns), &ca_ref.name) {
+                            None => {
+                                errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
+                                    namespace: ca_ns.to_string(),
+                                    name: ca_ref.name.clone(),
+                                    reason: "ConfigMap not found".to_string(),
+                                });
+                            }
+                            Some(cm) => {
+                                if let Some(data) = &cm.data {
+                                    if !data.contains_key("ca.crt") {
+                                        errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
+                                            namespace: ca_ns.to_string(),
+                                            name: ca_ref.name.clone(),
+                                            reason: "missing required key 'ca.crt'".to_string(),
+                                        });
+                                    }
+                                } else {
+                                    errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
+                                        namespace: ca_ns.to_string(),
+                                        name: ca_ref.name.clone(),
+                                        reason: "ConfigMap has no data".to_string(),
+                                    });
+                                }
+                            }
+                        }
 
-                // Cross-namespace ReferenceGrant check for frontend CA refs
-                if gateway_ns != ca_ns && is_reference_grant_validation_enabled() {
-                    let allowed = get_global_reference_grant_store().check_reference_allowed(
-                        gateway_ns,
-                        "gateway.networking.k8s.io",
-                        "Gateway",
-                        ca_ns,
-                        "",
-                        "Secret",
-                        Some(&ca_ref.name),
-                    );
-                    if !allowed {
-                        errors.push(GatewayResolvedRefsError::RefNotPermitted {
-                            namespace: ca_ns.to_string(),
-                            name: ca_ref.name.clone(),
+                        // Cross-namespace ReferenceGrant check for ConfigMap
+                        if gateway_ns != ca_ns && is_reference_grant_validation_enabled() {
+                            let allowed = get_global_reference_grant_store().check_reference_allowed(
+                                gateway_ns,
+                                "gateway.networking.k8s.io",
+                                "Gateway",
+                                ca_ns,
+                                "",
+                                "ConfigMap",
+                                Some(&ca_ref.name),
+                            );
+                            if !allowed {
+                                errors.push(GatewayResolvedRefsError::CACertRefNotPermitted {
+                                    namespace: ca_ns.to_string(),
+                                    name: ca_ref.name.clone(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {
+                        errors.push(GatewayResolvedRefsError::InvalidCACertificateKind {
+                            kind: ca_kind.to_string(),
                         });
                     }
                 }
@@ -1081,6 +1110,85 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
     }
 
     errors
+}
+
+/// Check if a listener has frontend validation CA refs and ALL of them are invalid.
+/// Returns true only when CA refs were configured but none are valid.
+fn has_all_ca_refs_invalid(listener: &GatewayListener, errors: &[GatewayResolvedRefsError]) -> bool {
+    let ca_ref_count = listener
+        .tls
+        .as_ref()
+        .and_then(|t| t.frontend_validation.as_ref())
+        .and_then(|fv| fv.ca_certificate_refs.as_ref())
+        .map(|refs| refs.len())
+        .unwrap_or(0);
+
+    if ca_ref_count == 0 {
+        return false;
+    }
+
+    // Count how many CA-ref-related errors there are
+    let ca_error_count = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                GatewayResolvedRefsError::InvalidCACertificateKind { .. }
+                    | GatewayResolvedRefsError::InvalidCACertificateRef { .. }
+                    | GatewayResolvedRefsError::CACertRefNotPermitted { .. }
+            )
+        })
+        .count();
+
+    // All CA refs are invalid if the number of CA errors >= number of CA refs
+    ca_error_count >= ca_ref_count
+}
+
+/// Build port key from listener attributes for conflict detection.
+///
+/// According to Gateway API spec:
+/// - HTTP, HTTPS, TLS: Port + Hostname must be different
+/// - TCP, UDP: Port must be different (hostname not considered)
+fn make_port_key(port: i32, protocol: &str, hostname: Option<&str>) -> String {
+    match protocol.to_uppercase().as_str() {
+        "HTTP" | "HTTPS" | "TLS" => format!("{}:{}", port, hostname.unwrap_or("")),
+        _ => format!("{}:", port),
+    }
+}
+
+/// Detect port conflicts within a single Gateway's listeners.
+///
+/// Per Gateway API spec, listener conflicts are scoped to a single Gateway —
+/// different Gateways may use the same port without conflict.
+///
+/// Returns a map of listener_name → conflict reason for conflicted listeners.
+fn detect_intra_gateway_conflicts(
+    listeners: &[crate::types::resources::gateway::Listener],
+) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+
+    // Group listeners by port key
+    let mut port_to_names: HashMap<String, Vec<&str>> = HashMap::new();
+    for l in listeners {
+        let port_key = make_port_key(l.port, &l.protocol, l.hostname.as_deref());
+        port_to_names.entry(port_key).or_default().push(&l.name);
+    }
+
+    let mut conflicts = HashMap::new();
+    for (port_key, names) in &port_to_names {
+        if names.len() > 1 {
+            for name in names {
+                let others: Vec<&&str> = names.iter().filter(|n| **n != *name).collect();
+                let reason = format!(
+                    "Port {}: conflicts with: {}",
+                    port_key,
+                    others.iter().map(|n| **n).collect::<Vec<_>>().join(", ")
+                );
+                conflicts.insert(name.to_string(), reason);
+            }
+        }
+    }
+    conflicts
 }
 
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
@@ -1122,11 +1230,29 @@ fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, 
 
 /// Get supported route kinds for a protocol
 fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
-    super::route_utils::protocol_default_route_kinds(protocol)
-        .iter()
-        .map(|kind| RouteGroupKind {
+    match protocol.to_uppercase().as_str() {
+        "HTTP" | "HTTPS" => vec![
+            RouteGroupKind {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: "HTTPRoute".to_string(),
+            },
+            RouteGroupKind {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: "GRPCRoute".to_string(),
+            },
+        ],
+        "TCP" => vec![RouteGroupKind {
             group: Some("gateway.networking.k8s.io".to_string()),
-            kind: kind.to_string(),
-        })
-        .collect()
+            kind: "TCPRoute".to_string(),
+        }],
+        "UDP" => vec![RouteGroupKind {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: "UDPRoute".to_string(),
+        }],
+        "TLS" => vec![RouteGroupKind {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: "TLSRoute".to_string(),
+        }],
+        _ => vec![],
+    }
 }

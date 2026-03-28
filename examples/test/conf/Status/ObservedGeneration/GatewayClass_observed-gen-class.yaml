@@ -1,0 +1,12 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: observed-gen-class
+  generation: 5
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "GatewayClass for observedGeneration testing"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: example-gateway

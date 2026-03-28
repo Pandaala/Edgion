@@ -1,5 +1,6 @@
-# Test: Cross-Gateway Port Conflict - Gateway A
-# This Gateway's Listener conflicts with Gateway B on port 31261
+# Test: Cross-Gateway Same Port - Gateway A
+# This Gateway uses the same port as Gateway B (31261)
+# After fix: cross-Gateway same port is NOT a conflict (conflict is Gateway-internal only)
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

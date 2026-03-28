@@ -1,0 +1,21 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-invalid-kind
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: grpc-status-gateway
+      namespace: edgion-test
+  hostnames:
+    - grpc-status-invalid.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - name: grpc-status-svc
+          group: example.com
+          kind: Foo
+          port: 50051

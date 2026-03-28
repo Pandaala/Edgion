@@ -161,11 +161,13 @@ if [[ "${PORT_FORWARD}" == "true" ]]; then
   trap cleanup_pf EXIT
 fi
 
-echo "Running: go test ./... -run TestConformance -v -timeout ${TIMEOUT} -args ${ARGS[*]}"
+GO_RUN_FILTER="${GO_RUN_FILTER:-TestConformance}"
+
+echo "Running: go test ./... -run ${GO_RUN_FILTER} -v -timeout ${TIMEOUT} -args ${ARGS[*]}"
 echo ""
 
 go test ./... \
-  -run TestConformance \
+  -run "${GO_RUN_FILTER}" \
   -v \
   -timeout "${TIMEOUT}" \
   -count=1 \

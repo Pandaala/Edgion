@@ -590,7 +590,18 @@ impl TlsCallback {
         ssl.set_verify_cert_store(store)
             .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
 
-        let verify_mode = SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT;
+        // Determine verify mode based on frontend validation mode
+        let mode = gateway_tls
+            .frontend_validation
+            .as_ref()
+            .and_then(|fv| fv.mode.as_deref())
+            .unwrap_or("AllowValidOnly");
+
+        let verify_mode = if mode == "AllowInsecureFallback" {
+            SslVerifyMode::PEER // Request cert but don't require it
+        } else {
+            SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT // Require cert
+        };
         ssl.set_verify(verify_mode);
 
         #[cfg(feature = "boringssl")]

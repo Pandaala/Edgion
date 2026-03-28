@@ -1,0 +1,17 @@
+# D3: Gateway HTTPS listener with cross-ns cert ref, ReferenceGrant from.namespace does not match
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cert-refgrant-invalid-from
+  namespace: edgion-default
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-invalid-from
+      protocol: HTTPS
+      port: 31333
+      tls:
+        certificateRefs:
+          - kind: Secret
+            name: no-grant-cert
+            namespace: backend

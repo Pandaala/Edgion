@@ -9,13 +9,15 @@ description: Gateway API 规范中 Edgion 明确不实现的功能清单及原�
 
 ## Programmed / Ready 状态条件
 
-**决定：不实现**
+**决定：简化实现（已完成）**
 
-Gateway API 规范将 `Programmed` 列为 Core 必需条件，要求确认配置已编程到数据面。Edgion 的 Controller-Gateway 架构使用异步 gRPC 配置同步（Gateway 主动 Watch/List 拉取），Controller 无法得知 Gateway 是否已加载某条具体配置。
+Gateway API 规范将 `Programmed` 列为 Core 必需条件，要求确认配置已编程到数据面。Edgion 的 Controller-Gateway 架构使用异步 gRPC 配置同步（Gateway 主动 Watch/List 拉取），Controller 无法精确得知 Gateway 是否已加载某条具体配置。
 
-曾评估过 Controller → Gateway HTTP Pull 方案（详见 `tasks/todo/data-plane-status-feedback.md`，设计已完成到 Step 03），但引入了全新通信路径、proto 改动、延时队列等，复杂度过高。轻量方案（推送成功即标记）也不成立，因为当前是 Gateway 拉取而非 Controller 推送。
+曾评估过 Controller → Gateway HTTP Pull 方案（详见 `tasks/todo/data-plane-status-feedback.md`，设计已完成到 Step 03），但引入了全新通信路径、proto 改动、延时队列等，复杂度过高。
 
-- Edgion 仅设置 `Accepted` 和 `ResolvedRefs` 条件
+当前采用简化策略：Controller 处理资源后即设置 `Programmed=True`（因为配置会通过 gRPC 同步推送到数据面），当 listener 存在冲突、未解析引用、无效 TLS 配置等异常时设置 `Programmed=False`。这满足 conformance test 的要求，但不代表数据面已实际加载配置。
+
+- Gateway 级和 Listener 级均设置 `Programmed` 条件
 - 详细架构决策见 [skills/01-architecture/01-controller/10-status-management.md](../01-architecture/01-controller/10-status-management.md)
 - 完整方案设计见 [tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)（保留备查，不实施）
 

@@ -163,7 +163,6 @@ Handler 方法的上下文对象，提供以下共享资源：
 | `ServiceRefManager` | `BidirectionalRefManager<ResourceRef>` | Service 后端依赖（Service → 所有路由类型） |
 | `CrossNamespaceRefManager` | `BidirectionalRefManager<ResourceRef>` | 跨命名空间引用（ReferenceGrant → 引用方资源） |
 | `GatewayRouteIndex` | 自定义双向索引 | Gateway ↔ Route 映射，含 hostname/port 变更检测缓存 |
-| `ListenerPortManager` | 自定义结构 | Gateway 监听器端口冲突检测 |
 | `AttachedRouteTracker` | 自定义结构 | Route → 父 Gateway 的附着状态追踪（用于 Gateway status 中的 attachedRoutes） |
 
 ### ReferenceGrant 体系

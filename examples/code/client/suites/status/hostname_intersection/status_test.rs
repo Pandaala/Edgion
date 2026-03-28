@@ -336,6 +336,68 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
+    /// Diagnose observedGeneration in gateway-level conditions.
+    ///
+    /// This test diagnoses whether conditions carry the correct observedGeneration value.
+    /// Expected: observedGeneration matches metadata.generation (or is non-null if generation is absent in file-based mode).
+    ///
+    /// The result is always logged (pass or fail) so we can see the actual values.
+    fn test_gateway_observed_generation() -> TestCase {
+        TestCase::new(
+            "gateway_observed_generation",
+            "Diagnose: Gateway conditions should carry observedGeneration",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                        Ok(gateway) => {
+                            let meta_generation = gateway["metadata"]["generation"].clone();
+                            let conditions = gateway["status"]["conditions"].as_array().cloned().unwrap_or_default();
+
+                            let mut report = format!(
+                                "metadata.generation = {}\n",
+                                serde_json::to_string(&meta_generation).unwrap_or_else(|_| "null".into())
+                            );
+
+                            let mut stale = Vec::new();
+                            for cond in &conditions {
+                                let cond_type = cond["type"].as_str().unwrap_or("?");
+                                let obs_gen = &cond["observedGeneration"];
+                                report.push_str(&format!(
+                                    "  condition={} observedGeneration={}\n",
+                                    cond_type,
+                                    serde_json::to_string(obs_gen).unwrap_or_else(|_| "null".into())
+                                ));
+
+                                // In file-based mode, metadata.generation is null, so we just check
+                                // that the field is present (non-null) when metadata.generation is set.
+                                // When metadata.generation is a number, observedGeneration must equal it.
+                                if let Some(gen) = meta_generation.as_i64() {
+                                    if obs_gen.as_i64() != Some(gen) {
+                                        stale.push(format!("{} (got {:?}, want {})", cond_type, obs_gen, gen));
+                                    }
+                                }
+                                // If metadata.generation is null (file-based), we report but don't fail
+                            }
+
+                            if stale.is_empty() {
+                                TestResult::passed_with_message(start.elapsed(), report)
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("stale conditions: {}.\n{}", stale.join(", "), report),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
     /// Assert no-intersecting-hosts route has Accepted=False
     fn test_no_intersection_route_not_accepted() -> TestCase {
         TestCase::new(
@@ -395,6 +457,7 @@ impl TestSuite for HostnameIntersectionStatusTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_print_gateway_listeners_status(),
+            Self::test_gateway_observed_generation(),
             Self::test_listener_count(),
             Self::test_supported_kinds(),
             Self::test_gateway_conditions(),

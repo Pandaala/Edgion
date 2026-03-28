@@ -341,7 +341,13 @@ impl RefGrantStatusTestSuite {
                     let start = Instant::now();
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "refgrant-partially-invalid").await
+                    match helpers::fetch_resource_status(
+                        &ctx,
+                        "HTTPRoute",
+                        ROUTE_NAMESPACE,
+                        "refgrant-partially-invalid",
+                    )
+                    .await
                     {
                         Ok(route) => {
                             // Accepted should be True (ref_denied does not make route unaccepted)
@@ -391,6 +397,243 @@ impl RefGrantStatusTestSuite {
                                     format!(
                                         "Expected PartiallyInvalid=True (service doesn't exist), got status: {}",
                                         serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    // ── Gateway listener certificateRef cross-namespace tests (D1–D4) ──
+
+    /// Helper: find a listener condition in Gateway status
+    fn find_listener_condition<'a>(gateway: &'a Value, listener_name: &str, cond_type: &str) -> Option<&'a Value> {
+        gateway["status"]["listeners"].as_array()?.iter().find_map(|l| {
+            if l["name"].as_str() == Some(listener_name) {
+                l["conditions"]
+                    .as_array()?
+                    .iter()
+                    .find(|c| c["type"].as_str() == Some(cond_type))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// D1: Gateway HTTPS listener cert ref cross-ns, wildcard ReferenceGrant (no name restriction)
+    /// Uses cert-store namespace with a grant that allows ALL Secrets
+    /// Expected: listener ResolvedRefs=True
+    fn test_gateway_cert_refgrant_allowed() -> TestCase {
+        TestCase::new(
+            "gateway_cert_refgrant_allowed",
+            "Gateway cross-ns cert ref with wildcard ReferenceGrant (all Secrets) should have listener ResolvedRefs=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", "edgion-default", "cert-refgrant-all").await {
+                        Ok(gw) => {
+                            if let Some(cond) = Self::find_listener_condition(&gw, "https-grant-all", "ResolvedRefs") {
+                                if cond["status"].as_str() == Some("True") {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "listener ResolvedRefs=True as expected".to_string(),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "Expected listener ResolvedRefs=True, got: {}",
+                                            serde_json::to_string_pretty(&cond).unwrap_or_default()
+                                        ),
+                                    )
+                                }
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "ResolvedRefs condition not found on listener 'https-grant-all', status: {}",
+                                        serde_json::to_string_pretty(&gw["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// D2: Gateway with two HTTPS listeners, ReferenceGrant allows only specific Secret name
+    /// Listener referencing the allowed name → ResolvedRefs=True
+    /// Listener referencing a different name → ResolvedRefs=False/RefNotPermitted
+    fn test_gateway_cert_refgrant_specific_name() -> TestCase {
+        TestCase::new(
+            "gateway_cert_refgrant_specific_name",
+            "Gateway cert ref: matching name→ResolvedRefs=True, mismatched name→ResolvedRefs=False(RefNotPermitted)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", "edgion-default", "cert-refgrant-specific")
+                        .await
+                    {
+                        Ok(gw) => {
+                            // Check matching listener
+                            let match_ok = if let Some(cond) =
+                                Self::find_listener_condition(&gw, "https-name-match", "ResolvedRefs")
+                            {
+                                cond["status"].as_str() == Some("True")
+                            } else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "ResolvedRefs not found on listener 'https-name-match', status: {}",
+                                        serde_json::to_string_pretty(&gw["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            };
+
+                            if !match_ok {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected listener 'https-name-match' ResolvedRefs=True, status: {}",
+                                        serde_json::to_string_pretty(&gw["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            }
+
+                            // Check mismatched listener
+                            let mismatch_ok = if let Some(cond) =
+                                Self::find_listener_condition(&gw, "https-name-mismatch", "ResolvedRefs")
+                            {
+                                cond["status"].as_str() == Some("False")
+                                    && cond["reason"].as_str() == Some("RefNotPermitted")
+                            } else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "ResolvedRefs not found on listener 'https-name-mismatch', status: {}",
+                                        serde_json::to_string_pretty(&gw["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            };
+
+                            if mismatch_ok {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "match→True, mismatch→False(RefNotPermitted) as expected".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected listener 'https-name-mismatch' ResolvedRefs=False(RefNotPermitted), status: {}",
+                                        serde_json::to_string_pretty(&gw["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// D3: Gateway cross-ns cert ref, ReferenceGrant exists but from.namespace does not match
+    /// Expected: listener ResolvedRefs=False/RefNotPermitted
+    fn test_gateway_cert_refgrant_invalid_from() -> TestCase {
+        TestCase::new(
+            "gateway_cert_refgrant_invalid_from",
+            "Gateway cross-ns cert ref with ReferenceGrant from.namespace mismatch should have ResolvedRefs=False(RefNotPermitted)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", "edgion-default", "cert-refgrant-invalid-from").await {
+                        Ok(gw) => {
+                            if let Some(cond) = Self::find_listener_condition(&gw, "https-invalid-from", "ResolvedRefs") {
+                                if cond["status"].as_str() == Some("False")
+                                    && cond["reason"].as_str() == Some("RefNotPermitted")
+                                {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "listener ResolvedRefs=False(RefNotPermitted) as expected".to_string(),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "Expected ResolvedRefs=False(RefNotPermitted), got: {}",
+                                            serde_json::to_string_pretty(&cond).unwrap_or_default()
+                                        ),
+                                    )
+                                }
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "ResolvedRefs condition not found on listener 'https-invalid-from', status: {}",
+                                        serde_json::to_string_pretty(&gw["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// D4: Gateway cross-ns cert ref with no ReferenceGrant for Gateway kind at all
+    /// Expected: listener ResolvedRefs=False/RefNotPermitted
+    fn test_gateway_cert_no_refgrant() -> TestCase {
+        TestCase::new(
+            "gateway_cert_no_refgrant",
+            "Gateway cross-ns cert ref with no ReferenceGrant should have ResolvedRefs=False(RefNotPermitted)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", "edgion-default", "cert-refgrant-no-grant")
+                        .await
+                    {
+                        Ok(gw) => {
+                            if let Some(cond) = Self::find_listener_condition(&gw, "https-no-grant", "ResolvedRefs") {
+                                if cond["status"].as_str() == Some("False")
+                                    && cond["reason"].as_str() == Some("RefNotPermitted")
+                                {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "listener ResolvedRefs=False(RefNotPermitted) as expected".to_string(),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "Expected ResolvedRefs=False(RefNotPermitted), got: {}",
+                                            serde_json::to_string_pretty(&cond).unwrap_or_default()
+                                        ),
+                                    )
+                                }
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "ResolvedRefs condition not found on listener 'https-no-grant', status: {}",
+                                        serde_json::to_string_pretty(&gw["status"]).unwrap_or_default()
                                     ),
                                 )
                             }
@@ -517,6 +760,10 @@ impl TestSuite for RefGrantStatusTestSuite {
             Self::test_invalid_backend_kind(),
             Self::test_nonexistent_backend(),
             Self::test_partially_invalid(),
+            Self::test_gateway_cert_refgrant_allowed(),
+            Self::test_gateway_cert_refgrant_specific_name(),
+            Self::test_gateway_cert_refgrant_invalid_from(),
+            Self::test_gateway_cert_no_refgrant(),
             Self::test_delete_reference_grant(),
         ]
     }

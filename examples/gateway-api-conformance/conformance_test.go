@@ -88,6 +88,12 @@ func TestConformance(t *testing.T) {
 	// ⚠ Not yet validated against real conformance run.
 	opts.SupportedFeatures.Insert(features.SupportGRPCRoute)
 
+	// F-class: Frontend client certificate validation (mTLS)
+	// F1/F3/F4 are gated by SupportGatewayFrontendClientCertificateValidation
+	// F2 additionally requires SupportGatewayFrontendClientCertificateValidationInsecureFallback
+	opts.SupportedFeatures.Insert(features.SupportGatewayFrontendClientCertificateValidation)
+	opts.SupportedFeatures.Insert(features.SupportGatewayFrontendClientCertificateValidationInsecureFallback)
+
 	// Conformance profiles — declare which profiles Edgion claims to support.
 	// This enables profile-based conformance reporting per GEP-1709.
 	//

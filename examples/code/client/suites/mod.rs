@@ -58,8 +58,10 @@ pub use edgion_plugins::{
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
 pub use status::BackendTlsStatusTestSuite;
+pub use status::GrpcRouteStatusTestSuite;
 pub use status::HostnameIntersectionStatusTestSuite;
 pub use status::RefGrantStatusTestSuite;
+pub use status::ObservedGenerationStatusTestSuite;
 pub use status::TlsListenerModeStatusTestSuite;
 
 // Services tests (ACME, etc.)

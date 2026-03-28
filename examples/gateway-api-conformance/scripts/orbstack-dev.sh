@@ -9,18 +9,21 @@ TAG="conformance-dev"
 CONTROLLER_IMAGE="pandaala/edgion-controller:${TAG}"
 GATEWAY_IMAGE="pandaala/edgion-gateway:${TAG}"
 NS="edgion-system"
+PROFILE="${PROFILE:-debug}"
 
 usage() {
   cat <<EOF
 Gateway API Conformance - OrbStack Dev Tool
 
 Usage: $0 <command> [args...]
+       PROFILE=release $0 <command>   # use release build (default: debug)
 
 Commands:
   build [c|g|all]       Build Docker image(s) (default: all)
   deploy [c|g|all]      Update Deployment image + rollout (default: all)
   rebuild [c|g|all]     build + deploy in one step (default: all)
   hotpatch [c|g]        Extract binary from image, cp to Pod, kill process
+  localpatch [c|g|all]  Fast: cargo zigbuild locally → kubectl cp → pkill (no Docker build)
   test [args...]        Run conformance test (auto port-forward)
   status                Show Pod/GatewayClass/Gateway status
   logs [c|g]            Tail controller or gateway logs
@@ -45,12 +48,14 @@ get_pod() {
 cmd_build() {
   local target="${1:-all}"
   cd "$PROJECT_ROOT"
+  echo "  Profile: ${PROFILE}"
 
   if [[ "$target" == "c" || "$target" == "all" ]]; then
     echo "Building controller image..."
     docker build \
       --build-arg BINARY=edgion-controller \
       --build-arg BUILD_TYPE=bin \
+      --build-arg PROFILE="${PROFILE}" \
       -t "${CONTROLLER_IMAGE}" \
       -f docker/Dockerfile .
     echo "Controller image built: ${CONTROLLER_IMAGE}"
@@ -61,6 +66,7 @@ cmd_build() {
     docker build \
       --build-arg BINARY=edgion-gateway \
       --build-arg BUILD_TYPE=bin \
+      --build-arg PROFILE="${PROFILE}" \
       -t "${GATEWAY_IMAGE}" \
       -f docker/Dockerfile .
     echo "Gateway image built: ${GATEWAY_IMAGE}"
@@ -69,21 +75,84 @@ cmd_build() {
 
 cmd_deploy() {
   local target="${1:-all}"
+  local backtrace_val
+  backtrace_val=$([ "${PROFILE}" = "release" ] && echo "0" || echo "full")
 
   if [[ "$target" == "c" || "$target" == "all" ]]; then
-    echo "Deploying controller..."
+    echo "Deploying controller (RUST_BACKTRACE=${backtrace_val})..."
     kubectl -n "$NS" set image deployment/edgion-controller \
       edgion-controller="${CONTROLLER_IMAGE}"
+    kubectl -n "$NS" set env deployment/edgion-controller \
+      RUST_BACKTRACE="${backtrace_val}"
     kubectl rollout restart deployment/edgion-controller -n "$NS"
     kubectl rollout status deployment/edgion-controller -n "$NS" --timeout=120s
   fi
 
   if [[ "$target" == "g" || "$target" == "all" ]]; then
-    echo "Deploying gateway..."
+    echo "Deploying gateway (RUST_BACKTRACE=${backtrace_val})..."
     kubectl -n "$NS" set image deployment/edgion-gateway \
       edgion-gateway="${GATEWAY_IMAGE}"
+    kubectl -n "$NS" set env deployment/edgion-gateway \
+      RUST_BACKTRACE="${backtrace_val}"
     kubectl rollout restart deployment/edgion-gateway -n "$NS"
     kubectl rollout status deployment/edgion-gateway -n "$NS" --timeout=120s
+  fi
+}
+
+cmd_localpatch() {
+  # Fast iteration: cargo zigbuild (local, cross-compile to Linux arm64) → kubectl cp → pkill.
+  # No Docker build — binary goes into /usr/local/edgion/ (edgion-owned, writable).
+  # The restart-loop entrypoint picks up the new binary automatically after pkill.
+  #
+  # One-time setup (if not done):
+  #   brew install zig
+  #   cargo install cargo-zigbuild
+  #   rustup target add aarch64-unknown-linux-gnu
+  local target="${1:-all}"
+  local cargo_profile_flag
+  cargo_profile_flag=$([ "${PROFILE}" = "release" ] && echo "--release" || echo "")
+  local out_dir
+  out_dir=$([ "${PROFILE}" = "release" ] && echo "release" || echo "debug")
+
+  cd "$PROJECT_ROOT"
+
+  # Check prerequisites
+  command -v cargo-zigbuild >/dev/null 2>&1 || { echo "ERROR: cargo-zigbuild not found. Run: brew install zig && cargo install cargo-zigbuild && rustup target add aarch64-unknown-linux-gnu"; exit 1; }
+
+  if [[ "$target" == "c" || "$target" == "all" ]]; then
+    echo "Building edgion-controller (local, ${PROFILE})..."
+    cargo zigbuild ${cargo_profile_flag} --target aarch64-unknown-linux-gnu --bin edgion-controller
+
+    local pod
+    pod=$(get_pod controller)
+    [[ -z "$pod" ]] && { echo "ERROR: No controller pod found"; exit 1; }
+
+    echo "Copying to pod ${pod}..."
+    kubectl cp "target/aarch64-unknown-linux-gnu/${out_dir}/edgion-controller" \
+      "${NS}/${pod}:/usr/local/edgion/edgion-controller"
+
+    echo "Restarting controller process..."
+    kubectl exec -n "$NS" "$pod" -- pkill -f "edgion-controller" || true
+    sleep 2
+    echo "Done. Controller restarted with new binary."
+  fi
+
+  if [[ "$target" == "g" || "$target" == "all" ]]; then
+    echo "Building edgion-gateway (local, ${PROFILE})..."
+    cargo zigbuild ${cargo_profile_flag} --target aarch64-unknown-linux-gnu --bin edgion-gateway
+
+    local pod
+    pod=$(get_pod gateway)
+    [[ -z "$pod" ]] && { echo "ERROR: No gateway pod found"; exit 1; }
+
+    echo "Copying to pod ${pod}..."
+    kubectl cp "target/aarch64-unknown-linux-gnu/${out_dir}/edgion-gateway" \
+      "${NS}/${pod}:/usr/local/edgion/edgion-gateway"
+
+    echo "Restarting gateway process..."
+    kubectl exec -n "$NS" "$pod" -- pkill -f "edgion-gateway" || true
+    sleep 2
+    echo "Done. Gateway restarted with new binary."
   fi
 }
 
@@ -218,9 +287,10 @@ cmd_shell() {
 
 # Main dispatch
 case "${1:-}" in
-  build)    shift; cmd_build "${1:-all}" ;;
-  deploy)   shift; cmd_deploy "${1:-all}" ;;
-  rebuild)  shift; cmd_rebuild "${1:-all}" ;;
+  build)       shift; cmd_build "${1:-all}" ;;
+  deploy)      shift; cmd_deploy "${1:-all}" ;;
+  rebuild)     shift; cmd_rebuild "${1:-all}" ;;
+  localpatch)  shift; cmd_localpatch "${1:-all}" ;;
   hotpatch) shift; cmd_hotpatch "${1:-}" ;;
   test)     shift; cmd_test "$@" ;;
   status)   cmd_status ;;

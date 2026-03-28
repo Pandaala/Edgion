@@ -29,16 +29,18 @@ One Gateway with two Listeners using the same port:
 - Gateway marked as `ListenersNotValid=True`
 - Gateway runtime skips both conflicting Listeners
 
-### 2. Cross-Gateway Conflict (`Gateway_cross_conflict_A.yaml`, `Gateway_cross_conflict_B.yaml`)
+### 2. Cross-Gateway Same Port - No Conflict (`Gateway_cross_conflict_A.yaml`, `Gateway_cross_conflict_B.yaml`)
 
 Two Gateways each with one Listener using the same port:
 - Gateway A: Listener `http` on port 31261
-- Gateway B: Listener `http` on port 31261 (conflict!)
+- Gateway B: Listener `http` on port 31261
+
+Conflict detection is Gateway-internal only. Different Gateways using the same port is NOT a conflict.
 
 **Expected Result**:
-- Both Gateways' Listeners marked as `Conflicted=True`
-- Both Gateways marked as `ListenersNotValid=True`
-- Neither Listener is bound at runtime
+- Both Gateways' Listeners are NOT marked as `Conflicted`
+- Both Gateways do NOT have `ListenersNotValid`
+- Both Listeners are healthy and programmed
 
 ### 3. Same Port Different Hostname - HTTP (No Conflict) (`Gateway_same_port_diff_hostname.yaml`)
 
