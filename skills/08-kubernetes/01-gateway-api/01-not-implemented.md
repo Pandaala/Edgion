@@ -110,16 +110,17 @@ Edgion 支持：
 - `TLSRouteModeTerminate` 可以作为后续 conformance 目标推进
 - `TLSRouteModeMixed` 不作为当前实现目标，也不应在 supported features 中声明
 
-## GatewayPort8080 / 动态端口绑定
+## GatewayPort8080 / HTTPRouteParentRefPort / 动态端口绑定
 
 **决定：不实现**
 
-`SupportGatewayPort8080` conformance feature 要求网关能服务监听在端口 8080 的 Gateway 资源（`same-namespace-with-http-listener-on-8080`）。
+`SupportGatewayPort8080` 和 `SupportHTTPRouteParentRefPort` conformance features 都要求网关能动态绑定非标准端口（8080、8090 等）。
 
 Edgion 的 Gateway 进程在**启动时**通过 `configure_listeners` 绑定所有端口。端口绑定是一次性操作：Pingora 服务初始化后无法在运行时动态添加新端口。如果某个 Gateway 资源在网关进程启动后才被创建（如 conformance 测试的临时 Gateway），其监听端口无法被绑定。
 
 - 不声明 `SupportGatewayPort8080`（已从 `conformance_test.go` 和 `run.sh` 移除）
-- conformance 报告中 `GatewayWithAttachedRoutesWithPort8080` 和 `GatewayPort8080` 标记为 skipped
+- 不声明 `SupportHTTPRouteParentRefPort`（已从 `conformance_test.go` 注释移除，2026-03-27）
+- conformance 报告中 `GatewayWithAttachedRoutesWithPort8080`、`GatewayPort8080`、`HTTPRouteListenerPortMatching`、`HTTPRouteRedirectPortAndScheme` 标记为 skipped
 - 若未来需要支持动态端口，需要重新评估 Pingora 的 `Server::add_service` 是否支持运行时调用，以及 Controller→Gateway 配置同步的时序问题
 
 ## BackendTrafficPolicy (BTP)

@@ -20,7 +20,7 @@ TCPRoute 定义 L4 TCP 层的路由规则，将 TCP 连接转发到后端 Servic
 
 ### validate
 
-1. 调用 `validate_tcp_route_if_enabled()` 执行 ReferenceGrant 校验
+1. 调用 `validate_tcp_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
 2. 调用 `validate_backend_refs()` 校验所有 backendRef
 
 ### parse

@@ -28,7 +28,7 @@ impl TimeoutTestSuite {
                     let trace_id = format!("timeout-normal-{}", uuid::Uuid::new_v4());
                     let request = ctx
                         .http_client
-                        .get(format!("{}/delay/1", ctx.http_url()))
+                        .get(format!("{}/echo", ctx.http_url()))
                         .header("Host", "timeout-backend.example.com")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store");
@@ -146,17 +146,15 @@ impl TimeoutTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Create 1s timeout HTTP client，simulate client disconnect
-                    let short_timeout_client = reqwest::Client::builder()
+                    // Use ctx.http_client with per-request 1s timeout instead of creating a new client,
+                    // which would lose DNS overrides and other framework configuration.
+                    // server delay 3s (will not trigger server timeout, backend timeout is 10s)
+                    // but client 1s will disconnect
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/3", ctx.http_url()))
                         .timeout(std::time::Duration::from_secs(1))
-                        .no_proxy()
-                        .build()
-                        .expect("Failed to create short timeout client");
-
-                    // server delay3s（will not trigger server timeout, backend timeout is10s）
-                    // but client1s will disconnect
-                    let mut request = short_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
-                    request = request.header("Host", "timeout-client.example.com");
+                        .header("Host", "timeout-client.example.com");
 
                     match request.send().await {
                         Ok(response) => {
@@ -334,16 +332,13 @@ impl TimeoutTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Create alonger timeout HTTP client（5s），simulate long wait client that won't timeout first
-                    let long_timeout_client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(5))
-                        .no_proxy()
-                        .build()
-                        .expect("Failed to create long timeout client");
-
                     let trace_id = format!("timeout-read-{}", uuid::Uuid::new_v4());
-                    let mut request = long_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
-                    request = request
+                    // Use ctx.http_client with per-request timeout instead of creating a new client,
+                    // which would lose DNS overrides and other framework configuration.
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/3", ctx.http_url()))
+                        .timeout(std::time::Duration::from_secs(5))
                         .header("Host", "timeout-client.example.com")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store");

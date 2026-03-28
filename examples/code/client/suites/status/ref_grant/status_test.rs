@@ -16,6 +16,21 @@ pub struct RefGrantStatusTestSuite;
 
 const ROUTE_NAMESPACE: &str = "edgion-default";
 
+const REFERENCE_GRANT_YAML: &str = r#"apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-app
+  namespace: backend
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: edgion-default
+  to:
+    - group: ""
+      kind: Service
+"#;
+
 impl RefGrantStatusTestSuite {
     /// Check if status has ResolvedRefs=False condition with specific reason
     fn has_resolved_refs_false_with_reason(status: &Value, reason: &str) -> bool {
@@ -312,11 +327,15 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: HTTPRoute with some invalid rules should have PartiallyInvalid=True
+    /// Test: HTTPRoute with one valid rule and one rule with non-existent cross-ns backend
+    /// should have Accepted=True, ResolvedRefs=False, PartiallyInvalid=True.
+    /// The non-existent service makes the rule invalid (service_exists check), while
+    /// the ref_denied aspect only affects ResolvedRefs. Accepted remains True because
+    /// ref_denied does not cause route rejection.
     fn test_partially_invalid() -> TestCase {
         TestCase::new(
             "partially_invalid",
-            "HTTPRoute with one valid and one cross-ns-denied rule should have PartiallyInvalid=True",
+            "HTTPRoute with one valid and one invalid rule: Accepted=True, ResolvedRefs=False, PartiallyInvalid=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -325,6 +344,29 @@ impl RefGrantStatusTestSuite {
                     match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "refgrant-partially-invalid").await
                     {
                         Ok(route) => {
+                            // Accepted should be True (ref_denied does not make route unaccepted)
+                            if !helpers::has_condition(&route, "Accepted", "True") {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected Accepted=True, got status: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            }
+
+                            // ResolvedRefs should be False (ref_denied + service not found)
+                            if !Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected ResolvedRefs=False(RefNotPermitted), got status: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            }
+
+                            // PartiallyInvalid should be True (service doesn't exist → rule invalid)
                             let has_partially_invalid = if let Some(parents) = route["status"]["parents"].as_array() {
                                 parents.iter().any(|p| {
                                     p["conditions"].as_array().is_some_and(|conds| {
@@ -341,19 +383,117 @@ impl RefGrantStatusTestSuite {
                             if has_partially_invalid {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "PartiallyInvalid=True as expected".to_string(),
+                                    "Accepted=True, ResolvedRefs=False(RefNotPermitted), PartiallyInvalid=True — as expected".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected PartiallyInvalid=True, got status: {}",
+                                        "Expected PartiallyInvalid=True (service doesn't exist), got status: {}",
                                         serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
                                     ),
                                 )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Deleting a ReferenceGrant should cause the route to become ResolvedRefs=False
+    /// while keeping Accepted=True (route stays in route table, Gateway returns 500).
+    fn test_delete_reference_grant() -> TestCase {
+        TestCase::new(
+            "delete_reference_grant",
+            "Deleting ReferenceGrant: route keeps Accepted=True, ResolvedRefs becomes False, then restores",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    // Step 1: Verify initial state — cross-ns-route has ResolvedRefs=True
+                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await {
+                        Ok(route) => {
+                            if !helpers::has_condition(&route, "ResolvedRefs", "True") {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Pre-condition failed: expected ResolvedRefs=True before deleting grant, got: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            }
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Pre-check failed: {}", e)),
+                    }
+
+                    // Step 2: Delete the ReferenceGrant
+                    if let Err(e) = ctx.delete_resource("ReferenceGrant", "backend", "allow-app").await {
+                        return TestResult::failed(start.elapsed(), format!("Failed to delete ReferenceGrant: {}", e));
+                    }
+
+                    // Step 3: Wait for revalidation and check ResolvedRefs=False + Accepted=True
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await {
+                        Ok(route) => {
+                            if !helpers::has_condition(&route, "Accepted", "True") {
+                                // Restore before failing
+                                let _ = ctx.apply_yaml(REFERENCE_GRANT_YAML).await;
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "After deleting ReferenceGrant, Accepted should remain True, got: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            }
+                            if !Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
+                                // Restore before failing
+                                let _ = ctx.apply_yaml(REFERENCE_GRANT_YAML).await;
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "After deleting ReferenceGrant, expected ResolvedRefs=False(RefNotPermitted), got: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            let _ = ctx.apply_yaml(REFERENCE_GRANT_YAML).await;
+                            return TestResult::failed(start.elapsed(), format!("Fetch after delete failed: {}", e));
+                        }
+                    }
+
+                    // Step 4: Restore the ReferenceGrant
+                    if let Err(e) = ctx.apply_yaml(REFERENCE_GRANT_YAML).await {
+                        return TestResult::failed(start.elapsed(), format!("Failed to restore ReferenceGrant: {}", e));
+                    }
+
+                    // Step 5: Wait and verify ResolvedRefs goes back to True
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await {
+                        Ok(route) => {
+                            if helpers::has_condition(&route, "ResolvedRefs", "True") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Delete→ResolvedRefs=False(RefNotPermitted)+Accepted=True, Restore→ResolvedRefs=True".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "After restoring ReferenceGrant, expected ResolvedRefs=True, got: {}",
+                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Fetch after restore failed: {}", e)),
                     }
                 })
             },
@@ -377,6 +517,7 @@ impl TestSuite for RefGrantStatusTestSuite {
             Self::test_invalid_backend_kind(),
             Self::test_nonexistent_backend(),
             Self::test_partially_invalid(),
+            Self::test_delete_reference_grant(),
         ]
     }
 }

@@ -80,7 +80,9 @@ func TestConformance(t *testing.T) {
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestPercentageMirror)
 
 	// B-class: HTTPRoute parentRef port matching
-	opts.SupportedFeatures.Insert(features.SupportHTTPRouteParentRefPort)
+	// Disabled: requires dynamic listener port binding at runtime (8080/8090),
+	// which Edgion does not support — ports are bound at startup only.
+	// opts.SupportedFeatures.Insert(features.SupportHTTPRouteParentRefPort)
 
 	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
 	// ⚠ Not yet validated against real conformance run.

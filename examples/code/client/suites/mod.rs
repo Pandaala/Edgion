@@ -16,8 +16,8 @@ pub use http_route::{
     CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, HeaderModifierTestSuite,
     HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite,
     HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
-    PartiallyInvalidTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite, TimeoutTestSuite,
-    WebSocketTestSuite, WeightedBackendTestSuite,
+    PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
+    TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};

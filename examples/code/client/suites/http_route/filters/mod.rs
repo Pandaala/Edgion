@@ -4,9 +4,11 @@
 mod filter_conflict;
 mod header_modifier;
 mod redirect;
+mod percent_mirror;
 mod security;
 
 pub use filter_conflict::FilterConflictTestSuite;
 pub use header_modifier::HeaderModifierTestSuite;
+pub use percent_mirror::PercentMirrorTestSuite;
 pub use redirect::HttpRedirectTestSuite;
 pub use security::HttpSecurityTestSuite;

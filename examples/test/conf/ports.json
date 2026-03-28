@@ -1,5 +1,5 @@
 {
-  "current_max": 31321,
+  "current_max": 31322,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -145,6 +145,9 @@
     },
     "HTTPRoute/Filters/FilterConflict": {
       "http": 31311
+    },
+    "HTTPRoute/Filters/PercentMirror": {
+      "http": 31322
     },
     "Gateway/FrontendValidation": {
       "https": 31312

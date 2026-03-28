@@ -109,6 +109,233 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
+    /// Assert Gateway has exactly 3 listeners in status
+    fn test_listener_count() -> TestCase {
+        TestCase::new(
+            "listener_count",
+            "Gateway must have exactly 3 listeners in status",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                        Ok(gateway) => {
+                            let listeners = match gateway["status"]["listeners"].as_array() {
+                                Some(l) => l,
+                                None => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "No listeners in Gateway status. Full status: {}",
+                                            serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
+                                        ),
+                                    );
+                                }
+                            };
+
+                            let count = listeners.len();
+                            if count == 3 {
+                                let names: Vec<&str> = listeners
+                                    .iter()
+                                    .filter_map(|l| l["name"].as_str())
+                                    .collect();
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("3 listeners present: {:?}", names),
+                                )
+                            } else {
+                                let pretty =
+                                    serde_json::to_string_pretty(listeners).unwrap_or_default();
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 3 listeners, got {}. Listeners:\n{}", count, pretty),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Assert each listener has HTTPRoute in supportedKinds
+    fn test_supported_kinds() -> TestCase {
+        TestCase::new(
+            "supported_kinds_httproute",
+            "Each listener must include HTTPRoute in supportedKinds",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                        Ok(gateway) => {
+                            let listeners = match gateway["status"]["listeners"].as_array() {
+                                Some(l) => l,
+                                None => {
+                                    return TestResult::failed(start.elapsed(), "No listeners in Gateway status".into());
+                                }
+                            };
+
+                            let mut errors = Vec::new();
+                            for listener in listeners {
+                                let name = listener["name"].as_str().unwrap_or("<unknown>");
+                                let has_httproute = listener["supportedKinds"]
+                                    .as_array()
+                                    .is_some_and(|kinds| {
+                                        kinds.iter().any(|k| {
+                                            k["kind"].as_str() == Some("HTTPRoute")
+                                                && k["group"].as_str()
+                                                    == Some("gateway.networking.k8s.io")
+                                        })
+                                    });
+
+                                if !has_httproute {
+                                    errors.push(format!(
+                                        "{}: HTTPRoute not in supportedKinds: {}",
+                                        name,
+                                        serde_json::to_string(&listener["supportedKinds"]).unwrap_or_default()
+                                    ));
+                                }
+                            }
+
+                            if errors.is_empty() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "All listeners include HTTPRoute in supportedKinds".into(),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), errors.join("; "))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Assert Gateway-level conditions: Accepted=True and Programmed=True
+    fn test_gateway_conditions() -> TestCase {
+        TestCase::new(
+            "gateway_conditions",
+            "Gateway must have Accepted=True and Programmed=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                        Ok(gateway) => {
+                            let conditions = match gateway["status"]["conditions"].as_array() {
+                                Some(c) => c,
+                                None => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!(
+                                            "No conditions in Gateway status. Full status: {}",
+                                            serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
+                                        ),
+                                    );
+                                }
+                            };
+
+                            let required = [("Accepted", "True"), ("Programmed", "True")];
+                            let mut errors = Vec::new();
+
+                            for (cond_type, expected_status) in &required {
+                                let found = conditions.iter().any(|c| {
+                                    c["type"].as_str() == Some(cond_type)
+                                        && c["status"].as_str() == Some(expected_status)
+                                });
+                                if !found {
+                                    errors.push(format!("missing {}={}", cond_type, expected_status));
+                                }
+                            }
+
+                            if errors.is_empty() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Gateway has Accepted=True and Programmed=True".into(),
+                                )
+                            } else {
+                                let actual = serde_json::to_string_pretty(conditions).unwrap_or_default();
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("{}. Actual conditions:\n{}", errors.join("; "), actual),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Assert each listener has Accepted=True and ResolvedRefs=True conditions
+    fn test_listener_conditions() -> TestCase {
+        TestCase::new(
+            "listener_conditions",
+            "Each listener must have Accepted=True and ResolvedRefs=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                        Ok(gateway) => {
+                            let listeners = match gateway["status"]["listeners"].as_array() {
+                                Some(l) => l,
+                                None => {
+                                    return TestResult::failed(start.elapsed(), "No listeners in Gateway status".into());
+                                }
+                            };
+
+                            let required_conditions = [("Accepted", "True"), ("ResolvedRefs", "True")];
+                            let mut errors = Vec::new();
+
+                            for listener in listeners {
+                                let name = listener["name"].as_str().unwrap_or("<unknown>");
+                                let conditions = listener["conditions"].as_array();
+
+                                for (cond_type, expected_status) in &required_conditions {
+                                    let found = conditions.is_some_and(|conds| {
+                                        conds.iter().any(|c| {
+                                            c["type"].as_str() == Some(cond_type)
+                                                && c["status"].as_str() == Some(expected_status)
+                                        })
+                                    });
+
+                                    if !found {
+                                        let actual_conds =
+                                            serde_json::to_string(&listener["conditions"]).unwrap_or_default();
+                                        errors.push(format!(
+                                            "{}: missing {}={}, actual conditions: {}",
+                                            name, cond_type, expected_status, actual_conds
+                                        ));
+                                    }
+                                }
+                            }
+
+                            if errors.is_empty() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "All listeners have Accepted=True and ResolvedRefs=True".into(),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), errors.join("; "))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
     /// Assert no-intersecting-hosts route has Accepted=False
     fn test_no_intersection_route_not_accepted() -> TestCase {
         TestCase::new(
@@ -168,6 +395,10 @@ impl TestSuite for HostnameIntersectionStatusTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_print_gateway_listeners_status(),
+            Self::test_listener_count(),
+            Self::test_supported_kinds(),
+            Self::test_gateway_conditions(),
+            Self::test_listener_conditions(),
             Self::test_attached_routes_count(),
             Self::test_no_intersection_route_not_accepted(),
         ]

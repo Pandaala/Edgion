@@ -173,6 +173,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
         "HTTPRoute/Backend/SessionPersistence" => "HTTPRoute/Backend/SessionPersistence",
         "HTTPRoute/Filters/FilterConflict" => "HTTPRoute/Filters/FilterConflict",
+        "HTTPRoute/Filters/PercentMirror" => "HTTPRoute/Filters/PercentMirror",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
         "HTTPRoute/Filters/Security" => "HTTPRoute/Filters/Security",
         "HTTPRoute/Protocol" | "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
@@ -356,6 +357,14 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
             runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
             runner.add_suite(Box::new(suites::FilterConflictTestSuite));
+            runner.add_suite(Box::new(suites::PercentMirrorTestSuite));
+        }
+        "HTTPRoute/Filters/PercentMirror" => {
+            if !gateway {
+                eprintln!("Error: PercentMirror tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PercentMirrorTestSuite));
         }
         "HTTPRoute/Filters/FilterConflict" => {
             if !gateway {

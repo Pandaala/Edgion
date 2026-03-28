@@ -61,50 +61,30 @@ pub fn resolve_effective_hostnames(
             }
         };
 
-        let listener_hostnames = collect_listener_hostnames(&gateway, pr);
+        let matching_listeners = collect_matching_listeners(&gateway, pr);
 
-        match route_hostnames {
-            Some(route_hs) if !route_hs.is_empty() => {
-                if listener_hostnames.is_empty() {
-                    for route_hn in route_hs {
-                        if seen.insert(route_hn.clone()) {
-                            all_effective.push(route_hn.clone());
-                        }
-                    }
-                    actions.push("passthrough".to_string());
-                } else {
-                    let mut intersected_any = false;
-                    for listener_hn in &listener_hostnames {
-                        for route_hn in route_hs {
-                            if let Some(intersected) = compute_hostname_intersection(listener_hn, route_hn) {
-                                if seen.insert(intersected.clone()) {
-                                    all_effective.push(intersected);
-                                }
-                                intersected_any = true;
-                            }
-                        }
-                    }
-                    if intersected_any {
-                        actions.push("intersected".to_string());
+        if matching_listeners.is_empty() {
+            // No matching listeners — treat as if no Gateway constraints
+            if let Some(route_hs) = route_hostnames {
+                for h in route_hs {
+                    if seen.insert(h.clone()) {
+                        all_effective.push(h.clone());
                     }
                 }
             }
-            _ => {
-                if listener_hostnames.is_empty() {
-                    if seen.insert("*".to_string()) {
-                        all_effective.push("*".to_string());
-                    }
-                    actions.push("catch-all".to_string());
-                } else {
-                    for lh in &listener_hostnames {
-                        if seen.insert(lh.clone()) {
-                            all_effective.push(lh.clone());
-                            actions.push(format!("inherited:{}", lh));
-                        }
-                    }
-                }
-            }
+            actions.push("no-listeners".to_string());
+            continue;
         }
+
+        // Per-listener resolution: compute effective hostnames for each
+        // listener individually, then union all results.
+        resolve_for_listeners(
+            &matching_listeners,
+            route_hostnames,
+            &mut seen,
+            &mut all_effective,
+            &mut actions,
+        );
     }
 
     if all_effective.is_empty() {
@@ -123,27 +103,86 @@ pub fn resolve_effective_hostnames(
     }
 }
 
+/// Resolve effective hostnames given a set of matching listener hostnames and route hostnames.
+///
+/// This is the core per-Gateway resolution logic extracted for testability.
+/// It processes each listener hostname against the route hostnames and produces
+/// the union of all effective hostnames with dedup.
+fn resolve_for_listeners(
+    matching_listeners: &[Option<String>],
+    route_hostnames: Option<&Vec<String>>,
+    seen: &mut HashSet<String>,
+    all_effective: &mut Vec<String>,
+    actions: &mut Vec<String>,
+) {
+    for listener_hostname in matching_listeners {
+        match (listener_hostname.as_deref(), route_hostnames) {
+            // Catch-all listener + route has hostnames -> passthrough
+            (None, Some(route_hs)) if !route_hs.is_empty() => {
+                for h in route_hs {
+                    if seen.insert(h.clone()) {
+                        all_effective.push(h.clone());
+                    }
+                }
+                actions.push("passthrough".to_string());
+            }
+            // Catch-all listener + route has no hostnames -> "*"
+            (None, _) => {
+                if seen.insert("*".to_string()) {
+                    all_effective.push("*".to_string());
+                }
+                actions.push("catch-all".to_string());
+            }
+            // Specific listener + route has hostnames -> intersection
+            (Some(lh), Some(route_hs)) if !route_hs.is_empty() => {
+                for route_hn in route_hs {
+                    if let Some(intersected) = compute_hostname_intersection(lh, route_hn) {
+                        if seen.insert(intersected.clone()) {
+                            all_effective.push(intersected);
+                        }
+                    }
+                }
+                actions.push("intersected".to_string());
+            }
+            // Specific listener + route has no hostnames -> inherit
+            (Some(lh), _) => {
+                let lh_owned = lh.to_string();
+                let action = format!("inherited:{}", &lh_owned);
+                if seen.insert(lh_owned.clone()) {
+                    all_effective.push(lh_owned);
+                }
+                actions.push(action);
+            }
+        }
+    }
+}
+
 /// Collect hostnames from listeners that match a parentRef's sectionName/port filter.
-fn collect_listener_hostnames(gateway: &Gateway, pr: &ParentReference) -> Vec<String> {
+///
+/// Returns `Vec<Option<String>>` where each entry is one matching listener's hostname.
+/// `None` means the listener has no hostname constraint (catch-all).
+/// This preserves catch-all listener information that was previously lost.
+fn collect_matching_listeners(gateway: &Gateway, pr: &ParentReference) -> Vec<Option<String>> {
     let listeners = match &gateway.spec.listeners {
         Some(ls) => ls,
         None => return Vec::new(),
     };
 
-    let matching_listeners: Vec<_> = listeners
-        .iter()
-        .filter(|l| pr.section_name.as_ref().is_none_or(|sn| l.name == *sn) && pr.port.is_none_or(|p| l.port == p))
-        .collect();
-
-    let mut hostnames = Vec::new();
-    for listener in matching_listeners {
-        if let Some(hostname) = &listener.hostname {
-            if !hostname.is_empty() && !hostnames.contains(hostname) {
-                hostnames.push(hostname.clone());
-            }
+    let mut seen: HashSet<Option<String>> = HashSet::new();
+    let mut result = Vec::new();
+    for listener in listeners.iter().filter(|l| {
+        pr.section_name.as_ref().is_none_or(|sn| l.name == *sn) && pr.port.is_none_or(|p| l.port == p)
+    }) {
+        let hostname = listener
+            .hostname
+            .as_ref()
+            .filter(|h| !h.is_empty())
+            .cloned();
+        if seen.insert(hostname.clone()) {
+            result.push(hostname);
         }
     }
-    hostnames
+    result
 }
 
 /// Compute the intersection of a listener hostname and a route hostname.
@@ -287,5 +326,68 @@ mod tests {
             compute_hostname_intersection("*.example.com", "a.b.example.com"),
             Some("a.b.example.com".to_string())
         );
+    }
+
+    /// Helper to run resolve_for_listeners and return (hostnames, actions)
+    fn run_resolve_for_listeners(
+        listeners: &[Option<String>],
+        route_hostnames: Option<&Vec<String>>,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut seen = HashSet::new();
+        let mut all_effective = Vec::new();
+        let mut actions = Vec::new();
+        resolve_for_listeners(listeners, route_hostnames, &mut seen, &mut all_effective, &mut actions);
+        if all_effective.is_empty() {
+            all_effective.push("*".to_string());
+        }
+        (all_effective, actions)
+    }
+
+    #[test]
+    fn test_resolve_mixed_listeners_with_route_hostnames() {
+        // Scenario 1: catch-all listener + hostname listener, route has hostnames
+        // This is the bug scenario: should passthrough "example.org", not become "*"
+        let listeners = vec![None, Some("second-example.org".to_string())];
+        let route_hs = vec!["example.org".to_string()];
+        let (hostnames, actions) = run_resolve_for_listeners(&listeners, Some(&route_hs));
+        assert_eq!(hostnames, vec!["example.org"]);
+        assert_eq!(actions, vec!["passthrough", "intersected"]);
+    }
+
+    #[test]
+    fn test_resolve_catchall_listener_route_has_hostnames() {
+        // Scenario 2: single catch-all listener, route has hostnames -> passthrough
+        let listeners = vec![None];
+        let route_hs = vec!["foo.com".to_string()];
+        let (hostnames, _actions) = run_resolve_for_listeners(&listeners, Some(&route_hs));
+        assert_eq!(hostnames, vec!["foo.com"]);
+    }
+
+    #[test]
+    fn test_resolve_catchall_listener_route_no_hostnames() {
+        // Scenario 3: single catch-all listener, route has no hostnames -> "*"
+        let listeners = vec![None];
+        let (hostnames, actions) = run_resolve_for_listeners(&listeners, None);
+        assert_eq!(hostnames, vec!["*"]);
+        assert_eq!(actions, vec!["catch-all"]);
+    }
+
+    #[test]
+    fn test_resolve_specific_listener_route_has_hostnames_intersection() {
+        // Scenario 4: wildcard listener + route hostnames -> intersection
+        let listeners = vec![Some("*.example.com".to_string())];
+        let route_hs = vec!["foo.example.com".to_string()];
+        let (hostnames, actions) = run_resolve_for_listeners(&listeners, Some(&route_hs));
+        assert_eq!(hostnames, vec!["foo.example.com"]);
+        assert_eq!(actions, vec!["intersected"]);
+    }
+
+    #[test]
+    fn test_resolve_specific_listener_route_no_hostnames_inherit() {
+        // Scenario 5: specific listener, route has no hostnames -> inherit
+        let listeners = vec![Some("example.com".to_string())];
+        let (hostnames, actions) = run_resolve_for_listeners(&listeners, None);
+        assert_eq!(hostnames, vec!["example.com"]);
+        assert_eq!(actions, vec!["inherited:example.com"]);
     }
 }

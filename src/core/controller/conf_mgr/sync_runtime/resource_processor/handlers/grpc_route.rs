@@ -290,7 +290,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
                 let accepted_result =
-                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames, "GRPCRoute");
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
@@ -462,7 +462,9 @@ fn find_invalid_rule_indices(route: &GRPCRoute, route_ns: &str) -> Vec<usize> {
                     if !super::route_utils::service_exists(ns, &br.name) {
                         return true;
                     }
-                    br.ref_denied.is_some()
+                    // ref_denied backends are NOT treated as invalid here.
+                    // They stay in the route table so Gateway can match and return 500.
+                    false
                 });
                 if all_invalid {
                     invalid_indices.push(idx);

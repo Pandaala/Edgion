@@ -22,6 +22,9 @@ pub struct AcceptedResult {
     /// Names of listeners that accept this route (namespace + hostname intersection pass).
     /// Empty when the route is rejected.
     pub matched_listeners: Vec<String>,
+    /// Protocols of the matched listeners (e.g. "HTTPS", "TLS", "HTTP").
+    /// Populated alongside matched_listeners; same order is NOT guaranteed.
+    pub matched_listener_protocols: Vec<String>,
 }
 
 /// Check if a listener's namespace policy allows a route from the given namespace.
@@ -147,6 +150,47 @@ pub fn collect_ref_denied_errors(ref_denied_list: &[Option<&RefDenied>]) -> Vec<
     errors
 }
 
+/// Gateway API standard route kinds — only these are subject to allowedRoutes.kinds filtering.
+/// Non-route resources (e.g. EdgionTls for TLS config) bypass this check entirely.
+const GATEWAY_API_ROUTE_KINDS: &[&str] = &["HTTPRoute", "GRPCRoute", "TLSRoute", "TCPRoute", "UDPRoute"];
+
+/// Protocol default route kinds per Gateway API spec.
+/// Mirrors `get_supported_kinds_for_protocol()` in gateway.rs — keep in sync.
+pub(super) fn protocol_default_route_kinds(protocol: &str) -> &'static [&'static str] {
+    match protocol.to_uppercase().as_str() {
+        "HTTP" | "HTTPS" => &["HTTPRoute", "GRPCRoute"],
+        "TLS" => &["TLSRoute"],
+        "TCP" => &["TCPRoute"],
+        "UDP" => &["UDPRoute"],
+        _ => &[],
+    }
+}
+
+/// Check if a listener supports the given route kind based on allowedRoutes.kinds
+/// or protocol defaults per Gateway API spec.
+///
+/// Non-route resources (e.g. EdgionTls) always pass — `allowedRoutes.kinds` only
+/// governs Gateway API route kinds, not policy/config attachments.
+fn listener_supports_route_kind(listener: &crate::types::resources::gateway::Listener, route_kind: &str) -> bool {
+    if !GATEWAY_API_ROUTE_KINDS.contains(&route_kind) {
+        return true;
+    }
+
+    let kinds = listener
+        .allowed_routes
+        .as_ref()
+        .and_then(|ar| ar.kinds.as_ref())
+        .filter(|k| !k.is_empty());
+
+    match kinds {
+        Some(allowed_kinds) => allowed_kinds.iter().any(|rgk| {
+            let group = rgk.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+            group == "gateway.networking.k8s.io" && rgk.kind == route_kind
+        }),
+        None => protocol_default_route_kinds(&listener.protocol).contains(&route_kind),
+    }
+}
+
 /// Validate a parent ref for the Accepted condition.
 ///
 /// Checks namespace policy and (optionally) hostname intersection.
@@ -155,12 +199,14 @@ pub fn validate_parent_ref_accepted(
     route_ns: &str,
     parent_ref: &ParentReference,
     route_hostnames: Option<&Vec<String>>,
+    route_kind: &str,
 ) -> AcceptedResult {
     let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
     if parent_group != "gateway.networking.k8s.io" {
         return AcceptedResult {
             errors: Vec::new(),
             matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
         };
     }
     let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
@@ -168,6 +214,7 @@ pub fn validate_parent_ref_accepted(
         return AcceptedResult {
             errors: Vec::new(),
             matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
         };
     }
 
@@ -178,6 +225,7 @@ pub fn validate_parent_ref_accepted(
         return AcceptedResult {
             errors: Vec::new(),
             matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
         };
     };
 
@@ -194,6 +242,7 @@ pub fn validate_parent_ref_accepted(
                     section_name: section_name.clone(),
                 }],
                 matched_listeners: Vec::new(),
+                matched_listener_protocols: Vec::new(),
             };
         }
     } else if let Some(port) = parent_ref.port {
@@ -204,6 +253,7 @@ pub fn validate_parent_ref_accepted(
                     section_name: format!("port:{}", port),
                 }],
                 matched_listeners: Vec::new(),
+                matched_listener_protocols: Vec::new(),
             };
         }
     }
@@ -216,7 +266,7 @@ pub fn validate_parent_ref_accepted(
         })
         .collect();
 
-    let accepted_listener_names: Vec<String> = matching_listeners
+    let ns_hostname_accepted: Vec<_> = matching_listeners
         .iter()
         .filter(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns))
         .filter(|l| match route_hostnames {
@@ -229,8 +279,14 @@ pub fn validate_parent_ref_accepted(
                     .any(|route_hn| hostnames_intersect(listener_hn, route_hn)),
             },
         })
-        .map(|l| l.name.clone())
         .collect();
+
+    let accepted: Vec<_> = ns_hostname_accepted
+        .iter()
+        .filter(|l| listener_supports_route_kind(l, route_kind))
+        .collect();
+    let accepted_listener_names: Vec<String> = accepted.iter().map(|l| l.name.clone()).collect();
+    let accepted_listener_protocols: Vec<String> = accepted.iter().map(|l| l.protocol.clone()).collect();
 
     if accepted_listener_names.is_empty() {
         let ns_allowed = matching_listeners
@@ -240,20 +296,27 @@ pub fn validate_parent_ref_accepted(
             vec![AcceptedError::NotAllowedByListeners {
                 resource_ns: route_ns.to_string(),
             }]
-        } else {
+        } else if ns_hostname_accepted.is_empty() {
             vec![AcceptedError::NoMatchingListenerHostname {
                 hostnames: route_hostnames.cloned().unwrap_or_default(),
+            }]
+        } else {
+            // Listeners match namespace+hostname but not route kind
+            vec![AcceptedError::NotAllowedByListeners {
+                resource_ns: route_ns.to_string(),
             }]
         };
         return AcceptedResult {
             errors,
             matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
         };
     }
 
     AcceptedResult {
         errors: Vec::new(),
         matched_listeners: accepted_listener_names,
+        matched_listener_protocols: accepted_listener_protocols,
     }
 }
 
@@ -297,7 +360,7 @@ pub fn update_tracker_accepted_only(
             continue;
         }
 
-        let result = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+        let result = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames, route_kind.as_str());
         if !result.errors.is_empty() {
             continue;
         }

@@ -1,0 +1,30 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: percent-mirror-fraction50
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: percent-mirror-gateway
+      namespace: edgion-test
+  hostnames:
+    - "mirror-frac50.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: test-http
+              namespace: edgion-test
+              port: 30001
+            fraction:
+              numerator: 1
+              denominator: 2
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

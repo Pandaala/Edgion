@@ -1122,29 +1122,11 @@ fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, 
 
 /// Get supported route kinds for a protocol
 fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
-    match protocol.to_uppercase().as_str() {
-        "HTTP" | "HTTPS" => vec![
-            RouteGroupKind {
-                group: Some("gateway.networking.k8s.io".to_string()),
-                kind: "HTTPRoute".to_string(),
-            },
-            RouteGroupKind {
-                group: Some("gateway.networking.k8s.io".to_string()),
-                kind: "GRPCRoute".to_string(),
-            },
-        ],
-        "TCP" => vec![RouteGroupKind {
+    super::route_utils::protocol_default_route_kinds(protocol)
+        .iter()
+        .map(|kind| RouteGroupKind {
             group: Some("gateway.networking.k8s.io".to_string()),
-            kind: "TCPRoute".to_string(),
-        }],
-        "UDP" => vec![RouteGroupKind {
-            group: Some("gateway.networking.k8s.io".to_string()),
-            kind: "UDPRoute".to_string(),
-        }],
-        "TLS" => vec![RouteGroupKind {
-            group: Some("gateway.networking.k8s.io".to_string()),
-            kind: "TLSRoute".to_string(),
-        }],
-        _ => vec![],
-    }
+            kind: kind.to_string(),
+        })
+        .collect()
 }
