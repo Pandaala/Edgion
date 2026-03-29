@@ -117,8 +117,24 @@ kubectl apply --server-side --force-conflicts -f "$K8S_DEPLOY_ROOT/namespace.yam
 
 if [[ "${SKIP_CRD}" != "true" ]]; then
   echo "[2/5] Apply Gateway API and Edgion CRDs from $CRD_ROOT"
-  kubectl apply -f "$CRD_ROOT/gateway-api/"
-  kubectl apply -f "$CRD_ROOT/edgion-crd/"
+  # Remove safe-upgrades VAP — it blocks experimental CRDs on top of standard
+  kubectl delete validatingadmissionpolicy safe-upgrades.gateway.networking.k8s.io --ignore-not-found 2>/dev/null || true
+  kubectl delete validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io --ignore-not-found 2>/dev/null || true
+  # Apply experimental CRDs with VAP stripped out (VAP inside the file would re-block itself)
+  _exp_file="$CRD_ROOT/gateway-api/gateway-api-experimental-v1.5.0.yaml"
+  if [[ -f "$_exp_file" ]]; then
+    # Split multi-doc YAML, drop ValidatingAdmissionPolicy* kinds, re-apply
+    awk '
+      BEGIN { skip=0; buf="" }
+      /^---/ { if (!skip && buf!="") print buf; buf="---\n"; skip=0; next }
+      /^kind: ValidatingAdmissionPolicy/ { skip=1 }
+      { if (!skip) buf=buf $0 "\n" }
+      END { if (!skip && buf!="") print buf }
+    ' "$_exp_file" | kubectl apply --server-side --force-conflicts -f -
+  else
+    kubectl apply --server-side --force-conflicts -f "$CRD_ROOT/gateway-api/"
+  fi
+  kubectl apply --server-side --force-conflicts -f "$CRD_ROOT/edgion-crd/"
 else
   echo "[2/5] Skip CRD apply"
 fi

@@ -30,12 +30,12 @@ spec:
         - "--websocket-port=30005"
         - "--tcp-port=30010"
         - "--udp-port=30011"
-        - "--auth-port=30040"
+
         - "--https-backend-port=30051"
-        - "--https-backend-mtls-port=30052"
+
         - "--cert-file=/etc/edgion/backend-tls/tls.crt"
         - "--key-file=/etc/edgion/backend-tls/tls.key"
-        - "--client-ca-file=/etc/edgion/client-ca/ca.crt"
+
         - "--log-level=info"
         ports:
         - name: http-1
@@ -151,7 +151,7 @@ spec:
         - "--websocket-port=30005"
         - "--tcp-port=30010"
         - "--udp-port=30011"
-        - "--auth-port=30040"
+
         - "--log-level=info"
         ports:
         - name: http-1
@@ -247,7 +247,7 @@ spec:
         - "--websocket-port=30005"
         - "--tcp-port=30010"
         - "--udp-port=30011"
-        - "--auth-port=30040"
+
         - "--log-level=info"
         ports:
         - name: http-1

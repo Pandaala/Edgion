@@ -100,16 +100,11 @@ impl PercentMirrorTestSuite {
                         .await
                     {
                         Ok(r) => r,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("main request failed: {}", e))
-                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("main request failed: {}", e)),
                     };
 
                     if resp.status().as_u16() != 200 {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("main request returned {}", resp.status()),
-                        );
+                        return TestResult::failed(start.elapsed(), format!("main request returned {}", resp.status()));
                     }
                     let _ = resp.text().await;
 
@@ -127,8 +122,10 @@ impl PercentMirrorTestSuite {
                                     );
                                 }
                             };
-                            let has_mirror_hdr =
-                                cap["headers"]["x-mirror"].as_str().map(|v| v == "true").unwrap_or(false);
+                            let has_mirror_hdr = cap["headers"]["x-mirror"]
+                                .as_str()
+                                .map(|v| v == "true")
+                                .unwrap_or(false);
                             if !has_mirror_hdr {
                                 return TestResult::failed(
                                     start.elapsed(),
@@ -169,16 +166,11 @@ impl PercentMirrorTestSuite {
                         .await
                     {
                         Ok(r) => r,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("main request failed: {}", e))
-                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("main request failed: {}", e)),
                     };
 
                     if resp.status().as_u16() != 200 {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("main request returned {}", resp.status()),
-                        );
+                        return TestResult::failed(start.elapsed(), format!("main request returned {}", resp.status()));
                     }
                     let _ = resp.text().await;
 
@@ -202,9 +194,7 @@ impl PercentMirrorTestSuite {
                                     "percent=0: no mirror capture (as expected)".to_string(),
                                 )
                             }
-                            Err(e) => {
-                                TestResult::failed(start.elapsed(), format!("Failed to parse response: {}", e))
-                            }
+                            Err(e) => TestResult::failed(start.elapsed(), format!("Failed to parse response: {}", e)),
                         },
                         Err(e) => TestResult::failed(start.elapsed(), format!("query failed: {}", e)),
                     }

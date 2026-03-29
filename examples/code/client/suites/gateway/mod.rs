@@ -32,3 +32,4 @@ pub use tls::BackendTlsTestSuite;
 pub use tls::FrontendValidationTestSuite;
 pub use tls::GatewayTlsNoHostnameListenerTestSuite;
 pub use tls::GatewayTlsTestSuite;
+pub use tls::MisdirectedRequestTestSuite;

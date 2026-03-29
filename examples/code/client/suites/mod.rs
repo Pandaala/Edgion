@@ -43,25 +43,26 @@ pub use gateway::{
     AllowedRoutesSelectorNamespaceTestSuite, BackendTlsGatewayCertTestSuite, BackendTlsSanTestSuite,
     BackendTlsTestSuite, CombinedScenariosTestSuite, FrontendValidationTestSuite,
     GatewayTlsNoHostnameListenerTestSuite, GatewayTlsTestSuite, InitialPhaseTestSuite, ListenerHostnameTestSuite,
-    PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite, UpdatePhaseTestSuite,
+    MisdirectedRequestTestSuite, PortConflictTestSuite, RealIpTestSuite, SecurityTestSuite, StreamPluginsTestSuite,
+    UpdatePhaseTestSuite,
 };
 
 // EdgionPlugins tests
 pub use edgion_plugins::{
-    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, BasicAuthTestSuite, CtxSetTestSuite,
-    DirectEndpointTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite,
-    ForwardAuthTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite, JwtAuthTestSuite,
-    KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
-    ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite, RequestMirrorTestSuite,
-    RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, BasicAuthTestSuite,
+    CorsPluginTestSuite, CtxSetTestSuite, DirectEndpointTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite,
+    DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
+    JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
+    PluginConditionTestSuite, PluginLogsTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
+    RequestMirrorTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
 pub use status::BackendTlsStatusTestSuite;
 pub use status::GrpcRouteStatusTestSuite;
 pub use status::HostnameIntersectionStatusTestSuite;
-pub use status::RefGrantStatusTestSuite;
 pub use status::ObservedGenerationStatusTestSuite;
+pub use status::RefGrantStatusTestSuite;
 pub use status::TlsListenerModeStatusTestSuite;
 
 // Services tests (ACME, etc.)

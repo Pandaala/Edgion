@@ -428,9 +428,7 @@ impl ConfigClient {
             ResourceKind::BackendTLSPolicy => self.backend_tls_policies.list().to_json("BackendTLSPolicy")?,
             ResourceKind::PluginMetaData => self.plugin_metadata.list().to_json("PluginMetaData")?,
             ResourceKind::Secret => return Err("Secret resources are not stored in ConfigClient".to_string()),
-            ResourceKind::ConfigMap => {
-                return Err("ConfigMap resources are not synced to Gateway".to_string())
-            }
+            ResourceKind::ConfigMap => return Err("ConfigMap resources are not synced to Gateway".to_string()),
             ResourceKind::EdgionAcme => self.edgion_acme.list().to_json("EdgionAcme")?,
         };
 

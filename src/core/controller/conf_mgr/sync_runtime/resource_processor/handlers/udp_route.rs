@@ -270,7 +270,8 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_result = super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None, "UDPRoute");
+                let accepted_result =
+                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None, "UDPRoute");
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 

@@ -255,6 +255,15 @@ pub struct RequestInfo {
     /// TLS connection id for correlating tls.log and access.log
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_id: Option<String>,
+    /// Listener name that matched the SNI during TLS handshake (Gateway TLS only).
+    /// None for HTTP connections, EdgionTls connections, or when TLS metadata is unavailable.
+    /// Used for 421 Misdirected Request detection.
+    #[serde(skip)]
+    pub tls_matched_listener: Option<String>,
+    /// Gateway key (ns/name) from TLS handshake matching (Gateway TLS only).
+    /// Used together with tls_matched_listener for 421 detection.
+    #[serde(skip)]
+    pub tls_matched_gateway_key: Option<String>,
     /// Listener port that received this request (set at context creation, always available)
     #[serde(rename = "listener-port")]
     pub listener_port: u16,

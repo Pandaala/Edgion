@@ -50,6 +50,7 @@
 这些目录通常都走同一个 `EdgionPlugins` listener key，只是 suite 断言不同：
 
 - `BasicAuth`
+- `Cors`
 - `JwtAuth`
 - `JweDecrypt`
 - `KeyAuth`

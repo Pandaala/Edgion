@@ -89,12 +89,21 @@ impl GapiCorsFilter {
             && session.header_value("access-control-request-method").is_some()
     }
 
-    fn set_cors_headers(&self, session: &mut dyn PluginSession, origin: &str) {
+    /// Compute CORS response headers as key-value pairs.
+    /// This allows callers to apply headers to either a ResponseHeader (preflight)
+    /// or via session queue (simple requests).
+    fn build_cors_headers(
+        &self,
+        session: &mut dyn PluginSession,
+        origin: &str,
+        is_preflight: bool,
+    ) -> Vec<(&'static str, String)> {
+        let mut headers = Vec::new();
         let credentials = self.config.allow_credentials.unwrap_or(false);
 
         // Access-Control-Allow-Origin
-        if credentials {
-            let _ = session.set_response_header("Access-Control-Allow-Origin", origin);
+        let acao = if credentials {
+            origin.to_string()
         } else {
             let has_wildcard = self
                 .config
@@ -103,41 +112,50 @@ impl GapiCorsFilter {
                 .map(|o| o.iter().any(|v| v == "*"))
                 .unwrap_or(false);
             if has_wildcard {
-                let _ = session.set_response_header("Access-Control-Allow-Origin", "*");
+                // When request carries credentials (Cookie/Authorization), browsers reject
+                // "Access-Control-Allow-Origin: *". Echo the origin instead.
+                let request_has_credentials =
+                    session.header_value("cookie").is_some() || session.header_value("authorization").is_some();
+                if request_has_credentials {
+                    origin.to_string()
+                } else {
+                    "*".to_string()
+                }
             } else {
-                let _ = session.set_response_header("Access-Control-Allow-Origin", origin);
+                origin.to_string()
             }
-        }
+        };
+        headers.push(("Access-Control-Allow-Origin", acao));
 
         // Access-Control-Allow-Credentials
         if credentials {
-            let _ = session.set_response_header("Access-Control-Allow-Credentials", "true");
+            headers.push(("Access-Control-Allow-Credentials", "true".to_string()));
         }
 
         // Access-Control-Allow-Methods
         if let Some(methods) = &self.config.allow_methods {
             if !methods.is_empty() {
                 if credentials && methods.iter().any(|m| m == "*") {
+                    // Echo back the requested method (only if the header is present)
                     if let Some(req_method) = session.header_value("access-control-request-method") {
-                        let _ = session.set_response_header("Access-Control-Allow-Methods", &req_method);
+                        headers.push(("Access-Control-Allow-Methods", req_method));
                     }
                 } else {
-                    let val = methods.join(", ");
-                    let _ = session.set_response_header("Access-Control-Allow-Methods", &val);
+                    headers.push(("Access-Control-Allow-Methods", methods.join(", ")));
                 }
             }
         }
 
         // Access-Control-Allow-Headers
-        if let Some(headers) = &self.config.allow_headers {
-            if !headers.is_empty() {
-                if credentials && headers.iter().any(|h| h == "*") {
+        if let Some(allow_headers) = &self.config.allow_headers {
+            if !allow_headers.is_empty() {
+                if credentials && allow_headers.iter().any(|h| h == "*") {
+                    // Echo back the requested headers (only if the header is present)
                     if let Some(req_headers) = session.header_value("access-control-request-headers") {
-                        let _ = session.set_response_header("Access-Control-Allow-Headers", &req_headers);
+                        headers.push(("Access-Control-Allow-Headers", req_headers));
                     }
                 } else {
-                    let val = headers.join(", ");
-                    let _ = session.set_response_header("Access-Control-Allow-Headers", &val);
+                    headers.push(("Access-Control-Allow-Headers", allow_headers.join(", ")));
                 }
             }
         }
@@ -145,18 +163,39 @@ impl GapiCorsFilter {
         // Access-Control-Expose-Headers
         if let Some(expose) = &self.config.expose_headers {
             if !expose.is_empty() {
-                let val = expose.join(", ");
-                let _ = session.set_response_header("Access-Control-Expose-Headers", &val);
+                headers.push(("Access-Control-Expose-Headers", expose.join(", ")));
             }
         }
 
         // Access-Control-Max-Age (preflight only)
-        if self.is_preflight(session) && self.config.max_age > 0 {
-            let _ = session.set_response_header("Access-Control-Max-Age", &self.config.max_age.to_string());
+        if is_preflight && self.config.max_age > 0 {
+            headers.push(("Access-Control-Max-Age", self.config.max_age.to_string()));
         }
 
-        // Vary: Origin
+        headers
+    }
+
+    /// Apply CORS headers to the upstream response via session queue.
+    /// Used for simple (non-preflight) requests where headers are applied
+    /// later during the upstream response phase.
+    fn set_cors_headers_via_session(&self, session: &mut dyn PluginSession, origin: &str) {
+        let headers = self.build_cors_headers(session, origin, false);
+        for (name, value) in &headers {
+            let _ = session.set_response_header(name, value);
+        }
         let _ = session.append_response_header("Vary", "Origin");
+    }
+
+    /// Build a 204 preflight response with CORS headers set directly on the ResponseHeader.
+    /// This avoids the session queue which is only consumed during the upstream response phase.
+    fn build_preflight_response(&self, session: &mut dyn PluginSession, origin: &str) -> Option<Box<ResponseHeader>> {
+        let headers = self.build_cors_headers(session, origin, true);
+        let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).ok()?;
+        for (name, value) in &headers {
+            let _ = resp.insert_header(*name, value.as_str());
+        }
+        let _ = resp.append_header("Vary", "Origin");
+        Some(Box::new(resp))
     }
 }
 
@@ -189,15 +228,26 @@ impl RequestFilter for GapiCorsFilter {
 
         if !self.is_origin_allowed(&origin) {
             plugin_log.push("CORS: origin rejected; ");
-            // Per Gateway API spec: still allow the request through, just don't set CORS headers
+            // For preflight with non-matching origin, return 204 directly
+            // to avoid forwarding a useless OPTIONS request to the backend.
+            if self.is_preflight(session) {
+                if let Ok(resp) = ResponseHeader::build(204, None) {
+                    let _ = session.write_response_header(Box::new(resp), true).await;
+                    let _ = session.write_response_body(Some(Bytes::new()), true).await;
+                }
+                plugin_log.push("CORS: preflight rejected; ");
+                return PluginRunningResult::ErrTerminateRequest;
+            }
+            // Simple request: allow through without CORS headers
             return PluginRunningResult::GoodNext;
         }
 
         if self.is_preflight(session) {
-            self.set_cors_headers(session, &origin);
-
-            if let Ok(resp) = ResponseHeader::build(204, None) {
-                let _ = session.write_response_header(Box::new(resp), true).await;
+            // Build preflight response with CORS headers set directly on ResponseHeader.
+            // Cannot use session.set_response_header() here because it queues headers
+            // for the upstream response phase, which never runs for terminated requests.
+            if let Some(resp) = self.build_preflight_response(session, &origin) {
+                let _ = session.write_response_header(resp, true).await;
                 let _ = session.write_response_body(Some(Bytes::new()), true).await;
             }
 
@@ -205,8 +255,8 @@ impl RequestFilter for GapiCorsFilter {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // Normal CORS request: set headers (they will be sent with the proxied response)
-        self.set_cors_headers(session, &origin);
+        // Normal CORS request: queue headers for application during upstream response phase
+        self.set_cors_headers_via_session(session, &origin);
         plugin_log.push("CORS: headers set; ");
         PluginRunningResult::GoodNext
     }

@@ -40,12 +40,11 @@ impl ObservedGenerationStatusTestSuite {
                     let start = Instant::now();
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    let gateway = match helpers::fetch_resource_status(
-                        &ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME,
-                    ).await {
-                        Ok(gw) => gw,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
-                    };
+                    let gateway =
+                        match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                            Ok(gw) => gw,
+                            Err(e) => return TestResult::failed(start.elapsed(), e),
+                        };
 
                     let metadata_gen = gateway["metadata"]["generation"].as_i64();
                     let conditions = match gateway["status"]["conditions"].as_array() {
@@ -104,12 +103,11 @@ impl ObservedGenerationStatusTestSuite {
                     let start = Instant::now();
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    let gateway = match helpers::fetch_resource_status(
-                        &ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME,
-                    ).await {
-                        Ok(gw) => gw,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
-                    };
+                    let gateway =
+                        match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                            Ok(gw) => gw,
+                            Err(e) => return TestResult::failed(start.elapsed(), e),
+                        };
 
                     let metadata_gen = gateway["metadata"]["generation"].as_i64();
                     let listeners = match gateway["status"]["listeners"].as_array() {
@@ -143,10 +141,7 @@ impl ObservedGenerationStatusTestSuite {
                     if failures.is_empty() {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            format!(
-                                "All listener conditions have observedGeneration={:?}",
-                                metadata_gen
-                            ),
+                            format!("All listener conditions have observedGeneration={:?}", metadata_gen),
                         )
                     } else {
                         TestResult::failed(start.elapsed(), failures.join("; "))
@@ -166,12 +161,11 @@ impl ObservedGenerationStatusTestSuite {
                     let start = Instant::now();
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    let gc = match helpers::fetch_cluster_resource_status(
-                        &ctx, "GatewayClass", GATEWAY_CLASS_NAME,
-                    ).await {
-                        Ok(gc) => gc,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
-                    };
+                    let gc =
+                        match helpers::fetch_cluster_resource_status(&ctx, "GatewayClass", GATEWAY_CLASS_NAME).await {
+                            Ok(gc) => gc,
+                            Err(e) => return TestResult::failed(start.elapsed(), e),
+                        };
 
                     let metadata_gen = gc["metadata"]["generation"].as_i64();
                     let conditions = match gc["status"]["conditions"].as_array() {

@@ -639,6 +639,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
+                    run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
                     run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
                         run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true

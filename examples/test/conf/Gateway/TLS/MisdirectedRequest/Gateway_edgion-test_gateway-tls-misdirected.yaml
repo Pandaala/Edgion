@@ -1,0 +1,42 @@
+# Gateway with multiple HTTPS listeners sharing one port for 421 Misdirected Request testing.
+# Three listeners share port 31337: exact hostname, wildcard, and catch-all.
+# The annotation enables per-gateway 421 detection (independent of global config).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway-tls-misdirected
+  namespace: edgion-test
+  annotations:
+    edgion.io/require-sni-host-match: "true"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # Listener 1: exact hostname
+    - name: https-exact
+      protocol: HTTPS
+      port: 31337
+      hostname: "sni421-exact.test.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test
+    # Listener 2: wildcard hostname
+    - name: https-wildcard
+      protocol: HTTPS
+      port: 31337
+      hostname: "*.sni421.test.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test
+    # Listener 3: catch-all (no hostname)
+    - name: https-catchall
+      protocol: HTTPS
+      port: 31337
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test

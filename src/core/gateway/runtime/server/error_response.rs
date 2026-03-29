@@ -227,6 +227,18 @@ pub async fn end_response_grpc_unavailable(
     Ok(())
 }
 
+/// Send gRPC UNIMPLEMENTED (status 12) error response.
+///
+/// Used when a gRPC request doesn't match any configured GRPCRoute rule.
+/// Per Gateway API spec, unmatched gRPC requests should return UNIMPLEMENTED.
+pub async fn end_response_grpc_unimplemented(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+) -> pingora_core::Result<()> {
+    send_grpc_trailers_only(session, ctx, server_header_opts, 501).await
+}
+
 /// Send 500 Internal Server Error error response (nginx-style).
 /// For gRPC requests, returns gRPC INTERNAL (status 13) per gRPC protocol spec.
 pub async fn end_response_500(

@@ -168,8 +168,8 @@ Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 port+protocol+hos
 | GatewayWithAttachedRoutes（3个子测试） | ✅ | |
 | GatewayHTTPListenerIsolation | ✅ | |
 | GatewayFrontendInvalidDefaultClientCertificateValidation | ✅ | |
-| GatewayFrontendClientCertificateValidation | ❌ | status condition 问题 |
-| GatewayFrontendClientCertificateValidationInsecureFallback | ❌ | status condition 问题 |
+| GatewayFrontendClientCertificateValidation | ⚠️ | 数据面已实现，待 conformance 验证（需 8443 端口预绑定） |
+| GatewayFrontendClientCertificateValidationInsecureFallback | ⚠️ | 数据面已实现（InsecureFallback verify callback），待 conformance 验证 |
 | GatewayInvalidFrontendClientCertificateValidation | ❌ | `default_valid_configuration` 子测试 status 问题 |
 | GatewayStaticAddresses | ⏭ SKIP | 明确不实现（地址由 TOML 配置决定） |
 | GatewayOptionalAddressValue | ⏭ SKIP | 明确不实现 |

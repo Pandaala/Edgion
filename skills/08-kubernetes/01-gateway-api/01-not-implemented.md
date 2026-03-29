@@ -139,7 +139,7 @@ Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-bre
 
 ## ~~frontendValidation 标准化~~ ✅ 已完成
 
-`GatewayTLSConfig` 已添加 `frontend_validation` 字段，Controller 解析 CA Secret 引用，Gateway TLS 握手时配置 mTLS verify mode。与 EdgionTls `client_auth` 完全独立，两条路径互不映射。`supportedFeatures` 已声明 `GatewayFrontendClientCertificateValidation`。
+Controller 解析 `frontend_validation` CA 引用（Secret/ConfigMap），per-port 合并，设置 listener status conditions。Gateway 数据面 `configure_gateway_frontend_mtls()` 加载 CA 证书配置 SSL verify mode：AllowValidOnly 用 `PEER | FAIL_IF_NO_PEER_CERT`，AllowInsecureFallback 用自定义 verify callback 始终 accept（boringssl FFI）。与 EdgionTls `client_auth` 完全独立。
 
 ## GATEWAY-TLS ConformanceProfile
 

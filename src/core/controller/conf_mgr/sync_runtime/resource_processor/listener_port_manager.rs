@@ -41,11 +41,7 @@ pub struct ListenerRef {
 }
 
 impl ListenerRef {
-    pub fn new(
-        gateway_key: impl Into<String>,
-        listener_name: impl Into<String>,
-        hostname: Option<String>,
-    ) -> Self {
+    pub fn new(gateway_key: impl Into<String>, listener_name: impl Into<String>, hostname: Option<String>) -> Self {
         Self {
             gateway_key: gateway_key.into(),
             listener_name: listener_name.into(),
@@ -206,10 +202,7 @@ impl ListenerPortManager {
             };
 
             // Collect same-gateway listeners on this port
-            let same_gw: Vec<&ListenerRef> = listeners
-                .iter()
-                .filter(|l| l.gateway_key == gateway_key)
-                .collect();
+            let same_gw: Vec<&ListenerRef> = listeners.iter().filter(|l| l.gateway_key == gateway_key).collect();
 
             if same_gw.len() < 2 {
                 continue;
@@ -222,11 +215,7 @@ impl ListenerPortManager {
                     .iter()
                     .enumerate()
                     .filter(|(j, other)| {
-                        *j != i
-                            && hostnames_conflict(
-                                listener.hostname.as_deref(),
-                                other.hostname.as_deref(),
-                            )
+                        *j != i && hostnames_conflict(listener.hostname.as_deref(), other.hostname.as_deref())
                     })
                     .map(|(_, l)| l.listener_name.as_str())
                     .collect();
@@ -366,7 +355,11 @@ mod tests {
             "default/gw",
             &[
                 ("catchall".to_string(), "443".to_string(), None),
-                ("specific".to_string(), "443".to_string(), Some("api.example.com".to_string())),
+                (
+                    "specific".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
             ],
         );
 
@@ -382,7 +375,11 @@ mod tests {
             "default/gw",
             &[
                 ("wild".to_string(), "443".to_string(), Some("*.example.com".to_string())),
-                ("concrete".to_string(), "443".to_string(), Some("foo.example.com".to_string())),
+                (
+                    "concrete".to_string(),
+                    "443".to_string(),
+                    Some("foo.example.com".to_string()),
+                ),
             ],
         );
 
@@ -397,8 +394,16 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                ("wild-1".to_string(), "443".to_string(), Some("*.example.com".to_string())),
-                ("wild-2".to_string(), "443".to_string(), Some("*.example.com".to_string())),
+                (
+                    "wild-1".to_string(),
+                    "443".to_string(),
+                    Some("*.example.com".to_string()),
+                ),
+                (
+                    "wild-2".to_string(),
+                    "443".to_string(),
+                    Some("*.example.com".to_string()),
+                ),
             ],
         );
 
@@ -414,8 +419,16 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                ("api".to_string(), "443".to_string(), Some("api.example.com".to_string())),
-                ("web".to_string(), "443".to_string(), Some("web.example.com".to_string())),
+                (
+                    "api".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
+                (
+                    "web".to_string(),
+                    "443".to_string(),
+                    Some("web.example.com".to_string()),
+                ),
             ],
         );
 
@@ -495,8 +508,16 @@ mod tests {
             "default/gw",
             &[
                 ("catchall".to_string(), "443".to_string(), None),
-                ("api".to_string(), "443".to_string(), Some("api.example.com".to_string())),
-                ("web".to_string(), "443".to_string(), Some("web.example.com".to_string())),
+                (
+                    "api".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
+                (
+                    "web".to_string(),
+                    "443".to_string(),
+                    Some("web.example.com".to_string()),
+                ),
             ],
         );
 
@@ -513,7 +534,11 @@ mod tests {
             &[
                 ("catchall-1".to_string(), "443".to_string(), None),
                 ("catchall-2".to_string(), "443".to_string(), None),
-                ("api".to_string(), "443".to_string(), Some("api.example.com".to_string())),
+                (
+                    "api".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
             ],
         );
 

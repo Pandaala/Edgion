@@ -84,13 +84,8 @@ impl GrpcRouteStatusTestSuite {
                     let start = Instant::now();
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match helpers::fetch_resource_status(
-                        &ctx,
-                        "GRPCRoute",
-                        ROUTE_NAMESPACE,
-                        "grpc-nonexistent-backend",
-                    )
-                    .await
+                    match helpers::fetch_resource_status(&ctx, "GRPCRoute", ROUTE_NAMESPACE, "grpc-nonexistent-backend")
+                        .await
                     {
                         Ok(route) => {
                             if Self::has_resolved_refs_false_with_reason(&route, "BackendNotFound") {
@@ -125,7 +120,8 @@ impl GrpcRouteStatusTestSuite {
                     let start = Instant::now();
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match helpers::fetch_resource_status(&ctx, "GRPCRoute", ROUTE_NAMESPACE, "grpc-invalid-kind").await {
+                    match helpers::fetch_resource_status(&ctx, "GRPCRoute", ROUTE_NAMESPACE, "grpc-invalid-kind").await
+                    {
                         Ok(route) => {
                             if Self::has_resolved_refs_false_with_reason(&route, "InvalidKind") {
                                 TestResult::passed_with_message(

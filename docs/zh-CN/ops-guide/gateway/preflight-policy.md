@@ -96,12 +96,20 @@ spec:
     statusCode: 200
 ```
 
-## 与 CORS 插件的关系
+## 与 CORS 的关系
 
-Preflight 策略与 CORS 插件**协同工作**：
+Preflight 策略的行为取决于路由使用的 CORS 配置方式：
+
+### Gateway API 原生 CORS filter（`type: CORS`）
+
+当路由配置了原生 `type: CORS` filter 时，**preflight handler 不介入**，preflight 请求直接由路由级插件 `GapiCorsFilter` 处理。`preflightPolicy` 配置对此路径无效。
+
+### EdgionPlugins CORS 插件
+
+当路由通过 `ExtensionRef` 引用 EdgionPlugins 中的 CORS 插件时，preflight handler **协同工作**：
 
 1. **Preflight Handler 先执行**：在所有插件之前拦截 preflight 请求
-2. **自动查找 CORS 配置**：从路由的插件列表中查找 CORS 插件配置
+2. **自动查找 CORS 配置**：从路由的 EdgionPlugins 中查找 CORS 插件配置
 3. **使用 CORS 响应**：如果找到 CORS 配置，按 CORS 规则响应
 4. **默认响应**：如果没有 CORS 配置，返回配置的默认状态码
 
@@ -110,11 +118,13 @@ Preflight 策略与 CORS 插件**协同工作**：
 ```
 浏览器 OPTIONS 请求
     ↓
-Preflight Handler 拦截
-    ↓
-检查路由是否配置了 CORS 插件？
-    ├─ 是 → 使用 CORS 配置响应
-    └─ 否 → 返回 204 No Content
+路由配置了原生 type: CORS filter？
+    ├─ 是 → 跳过 Preflight Handler，由 GapiCorsFilter 处理
+    └─ 否 → Preflight Handler 拦截
+              ↓
+          路由有 EdgionPlugins CORS 配置？
+              ├─ 是 → 使用 CORS 配置响应
+              └─ 否 → 返回 204 No Content
 ```
 
 ## 常见问题
@@ -131,7 +141,9 @@ Preflight Handler 拦截
 
 ### Q: Preflight 响应会经过其他插件吗？
 
-**A:** 不会。Preflight 请求在所有插件（包括认证、限流等）**之前**就被拦截并响应，这是符合标准的行为。
+**A:** 取决于 CORS 配置方式：
+- **EdgionPlugins CORS**：不会。Preflight 在所有插件之前由 preflight handler 拦截并响应。
+- **原生 `type: CORS` filter**：Preflight 在路由级插件链中由 GapiCorsFilter 处理，HTTPRoute `filters` 数组中排在 CORS 之前的 filter 会先执行。建议将 CORS filter 放在 filters 列表首位。
 
 ### Q: 如何查看 preflight 请求的处理日志？
 

@@ -21,6 +21,9 @@ pub use backend::{
     LBConsistentHashTestSuite, LBRoundRobinTestSuite, PartiallyInvalidTestSuite, RetryOnStatusTestSuite,
     SessionPersistenceTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
 };
-pub use filters::{FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, PercentMirrorTestSuite};
+pub use filters::{
+    FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite,
+    PercentMirrorTestSuite,
+};
 pub use protocol::WebSocketTestSuite;
 pub use r#match::HttpMatchTestSuite;

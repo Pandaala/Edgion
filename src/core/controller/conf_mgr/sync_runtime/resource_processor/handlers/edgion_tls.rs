@@ -262,13 +262,17 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         if let Some(parent_refs) = &tls.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_result = super::route_utils::validate_parent_ref_accepted(resource_ns, parent_ref, None, "EdgionTls");
+                let accepted_result =
+                    super::route_utils::validate_parent_ref_accepted(resource_ns, parent_ref, None, "EdgionTls");
                 let mut accepted_errors = accepted_result.errors;
 
                 // EdgionTls only makes sense on HTTPS/TLS listeners — reject non-TLS ones.
                 if accepted_errors.is_empty()
                     && !accepted_result.matched_listener_protocols.is_empty()
-                    && !accepted_result.matched_listener_protocols.iter().any(|p| p == "HTTPS" || p == "TLS")
+                    && !accepted_result
+                        .matched_listener_protocols
+                        .iter()
+                        .any(|p| p == "HTTPS" || p == "TLS")
                 {
                     accepted_errors.push(AcceptedError::Invalid {
                         message: "EdgionTls requires HTTPS or TLS listener".to_string(),

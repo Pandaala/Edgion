@@ -81,7 +81,7 @@ spec:
   # ─── 安全防护 ───
   securityProtect:
     xForwardedForLimit: 200                 # usize, XFF 最大字节数
-    requireSniHostMatch: true               # bool, HTTPS 要求 SNI 和 Host 匹配
+    requireSniHostMatch: true               # bool, HTTPS listener 级别 421 Misdirected Request 检测
     fallbackSni: ""                         # string?, 客户端无 SNI 时的备用值
     tlsProxyLogRecord: true                 # bool, 记录 TLS 代理连接日志
 
@@ -146,7 +146,7 @@ spec:
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `xForwardedForLimit` | `usize` | `200` | X-Forwarded-For 最大字节数 |
-| `requireSniHostMatch` | `bool` | `true` | HTTPS 要求 SNI 和 Host header 匹配 |
+| `requireSniHostMatch` | `bool` | `true` | HTTPS listener 级别 421 Misdirected Request 检测（可通过 Gateway 注解 per-Gateway 开启） |
 | `fallbackSni` | `String?` | — | 客户端未提供 SNI 时的备用主机名 |
 | `tlsProxyLogRecord` | `bool` | `true` | 记录 TLS 代理连接日志 |
 

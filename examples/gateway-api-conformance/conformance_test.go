@@ -83,6 +83,9 @@ func TestConformance(t *testing.T) {
 	// negotiation fails on several sub-tests)
 	// opts.SupportedFeatures.Insert(features.SupportHTTPRouteCORS)
 
+	// HTTP 421 Misdirected Request detection (Gateway API spec)
+	opts.SupportedFeatures.Insert(features.SupportGatewayHTTPSListenerDetectMisdirectedRequests)
+
 	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
 	opts.SupportedFeatures.Insert(features.SupportGRPCRoute)
 

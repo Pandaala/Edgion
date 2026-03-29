@@ -134,3 +134,108 @@ spec:
         selector:
           matchLabels:
             gateway-conformance: backend
+---
+# Pre-created for GatewayFrontendClientCertificateValidation conformance test.
+# Edgion does not support dynamic listener creation, so port 8443 must be bound at startup.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: client-validation-default
+  namespace: gateway-conformance-infra
+spec:
+  gatewayClassName: edgion
+  tls:
+    frontend:
+      default:
+        validation:
+          caCertificateRefs:
+          - kind: ConfigMap
+            group: ""
+            name: tls-validity-checks-ca-certificate
+      perPort:
+      - port: 8443
+        tls:
+          validation:
+            caCertificateRefs:
+            - kind: ConfigMap
+              group: ""
+              name: tls-validity-checks-per-port-ca-certificate
+  listeners:
+  - name: https
+    port: 443
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra
+  - name: https-with-hostname
+    port: 8443
+    hostname: second-example.org
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra
+---
+# Pre-created for GatewayFrontendClientCertificateValidationInsecureFallback conformance test.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: client-validation-insecure-fallback
+  namespace: gateway-conformance-infra
+spec:
+  gatewayClassName: edgion
+  tls:
+    frontend:
+      default:
+        validation:
+          mode: AllowInsecureFallback
+          caCertificateRefs:
+          - kind: ConfigMap
+            group: ""
+            name: tls-validity-checks-ca-certificate
+      perPort:
+      - port: 8443
+        tls:
+          validation:
+            mode: AllowInsecureFallback
+            caCertificateRefs:
+            - kind: ConfigMap
+              group: ""
+              name: tls-validity-checks-per-port-ca-certificate
+  listeners:
+  - name: https
+    port: 443
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra
+  - name: https-with-hostname
+    port: 8443
+    hostname: second-example.org
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: Same
+    tls:
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: tls-validity-checks-certificate
+        namespace: gateway-conformance-infra

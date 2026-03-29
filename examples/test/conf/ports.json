@@ -1,5 +1,5 @@
 {
-  "current_max": 31335,
+  "current_max": 31337,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -150,7 +150,8 @@
       "http": 31322
     },
     "Gateway/FrontendValidation": {
-      "https": 31312
+      "https": 31312,
+      "https_insecure": 31336
     },
     "Gateway/TLS/BackendTLSSAN": {
       "http": 31320
@@ -167,6 +168,9 @@
       "d2_https_mismatch": 31332,
       "d3_https": 31333,
       "d4_https": 31334
+    },
+    "Gateway/TLS/MisdirectedRequest": {
+      "https": 31337
     }
   }
 }

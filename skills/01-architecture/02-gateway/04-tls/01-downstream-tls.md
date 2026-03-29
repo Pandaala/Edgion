@@ -62,9 +62,29 @@ TLS 握手完成后被调用，负责：
 1. 从 `GatewayTlsEntry` 的内联 `secrets` 获取 Secret（优先）。
 2. 回退到从全局 SecretStore 按 `certificateRefs` 查找 Secret。
 3. 从 Secret 的 `data["tls.crt"]` 和 `data["tls.key"]` 提取证书和私钥。
-4. 解析并设置到 SSL 连接（不支持 mTLS 等高级配置）。
+4. 解析并设置到 SSL 连接。
+5. 若 `frontend_validation` 存在，调用 `configure_gateway_frontend_mtls()` 配置客户端证书验证。
 
-## mTLS 客户端验证
+## Gateway frontendValidation（标准 mTLS）
+
+Gateway API 标准的前端客户端证书验证，通过 `spec.tls.frontend` 配置。与 EdgionTls `client_auth` 完全独立。
+
+### 验证模式
+
+| 模式 | 行为 | 实现 |
+|------|------|------|
+| `AllowValidOnly`（默认） | 必须提供匹配 CA 签发的有效证书 | `PEER \| FAIL_IF_NO_PEER_CERT` |
+| `AllowInsecureFallback` | 有效/无效/缺失证书均放行 | 自定义 verify callback 始终返回 1（boringssl FFI） |
+
+### 配置流程（`configure_gateway_frontend_mtls`）
+
+1. 从 `resolved_frontend_ca_secrets` 提取 CA 证书（key: `ca.crt`），构建 `X509Store`。
+2. 根据 `mode` 选择 verify mode：AllowValidOnly 用标准 SSL verify，AllowInsecureFallback 用 `boring_sys::SSL_set_verify` + `insecure_fallback_verify_cb`。
+3. 设置 `verify_depth(10)`。
+
+per-port 配置由 Controller 合并到每个 listener 的 `GatewayTlsConfig` 中，Gateway 侧无需额外处理。
+
+## EdgionTls mTLS 客户端验证
 
 当 EdgionTls 配置了 `spec.client_auth` 时，`configure_mtls` 启用客户端证书验证：
 

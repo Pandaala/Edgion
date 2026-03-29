@@ -122,6 +122,10 @@ impl GrpcMatchEngine {
                         );
                     }
                 }
+            } else {
+                // No method match specified (header-only match) — matches any service/method.
+                // Per Gateway API spec, omitting the method field means match all gRPC methods.
+                catch_all_routes.push(route);
             }
         }
 
@@ -336,7 +340,7 @@ mod tests {
     use super::*;
     use crate::core::gateway::routes::grpc::match_unit::GrpcMatchInfo;
     use crate::types::resources::grpc_route::GRPCRouteRule;
-    use crate::types::{GRPCMethodMatch, GRPCRouteMatch};
+    use crate::types::{GRPCHeaderMatch, GRPCMethodMatch, GRPCRouteMatch};
 
     #[test]
     fn test_parse_grpc_path_valid() {
@@ -502,5 +506,87 @@ mod tests {
         // Longest combined pattern first
         assert_eq!(engine.regex_service_regex_method[0].matched_info.rsc.name, "long");
         assert_eq!(engine.regex_service_regex_method[1].matched_info.rsc.name, "short");
+    }
+
+    fn make_header_only_route(
+        headers: Vec<(&str, &str)>,
+        name: &str,
+        rule_index: u32,
+        match_index: u32,
+    ) -> Arc<GrpcRouteRuleUnit> {
+        use crate::core::gateway::lb::BackendSelector;
+        use crate::core::gateway::plugins::PluginRuntime;
+        use crate::core::gateway::routes::grpc::match_unit::GrpcMatchSpecificity;
+        use crate::core::gateway::routes::grpc::GrpcRouteInfo;
+
+        let grpc_match = GRPCRouteMatch {
+            method: None,
+            headers: if headers.is_empty() {
+                None
+            } else {
+                Some(
+                    headers
+                        .iter()
+                        .map(|(n, v)| GRPCHeaderMatch {
+                            match_type: None,
+                            name: n.to_string(),
+                            value: v.to_string(),
+                        })
+                        .collect(),
+                )
+            },
+        };
+        let route_info = Arc::new(GrpcRouteInfo {
+            parent_refs: None,
+            effective_hostnames: vec!["*".to_string()],
+        });
+        let rule = Arc::new(GRPCRouteRule {
+            name: None,
+            matches: None,
+            filters: None,
+            backend_refs: None,
+            timeouts: None,
+            retry: None,
+            session_persistence: None,
+            backend_finder: BackendSelector::new(),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            parsed_timeouts: None,
+        });
+        Arc::new(GrpcRouteRuleUnit {
+            resource_key: format!("default/{}", name),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),
+            rule,
+            route_info,
+            specificity: GrpcMatchSpecificity {
+                header_count: headers.len() as u16,
+                creation_ts_ms: 0,
+                route_key: format!("default/{}", name),
+                rule_index,
+                match_index,
+            },
+        })
+    }
+
+    #[test]
+    fn test_header_only_routes_classified_as_catch_all() {
+        let route1 = make_header_only_route(vec![("Version", "one")], "header-r1", 0, 0);
+        let route2 = make_header_only_route(vec![("Version", "two")], "header-r2", 1, 0);
+        let route3 = make_header_only_route(vec![("Version", "two"), ("Color", "orange")], "header-r3", 0, 1);
+
+        let engine = GrpcMatchEngine::new(vec![route1, route2, route3]);
+        assert_eq!(engine.catch_all_routes.len(), 3);
+        assert!(engine.exact_routes.is_empty());
+        assert!(engine.service_routes.is_empty());
+    }
+
+    #[test]
+    fn test_header_only_routes_sorted_by_specificity() {
+        let route_1h = make_header_only_route(vec![("Version", "one")], "one-header", 0, 0);
+        let route_2h = make_header_only_route(vec![("Version", "two"), ("Color", "orange")], "two-headers", 0, 1);
+
+        let engine = GrpcMatchEngine::new(vec![route_1h, route_2h]);
+        assert_eq!(engine.catch_all_routes.len(), 2);
+        assert_eq!(engine.catch_all_routes[0].specificity.header_count, 2);
+        assert_eq!(engine.catch_all_routes[1].specificity.header_count, 1);
     }
 }

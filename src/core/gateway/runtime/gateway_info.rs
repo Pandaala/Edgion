@@ -30,6 +30,11 @@ pub struct GatewayInfo {
     pub metrics_test_key: Option<String>,
     /// Test type for metrics collection (from edgion.io/metrics-test-type annotation)
     pub metrics_test_type: Option<TestType>,
+
+    /// Per-Gateway opt-in for 421 Misdirected Request detection
+    /// (from edgion.io/require-sni-host-match annotation).
+    /// Only used to enable when global config is off; cannot disable when global is on.
+    pub require_sni_host_match: Option<bool>,
 }
 
 impl GatewayInfo {
@@ -40,6 +45,7 @@ impl GatewayInfo {
         listener_name: Option<String>,
         metrics_test_key: Option<String>,
         metrics_test_type: Option<TestType>,
+        require_sni_host_match: Option<bool>,
     ) -> Self {
         Self {
             namespace,
@@ -47,6 +53,7 @@ impl GatewayInfo {
             listener_name,
             metrics_test_key,
             metrics_test_type,
+            require_sni_host_match,
         }
     }
 

@@ -133,6 +133,11 @@ impl DomainGrpcRouteRules {
         let grpc_routes = self.grpc_routes.load();
         grpc_routes.match_route(session, index, hostname)
     }
+
+    /// Returns true if this port has any gRPC routes registered.
+    pub fn has_routes(&self) -> bool {
+        self.grpc_routes.load().match_engine.is_some()
+    }
 }
 
 // ============================================================================

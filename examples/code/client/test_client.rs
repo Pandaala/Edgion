@@ -125,6 +125,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "backend-tls-san" | "backendtlssan" => "Gateway/TLS/BackendTLSSAN".to_string(),
             "backend-tls-gateway-cert" | "backendtlsgatewaycert" => "Gateway/TLS/BackendTLSGatewayCert".to_string(),
+            "misdirected-request" | "misdirectedrequest" | "421" => "Gateway/TLS/MisdirectedRequest".to_string(),
             "frontend-validation" | "frontendvalidation" | "fv-mtls" => "Gateway/FrontendValidation".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
@@ -202,11 +203,13 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/TLS/BackendTLSSAN" => "Gateway/TLS/BackendTLSSAN",
         "Gateway/TLS/BackendTLSGatewayCert" => "Gateway/TLS/BackendTLSGatewayCert",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
+        "Gateway/TLS/MisdirectedRequest" => "Gateway/TLS/MisdirectedRequest",
         "Gateway/TLS/NoHostnameListener" => "Gateway/TLS/NoHostnameListener",
         "Gateway/FrontendValidation" => "Gateway/FrontendValidation",
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
+        "EdgionPlugins/Cors" => "EdgionPlugins",
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/BasicAuth" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
@@ -560,6 +563,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GatewayTlsNoHostnameListenerTestSuite));
         }
+        "Gateway/TLS/MisdirectedRequest" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/MisdirectedRequest tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::MisdirectedRequestTestSuite));
+        }
         "Gateway/FrontendValidation" => {
             if !gateway {
                 eprintln!("Error: Gateway/FrontendValidation tests require --gateway flag");
@@ -742,6 +752,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::BandwidthLimitTestSuite));
+        }
+        "EdgionPlugins/Cors" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/Cors tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CorsPluginTestSuite));
         }
         "EdgionPlugins/CtxSet" => {
             if !gateway {
@@ -1010,6 +1027,7 @@ async fn main() -> Result<()> {
                 let http_host = match suite.as_str() {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
                     "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+                    "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
                     "EdgionTls/port_only" => "port-only.example.com",
                     "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
                     _ => "test.example.com",
@@ -1033,6 +1051,7 @@ async fn main() -> Result<()> {
                 let http_host = match suite.as_str() {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
                     "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+                    "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
                     "EdgionTls/port_only" => "port-only.example.com",
                     "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
                     _ => "test.example.com",

@@ -327,15 +327,14 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: HTTPRoute with one valid rule and one rule with non-existent cross-ns backend
-    /// should have Accepted=True, ResolvedRefs=False, PartiallyInvalid=True.
-    /// The non-existent service makes the rule invalid (service_exists check), while
-    /// the ref_denied aspect only affects ResolvedRefs. Accepted remains True because
-    /// ref_denied does not cause route rejection.
+    /// Test: HTTPRoute with one valid rule and one rule with ref-denied cross-ns backend
+    /// should have Accepted=True and ResolvedRefs=False(RefNotPermitted).
+    /// Per Gateway API conformance spec (httproute-partially-invalid-via-invalid-reference-grant),
+    /// PartiallyInvalid is NOT required for backend ref issues — only ResolvedRefs is affected.
     fn test_partially_invalid() -> TestCase {
         TestCase::new(
             "partially_invalid",
-            "HTTPRoute with one valid and one invalid rule: Accepted=True, ResolvedRefs=False, PartiallyInvalid=True",
+            "HTTPRoute with one valid and one ref-denied rule: Accepted=True, ResolvedRefs=False(RefNotPermitted)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -361,7 +360,7 @@ impl RefGrantStatusTestSuite {
                                 );
                             }
 
-                            // ResolvedRefs should be False (ref_denied + service not found)
+                            // ResolvedRefs should be False(RefNotPermitted) — per Gateway API spec
                             if !Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
                                 return TestResult::failed(
                                     start.elapsed(),
@@ -372,34 +371,10 @@ impl RefGrantStatusTestSuite {
                                 );
                             }
 
-                            // PartiallyInvalid should be True (service doesn't exist → rule invalid)
-                            let has_partially_invalid = if let Some(parents) = route["status"]["parents"].as_array() {
-                                parents.iter().any(|p| {
-                                    p["conditions"].as_array().is_some_and(|conds| {
-                                        conds.iter().any(|c| {
-                                            c["type"].as_str() == Some("PartiallyInvalid")
-                                                && c["status"].as_str() == Some("True")
-                                        })
-                                    })
-                                })
-                            } else {
-                                false
-                            };
-
-                            if has_partially_invalid {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Accepted=True, ResolvedRefs=False(RefNotPermitted), PartiallyInvalid=True — as expected".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "Expected PartiallyInvalid=True (service doesn't exist), got status: {}",
-                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
-                                    ),
-                                )
-                            }
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Accepted=True, ResolvedRefs=False(RefNotPermitted) — as expected".to_string(),
+                            )
                         }
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }

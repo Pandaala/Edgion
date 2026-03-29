@@ -448,7 +448,14 @@ impl KubernetesController {
     /// - ReferenceGrant: Cross-namespace reference validation
     /// - Service: Route backend references need Service info
     fn phase1_kinds(&self) -> Vec<&'static str> {
-        let mut kinds = vec!["GatewayClass", "Gateway", "Secret", "ConfigMap", "ReferenceGrant", "Service"];
+        let mut kinds = vec![
+            "GatewayClass",
+            "Gateway",
+            "Secret",
+            "ConfigMap",
+            "ReferenceGrant",
+            "Service",
+        ];
         if self.endpoint_mode.uses_endpoint() {
             kinds.push("Endpoints");
         }

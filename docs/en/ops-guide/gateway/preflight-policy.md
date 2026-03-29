@@ -96,12 +96,20 @@ spec:
     statusCode: 200
 ```
 
-## Relationship with CORS Plugin
+## Relationship with CORS
 
-The preflight policy works **in conjunction with** the CORS plugin:
+The preflight policy behavior depends on how CORS is configured on the route:
+
+### Gateway API Native CORS Filter (`type: CORS`)
+
+When a route has a native `type: CORS` filter, the **preflight handler does not intervene**. Preflight requests are handled directly by the route-level `GapiCorsFilter` plugin. The `preflightPolicy` configuration has no effect on this path.
+
+### EdgionPlugins CORS Plugin
+
+When a route references an EdgionPlugins CORS plugin via `ExtensionRef`, the preflight handler works **in conjunction with** it:
 
 1. **Preflight Handler executes first**: Intercepts preflight requests before all plugins
-2. **Automatically looks up CORS configuration**: Searches for CORS plugin configuration in the route's plugin list
+2. **Automatically looks up CORS configuration**: Searches for CORS plugin configuration in the route's EdgionPlugins
 3. **Uses CORS response**: If CORS configuration is found, responds according to CORS rules
 4. **Default response**: If no CORS configuration is found, returns the configured default status code
 
@@ -110,11 +118,13 @@ The preflight policy works **in conjunction with** the CORS plugin:
 ```
 Browser OPTIONS request
     |
-Preflight Handler intercepts
-    |
-Check if route has CORS plugin configured?
-    |-- Yes -> Respond using CORS configuration
-    +-- No  -> Return 204 No Content
+Route has native type: CORS filter?
+    |-- Yes -> Skip Preflight Handler, GapiCorsFilter handles it
+    +-- No  -> Preflight Handler intercepts
+                  |
+              Route has EdgionPlugins CORS config?
+                  |-- Yes -> Respond using CORS configuration
+                  +-- No  -> Return 204 No Content
 ```
 
 ## FAQ
@@ -131,7 +141,9 @@ Check if route has CORS plugin configured?
 
 ### Q: Will preflight responses go through other plugins?
 
-**A:** No. Preflight requests are intercepted and responded to **before** all plugins (including authentication, rate limiting, etc.), which is standards-compliant behavior.
+**A:** It depends on how CORS is configured:
+- **EdgionPlugins CORS**: No. Preflight is intercepted by the preflight handler before all plugins.
+- **Native `type: CORS` filter**: Preflight is handled by GapiCorsFilter within the route-level plugin chain. Filters listed before CORS in the HTTPRoute `filters` array will execute first. It is recommended to place the CORS filter at the beginning of the filters list.
 
 ### Q: How to view preflight request processing logs?
 

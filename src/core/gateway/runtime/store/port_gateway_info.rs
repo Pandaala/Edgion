@@ -215,6 +215,10 @@ impl PortGatewayInfoStore {
                 .get(annotations::METRICS_TEST_TYPE)
                 .map(|s| TestType::from_str(s));
 
+            let require_sni_host_match = gateway_annotations_map
+                .get(annotations::REQUIRE_SNI_HOST_MATCH)
+                .map(|v| v == "true");
+
             for listener in listeners {
                 if is_listener_conflicted(gateway, &listener.name) {
                     continue;
@@ -227,6 +231,7 @@ impl PortGatewayInfoStore {
                     Some(listener.name.clone()),
                     metrics_test_key.clone(),
                     metrics_test_type.clone(),
+                    require_sni_host_match,
                 );
 
                 let gateway_key = gi.gateway_key();

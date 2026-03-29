@@ -170,14 +170,11 @@ fn collect_matching_listeners(gateway: &Gateway, pr: &ParentReference) -> Vec<Op
 
     let mut seen: HashSet<Option<String>> = HashSet::new();
     let mut result = Vec::new();
-    for listener in listeners.iter().filter(|l| {
-        pr.section_name.as_ref().is_none_or(|sn| l.name == *sn) && pr.port.is_none_or(|p| l.port == p)
-    }) {
-        let hostname = listener
-            .hostname
-            .as_ref()
-            .filter(|h| !h.is_empty())
-            .cloned();
+    for listener in listeners
+        .iter()
+        .filter(|l| pr.section_name.as_ref().is_none_or(|sn| l.name == *sn) && pr.port.is_none_or(|p| l.port == p))
+    {
+        let hostname = listener.hostname.as_ref().filter(|h| !h.is_empty()).cloned();
         if seen.insert(hostname.clone()) {
             result.push(hostname);
         }

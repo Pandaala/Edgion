@@ -3,8 +3,8 @@
 
 mod filter_conflict;
 mod header_modifier;
-mod redirect;
 mod percent_mirror;
+mod redirect;
 mod security;
 
 pub use filter_conflict::FilterConflictTestSuite;

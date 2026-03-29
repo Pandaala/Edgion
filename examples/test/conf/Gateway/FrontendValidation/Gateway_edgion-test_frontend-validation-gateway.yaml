@@ -19,3 +19,17 @@ spec:
             - name: fv-client-ca
               kind: Secret
               group: ""
+    - name: https-fv-insecure
+      hostname: "fv-mtls.example.com"
+      protocol: HTTPS
+      port: 31336
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: fv-server-cert
+        frontendValidation:
+          mode: AllowInsecureFallback
+          caCertificateRefs:
+            - name: fv-client-ca
+              kind: Secret
+              group: ""

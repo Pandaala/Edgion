@@ -78,102 +78,128 @@ impl Cors {
         }
     }
 
-    /// Set CORS headers on the response
-    fn set_cors_headers(&self, session: &mut dyn PluginSession, allowed_origin: &str) -> CorsResult<()> {
+    /// Compute all CORS + timing + private-network headers as key-value pairs.
+    /// This allows callers to apply headers to either a ResponseHeader (preflight)
+    /// or via session queue (simple requests / preflight_continue).
+    fn build_cors_header_pairs(
+        &self,
+        session: &mut dyn PluginSession,
+        allowed_origin: &str,
+        is_preflight: bool,
+    ) -> Vec<(&'static str, String)> {
+        let mut headers = Vec::new();
+
         // Access-Control-Allow-Origin (required)
-        session.set_response_header("Access-Control-Allow-Origin", allowed_origin)?;
+        headers.push(("Access-Control-Allow-Origin", allowed_origin.to_string()));
 
         // Access-Control-Allow-Methods
-        let methods = self.config.get_allow_methods();
-        session.set_response_header("Access-Control-Allow-Methods", &methods)?;
+        headers.push(("Access-Control-Allow-Methods", self.config.get_allow_methods()));
 
         // Access-Control-Allow-Headers
         let requested_headers = session.header_value("access-control-request-headers");
-        let headers = self.config.get_allow_headers(requested_headers.as_deref());
-        session.set_response_header("Access-Control-Allow-Headers", &headers)?;
+        headers.push((
+            "Access-Control-Allow-Headers",
+            self.config.get_allow_headers(requested_headers.as_deref()),
+        ));
 
         // Access-Control-Expose-Headers
         let expose = self.config.get_expose_headers();
         if !expose.is_empty() {
-            session.set_response_header("Access-Control-Expose-Headers", expose)?;
+            headers.push(("Access-Control-Expose-Headers", expose.to_string()));
         }
 
         // Access-Control-Allow-Credentials
         if self.config.allow_credentials {
-            session.set_response_header("Access-Control-Allow-Credentials", "true")?;
+            headers.push(("Access-Control-Allow-Credentials", "true".to_string()));
         }
 
-        // Access-Control-Max-Age (for preflight, only if configured)
-        if self.is_preflight_request(session) {
+        // Access-Control-Max-Age (preflight only)
+        if is_preflight {
             if let Some(max_age) = self.config.max_age {
-                session.set_response_header("Access-Control-Max-Age", &max_age.to_string())?;
+                headers.push(("Access-Control-Max-Age", max_age.to_string()));
             }
         }
 
-        // Vary: Origin (append if not using wildcard)
+        // Timing-Allow-Origin
+        if let Some(origin) = session.header_value("origin") {
+            if self.config.is_timing_origin_allowed(&origin) {
+                let timing_value = if let Some(ref timing_origins) = self.config.timing_allow_origins {
+                    if timing_origins == "**" {
+                        origin.clone()
+                    } else if timing_origins == "*" {
+                        "*".to_string()
+                    } else {
+                        origin.clone()
+                    }
+                } else {
+                    origin.clone()
+                };
+                headers.push(("Timing-Allow-Origin", timing_value));
+            }
+        }
+
+        // Private Network Access
+        if self.config.allow_private_network {
+            if let Some(req_pn) = session.header_value("access-control-request-private-network") {
+                if req_pn == "true" {
+                    headers.push(("Access-Control-Allow-Private-Network", "true".to_string()));
+                }
+            }
+        }
+
+        headers
+    }
+
+    /// Apply CORS headers via session queue (for simple requests and preflight_continue).
+    /// Headers are consumed during the upstream response phase.
+    fn set_cors_headers_via_session(
+        &self,
+        session: &mut dyn PluginSession,
+        allowed_origin: &str,
+        is_preflight: bool,
+    ) -> CorsResult<()> {
+        let headers = self.build_cors_header_pairs(session, allowed_origin, is_preflight);
+        for (name, value) in &headers {
+            session.set_response_header(name, value)?;
+        }
         if self.config.should_add_vary_header() {
             session.append_response_header("Vary", "Origin")?;
         }
-
         Ok(())
     }
 
-    /// Set Timing-Allow-Origin header if configured
-    fn set_timing_headers(&self, session: &mut dyn PluginSession, origin: &str) -> CorsResult<()> {
-        if self.config.is_timing_origin_allowed(origin) {
-            // Determine what value to set
-            let timing_value = if let Some(ref timing_origins) = self.config.timing_allow_origins {
-                if timing_origins == "**" {
-                    origin.to_string()
-                } else if timing_origins == "*" {
-                    "*".to_string()
-                } else if timing_origins == origin {
-                    origin.to_string()
-                } else {
-                    // Matched via regex, return the origin
-                    origin.to_string()
-                }
-            } else {
-                // Only regex configured
-                origin.to_string()
-            };
-
-            session.set_response_header("Timing-Allow-Origin", &timing_value)?;
+    /// Build a preflight response with CORS headers set directly on the ResponseHeader.
+    /// This avoids the session queue which is only consumed during the upstream response phase.
+    fn build_preflight_response(
+        &self,
+        session: &mut dyn PluginSession,
+        allowed_origin: &str,
+    ) -> CorsResult<Box<ResponseHeader>> {
+        let headers = self.build_cors_header_pairs(session, allowed_origin, true);
+        let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).map_err(|e| Box::new(e) as CorsError)?;
+        for (name, value) in &headers {
+            resp.insert_header(*name, value.as_str())
+                .map_err(|e| Box::new(e) as CorsError)?;
         }
-
-        Ok(())
+        if self.config.should_add_vary_header() {
+            resp.append_header("Vary", "Origin")
+                .map_err(|e| Box::new(e) as CorsError)?;
+        }
+        Ok(Box::new(resp))
     }
 
     /// Handle preflight request
     async fn handle_preflight(&self, session: &mut dyn PluginSession, allowed_origin: &str) -> CorsResult<()> {
-        // Set all CORS headers
-        self.set_cors_headers(session, allowed_origin)?;
-
-        // Check timing headers
-        if let Some(origin) = session.header_value("origin") {
-            self.set_timing_headers(session, &origin)?;
-        }
-
-        // Check for Private Network Access request
-        if self.config.allow_private_network {
-            if let Some(req_private_network) = session.header_value("access-control-request-private-network") {
-                if req_private_network == "true" {
-                    session.set_response_header("Access-Control-Allow-Private-Network", "true")?;
-                }
-            }
-        }
-
-        // If preflight_continue is true, don't send response here
+        // If preflight_continue is true, queue headers for upstream response phase
         if self.config.preflight_continue {
-            // Let the request continue to upstream
+            self.set_cors_headers_via_session(session, allowed_origin, true)?;
             return Ok(());
         }
 
-        // Return 200 OK
-        let resp = ResponseHeader::build(200, None)?;
-        session.write_response_header(Box::new(resp), true).await?;
-
-        // Send empty body
+        // Build preflight response with CORS headers set directly on ResponseHeader.
+        // Cannot use session queue because terminated requests skip the upstream response phase.
+        let resp = self.build_preflight_response(session, allowed_origin)?;
+        session.write_response_header(resp, true).await?;
         session.write_response_body(Some(Bytes::new()), true).await?;
 
         Ok(())
@@ -181,15 +207,7 @@ impl Cors {
 
     /// Handle normal CORS request (non-preflight)
     fn handle_normal_request(&self, session: &mut dyn PluginSession, allowed_origin: &str) -> CorsResult<()> {
-        // Set CORS headers
-        self.set_cors_headers(session, allowed_origin)?;
-
-        // Check timing headers
-        if let Some(origin) = session.header_value("origin") {
-            self.set_timing_headers(session, &origin)?;
-        }
-
-        Ok(())
+        self.set_cors_headers_via_session(session, allowed_origin, false)
     }
 }
 
@@ -210,8 +228,18 @@ impl RequestFilter for Cors {
         let allowed_origin = match self.get_validated_origin(session) {
             Some(origin) => origin,
             None => {
-                // Origin not allowed, don't set CORS headers (browser will block)
                 plugin_log.push("Origin rejected; ");
+                // For preflight with non-matching origin, return 204 directly
+                // to avoid forwarding a useless OPTIONS request to the backend.
+                if self.is_preflight_request(session) {
+                    if let Ok(resp) = ResponseHeader::build(204, None) {
+                        let _ = session.write_response_header(Box::new(resp), true).await;
+                        let _ = session.write_response_body(Some(Bytes::new()), true).await;
+                    }
+                    plugin_log.push("Preflight rejected; ");
+                    return PluginRunningResult::ErrTerminateRequest;
+                }
+                // Simple request: allow through without CORS headers (browser will block)
                 return PluginRunningResult::GoodNext;
             }
         };

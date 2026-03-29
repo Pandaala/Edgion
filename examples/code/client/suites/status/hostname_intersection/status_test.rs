@@ -136,17 +136,13 @@ impl HostnameIntersectionStatusTestSuite {
 
                             let count = listeners.len();
                             if count == 3 {
-                                let names: Vec<&str> = listeners
-                                    .iter()
-                                    .filter_map(|l| l["name"].as_str())
-                                    .collect();
+                                let names: Vec<&str> = listeners.iter().filter_map(|l| l["name"].as_str()).collect();
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!("3 listeners present: {:?}", names),
                                 )
                             } else {
-                                let pretty =
-                                    serde_json::to_string_pretty(listeners).unwrap_or_default();
+                                let pretty = serde_json::to_string_pretty(listeners).unwrap_or_default();
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!("Expected 3 listeners, got {}. Listeners:\n{}", count, pretty),
@@ -175,22 +171,22 @@ impl HostnameIntersectionStatusTestSuite {
                             let listeners = match gateway["status"]["listeners"].as_array() {
                                 Some(l) => l,
                                 None => {
-                                    return TestResult::failed(start.elapsed(), "No listeners in Gateway status".into());
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        "No listeners in Gateway status".into(),
+                                    );
                                 }
                             };
 
                             let mut errors = Vec::new();
                             for listener in listeners {
                                 let name = listener["name"].as_str().unwrap_or("<unknown>");
-                                let has_httproute = listener["supportedKinds"]
-                                    .as_array()
-                                    .is_some_and(|kinds| {
-                                        kinds.iter().any(|k| {
-                                            k["kind"].as_str() == Some("HTTPRoute")
-                                                && k["group"].as_str()
-                                                    == Some("gateway.networking.k8s.io")
-                                        })
-                                    });
+                                let has_httproute = listener["supportedKinds"].as_array().is_some_and(|kinds| {
+                                    kinds.iter().any(|k| {
+                                        k["kind"].as_str() == Some("HTTPRoute")
+                                            && k["group"].as_str() == Some("gateway.networking.k8s.io")
+                                    })
+                                });
 
                                 if !has_httproute {
                                     errors.push(format!(
@@ -290,7 +286,10 @@ impl HostnameIntersectionStatusTestSuite {
                             let listeners = match gateway["status"]["listeners"].as_array() {
                                 Some(l) => l,
                                 None => {
-                                    return TestResult::failed(start.elapsed(), "No listeners in Gateway status".into());
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        "No listeners in Gateway status".into(),
+                                    );
                                 }
                             };
 
