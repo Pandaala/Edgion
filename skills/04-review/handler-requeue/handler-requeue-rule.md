@@ -10,7 +10,7 @@
 2. Implement cleanup in `on_delete()` with `remove_from_gateway_route_index()`
 
 Without this, when the handler processes a resource before its Gateway exists,
-`resolved_ports` (or effective hostnames) will be permanently stale because
+`resolved_listeners` (or effective hostnames) will be permanently stale because
 Gateway's `on_change()` relies on `gateway_route_index` to find and requeue
 affected resources.
 

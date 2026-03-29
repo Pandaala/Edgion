@@ -36,7 +36,7 @@ What `TlsRouteHandler` demonstrates:
 - validate backend refs
 - record cross-namespace refs for later `ReferenceGrant` revalidation
 - register backend `Service` refs for cross-resource requeue
-- resolve `parentRefs` into `resolved_ports`
+- resolve `parentRefs` into `resolved_listeners`
 - register in `gateway_route_index`
 - update attached-route tracking and parent status
 

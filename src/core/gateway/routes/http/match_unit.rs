@@ -1,5 +1,5 @@
 use crate::core::gateway::runtime::matching::route::check_gateway_listener_match;
-use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;

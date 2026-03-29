@@ -15,6 +15,6 @@ pub use server::{
     end_response_grpc_unavailable, end_response_grpc_unimplemented, GatewayBase, ServerHeaderOpts,
 };
 pub use store::{
-    get_global_gateway_config_store, get_global_gateway_store, get_port_gateway_info_store, rebuild_port_gateway_infos,
-    GatewayInfoIndex,
+    get_global_gateway_config_store, get_global_gateway_store, get_listener_gateway_info_store,
+    rebuild_listener_gateway_infos, GatewayInfoIndex,
 };

@@ -111,7 +111,7 @@ src/core/gateway/
 ├── runtime/       # Pingora 运行时
 │   ├── server/    # GatewayBase、listener_builder、error_response、server_header
 │   ├── matching/  # Gateway 匹配、TLS 证书匹配 (ArcSwap)
-│   ├── store/     # GatewayStore、GatewayConfigStore、PortGatewayInfoStore (ArcSwap)
+│   ├── store/     # GatewayStore、GatewayConfigStore、ListenerGatewayInfoStore (ArcSwap)
 │   ├── handler.rs # Gateway 资源 ConfHandler 实现
 │   └── gateway_info.rs
 ├── services/      # 附加服务

@@ -1,6 +1,6 @@
 ---
 name: resource-tls-route
-description: TLSRoute 资源：TLS SNI 路由、passthrough/terminate 模式、per-port 路由表。
+description: TLSRoute 资源：TLS SNI 路由、passthrough/terminate 模式、per-listener 路由表。
 ---
 
 # TLSRoute 资源
@@ -28,11 +28,11 @@ TLSRoute 定义 TLS 层的路由规则，支持 TLS passthrough 和 terminate �
 1. 记录跨命名空间引用到 CrossNsRefManager
 2. 注册 Service 引用到 ServiceRefManager
 3. 标记被拒绝的跨命名空间 backendRef
-4. 清除并重算 `resolved_ports`：从 parentRef 解析 Listener 端口，遵循 Gateway API 规范：
-   - parentRef.port 已指定 → 直接使用
-   - parentRef.sectionName 已指定 → 查找匹配 Listener 获取端口
+4. 清除并重算 `resolved_listeners`：通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`，遵循 Gateway API 规范：
+   - 总是查找 Gateway 获取地址和协议（不再有只取 parentRef.port 的快速路径）
+   - sectionName + port 同时存在时，校验两者一致性
    - 都未指定 → 挂载到父 Gateway 的所有 Listener（受 allowedRoutes 命名空间策略约束）
-5. 若 resolved_ports 为 None，记录 debug 日志
+5. 若 resolved_listeners 为 None，记录 debug 日志
 
 ### on_change
 
@@ -51,7 +51,7 @@ TLSRoute 定义 TLS 层的路由规则，支持 TLS passthrough 和 terminate �
 TLSRoute 的 ConfHandler 将路由编译到 `GlobalTlsRouteManagers`：
 
 1. **路由初始化**：调用 `initialize_route()` 验证路由数据
-2. **per-port 管理**：根据 resolved_ports 注册到对应端口的路由管理器
+2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
 3. **SNI 匹配**：根据 spec.hostnames 进行 TLS SNI 匹配，支持通配符域名
 4. **增量更新**：partial_update 时收集受影响端口（旧端口 + 新端口），仅重建受影响端口的路由表
 

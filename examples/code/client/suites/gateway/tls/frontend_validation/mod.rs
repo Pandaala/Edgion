@@ -23,6 +23,10 @@ use std::time::Instant;
 
 const PORT: u16 = 31312;
 const PORT_INSECURE: u16 = 31336;
+/// Port for the invalid-ca-cert-gw: valid TLS cert but nonexistent CA ref → Programmed=False.
+/// After the listener-status filter fix, no TLS entry is registered for this port,
+/// so all TLS connections must fail.
+const PORT_INVALID_CA: u16 = 31338;
 const HOSTNAME: &str = "fv-mtls.example.com";
 
 pub struct FrontendValidationTestSuite;
@@ -290,6 +294,54 @@ impl FrontendValidationTestSuite {
         )
     }
 
+    // Test 7: Listener with Programmed=False (invalid CA cert ref) must not serve TLS.
+    //
+    // Gateway `invalid-ca-cert-gw` has `frontendValidation.caCertificateRefs` pointing to
+    // a nonexistent Secret (`does-not-exist`).  The Controller sets Programmed=False on its
+    // HTTPS listener.  After the data-plane listener-status filter fix, that listener is not
+    // registered in the TLS matcher, so any TLS connection to PORT_INVALID_CA must fail.
+    //
+    // Without the fix the listener's valid TLS cert (`fv-server-cert`) would still be served
+    // and the connection would succeed — proving the fix is exercised.
+    fn test_invalid_ca_ref_listener_not_served() -> TestCase {
+        TestCase::new(
+            "fv_invalid_ca_ref_not_served",
+            "Invalid CA cert ref: Programmed=False listener should not serve TLS",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let client = match create_client_with_sni(HOSTNAME, &ctx.target_host, PORT_INVALID_CA) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Failed to create client: {}", e),
+                            )
+                        }
+                    };
+
+                    let url = format!("https://{}:{}/health", HOSTNAME, PORT_INVALID_CA);
+
+                    match client.get(&url).send().await {
+                        Ok(response) => TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected TLS failure (listener Programmed=False should not be registered), \
+                                 but request succeeded with status {}",
+                                response.status()
+                            ),
+                        ),
+                        Err(_) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "TLS connection failed as expected — Programmed=False listener is not registered".to_string(),
+                        ),
+                    }
+                })
+            },
+        )
+    }
+
     // Test 6: InsecureFallback + invalid client certificate → 200 OK
     fn test_insecure_invalid_cert() -> TestCase {
         TestCase::new(
@@ -362,6 +414,7 @@ impl TestSuite for FrontendValidationTestSuite {
             Self::test_insecure_valid_cert(),
             Self::test_insecure_no_cert(),
             Self::test_insecure_invalid_cert(),
+            Self::test_invalid_ca_ref_listener_not_served(),
         ]
     }
 }

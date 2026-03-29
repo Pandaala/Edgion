@@ -135,7 +135,7 @@ kubectl exec -n edgion-system $POD -- sh -c "kill -9 $CTRL_PID"
 
 ### Hostname 冲突检测规则（重要）
 
-Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 port+protocol+hostname 组合，不是 hostname 相交。
+Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 socket-address+hostname 组合（冲突检测 key 通过 `make_conflict_key(SocketAddr)` 按 socket 地址分组），不是 hostname 相交。
 
 - `None`（wildcard）+ `None` → **Conflicted**（两个都是 wildcard）
 - `foo.example.com` + `foo.example.com` → **Conflicted**

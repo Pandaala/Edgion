@@ -1,6 +1,6 @@
 ---
 name: resource-udp-route
-description: UDPRoute 资源：L4 UDP 路由、per-port 路由表、无状态 per-packet 转发。
+description: UDPRoute 资源：L4 UDP 路由、per-listener 路由表、无状态 per-packet 转发。
 ---
 
 # UDPRoute 资源
@@ -28,8 +28,8 @@ UDPRoute 定义 L4 UDP 层的路由规则，将 UDP 数据包转发到后端 Ser
 1. 记录跨命名空间引用到 CrossNsRefManager
 2. 注册 Service 引用到 ServiceRefManager
 3. 标记被拒绝的跨命名空间 backendRef
-4. 清除并重算 `resolved_ports`：从 parentRef 解析 Listener 端口（逻辑与 TCPRoute/TLSRoute 一致）
-5. 若 resolved_ports 为 None，记录 debug 日志
+4. 清除并重算 `resolved_listeners`：通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`（逻辑与 TCPRoute/TLSRoute 一致）
+5. 若 resolved_listeners 为 None，记录 debug 日志
 
 ### on_change
 
@@ -48,7 +48,7 @@ UDPRoute 定义 L4 UDP 层的路由规则，将 UDP 数据包转发到后端 Ser
 UDPRoute 的 ConfHandler 将路由编译到 `GlobalUdpRouteManagers`：
 
 1. **路由初始化**：调用 `initialize_route()` 验证并准备路由数据
-2. **per-port 管理**：根据 resolved_ports 注册到对应端口的路由管理器
+2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
 3. **全量/增量更新**：full_set 时清空并重建；partial_update 时收集受影响端口仅重建这些端口
 4. **无状态转发**：UDP 为 per-packet 转发，每个数据包独立路由到后端
 

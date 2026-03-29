@@ -16,6 +16,7 @@
 //! without touching any HashMap.
 
 use crate::core::common::matcher::HashHost;
+use crate::core::gateway::runtime::store::listener_gateway_info::is_listener_not_programmed;
 use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{FrontendTLSValidation, SecretObjectReference};
@@ -144,6 +145,13 @@ impl GatewayTlsMatcher {
                     Some(tls) => tls,
                     None => continue,
                 };
+
+                // Skip listeners the Controller has marked as not programmed (e.g. invalid CA cert
+                // reference, unresolvable Secret). Registering them would allow a broken TLS config
+                // to serve or shadow valid listeners on the same port.
+                if is_listener_not_programmed(gateway, &listener.name) {
+                    continue;
+                }
 
                 // For listeners using EdgionTls cert-provider, certificate_refs may be
                 // absent because certs are loaded dynamically via the EdgionTls CRD.
@@ -812,5 +820,93 @@ mod tests {
         // Different listener should not match either
         let result = matcher.match_sni(&key_8443, "unknown.example.com");
         assert!(result.is_none(), "Different listener should not match");
+    }
+
+    #[test]
+    fn test_programmed_false_listener_not_registered() {
+        use crate::types::resources::common::Condition;
+        use crate::types::resources::gateway::{GatewayStatus, ListenerStatus};
+
+        let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
+
+        let tls_config = make_tls_config("server-cert", Some("default"));
+        let listener = create_test_listener("https", Some("api.example.com"), Some(tls_config));
+
+        let mut gateway = create_test_gateway("test-gw", "default", vec![listener]);
+        gateway.status = Some(GatewayStatus {
+            addresses: None,
+            conditions: None,
+            listeners: Some(vec![ListenerStatus {
+                name: "https".to_string(),
+                supported_kinds: vec![],
+                attached_routes: 0,
+                conditions: vec![Condition {
+                    last_transition_time: "2024-01-01T00:00:00Z".to_string(),
+                    message: String::new(),
+                    observed_generation: None,
+                    reason: "Invalid".to_string(),
+                    status: "False".to_string(),
+                    type_: "Programmed".to_string(),
+                }],
+            }]),
+        });
+
+        matcher.rebuild_from_gateways(&[gateway]);
+
+        // Programmed=False listener must not be in the TLS matcher
+        let result = matcher.match_sni(&key, "api.example.com");
+        assert!(result.is_none(), "Programmed=False listener should not serve TLS");
+        assert!(matcher.is_empty(), "matcher should be empty when only listener is invalid");
+    }
+
+    #[test]
+    fn test_programmed_false_does_not_shadow_valid_listener() {
+        use crate::types::resources::common::Condition;
+        use crate::types::resources::gateway::{GatewayStatus, ListenerStatus};
+
+        let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
+
+        // Invalid gateway: Programmed=False, catch-all (no hostname), valid cert
+        let invalid_tls = make_tls_config("invalid-cert", Some("default"));
+        let invalid_listener = create_test_listener("https", None, Some(invalid_tls));
+        let mut invalid_gw = create_test_gateway("invalid-gw", "default", vec![invalid_listener]);
+        invalid_gw.status = Some(GatewayStatus {
+            addresses: None,
+            conditions: None,
+            listeners: Some(vec![ListenerStatus {
+                name: "https".to_string(),
+                supported_kinds: vec![],
+                attached_routes: 0,
+                conditions: vec![Condition {
+                    last_transition_time: "2024-01-01T00:00:00Z".to_string(),
+                    message: String::new(),
+                    observed_generation: None,
+                    reason: "NoValidCACertificate".to_string(),
+                    status: "False".to_string(),
+                    type_: "Programmed".to_string(),
+                }],
+            }]),
+        });
+
+        // Valid gateway: Programmed=True, same port, specific hostname
+        let valid_tls = make_tls_config("valid-cert", Some("default"));
+        let valid_listener = create_test_listener("https", Some("api.example.com"), Some(valid_tls));
+        let valid_gw = create_test_gateway("valid-gw", "default", vec![valid_listener]);
+
+        matcher.rebuild_from_gateways(&[invalid_gw, valid_gw]);
+
+        // Valid listener should still match
+        let result = matcher.match_sni(&key, "api.example.com");
+        assert!(result.is_some(), "valid listener should still be registered");
+        assert_eq!(result.unwrap().gateway_name, "valid-gw");
+
+        // Invalid listener's cert should NOT appear as catch-all fallback
+        let fallback = matcher.match_sni(&key, "unknown.example.com");
+        assert!(
+            fallback.is_none() || fallback.as_ref().map(|e| e.gateway_name.as_str()) == Some("valid-gw"),
+            "catch-all should not use the invalid gateway's cert"
+        );
     }
 }

@@ -34,7 +34,7 @@ Controller → gRPC Watch/List → ClientCache → ConfHandler<T>.full_set / par
 
 ```
 partial_update(add, update, remove)
-  → 计算 affected_scope (hostname / port / service_key)
+  → 计算 affected_scope (hostname / listener_key / service_key)
   → 只对受影响的子引擎 rebuild
   → 未受影响部分通过 Arc 复用
 ```
@@ -91,20 +91,20 @@ partial_update(add, update, remove)
 
 ### 7.1 按影响范围 rebuild（推荐）
 
-适用于有多维度分桶的资源（HTTPRoute 按 hostname，TLSRoute 按 port）。
+适用于有多维度分桶的资源（HTTPRoute 按 hostname，TLSRoute 按 listener_key）。
 
 ```
 partial_update:
-  1. 在修改 cache 之前，收集旧数据的 affected_scope（旧 hostname / 旧 port）
+  1. 在修改 cache 之前，收集旧数据的 affected_scope（旧 hostname / 旧 listener_key）
   2. 修改 cache（insert / remove）
-  3. 收集新数据的 affected_scope（新 hostname / 新 port）
+  3. 收集新数据的 affected_scope（新 hostname / 新 listener_key）
   4. 合并 affected_scope = old ∪ new
   5. 只对 affected_scope 内的子引擎 rebuild
 ```
 
 参考：
 - HTTPRoute `build_affected_hostnames` → per-hostname `rebuild_exact_hostname`
-- TLSRoute `rebuild_affected_port_managers(&affected_ports)`
+- TLSRoute `rebuild_affected_listener_managers(&affected_listeners)`
 
 ### 7.2 缓存解析结果（次优）
 
@@ -134,7 +134,7 @@ partial_update:
 | 资源 | 评级 | 策略 |
 |------|------|------|
 | HTTPRoute | A | 按 affected hostname 精确 rebuild，未变 hostname 通过 Arc 复用 |
-| TLSRoute | A | 按 affected port rebuild，未变 port 不触发 |
+| TLSRoute | A | 按 affected listener rebuild，未变 listener 不触发 |
 | TCPRoute | A | 逐条 add_route / remove_route，无全量 rebuild |
 | UDPRoute | A | 同 TCPRoute |
 | EndpointSlice | A | 按 affected_services 增量更新 LB |

@@ -1,5 +1,5 @@
 use crate::core::gateway::routes::http::match_unit::{HttpRouteRuleUnit, RouteMatchResult};
-use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use pingora_proxy::Session;

@@ -1,5 +1,5 @@
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
-use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::grpc_route::GRPCMethodMatchType;

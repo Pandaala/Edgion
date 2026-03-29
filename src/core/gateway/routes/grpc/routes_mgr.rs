@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
-use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule, ListenerKey};
@@ -215,8 +215,8 @@ impl GlobalGrpcRouteManagers {
 
     /// Rebuild all per-listener managers from the current route cache and units cache.
     pub fn rebuild_all_listener_managers(&self) {
-        // Pre-create listener managers for all known listeners from PortGatewayInfoStore
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         for key in pgis.all_listener_keys() {
             self.get_or_create_listener_manager(&key);
         }
@@ -283,7 +283,7 @@ impl GlobalGrpcRouteManagers {
         }
         drop(units_cache);
 
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
         let mut removed_stale = 0usize;
         for (key, units) in &listener_buckets {

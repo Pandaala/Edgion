@@ -1,6 +1,6 @@
 ---
 name: gateway-route-matching
-description: 路由匹配总览：多级流水线（Port→Domain→Path→DeepMatch）、per-port 隔离、注册流程、原子切换。
+description: 路由匹配总览：多级流水线（Listener→Domain→Path→DeepMatch）、per-listener 隔离、注册流程、原子切换。
 ---
 
 # 路由匹配总览
@@ -10,32 +10,32 @@ description: 路由匹配总览：多级流水线（Port→Domain→Path→DeepM
 请求到达 Gateway 后，路由匹配按以下层级依次执行：
 
 ```
-Port → Domain (精确/通配/catch-all) → Path (regex/radix) → Deep match
+Listener → Domain (精确/通配/catch-all) → Path (regex/radix) → Deep match
 ```
 
-1. **Port 隔离**：根据连接到达的监听端口，选择对应的 per-port 路由表。
+1. **Listener 隔离**：根据连接到达的监听地址和协议（`ListenerKey`，格式 `"{addr}/{protocol}"`），选择对应的 per-listener 路由表。
 2. **Domain 匹配**：在 `DomainRouteRules` 中按主机名查找 `RouteRules`。
 3. **Path 匹配**：在 `RouteRules` 中先尝试 regex 引擎，再尝试 radix 引擎。
 4. **Deep match**：对候选路由执行 Gateway/Listener 约束、HTTP method、headers、query params 精确校验。
 
-## Per-port 隔离
+## Per-listener 隔离
 
 每个 listener 拥有独立的路由表，由 `GlobalHttpRouteManagers` 管理：
 
 ```
 GlobalHttpRouteManagers
-├── route_cache: DashMap<String, HTTPRoute>        # 全局路由缓存
-└── by_port: DashMap<u16, Arc<HttpPortRouteManager>>
+├── route_cache: DashMap<String, HTTPRoute>                    # 全局路由缓存
+└── by_listener: DashMap<ListenerKey, Arc<HttpPortRouteManager>>
     └── HttpPortRouteManager
-        └── route_table: ArcSwap<DomainRouteRules>  # per-port 快照
+        └── route_table: ArcSwap<DomainRouteRules>             # per-listener 快照
 ```
 
 - `route_cache` 保存所有 HTTPRoute 的规范副本（`resource_key -> HTTPRoute`）。
-- `by_port` 为每个监听端口维护一个 `HttpPortRouteManager`，其中的 `ArcSwap<DomainRouteRules>` 支持无锁读。
-- 路由表更新时，仅受影响的端口会被重建；其他端口不受干扰。
+- `by_listener` 为每个 `ListenerKey` 维护一个 `HttpPortRouteManager`，其中的 `ArcSwap<DomainRouteRules>` 支持无锁读。
+- 路由表更新时，仅受影响的 listener 会被重建；其他 listener 不受干扰。
 - `pg_request_filter` 在每个请求中通过 `load_route_table()` 获取当前快照，整个请求生命周期内引用不变。
 
-其他协议（gRPC / TCP / TLS / UDP）的全局管理器遵循相同的 `Global*RouteManagers → per-port manager → ArcSwap` 模式。
+其他协议（gRPC / TCP / TLS / UDP）的全局管理器遵循相同的 `Global*RouteManagers → per-listener manager → ArcSwap` 模式。
 
 ## Domain 匹配
 
@@ -116,12 +116,12 @@ route_cache 更新（DashMap insert/remove）
 sync_lb_policies_for_routes（同步 LB 策略到全局 PolicyStore）
        │
        ▼
-rebuild_all_port_managers / rebuild_affected_port_managers
+rebuild_all_listener_managers / rebuild_affected_listener_managers
        │
-       ├── bucket_routes_by_port（按 resolved_ports 分桶）
-       │   └── 回退：parentRef.port → 全部端口
+       ├── bucket_routes_by_listener（按 resolved_listeners 分桶）
+       │   └── resolved_listeners 为空的路由直接 skip+warn
        │
-       ├── 对每个受影响端口：
+       ├── 对每个受影响 listener：
        │   ├── parse_http_routes_to_domain_rules（解析路由为 domain→rules）
        │   │   ├── filter_accepted_parent_refs（过滤已 Accepted 的 parentRef）
        │   │   ├── get_effective_hostnames（resolved_hostnames > spec.hostnames > "*"）
@@ -132,14 +132,14 @@ rebuild_all_port_managers / rebuild_affected_port_managers
        │   │   └── RadixHostMatchEngine 初始化（通配域名）
        │   └── HttpPortRouteManager::store_route_table（ArcSwap 原子切换）
        │
-       └── 清理无路由且无活跃 Listener 的过期端口
+       └── 清理无路由且无活跃 Listener 的过期 listener
 ```
 
 整个更新过程中，已有请求持有旧快照引用，不会被中断。新请求自动获取最新快照。
 
-## 多 Gateway 端口共享
+## 多 Gateway Listener 共享
 
-当多个 Gateway 的 Listener 监听同一端口时，所有 Gateway 的路由会合并到同一个 per-port `DomainRouteRules` 中。在 deep match 阶段，`check_gateway_listener_match` 通过遍历 `gateway_infos`（来自 `PortGatewayInfoStore`）来验证每条路由是否属于当前请求所匹配的 Gateway/Listener，从而实现逻辑上的 Listener 隔离。
+当多个 Gateway 的 Listener 绑定到同一个地址/协议组合（同一 `ListenerKey`）时，所有 Gateway 的路由会合并到同一个 per-listener `DomainRouteRules` 中。在 deep match 阶段，`check_gateway_listener_match` 通过遍历 `gateway_infos`（来自 `ListenerGatewayInfoStore`）来验证每条路由是否属于当前请求所匹配的 Gateway/Listener，从而实现逻辑上的 Listener 隔离。
 
 ## 关键源文件
 

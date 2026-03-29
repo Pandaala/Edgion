@@ -21,6 +21,7 @@ pub use udp_route_table::UdpRouteTable;
 
 pub use edgion_udp::EdgionUdpProxy;
 
+use crate::types::ListenerKey;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -28,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 /// Registry that holds CancellationTokens for active UDP listeners,
 /// allowing external lifecycle management (hot-reload, graceful shutdown).
 pub struct UdpListenerRegistry {
-    tokens: RwLock<HashMap<u16, CancellationToken>>,
+    tokens: RwLock<HashMap<ListenerKey, CancellationToken>>,
 }
 
 impl UdpListenerRegistry {
@@ -38,19 +39,19 @@ impl UdpListenerRegistry {
         }
     }
 
-    /// Register a cancel token for a UDP listener port.
-    /// If a previous listener exists on this port, cancel it first.
-    pub fn register(&self, port: u16, token: CancellationToken) {
+    /// Register a cancel token for a UDP listener key.
+    /// If a previous listener exists for this key, cancel it first.
+    pub fn register(&self, key: &ListenerKey, token: CancellationToken) {
         let mut map = self.tokens.write().expect("lock udp listener registry");
-        if let Some(old) = map.insert(port, token) {
+        if let Some(old) = map.insert(key.clone(), token) {
             old.cancel();
         }
     }
 
-    /// Cancel and remove the listener on the given port.
+    /// Cancel and remove the listener for the given key.
     /// Returns true if a listener was found and cancelled.
-    pub fn cancel(&self, port: u16) -> bool {
-        let removed = self.tokens.write().expect("lock udp listener registry").remove(&port);
+    pub fn cancel(&self, key: &ListenerKey) -> bool {
+        let removed = self.tokens.write().expect("lock udp listener registry").remove(key);
         if let Some(token) = removed {
             token.cancel();
             true

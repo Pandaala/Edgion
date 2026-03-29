@@ -4,7 +4,7 @@ use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRo
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::gateway::routes::http::match_unit::RouteMatchResult;
 use crate::core::gateway::routes::http::HttpRouteRuleUnit;
-use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::HTTPRoute;
@@ -334,8 +334,8 @@ impl GlobalHttpRouteManagers {
 
     /// Rebuild all per-listener managers from the current route cache.
     pub fn rebuild_all_listener_managers(&self) {
-        // Pre-create listener managers for all known listeners from PortGatewayInfoStore
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         for key in pgis.all_listener_keys() {
             self.get_or_create_listener_manager(&key);
         }
@@ -353,7 +353,7 @@ impl GlobalHttpRouteManagers {
         }
 
         // Remove stale listener entries: listeners that have no routes AND are not
-        // registered in PortGatewayInfoStore (i.e. no Gateway listener for that key).
+        // registered in ListenerGatewayInfoStore (i.e. no Gateway listener for that key).
         let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
@@ -404,7 +404,7 @@ impl GlobalHttpRouteManagers {
             }
         }
 
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
         let mut removed_stale = 0usize;
         for (key, routes) in &listener_buckets {

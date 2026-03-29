@@ -54,10 +54,10 @@ Both scripts are **self-contained** — they auto-start and auto-stop the enviro
 |----------|-------------------|-------------------|
 | HTTPRoute | `httproute` | RouteManager (exact_domains, wildcard_domains, catch_all, http_routes) |
 | GRPCRoute | `grpcroute` | GrpcRouteManager (grpc_routes, resource_keys) |
-| TCPRoute | `tcproute` | GlobalTcpRouteManagers (route_cache, port_count) |
-| UDPRoute | `udproute` | GlobalUdpRouteManagers (route_cache, port_count) |
-| TLSRoute | `tlsroute` | GlobalTlsRouteManagers (route_cache, port_count) |
-| EdgionTls | `edgiontls` | TlsStore (entries), TlsCertMatcher (port_count) |
+| TCPRoute | `tcproute` | GlobalTcpRouteManagers (route_cache, listener_count) |
+| UDPRoute | `udproute` | GlobalUdpRouteManagers (route_cache, listener_count) |
+| TLSRoute | `tlsroute` | GlobalTlsRouteManagers (route_cache, listener_count) |
+| EdgionTls | `edgiontls` | TlsStore (entries), TlsCertMatcher (listener_count) |
 | EdgionPlugins | `edgionplugins` | PluginStore (plugins) |
 | EdgionStreamPlugins | `edgionstreamplugins` | StreamPluginStore (plugins) |
 | BackendTLSPolicy | `backendtlspolicy` | BackendTLSPolicyStore (policies, reverse_index_targets) |

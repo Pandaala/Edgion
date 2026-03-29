@@ -3,7 +3,7 @@
 //! This module provides clean integration interfaces for the HTTP pipeline to call,
 //! encapsulating all gRPC-specific logic within the `grpc` module.
 
-use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
 use crate::types::EdgionHttpContext;

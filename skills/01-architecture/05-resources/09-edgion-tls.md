@@ -26,11 +26,11 @@ EdgionTls 是 Edgion 的自定义扩展资源，提供比 Gateway 内置 certifi
 1. **清除旧引用**：清除 SecretRefManager 中该 EdgionTls 的旧记录
 2. **解析服务端证书 Secret**：从 `spec.secret_ref` 获取 Secret 引用，在 SecretRefManager 注册，从 GLOBAL_SECRET_STORE 读取 Secret 数据填入 `spec.secret`
 3. **解析 CA 证书 Secret（mTLS）**：若配置了 `spec.client_auth.ca_secret_ref`，同样注册并解析 CA Secret，填入 `client_auth.ca_secret`
-4. **解析 resolved_ports**：从 parentRef 解析 Listener 端口，逻辑与路由资源一致：parentRef.port 优先，否则通过 sectionName 或全部 Listener 获取，受 allowedRoutes 命名空间策略约束
+4. **解析 resolved_listeners**：从 parentRef 解析 Listener 端口，逻辑与路由资源一致：parentRef.port 优先，否则通过 sectionName 或全部 Listener 获取，受 allowedRoutes 命名空间策略约束
 
 ### on_change
 
-注册到 GatewayRouteIndex，确保 Gateway 的 hostname/port 变更时能 requeue 此 EdgionTls（重新计算 resolved_ports）。
+注册到 GatewayRouteIndex，确保 Gateway 的 hostname/port 变更时能 requeue 此 EdgionTls（重新计算 resolved_listeners）。
 
 ### on_delete
 

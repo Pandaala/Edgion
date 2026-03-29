@@ -6,7 +6,7 @@ Use this file when the task is about real Kubernetes object annotations under `m
 
 - `src/types/constants/annotations.rs`
 - `src/core/gateway/runtime/server/listener_builder.rs`
-- `src/core/gateway/runtime/store/port_gateway_info.rs`
+- `src/core/gateway/runtime/store/listener_gateway_info.rs`
 - `src/core/gateway/routes/tcp/conf_handler_impl.rs`
 - `src/core/gateway/routes/tls/conf_handler_impl.rs`
 - `src/types/resources/http_route_preparse.rs`

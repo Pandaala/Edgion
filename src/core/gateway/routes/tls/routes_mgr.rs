@@ -122,8 +122,8 @@ impl GlobalTlsRouteManagers {
     /// 2. For each listener that has routes: rebuild the manager
     /// 3. For listeners that no longer have routes: rebuild with empty set
     pub fn rebuild_all_listener_managers(&self) {
-        // Pre-create listener managers for all known listeners from PortGatewayInfoStore
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         for key in pgis.all_listener_keys() {
             self.get_or_create_listener_manager(&key);
         }
@@ -139,7 +139,7 @@ impl GlobalTlsRouteManagers {
         }
 
         // Remove stale listener entries that no longer have any routes and are not
-        // registered in PortGatewayInfoStore
+        // registered in ListenerGatewayInfoStore
         let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
@@ -186,7 +186,7 @@ impl GlobalTlsRouteManagers {
             }
         }
 
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
         let mut removed_stale = 0usize;
         for (key, routes) in &listener_buckets {

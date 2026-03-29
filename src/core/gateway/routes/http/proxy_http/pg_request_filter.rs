@@ -3,8 +3,8 @@ use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_match_grpc_route};
 use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
 use crate::core::gateway::runtime::hostname_matches_listener;
-use crate::core::gateway::runtime::store::get_port_gateway_info_store;
-use crate::core::gateway::runtime::store::port_gateway_info::format_gateway_key;
+use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
+use crate::core::gateway::runtime::store::listener_gateway_info::format_gateway_key;
 use crate::core::gateway::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
 };
@@ -29,7 +29,7 @@ pub async fn request_filter(
 
     // Step 1: Route matching — single lookup against the global route table.
     // Load the pre-built GatewayInfoIndex for O(1) gateway/listener lookups.
-    let gateway_index = get_port_gateway_info_store().get_index(&edgion_http.listener_key);
+    let gateway_index = get_listener_gateway_info_store().get_index(&edgion_http.listener_key);
 
     // HTTPS listener isolation: 421 Misdirected Request (Gateway API spec).
     // If SNI matched listener A but Host should be served by a different listener → 421.
@@ -78,9 +78,9 @@ pub async fn request_filter(
             return Ok(true);
         }
 
-        let grpc_port_manager =
+        let grpc_listener_manager =
             get_global_grpc_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
-        let grpc_routes = grpc_port_manager.load_route_table();
+        let grpc_routes = grpc_listener_manager.load_route_table();
         let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_index).await;
 
         // If GRPCRoutes exist on this port but none matched, return UNIMPLEMENTED
@@ -98,9 +98,9 @@ pub async fn request_filter(
     }
 
     if !ctx.is_grpc_route_matched {
-        let http_port_manager =
+        let http_listener_manager =
             get_global_http_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
-        let port_routes = http_port_manager.load_route_table();
+        let port_routes = http_listener_manager.load_route_table();
         match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
                 ctx.gateway_info = result.matched_gateway;

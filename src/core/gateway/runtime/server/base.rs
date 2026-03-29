@@ -2,7 +2,7 @@ use crate::core::gateway::conf_sync::conf_client::ConfigClient;
 use crate::core::gateway::observe::access_log::get_access_logger_unchecked;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::server::listener_builder;
-use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_port_gateway_infos};
+use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_listener_gateway_infos};
 use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
 use crate::types::{Gateway, ResourceMeta};
@@ -84,9 +84,9 @@ impl GatewayBase {
         // 2. Get ServerConf Arc from pingora_server for listener creation
         let server_conf_arc = pingora_server.configuration.clone();
 
-        // 2.5. Populate global PortGatewayInfoStore so that route matching can
-        // dynamically look up which Gateways share each port.
-        rebuild_port_gateway_infos(&gateways);
+        // 2.5. Populate global ListenerGatewayInfoStore so that route matching can
+        // dynamically look up which Gateways share each listener.
+        rebuild_listener_gateway_infos(&gateways);
 
         // Track bound listeners to avoid duplicate physical bindings
         let mut bound_listeners: HashSet<ListenerKey> = HashSet::new();

@@ -1,4 +1,4 @@
-//! Port-based GatewayInfo Store
+//! Listener-based GatewayInfo Store
 //!
 //! Maintains a dynamic mapping from listener port to all Gateway/Listener
 //! contexts sharing that port. This enables correct route matching when
@@ -145,12 +145,12 @@ pub struct ListenerEntry {
     pub allowed_routes: Option<AllowedRoutes>,
 }
 
-pub struct PortGatewayInfoStore {
+pub struct ListenerGatewayInfoStore {
     flat_data: ArcSwap<HashMap<ListenerKey, Arc<Vec<GatewayInfo>>>>,
     index_data: ArcSwap<HashMap<ListenerKey, Arc<GatewayInfoIndex>>>,
 }
 
-impl PortGatewayInfoStore {
+impl ListenerGatewayInfoStore {
     pub fn new() -> Self {
         Self {
             flat_data: ArcSwap::from_pointee(HashMap::new()),
@@ -224,6 +224,9 @@ impl PortGatewayInfoStore {
                 if is_listener_conflicted(gateway, &listener.name) {
                     continue;
                 }
+                if is_listener_not_programmed(gateway, &listener.name) {
+                    continue;
+                }
 
                 let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
                 let key = ListenerKey::new(addr, &listener.protocol);
@@ -272,7 +275,7 @@ impl PortGatewayInfoStore {
         self.index_data.store(Arc::new(index_arc_map));
 
         tracing::info!(
-            component = "port_gateway_info_store",
+            component = "listener_gateway_info_store",
             listeners = listener_count,
             gateway_listener_entries = total_entries,
             "Rebuilt listener GatewayInfo store"
@@ -281,24 +284,24 @@ impl PortGatewayInfoStore {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct PortGatewayInfoStats {
-    pub port_count: usize,
+pub struct ListenerGatewayInfoStats {
+    pub listener_count: usize,
     pub total_entries: usize,
 }
 
-impl PortGatewayInfoStore {
+impl ListenerGatewayInfoStore {
     /// Collect size statistics for leak-detection tests.
-    pub fn stats(&self) -> PortGatewayInfoStats {
+    pub fn stats(&self) -> ListenerGatewayInfoStats {
         let data = self.flat_data.load();
         let total: usize = data.values().map(|v| v.len()).sum();
-        PortGatewayInfoStats {
-            port_count: data.len(),
+        ListenerGatewayInfoStats {
+            listener_count: data.len(),
             total_entries: total,
         }
     }
 }
 
-impl Default for PortGatewayInfoStore {
+impl Default for ListenerGatewayInfoStore {
     fn default() -> Self {
         Self::new()
     }
@@ -330,14 +333,184 @@ fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-static GLOBAL_PORT_GATEWAY_INFO_STORE: LazyLock<PortGatewayInfoStore> = LazyLock::new(PortGatewayInfoStore::new);
-
-/// Get a reference to the global PortGatewayInfoStore
-pub fn get_port_gateway_info_store() -> &'static PortGatewayInfoStore {
-    &GLOBAL_PORT_GATEWAY_INFO_STORE
+/// Check if a Listener is explicitly marked as not programmed in Gateway status.
+///
+/// Returns `true` when the Listener has `Programmed=False` **or** `Accepted=False`.
+/// This prevents the data plane from registering TLS and route entries for listeners
+/// that the Controller has determined cannot be correctly configured (e.g. invalid CA
+/// cert reference, unresolvable Secret, unsupported TLS mode).
+///
+/// Returns `false` (allow-through) when:
+/// - Gateway has no status yet (initial creation — avoids startup race with Controller)
+/// - Listener name not found in status (partial update — safe side is allow)
+pub(crate) fn is_listener_not_programmed(gateway: &Gateway, listener_name: &str) -> bool {
+    gateway
+        .status
+        .as_ref()
+        .and_then(|s| s.listeners.as_ref())
+        .and_then(|listeners| listeners.iter().find(|ls| ls.name == listener_name))
+        .map(|ls| {
+            ls.conditions.iter().any(|c| {
+                (c.type_ == "Programmed" || c.type_ == "Accepted") && c.status == "False"
+            })
+        })
+        .unwrap_or(false)
 }
 
-/// Rebuild the global PortGatewayInfoStore from Gateway list
-pub fn rebuild_port_gateway_infos(gateways: &[Gateway]) {
-    get_port_gateway_info_store().rebuild(gateways);
+static GLOBAL_LISTENER_GATEWAY_INFO_STORE: LazyLock<ListenerGatewayInfoStore> =
+    LazyLock::new(ListenerGatewayInfoStore::new);
+
+/// Get a reference to the global ListenerGatewayInfoStore
+pub fn get_listener_gateway_info_store() -> &'static ListenerGatewayInfoStore {
+    &GLOBAL_LISTENER_GATEWAY_INFO_STORE
+}
+
+/// Rebuild the global ListenerGatewayInfoStore from Gateway list
+pub fn rebuild_listener_gateway_infos(gateways: &[Gateway]) {
+    get_listener_gateway_info_store().rebuild(gateways);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::common::Condition;
+    use crate::types::resources::gateway::{GatewaySpec, GatewayStatus, ListenerStatus, Listener};
+    use kube::api::ObjectMeta;
+
+    fn make_condition(type_: &str, status: &str) -> Condition {
+        Condition {
+            last_transition_time: "2024-01-01T00:00:00Z".to_string(),
+            message: String::new(),
+            observed_generation: None,
+            reason: "Test".to_string(),
+            status: status.to_string(),
+            type_: type_.to_string(),
+        }
+    }
+
+    fn make_listener_status(name: &str, conditions: Vec<Condition>) -> ListenerStatus {
+        ListenerStatus {
+            name: name.to_string(),
+            supported_kinds: vec![],
+            attached_routes: 0,
+            conditions,
+        }
+    }
+
+    fn make_gateway(listener_name: &str, conditions: Vec<Condition>) -> Gateway {
+        Gateway {
+            metadata: ObjectMeta {
+                name: Some("test-gw".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: GatewaySpec {
+                gateway_class_name: "test".to_string(),
+                listeners: Some(vec![Listener {
+                    name: listener_name.to_string(),
+                    hostname: None,
+                    port: 443,
+                    protocol: "HTTPS".to_string(),
+                    tls: None,
+                    allowed_routes: None,
+                }]),
+                addresses: None,
+                tls: None,
+            },
+            status: Some(GatewayStatus {
+                addresses: None,
+                conditions: None,
+                listeners: Some(vec![make_listener_status(listener_name, conditions)]),
+            }),
+        }
+    }
+
+    #[test]
+    fn test_not_programmed_no_status() {
+        // status=None → allow through (startup race)
+        let gw = Gateway {
+            metadata: ObjectMeta::default(),
+            spec: GatewaySpec {
+                gateway_class_name: "t".to_string(),
+                listeners: None,
+                addresses: None,
+                tls: None,
+            },
+            status: None,
+        };
+        assert!(!is_listener_not_programmed(&gw, "https"));
+    }
+
+    #[test]
+    fn test_not_programmed_when_programmed_false() {
+        let gw = make_gateway("https", vec![
+            make_condition("Accepted", "True"),
+            make_condition("Programmed", "False"),
+        ]);
+        assert!(is_listener_not_programmed(&gw, "https"));
+    }
+
+    #[test]
+    fn test_not_programmed_when_accepted_false() {
+        let gw = make_gateway("https", vec![make_condition("Accepted", "False")]);
+        assert!(is_listener_not_programmed(&gw, "https"));
+    }
+
+    #[test]
+    fn test_not_programmed_false_when_all_true() {
+        let gw = make_gateway("https", vec![
+            make_condition("Accepted", "True"),
+            make_condition("Programmed", "True"),
+        ]);
+        assert!(!is_listener_not_programmed(&gw, "https"));
+    }
+
+    #[test]
+    fn test_not_programmed_false_when_listener_missing_from_status() {
+        let gw = make_gateway("https", vec![make_condition("Programmed", "False")]);
+        // Asking about a different listener → safe to allow through
+        assert!(!is_listener_not_programmed(&gw, "http"));
+    }
+
+    #[test]
+    fn test_rebuild_skips_not_programmed_listener() {
+        let store = ListenerGatewayInfoStore::new();
+
+        // Gateway with Programmed=False on its only listener
+        let invalid_gw = make_gateway("https", vec![make_condition("Programmed", "False")]);
+        store.rebuild(&[invalid_gw]);
+
+        use crate::types::listener_key::ListenerKey;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let key = ListenerKey::new(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443),
+            "HTTPS",
+        );
+        assert!(
+            store.get_index(&key).is_empty(),
+            "Programmed=False listener should not be registered in the index"
+        );
+    }
+
+    #[test]
+    fn test_rebuild_includes_programmed_true_listener() {
+        let store = ListenerGatewayInfoStore::new();
+
+        let valid_gw = make_gateway("https", vec![
+            make_condition("Accepted", "True"),
+            make_condition("Programmed", "True"),
+        ]);
+        store.rebuild(&[valid_gw]);
+
+        use crate::types::listener_key::ListenerKey;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let key = ListenerKey::new(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443),
+            "HTTPS",
+        );
+        assert!(
+            !store.get_index(&key).is_empty(),
+            "Programmed=True listener should be registered in the index"
+        );
+    }
 }

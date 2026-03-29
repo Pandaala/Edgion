@@ -35,7 +35,7 @@ Edgion 在 conformance 测试中声明以下 profiles（GEP-1709）：
 ## TLS Certificate Selection
 
 Edgion intentionally does not support cross-port TLS certificate fallback, but does
-support catch-all (no hostname) listener certificate selection as a per-port fallback.
+support catch-all (no hostname) listener certificate selection as a per-listener fallback.
 
 ### What Edgion does
 
@@ -51,19 +51,19 @@ support catch-all (no hostname) listener certificate selection as a per-port fal
 - No search across all listener ports for a usable certificate
 - No implicit fallback from one listener's certificate to another listener on a different port
 
-## Why catch-all TLS matching is limited to per-port scope
+## Why catch-all TLS matching is limited to per-listener scope
 
 Gateway API allows a Listener without `hostname`, meaning the listener matches all hostnames
 at the routing level. Edgion honors this by using the catch-all listener's certificate as a
-per-port fallback when no hostname-specific listener matches the SNI. The certificate may not
+per-listener fallback when no hostname-specific listener matches the SNI. The certificate may not
 be valid for every SNI, but this matches Gateway API conformance expectations — the catch-all
-listener is the correct fallback within its port.
+listener is the correct fallback within its listener scope.
 
-## Why cross-port fallback is not supported
+## Why cross-listener fallback is not supported
 
-Gateway listeners are port-scoped. Allowing a fallback that ignores port breaks listener isolation and can select the wrong certificate when the same hostname is configured differently on multiple ports.
+Gateway listeners are listener-scoped (keyed by `ListenerKey` = `"{addr}/{protocol}"`). Allowing a fallback that ignores the listener key breaks listener isolation and can select the wrong certificate when the same hostname is configured differently on multiple listeners.
 
-Edgion treats `(port, sni)` as the required lookup key for Gateway TLS.
+Edgion treats `(ListenerKey, sni)` as the required lookup key for Gateway TLS.
 
 ## EdgionTls binding rule
 
@@ -85,7 +85,7 @@ Gateway. This applies to:
 
 **Bug history (2026-03):** The original implementation only handled `port` set
 or `sectionName` set, missing the both-absent fallback. This caused TLSRoute
-and EdgionTls to silently get `resolved_ports = None` when parentRef had only
+and EdgionTls to silently get `resolved_listeners = None` when parentRef had only
 `name` + `namespace`.
 
 **Test coverage:** `TLSRoute/BothAbsentParentRef` and
@@ -98,7 +98,7 @@ Without this, when a Gateway is added or its listeners change, EdgionTls would
 not be requeued to re-resolve its listener ports.
 
 **Bug history (2026-03):** EdgionTls originally had no `on_change()` at all.
-If EdgionTls was processed before its Gateway during init, `resolved_ports`
+If EdgionTls was processed before its Gateway during init, `resolved_listeners`
 would permanently be `None` with no requeue mechanism. Fixed by adding
 `on_change()` with `update_gateway_route_index()` and `on_delete()` with
 `remove_from_gateway_route_index()`.
@@ -112,8 +112,8 @@ TCPRoute, UDPRoute.
 
 When editing TLS matching:
 
-- keep `EdgionTls` matching port-scoped
-- keep Gateway TLS matching port-scoped
-- catch-all (no hostname) listeners are valid per-port fallbacks — do not remove this support
-- do not reintroduce cross-port fallback lookup
+- keep `EdgionTls` matching listener-scoped (keyed by `ListenerKey`)
+- keep Gateway TLS matching listener-scoped
+- catch-all (no hostname) listeners are valid per-listener fallbacks — do not remove this support
+- do not reintroduce cross-listener fallback lookup
 - prefer explicit status/reporting over implicit matcher fallback

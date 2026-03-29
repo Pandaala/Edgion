@@ -71,5 +71,5 @@ spec:
 ## 特点
 
 - **无匹配条件**：TCP 路由仅按端口转发，不解析协议内容
-- **per-port 隔离**：每个 Listener 端口独立路由
+- **per-listener 隔离**：每个 Listener（按 `ListenerKey` 索引）独立路由
 - **StreamPlugins**：通过注解绑定 TCP 层插件（如 IP 限制）

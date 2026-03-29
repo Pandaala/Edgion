@@ -151,8 +151,8 @@ mod route_matching_tests {
 
     /// Helper function to verify route matching without Session
     /// Instead, we'll test the internal state of RouteRules
-    fn verify_route_exists(port_manager: &Arc<HttpPortRouteManager>, hostname: &str, should_exist: bool) {
-        let domain_routes = port_manager.load_route_table();
+    fn verify_route_exists(listener_manager: &Arc<HttpPortRouteManager>, hostname: &str, should_exist: bool) {
+        let domain_routes = listener_manager.load_route_table();
         // Check exact domain map first (case-insensitive)
         let exact_map = domain_routes.exact_domain_map.load();
         let exists_exact = exact_map.get(&hostname.to_lowercase()).is_some();
@@ -182,12 +182,12 @@ mod route_matching_tests {
 
     /// Helper function to verify route count
     fn verify_route_count(
-        port_manager: &Arc<HttpPortRouteManager>,
+        listener_manager: &Arc<HttpPortRouteManager>,
         hostname: &str,
         expected_normal_routes: usize,
         expected_regex_routes: usize,
     ) {
-        let domain_routes = port_manager.load_route_table();
+        let domain_routes = listener_manager.load_route_table();
         // Try exact domain map first (case-insensitive)
         let exact_map = domain_routes.exact_domain_map.load();
         let route_rules = if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {

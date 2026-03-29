@@ -4,7 +4,8 @@ use crate::core::gateway::routes::grpc::get_global_grpc_route_managers;
 use crate::core::gateway::routes::http::get_global_http_route_managers;
 use crate::core::gateway::runtime::matching::rebuild_gateway_tls_matcher;
 use crate::core::gateway::runtime::store::{
-    get_global_gateway_config_store, get_global_gateway_store, get_port_gateway_info_store, rebuild_port_gateway_infos,
+    get_global_gateway_config_store, get_global_gateway_store, get_listener_gateway_info_store,
+    rebuild_listener_gateway_infos,
 };
 use crate::types::prelude_resources::Gateway;
 use crate::types::ListenerKey;
@@ -69,9 +70,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
         rebuild_gateway_tls_matcher(&gateways);
 
         // Rebuild listener → GatewayInfo mapping (for dynamic route matching)
-        let keys_before = get_port_gateway_info_store().all_listener_keys();
-        rebuild_port_gateway_infos(&gateways);
-        let keys_after = get_port_gateway_info_store().all_listener_keys();
+        let keys_before = get_listener_gateway_info_store().all_listener_keys();
+        rebuild_listener_gateway_infos(&gateways);
+        let keys_after = get_listener_gateway_info_store().all_listener_keys();
 
         // Rebuild HTTP/gRPC per-listener route managers only when the listener
         // set changed (listeners added or removed). This avoids unnecessary full
@@ -173,9 +174,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
             let gateways = store.list_gateways();
             rebuild_gateway_tls_matcher(&gateways);
 
-            let keys_before = get_port_gateway_info_store().all_listener_keys();
-            rebuild_port_gateway_infos(&gateways);
-            let keys_after = get_port_gateway_info_store().all_listener_keys();
+            let keys_before = get_listener_gateway_info_store().all_listener_keys();
+            rebuild_listener_gateway_infos(&gateways);
+            let keys_after = get_listener_gateway_info_store().all_listener_keys();
 
             if listeners_changed(&keys_before, &keys_after) {
                 get_global_http_route_managers().rebuild_all_listener_managers();

@@ -313,7 +313,7 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
     let socket = UdpSocket::from_std(socket)?;
 
     let cancel_token = CancellationToken::new();
-    get_udp_listener_registry().register(port, cancel_token.clone());
+    get_udp_listener_registry().register(&context.listener_key, cancel_token.clone());
 
     let edgion_udp = Arc::new(EdgionUdpProxy::new(
         port,

@@ -146,12 +146,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
-            let route_ns_ports = route.metadata.namespace.as_deref().unwrap_or("default");
-            let listener_keys = super::route_utils::resolve_listener_keys(
-                parent_refs,
-                route_ns_ports,
-                route.metadata.namespace.as_deref(),
-            );
+            let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+            let listener_keys =
+                super::route_utils::resolve_listener_keys(parent_refs, route_ns, route.metadata.namespace.as_deref());
             if !listener_keys.is_empty() {
                 route.spec.resolved_listeners = Some(listener_keys);
             }

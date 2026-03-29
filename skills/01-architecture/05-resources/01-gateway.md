@@ -32,7 +32,7 @@ Gateway 是 Edgion 的核心资源，定义网关的 Listener（监听端口、�
 
 ### on_change
 
-1. **requeue 关联路由**：通过 `GatewayRouteIndex` 查找所有 parentRef 指向此 Gateway 的路由，当 Listener 的 hostname 或 port 发生变化时 requeue 它们，重新计算 resolved_hostnames 和 resolved_ports
+1. **requeue 关联路由**：通过 `GatewayRouteIndex` 查找所有 parentRef 指向此 Gateway 的路由，当 Listener 的 hostname 或 port 发生变化时 requeue 它们，重新计算 resolved_hostnames 和 resolved_listeners
 
 ### on_delete
 
