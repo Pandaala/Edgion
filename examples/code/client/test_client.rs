@@ -95,6 +95,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "http-security" | "httpsecurity" => "HTTPRoute/Filters/Security".to_string(),
             "https" => "EdgionTls/https".to_string(),
             "websocket" => "HTTPRoute/Protocol/WebSocket".to_string(),
+            "h2c" => "HTTPRoute/Protocol/H2C".to_string(),
             "lb-rr" | "lbrr" | "lb-roundrobin" => "HTTPRoute/Backend/LBRoundRobin".to_string(),
             "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
@@ -143,7 +144,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "ref-grant-status" => "Status/RefGrant".to_string(),
             "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
             "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
+            "gateway-frontend-validation-status" | "gwfv-status" => "Status/GatewayFrontendValidation".to_string(),
             "grpc-route-status" | "grpcroutestatus" => "Status/GRPCRoute".to_string(),
+            "tls-route-status" | "tlsroutestatus" => "Status/TLSRoute".to_string(),
             "observed-generation-status" | "observedgeneration" => "Status/ObservedGeneration".to_string(),
             _ => cmd.to_string(),
         };
@@ -179,7 +182,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Filters/PercentMirror" => "HTTPRoute/Filters/PercentMirror",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
         "HTTPRoute/Filters/Security" => "HTTPRoute/Filters/Security",
-        "HTTPRoute/Protocol" | "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
+        "HTTPRoute/Protocol" => "HTTPRoute/Protocol/WebSocket",
+        "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
+        "HTTPRoute/Protocol/H2C" => "HTTPRoute/Protocol/H2C",
         "HTTPRoute/MultiPort" => "HTTPRoute/MultiPort",
         // GRPCRoute
         "GRPCRoute/Basic" | "GRPCRoute" => "GRPCRoute/Basic",
@@ -401,12 +406,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         }
         "HTTPRoute/Protocol" => {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
+            runner.add_suite(Box::new(suites::H2cTestSuite));
             if gateway {
                 runner.add_suite(Box::new(suites::HttpsTestSuite));
             }
         }
         "HTTPRoute/Protocol/WebSocket" => {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
+        }
+        "HTTPRoute/Protocol/H2C" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/Protocol/H2C tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::H2cTestSuite));
         }
         "HTTPRoute/Protocol/HTTPS" => {
             if !gateway {
@@ -921,6 +934,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::BackendTlsStatusTestSuite));
         }
+        "Status/GatewayFrontendValidation" => {
+            if !gateway {
+                eprintln!("Error: Status/GatewayFrontendValidation tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GatewayFrontendValidationStatusTestSuite));
+        }
         "Status/TLSListenerMode" => {
             if !gateway {
                 eprintln!("Error: Status/TLSListenerMode tests require --gateway flag");
@@ -934,6 +954,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GrpcRouteStatusTestSuite));
+        }
+        "Status/TLSRoute" => {
+            if !gateway {
+                eprintln!("Error: Status/TLSRoute tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsRouteStatusTestSuite));
         }
         "Status/ObservedGeneration" => {
             if !gateway {
@@ -951,6 +978,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
+            runner.add_suite(Box::new(suites::H2cTestSuite));
             runner.add_suite(Box::new(suites::TcpTestSuite));
             runner.add_suite(Box::new(suites::UdpTestSuite));
             if gateway {

@@ -50,6 +50,8 @@ pub mod condition_reasons {
     pub const INVALID: &str = "Invalid";
     /// TLS listener mode is not supported (e.g. Mixed mode for TLSRoute)
     pub const UNSUPPORTED_TLS_MODE: &str = "UnsupportedTLSMode";
+    /// Listener field value is not supported by the current implementation.
+    pub const UNSUPPORTED_VALUE: &str = "UnsupportedValue";
     /// HTTPS/TLS listener missing tls block or certificateRefs
     pub const INVALID_TLS_CONFIGURATION: &str = "InvalidTLSConfiguration";
 

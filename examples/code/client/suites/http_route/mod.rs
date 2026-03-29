@@ -25,5 +25,5 @@ pub use filters::{
     FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite,
     PercentMirrorTestSuite,
 };
-pub use protocol::WebSocketTestSuite;
+pub use protocol::{H2cTestSuite, WebSocketTestSuite};
 pub use r#match::HttpMatchTestSuite;

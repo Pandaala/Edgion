@@ -5,20 +5,31 @@ metadata:
   namespace: edgion-test
 spec:
   gatewayClassName: public-gateway
+  tls:
+    frontend:
+      default:
+        validation:
+          caCertificateRefs:
+            - name: fv-client-ca
+              kind: Secret
+              group: ""
+      perPort:
+        - port: 31336
+          tls:
+            validation:
+              mode: AllowInsecureFallback
+              caCertificateRefs:
+                - name: fv-client-ca
+                  kind: Secret
+                  group: ""
   listeners:
     - name: https-fv
-      hostname: "fv-mtls.example.com"
       protocol: HTTPS
       port: 31312
       tls:
         mode: Terminate
         certificateRefs:
           - name: fv-server-cert
-        frontendValidation:
-          caCertificateRefs:
-            - name: fv-client-ca
-              kind: Secret
-              group: ""
     - name: https-fv-insecure
       hostname: "fv-mtls.example.com"
       protocol: HTTPS
@@ -27,9 +38,3 @@ spec:
         mode: Terminate
         certificateRefs:
           - name: fv-server-cert
-        frontendValidation:
-          mode: AllowInsecureFallback
-          caCertificateRefs:
-            - name: fv-client-ca
-              kind: Secret
-              group: ""

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -100,12 +101,11 @@ func TestConformance(t *testing.T) {
 	//
 	// GATEWAY-HTTP: declared, core features implemented.
 	// GATEWAY-GRPC: declared, core features implemented (exact/header/hostname/weight matching).
-	// GATEWAY-TLS:  NOT declared yet. TLS Passthrough implemented but conformance tests never run.
-	//               Likely needs status condition work (ResolvedRefs, supportedKinds for TLSRoute).
-	//               Add GatewayTLSConformanceProfileName + SupportTLSRoute when core tests pass.
+	// GATEWAY-TLS:  declared for testing. TLS Passthrough implemented; status condition work may be needed.
 	opts.ConformanceProfiles = sets.New[suite.ConformanceProfileName](
 		suite.GatewayHTTPConformanceProfileName,
 		suite.GatewayGRPCConformanceProfileName,
+		suite.GatewayTLSConformanceProfileName,
 	)
 
 	opts.AllowCRDsMismatch = true
@@ -129,22 +129,34 @@ func TestConformance(t *testing.T) {
 		RequestTimeout:                     2 * time.Second,
 		LatestObservedGenerationSet:        10 * time.Second,
 		DefaultTestTimeout:                 15 * time.Second,
-		RequiredConsecutiveSuccesses:        3,
+		RequiredConsecutiveSuccesses:       3,
 	}
 
 	// Optional port-forward proxy (for clusters with unreachable pod IPs)
 	proxyHost := os.Getenv("GATEWAY_PROXY_HOST")
+	enableGRPCProxy := false
+	if raw := os.Getenv("GATEWAY_PROXY_ENABLE_GRPC"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			t.Fatalf("invalid GATEWAY_PROXY_ENABLE_GRPC value %q: %v", raw, err)
+		}
+		enableGRPCProxy = parsed
+	}
 	if proxyHost != "" {
 		httpPort := os.Getenv("GATEWAY_PROXY_HTTP_PORT")
 		if httpPort == "" {
-			httpPort = "8080"
+			httpPort = "18080"
 		}
 		httpsPort := os.Getenv("GATEWAY_PROXY_HTTPS_PORT")
 		if httpsPort == "" {
-			httpsPort = "8443"
+			httpsPort = "18443"
+		}
+		https8443Port := os.Getenv("GATEWAY_PROXY_HTTPS_8443_PORT")
+		if https8443Port == "" {
+			https8443Port = "28443"
 		}
 
-		t.Logf("Using port-forward proxy: %s (HTTP: %s, HTTPS: %s)", proxyHost, httpPort, httpsPort)
+		t.Logf("Using port-forward proxy: %s (HTTP: %s, HTTPS: %s, HTTPS-8443: %s)", proxyHost, httpPort, httpsPort, https8443Port)
 
 		opts.RoundTripper = &roundtripper.DefaultRoundTripper{
 			Debug:         opts.Debug,
@@ -159,12 +171,21 @@ func TestConformance(t *testing.T) {
 					addr = net.JoinHostPort(proxyHost, httpPort)
 				case "443":
 					addr = net.JoinHostPort(proxyHost, httpsPort)
+				case "8443":
+					addr = net.JoinHostPort(proxyHost, https8443Port)
 				default:
 					return nil, fmt.Errorf("unexpected port in gateway address: %s", addr)
 				}
 				return (&net.Dialer{}).DialContext(ctx, network, addr)
 			},
 		}
+
+		if enableGRPCProxy {
+			t.Log("Enabling gRPC proxy client for port-forward mode")
+			opts.GRPCClient = NewPortForwardGRPCClient(proxyHost, httpPort, httpsPort, https8443Port)
+		}
+	} else if enableGRPCProxy {
+		t.Fatal("GATEWAY_PROXY_ENABLE_GRPC requires GATEWAY_PROXY_HOST to be set")
 	}
 
 	conformance.RunConformanceWithOptions(t, opts)

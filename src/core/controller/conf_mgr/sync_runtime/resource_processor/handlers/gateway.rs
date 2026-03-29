@@ -141,7 +141,7 @@ struct ListenerInfo {
     no_valid_ca_certificate: bool,
     /// True when frontend validation uses AllowInsecureFallback mode
     insecure_fallback_mode: bool,
-    /// True when listener TLS mode is not supported (e.g. Mixed)
+    /// True when listener TLS mode is not supported for its protocol/feature set.
     unsupported_tls_mode: bool,
 }
 
@@ -477,12 +477,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     .and_then(|fv| fv.mode.as_deref())
                     == Some("AllowInsecureFallback");
 
-                // Check if TLS mode is unsupported (only Terminate and Passthrough are supported)
-                let unsupported_tls_mode = l
-                    .tls
-                    .as_ref()
-                    .and_then(|t| t.mode.as_deref())
-                    .is_some_and(|mode| mode != "Terminate" && mode != "Passthrough");
+                let unsupported_tls_mode = listener_has_unsupported_tls_mode(l);
 
                 ListenerInfo {
                     name: l.name.clone(),
@@ -875,7 +870,7 @@ fn update_listener_conditions(
     if unsupported_tls_mode {
         let cond = condition_false(
             condition_types::ACCEPTED,
-            condition_reasons::UNSUPPORTED_TLS_MODE,
+            condition_reasons::UNSUPPORTED_VALUE,
             "Listener TLS mode is not supported",
             generation,
         );
@@ -1261,8 +1256,25 @@ fn has_all_ca_refs_invalid(listener: &GatewayListener, errors: &[GatewayResolved
     ca_error_count >= ca_ref_count
 }
 
+fn listener_has_unsupported_tls_mode(listener: &GatewayListener) -> bool {
+    let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_deref()) else {
+        return false;
+    };
+
+    match listener.protocol.to_uppercase().as_str() {
+        // We currently only advertise/pass conformance for TLS passthrough listeners.
+        "TLS" => mode != "Passthrough",
+        "HTTPS" => mode != "Terminate",
+        _ => false,
+    }
+}
+
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
 fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, Vec<GatewayResolvedRefsError>) {
+    if listener_has_unsupported_tls_mode(listener) {
+        return (Vec::new(), Vec::new());
+    }
+
     let protocol_kinds = get_supported_kinds_for_protocol(&listener.protocol);
     let requested_kinds = listener
         .allowed_routes

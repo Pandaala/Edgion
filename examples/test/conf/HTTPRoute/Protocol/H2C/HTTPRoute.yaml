@@ -1,0 +1,18 @@
+# H2C backend HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: h2c-test
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: h2c-test-gateway
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-h2c
+          port: 30001

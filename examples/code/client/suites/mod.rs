@@ -13,7 +13,7 @@ pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, HeaderModifierTestSuite,
+    CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, H2cTestSuite, HeaderModifierTestSuite,
     HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite,
     HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
     PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
@@ -59,11 +59,13 @@ pub use edgion_plugins::{
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
 pub use status::BackendTlsStatusTestSuite;
+pub use status::GatewayFrontendValidationStatusTestSuite;
 pub use status::GrpcRouteStatusTestSuite;
 pub use status::HostnameIntersectionStatusTestSuite;
 pub use status::ObservedGenerationStatusTestSuite;
 pub use status::RefGrantStatusTestSuite;
 pub use status::TlsListenerModeStatusTestSuite;
+pub use status::TlsRouteStatusTestSuite;
 
 // Services tests (ACME, etc.)
 pub use services::AcmeTestSuite;

@@ -13,6 +13,7 @@ CONTROLLER_IMAGE="${CONTROLLER_IMAGE:-}"
 GATEWAY_IMAGE="${GATEWAY_IMAGE:-}"
 PULL_POLICY="${PULL_POLICY:-Always}"
 SKIP_CRD="${SKIP_CRD:-false}"
+TLS_ONLY="${TLS_ONLY:-false}"
 
 show_help() {
   cat <<USAGE
@@ -25,6 +26,7 @@ Options:
   --gateway-image <img>     Override gateway image
   --pull-policy <policy>    Image pull policy (default: Always)
   --skip-crd                Skip CRD installation
+  --tls-only                Use TLSRoute-focused pre-created Gateways
   -h, --help                Show this help
 USAGE
 }
@@ -35,10 +37,24 @@ while [[ $# -gt 0 ]]; do
     --gateway-image)    GATEWAY_IMAGE="$2";    shift 2 ;;
     --pull-policy)      PULL_POLICY="$2";      shift 2 ;;
     --skip-crd)         SKIP_CRD=true;         shift   ;;
+    --tls-only)         TLS_ONLY=true;         shift   ;;
     -h|--help)          show_help; exit 0              ;;
     *) echo "Unknown option: $1"; show_help; exit 1    ;;
   esac
 done
+
+if [[ "${TLS_ONLY}" == "true" ]]; then
+  CONFORMANCE_GATEWAY_MANIFEST="$MANIFESTS_DIR/conformance-gateway-tls.yaml"
+  READINESS_GATEWAY="gateway-tlsroute"
+else
+  CONFORMANCE_GATEWAY_MANIFEST="$MANIFESTS_DIR/conformance-gateway.yaml"
+  READINESS_GATEWAY="same-namespace"
+fi
+
+delete_gateway_if_exists() {
+  local name="$1"
+  kubectl delete gateway "$name" -n gateway-conformance-infra --ignore-not-found=true >/dev/null 2>&1 || true
+}
 
 echo "=== Gateway API Conformance Setup ==="
 
@@ -105,7 +121,20 @@ kubectl apply -f "$MANIFESTS_DIR/gatewayclass.yaml"
 # 5. Pre-create conformance namespaces and Gateway CRs
 # ------------------------------------------------------------------
 echo "[5/8] Pre-create conformance base Gateways (listener workaround)"
-kubectl apply --server-side --force-conflicts -f "$MANIFESTS_DIR/conformance-gateway.yaml"
+if [[ "${TLS_ONLY}" == "true" ]]; then
+  echo "       Removing default HTTPS conformance Gateways that conflict with TLS passthrough on port 443..."
+  delete_gateway_if_exists "same-namespace-with-https-listener"
+  delete_gateway_if_exists "client-validation-default"
+  delete_gateway_if_exists "client-validation-insecure-fallback"
+else
+  echo "       Removing TLS-only conformance Gateways that conflict with HTTPS listener setup..."
+  delete_gateway_if_exists "gateway-tlsroute"
+  delete_gateway_if_exists "gw-tlsroute-exact-hostname-x-1"
+  delete_gateway_if_exists "gw-tlsroute-more-specific-wc-hostname-x-2"
+  delete_gateway_if_exists "gw-tlsroute-less-specific-wc-hostname-x-3"
+  delete_gateway_if_exists "gw-tlsroute-empty-hostname-x-4"
+fi
+kubectl apply --server-side --force-conflicts -f "$CONFORMANCE_GATEWAY_MANIFEST"
 
 # Wait for controller to process the Gateways
 sleep 3
@@ -157,7 +186,7 @@ if [[ -n "${GW_SVC_IP}" && "${GW_SVC_IP}" != "None" ]]; then
   # Wait for controller to re-process Gateways with correct address
   echo "       Waiting for Gateway status.addresses to be updated..."
   for i in $(seq 1 30); do
-    ADDR=$(kubectl -n gateway-conformance-infra get gateway same-namespace \
+    ADDR=$(kubectl -n gateway-conformance-infra get gateway "$READINESS_GATEWAY" \
       -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)
     if [[ "${ADDR}" == "${GW_SVC_IP}" ]]; then
       echo "       Gateway address updated to ${GW_SVC_IP}"
@@ -191,4 +220,8 @@ done
 
 echo ""
 echo "=== Setup Complete ==="
-echo "Run ./scripts/run.sh to execute conformance tests."
+if [[ "${TLS_ONLY}" == "true" ]]; then
+  echo "Run GO_RUN_FILTER=\"TestConformance/TLSRouteSimpleSameNamespace$\" bash ./scripts/run.sh --conformance-profiles GATEWAY-TLS to execute a TLSRoute test."
+else
+  echo "Run ./scripts/run.sh to execute conformance tests."
+fi

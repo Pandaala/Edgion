@@ -22,21 +22,37 @@ SKIP_BUILD=false
 NO_CACHE=""
 PROFILE="debug"
 CONTROLLER_REPLICAS="${CONTROLLER_REPLICAS:-1}"
+TLS_ONLY="${TLS_ONLY:-false}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=true; shift ;;
     --rebuild)    NO_CACHE="--no-cache"; shift ;;
     --release)    PROFILE="release"; shift ;;
+    --tls-only)   TLS_ONLY=true; shift ;;
     -h|--help)
-      echo "Usage: $0 [--skip-build] [--rebuild] [--release]"
+      echo "Usage: $0 [--skip-build] [--rebuild] [--release] [--tls-only]"
       echo "  --skip-build  Skip Docker image build, use existing images"
       echo "  --rebuild     Force rebuild images without Docker cache"
       echo "  --release     Build release profile (default: debug)"
+      echo "  --tls-only    Use TLSRoute-focused pre-created Gateways"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+if [[ "${TLS_ONLY}" == "true" ]]; then
+  CONFORMANCE_GATEWAY_MANIFEST="$MANIFESTS_DIR/conformance-gateway-tls.yaml"
+  READINESS_GATEWAY="gateway-tlsroute"
+else
+  CONFORMANCE_GATEWAY_MANIFEST="$MANIFESTS_DIR/conformance-gateway.yaml"
+  READINESS_GATEWAY="same-namespace"
+fi
+
+delete_gateway_if_exists() {
+  local name="$1"
+  kubectl delete gateway "$name" -n gateway-conformance-infra --ignore-not-found=true >/dev/null 2>&1 || true
+}
 
 TAG="conformance-dev"
 CONTROLLER_IMAGE="pandaala/edgion-controller:${TAG}"
@@ -141,7 +157,20 @@ kubectl apply -f "$MANIFESTS_DIR/gatewayclass.yaml"
 # 5. Pre-create conformance Gateways
 # ------------------------------------------------------------------
 echo "[5] Pre-create conformance Gateways"
-kubectl apply --server-side --force-conflicts -f "$MANIFESTS_DIR/conformance-gateway.yaml"
+if [[ "${TLS_ONLY}" == "true" ]]; then
+  echo "  Removing default HTTPS conformance Gateways that conflict with TLS passthrough on port 443..."
+  delete_gateway_if_exists "same-namespace-with-https-listener"
+  delete_gateway_if_exists "client-validation-default"
+  delete_gateway_if_exists "client-validation-insecure-fallback"
+else
+  echo "  Removing TLS-only conformance Gateways that conflict with HTTPS listener setup..."
+  delete_gateway_if_exists "gateway-tlsroute"
+  delete_gateway_if_exists "gw-tlsroute-exact-hostname-x-1"
+  delete_gateway_if_exists "gw-tlsroute-more-specific-wc-hostname-x-2"
+  delete_gateway_if_exists "gw-tlsroute-less-specific-wc-hostname-x-3"
+  delete_gateway_if_exists "gw-tlsroute-empty-hostname-x-4"
+fi
+kubectl apply --server-side --force-conflicts -f "$CONFORMANCE_GATEWAY_MANIFEST"
 sleep 3
 
 # ------------------------------------------------------------------
@@ -186,7 +215,7 @@ if [[ -n "${GW_SVC_IP}" && "${GW_SVC_IP}" != "None" ]]; then
 
   echo "  Waiting for Gateway status.addresses..."
   for i in $(seq 1 30); do
-    ADDR=$(kubectl -n gateway-conformance-infra get gateway same-namespace \
+    ADDR=$(kubectl -n gateway-conformance-infra get gateway "$READINESS_GATEWAY" \
       -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)
     if [[ "${ADDR}" == "${GW_SVC_IP}" ]]; then
       echo "  Gateway address updated to ${GW_SVC_IP}"
@@ -216,8 +245,13 @@ done
 echo ""
 echo "=== Setup Complete ==="
 echo ""
-echo "Quick test:"
-echo "  ./scripts/orbstack-dev.sh test --run-test HTTPRouteSimpleSameNamespace"
+if [[ "${TLS_ONLY}" == "true" ]]; then
+  echo "Quick test:"
+  echo "  GO_RUN_FILTER=\"TestConformance/TLSRouteSimpleSameNamespace$\" bash scripts/run.sh --conformance-profiles GATEWAY-TLS"
+else
+  echo "Quick test:"
+  echo "  ./scripts/orbstack-dev.sh test --run-test HTTPRouteSimpleSameNamespace"
+fi
 echo ""
 echo "Hot-reload after code change:"
 echo "  ./scripts/orbstack-dev.sh rebuild"

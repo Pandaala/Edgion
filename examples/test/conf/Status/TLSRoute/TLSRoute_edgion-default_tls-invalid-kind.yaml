@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: tls-invalid-kind
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: tlsroute-status-gateway
+      namespace: edgion-test
+      sectionName: tls
+  hostnames:
+    - invalid-kind.tls-status.example.com
+  rules:
+    - backendRefs:
+        - name: tls-status-svc
+          group: example.com
+          kind: Foo
+          port: 30051

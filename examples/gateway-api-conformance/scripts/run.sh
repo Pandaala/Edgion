@@ -47,6 +47,7 @@ Environment Variables (port-forward proxy):
   GATEWAY_PROXY_HOST           Proxy host for gateway traffic (enables proxy mode)
   GATEWAY_PROXY_HTTP_PORT      Local HTTP port (default: 8080)
   GATEWAY_PROXY_HTTPS_PORT     Local HTTPS port (default: 8443)
+  GATEWAY_PROXY_ENABLE_GRPC    Enable gRPC proxy client as well (default: false)
 
 Examples:
   $0                                    # Core features
@@ -140,8 +141,9 @@ cleanup_pf() {
 
 if [[ "${PORT_FORWARD}" == "true" ]]; then
   export GATEWAY_PROXY_HOST="${GATEWAY_PROXY_HOST:-127.0.0.1}"
-  export GATEWAY_PROXY_HTTP_PORT="${GATEWAY_PROXY_HTTP_PORT:-8080}"
-  export GATEWAY_PROXY_HTTPS_PORT="${GATEWAY_PROXY_HTTPS_PORT:-8443}"
+  export GATEWAY_PROXY_HTTP_PORT="${GATEWAY_PROXY_HTTP_PORT:-18080}"
+  export GATEWAY_PROXY_HTTPS_PORT="${GATEWAY_PROXY_HTTPS_PORT:-18443}"
+  export GATEWAY_PROXY_HTTPS_8443_PORT="${GATEWAY_PROXY_HTTPS_8443_PORT:-28443}"
 
   GW_NS="edgion-system"
   GW_POD=$(kubectl get pods -n "${GW_NS}" -l app=edgion-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
@@ -150,9 +152,9 @@ if [[ "${PORT_FORWARD}" == "true" ]]; then
     exit 1
   fi
 
-  echo "Starting port-forward: ${GW_POD} ${GATEWAY_PROXY_HTTP_PORT}:80 ${GATEWAY_PROXY_HTTPS_PORT}:443"
+  echo "Starting port-forward: ${GW_POD} ${GATEWAY_PROXY_HTTP_PORT}:80 ${GATEWAY_PROXY_HTTPS_PORT}:443 ${GATEWAY_PROXY_HTTPS_8443_PORT}:8443"
   kubectl port-forward "pod/${GW_POD}" -n "${GW_NS}" \
-    "${GATEWAY_PROXY_HTTP_PORT}:80" "${GATEWAY_PROXY_HTTPS_PORT}:443" \
+    "${GATEWAY_PROXY_HTTP_PORT}:80" "${GATEWAY_PROXY_HTTPS_PORT}:443" "${GATEWAY_PROXY_HTTPS_8443_PORT}:8443" \
     --address="${GATEWAY_PROXY_HOST}" >/dev/null 2>&1 &
   PF_PID=$!
   sleep 2

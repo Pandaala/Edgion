@@ -13,6 +13,25 @@
 ./scripts/run.sh --extended
 ```
 
+## TLSRoute 专用环境
+
+TLSRoute data-plane conformance 需要在 Gateway 进程启动前就把 443 上的 TLS
+passthrough listener 预创建好。默认的 `conformance-gateway.yaml` 预创建了
+HTTPS 443 listener，会和 TLSRoute 的 443 passthrough listener 冲突。
+
+因此，跑 TLSRoute data-plane 测试前请先用 TLS 专用 setup：
+
+```bash
+./scripts/setup-orbstack.sh --tls-only
+```
+
+然后再跑 TLSRoute 测试。OrbStack 下通常不需要 `--port-forward`：
+
+```bash
+GO_RUN_FILTER="TestConformance/TLSRouteSimpleSameNamespace$" \
+  bash scripts/run.sh --conformance-profiles GATEWAY-TLS
+```
+
 ## 测试粒度控制
 
 ### 单个测试

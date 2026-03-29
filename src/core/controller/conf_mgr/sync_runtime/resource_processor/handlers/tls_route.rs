@@ -95,14 +95,9 @@ impl Default for TlsRouteHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
     fn validate(&self, route: &TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let mut errors = validate_tls_route_if_enabled(route);
-        let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        errors.extend(
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples)
-                .iter()
-                .map(|e| e.message()),
-        );
+        let errors = validate_tls_route_if_enabled(route);
+        // Note: backend ref validation (service existence, kind check) is handled by
+        // update_status() via ResolvedRefs condition. It must not affect Accepted.
         errors
     }
 
