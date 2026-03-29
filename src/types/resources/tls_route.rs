@@ -12,6 +12,7 @@ use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::plugins::PluginRuntime;
+use crate::types::ListenerKey;
 
 /// API group for TLSRoute
 pub const TLS_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -44,10 +45,10 @@ pub struct TLSRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<TLSRouteRule>>,
 
-    /// Resolved listener ports from parentRefs (computed by controller).
-    /// Derived from parentRef.port or parentRef.sectionName → Gateway listener.port.
+    /// Pre-computed listener keys from parentRef resolution (set by Controller).
+    /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resolved_ports: Option<Vec<u16>>,
+    pub resolved_listeners: Option<Vec<ListenerKey>>,
 }
 
 /// TLSRouteRule defines TLS routing rules

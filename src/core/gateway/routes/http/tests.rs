@@ -79,7 +79,7 @@ mod route_matching_tests {
             "spec": {
                 "parentRefs": parent_refs_json,
                 "hostnames": hostnames,
-                "resolvedPorts": [80],
+                "resolvedListeners": ["0.0.0.0:80/HTTP"],
                 "rules": [{
                     "matches": matches_json,
                     "backendRefs": [{
@@ -135,7 +135,7 @@ mod route_matching_tests {
             "spec": {
                 "parentRefs": parent_refs_json,
                 "hostnames": hostnames,
-                "resolvedPorts": [80],
+                "resolvedListeners": ["0.0.0.0:80/HTTP"],
                 "rules": [{
                     "matches": matches_json,
                     "backendRefs": [{

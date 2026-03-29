@@ -9,9 +9,6 @@
 //! - Gateway API standard status management (per parent)
 
 use super::{remove_from_gateway_route_index, update_gateway_route_index};
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::{
-    listener_allows_route_namespace, lookup_gateway,
-};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, get_secret, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult,
     ProcessorHandler, ResolvedRefsError, ResourceRef,
@@ -149,56 +146,19 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             }
         }
 
-        // 3. Resolve ports from parentRefs → Gateway → listener.port
-        //
-        // Per Gateway API spec:
-        //   - parentRef.port set → use that port directly
-        //   - parentRef.sectionName set → find matching listener by name, use its port
-        //   - neither set → attach to ALL listeners of the parent Gateway
-        //
-        // Only include ports from listeners whose allowedRoutes policy permits
-        // this EdgionTls's namespace (default: Same).
+        // 3. Resolve listener keys from parentRefs for per-listener route isolation
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        tls.spec.resolved_listeners = None;
         if let Some(parent_refs) = &tls.spec.parent_refs {
-            let mut ports = Vec::new();
-            for parent_ref in parent_refs {
-                if let Some(port) = parent_ref.port {
-                    ports.push(port as u16);
-                } else {
-                    let gw_ns = parent_ref
-                        .namespace
-                        .as_deref()
-                        .or(tls.metadata.namespace.as_deref())
-                        .unwrap_or("default");
-                    if let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name) {
-                        if let Some(listeners) = &gateway.spec.listeners {
-                            if let Some(section_name) = &parent_ref.section_name {
-                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                                    if listener_allows_route_namespace(&listener.allowed_routes, resource_ns, gw_ns) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            } else {
-                                for listener in listeners {
-                                    if listener_allows_route_namespace(&listener.allowed_routes, resource_ns, gw_ns) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !ports.is_empty() {
-                ports.sort_unstable();
-                ports.dedup();
+            let listener_keys =
+                super::route_utils::resolve_listener_keys(parent_refs, resource_ns, tls.metadata.namespace.as_deref());
+            if !listener_keys.is_empty() {
                 tracing::debug!(
                     edgion_tls = %resource_ref.key(),
-                    resolved_ports = ?ports,
-                    "Resolved ports from parentRefs"
+                    resolved_listeners = ?listener_keys,
+                    "Resolved listeners from parentRefs"
                 );
-                tls.spec.resolved_ports = Some(ports);
+                tls.spec.resolved_listeners = Some(listener_keys);
             }
         }
 
@@ -212,7 +172,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // Register in gateway_route_index so Gateway's on_change can requeue
         // this EdgionTls when listener hostnames or ports change. Without this,
         // an EdgionTls processed before its Gateway would permanently have
-        // resolved_ports = None with no mechanism to trigger re-resolution.
+        // resolved_listeners = None with no mechanism to trigger re-resolution.
         update_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name, tls.spec.parent_refs.as_ref());
     }
 
@@ -350,7 +310,7 @@ mod tests {
                 ciphers: None,
                 extend: None,
                 secret: None,
-                resolved_ports: None,
+                resolved_listeners: None,
             },
             status: None,
         }

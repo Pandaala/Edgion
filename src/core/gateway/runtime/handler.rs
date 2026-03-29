@@ -7,6 +7,7 @@ use crate::core::gateway::runtime::store::{
     get_global_gateway_config_store, get_global_gateway_store, get_port_gateway_info_store, rebuild_port_gateway_infos,
 };
 use crate::types::prelude_resources::Gateway;
+use crate::types::ListenerKey;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -67,17 +68,17 @@ impl ConfHandler<Gateway> for GatewayHandler {
         // Rebuild Gateway TLS matcher (port-based certificate lookup)
         rebuild_gateway_tls_matcher(&gateways);
 
-        // Rebuild port → GatewayInfo mapping (for dynamic route matching)
-        let ports_before = get_port_gateway_info_store().all_ports();
+        // Rebuild listener → GatewayInfo mapping (for dynamic route matching)
+        let keys_before = get_port_gateway_info_store().all_listener_keys();
         rebuild_port_gateway_infos(&gateways);
-        let ports_after = get_port_gateway_info_store().all_ports();
+        let keys_after = get_port_gateway_info_store().all_listener_keys();
 
-        // Rebuild HTTP/gRPC per-port route managers only when the listener port
-        // set changed (ports added or removed). This avoids unnecessary full
+        // Rebuild HTTP/gRPC per-listener route managers only when the listener
+        // set changed (listeners added or removed). This avoids unnecessary full
         // rebuilds on Gateway metadata-only changes (e.g. annotations, status).
-        if ports_changed(&ports_before, &ports_after) {
-            get_global_http_route_managers().rebuild_all_port_managers();
-            get_global_grpc_route_managers().rebuild_all_port_managers();
+        if listeners_changed(&keys_before, &keys_after) {
+            get_global_http_route_managers().rebuild_all_listener_managers();
+            get_global_grpc_route_managers().rebuild_all_listener_managers();
         }
     }
 
@@ -172,13 +173,13 @@ impl ConfHandler<Gateway> for GatewayHandler {
             let gateways = store.list_gateways();
             rebuild_gateway_tls_matcher(&gateways);
 
-            let ports_before = get_port_gateway_info_store().all_ports();
+            let keys_before = get_port_gateway_info_store().all_listener_keys();
             rebuild_port_gateway_infos(&gateways);
-            let ports_after = get_port_gateway_info_store().all_ports();
+            let keys_after = get_port_gateway_info_store().all_listener_keys();
 
-            if ports_changed(&ports_before, &ports_after) {
-                get_global_http_route_managers().rebuild_all_port_managers();
-                get_global_grpc_route_managers().rebuild_all_port_managers();
+            if listeners_changed(&keys_before, &keys_after) {
+                get_global_http_route_managers().rebuild_all_listener_managers();
+                get_global_grpc_route_managers().rebuild_all_listener_managers();
             }
         }
     }
@@ -201,16 +202,16 @@ fn update_gateway_backend_tls_store(gateway_key: &str, gateway: &Gateway) {
     }
 }
 
-/// Check whether the set of listener ports changed between two snapshots.
+/// Check whether the set of listener keys changed between two snapshots.
 /// Order-independent comparison using sorted vecs.
-fn ports_changed(before: &[u16], after: &[u16]) -> bool {
+fn listeners_changed(before: &[ListenerKey], after: &[ListenerKey]) -> bool {
     if before.len() != after.len() {
         return true;
     }
     let mut a = before.to_vec();
     let mut b = after.to_vec();
-    a.sort_unstable();
-    b.sort_unstable();
+    a.sort();
+    b.sort();
     a != b
 }
 

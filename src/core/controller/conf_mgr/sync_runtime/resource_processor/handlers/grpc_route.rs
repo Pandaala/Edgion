@@ -121,9 +121,9 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         // Register Service backend references for cross-resource requeue
         Self::register_service_refs(&route);
 
-        // Treat resolved_ports as controller-derived state.
+        // Treat resolved_listeners as controller-derived state.
         // Clear any user-provided or stale value before recomputing from current parentRefs.
-        route.spec.resolved_ports = None;
+        route.spec.resolved_listeners = None;
 
         // Resolve effective hostnames (intersection with Gateway listener hostnames)
         if let Some(parent_refs) = &route.spec.parent_refs {
@@ -144,50 +144,16 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             }
         }
 
-        // Resolve listener ports from parentRefs for per-port route isolation
+        // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
             let route_ns_ports = route.metadata.namespace.as_deref().unwrap_or("default");
-            let mut ports = Vec::new();
-            for parent_ref in parent_refs {
-                if let Some(port) = parent_ref.port {
-                    ports.push(port as u16);
-                } else {
-                    let gw_ns = parent_ref
-                        .namespace
-                        .as_deref()
-                        .or(route.metadata.namespace.as_deref())
-                        .unwrap_or("default");
-                    if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
-                        if let Some(listeners) = &gateway.spec.listeners {
-                            if let Some(section_name) = &parent_ref.section_name {
-                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns_ports,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            } else {
-                                for listener in listeners {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns_ports,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if !ports.is_empty() {
-                ports.sort_unstable();
-                ports.dedup();
-                route.spec.resolved_ports = Some(ports);
+            let listener_keys = super::route_utils::resolve_listener_keys(
+                parent_refs,
+                route_ns_ports,
+                route.metadata.namespace.as_deref(),
+            );
+            if !listener_keys.is_empty() {
+                route.spec.resolved_listeners = Some(listener_keys);
             }
         }
 
@@ -384,7 +350,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parse_clears_stale_resolved_ports_when_current_parent_refs_cannot_resolve() {
+    async fn parse_clears_stale_resolved_listeners_when_current_parent_refs_cannot_resolve() {
         let handler = GrpcRouteHandler::default();
         let ctx = make_ctx();
         let route: GRPCRoute = serde_json::from_value(json!({
@@ -395,7 +361,6 @@ mod tests {
                 "namespace": "default"
             },
             "spec": {
-                "resolvedPorts": [9090],
                 "parentRefs": [
                     {
                         "name": "missing-gateway"
@@ -411,8 +376,8 @@ mod tests {
         };
 
         assert_eq!(
-            parsed.spec.resolved_ports, None,
-            "stale or user-provided resolvedPorts must be cleared when current parentRefs cannot be resolved"
+            parsed.spec.resolved_listeners, None,
+            "stale or user-provided resolvedListeners must be cleared when current parentRefs cannot be resolved"
         );
     }
 }

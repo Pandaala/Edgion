@@ -26,6 +26,7 @@ use crate::core::gateway::routes::udp::{get_global_udp_route_managers, get_udp_l
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
+use crate::types::ListenerKey;
 use tokio_util::sync::CancellationToken;
 
 /// Annotation key to control HTTP/2 support
@@ -63,6 +64,7 @@ pub struct ListenerContext {
     pub gateway_name: String,
     pub gateway_key: String,
     pub listener: Listener,
+    pub listener_key: ListenerKey,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub server_conf: Arc<ServerConf>,
@@ -156,6 +158,7 @@ pub fn add_http_listener(
     let edgion_http = EdgionHttpProxy {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),
+        listener_key: context.listener_key.clone(),
         server_start_time: SystemTime::now(),
         server_header_opts: Default::default(),
         access_logger: context.access_logger.clone(),
@@ -209,8 +212,12 @@ pub fn add_http_listener(
         #[cfg(any(feature = "boringssl", feature = "openssl"))]
         {
             let port = context.listener.port as u16;
-            let mut tls_settings =
-                TlsCallback::new_tls_settings_with_callback(port, context.edgion_gateway_config.clone(), true)?;
+            let mut tls_settings = TlsCallback::new_tls_settings_with_callback(
+                port,
+                context.listener_key.clone(),
+                context.edgion_gateway_config.clone(),
+                true,
+            )?;
             // Enable HTTP/2 for HTTPS if enable_http2 is true
             if enable_http2 {
                 tls_settings.enable_h2();
@@ -259,10 +266,11 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    let tcp_route_manager = get_global_tcp_route_managers().get_or_create_port_manager(port);
+    let tcp_route_manager = get_global_tcp_route_managers().get_or_create_listener_manager(&context.listener_key);
 
     let edgion_tcp = EdgionTcpProxy {
         listener_port: port,
+        listener_key: context.listener_key.clone(),
         tcp_route_manager,
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         connector: TransportConnector::new(None),
@@ -298,7 +306,7 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    let udp_route_manager = get_global_udp_route_managers().get_or_create_port_manager(port);
+    let udp_route_manager = get_global_udp_route_managers().get_or_create_listener_manager(&context.listener_key);
 
     let socket = std::net::UdpSocket::bind(&addr)?;
     socket.set_nonblocking(true)?;
@@ -309,6 +317,7 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
 
     let edgion_udp = Arc::new(EdgionUdpProxy::new(
         port,
+        context.listener_key.clone(),
         udp_route_manager,
         context.edgion_gateway_config.clone(),
         socket,
@@ -341,10 +350,11 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    let tls_route_manager = get_global_tls_route_managers().get_or_create_port_manager(port);
+    let tls_route_manager = get_global_tls_route_managers().get_or_create_listener_manager(&context.listener_key);
 
     let edgion_tls = EdgionTlsTcpProxy {
         listener_port: port,
+        listener_key: context.listener_key.clone(),
         tls_route_manager,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
@@ -352,7 +362,12 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     };
 
     // Create TLS settings with callback for certificate loading (with port for SNI lookup)
-    let tls_settings = TlsCallback::new_tls_settings_with_callback(port, context.edgion_gateway_config.clone(), false)?;
+    let tls_settings = TlsCallback::new_tls_settings_with_callback(
+        port,
+        context.listener_key.clone(),
+        context.edgion_gateway_config.clone(),
+        false,
+    )?;
 
     let mut tls_service = Service::new(format!("TLS-TCP-{}", listener_name), edgion_tls);
 
@@ -387,10 +402,11 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
     let addr = format!("0.0.0.0:{}", context.listener.port);
     let port = context.listener.port as u16;
 
-    let tls_route_manager = get_global_tls_route_managers().get_or_create_port_manager(port);
+    let tls_route_manager = get_global_tls_route_managers().get_or_create_listener_manager(&context.listener_key);
 
     let proxy = EdgionTlsPassthroughProxy {
         listener_port: port,
+        listener_key: context.listener_key.clone(),
         tls_route_manager,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),

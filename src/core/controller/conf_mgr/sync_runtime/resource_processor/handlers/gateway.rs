@@ -13,9 +13,10 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_att
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
     get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_listener_port_manager, get_secret,
-    make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    make_conflict_key, ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
@@ -186,15 +187,16 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         cross_ns_manager.clear_resource_refs(&cross_ns_ref);
 
         // Register listeners to ListenerPortManager (empty list clears stale registrations)
-        let listener_ports: Vec<(String, String, Option<String>)> = g
+        let listener_ports: Vec<(String, ConflictKey, Option<String>)> = g
             .spec
             .listeners
             .as_deref()
             .unwrap_or_default()
             .iter()
             .map(|l| {
-                let port_key = make_port_key(l.port, &l.protocol);
-                (l.name.clone(), port_key, l.hostname.clone())
+                let addr = resolve_listener_addr(g.spec.addresses.as_ref(), l.port);
+                let conflict_key = make_conflict_key(addr);
+                (l.name.clone(), conflict_key, l.hostname.clone())
             })
             .collect();
         let gateway_key_for_port_mgr = format!(

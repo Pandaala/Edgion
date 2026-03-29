@@ -126,7 +126,7 @@ mod tests {
                 }]),
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![]),
-                resolved_ports: None,
+                resolved_listeners: None,
             },
             status: None,
         }

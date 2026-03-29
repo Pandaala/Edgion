@@ -29,8 +29,7 @@ pub async fn request_filter(
 
     // Step 1: Route matching — single lookup against the global route table.
     // Load the pre-built GatewayInfoIndex for O(1) gateway/listener lookups.
-    let port = edgion_http.listener.port as u16;
-    let gateway_index = get_port_gateway_info_store().get_index(port);
+    let gateway_index = get_port_gateway_info_store().get_index(&edgion_http.listener_key);
 
     // HTTPS listener isolation: 421 Misdirected Request (Gateway API spec).
     // If SNI matched listener A but Host should be served by a different listener → 421.
@@ -79,7 +78,8 @@ pub async fn request_filter(
             return Ok(true);
         }
 
-        let grpc_port_manager = get_global_grpc_route_managers().get_or_create_port_manager(port);
+        let grpc_port_manager =
+            get_global_grpc_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
         let grpc_routes = grpc_port_manager.load_route_table();
         let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_index).await;
 
@@ -98,7 +98,8 @@ pub async fn request_filter(
     }
 
     if !ctx.is_grpc_route_matched {
-        let http_port_manager = get_global_http_route_managers().get_or_create_port_manager(port);
+        let http_port_manager =
+            get_global_http_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
         let port_routes = http_port_manager.load_route_table();
         match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {

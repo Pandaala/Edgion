@@ -1,11 +1,12 @@
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
 use crate::core::gateway::observe::logs::ssl_log::log_ssl;
 use crate::core::gateway::observe::logs::LogBuffer;
-use crate::core::gateway::runtime::matching::{match_gateway_tls_with_port, GatewayTlsEntry};
+use crate::core::gateway::runtime::matching::{match_gateway_tls, GatewayTlsEntry};
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
-use crate::core::gateway::tls::store::cert_matcher::match_sni_with_port;
+use crate::core::gateway::tls::store::cert_matcher::match_sni;
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+use crate::types::listener_key::ListenerKey;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
 use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
@@ -189,9 +190,10 @@ use ssl_ctx_ex_data::{store_ssl_ctx, take_ssl_ctx};
 
 /// TLS callback handler for dynamic certificate loading.
 ///
-/// Supports port-based certificate lookup for Gateway API semantics.
+/// Supports listener-key-based certificate lookup for Gateway API semantics.
 pub struct TlsCallback {
     port: u16,
+    listener_key: ListenerKey,
     edgion_gateway_config: Arc<EdgionGatewayConfig>,
 }
 
@@ -286,30 +288,34 @@ impl TlsAccept for TlsCallback {
 }
 
 impl TlsCallback {
-    /// Create a new TlsCallback with port information
+    /// Create a new TlsCallback with listener key information
     ///
     /// # Parameters
-    /// - `port`: The listening port for this TLS service
+    /// - `port`: The listening port (retained for TlsConnMeta logging)
+    /// - `listener_key`: The listener key identifying the physical listener
     /// - `edgion_gateway_config`: Gateway configuration for fallback behavior
-    pub fn new(port: u16, edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
+    pub fn new(port: u16, listener_key: ListenerKey, edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
         Self {
             port,
+            listener_key,
             edgion_gateway_config,
         }
     }
 
-    /// Create TLS settings with callback for the specified port
+    /// Create TLS settings with callback for the specified listener
     ///
     /// # Parameters
-    /// - `port`: The listening port (used for port-dimension certificate lookup)
+    /// - `port`: The listening port (retained for TlsConnMeta logging)
+    /// - `listener_key`: The listener key for certificate lookup
     /// - `edgion_gateway_config`: Gateway configuration
     /// - `enable_http2`: Whether to enable HTTP/2 ALPN negotiation
     pub fn new_tls_settings_with_callback(
         port: u16,
+        listener_key: ListenerKey,
         edgion_gateway_config: Arc<EdgionGatewayConfig>,
         enable_http2: bool,
     ) -> Result<TlsSettings> {
-        let callback = Box::new(TlsCallback::new(port, edgion_gateway_config));
+        let callback = Box::new(TlsCallback::new(port, listener_key, edgion_gateway_config));
         let mut settings =
             TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
 
@@ -326,16 +332,16 @@ impl TlsCallback {
     /// `apply_edgion_tls_cert` / `apply_gateway_tls_cert` handle ssl_log
     /// population internally (cert, mtls, error fields).
     fn match_and_apply_cert(&self, ssl: &mut SslRef, sni: &str, ssl_ctx: &mut SslCtx) -> bool {
-        // Layer 1: EdgionTls (port-aware)
-        if let Some(edgion_tls) = match_sni_with_port(self.port, sni) {
+        // Layer 1: EdgionTls (listener-key-aware)
+        if let Some(edgion_tls) = match_sni(&self.listener_key, sni) {
             ssl_ctx.meta.is_mtls = edgion_tls.spec.client_auth.is_some();
             ssl_ctx.matched_edgion_tls = Some(edgion_tls.clone());
             self.apply_edgion_tls_cert(ssl, &edgion_tls, ssl_ctx);
             return true;
         }
 
-        // Layer 2: Gateway TLS (port-aware)
-        if let Some(gw) = match_gateway_tls_with_port(self.port, sni) {
+        // Layer 2: Gateway TLS (listener-key-aware)
+        if let Some(gw) = match_gateway_tls(&self.listener_key, sni) {
             self.apply_gateway_tls_cert(ssl, &gw, ssl_ctx);
             return true;
         }

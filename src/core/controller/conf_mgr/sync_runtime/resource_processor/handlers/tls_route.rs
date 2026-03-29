@@ -109,7 +109,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
     fn preparse(&self, route: &mut TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
         // Register in gateway_route_index at the earliest opportunity (before parse)
         // so that if this TLSRoute is processed before its parent Gateway, the
-        // Gateway's on_change can find and requeue it to re-resolve resolved_ports.
+        // Gateway's on_change can find and requeue it to re-resolve resolved_listeners.
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         update_gateway_route_index(
@@ -164,70 +164,24 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             }
         }
 
-        // Treat resolved_ports as controller-derived state.
+        // Treat resolved_listeners as controller-derived state.
         // Clear any stale value before recomputing from current parentRefs.
-        route.spec.resolved_ports = None;
+        route.spec.resolved_listeners = None;
 
-        // Resolve listener ports from parentRefs → Gateway → listener.port
-        //
-        // Per Gateway API spec:
-        //   - parentRef.port set → use that port directly
-        //   - parentRef.sectionName set → find matching listener by name, use its port
-        //   - neither set → attach to ALL listeners of the parent Gateway
-        //
-        // Only include ports from listeners whose allowedRoutes policy permits
-        // this TLSRoute's namespace (default: Same).
+        // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
-            let mut ports = Vec::new();
-            for parent_ref in parent_refs {
-                if let Some(port) = parent_ref.port {
-                    ports.push(port as u16);
-                } else {
-                    let gw_ns = parent_ref
-                        .namespace
-                        .as_deref()
-                        .or(route.metadata.namespace.as_deref())
-                        .unwrap_or("default");
-                    if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
-                        if let Some(listeners) = &gateway.spec.listeners {
-                            if let Some(section_name) = &parent_ref.section_name {
-                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            } else {
-                                for listener in listeners {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !ports.is_empty() {
-                ports.sort_unstable();
-                ports.dedup();
-                route.spec.resolved_ports = Some(ports);
+            let listener_keys =
+                super::route_utils::resolve_listener_keys(parent_refs, route_ns, route.metadata.namespace.as_deref());
+            if !listener_keys.is_empty() {
+                route.spec.resolved_listeners = Some(listener_keys);
             }
         }
 
-        if route.spec.resolved_ports.is_none() {
+        if route.spec.resolved_listeners.is_none() {
             tracing::debug!(
                 route = %route.metadata.name.as_deref().unwrap_or(""),
                 ns = route_ns,
-                "TLSRoute has no resolved_ports: Gateway not yet available or no matching listeners"
+                "TLSRoute has no resolved_listeners: Gateway not yet available or no matching listeners"
             );
         }
 

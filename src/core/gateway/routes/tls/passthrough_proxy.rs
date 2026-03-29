@@ -26,7 +26,7 @@ use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::ResourceMeta;
-use crate::types::{MatchedInfo, Rsc};
+use crate::types::{ListenerKey, MatchedInfo, Rsc};
 
 /// TLS Passthrough proxy service.
 ///
@@ -37,6 +37,7 @@ use crate::types::{MatchedInfo, Rsc};
 /// 4. Relays all bytes bidirectionally (the TLS session is between client and backend)
 pub struct EdgionTlsPassthroughProxy {
     pub listener_port: u16,
+    pub listener_key: ListenerKey,
     pub tls_route_manager: Arc<TlsRouteManager>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,

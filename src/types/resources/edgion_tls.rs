@@ -3,6 +3,7 @@ use super::gateway::SecretObjectReference;
 use super::http_route::RouteParentStatus;
 use crate::types::constants::annotations;
 use crate::types::constants::secret_keys::tls::{CERT, KEY};
+use crate::types::ListenerKey;
 use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -139,11 +140,10 @@ pub struct EdgionTlsSpec {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub secret: Option<Secret>,
 
-    /// Resolved ports from parentRefs (filled by controller, not from YAML).
-    /// Derived from parentRef → Gateway → listener.port.
-    /// None = not yet bound to any listener port, so it must not enter the matcher.
+    /// Pre-computed listener keys from parentRef resolution (set by Controller).
+    /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub resolved_ports: Option<Vec<u16>>,
+    pub resolved_listeners: Option<Vec<ListenerKey>>,
 }
 
 /// Extended/experimental TLS features (reserved)
@@ -488,7 +488,7 @@ mod tests {
                 ciphers: None,
                 extend: None,
                 secret: None,
-                resolved_ports: None,
+                resolved_listeners: None,
             },
             status: None,
         }
@@ -569,7 +569,7 @@ spec:
                 ciphers: None,
                 extend: None,
                 secret: None,
-                resolved_ports: None,
+                resolved_listeners: None,
             },
             status: None,
         };

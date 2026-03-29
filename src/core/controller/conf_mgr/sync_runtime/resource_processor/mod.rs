@@ -66,7 +66,9 @@ pub use ref_grant::{
 };
 
 // Re-export listener_port_manager utilities
-pub use listener_port_manager::{get_listener_port_manager, make_port_key, ListenerPortManager, ListenerRef};
+pub use listener_port_manager::{
+    get_listener_port_manager, make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey,
+};
 
 // Re-export attached_route_tracker utilities
 pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};

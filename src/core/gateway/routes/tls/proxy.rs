@@ -22,7 +22,7 @@ use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
 use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
+use crate::types::{ListenerKey, MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use serde::Serialize;
 
 fn is_zero_u64(v: &u64) -> bool {
@@ -116,6 +116,7 @@ impl TlsContext {
 /// only the inner `ArcSwap<TlsRouteTable>`, so the Arc stays stable.
 pub struct EdgionTlsTcpProxy {
     pub listener_port: u16,
+    pub listener_key: ListenerKey,
     pub tls_route_manager: Arc<TlsRouteManager>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,

@@ -347,7 +347,7 @@ struct TlsStoreStats {
 
 #[derive(Serialize)]
 struct TlsCertMatcherStats {
-    port_count: usize,
+    listener_count: usize,
 }
 
 #[derive(Serialize)]
@@ -394,7 +394,7 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
     };
 
     let tls_cert_matcher = TlsCertMatcherStats {
-        port_count: crate::core::gateway::tls::store::cert_matcher::get_tls_cert_matcher().port_count(),
+        listener_count: crate::core::gateway::tls::store::cert_matcher::get_tls_cert_matcher().listener_count(),
     };
 
     let plugin_store = PluginStoreStats {

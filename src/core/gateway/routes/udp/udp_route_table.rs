@@ -73,7 +73,7 @@ mod tests {
                     port: Some(port as i32),
                 }]),
                 rules: Some(vec![]),
-                resolved_ports: Some(vec![port]),
+                resolved_listeners: None,
             },
             status: None,
         }

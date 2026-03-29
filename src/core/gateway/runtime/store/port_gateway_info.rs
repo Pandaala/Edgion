@@ -22,6 +22,7 @@ use super::super::gateway_info::GatewayInfo;
 use crate::core::gateway::observe::metrics::TestType;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::types::constants::annotations::edgion as annotations;
+use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::Gateway;
 use arc_swap::ArcSwap;
@@ -145,8 +146,8 @@ pub struct ListenerEntry {
 }
 
 pub struct PortGatewayInfoStore {
-    flat_data: ArcSwap<HashMap<u16, Arc<Vec<GatewayInfo>>>>,
-    index_data: ArcSwap<HashMap<u16, Arc<GatewayInfoIndex>>>,
+    flat_data: ArcSwap<HashMap<ListenerKey, Arc<Vec<GatewayInfo>>>>,
+    index_data: ArcSwap<HashMap<ListenerKey, Arc<GatewayInfoIndex>>>,
 }
 
 impl PortGatewayInfoStore {
@@ -157,32 +158,32 @@ impl PortGatewayInfoStore {
         }
     }
 
-    /// Get all GatewayInfo contexts for a given port.
+    /// Get all GatewayInfo contexts for a given listener key.
     ///
-    /// Returns an empty Vec (behind Arc) if the port has no registered Gateways.
+    /// Returns an empty Vec (behind Arc) if the key has no registered Gateways.
     /// This is the hot-path call used in `pg_request_filter` per request.
     #[inline]
-    pub fn get(&self, port: u16) -> Arc<Vec<GatewayInfo>> {
+    pub fn get(&self, key: &ListenerKey) -> Arc<Vec<GatewayInfo>> {
         let data = self.flat_data.load();
-        data.get(&port).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
+        data.get(key).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
-    /// Get the pre-built GatewayInfoIndex for a given port.
+    /// Get the pre-built GatewayInfoIndex for a given listener key.
     ///
-    /// Returns an empty index if the port has no registered Gateways.
+    /// Returns an empty index if the key has no registered Gateways.
     /// Hot-path call: O(1) ArcSwap load + HashMap get.
     #[inline]
-    pub fn get_index(&self, port: u16) -> Arc<GatewayInfoIndex> {
+    pub fn get_index(&self, key: &ListenerKey) -> Arc<GatewayInfoIndex> {
         let data = self.index_data.load();
-        data.get(&port)
+        data.get(key)
             .cloned()
             .unwrap_or_else(|| Arc::new(GatewayInfoIndex::new()))
     }
 
-    /// Return all ports that have at least one registered Gateway/Listener.
-    pub fn all_ports(&self) -> Vec<u16> {
+    /// Return all listener keys that have at least one registered Gateway/Listener.
+    pub fn all_listener_keys(&self) -> Vec<ListenerKey> {
         let data = self.flat_data.load();
-        data.keys().copied().collect()
+        data.keys().cloned().collect()
     }
 
     /// Rebuild the store from the full list of Gateway resources.
@@ -191,8 +192,8 @@ impl PortGatewayInfoStore {
     /// and builds both the flat port → Vec<GatewayInfo> mapping and the
     /// per-port GatewayInfoIndex for O(1) route matching lookups.
     pub fn rebuild(&self, gateways: &[Gateway]) {
-        let mut port_map: HashMap<u16, Vec<GatewayInfo>> = HashMap::new();
-        let mut index_map: HashMap<u16, GatewayInfoIndex> = HashMap::new();
+        let mut port_map: HashMap<ListenerKey, Vec<GatewayInfo>> = HashMap::new();
+        let mut index_map: HashMap<ListenerKey, GatewayInfoIndex> = HashMap::new();
 
         for gateway in gateways {
             let gateway_namespace = gateway.metadata.namespace.clone();
@@ -224,7 +225,8 @@ impl PortGatewayInfoStore {
                     continue;
                 }
 
-                let port = listener.port as u16;
+                let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
+                let key = ListenerKey::new(addr, &listener.protocol);
                 let gi = GatewayInfo::new(
                     gateway_namespace.clone(),
                     gateway_name.clone(),
@@ -242,28 +244,28 @@ impl PortGatewayInfoStore {
                 };
 
                 index_map
-                    .entry(port)
+                    .entry(key.clone())
                     .or_insert_with(GatewayInfoIndex::new)
                     .gateways
                     .entry(gateway_key)
                     .or_insert_with(GatewayListeners::new)
                     .add(entry);
 
-                port_map.entry(port).or_default().push(gi);
+                port_map.entry(key).or_default().push(gi);
             }
         }
 
-        let port_count = port_map.len();
+        let listener_count = port_map.len();
         let total_entries: usize = port_map.values().map(|v| v.len()).sum();
 
-        let flat_arc_map: HashMap<u16, Arc<Vec<GatewayInfo>>> = port_map
+        let flat_arc_map: HashMap<ListenerKey, Arc<Vec<GatewayInfo>>> = port_map
             .into_iter()
-            .map(|(port, infos)| (port, Arc::new(infos)))
+            .map(|(key, infos)| (key, Arc::new(infos)))
             .collect();
 
-        let index_arc_map: HashMap<u16, Arc<GatewayInfoIndex>> = index_map
+        let index_arc_map: HashMap<ListenerKey, Arc<GatewayInfoIndex>> = index_map
             .into_iter()
-            .map(|(port, index)| (port, Arc::new(index)))
+            .map(|(key, index)| (key, Arc::new(index)))
             .collect();
 
         self.flat_data.store(Arc::new(flat_arc_map));
@@ -271,9 +273,9 @@ impl PortGatewayInfoStore {
 
         tracing::info!(
             component = "port_gateway_info_store",
-            ports = port_count,
+            listeners = listener_count,
             gateway_listener_entries = total_entries,
-            "Rebuilt port GatewayInfo store"
+            "Rebuilt listener GatewayInfo store"
         );
     }
 }

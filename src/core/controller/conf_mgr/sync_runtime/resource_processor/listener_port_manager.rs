@@ -6,17 +6,17 @@
 //!
 //! ## Design
 //!
-//! - Forward index: port_key → Set of ListenerRefs (all listeners using this port)
-//! - Reverse index: gateway_key → Set of port_keys (all ports used by this gateway)
+//! - Forward index: conflict_key → Set of ListenerRefs (all listeners using this socket address)
+//! - Reverse index: gateway_key → Set of conflict_keys (all socket addresses used by this gateway)
 //! - Conflict detection considers hostname intersection (wildcard-aware)
 //!
-//! ## Port Key Format
+//! ## Conflict Key Format
 //!
-//! Port keys group listeners that *could* conflict (same port+protocol group):
-//! - HTTP/HTTPS/TLS: "port" (e.g. "443")
-//! - TCP/UDP: "PROTO:port" (e.g. "TCP:53", "UDP:53")
+//! Conflict keys group listeners that bind the same OS socket (same IP:port):
+//! - Format: "{ip}:{port}" (e.g. "0.0.0.0:443")
+//! - Protocol is excluded because HTTP/HTTPS/TLS/TCP all bind the same OS socket on a given (ip, port)
 //!
-//! Within each port key group, hostname intersection determines actual conflicts.
+//! Within each conflict key group, hostname intersection determines actual conflicts.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, RwLock};
@@ -50,22 +50,23 @@ impl ListenerRef {
     }
 }
 
-/// Port key for grouping listeners that could potentially conflict.
-pub type PortKey = String;
+/// Conflict group key: listeners on the same socket address can conflict.
+/// Format: "{ip}:{port}" — protocol is excluded because HTTP/HTTPS/TLS/TCP
+/// all bind the same OS socket on a given (ip, port).
+pub type ConflictKey = String;
 
-/// Build port key from listener attributes.
+/// Build conflict key from a socket address.
 ///
-/// Groups listeners by port+protocol so that hostname intersection can be
-/// checked within each group during conflict detection.
-///
-/// - HTTP, HTTPS, TLS: grouped by port only (hostname checked separately)
-/// - TCP, UDP: grouped by protocol+port (hostname irrelevant)
-pub fn make_port_key(port: i32, protocol: &str) -> PortKey {
-    match protocol.to_uppercase().as_str() {
-        "HTTP" | "HTTPS" | "TLS" => format!("{}", port),
-        proto => format!("{}:{}", proto, port),
-    }
+/// Groups listeners by their OS socket address (ip:port) so that hostname
+/// intersection can be checked within each group during conflict detection.
+/// Protocol is excluded from the key because different protocols on the same
+/// (ip, port) bind the same OS socket.
+pub fn make_conflict_key(addr: std::net::SocketAddr) -> ConflictKey {
+    addr.to_string() // e.g. "0.0.0.0:443"
 }
+
+// Keep PortKey as a type alias for backward compatibility
+pub type PortKey = ConflictKey;
 
 /// Check if two listener hostnames are identical (i.e. truly conflict).
 ///
@@ -89,11 +90,11 @@ fn hostnames_conflict(a: Option<&str>, b: Option<&str>) -> bool {
 /// Conflict detection is hostname-aware: wildcard listeners conflict
 /// with any hostname-specific listener on the same port.
 pub struct ListenerPortManager {
-    /// Forward index: port_key → listeners using this port
-    port_to_listeners: RwLock<HashMap<PortKey, HashSet<ListenerRef>>>,
+    /// Forward index: conflict_key → listeners using this socket address
+    port_to_listeners: RwLock<HashMap<ConflictKey, HashSet<ListenerRef>>>,
 
-    /// Reverse index: gateway_key → port_keys it uses
-    gateway_to_ports: RwLock<HashMap<String, HashSet<PortKey>>>,
+    /// Reverse index: gateway_key → conflict_keys it uses
+    gateway_to_ports: RwLock<HashMap<String, HashSet<ConflictKey>>>,
 }
 
 impl ListenerPortManager {
@@ -106,39 +107,39 @@ impl ListenerPortManager {
 
     /// Register a gateway's listeners.
     ///
-    /// Each listener is a tuple of (listener_name, port_key, hostname).
+    /// Each listener is a tuple of (listener_name, conflict_key, hostname).
     ///
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
-    pub fn register_gateway(&self, gateway_key: &str, listeners: &[(String, PortKey, Option<String>)]) {
+    pub fn register_gateway(&self, gateway_key: &str, listeners: &[(String, ConflictKey, Option<String>)]) {
         let mut gw_map = self.gateway_to_ports.write().unwrap();
         let mut port_map = self.port_to_listeners.write().unwrap();
 
         // Clear old registrations
-        if let Some(old_port_keys) = gw_map.remove(gateway_key) {
-            for port_key in &old_port_keys {
-                if let Some(listeners_set) = port_map.get_mut(port_key) {
+        if let Some(old_conflict_keys) = gw_map.remove(gateway_key) {
+            for conflict_key in &old_conflict_keys {
+                if let Some(listeners_set) = port_map.get_mut(conflict_key) {
                     listeners_set.retain(|l| l.gateway_key != gateway_key);
                     if listeners_set.is_empty() {
-                        port_map.remove(port_key);
+                        port_map.remove(conflict_key);
                     }
                 }
             }
         }
 
         // Add new registrations
-        let mut port_keys = HashSet::new();
+        let mut conflict_keys = HashSet::new();
 
-        for (listener_name, port_key, hostname) in listeners {
+        for (listener_name, conflict_key, hostname) in listeners {
             // Normalize empty hostname to None (wildcard)
             let hostname = hostname.as_ref().filter(|h| !h.is_empty()).cloned();
             let listener_ref = ListenerRef::new(gateway_key, listener_name.clone(), hostname);
-            port_map.entry(port_key.clone()).or_default().insert(listener_ref);
-            port_keys.insert(port_key.clone());
+            port_map.entry(conflict_key.clone()).or_default().insert(listener_ref);
+            conflict_keys.insert(conflict_key.clone());
         }
 
-        if !port_keys.is_empty() {
-            gw_map.insert(gateway_key.to_string(), port_keys);
+        if !conflict_keys.is_empty() {
+            gw_map.insert(gateway_key.to_string(), conflict_keys);
         }
 
         tracing::debug!(
@@ -156,21 +157,21 @@ impl ListenerPortManager {
         let mut gw_map = self.gateway_to_ports.write().unwrap();
         let mut port_map = self.port_to_listeners.write().unwrap();
 
-        let port_keys = gw_map.remove(gateway_key).unwrap_or_default();
+        let conflict_keys = gw_map.remove(gateway_key).unwrap_or_default();
 
-        for port_key in &port_keys {
-            if let Some(listeners) = port_map.get_mut(port_key) {
+        for conflict_key in &conflict_keys {
+            if let Some(listeners) = port_map.get_mut(conflict_key) {
                 listeners.retain(|l| l.gateway_key != gateway_key);
                 if listeners.is_empty() {
-                    port_map.remove(port_key);
+                    port_map.remove(conflict_key);
                 }
             }
         }
 
-        if !port_keys.is_empty() {
+        if !conflict_keys.is_empty() {
             tracing::debug!(
                 gateway = %gateway_key,
-                port_count = port_keys.len(),
+                socket_count = conflict_keys.len(),
                 "Unregistered gateway from port manager"
             );
         }
@@ -196,20 +197,20 @@ impl ListenerPortManager {
             None => return conflicts,
         };
 
-        for port_key in port_keys {
-            let Some(listeners) = port_map.get(port_key) else {
+        for conflict_key in port_keys {
+            let Some(listeners) = port_map.get(conflict_key) else {
                 continue;
             };
 
-            // Collect same-gateway listeners on this port
+            // Collect same-gateway listeners on this socket address
             let same_gw: Vec<&ListenerRef> = listeners.iter().filter(|l| l.gateway_key == gateway_key).collect();
 
             if same_gw.len() < 2 {
                 continue;
             }
 
-            // For TCP/UDP there's no hostname dimension — all same-port listeners conflict
-            // For HTTP/HTTPS/TLS, check hostname intersection pairwise
+            // Check hostname intersection pairwise: two listeners on the same socket address
+            // conflict if they have the same hostname (including both being wildcard).
             for (i, listener) in same_gw.iter().enumerate() {
                 let others: Vec<&str> = same_gw
                     .iter()
@@ -221,7 +222,7 @@ impl ListenerPortManager {
                     .collect();
 
                 if !others.is_empty() {
-                    let reason = format!("Port {}: conflicts with: {}", port_key, others.join(", "));
+                    let reason = format!("Socket {}: conflicts with: {}", conflict_key, others.join(", "));
                     conflicts.insert(listener.listener_name.clone(), reason);
                 }
             }
@@ -262,18 +263,28 @@ impl Default for ListenerPortManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn addr(port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port)
+    }
+
+    fn key(port: u16) -> ConflictKey {
+        make_conflict_key(addr(port))
+    }
 
     #[test]
-    fn test_make_port_key() {
-        // HTTP/HTTPS/TLS: port only
-        assert_eq!(make_port_key(80, "HTTP"), "80");
-        assert_eq!(make_port_key(443, "HTTPS"), "443");
-        assert_eq!(make_port_key(443, "TLS"), "443");
+    fn test_make_conflict_key() {
+        // All protocols on the same (ip, port) produce the same conflict key
+        assert_eq!(make_conflict_key(addr(80)), "0.0.0.0:80");
+        assert_eq!(make_conflict_key(addr(443)), "0.0.0.0:443");
 
-        // TCP/UDP: protocol:port
-        assert_eq!(make_port_key(3306, "TCP"), "TCP:3306");
-        assert_eq!(make_port_key(53, "UDP"), "UDP:53");
-        assert_ne!(make_port_key(53, "TCP"), make_port_key(53, "UDP"));
+        // Different ports produce different keys
+        assert_ne!(make_conflict_key(addr(80)), make_conflict_key(addr(443)));
+
+        // Custom IP address
+        let custom = SocketAddr::new("192.168.1.1".parse::<IpAddr>().unwrap(), 8080);
+        assert_eq!(make_conflict_key(custom), "192.168.1.1:8080");
     }
 
     #[test]
@@ -310,33 +321,33 @@ mod tests {
         manager.register_gateway(
             "default/gateway-a",
             &[
-                ("http".to_string(), "80".to_string(), None),
-                ("https".to_string(), "443".to_string(), Some("example.com".to_string())),
+                ("http".to_string(), key(80), None),
+                ("https".to_string(), key(443), Some("example.com".to_string())),
             ],
         );
 
-        manager.register_gateway("default/gateway-b", &[("http".to_string(), "80".to_string(), None)]);
+        manager.register_gateway("default/gateway-b", &[("http".to_string(), key(80), None)]);
 
-        let (ports, gateways) = manager.stats();
+        let (sockets, gateways) = manager.stats();
         assert_eq!(gateways, 2);
-        assert_eq!(ports, 2); // "80" and "443"
+        assert_eq!(sockets, 2); // "0.0.0.0:80" and "0.0.0.0:443"
 
         manager.unregister_gateway("default/gateway-a");
 
-        let (ports, gateways) = manager.stats();
+        let (sockets, gateways) = manager.stats();
         assert_eq!(gateways, 1);
-        assert_eq!(ports, 1);
+        assert_eq!(sockets, 1);
     }
 
     #[test]
-    fn test_conflict_same_port_same_hostname() {
+    fn test_conflict_same_socket_same_hostname() {
         let manager = ListenerPortManager::new();
 
         manager.register_gateway(
             "default/gw",
             &[
-                ("http-1".to_string(), "80".to_string(), None),
-                ("http-2".to_string(), "80".to_string(), None),
+                ("http-1".to_string(), key(80), None),
+                ("http-2".to_string(), key(80), None),
             ],
         );
 
@@ -354,12 +365,8 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                ("catchall".to_string(), "443".to_string(), None),
-                (
-                    "specific".to_string(),
-                    "443".to_string(),
-                    Some("api.example.com".to_string()),
-                ),
+                ("catchall".to_string(), key(443), None),
+                ("specific".to_string(), key(443), Some("api.example.com".to_string())),
             ],
         );
 
@@ -374,12 +381,8 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                ("wild".to_string(), "443".to_string(), Some("*.example.com".to_string())),
-                (
-                    "concrete".to_string(),
-                    "443".to_string(),
-                    Some("foo.example.com".to_string()),
-                ),
+                ("wild".to_string(), key(443), Some("*.example.com".to_string())),
+                ("concrete".to_string(), key(443), Some("foo.example.com".to_string())),
             ],
         );
 
@@ -394,16 +397,8 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                (
-                    "wild-1".to_string(),
-                    "443".to_string(),
-                    Some("*.example.com".to_string()),
-                ),
-                (
-                    "wild-2".to_string(),
-                    "443".to_string(),
-                    Some("*.example.com".to_string()),
-                ),
+                ("wild-1".to_string(), key(443), Some("*.example.com".to_string())),
+                ("wild-2".to_string(), key(443), Some("*.example.com".to_string())),
             ],
         );
 
@@ -415,20 +410,12 @@ mod tests {
     fn test_no_conflict_different_hostnames() {
         let manager = ListenerPortManager::new();
 
-        // Different concrete hostnames on same port — no conflict
+        // Different concrete hostnames on same socket address — no conflict
         manager.register_gateway(
             "default/gw",
             &[
-                (
-                    "api".to_string(),
-                    "443".to_string(),
-                    Some("api.example.com".to_string()),
-                ),
-                (
-                    "web".to_string(),
-                    "443".to_string(),
-                    Some("web.example.com".to_string()),
-                ),
+                ("api".to_string(), key(443), Some("api.example.com".to_string())),
+                ("web".to_string(), key(443), Some("web.example.com".to_string())),
             ],
         );
 
@@ -439,8 +426,8 @@ mod tests {
     fn test_no_conflict_cross_gateway() {
         let manager = ListenerPortManager::new();
 
-        manager.register_gateway("default/gw-a", &[("https".to_string(), "443".to_string(), None)]);
-        manager.register_gateway("default/gw-b", &[("https".to_string(), "443".to_string(), None)]);
+        manager.register_gateway("default/gw-a", &[("https".to_string(), key(443), None)]);
+        manager.register_gateway("default/gw-b", &[("https".to_string(), key(443), None)]);
 
         assert!(manager.detect_conflicts("default/gw-a").is_empty());
         assert!(manager.detect_conflicts("default/gw-b").is_empty());
@@ -453,8 +440,8 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                ("http".to_string(), "80".to_string(), None),
-                ("https".to_string(), "443".to_string(), None),
+                ("http".to_string(), key(80), None),
+                ("https".to_string(), key(443), None),
             ],
         );
 
@@ -462,40 +449,43 @@ mod tests {
     }
 
     #[test]
-    fn test_no_conflict_tcp_vs_udp_same_port() {
+    fn test_conflict_tcp_and_http_same_socket() {
         let manager = ListenerPortManager::new();
 
-        // TCP and UDP on same port number within same gateway — no conflict
+        // TCP and HTTP on the same (ip, port) share the same OS socket → same conflict key → conflict
         manager.register_gateway(
             "default/gw",
             &[
-                ("tcp-53".to_string(), make_port_key(53, "TCP"), None),
-                ("udp-53".to_string(), make_port_key(53, "UDP"), None),
+                ("tcp-80".to_string(), key(80), None),
+                ("http-80".to_string(), key(80), None),
             ],
         );
 
-        assert!(manager.detect_conflicts("default/gw").is_empty());
+        let conflicts = manager.detect_conflicts("default/gw");
+        assert_eq!(conflicts.len(), 2);
+        assert!(conflicts.contains_key("tcp-80"));
+        assert!(conflicts.contains_key("http-80"));
     }
 
     #[test]
     fn test_re_register_clears_old() {
         let manager = ListenerPortManager::new();
 
-        manager.register_gateway("default/gw", &[("http".to_string(), "80".to_string(), None)]);
+        manager.register_gateway("default/gw", &[("http".to_string(), key(80), None)]);
         manager.register_gateway("default/gw", &[]);
 
-        let (ports, gateways) = manager.stats();
+        let (sockets, gateways) = manager.stats();
         assert_eq!(gateways, 0);
-        assert_eq!(ports, 0);
+        assert_eq!(sockets, 0);
     }
 
     #[test]
     fn test_clear() {
         let manager = ListenerPortManager::new();
-        manager.register_gateway("default/gw", &[("http".to_string(), "80".to_string(), None)]);
+        manager.register_gateway("default/gw", &[("http".to_string(), key(80), None)]);
         manager.clear();
-        let (ports, gateways) = manager.stats();
-        assert_eq!(ports, 0);
+        let (sockets, gateways) = manager.stats();
+        assert_eq!(sockets, 0);
         assert_eq!(gateways, 0);
     }
 
@@ -507,17 +497,9 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                ("catchall".to_string(), "443".to_string(), None),
-                (
-                    "api".to_string(),
-                    "443".to_string(),
-                    Some("api.example.com".to_string()),
-                ),
-                (
-                    "web".to_string(),
-                    "443".to_string(),
-                    Some("web.example.com".to_string()),
-                ),
+                ("catchall".to_string(), key(443), None),
+                ("api".to_string(), key(443), Some("api.example.com".to_string())),
+                ("web".to_string(), key(443), Some("web.example.com".to_string())),
             ],
         );
 
@@ -532,13 +514,9 @@ mod tests {
         manager.register_gateway(
             "default/gw",
             &[
-                ("catchall-1".to_string(), "443".to_string(), None),
-                ("catchall-2".to_string(), "443".to_string(), None),
-                (
-                    "api".to_string(),
-                    "443".to_string(),
-                    Some("api.example.com".to_string()),
-                ),
+                ("catchall-1".to_string(), key(443), None),
+                ("catchall-2".to_string(), key(443), None),
+                ("api".to_string(), key(443), Some("api.example.com".to_string())),
             ],
         );
 

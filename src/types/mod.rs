@@ -5,6 +5,7 @@ pub mod edgion_status;
 pub mod err;
 pub mod filters;
 pub mod gateway_base_conf;
+pub mod listener_key;
 pub mod observe;
 pub mod output;
 pub mod resources;
@@ -13,6 +14,7 @@ pub mod work_dir;
 
 // Re-export common types
 pub use self::common::{KeyGet, KeySet};
+pub use self::listener_key::ListenerKey;
 
 // Backward compatibility: global_def re-exports from constants::app
 pub mod global_def {

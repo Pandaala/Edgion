@@ -9,6 +9,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::attache
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::{ParentReference, RefDenied};
 use crate::types::resources::gateway::AllowedRoutes;
@@ -426,6 +427,86 @@ pub fn lookup_gateway(namespace: &str, name: &str) -> Option<Gateway> {
         gw.metadata.namespace.as_deref().unwrap_or("default") == namespace
             && gw.metadata.name.as_deref().unwrap_or("") == name
     })
+}
+
+/// Resolve listener keys from parentRefs for per-listener route isolation.
+///
+/// For each parentRef, looks up the referenced Gateway and resolves matching
+/// listeners based on the parentRef's sectionName and/or port fields:
+///
+/// - **sectionName set**: find the listener by name; if port is also set,
+///   validate that the listener's port matches (per Gateway API spec, both
+///   must match when both are specified).
+/// - **port set (no sectionName)**: find all listeners matching the port.
+/// - **neither set**: attach to all listeners of the parent Gateway.
+///
+/// Only includes listeners whose `allowedRoutes` namespace policy permits
+/// the route's namespace (default policy: "Same").
+///
+/// `route_namespace` is the namespace of the route resource itself.
+/// `fallback_namespace` is typically `route.metadata.namespace` and is used
+/// to resolve the Gateway namespace when `parentRef.namespace` is absent.
+pub fn resolve_listener_keys(
+    parent_refs: &[ParentReference],
+    route_namespace: &str,
+    fallback_namespace: Option<&str>,
+) -> Vec<ListenerKey> {
+    let mut listener_keys = Vec::new();
+
+    for parent_ref in parent_refs {
+        let gw_ns = parent_ref
+            .namespace
+            .as_deref()
+            .or(fallback_namespace)
+            .unwrap_or("default");
+
+        let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name) else {
+            continue;
+        };
+        let gw_addresses = gateway.spec.addresses.as_ref();
+        let Some(listeners) = &gateway.spec.listeners else {
+            continue;
+        };
+
+        if let Some(section_name) = &parent_ref.section_name {
+            // sectionName specified -- find that specific listener
+            if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
+                // Per Gateway API spec: when both sectionName and port are
+                // specified, the port must also match.
+                if let Some(port) = parent_ref.port {
+                    if listener.port != port {
+                        continue;
+                    }
+                }
+                if listener_allows_route_namespace(&listener.allowed_routes, route_namespace, gw_ns) {
+                    let addr = resolve_listener_addr(gw_addresses, listener.port);
+                    listener_keys.push(ListenerKey::new(addr, &listener.protocol));
+                }
+            }
+        } else if let Some(port) = parent_ref.port {
+            // Explicit port -- find listeners matching the port
+            for listener in listeners {
+                if listener.port == port {
+                    if listener_allows_route_namespace(&listener.allowed_routes, route_namespace, gw_ns) {
+                        let addr = resolve_listener_addr(gw_addresses, listener.port);
+                        listener_keys.push(ListenerKey::new(addr, &listener.protocol));
+                    }
+                }
+            }
+        } else {
+            // No sectionName, no port -- all listeners
+            for listener in listeners {
+                if listener_allows_route_namespace(&listener.allowed_routes, route_namespace, gw_ns) {
+                    let addr = resolve_listener_addr(gw_addresses, listener.port);
+                    listener_keys.push(ListenerKey::new(addr, &listener.protocol));
+                }
+            }
+        }
+    }
+
+    listener_keys.sort_unstable();
+    listener_keys.dedup();
+    listener_keys
 }
 
 #[cfg(test)]

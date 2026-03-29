@@ -88,7 +88,7 @@ mod tests {
                 ciphers: None,
                 extend: None,
                 secret,
-                resolved_ports: None,
+                resolved_listeners: None,
             },
             status: None,
         }

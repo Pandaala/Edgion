@@ -5,12 +5,12 @@ use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRo
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::gateway::routes::http::match_unit::MatchSpecificity;
 use crate::core::gateway::routes::http::routes_mgr::{
-    resolved_ports_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
+    resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
 use crate::core::gateway::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::types::resources::common::ParentReference;
 use crate::types::resources::http_route::RouteParentStatus;
-use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, MatchInfo, ResourceMeta};
+use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, MatchInfo, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -141,8 +141,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             self.route_cache.insert(key.clone(), route.clone());
         }
 
-        // Step 2: Rebuild all per-port managers
-        self.rebuild_all_port_managers();
+        // Step 2: Rebuild all per-listener managers
+        self.rebuild_all_listener_managers();
 
         let elapsed = start_time.elapsed();
         tracing::info!(
@@ -171,55 +171,37 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             "partial update start"
         );
 
-        // Compute affected ports BEFORE updating cache.
-        // When a route lacks resolved_ports, extract from parentRef.port
-        // or mark all existing ports as affected.
-        let mut affected_ports = HashSet::new();
-        let mut needs_all_ports = false;
+        // Compute affected listeners BEFORE updating cache.
+        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
         for (key, route) in &add_or_update {
-            let ports = resolved_ports_for_route(route);
-            if ports.is_empty() {
-                if let Some(parent_refs) = &route.spec.parent_refs {
-                    let any_port = parent_refs.iter().any(|pr| pr.port.is_some());
-                    if any_port {
-                        for pr in parent_refs {
-                            if let Some(p) = pr.port {
-                                affected_ports.insert(p as u16);
-                            }
-                        }
-                    } else {
-                        needs_all_ports = true;
-                    }
-                } else {
-                    needs_all_ports = true;
-                }
+            let listeners = resolved_listeners_for_route(route);
+            if listeners.is_empty() {
+                // Route has no resolved_listeners — it won't appear in any bucket.
+                // Do NOT mark needs_all_listeners; just warn and skip new-side listeners.
+                tracing::warn!(route = %key, "HTTPRoute has no resolved_listeners during partial_update");
             } else {
-                for &port in ports {
-                    affected_ports.insert(port);
+                for lk in listeners {
+                    affected_listeners.insert(lk.clone());
                 }
             }
+            // Still collect old version's listeners so they get rebuilt
             if let Some(old) = self.route_cache.get(key) {
-                for &port in resolved_ports_for_route(old.value()) {
-                    affected_ports.insert(port);
+                for lk in resolved_listeners_for_route(old.value()) {
+                    affected_listeners.insert(lk.clone());
                 }
             }
         }
         for key in &remove {
             if let Some(old) = self.route_cache.get(key) {
-                let ports = resolved_ports_for_route(old.value());
-                if ports.is_empty() {
-                    needs_all_ports = true;
+                let listeners = resolved_listeners_for_route(old.value());
+                if listeners.is_empty() {
+                    // Old route also had no listeners — nothing to rebuild
                 } else {
-                    for &port in ports {
-                        affected_ports.insert(port);
+                    for lk in listeners {
+                        affected_listeners.insert(lk.clone());
                     }
                 }
-            }
-        }
-        if needs_all_ports {
-            for entry in self.by_port.iter() {
-                affected_ports.insert(*entry.key());
             }
         }
 
@@ -231,8 +213,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             self.route_cache.remove(key);
         }
 
-        // Rebuild affected port managers
-        self.rebuild_affected_port_managers(&affected_ports);
+        // Rebuild affected listener managers
+        self.rebuild_affected_listener_managers(&affected_listeners);
 
         tracing::info!(component = "http_route_manager", "partial update done");
     }

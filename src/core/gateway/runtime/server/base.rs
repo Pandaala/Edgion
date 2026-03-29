@@ -3,6 +3,7 @@ use crate::core::gateway::observe::access_log::get_access_logger_unchecked;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::server::listener_builder;
 use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_port_gateway_infos};
+use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
 use crate::types::{Gateway, ResourceMeta};
 use anyhow::{anyhow, Result};
@@ -87,8 +88,8 @@ impl GatewayBase {
         // dynamically look up which Gateways share each port.
         rebuild_port_gateway_infos(&gateways);
 
-        // Track bound ports to avoid duplicate physical bindings
-        let mut bound_ports: HashSet<u16> = HashSet::new();
+        // Track bound listeners to avoid duplicate physical bindings
+        let mut bound_listeners: HashSet<ListenerKey> = HashSet::new();
 
         // 3. Process each Gateway and configure listeners
         for gateway in gateways.iter() {
@@ -161,14 +162,15 @@ impl GatewayBase {
                 }
 
                 for listener in listeners {
-                    let port = listener.port as u16;
+                    let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
+                    let listener_key = ListenerKey::new(addr, &listener.protocol);
 
-                    if bound_ports.contains(&port) {
+                    if bound_listeners.contains(&listener_key) {
                         tracing::info!(
                             gateway = %gateway.key_name(),
                             listener = %listener.name,
-                            port = port,
-                            "Listener skipped - port already bound by another Gateway (routes served via global table)"
+                            key = %listener_key,
+                            "Listener skipped - already bound (routes served via global table)"
                         );
                         continue;
                     }
@@ -177,7 +179,7 @@ impl GatewayBase {
                         tracing::warn!(
                             gateway = %gateway.key_name(),
                             listener = %listener.name,
-                            port = port,
+                            key = %listener_key,
                             "Listener skipped - marked as Conflicted by Controller (port conflict)"
                         );
                         continue;
@@ -196,6 +198,7 @@ impl GatewayBase {
                         gateway_name: gateway_name.clone(),
                         gateway_key: gateway.key_name(),
                         listener: listener.clone(),
+                        listener_key: listener_key.clone(),
                         access_logger: self.get_access_logger(),
                         edgion_gateway_config: Arc::new(edgion_gateway_config.clone()),
                         server_conf: server_conf_arc.clone(),
@@ -205,7 +208,7 @@ impl GatewayBase {
 
                     // Add listener to pingora_server
                     listener_builder::add_listener(pingora_server, context)?;
-                    bound_ports.insert(port);
+                    bound_listeners.insert(listener_key);
                 }
             }
         }
