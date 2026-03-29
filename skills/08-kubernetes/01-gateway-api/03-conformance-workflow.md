@@ -136,7 +136,7 @@ go test ./... -run "TestConformance/<TestName>" -v -timeout 10m -count=1 \
 |------|---------|------|
 | GatewayClass not Accepted | Controller 未启动或 crash | `orbstack-dev.sh logs c` |
 | Gateway no address | gateway_address 配置错误 | 重新运行 setup-orbstack.sh |
-| HTTPRoute test timeout | Pod IP 不可达 | 用 `--port-forward` |
+| HTTPRoute test timeout | Pod IP 不可达 | 用 `--port-forward`；或手动设置 `GATEWAY_PROXY_PORT_MAP`（见 conformance-testing.md 的 TAL 部分） |
 | 测试 SKIP | feature 未在 supported-features 中声明 | 检查 conformance_test.go |
 | Pod CrashLoopBackOff | Binary crash | `orbstack-dev.sh logs c/g` |
 

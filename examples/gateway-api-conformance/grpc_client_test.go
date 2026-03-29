@@ -1,5 +1,11 @@
 package conformance_test
 
+// TAL gRPC client — wraps tal.Resolver to route all gRPC conformance traffic
+// through the configured address resolver (port-forward or direct).
+//
+// This file lives in the conformance_test package (not in tal/) because the
+// confgrpc.Client interface accepts *testing.T, making it test-only by design.
+
 import (
 	"context"
 	"fmt"
@@ -15,53 +21,30 @@ import (
 
 	pb "sigs.k8s.io/gateway-api/conformance/echo-basic/grpcechoserver"
 	confgrpc "sigs.k8s.io/gateway-api/conformance/utils/grpc"
+
+	"edgion.com/gateway-api-conformance/tal"
 )
 
-// PortForwardGRPCClient routes conformance gRPC traffic through the same
-// localhost port-forward proxy used by the HTTP round tripper.
-type PortForwardGRPCClient struct {
-	proxyHost     string
-	httpPort      string
-	httpsPort     string
-	https8443Port string
+// grpcClient implements confgrpc.Client, routing connections through a
+// tal.Resolver. Only the TCP dial target is rewritten; Authority and
+// metadata are preserved unchanged.
+type grpcClient struct {
+	resolver tal.Resolver
 }
 
-func NewPortForwardGRPCClient(proxyHost, httpPort, httpsPort, https8443Port string) *PortForwardGRPCClient {
-	return &PortForwardGRPCClient{
-		proxyHost:     proxyHost,
-		httpPort:      httpPort,
-		httpsPort:     httpsPort,
-		https8443Port: https8443Port,
-	}
+func newGRPCClient(resolver tal.Resolver) *grpcClient {
+	return &grpcClient{resolver: resolver}
 }
 
-func (c *PortForwardGRPCClient) proxyAddress(addr string) (string, error) {
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "", err
-	}
-
-	switch port {
-	case "80":
-		return net.JoinHostPort(c.proxyHost, c.httpPort), nil
-	case "443":
-		return net.JoinHostPort(c.proxyHost, c.httpsPort), nil
-	case "8443":
-		return net.JoinHostPort(c.proxyHost, c.https8443Port), nil
-	default:
-		return "", fmt.Errorf("unexpected port in gateway address: %s", addr)
-	}
-}
-
-func (c *PortForwardGRPCClient) dialOptions(req *confgrpc.RequestMetadata) []grpc.DialOption {
+func (c *grpcClient) dialOptions(req *confgrpc.RequestMetadata) []grpc.DialOption {
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			targetAddr, err := c.proxyAddress(addr)
+			resolved, err := c.resolver.Resolve(addr)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("[TAL] grpc dial: %w", err)
 			}
-			return (&net.Dialer{}).DialContext(ctx, "tcp", targetAddr)
+			return (&net.Dialer{}).DialContext(ctx, "tcp", resolved)
 		}),
 	}
 
@@ -72,7 +55,8 @@ func (c *PortForwardGRPCClient) dialOptions(req *confgrpc.RequestMetadata) []grp
 	return dialOpts
 }
 
-func (c *PortForwardGRPCClient) SendRPC(t *testing.T, address string, expected confgrpc.ExpectedResponse, timeout time.Duration) (*confgrpc.Response, error) {
+// SendRPC implements confgrpc.Client.
+func (c *grpcClient) SendRPC(t *testing.T, address string, expected confgrpc.ExpectedResponse, timeout time.Duration) (*confgrpc.Response, error) {
 	t.Helper()
 
 	conn, err := grpc.NewClient(address, c.dialOptions(expected.RequestMetadata)...)
@@ -115,4 +99,5 @@ func (c *PortForwardGRPCClient) SendRPC(t *testing.T, address string, expected c
 	return resp, nil
 }
 
-func (c *PortForwardGRPCClient) Close() {}
+// Close implements confgrpc.Client.
+func (c *grpcClient) Close() {}

@@ -90,23 +90,63 @@ go test ./... -run "TestConformance/TLSRoute" -v -timeout 10m -count=1 \
 ./scripts/run.sh --all-features  # 所有 feature（含未实现的）
 ```
 
-## Port-Forward 模式
+## Transport Access Layer (TAL)
 
-当集群 Pod IP 不可直接访问时：
+TAL 是 Edgion conformance 测试的统一接入层，负责把"如何到达 Gateway"从"验证什么协议"中分离出来。
+
+### 工作原理
+
+TAL 只改写底层 TCP 连接的目标地址，不修改任何请求语义：
+- Host header、`:authority`、URL path、TLS 参数、请求体均保持原样
+- 地址改写有可选 debug 日志：`TAL_DEBUG=true`
+
+```
+[TAL] resolved 192.168.194.236:80 -> 127.0.0.1:18080
+```
+
+### 覆盖的协议场景
+
+| 场景 | 官方扩展点 | TAL 组件 |
+|------|------------|----------|
+| HTTP/1.1 | `RoundTripper` | `tal.NewRoundTripper` |
+| HTTPS / HTTP/2 over TLS | `RoundTripper` | `tal.NewRoundTripper` |
+| H2C prior knowledge | `RoundTripper` | `tal.NewRoundTripper` |
+| gRPC | `GRPCClient` | `tal.NewGRPCClient` |
+
+### 已知边界（TAL 无法解决的问题）
+
+- **WebSocket**：官方 conformance 框架尚无 dialer hook，TAL 暂无法拦截
+- **TLSRoute 环境编排**：Gateway 启动前未创建正确 listener，TAL 无法弥补
+- **Edgion 数据面 bug**：请求已到达 Gateway 但响应错误，需产品修复
+
+### Port-Forward 模式
+
+当集群 Pod IP 不可直接访问时（OrbStack、远程集群）：
 
 ```bash
 ./scripts/run.sh --port-forward
 ./scripts/run.sh --port-forward --run-test HTTPRouteSimpleSameNamespace
 ```
 
-也可手动设置：
+也可手动设置（推荐使用 `GATEWAY_PROXY_PORT_MAP` 统一管理端口映射）：
 
 ```bash
 export GATEWAY_PROXY_HOST=127.0.0.1
-export GATEWAY_PROXY_HTTP_PORT=8080
-export GATEWAY_PROXY_HTTPS_PORT=8443
-kubectl port-forward -n edgion-system pod/<gateway-pod> 8080:80 8443:443 &
+# 方式 1：统一端口映射表（推荐）
+export GATEWAY_PROXY_PORT_MAP="80:18080,443:18443,8443:28443"
+# 方式 2：单独变量（兼容旧用法）
+export GATEWAY_PROXY_HTTP_PORT=18080
+export GATEWAY_PROXY_HTTPS_PORT=18443
+export GATEWAY_PROXY_HTTPS_8443_PORT=28443
+
+kubectl port-forward -n edgion-system pod/<gateway-pod> 18080:80 18443:443 28443:8443 &
 ./scripts/run.sh --run-test HTTPRouteSimpleSameNamespace
+```
+
+启用 gRPC proxy（`GRPCRoute*` 系列测试）：
+
+```bash
+GATEWAY_PROXY_ENABLE_GRPC=true ./scripts/run.sh --port-forward --conformance-profiles GATEWAY-GRPC
 ```
 
 ## 所有选项

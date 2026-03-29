@@ -1,9 +1,6 @@
 package conformance_test
 
 import (
-	"context"
-	"fmt"
-	"net"
 	"os"
 	"strconv"
 	"testing"
@@ -13,9 +10,10 @@ import (
 
 	"sigs.k8s.io/gateway-api/conformance"
 	"sigs.k8s.io/gateway-api/conformance/utils/config"
-	"sigs.k8s.io/gateway-api/conformance/utils/roundtripper"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
 	"sigs.k8s.io/gateway-api/pkg/features"
+
+	"edgion.com/gateway-api-conformance/tal"
 )
 
 func TestConformance(t *testing.T) {
@@ -132,8 +130,11 @@ func TestConformance(t *testing.T) {
 		RequiredConsecutiveSuccesses:       3,
 	}
 
-	// Optional port-forward proxy (for clusters with unreachable pod IPs)
-	proxyHost := os.Getenv("GATEWAY_PROXY_HOST")
+	// Transport Access Layer (TAL): unified Gateway address resolver.
+	// In port-forward mode (GATEWAY_PROXY_HOST set), all protocol adapters
+	// rewrite only the TCP dial target — request semantics are never modified.
+	resolver, proxyEnabled := tal.ResolverFromEnv()
+
 	enableGRPCProxy := false
 	if raw := os.Getenv("GATEWAY_PROXY_ENABLE_GRPC"); raw != "" {
 		parsed, err := strconv.ParseBool(raw)
@@ -142,47 +143,14 @@ func TestConformance(t *testing.T) {
 		}
 		enableGRPCProxy = parsed
 	}
-	if proxyHost != "" {
-		httpPort := os.Getenv("GATEWAY_PROXY_HTTP_PORT")
-		if httpPort == "" {
-			httpPort = "18080"
-		}
-		httpsPort := os.Getenv("GATEWAY_PROXY_HTTPS_PORT")
-		if httpsPort == "" {
-			httpsPort = "18443"
-		}
-		https8443Port := os.Getenv("GATEWAY_PROXY_HTTPS_8443_PORT")
-		if https8443Port == "" {
-			https8443Port = "28443"
-		}
 
-		t.Logf("Using port-forward proxy: %s (HTTP: %s, HTTPS: %s, HTTPS-8443: %s)", proxyHost, httpPort, httpsPort, https8443Port)
-
-		opts.RoundTripper = &roundtripper.DefaultRoundTripper{
-			Debug:         opts.Debug,
-			TimeoutConfig: opts.TimeoutConfig,
-			CustomDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				_, port, err := net.SplitHostPort(addr)
-				if err != nil {
-					return nil, err
-				}
-				switch port {
-				case "80":
-					addr = net.JoinHostPort(proxyHost, httpPort)
-				case "443":
-					addr = net.JoinHostPort(proxyHost, httpsPort)
-				case "8443":
-					addr = net.JoinHostPort(proxyHost, https8443Port)
-				default:
-					return nil, fmt.Errorf("unexpected port in gateway address: %s", addr)
-				}
-				return (&net.Dialer{}).DialContext(ctx, network, addr)
-			},
-		}
+	if proxyEnabled {
+		t.Logf("TAL: port-forward mode enabled (GATEWAY_PROXY_HOST=%s)", os.Getenv("GATEWAY_PROXY_HOST"))
+		opts.RoundTripper = tal.NewRoundTripper(resolver, opts.Debug, opts.TimeoutConfig)
 
 		if enableGRPCProxy {
-			t.Log("Enabling gRPC proxy client for port-forward mode")
-			opts.GRPCClient = NewPortForwardGRPCClient(proxyHost, httpPort, httpsPort, https8443Port)
+			t.Log("TAL: gRPC proxy client enabled")
+			opts.GRPCClient = newGRPCClient(resolver)
 		}
 	} else if enableGRPCProxy {
 		t.Fatal("GATEWAY_PROXY_ENABLE_GRPC requires GATEWAY_PROXY_HOST to be set")

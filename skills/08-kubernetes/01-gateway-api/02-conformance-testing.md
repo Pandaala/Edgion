@@ -74,15 +74,52 @@ GO_RUN_FILTER="TestConformance/HTTPRoute" bash scripts/run.sh
 bash scripts/run.sh --supported-features "Gateway,HTTPRoute,ReferenceGrant"
 ```
 
-### Port-Forward 模式
+### Port-Forward 模式（TAL）
 
-集群 Pod IP 不可达时使用：
+集群 Pod IP 不可达时使用。TAL（Transport Access Layer）负责统一处理地址改写，支持灵活的端口映射配置。
+
+**快速启用：**
 
 ```bash
 bash scripts/run.sh --port-forward
 ```
 
-自动 `kubectl port-forward` 到 edgion-gateway pod，HTTP→8080, HTTPS→8443。
+自动启动 `kubectl port-forward` 到 edgion-gateway pod，默认绑定本地端口（HTTP:18080, HTTPS:18443, HTTPS-8443:28443）。
+
+**高级用法 — 统一端口映射表（推荐）：**
+
+```bash
+export GATEWAY_PROXY_PORT_MAP="80:18080,443:18443,8443:28443"
+./scripts/run.sh --port-forward
+```
+
+`GATEWAY_PROXY_PORT_MAP` 格式：`gwPort:localPort,gwPort:localPort,...`，允许为每个 gateway 端口独立配置本地转发端口。
+
+**兼容旧用法（逐个指定）：**
+
+```bash
+export GATEWAY_PROXY_HOST=127.0.0.1
+export GATEWAY_PROXY_HTTP_PORT=18080
+export GATEWAY_PROXY_HTTPS_PORT=18443
+export GATEWAY_PROXY_HTTPS_8443_PORT=28443
+./scripts/run.sh --port-forward
+```
+
+**启用 gRPC proxy：**
+
+```bash
+GATEWAY_PROXY_ENABLE_GRPC=true ./scripts/run.sh --port-forward
+```
+
+用于 `GRPCRoute*` 系列测试。
+
+**调试 TAL 地址改写：**
+
+```bash
+TAL_DEBUG=true ./scripts/run.sh --port-forward
+```
+
+在 test 输出中查看 `[TAL] resolved ...` 日志。
 
 ## 更新二进制（localpatch）
 
