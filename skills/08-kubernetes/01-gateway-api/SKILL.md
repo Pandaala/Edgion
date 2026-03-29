@@ -67,10 +67,10 @@ Edgion treats `(ListenerKey, sni)` as the required lookup key for Gateway TLS.
 
 ## EdgionTls binding rule
 
-For `EdgionTls`, controller-side port resolution is required before the resource can enter the matcher.
+For `EdgionTls`, controller-side listener resolution is required before the resource can enter the matcher.
 
-- If parent refs resolve to listener ports, the TLS resource is admitted into the matcher.
-- If no listener port is resolved, the TLS resource is skipped from the matcher.
+- If parent refs resolve to listener keys (`ListenerKey`), the TLS resource is admitted into the matcher.
+- If no listener key is resolved, the TLS resource is skipped from the matcher.
 - This state should be reflected in status instead of being hidden behind a global fallback.
 
 ## parentRef Resolution: both-absent Fallback
@@ -85,8 +85,8 @@ Gateway. This applies to:
 
 **Bug history (2026-03):** The original implementation only handled `port` set
 or `sectionName` set, missing the both-absent fallback. This caused TLSRoute
-and EdgionTls to silently get `resolved_listeners = None` when parentRef had only
-`name` + `namespace`.
+and EdgionTls to silently get `resolved_listeners = None` (now `Vec<ListenerKey>`)
+when parentRef had only `name` + `namespace`.
 
 **Test coverage:** `TLSRoute/BothAbsentParentRef` and
 `EdgionTls/BothAbsentParentRef` integration tests verify this behavior.
@@ -99,7 +99,7 @@ not be requeued to re-resolve its listener ports.
 
 **Bug history (2026-03):** EdgionTls originally had no `on_change()` at all.
 If EdgionTls was processed before its Gateway during init, `resolved_listeners`
-would permanently be `None` with no requeue mechanism. Fixed by adding
+would permanently be empty with no requeue mechanism. Fixed by adding
 `on_change()` with `update_gateway_route_index()` and `on_delete()` with
 `remove_from_gateway_route_index()`.
 

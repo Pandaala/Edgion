@@ -53,7 +53,7 @@ TLSRoute 的 ConfHandler 将路由编译到 `GlobalTlsRouteManagers`：
 1. **路由初始化**：调用 `initialize_route()` 验证路由数据
 2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
 3. **SNI 匹配**：根据 spec.hostnames 进行 TLS SNI 匹配，支持通配符域名
-4. **增量更新**：partial_update 时收集受影响端口（旧端口 + 新端口），仅重建受影响端口的路由表
+4. **增量更新**：partial_update 时收集受影响 listener（旧 listener + 新 listener），仅重建受影响 listener 的路由表
 
 ## 跨资源关联
 

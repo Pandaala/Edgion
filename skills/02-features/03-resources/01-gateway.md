@@ -157,9 +157,9 @@ status:
           status: "True"
 ```
 
-## 端口冲突检测
+## Listener 冲突检测
 
-同一 `(port, protocol, hostname)` 组合在多个 Gateway 间冲突时，后创建的 Gateway 的 Listener 会被标记为 `Conflicted=True`。冲突 Gateway 被删除后，自动恢复。
+同一 `(socket_addr, hostname)` 组合在多个 Gateway 间冲突时，后创建的 Gateway 的 Listener 会被标记为 `Conflicted=True`。冲突检测 key 通过 `make_conflict_key(SocketAddr)` 按 socket 地址分组（而非 port+protocol）。冲突 Gateway 被删除后，自动恢复。
 
 ## Edgion 扩展注解
 

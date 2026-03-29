@@ -54,7 +54,7 @@ Gateway 是 Edgion 的核心资源，定义网关的 Listener（监听端口、�
 
 ## Gateway 侧处理
 
-Gateway 资源同步到 Gateway 侧后，用于配置 Pingora 的监听器。每个 Listener 对应一个端口的监听，GatewayConfigStore 按端口维度管理配置。TLS 证书存储在证书匹配引擎中，请求时通过 SNI 匹配选择证书。
+Gateway 资源同步到 Gateway 侧后，用于配置 Pingora 的监听器。每个 Listener 通过 `ListenerKey`（格式 `"{addr}/{protocol}"`）标识，`ListenerGatewayInfoStore` 按 `ListenerKey` 维度管理 Gateway 聚合信息，GatewayConfigStore 管理 Listener 配置。TLS 证书存储在证书匹配引擎中，请求时通过 ListenerKey+SNI 匹配选择证书。
 
 ## 跨资源关联
 

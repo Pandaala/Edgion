@@ -49,7 +49,7 @@ TCPRoute 的 ConfHandler 将路由编译到 `GlobalTcpRouteManagers`：
 
 1. **路由初始化**：调用 `initialize_route()` 验证并准备路由数据
 2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
-3. **全量/增量更新**：full_set 时清空并重建所有路由缓存和端口管理器；partial_update 时收集受影响的端口（旧端口 + 新端口），仅重建这些端口的路由表
+3. **全量/增量更新**：full_set 时清空并重建所有路由缓存和 listener 管理器；partial_update 时收集受影响的 listener（旧 listener + 新 listener），仅重建这些 listener 的路由表
 4. **first-match 语义**：同一端口上多个 TCPRoute 时按注册顺序匹配第一个
 
 ## 跨资源关联

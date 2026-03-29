@@ -30,7 +30,7 @@ pub struct GatewayStore {
 
 ## Gateway 配置存储（GatewayConfigStore）
 
-`GatewayConfigStore` 提供按端口查询的 Gateway 动态配置，采用两层匹配结构：
+`GatewayConfigStore` 提供按 Listener 查询的 Gateway ��态配置，采用两层匹配结构：
 
 ```rust
 pub struct GatewayListenerConfig {
@@ -101,6 +101,6 @@ src/core/gateway/runtime/
 └── store/
     ├── mod.rs                # 模块导出
     ├── gateway.rs            # GatewayStore（Gateway 资源 CRUD）
-    ├── config.rs             # GatewayConfigStore（按端口的 Listener 配置）
+    ├── config.rs             # GatewayConfigStore（Listener ��置）
     └── listener_gateway_info.rs  # ListenerGatewayInfoStore（Listener-Gateway 映射）
 ```

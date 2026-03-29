@@ -186,7 +186,7 @@ and the controller always resolves listeners before syncing.
 | # | Finding | Severity | Affected | Recommendation |
 |---|---------|----------|----------|----------------|
 | 1 | TCP/UDP/TLS do not clear `resolved_listeners` before recompute in `parse()`; HTTP/gRPC do | Medium | Controller handlers | Add `route.spec.resolved_listeners = None` at start of `parse()` in TCP/UDP/TLS for consistency |
-| 2 | TCP/UDP/TLS warn when `resolved_listeners` is empty after `parse()`; HTTP/gRPC do not | Low | Controller handlers | Align: either add warning to HTTP/gRPC or remove from TCP/UDP/TLS |
+| 2 | ~~TCP/UDP/TLS warn when `resolved_listeners` is empty after `parse()`; HTTP/gRPC do not~~ | ~~Low~~ | ~~Controller handlers~~ | **Resolved** — all protocols now skip+warn when `resolved_listeners` is empty (Service refactoring) |
 | 3 | HTTP/gRPC `route_cache` stores values directly (`HTTPRoute`/`GRPCRoute`); TCP/UDP/TLS wrap in `Arc` (`Arc<TCPRoute>`) | Low | Gateway route managers | Cosmetic; no functional impact. Consider unifying to `Arc` for consistency |
 | 4 | gRPC `route_units_cache` uses `Mutex`; all other caches use `DashMap` | Low | gRPC route manager | Consider `DashMap` if contention becomes measurable |
 
@@ -198,7 +198,7 @@ and the controller always resolves listeners before syncing.
 |---|------|----------|--------|
 | 1 | ~~Per-listener isolation for HTTP/gRPC~~ | ~~P3~~ | **Done** — implemented per-listener `GlobalHttpRouteManagers` / `GlobalGrpcRouteManagers` with `ListenerKey` |
 | 2 | Align `resolved_listeners` clearing in TCP/UDP/TLS controller handlers | P4 | Open |
-| 3 | Align warning behavior for empty `resolved_listeners` across all handlers | P4 | Open |
+| 3 | ~~Align warning behavior for empty `resolved_listeners` across all handlers~~ | ~~P4~~ | **Done** — unified skip+warn behavior across all protocols |
 | 4 | Consider `DashMap` for gRPC `route_units_cache` | P5 | Open |
 
 ---

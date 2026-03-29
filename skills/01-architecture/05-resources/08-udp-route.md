@@ -49,7 +49,7 @@ UDPRoute 的 ConfHandler 将路由编译到 `GlobalUdpRouteManagers`：
 
 1. **路由初始化**：调用 `initialize_route()` 验证并准备路由数据
 2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
-3. **全量/增量更新**：full_set 时清空并重建；partial_update 时收集受影响端口仅重建这些端口
+3. **全量/增量更新**：full_set 时清空并重建；partial_update 时收集受影响 listener 仅重建这些 listener
 4. **无状态转发**：UDP 为 per-packet 转发，每个数据包独立路由到后端
 
 ## 跨资源关联
