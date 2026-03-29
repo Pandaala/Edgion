@@ -378,6 +378,38 @@ impl TlsCallback {
                 return;
             }
         };
+        // Runtime expiry check: cert may have expired after being loaded into the store.
+        // X509 is already parsed here, so this is just one time comparison per connection.
+        // Note: only implemented for boringssl; openssl/rustls builds rely on the TLS
+        // handshake itself to reject expired certs, but err_log will not reflect it.
+        #[cfg(feature = "boringssl")]
+        match boring::asn1::Asn1Time::days_from_now(0) {
+            Ok(now) => {
+                if cert.not_after() < &now {
+                    ssl_ctx.meta.err_log =
+                        Some(format!("cert_expired: not_after={}", cert.not_after()));
+                    return;
+                }
+                // not_before check: reject certs that are not yet valid.
+                // Mirrors the load-time check in validate_cert/check_expiration.
+                if cert.not_before() > &now {
+                    ssl_ctx.meta.err_log =
+                        Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
+                    return;
+                }
+            }
+            Err(e) => {
+                // days_from_now(0) can only fail due to BoringSSL internal allocation failure
+                // (effectively impossible). Log the error but allow the connection to proceed
+                // rather than causing a complete outage — the cert was already validated at
+                // load time (layer 1), and BoringSSL will reject genuinely broken certs.
+                let _ = ssl_ctx
+                    .meta
+                    .log
+                    .get_or_insert_with(crate::core::gateway::observe::logs::LogBuffer::new)
+                    .push(&format!("[warn] cert_expiry_check_failed: {e}"));
+            }
+        }
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
             ssl_ctx.meta.err_log = Some(format!("et: set cert: {e}"));
             return;

@@ -62,6 +62,7 @@ boringssl = [
     "pingora-core/boringssl",
     "pingora-proxy/boringssl",
     "dep:boring-sys",
+    "dep:boring",
 ]
 
 openssl = [
@@ -161,6 +162,7 @@ fred = { version = "10", default-features = false, features = [
 
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
 boring-sys = { version = "4", optional = true }
+boring = { version = "4", optional = true }
 
 # Metrics
 metrics = "0.24"
@@ -206,3 +208,4 @@ tempfile = "3"
 tokio-tungstenite = "0.28"
 base64 = "0.22"
 tonic-build = "0.12"
+time = { version = "0.3", features = ["std"] }

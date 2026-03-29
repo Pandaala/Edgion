@@ -189,6 +189,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         // GRPCRoute
         "GRPCRoute/Basic" | "GRPCRoute" => "GRPCRoute/Basic",
         "GRPCRoute/Match" => "GRPCRoute/Match",
+        "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
@@ -452,6 +453,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GrpcMatchTestSuite));
+        }
+        "GRPCRoute/UnmatchedRoute" => {
+            if !gateway {
+                eprintln!("Error: GRPCRoute/UnmatchedRoute tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcUnmatchedRouteTestSuite));
         }
         "GRPCRoute/TLS" => {
             if !gateway {

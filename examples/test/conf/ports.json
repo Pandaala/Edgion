@@ -53,6 +53,9 @@
     "GRPCRoute/Match": {
       "grpc": 31060
     },
+    "GRPCRoute/UnmatchedRoute": {
+      "grpc": 31061
+    },
     "TCPRoute/Basic": {
       "tcp": 31090,
       "tcp_filtered": 31091

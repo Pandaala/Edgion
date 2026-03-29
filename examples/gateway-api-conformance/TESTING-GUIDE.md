@@ -121,12 +121,16 @@ TAL 只改写底层 TCP 连接的目标地址，不修改任何请求语义：
 
 ### Port-Forward 模式
 
-当集群 Pod IP 不可直接访问时（OrbStack、远程集群）：
+当集群 Pod IP 不可直接访问时（远程集群等场景）：
 
 ```bash
 ./scripts/run.sh --port-forward
 ./scripts/run.sh --port-forward --run-test HTTPRouteSimpleSameNamespace
 ```
+
+> **OrbStack 用户注意**：OrbStack 原生支持 macOS 直连 K8s ClusterIP，
+> **全量测试时不要加 `--port-forward`**。port-forward 在长时间运行（~12 分钟）
+> 中可能断开，导致大量 `connection refused`。直接 `bash scripts/run.sh` 即可。
 
 也可手动设置（推荐使用 `GATEWAY_PROXY_PORT_MAP` 统一管理端口映射）：
 
@@ -168,14 +172,18 @@ GATEWAY_PROXY_ENABLE_GRPC=true ./scripts/run.sh --port-forward --conformance-pro
 
 ## Conformance Profiles
 
-| Profile | 状态 | 测试数 |
-|---------|------|--------|
-| GATEWAY-HTTP | ✅ 已声明 | ~75 |
-| GATEWAY-GRPC | ⚠️ 已声明未验证 | 5 |
-| GATEWAY-TLS | ❌ 未声明 | 13 |
+三个 profile 均已在 `conformance_test.go` 中声明（`opts.ConformanceProfiles`）。
+
+| Profile | 声明 | Core | Extended | 备注 |
+|---------|------|------|----------|------|
+| GATEWAY-HTTP | ✅ | 33/33 passed | 24/28 passed | Core 全通过；Extended 4 failures (mTLS/421) |
+| GATEWAY-GRPC | ✅ | 9/13 passed | — | 4 failures: gRPC 无匹配路由返回 Internal 而非 Unimplemented |
+| GATEWAY-TLS | ✅ | 14/18 passed | — | 4 failures: 动态 TLS passthrough listener 不支持 |
+
+> 数据截止：2026-03-29，全量 `bash scripts/run.sh`（直连，无 port-forward）
 
 ## 进度追踪
 
-详细的逐测试进度追踪见：
-- `tasks/todo/conformance-validation/` — 已有功能验证
-- `tasks/todo/missing-features/` — 缺失功能实现
+失败测试的逐项分析见：`tasks/todo/gateway-api-1.5-conformance-tests/`
+
+每个失败测试一个文件，包含错误日志、根因分析、修复方向和复现命令。

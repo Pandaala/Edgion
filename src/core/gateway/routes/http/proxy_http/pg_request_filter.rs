@@ -93,6 +93,9 @@ pub async fn request_filter(
         {
             ctx.add_error(EdgionStatus::RouteNotFound);
             end_response_grpc_unimplemented(session, ctx, &edgion_http.server_header_opts).await?;
+            // gRPC trailers-only response (HTTP 200 + grpc-status: 12, END_STREAM=true) already
+            // written above. Return Ok(true) to signal response is fully handled.
+            // Returning Err causes Pingora to call fail_to_proxy(), overwriting our response.
             return Ok(true);
         }
     }
@@ -109,7 +112,7 @@ pub async fn request_filter(
             Err(_) => {
                 ctx.add_error(EdgionStatus::RouteNotFound);
                 end_response_404(session, ctx, &edgion_http.server_header_opts).await?;
-                return Ok(true);
+                return Ok(true);  // Already sent error response, signal completion
             }
         }
     }

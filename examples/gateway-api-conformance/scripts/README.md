@@ -44,19 +44,27 @@
 ### 跑 conformance 测试
 
 ```bash
-# OrbStack 直连（Pod IP 可达，无需 port-forward）
-./scripts/run.sh --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC"
+# OrbStack 全量测试 — 直接用 run.sh，不需要 port-forward
+# OrbStack 原生支持 macOS 直接访问 K8s ClusterIP，直连最稳定
+bash scripts/run.sh
 
 # 单个测试
-./scripts/run.sh --run-test HTTPRouteSimpleSameNamespace
+bash scripts/run.sh --run-test HTTPRouteSimpleSameNamespace
 
-# 非直连集群（port-forward 模式）
-./scripts/run.sh --port-forward
+# 用 GO_RUN_FILTER 做更灵活的正则匹配
+GO_RUN_FILTER="TestConformance/HTTPRoute.*Redirect" bash scripts/run.sh
+
+# 非 OrbStack 集群（Pod IP 不可达时才需要 port-forward）
+bash scripts/run.sh --port-forward
 
 # TLSRoute 专用（需先用 --tls-only 初始化环境，见下）
 GO_RUN_FILTER="TestConformance/TLSRouteSimpleSameNamespace$" \
   bash scripts/run.sh --conformance-profiles GATEWAY-TLS
 ```
+
+> **⚠️ 注意**：`orbstack-dev.sh test` 内部强制加了 `--port-forward`。
+> 全量测试时应直接使用 `bash scripts/run.sh`，避免 port-forward 在
+> 长时间运行（~12 分钟）中断开导致大量 `connection refused` 失败。
 
 ### TLSRoute 测试环境
 
@@ -242,6 +250,30 @@ kubectl delete -f config/crd/edgion-crd/
 
 ---
 
+## 注意事项
+
+### 预创建 Gateway 可能丢失
+
+`setup-orbstack.sh` 会预创建 6 个 Gateway CR（`same-namespace`、`same-namespace-with-https-listener`、`all-namespaces`、`backend-namespaces`、`client-validation-default`、`client-validation-insecure-fallback`）。
+
+如果做过 `cleanup.sh` 或手动删除操作，部分 Gateway 可能丢失。恢复方法：
+
+```bash
+kubectl apply --server-side --force-conflicts -f manifests/conformance-gateway.yaml
+# 重启 gateway 以绑定新端口（如 8443）
+./scripts/orbstack-dev.sh restart g
+```
+
+### go test 输出完全缓冲
+
+全量测试运行约 12 分钟，期间终端**没有任何输出**（go test 对子包的 `-v` 输出做完整缓冲，直到测试结束后一次性打印）。这是正常的，不要误以为卡住了。
+
+### conformance report 单测模式的陷阱
+
+用 `--run-test` 或 `GO_RUN_FILTER` 跑单个测试时，生成的 `conformance-report.yaml` 会把所有**未运行**的测试标记为 Passed。这不代表全量通过，只是 conformance 框架的行为。只有全量运行的 report 才是真实的。
+
+---
+
 ## 常见问题
 
 **Q: `setup-orbstack.sh` 里为什么要手动修正 gateway_address？**
@@ -255,3 +287,8 @@ Edgion gateway 进程在启动时绑定 listener 端口，之后不支持动态�
 **Q: TLSRoute 为什么需要独立环境（`--tls-only`）？**
 
 默认环境在 443 端口部署了 HTTPS listener（用于 `HTTPRouteHTTPS*` 测试）。TLSRoute 需要在同一 443 端口做 TLS passthrough，两者冲突。`--tls-only` 会跳过 HTTPS listener，只创建 TLS passthrough Gateway。
+
+**Q: OrbStack 下应该用 `orbstack-dev.sh test` 还是直接 `run.sh`？**
+
+- **单个测试**：`orbstack-dev.sh test --run-test <Name>` 方便，port-forward 时间短不会断
+- **全量测试**：直接 `bash scripts/run.sh`。`orbstack-dev.sh test` 强制加 `--port-forward`，长时间运行容易断开
