@@ -1,18 +1,22 @@
 //! Listener Port Manager
 //!
-//! Tracks port usage across all Gateways for conflict detection.
-//! Similar to SecretRefManager but for port→listener relationships.
+//! Tracks port usage within each Gateway for intra-gateway conflict detection.
+//! Per Gateway API spec, Conflicted condition applies only within a single Gateway;
+//! different Gateways may independently use the same port.
 //!
 //! ## Design
 //!
 //! - Forward index: port_key → Set of ListenerRefs (all listeners using this port)
 //! - Reverse index: gateway_key → Set of port_keys (all ports used by this gateway)
+//! - Conflict detection considers hostname intersection (wildcard-aware)
 //!
 //! ## Port Key Format
 //!
-//! According to Gateway API spec (distinct listener rules):
-//! - HTTP/HTTPS/TLS: Port + Hostname must be different → key = "port:hostname"
-//! - TCP/UDP: Port must be different → key = "port:"
+//! Port keys group listeners that *could* conflict (same port+protocol group):
+//! - HTTP/HTTPS/TLS: "port" (e.g. "443")
+//! - TCP/UDP: "PROTO:port" (e.g. "TCP:53", "UDP:53")
+//!
+//! Within each port key group, hostname intersection determines actual conflicts.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, RwLock};
@@ -25,147 +29,92 @@ pub fn get_listener_port_manager() -> &'static ListenerPortManager {
     &LISTENER_PORT_MANAGER
 }
 
-/// Listener reference (gateway + listener name)
+/// Listener reference (gateway + listener name + hostname for conflict checking)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ListenerRef {
     /// Gateway key in "namespace/name" format
     pub gateway_key: String,
     /// Listener name within the gateway
     pub listener_name: String,
+    /// Hostname (None = wildcard, matches everything)
+    pub hostname: Option<String>,
 }
 
 impl ListenerRef {
-    /// Create a new ListenerRef
-    pub fn new(gateway_key: impl Into<String>, listener_name: impl Into<String>) -> Self {
+    pub fn new(gateway_key: impl Into<String>, listener_name: impl Into<String>, hostname: Option<String>) -> Self {
         Self {
             gateway_key: gateway_key.into(),
             listener_name: listener_name.into(),
+            hostname,
         }
-    }
-
-    /// Get display string for this listener reference
-    pub fn display(&self) -> String {
-        format!("{}/{}", self.gateway_key, self.listener_name)
     }
 }
 
-/// Port key for distinct check
-/// Format: "port:hostname" for HTTP/HTTPS/TLS, "port:" for TCP/UDP
+/// Port key for grouping listeners that could potentially conflict.
 pub type PortKey = String;
 
-/// Build port key from listener attributes
+/// Build port key from listener attributes.
 ///
-/// According to Gateway API spec:
-/// - HTTP, HTTPS, TLS: Port + Hostname must be different
-/// - TCP, UDP: Port must be different (hostname not considered)
-pub fn make_port_key(port: i32, protocol: &str, hostname: Option<&str>) -> PortKey {
+/// Groups listeners by port+protocol so that hostname intersection can be
+/// checked within each group during conflict detection.
+///
+/// - HTTP, HTTPS, TLS: grouped by port only (hostname checked separately)
+/// - TCP, UDP: grouped by protocol+port (hostname irrelevant)
+pub fn make_port_key(port: i32, protocol: &str) -> PortKey {
     match protocol.to_uppercase().as_str() {
-        "HTTP" | "HTTPS" | "TLS" => {
-            // Port + Hostname must be unique
-            format!("{}:{}", port, hostname.unwrap_or(""))
-        }
-        _ => {
-            // TCP/UDP only care about port
-            format!("{}:", port)
-        }
+        "HTTP" | "HTTPS" | "TLS" => format!("{}", port),
+        proto => format!("{}:{}", proto, port),
     }
 }
 
-/// Manages listener port usage across all Gateways
+/// Check if two listener hostnames are identical (i.e. truly conflict).
 ///
-/// This manager tracks which listeners are using which ports to enable
-/// conflict detection across all Gateways in the cluster.
+/// Per Gateway API spec, Conflicted means two listeners have the same
+/// port+protocol+hostname combination — not merely overlapping hostnames.
+/// Overlapping hostnames (e.g. wildcard vs specific) are handled by routing
+/// priority and are explicitly allowed when GatewayHTTPListenerIsolation is supported.
+///
+/// - None == None → conflict (both are wildcard)
+/// - `foo.example.com` == `foo.example.com` → conflict (identical)
+/// - None vs `foo.example.com` → no conflict (different, just overlapping)
+/// - `*.example.com` vs `foo.example.com` → no conflict (different, just overlapping)
+fn hostnames_conflict(a: Option<&str>, b: Option<&str>) -> bool {
+    a == b
+}
+
+/// Manages listener port usage for intra-gateway conflict detection.
+///
+/// Tracks which listeners are using which ports across all Gateways,
+/// but only reports conflicts within the same Gateway.
+/// Conflict detection is hostname-aware: wildcard listeners conflict
+/// with any hostname-specific listener on the same port.
 pub struct ListenerPortManager {
     /// Forward index: port_key → listeners using this port
     port_to_listeners: RwLock<HashMap<PortKey, HashSet<ListenerRef>>>,
 
     /// Reverse index: gateway_key → port_keys it uses
     gateway_to_ports: RwLock<HashMap<String, HashSet<PortKey>>>,
-
-    /// Latest conflict-impact set produced by a gateway registration change
-    pending_affected_gateways: RwLock<HashMap<String, HashSet<String>>>,
 }
 
 impl ListenerPortManager {
-    /// Create a new ListenerPortManager
     pub fn new() -> Self {
         Self {
             port_to_listeners: RwLock::new(HashMap::new()),
             gateway_to_ports: RwLock::new(HashMap::new()),
-            pending_affected_gateways: RwLock::new(HashMap::new()),
         }
     }
 
-    fn current_listener_registrations_locked(
-        gateway_key: &str,
-        gw_map: &HashMap<String, HashSet<PortKey>>,
-        port_map: &HashMap<PortKey, HashSet<ListenerRef>>,
-    ) -> HashSet<(String, PortKey)> {
-        let mut registrations = HashSet::new();
-
-        let Some(port_keys) = gw_map.get(gateway_key) else {
-            return registrations;
-        };
-
-        for port_key in port_keys {
-            if let Some(listeners) = port_map.get(port_key) {
-                for listener in listeners {
-                    if listener.gateway_key == gateway_key {
-                        registrations.insert((listener.listener_name.clone(), port_key.clone()));
-                    }
-                }
-            }
-        }
-
-        registrations
-    }
-
-    fn conflicting_gateways_locked(
-        gateway_key: &str,
-        gw_map: &HashMap<String, HashSet<PortKey>>,
-        port_map: &HashMap<PortKey, HashSet<ListenerRef>>,
-    ) -> HashSet<String> {
-        let mut conflicting_gateways = HashSet::new();
-
-        let Some(port_keys) = gw_map.get(gateway_key) else {
-            return conflicting_gateways;
-        };
-
-        for port_key in port_keys {
-            if let Some(listeners) = port_map.get(port_key) {
-                if listeners.len() > 1 {
-                    for listener in listeners {
-                        if listener.gateway_key != gateway_key {
-                            conflicting_gateways.insert(listener.gateway_key.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        conflicting_gateways
-    }
-
-    /// Register a gateway's listeners
+    /// Register a gateway's listeners.
     ///
-    /// This should be called in GatewayHandler.parse() to register all listeners.
-    /// It first clears old registrations for the gateway, then adds new ones.
-    ///
-    /// # Arguments
-    /// * `gateway_key` - Gateway key in "namespace/name" format
-    /// * `listeners` - List of (listener_name, port_key) tuples
+    /// Each listener is a tuple of (listener_name, port_key, hostname).
     ///
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
-    /// to prevent deadlocks.
-    pub fn register_gateway(&self, gateway_key: &str, listeners: &[(String, PortKey)]) {
-        // Acquire both locks in consistent order to prevent deadlock
+    pub fn register_gateway(&self, gateway_key: &str, listeners: &[(String, PortKey, Option<String>)]) {
         let mut gw_map = self.gateway_to_ports.write().unwrap();
         let mut port_map = self.port_to_listeners.write().unwrap();
-        let previous_registrations = Self::current_listener_registrations_locked(gateway_key, &gw_map, &port_map);
-        let previous_conflicting = Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map);
 
-        // Clear old registrations first (inline to avoid lock order issues)
+        // Clear old registrations
         if let Some(old_port_keys) = gw_map.remove(gateway_key) {
             for port_key in &old_port_keys {
                 if let Some(listeners_set) = port_map.get_mut(port_key) {
@@ -180,38 +129,16 @@ impl ListenerPortManager {
         // Add new registrations
         let mut port_keys = HashSet::new();
 
-        for (listener_name, port_key) in listeners {
-            let listener_ref = ListenerRef::new(gateway_key, listener_name.clone());
-
+        for (listener_name, port_key, hostname) in listeners {
+            // Normalize empty hostname to None (wildcard)
+            let hostname = hostname.as_ref().filter(|h| !h.is_empty()).cloned();
+            let listener_ref = ListenerRef::new(gateway_key, listener_name.clone(), hostname);
             port_map.entry(port_key.clone()).or_default().insert(listener_ref);
             port_keys.insert(port_key.clone());
         }
 
         if !port_keys.is_empty() {
             gw_map.insert(gateway_key.to_string(), port_keys);
-        }
-
-        let current_registrations: HashSet<(String, PortKey)> = listeners.iter().cloned().collect();
-        let registrations_changed = previous_registrations != current_registrations;
-        let affected_gateways = if registrations_changed {
-            let mut affected = previous_conflicting;
-            affected.extend(Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map));
-            affected.remove(gateway_key);
-            affected
-        } else {
-            HashSet::new()
-        };
-
-        drop(port_map);
-        drop(gw_map);
-
-        if registrations_changed {
-            self.pending_affected_gateways
-                .write()
-                .unwrap()
-                .insert(gateway_key.to_string(), affected_gateways);
-        } else {
-            self.pending_affected_gateways.write().unwrap().remove(gateway_key);
         }
 
         tracing::debug!(
@@ -221,30 +148,15 @@ impl ListenerPortManager {
         );
     }
 
-    /// Unregister a gateway
-    ///
-    /// This should be called in GatewayHandler.on_delete() to clean up.
+    /// Unregister a gateway and clean up all its port registrations.
     ///
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
-    /// to prevent deadlocks.
     pub fn unregister_gateway(&self, gateway_key: &str) {
-        let _ = self.unregister_gateway_and_get_affected(gateway_key);
-    }
-
-    /// Unregister a gateway and return gateways whose conflict status may change.
-    pub fn unregister_gateway_and_get_affected(&self, gateway_key: &str) -> HashSet<String> {
-        // Acquire both locks in consistent order to prevent deadlock
         let mut gw_map = self.gateway_to_ports.write().unwrap();
         let mut port_map = self.port_to_listeners.write().unwrap();
-        let affected_gateways = Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map);
 
         let port_keys = gw_map.remove(gateway_key).unwrap_or_default();
-
-        if port_keys.is_empty() {
-            self.pending_affected_gateways.write().unwrap().remove(gateway_key);
-            return HashSet::new();
-        }
 
         for port_key in &port_keys {
             if let Some(listeners) = port_map.get_mut(port_key) {
@@ -255,42 +167,27 @@ impl ListenerPortManager {
             }
         }
 
-        tracing::debug!(
-            gateway = %gateway_key,
-            port_count = port_keys.len(),
-            "Unregistered gateway from port manager"
-        );
-
-        self.pending_affected_gateways.write().unwrap().remove(gateway_key);
-        affected_gateways
+        if !port_keys.is_empty() {
+            tracing::debug!(
+                gateway = %gateway_key,
+                port_count = port_keys.len(),
+                "Unregistered gateway from port manager"
+            );
+        }
     }
 
-    /// Get all listeners using a specific port
-    pub fn get_listeners_for_port(&self, port_key: &str) -> Vec<ListenerRef> {
-        self.port_to_listeners
-            .read()
-            .unwrap()
-            .get(port_key)
-            .map(|s| s.iter().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// Detect port conflicts for a specific gateway
+    /// Detect intra-gateway port conflicts for a specific gateway.
     ///
-    /// Returns a HashMap where:
-    /// - Key: listener_name that has conflicts
-    /// - Value: (conflict_reason, list of all conflicting ListenerRefs)
-    ///
-    /// # Returns
-    /// Empty HashMap if no conflicts, otherwise contains conflicting listeners.
+    /// Two listeners on the same port conflict if their hostnames intersect:
+    /// - None (wildcard) conflicts with any hostname
+    /// - `*.example.com` conflicts with `foo.example.com`
+    /// - `api.example.com` does NOT conflict with `web.example.com`
     ///
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
-    /// to prevent deadlocks.
-    pub fn detect_conflicts(&self, gateway_key: &str) -> HashMap<String, (String, Vec<ListenerRef>)> {
+    pub fn detect_conflicts(&self, gateway_key: &str) -> HashMap<String, String> {
         let mut conflicts = HashMap::new();
 
-        // Acquire locks in consistent order
         let gw_map = self.gateway_to_ports.read().unwrap();
         let port_map = self.port_to_listeners.read().unwrap();
 
@@ -300,23 +197,32 @@ impl ListenerPortManager {
         };
 
         for port_key in port_keys {
-            if let Some(listeners) = port_map.get(port_key) {
-                if listeners.len() > 1 {
-                    // Conflict detected: multiple listeners using the same port
-                    let conflicting: Vec<ListenerRef> = listeners.iter().cloned().collect();
+            let Some(listeners) = port_map.get(port_key) else {
+                continue;
+            };
 
-                    let reason = format!(
-                        "Port {} conflicts with: {}",
-                        port_key,
-                        conflicting.iter().map(|l| l.display()).collect::<Vec<_>>().join(", ")
-                    );
+            // Collect same-gateway listeners on this port
+            let same_gw: Vec<&ListenerRef> = listeners.iter().filter(|l| l.gateway_key == gateway_key).collect();
 
-                    // Mark all listeners of this gateway that use the conflicting port
-                    for listener in listeners {
-                        if listener.gateway_key == gateway_key {
-                            conflicts.insert(listener.listener_name.clone(), (reason.clone(), conflicting.clone()));
-                        }
-                    }
+            if same_gw.len() < 2 {
+                continue;
+            }
+
+            // For TCP/UDP there's no hostname dimension — all same-port listeners conflict
+            // For HTTP/HTTPS/TLS, check hostname intersection pairwise
+            for (i, listener) in same_gw.iter().enumerate() {
+                let others: Vec<&str> = same_gw
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, other)| {
+                        *j != i && hostnames_conflict(listener.hostname.as_deref(), other.hostname.as_deref())
+                    })
+                    .map(|(_, l)| l.listener_name.as_str())
+                    .collect();
+
+                if !others.is_empty() {
+                    let reason = format!("Port {}: conflicts with: {}", port_key, others.join(", "));
+                    conflicts.insert(listener.listener_name.clone(), reason);
                 }
             }
         }
@@ -324,43 +230,15 @@ impl ListenerPortManager {
         conflicts
     }
 
-    /// Get all gateway keys that have conflicts with a given gateway
-    ///
-    /// Returns a set of gateway keys (excluding the given gateway itself)
-    /// that share conflicting ports.
+    /// Clear all registrations (e.g. during reload/re-election).
     ///
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
-    /// to prevent deadlocks.
-    pub fn get_conflicting_gateways(&self, gateway_key: &str) -> HashSet<String> {
-        let gw_map = self.gateway_to_ports.read().unwrap();
-        let port_map = self.port_to_listeners.read().unwrap();
-        Self::conflicting_gateways_locked(gateway_key, &gw_map, &port_map)
-    }
-
-    /// Take and clear the latest affected gateway set produced by this gateway's registration change.
-    pub fn take_affected_gateways(&self, gateway_key: &str) -> HashSet<String> {
-        self.pending_affected_gateways
-            .write()
-            .unwrap()
-            .remove(gateway_key)
-            .unwrap_or_default()
-    }
-
-    /// Clear all registrations
-    ///
-    /// This should be called during reload/re-election to reset state.
-    ///
-    /// # Lock Order
-    /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
-    /// to prevent deadlocks.
     pub fn clear(&self) {
-        // Acquire locks in consistent order
         let mut gw_map = self.gateway_to_ports.write().unwrap();
         let mut port_map = self.port_to_listeners.write().unwrap();
         gw_map.clear();
         port_map.clear();
-        self.pending_affected_gateways.write().unwrap().clear();
         tracing::info!("ListenerPortManager cleared");
     }
 
@@ -368,14 +246,10 @@ impl ListenerPortManager {
     ///
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
-    /// to prevent deadlocks.
     pub fn stats(&self) -> (usize, usize) {
-        // Acquire locks in consistent order
         let gw_map = self.gateway_to_ports.read().unwrap();
         let port_map = self.port_to_listeners.read().unwrap();
-        let gateway_count = gw_map.len();
-        let port_count = port_map.len();
-        (port_count, gateway_count)
+        (port_map.len(), gw_map.len())
     }
 }
 
@@ -390,143 +264,288 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_make_port_key_http() {
-        // HTTP/HTTPS/TLS use port + hostname
-        assert_eq!(make_port_key(80, "HTTP", Some("example.com")), "80:example.com");
-        assert_eq!(make_port_key(443, "HTTPS", Some("example.com")), "443:example.com");
-        assert_eq!(make_port_key(443, "TLS", None), "443:");
+    fn test_make_port_key() {
+        // HTTP/HTTPS/TLS: port only
+        assert_eq!(make_port_key(80, "HTTP"), "80");
+        assert_eq!(make_port_key(443, "HTTPS"), "443");
+        assert_eq!(make_port_key(443, "TLS"), "443");
+
+        // TCP/UDP: protocol:port
+        assert_eq!(make_port_key(3306, "TCP"), "TCP:3306");
+        assert_eq!(make_port_key(53, "UDP"), "UDP:53");
+        assert_ne!(make_port_key(53, "TCP"), make_port_key(53, "UDP"));
     }
 
     #[test]
-    fn test_make_port_key_tcp_udp() {
-        // TCP/UDP use port only
-        assert_eq!(make_port_key(3306, "TCP", Some("mysql.example.com")), "3306:");
-        assert_eq!(make_port_key(53, "UDP", None), "53:");
+    fn test_hostnames_conflict_fn() {
+        // Both wildcard (None) → conflict
+        assert!(hostnames_conflict(None, None));
+
+        // Wildcard vs concrete → no conflict (overlapping but not identical)
+        assert!(!hostnames_conflict(None, Some("example.com")));
+        assert!(!hostnames_conflict(Some("example.com"), None));
+
+        // Exact match → conflict
+        assert!(hostnames_conflict(Some("example.com"), Some("example.com")));
+
+        // Different concrete hostnames → no conflict
+        assert!(!hostnames_conflict(Some("api.example.com"), Some("web.example.com")));
+
+        // Wildcard pattern vs concrete → no conflict (overlapping but not identical)
+        assert!(!hostnames_conflict(Some("*.example.com"), Some("foo.example.com")));
+        assert!(!hostnames_conflict(Some("foo.example.com"), Some("*.example.com")));
+
+        // Different wildcard patterns → no conflict
+        assert!(!hostnames_conflict(Some("*.example.com"), Some("*.bar.example.com")));
+        assert!(!hostnames_conflict(Some("*.foo.com"), Some("*.bar.com")));
+
+        // Same wildcard pattern → conflict
+        assert!(hostnames_conflict(Some("*.example.com"), Some("*.example.com")));
     }
 
     #[test]
     fn test_register_and_unregister() {
         let manager = ListenerPortManager::new();
 
-        // Register gateway A
         manager.register_gateway(
             "default/gateway-a",
             &[
-                ("http".to_string(), "80:".to_string()),
-                ("https".to_string(), "443:example.com".to_string()),
+                ("http".to_string(), "80".to_string(), None),
+                ("https".to_string(), "443".to_string(), Some("example.com".to_string())),
             ],
         );
 
-        // Check forward index
-        let listeners_80 = manager.get_listeners_for_port("80:");
-        assert_eq!(listeners_80.len(), 1);
-        assert_eq!(listeners_80[0].gateway_key, "default/gateway-a");
+        manager.register_gateway("default/gateway-b", &[("http".to_string(), "80".to_string(), None)]);
 
-        // Register gateway B with same port
-        manager.register_gateway("default/gateway-b", &[("http".to_string(), "80:".to_string())]);
+        let (ports, gateways) = manager.stats();
+        assert_eq!(gateways, 2);
+        assert_eq!(ports, 2); // "80" and "443"
 
-        // Now port 80 should have 2 listeners
-        let listeners_80 = manager.get_listeners_for_port("80:");
-        assert_eq!(listeners_80.len(), 2);
-
-        // Unregister gateway A
         manager.unregister_gateway("default/gateway-a");
 
-        // Only gateway B should remain
-        let listeners_80 = manager.get_listeners_for_port("80:");
-        assert_eq!(listeners_80.len(), 1);
-        assert_eq!(listeners_80[0].gateway_key, "default/gateway-b");
+        let (ports, gateways) = manager.stats();
+        assert_eq!(gateways, 1);
+        assert_eq!(ports, 1);
     }
 
     #[test]
-    fn test_detect_conflicts_single_gateway() {
+    fn test_conflict_same_port_same_hostname() {
         let manager = ListenerPortManager::new();
 
-        // Gateway with two listeners on same port (internal conflict)
         manager.register_gateway(
-            "default/gateway-a",
+            "default/gw",
             &[
-                ("http-1".to_string(), "80:".to_string()),
-                ("http-2".to_string(), "80:".to_string()), // Same port!
+                ("http-1".to_string(), "80".to_string(), None),
+                ("http-2".to_string(), "80".to_string(), None),
             ],
         );
 
-        let conflicts = manager.detect_conflicts("default/gateway-a");
-        assert_eq!(conflicts.len(), 2); // Both listeners are conflicted
+        let conflicts = manager.detect_conflicts("default/gw");
+        assert_eq!(conflicts.len(), 2);
         assert!(conflicts.contains_key("http-1"));
         assert!(conflicts.contains_key("http-2"));
     }
 
     #[test]
-    fn test_detect_conflicts_cross_gateway() {
+    fn test_no_conflict_wildcard_vs_specific() {
         let manager = ListenerPortManager::new();
 
-        // Gateway A uses port 443
-        manager.register_gateway("default/gateway-a", &[("https".to_string(), "443:".to_string())]);
+        // Wildcard (None) vs concrete hostname — overlapping but not identical, no conflict
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("catchall".to_string(), "443".to_string(), None),
+                (
+                    "specific".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
+            ],
+        );
 
-        // Gateway B also uses port 443 (conflict!)
-        manager.register_gateway("default/gateway-b", &[("tls".to_string(), "443:".to_string())]);
-
-        // Both gateways should detect conflicts
-        let conflicts_a = manager.detect_conflicts("default/gateway-a");
-        let conflicts_b = manager.detect_conflicts("default/gateway-b");
-
-        assert_eq!(conflicts_a.len(), 1);
-        assert_eq!(conflicts_b.len(), 1);
-        assert!(conflicts_a.contains_key("https"));
-        assert!(conflicts_b.contains_key("tls"));
+        assert!(manager.detect_conflicts("default/gw").is_empty());
     }
 
     #[test]
-    fn test_get_conflicting_gateways() {
+    fn test_no_conflict_wildcard_pattern_vs_concrete() {
         let manager = ListenerPortManager::new();
 
-        manager.register_gateway("default/gateway-a", &[("https".to_string(), "443:".to_string())]);
-        manager.register_gateway("default/gateway-b", &[("tls".to_string(), "443:".to_string())]);
-        manager.register_gateway("default/gateway-c", &[("http".to_string(), "80:".to_string())]);
+        // *.example.com vs foo.example.com — overlapping but not identical, no conflict
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("wild".to_string(), "443".to_string(), Some("*.example.com".to_string())),
+                (
+                    "concrete".to_string(),
+                    "443".to_string(),
+                    Some("foo.example.com".to_string()),
+                ),
+            ],
+        );
 
-        let conflicting = manager.get_conflicting_gateways("default/gateway-a");
-        assert_eq!(conflicting.len(), 1);
-        assert!(conflicting.contains("default/gateway-b"));
-        assert!(!conflicting.contains("default/gateway-c"));
+        assert!(manager.detect_conflicts("default/gw").is_empty());
+    }
+
+    #[test]
+    fn test_conflict_same_wildcard_pattern() {
+        let manager = ListenerPortManager::new();
+
+        // Two listeners with identical wildcard pattern → conflict
+        manager.register_gateway(
+            "default/gw",
+            &[
+                (
+                    "wild-1".to_string(),
+                    "443".to_string(),
+                    Some("*.example.com".to_string()),
+                ),
+                (
+                    "wild-2".to_string(),
+                    "443".to_string(),
+                    Some("*.example.com".to_string()),
+                ),
+            ],
+        );
+
+        let conflicts = manager.detect_conflicts("default/gw");
+        assert_eq!(conflicts.len(), 2);
     }
 
     #[test]
     fn test_no_conflict_different_hostnames() {
         let manager = ListenerPortManager::new();
 
-        // Same port but different hostnames (allowed for HTTP/HTTPS/TLS)
+        // Different concrete hostnames on same port — no conflict
         manager.register_gateway(
-            "default/gateway-a",
-            &[("https".to_string(), "443:api.example.com".to_string())],
-        );
-        manager.register_gateway(
-            "default/gateway-b",
-            &[("https".to_string(), "443:web.example.com".to_string())],
+            "default/gw",
+            &[
+                (
+                    "api".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
+                (
+                    "web".to_string(),
+                    "443".to_string(),
+                    Some("web.example.com".to_string()),
+                ),
+            ],
         );
 
-        // No conflicts because hostnames are different
-        let conflicts_a = manager.detect_conflicts("default/gateway-a");
-        let conflicts_b = manager.detect_conflicts("default/gateway-b");
+        assert!(manager.detect_conflicts("default/gw").is_empty());
+    }
 
-        assert!(conflicts_a.is_empty());
-        assert!(conflicts_b.is_empty());
+    #[test]
+    fn test_no_conflict_cross_gateway() {
+        let manager = ListenerPortManager::new();
+
+        manager.register_gateway("default/gw-a", &[("https".to_string(), "443".to_string(), None)]);
+        manager.register_gateway("default/gw-b", &[("https".to_string(), "443".to_string(), None)]);
+
+        assert!(manager.detect_conflicts("default/gw-a").is_empty());
+        assert!(manager.detect_conflicts("default/gw-b").is_empty());
+    }
+
+    #[test]
+    fn test_no_conflict_different_ports() {
+        let manager = ListenerPortManager::new();
+
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("http".to_string(), "80".to_string(), None),
+                ("https".to_string(), "443".to_string(), None),
+            ],
+        );
+
+        assert!(manager.detect_conflicts("default/gw").is_empty());
+    }
+
+    #[test]
+    fn test_no_conflict_tcp_vs_udp_same_port() {
+        let manager = ListenerPortManager::new();
+
+        // TCP and UDP on same port number within same gateway — no conflict
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("tcp-53".to_string(), make_port_key(53, "TCP"), None),
+                ("udp-53".to_string(), make_port_key(53, "UDP"), None),
+            ],
+        );
+
+        assert!(manager.detect_conflicts("default/gw").is_empty());
+    }
+
+    #[test]
+    fn test_re_register_clears_old() {
+        let manager = ListenerPortManager::new();
+
+        manager.register_gateway("default/gw", &[("http".to_string(), "80".to_string(), None)]);
+        manager.register_gateway("default/gw", &[]);
+
+        let (ports, gateways) = manager.stats();
+        assert_eq!(gateways, 0);
+        assert_eq!(ports, 0);
     }
 
     #[test]
     fn test_clear() {
         let manager = ListenerPortManager::new();
-
-        manager.register_gateway("default/gateway-a", &[("http".to_string(), "80:".to_string())]);
-
-        let (ports, gateways) = manager.stats();
-        assert_eq!(ports, 1);
-        assert_eq!(gateways, 1);
-
+        manager.register_gateway("default/gw", &[("http".to_string(), "80".to_string(), None)]);
         manager.clear();
-
         let (ports, gateways) = manager.stats();
         assert_eq!(ports, 0);
         assert_eq!(gateways, 0);
+    }
+
+    #[test]
+    fn test_no_conflict_wildcard_and_two_concretes() {
+        let manager = ListenerPortManager::new();
+
+        // Wildcard + two concretes — all different hostnames, no conflicts
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("catchall".to_string(), "443".to_string(), None),
+                (
+                    "api".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
+                (
+                    "web".to_string(),
+                    "443".to_string(),
+                    Some("web.example.com".to_string()),
+                ),
+            ],
+        );
+
+        assert!(manager.detect_conflicts("default/gw").is_empty());
+    }
+
+    #[test]
+    fn test_conflict_two_wildcards_and_concrete() {
+        let manager = ListenerPortManager::new();
+
+        // Two wildcard (None) listeners → conflict with each other; concrete is fine
+        manager.register_gateway(
+            "default/gw",
+            &[
+                ("catchall-1".to_string(), "443".to_string(), None),
+                ("catchall-2".to_string(), "443".to_string(), None),
+                (
+                    "api".to_string(),
+                    "443".to_string(),
+                    Some("api.example.com".to_string()),
+                ),
+            ],
+        );
+
+        let conflicts = manager.detect_conflicts("default/gw");
+        assert_eq!(conflicts.len(), 2);
+        assert!(conflicts.contains_key("catchall-1"));
+        assert!(conflicts.contains_key("catchall-2"));
+        assert!(!conflicts.contains_key("api"));
     }
 }

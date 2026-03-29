@@ -71,6 +71,9 @@ is_runtime_generated_secret_template() {
         "HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml")
             return 0
             ;;
+        "Gateway/TLS/BackendTLSGatewayCert/Secret_edge_gateway-client-cert.yaml")
+            return 0
+            ;;
         "EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca.yaml")
             return 0
             ;;
@@ -260,9 +263,17 @@ get_all_suites() {
     done
     
     # resource
-    for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls_tcp plugins ref-grant-status; do
+    for resource in grpc grpc-match tcp udp mtls security real-ip backend-tls_tcp plugins; do
         if [ -d "${CONF_DIR}/${resource}" ]; then
             suites="$suites $resource"
+        fi
+    done
+
+    # Status test suites
+    for subdir in "${CONF_DIR}/Status"/*; do
+        if [ -d "$subdir" ]; then
+            local name=$(basename "$subdir")
+            suites="$suites Status/$name"
         fi
     done
     

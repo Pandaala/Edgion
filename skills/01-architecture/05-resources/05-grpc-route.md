@@ -21,7 +21,7 @@ GRPCRoute 定义 gRPC 层的路由规则。其 Controller 侧处理逻辑与 HTT
 
 ### validate
 
-1. 调用 `validate_grpc_route_if_enabled()` 执行 ReferenceGrant 校验
+1. 调用 `validate_grpc_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
 2. 调用 `validate_backend_refs()` 校验所有 backendRef
 
 ### parse

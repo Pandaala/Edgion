@@ -22,8 +22,7 @@ HTTPRoute 是 Edgion 中最复杂的资源，定义 HTTP 层的路由规则，�
 
 ### validate
 
-1. 调用 `validate_http_route_if_enabled()` 执行 ReferenceGrant 校验
-2. 调用 `validate_backend_refs()` 校验所有 backendRef 的 kind/存在性
+1. 调用 `validate_http_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
 
 ### preparse（类型层面）
 

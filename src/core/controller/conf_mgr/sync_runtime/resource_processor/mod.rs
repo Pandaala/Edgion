@@ -13,6 +13,7 @@
 //! - `HandlerContext`: Context passed to handler methods
 
 pub mod attached_route_tracker;
+pub mod configmap_utils;
 mod context;
 pub mod gateway_route_index;
 mod handler;
@@ -38,10 +39,11 @@ pub use status_utils::{
 
 // Re-export handlers
 pub use handlers::{
-    BackendTlsPolicyHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler,
-    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler,
+    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
+    UdpRouteHandler,
 };
 
 // Re-export generic ref_manager types

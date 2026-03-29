@@ -1,4 +1,5 @@
 use crate::core::gateway::runtime::matching::route::check_gateway_listener_match;
+use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
@@ -6,8 +7,62 @@ use crate::types::resources::common::ParentReference;
 use crate::types::{HTTPRouteRule, MatchInfo};
 use pingora_proxy::Session;
 use regex::Regex;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Pre-computed match specificity for Gateway API precedence ordering.
+///
+/// Fields are computed once at route creation time.
+/// Comparison order (highest priority first):
+///   has_method > header_count > query_count > creation_ts > route_key > rule_index
+///
+/// Path-level precedence (Exact vs Prefix, char count) is handled separately by
+/// RadixPath.priority_weight, which sorts *before* this struct.
+#[derive(Clone, Debug)]
+pub struct MatchSpecificity {
+    /// Whether this match specifies an HTTP method (true = more specific)
+    pub has_method: bool,
+    /// Number of header match conditions
+    pub header_count: u16,
+    /// Number of query parameter match conditions
+    pub query_count: u16,
+    /// Route creation timestamp for cross-route tie-breaking (older = higher priority).
+    /// Milliseconds since epoch; 0 = unknown/missing.
+    pub creation_ts_ms: i64,
+    /// Route "{namespace}/{name}" for final alphabetical tie-breaking
+    pub route_key: String,
+    /// Rule index within the route (for intra-route tie-breaking: first wins)
+    pub rule_index: u32,
+    /// Match index within the rule (for intra-rule tie-breaking: first wins)
+    pub match_index: u32,
+}
+
+impl MatchSpecificity {
+    /// Compare two MatchSpecificity values per Gateway API precedence.
+    /// Returns Ordering where Less means `self` has higher priority.
+    ///
+    /// This does NOT include path-level comparison — the caller must
+    /// compare RadixPath.priority_weight first.
+    pub fn cmp_precedence(&self, other: &Self) -> Ordering {
+        // Level 3: method match (has_method = true sorts first)
+        other
+            .has_method
+            .cmp(&self.has_method)
+            // Level 4: header count (more = higher priority)
+            .then(other.header_count.cmp(&self.header_count))
+            // Level 5: query param count (more = higher priority)
+            .then(other.query_count.cmp(&self.query_count))
+            // Level 6: creation timestamp (older = higher priority, ascending)
+            .then(self.creation_ts_ms.cmp(&other.creation_ts_ms))
+            // Level 7: alphabetical by namespace/name (ascending)
+            .then(self.route_key.cmp(&other.route_key))
+            // Intra-route: first rule wins (ascending)
+            .then(self.rule_index.cmp(&other.rule_index))
+            // Intra-rule: first match wins (ascending)
+            .then(self.match_index.cmp(&other.match_index))
+    }
+}
 
 /// Result of a successful route match, bundling the matched route and the
 /// gateway/listener context that satisfied the parentRef constraints.
@@ -31,6 +86,11 @@ pub struct HttpRouteRuleUnit {
     pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
     /// Pre-compiled regexes for query param RegularExpression matchers (aligned with query_params vec)
     pub compiled_query_regexes: Vec<Option<Arc<Regex>>>,
+    /// True when the match item has non-empty query_params conditions.
+    /// Used to skip query string parsing on the hot path for routes that don't need it.
+    pub has_query_matchers: bool,
+    /// Pre-computed match specificity for Gateway API precedence ordering.
+    pub specificity: MatchSpecificity,
 }
 
 impl HttpRouteRuleUnit {
@@ -88,12 +148,12 @@ impl HttpRouteRuleUnit {
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_infos`: All gateway/listener contexts available on this listener
+    /// - `index`: Pre-built gateway/listener index for this port
     pub fn deep_match(
         &self,
         session: &Session,
         ctx: &EdgionHttpContext,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
     ) -> Result<Option<GatewayInfo>, EdError> {
         let req_header = session.req_header();
         Self::deep_match_common(
@@ -101,9 +161,10 @@ impl HttpRouteRuleUnit {
             req_header,
             &self.parent_refs,
             ctx,
-            gateway_infos,
+            index,
             &self.compiled_header_regexes,
             &self.compiled_query_regexes,
+            self.has_query_matchers,
         )
     }
 
@@ -242,24 +303,22 @@ impl HttpRouteRuleUnit {
         req_header: &pingora_http::RequestHeader,
         parent_refs: &Option<Vec<ParentReference>>,
         ctx: &EdgionHttpContext,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
         compiled_header_regexes: &[Option<Arc<Regex>>],
         compiled_query_regexes: &[Option<Arc<Regex>>],
+        has_query_matchers: bool,
     ) -> Result<Option<GatewayInfo>, EdError> {
         let method = req_header.method.as_str();
         let match_item = &matched_info.m;
 
-        let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
-
-        // 0. Check Gateway/Listener constraints (sectionName, hostname, AllowedRoutes)
+        // 0. Check Gateway/Listener constraints (sectionName + hostname isolation)
         let matched_gi = if let Some(ref parent_refs) = parent_refs {
             match check_gateway_listener_match(
                 parent_refs,
-                gateway_infos,
+                index,
                 &ctx.request_info.hostname,
                 &matched_info.rsc.ns,
                 "HTTPRoute",
-                &matched_info.rsc.name,
             ) {
                 Some(gi) => gi,
                 None => return Ok(None),
@@ -285,25 +344,20 @@ impl HttpRouteRuleUnit {
             }
         }
 
-        // 3. Check Query Parameters (if specified) - ALL must match (AND logic)
-        if let Some(query_param_matches) = &match_item.query_params {
-            for (idx, query_param_match) in query_param_matches.iter().enumerate() {
-                let pre = compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
-                if !Self::match_query_param(&query_params, query_param_match, pre)? {
-                    return Ok(None);
+        // 3. Check Query Parameters — lazy parse: only when this route has query matchers
+        if has_query_matchers {
+            if let Some(query_param_matches) = &match_item.query_params {
+                let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
+                for (idx, query_param_match) in query_param_matches.iter().enumerate() {
+                    let pre = compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
+                    if !Self::match_query_param(&query_params, query_param_match, pre)? {
+                        return Ok(None);
+                    }
                 }
             }
         }
 
         Ok(Some(matched_gi))
-    }
-
-    /// Return the number of header matchers in the route's match item.
-    ///
-    /// Used for specificity-based sorting: rules with more header matchers are more specific
-    /// and should be evaluated before rules with fewer header matchers (per Gateway API spec).
-    pub fn header_matcher_count(&self) -> usize {
-        self.matched_info.m.headers.as_ref().map(|h| h.len()).unwrap_or(0)
     }
 
     /// Extract all path patterns from this route with their match types
@@ -381,5 +435,96 @@ mod tests {
         // Invalid hex sequences should be kept as-is
         assert_eq!(HttpRouteRuleUnit::url_decode("test%"), "test%");
         assert_eq!(HttpRouteRuleUnit::url_decode("test%GG"), "test%GG");
+    }
+
+    fn make_specificity(
+        has_method: bool,
+        header_count: u16,
+        query_count: u16,
+        creation_ts_ms: i64,
+        route_key: &str,
+        rule_index: u32,
+        match_index: u32,
+    ) -> MatchSpecificity {
+        MatchSpecificity {
+            has_method,
+            header_count,
+            query_count,
+            creation_ts_ms,
+            route_key: route_key.to_string(),
+            rule_index,
+            match_index,
+        }
+    }
+
+    #[test]
+    fn test_specificity_method_wins() {
+        let with_method = make_specificity(true, 0, 0, 1000, "ns/a", 0, 0);
+        let without_method = make_specificity(false, 0, 0, 1000, "ns/a", 0, 0);
+        assert_eq!(with_method.cmp_precedence(&without_method), Ordering::Less);
+        assert_eq!(without_method.cmp_precedence(&with_method), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_specificity_more_headers_wins() {
+        let h3 = make_specificity(true, 3, 0, 1000, "ns/a", 0, 0);
+        let h2 = make_specificity(true, 2, 0, 1000, "ns/a", 0, 0);
+        let h0 = make_specificity(true, 0, 0, 1000, "ns/a", 0, 0);
+        assert_eq!(h3.cmp_precedence(&h2), Ordering::Less);
+        assert_eq!(h2.cmp_precedence(&h0), Ordering::Less);
+        assert_eq!(h3.cmp_precedence(&h0), Ordering::Less);
+    }
+
+    #[test]
+    fn test_specificity_more_query_params_wins() {
+        let q2 = make_specificity(true, 1, 2, 1000, "ns/a", 0, 0);
+        let q1 = make_specificity(true, 1, 1, 1000, "ns/a", 0, 0);
+        let q0 = make_specificity(true, 1, 0, 1000, "ns/a", 0, 0);
+        assert_eq!(q2.cmp_precedence(&q1), Ordering::Less);
+        assert_eq!(q1.cmp_precedence(&q0), Ordering::Less);
+    }
+
+    #[test]
+    fn test_specificity_older_timestamp_wins() {
+        let old = make_specificity(true, 1, 1, 100, "ns/a", 0, 0);
+        let new = make_specificity(true, 1, 1, 200, "ns/a", 0, 0);
+        assert_eq!(old.cmp_precedence(&new), Ordering::Less);
+        assert_eq!(new.cmp_precedence(&old), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_specificity_alphabetical_route_key() {
+        let a = make_specificity(true, 1, 1, 100, "ns/aaa", 0, 0);
+        let b = make_specificity(true, 1, 1, 100, "ns/bbb", 0, 0);
+        assert_eq!(a.cmp_precedence(&b), Ordering::Less);
+        assert_eq!(b.cmp_precedence(&a), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_specificity_rule_index_tiebreak() {
+        let r0 = make_specificity(true, 1, 1, 100, "ns/a", 0, 0);
+        let r1 = make_specificity(true, 1, 1, 100, "ns/a", 1, 0);
+        assert_eq!(r0.cmp_precedence(&r1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_specificity_match_index_tiebreak() {
+        let m0 = make_specificity(true, 1, 1, 100, "ns/a", 0, 0);
+        let m1 = make_specificity(true, 1, 1, 100, "ns/a", 0, 1);
+        assert_eq!(m0.cmp_precedence(&m1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_specificity_equal() {
+        let a = make_specificity(true, 1, 1, 100, "ns/a", 0, 0);
+        let b = make_specificity(true, 1, 1, 100, "ns/a", 0, 0);
+        assert_eq!(a.cmp_precedence(&b), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_specificity_method_trumps_headers() {
+        let with_method = make_specificity(true, 0, 0, 1000, "ns/a", 0, 0);
+        let many_headers = make_specificity(false, 10, 10, 100, "ns/a", 0, 0);
+        assert_eq!(with_method.cmp_precedence(&many_headers), Ordering::Less);
     }
 }

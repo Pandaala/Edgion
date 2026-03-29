@@ -20,7 +20,7 @@ TLSRoute 定义 TLS 层的路由规则，支持 TLS passthrough 和 terminate �
 
 ### validate
 
-1. 调用 `validate_tls_route_if_enabled()` 执行 ReferenceGrant 校验
+1. 调用 `validate_tls_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
 2. 调用 `validate_backend_refs()` 校验所有 backendRef
 
 ### parse

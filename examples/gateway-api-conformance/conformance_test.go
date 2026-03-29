@@ -18,23 +18,6 @@ import (
 )
 
 func TestConformance(t *testing.T) {
-	proxyHost := os.Getenv("GATEWAY_PROXY_HOST")
-	if proxyHost == "" {
-		conformance.RunConformance(t)
-		return
-	}
-
-	httpPort := os.Getenv("GATEWAY_PROXY_HTTP_PORT")
-	if httpPort == "" {
-		httpPort = "8080"
-	}
-	httpsPort := os.Getenv("GATEWAY_PROXY_HTTPS_PORT")
-	if httpsPort == "" {
-		httpsPort = "8443"
-	}
-
-	t.Logf("Using port-forward proxy: %s (HTTP: %s, HTTPS: %s)", proxyHost, httpPort, httpsPort)
-
 	opts := conformance.DefaultOptions(t)
 
 	if opts.SupportedFeatures == nil {
@@ -55,7 +38,6 @@ func TestConformance(t *testing.T) {
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteHostRewrite)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRoutePathRewrite)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestMirror)
-	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestMultipleMirrors)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestTimeout)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteBackendTimeout)
 
@@ -67,29 +49,57 @@ func TestConformance(t *testing.T) {
 
 	// A-class: Gateway features
 	opts.SupportedFeatures.Insert(features.SupportGatewayHTTPListenerIsolation)
-	opts.SupportedFeatures.Insert(features.SupportGatewayPort8080)
+	// GatewayPort8080 requires dynamic listener binding at runtime, which is not supported.
+	// The gateway binds ports at startup only; ports created via Gateway resources after
+	// startup cannot be bound. This feature is permanently deferred.
 
 	// B-class: HTTPRoute redirect (path/port/scheme)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRoutePathRedirect)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRoutePortRedirect)
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteSchemeRedirect)
 
-	// B-class: HTTPRoute percentage mirror
+	// B-class: HTTPRoute redirect status codes (303/307/308)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRoute303RedirectStatusCode)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRoute307RedirectStatusCode)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRoute308RedirectStatusCode)
+
+	// B-class: HTTPRoute percentage mirror + multiple mirrors
 	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestPercentageMirror)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRouteRequestMultipleMirrors)
+
+	// B-class: HTTPRoute destination port matching (status-only tests)
+	opts.SupportedFeatures.Insert(features.SupportHTTPRouteDestinationPortMatching)
 
 	// B-class: HTTPRoute parentRef port matching
-	opts.SupportedFeatures.Insert(features.SupportHTTPRouteParentRefPort)
+	// Disabled: requires dynamic listener port binding at runtime (8080/8090),
+	// which Edgion does not support — ports are bound at startup only.
+	// opts.SupportedFeatures.Insert(features.SupportHTTPRouteParentRefPort)
+
+	// TLSRoute support (needed for HTTPRouteDisallowedKind status test)
+	opts.SupportedFeatures.Insert(features.SupportTLSRoute)
+
+	// CORS support — disabled: CORS preflight handling is incomplete
+	// (simple requests work, but preflight OPTIONS with auth/method/header
+	// negotiation fails on several sub-tests)
+	// opts.SupportedFeatures.Insert(features.SupportHTTPRouteCORS)
+
+	// HTTP 421 Misdirected Request detection (Gateway API spec)
+	opts.SupportedFeatures.Insert(features.SupportGatewayHTTPSListenerDetectMisdirectedRequests)
 
 	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
-	// ⚠ Not yet validated against real conformance run.
 	opts.SupportedFeatures.Insert(features.SupportGRPCRoute)
+
+	// F-class: Frontend client certificate validation (mTLS)
+	// F1/F3/F4 are gated by SupportGatewayFrontendClientCertificateValidation
+	// F2 additionally requires SupportGatewayFrontendClientCertificateValidationInsecureFallback
+	opts.SupportedFeatures.Insert(features.SupportGatewayFrontendClientCertificateValidation)
+	opts.SupportedFeatures.Insert(features.SupportGatewayFrontendClientCertificateValidationInsecureFallback)
 
 	// Conformance profiles — declare which profiles Edgion claims to support.
 	// This enables profile-based conformance reporting per GEP-1709.
 	//
 	// GATEWAY-HTTP: declared, core features implemented.
 	// GATEWAY-GRPC: declared, core features implemented (exact/header/hostname/weight matching).
-	//               ⚠ Not yet validated against real conformance run — may need status condition fixes.
 	// GATEWAY-TLS:  NOT declared yet. TLS Passthrough implemented but conformance tests never run.
 	//               Likely needs status condition work (ResolvedRefs, supportedKinds for TLSRoute).
 	//               Add GatewayTLSConformanceProfileName + SupportTLSRoute when core tests pass.
@@ -122,24 +132,39 @@ func TestConformance(t *testing.T) {
 		RequiredConsecutiveSuccesses:        3,
 	}
 
-	opts.RoundTripper = &roundtripper.DefaultRoundTripper{
-		Debug:         opts.Debug,
-		TimeoutConfig: opts.TimeoutConfig,
-		CustomDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			switch port {
-			case "80":
-				addr = net.JoinHostPort(proxyHost, httpPort)
-			case "443":
-				addr = net.JoinHostPort(proxyHost, httpsPort)
-			default:
-				return nil, fmt.Errorf("unexpected port in gateway address: %s", addr)
-			}
-			return (&net.Dialer{}).DialContext(ctx, network, addr)
-		},
+	// Optional port-forward proxy (for clusters with unreachable pod IPs)
+	proxyHost := os.Getenv("GATEWAY_PROXY_HOST")
+	if proxyHost != "" {
+		httpPort := os.Getenv("GATEWAY_PROXY_HTTP_PORT")
+		if httpPort == "" {
+			httpPort = "8080"
+		}
+		httpsPort := os.Getenv("GATEWAY_PROXY_HTTPS_PORT")
+		if httpsPort == "" {
+			httpsPort = "8443"
+		}
+
+		t.Logf("Using port-forward proxy: %s (HTTP: %s, HTTPS: %s)", proxyHost, httpPort, httpsPort)
+
+		opts.RoundTripper = &roundtripper.DefaultRoundTripper{
+			Debug:         opts.Debug,
+			TimeoutConfig: opts.TimeoutConfig,
+			CustomDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				_, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				switch port {
+				case "80":
+					addr = net.JoinHostPort(proxyHost, httpPort)
+				case "443":
+					addr = net.JoinHostPort(proxyHost, httpsPort)
+				default:
+					return nil, fmt.Errorf("unexpected port in gateway address: %s", addr)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, addr)
+			},
+		}
 	}
 
 	conformance.RunConformanceWithOptions(t, opts)

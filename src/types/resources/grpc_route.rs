@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::common::{ParentReference, RefDenied};
 use super::http_route::{
     BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
-    SessionPersistence,
+    RouteTimeout as HttpRouteTimeout, SessionPersistence,
 };
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::gateway::lb::BackendSelector;
@@ -66,6 +66,11 @@ pub struct GRPCRouteSpec {
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GRPCRouteRule {
+    /// Name is the name of the rule. It can be used for observability and status reporting.
+    /// Support: Extended
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     /// Matches define conditions used for matching the rule against requests
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<GRPCRouteMatch>>,
@@ -114,6 +119,7 @@ pub struct GRPCRouteRule {
 impl Clone for GRPCRouteRule {
     fn clone(&self) -> Self {
         Self {
+            name: self.name.clone(),
             matches: self.matches.clone(),
             filters: self.filters.clone(),
             backend_refs: self.backend_refs.clone(),
@@ -132,6 +138,7 @@ impl Clone for GRPCRouteRule {
 impl fmt::Debug for GRPCRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GRPCRouteRule")
+            .field("name", &self.name)
             .field("matches", &self.matches)
             .field("plugins", &self.filters)
             .field("backend_refs", &self.backend_refs)
@@ -424,8 +431,6 @@ impl GRPCRoute {
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
-        use crate::core::common::utils::parse_duration;
-
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
@@ -434,11 +439,35 @@ impl GRPCRoute {
             // Parse timeouts for each rule
             if let Some(timeouts) = &rule.timeouts {
                 // Parse GRPCRouteTimeouts manually (same structure as HTTPRouteTimeouts)
-                let request_timeout = timeouts.request.as_ref().and_then(|s| parse_duration(s).ok());
+                let request_timeout = timeouts
+                    .request
+                    .as_ref()
+                    .map(|s| HttpRouteTimeout::parse(s, "request"))
+                    .unwrap_or(HttpRouteTimeout::Unset);
 
-                let backend_request_timeout = timeouts.backend_request.as_ref().and_then(|s| parse_duration(s).ok());
+                let backend_request_timeout = timeouts
+                    .backend_request
+                    .as_ref()
+                    .map(|s| HttpRouteTimeout::parse(s, "backend_request"))
+                    .unwrap_or(HttpRouteTimeout::Unset);
 
-                if request_timeout.is_some() || backend_request_timeout.is_some() {
+                // Clamp: backendRequest must be <= request (Gateway API spec)
+                let backend_request_timeout =
+                    match (backend_request_timeout.as_duration(), request_timeout.as_duration()) {
+                        (Some(br), Some(req)) if br > req => {
+                            tracing::warn!(
+                                "GRPCRoute backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping",
+                                br,
+                                req
+                            );
+                            HttpRouteTimeout::Duration(req)
+                        }
+                        _ => backend_request_timeout,
+                    };
+
+                if !matches!(request_timeout, HttpRouteTimeout::Unset)
+                    || !matches!(backend_request_timeout, HttpRouteTimeout::Unset)
+                {
                     rule.parsed_timeouts = Some(HttpParsedRouteTimeouts {
                         request_timeout,
                         backend_request_timeout,

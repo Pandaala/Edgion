@@ -1,5 +1,7 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::core::gateway::routes::grpc::match_unit::{GrpcMatchInfo, GrpcRouteInfo, CATCH_ALL_HOSTNAME};
+use crate::core::gateway::routes::grpc::match_unit::{
+    GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo, CATCH_ALL_HOSTNAME,
+};
 use crate::core::gateway::routes::grpc::routes_mgr::{resolved_ports_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
 use crate::core::gateway::routes::http::conf_handler_impl::filter_accepted_parent_refs;
@@ -176,6 +178,12 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
     };
 
     let route_sv = route.get_sync_version();
+    let creation_ts_ms = route
+        .metadata
+        .creation_timestamp
+        .as_ref()
+        .map(|t| t.0.timestamp_millis())
+        .unwrap_or(0);
     let route_info = Arc::new(GrpcRouteInfo {
         parent_refs: Some(accepted_refs),
         effective_hostnames: get_effective_hostnames(route),
@@ -197,6 +205,14 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
 
             if let Some(matches) = &rule.matches {
                 for (match_id, match_item) in matches.iter().enumerate() {
+                    let header_count = match_item.headers.as_ref().map(|h| h.len() as u16).unwrap_or(0);
+                    let specificity = GrpcMatchSpecificity {
+                        header_count,
+                        creation_ts_ms,
+                        route_key: resource_key.to_string(),
+                        rule_index: rule_id as u32,
+                        match_index: match_id as u32,
+                    };
                     units.push(Arc::new(GrpcRouteRuleUnit {
                         resource_key: resource_key.to_string(),
                         matched_info: GrpcMatchInfo::new(
@@ -206,9 +222,11 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                             match_id,
                             match_item.clone(),
                             route_sv,
+                            rule.name.clone(),
                         ),
                         rule: rule_arc.clone(),
                         route_info: route_info.clone(),
+                        specificity,
                     }));
                 }
             }

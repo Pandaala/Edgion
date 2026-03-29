@@ -6,6 +6,7 @@
 mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
+mod cors;
 mod ctx_set;
 mod debug_access_log;
 mod direct_endpoint;
@@ -32,6 +33,7 @@ mod webhook_key_get;
 pub use all_endpoint_status::AllEndpointStatusTestSuite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
 pub use basic_auth::BasicAuthTestSuite;
+pub use cors::CorsPluginTestSuite;
 pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;
 pub use direct_endpoint::DirectEndpointTestSuite;

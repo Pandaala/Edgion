@@ -170,7 +170,11 @@ The test cases use `openssl s_client` to verify the negotiated server cipher.
 - `HTTPRoute_edge_backend-tls.yaml`: Backend TLS route.
 - `Secret_backend-ca.yaml`: Backend CA certificate.
 
-### `ref-grant-status/`
+### `Status/`
+
+Controller-level status validation tests. Each subdirectory is a separate test suite.
+
+#### `Status/RefGrant/`
 
 ReferenceGrant and status integration tests verify status updates for cross-namespace references.
 
@@ -188,6 +192,19 @@ Test scenarios:
 2. Cross-namespace reference without a `ReferenceGrant` results in `ResolvedRefs=False (RefNotPermitted)`.
 3. A late `ReferenceGrant` automatically requeues the `HTTPRoute` and updates status.
 4. Each `parentRef` gets an independent status entry.
+
+#### `Status/BackendTLSPolicy/`
+
+BackendTLSPolicy validation and status condition tests.
+
+- `BackendTLSPolicy_edgion-test_system-ca.yaml`: Uses `wellKnownCACertificates: System` (valid).
+- `BackendTLSPolicy_edgion-test_both-invalid.yaml`: Both `caCertificateRefs` and `wellKnownCACertificates` (invalid, mutually exclusive).
+- `BackendTLSPolicy_edgion-test_neither-invalid.yaml`: Neither `caCertificateRefs` nor `wellKnownCACertificates` (invalid, must specify one).
+
+Test scenarios:
+1. `wellKnownCACertificates: System` results in `Accepted=True`.
+2. Both fields set results in `Accepted=False` (mutually exclusive).
+3. Neither field set results in `Accepted=False` (must specify one).
 
 ## Adding a New Suite
 

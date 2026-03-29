@@ -1,11 +1,12 @@
 use super::EdgionHttpProxy;
-use crate::core::gateway::backends::get_peer;
-use crate::core::gateway::end_response_500;
+use crate::core::gateway::backends::{get_peer, try_get_peer};
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
 use crate::core::gateway::routes::http::routes_mgr::RouteRules;
+use crate::core::gateway::routes::http::session_persistence;
+use crate::core::gateway::{end_response_500, end_response_grpc_unavailable};
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
-use crate::types::{EdgionHttpContext, EdgionStatus};
+use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::upstreams::peer::Peer;
@@ -24,12 +25,12 @@ pub async fn upstream_peer(
         .route_unit
         .as_ref()
         .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .and_then(|timeouts| timeouts.request_timeout)
+        .and_then(|timeouts| timeouts.request_timeout.as_duration())
         .or_else(|| {
             ctx.grpc_route_unit
                 .as_ref()
                 .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-                .and_then(|timeouts| timeouts.request_timeout)
+                .and_then(|timeouts| timeouts.request_timeout.as_duration())
         });
 
     if let Some(timeout) = request_timeout {
@@ -89,13 +90,18 @@ pub async fn upstream_peer_grpc(
         Ok(Some(())) => {}
         Ok(None) => {
             ctx.add_error(EdgionStatus::GrpcUpstreamNotRouteMatched);
-            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
+            end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
+            // gRPC trailers-only response (HTTP 200 + grpc-status: 14, END_STREAM=true) already
+            // written above. Return HTTPStatus(200) so Pingora treats this as "response already
+            // handled" and does NOT send RST_STREAM. InternalError would cause Pingora to reset
+            // the H2 stream, and the client would see code=Internal(13) instead of Unavailable(14).
+            return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
         }
         Err(_) => {
             ctx.add_error(EdgionStatus::GrpcUpstreamNotBackendRefs);
-            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
+            end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
+            // Same reasoning as Ok(None): response already sent, signal Pingora to stop cleanly.
+            return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
         }
     }
 
@@ -187,8 +193,32 @@ pub async fn upstream_peer_http(
     // 3. Initialize backend context (unified logic)
     init_backend_context_if_needed(ctx)?;
 
-    // 4. Get peer
-    let mut peer = get_peer(session, ctx, false).await?;
+    // 4. Get peer — with session persistence fallback support
+    //
+    // When session persistence resolved a target (sp_target_addr was set), try_get_peer
+    // routes directly to it. If that fails (unhealthy), fallback to normal LB unless strict.
+    let sp_had_target = ctx.sp_target_addr.is_some();
+    let sp_strict = ctx
+        .route_unit
+        .as_ref()
+        .and_then(|ru| ru.rule.session_persistence.as_ref())
+        .and_then(|sp| sp.strict)
+        .unwrap_or(false);
+
+    let mut peer = match try_get_peer(ctx, session, false) {
+        Ok(peer) => peer,
+        Err(_) if sp_had_target && !sp_strict => {
+            // Session persistence fallback: target was unhealthy, retry with normal LB
+            ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
+            ctx.sp_state = SessionPersistenceState::InjectUpdate; // update token in response
+                                                                  // Retry with normal LB
+            get_peer(session, ctx, false).await?
+        }
+        Err(_) => {
+            // No fallback (strict mode, no session persistence, or no target) — error response
+            get_peer(session, ctx, false).await?
+        }
+    };
 
     // 5. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
@@ -212,6 +242,44 @@ pub async fn select_http_backend(
             return Err(PingoraError::new(ErrorType::InternalError));
         }
     };
+
+    // Session Persistence: extract token before mutating ctx
+    // Pre-compute outside the borrow of route_unit to satisfy the borrow checker
+    let sp_active = route_unit.rule.session_persistence.is_some();
+
+    // Warn if idle_timeout is configured (not supported in current version)
+    if let Some(ref sp) = route_unit.rule.session_persistence {
+        if sp.idle_timeout.is_some() {
+            tracing::warn!(
+                "sessionPersistence.idleTimeout is configured but not supported in current version (requires server-side session storage)"
+            );
+        }
+    }
+
+    let sp_token = route_unit
+        .rule
+        .session_persistence
+        .as_ref()
+        .and_then(|sp| session_persistence::extract_session_token(session, sp));
+
+    // Determine initial session persistence state and extract token value for affinity lookup
+    let sp_token_value: Option<String>;
+    if sp_active {
+        match sp_token {
+            Some(token) => {
+                // Token found in request — stays Inactive unless fallback happens later
+                ctx.sp_state = SessionPersistenceState::Inactive;
+                sp_token_value = Some(token);
+            }
+            None => {
+                // No token — first request, will inject new token
+                ctx.sp_state = SessionPersistenceState::InjectNew;
+                sp_token_value = None;
+            }
+        }
+    } else {
+        sp_token_value = None;
+    }
 
     // ===== DynamicInternalUpstream: select specific backend_ref by name =====
     let mut backend_ref = if let Some(ref jump) = ctx.internal_jump {
@@ -266,12 +334,47 @@ pub async fn select_http_backend(
 
     // BackendTLSPolicy is applied via the peer builder; no per-request logging needed
 
+    // Pre-extract route namespace before mutable ctx borrows (borrow checker)
+    let route_ns = route_unit.matched_info.rsc.ns.clone();
+
     // Run backend-level request edgion_plugins
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         ctx.add_error(EdgionStatus::Unknown);
         end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-        return Err(PingoraError::new(ErrorType::InternalError));
+        // Use HTTPStatus(200) for gRPC so fail_to_proxy does not attempt to write
+        // another error response on an already-closed H2 stream (would set upstream
+        // status to 500 in logs and emit a redundant write attempt).
+        let err_type = if ctx.request_info.is_grpc_request {
+            ErrorType::HTTPStatus(200)
+        } else {
+            ErrorType::InternalError
+        };
+        return Err(PingoraError::new(err_type));
+    }
+
+    // Session Persistence: resolve token → target addr via affinity map
+    // Must happen after backend_ref selection (we need service_key for the map lookup)
+    if sp_active {
+        if let Some(ref token) = sp_token_value {
+            // Token present — look up in affinity map
+            let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_ns);
+            let service_key = format!("{}/{}", namespace, &backend_ref.name);
+
+            // Ensure affinity map is built for this service
+            let backends = crate::core::gateway::backends::get_backends_for_service(&service_key);
+            let affinity_map =
+                crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build(&service_key, &backends);
+
+            if let Some(&addr) = affinity_map.get(token.as_str()) {
+                // Token resolved — set target for try_get_peer to use
+                ctx.sp_target_addr = Some(addr);
+            } else {
+                // Token not in map (stale/unknown) → normal LB + inject new token
+                ctx.sp_state = SessionPersistenceState::InjectNew;
+            }
+        }
+        // sp_token_value is None → first request (InjectNew already set), no lookup needed
     }
 
     ctx.selected_backend = Some(backend_ref);
@@ -292,15 +395,45 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
                 .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
         });
 
-    // Backend request timeout: route-level backend_request_timeout overrides global request_timeout
-    // This timeout covers connection + read + write for a single backend request
-    let effective_backend_timeout = route_timeouts
-        .and_then(|rt| rt.backend_request_timeout)
-        .unwrap_or(backend_timeout.request_timeout);
+    // Backend request timeout: three-state per Gateway API spec
+    // - Unset: use global default
+    // - Disabled ("0s"): no timeout (don't set peer options, Pingora defaults to no timeout)
+    // - Duration: use the specified value
+    use crate::types::resources::http_route::RouteTimeout;
+    let route_backend_timeout = route_timeouts.map(|rt| &rt.backend_request_timeout);
 
-    peer.options.connection_timeout = Some(effective_backend_timeout);
-    peer.options.read_timeout = Some(effective_backend_timeout);
-    peer.options.write_timeout = Some(effective_backend_timeout);
+    let effective_backend_timeout = match route_backend_timeout {
+        Some(RouteTimeout::Disabled) => None, // "0s" = no timeout
+        Some(RouteTimeout::Duration(d)) => Some(*d),
+        _ => Some(backend_timeout.request_timeout), // Unset or no route timeouts → global default
+    };
+
+    // connection_timeout: use route backendRequest timeout, or fall back to global default.
+    // "0s" on backendRequest disables I/O timeouts, not connection establishment — always set a floor.
+    // Intentionally NOT bounded by request_timeout: connection establishment is infrastructure
+    // overhead; bounding it would cause spurious 504s when request_timeout is tight.
+    let effective_connection_timeout = effective_backend_timeout.unwrap_or(backend_timeout.connect_timeout);
+    peer.options.connection_timeout = Some(effective_connection_timeout);
+
+    // Apply request_timeout as a ceiling on read/write timeout.
+    // Gateway API spec: request_timeout is end-to-end; remaining time = timeout - elapsed.
+    // Filter out zero remaining time to avoid setting Duration::ZERO on the peer (undefined behaviour).
+    let request_remaining = route_timeouts
+        .and_then(|rt| rt.request_timeout.as_duration())
+        .map(|req| req.saturating_sub(ctx.start_time.elapsed()))
+        .filter(|r| !r.is_zero());
+
+    let effective_read_write_timeout = match (effective_backend_timeout, request_remaining) {
+        (Some(b), Some(r)) => Some(b.min(r)),
+        (Some(b), None) => Some(b),
+        (None, Some(r)) => Some(r),
+        (None, None) => None,
+    };
+
+    if let Some(timeout) = effective_read_write_timeout {
+        peer.options.read_timeout = Some(timeout);
+        peer.options.write_timeout = Some(timeout);
+    }
 
     // Idle timeout: use global config from EdgionGatewayConfig
     peer.options.idle_timeout = Some(backend_timeout.idle_timeout);

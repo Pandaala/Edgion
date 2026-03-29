@@ -1,0 +1,30 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: refgrant-partially-invalid
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: public-gateway
+      namespace: edgion-test
+  hostnames:
+    - partially-invalid.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /a
+      backendRefs:
+        # Rule 0: 有 ReferenceGrant 允许，valid
+        - name: cross-ns-svc
+          namespace: backend
+          port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /b
+      backendRefs:
+        # Rule 1: 无 ReferenceGrant，ref_denied 会被设置，invalid
+        - name: some-denied-svc
+          namespace: edgion-system
+          port: 80

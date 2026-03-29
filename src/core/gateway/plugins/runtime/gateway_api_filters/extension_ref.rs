@@ -211,26 +211,41 @@ impl ExtensionRefFilter {
             Err(_) => return None,
         };
 
-        // Start EdgionPlugins log
         let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
         let mut max_delay: Option<std::time::Duration> = None;
 
-        for plugin in plugin_runtime.upstream_response_body_plugins_iter() {
-            let mut inner_log = PluginLog::new(plugin.name());
-            let delay = plugin.run_upstream_response_body_filter(body, end_of_stream, session, &mut inner_log);
-            session.push_to_edgion_plugins_log(&log_token, inner_log);
+        // Wrap body filter loop in catch_unwind so pop_plugin_ref runs
+        // even if a plugin panics. Without this, a panic would leave a
+        // stale entry on plugin_ref_stack, causing false cycle detection
+        // on subsequent chunks for the same session.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for plugin in plugin_runtime.upstream_response_body_plugins_iter() {
+                let mut inner_log = PluginLog::new(plugin.name());
+                let delay = plugin.run_upstream_response_body_filter(body, end_of_stream, session, &mut inner_log);
+                session.push_to_edgion_plugins_log(&log_token, inner_log);
 
-            if let Some(d) = delay {
-                max_delay = Some(match max_delay {
-                    Some(current) => current.max(d),
-                    None => d,
-                });
+                if let Some(d) = delay {
+                    max_delay = Some(match max_delay {
+                        Some(current) => current.max(d),
+                        None => d,
+                    });
+                }
             }
-        }
+        }));
 
         session.pop_plugin_ref();
-        max_delay
+
+        match result {
+            Ok(()) => max_delay,
+            Err(payload) => {
+                tracing::error!(
+                    plugin_key = %self.plugin_key(),
+                    "Plugin body filter panicked, plugin_ref popped safely"
+                );
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 }
 

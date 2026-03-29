@@ -1,11 +1,12 @@
 // PartiallyInvalid Test suite
 //
-// Tests the PartiallyInvalid condition behavior:
+// Tests Gateway API spec behavior for routes with unresolvable backends.
+// Per spec (httproute-invalid-nonexistent-backendref conformance test):
 // 1. Partial invalid: rule[0] has valid backend, rule[1] has nonexistent backend
 //    - /valid should proxy successfully (200)
-//    - /invalid-backend should return 404 (rule skipped by Gateway)
+//    - /invalid-backend should return 500 (backend unresolvable, route still accepted)
 // 2. All invalid: both rules have nonexistent backends
-//    - /bad-one and /bad-two should return 404 (route not accepted)
+//    - /bad-one and /bad-two should return 500 (backends unresolvable, route still accepted)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -52,7 +53,7 @@ impl PartiallyInvalidTestSuite {
     fn test_invalid_rule_skipped() -> TestCase {
         TestCase::new(
             "invalid_rule_skipped",
-            "Rule[1] with nonexistent backend should be skipped (404)",
+            "Rule[1] with nonexistent backend should return 500 (per Gateway API spec)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -65,16 +66,16 @@ impl PartiallyInvalidTestSuite {
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status().as_u16();
-                            if status == 404 {
+                            if status == 500 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Invalid rule skipped: 404 as expected".to_string(),
+                                    "Invalid backend returns 500 as expected (per Gateway API spec)".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected 404 for skipped invalid rule, got {} (rule was not skipped)",
+                                        "Expected 500 for unresolvable backend, got {} (spec: BackendNotFound → 500)",
                                         status
                                     ),
                                 )
@@ -90,7 +91,7 @@ impl PartiallyInvalidTestSuite {
     fn test_all_invalid_route_rejected() -> TestCase {
         TestCase::new(
             "all_invalid_route_rejected",
-            "Route with ALL invalid rules should be rejected (404 for any path)",
+            "Route with ALL invalid rules should still be accepted, returning 500 (per Gateway API spec)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -103,16 +104,16 @@ impl PartiallyInvalidTestSuite {
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status().as_u16();
-                            if status == 404 {
+                            if status == 500 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "All-invalid route rejected: 404 as expected".to_string(),
+                                    "All-invalid route returns 500 as expected (route accepted, backends unresolvable)".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "Expected 404 for all-invalid route, got {} (route should not be accepted)",
+                                        "Expected 500 for all-invalid route, got {} (spec: route accepted but backends unresolvable → 500)",
                                         status
                                     ),
                                 )

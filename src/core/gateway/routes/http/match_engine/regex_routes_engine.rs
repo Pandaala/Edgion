@@ -1,5 +1,5 @@
 use crate::core::gateway::routes::http::match_unit::{HttpRouteRuleUnit, RouteMatchResult};
-use crate::core::gateway::runtime::GatewayInfo;
+use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
@@ -34,13 +34,17 @@ impl RegexRoutesEngine {
             };
         }
 
-        // Sort routes by pattern length (longest first) for priority matching
-        // Longer patterns are typically more specific and should be matched first
+        // Sort routes by pattern length (longest first) for priority matching,
+        // with specificity tie-breaking per Gateway API spec.
         let mut routes = routes;
         routes.sort_by(|a, b| {
             let len_a = a.path_regex.as_ref().map(|r| r.as_str().len()).unwrap_or(0);
             let len_b = b.path_regex.as_ref().map(|r| r.as_str().len()).unwrap_or(0);
-            len_b.cmp(&len_a) // Descending order (longest first)
+            let len_cmp = len_b.cmp(&len_a);
+            if len_cmp != std::cmp::Ordering::Equal {
+                return len_cmp;
+            }
+            a.specificity.cmp_precedence(&b.specificity)
         });
 
         // Extract patterns and build RegexSet for fast batch matching
@@ -77,12 +81,12 @@ impl RegexRoutesEngine {
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_infos`: All gateway/listener contexts available on this listener
+    /// - `index`: Pre-built gateway/listener index for this port
     pub fn match_route(
         &self,
         session: &mut Session,
         ctx: &EdgionHttpContext,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
     ) -> Result<Option<RouteMatchResult>, EdError> {
         let path = session.req_header().uri.path();
 
@@ -93,9 +97,29 @@ impl RegexRoutesEngine {
                 return Ok(None);
             }
 
-            for &idx in &matches {
+            // Sort matched indices by precedence (RegexSet may return in arbitrary order)
+            let mut sorted_matches = matches;
+            sorted_matches.sort_by(|&a, &b| {
+                let len_a = self.routes[a]
+                    .path_regex
+                    .as_ref()
+                    .map(|r| r.as_str().len())
+                    .unwrap_or(0);
+                let len_b = self.routes[b]
+                    .path_regex
+                    .as_ref()
+                    .map(|r| r.as_str().len())
+                    .unwrap_or(0);
+                let len_cmp = len_b.cmp(&len_a);
+                if len_cmp != std::cmp::Ordering::Equal {
+                    return len_cmp;
+                }
+                self.routes[a].specificity.cmp_precedence(&self.routes[b].specificity)
+            });
+
+            for &idx in &sorted_matches {
                 let regex_route = &self.routes[idx];
-                if let Some(matched_gi) = regex_route.deep_match(session, ctx, gateway_infos)? {
+                if let Some(matched_gi) = regex_route.deep_match(session, ctx, index)? {
                     return Ok(Some(RouteMatchResult {
                         route_unit: regex_route.clone(),
                         matched_gateway: matched_gi,
@@ -105,7 +129,7 @@ impl RegexRoutesEngine {
         } else {
             for regex_route in &self.routes {
                 if regex_route.matches_path(path) {
-                    if let Some(matched_gi) = regex_route.deep_match(session, ctx, gateway_infos)? {
+                    if let Some(matched_gi) = regex_route.deep_match(session, ctx, index)? {
                         return Ok(Some(RouteMatchResult {
                             route_unit: regex_route.clone(),
                             matched_gateway: matched_gi,
@@ -124,6 +148,7 @@ mod tests {
     use super::*;
     use crate::core::gateway::lb::BackendSelector;
     use crate::core::gateway::plugins::PluginRuntime;
+    use crate::core::gateway::routes::http::match_unit::MatchSpecificity;
     use crate::types::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule, MatchInfo};
     use regex::Regex;
 
@@ -164,6 +189,7 @@ mod tests {
         let regex = Regex::new(regex_pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", regex_pattern));
 
         let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(&match_item);
+        let has_qm = match_item.query_params.as_ref().is_some_and(|qp| !qp.is_empty());
         Arc::new(HttpRouteRuleUnit {
             resource_key: format!("{}/{}", namespace, name),
             matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item, 0),
@@ -172,6 +198,16 @@ mod tests {
             parent_refs: None,
             compiled_header_regexes: chr,
             compiled_query_regexes: cqr,
+            has_query_matchers: has_qm,
+            specificity: MatchSpecificity {
+                has_method: false,
+                header_count: 0,
+                query_count: 0,
+                creation_ts_ms: 0,
+                route_key: format!("{}/{}", namespace, name),
+                rule_index: rule_id as u32,
+                match_index: 0,
+            },
         })
     }
 
@@ -310,13 +346,22 @@ mod tests {
 
         let engine = RegexRoutesEngine::build(routes);
 
-        // Test digit path
-        assert!(engine.routes[0].matches_path("/users/123"));
-        assert!(!engine.routes[0].matches_path("/users/abc"));
+        let digits_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "digits")
+            .unwrap();
+        let alpha_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "alpha")
+            .unwrap();
 
-        // Test alpha path
-        assert!(engine.routes[1].matches_path("/users/abc"));
-        assert!(!engine.routes[1].matches_path("/users/123"));
+        assert!(digits_route.matches_path("/users/123"));
+        assert!(!digits_route.matches_path("/users/abc"));
+
+        assert!(alpha_route.matches_path("/users/abc"));
+        assert!(!alpha_route.matches_path("/users/123"));
     }
 
     #[test]
@@ -381,18 +426,30 @@ mod tests {
 
         let engine = RegexRoutesEngine::build(routes);
 
+        let root_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "root")
+            .unwrap();
+        let empty_route = engine
+            .routes
+            .iter()
+            .find(|r| r.matched_info.rsc.name == "empty")
+            .unwrap();
+        let any_route = engine.routes.iter().find(|r| r.matched_info.rsc.name == "any").unwrap();
+
         // Test root path
-        assert!(engine.routes[0].matches_path("/"));
-        assert!(!engine.routes[0].matches_path("/anything"));
+        assert!(root_route.matches_path("/"));
+        assert!(!root_route.matches_path("/anything"));
 
         // Test empty pattern
-        assert!(engine.routes[1].matches_path(""));
-        assert!(!engine.routes[1].matches_path("/"));
+        assert!(empty_route.matches_path(""));
+        assert!(!empty_route.matches_path("/"));
 
         // Test match-all pattern
-        assert!(engine.routes[2].matches_path(""));
-        assert!(engine.routes[2].matches_path("/"));
-        assert!(engine.routes[2].matches_path("/anything"));
+        assert!(any_route.matches_path(""));
+        assert!(any_route.matches_path("/"));
+        assert!(any_route.matches_path("/anything"));
     }
 
     #[test]

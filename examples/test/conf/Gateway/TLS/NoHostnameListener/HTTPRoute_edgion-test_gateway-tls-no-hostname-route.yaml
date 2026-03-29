@@ -1,4 +1,4 @@
-# Route attached to a listener without hostname, used to verify TLS cert matching rejects it
+# Route attached to a catch-all listener (no hostname), verifies TLS handshake succeeds via fallback
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

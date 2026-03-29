@@ -24,8 +24,7 @@ Gateway 是 Edgion 的核心资源，定义网关的 Listener（监听端口、�
 ### parse
 
 1. **清除旧引用**：清除 SecretRefManager 和 CrossNsRefManager 中该 Gateway 的旧记录（处理更新场景）
-2. **注册端口信息**：将每个 Listener 的 `(name, port_key)` 注册到 `ListenerPortManager`，用于检测跨 Gateway 的端口冲突。port_key 由 `(port, protocol, hostname)` 组成
-3. **解析 TLS 证书**：遍历每个 Listener 的 `tls.certificateRefs`：
+2. **解析 TLS 证书**：遍历每个 Listener 的 `tls.certificateRefs`：
    - 在 SecretRefManager 中注册引用关系（Secret 变更时自动 requeue 此 Gateway）
    - 若为跨命名空间引用，在 CrossNsRefManager 中注册
    - 从 `GLOBAL_SECRET_STORE` 读取 Secret 数据，填入 `tls.secrets` 字段
@@ -33,23 +32,21 @@ Gateway 是 Edgion 的核心资源，定义网关的 Listener（监听端口、�
 
 ### on_change
 
-1. **requeue 冲突 Gateway**：通过 `ListenerPortManager.take_affected_gateways()` 获取冲突关系发生变化的 Gateway 并 requeue，确保双向标记冲突状态
-2. **requeue 关联路由**：通过 `GatewayRouteIndex` 查找所有 parentRef 指向此 Gateway 的路由，当 Listener 的 hostname 或 port 发生变化时 requeue 它们，重新计算 resolved_hostnames 和 resolved_ports
+1. **requeue 关联路由**：通过 `GatewayRouteIndex` 查找所有 parentRef 指向此 Gateway 的路由，当 Listener 的 hostname 或 port 发生变化时 requeue 它们，重新计算 resolved_hostnames 和 resolved_ports
 
 ### on_delete
 
-- 清除 SecretRefManager、CrossNsRefManager、ListenerPortManager 注册
-- requeue 之前与此 Gateway 冲突的其他 Gateway（从 Conflicted=True 变为 False）
+- 清除 SecretRefManager、CrossNsRefManager 注册
 - 清除 GatewayRouteIndex 中的 hostname/port 缓存
 
 ### update_status
 
 - **Gateway 级别 Conditions**:
   - `Accepted`：无 validation_errors 时为 True
-  - `ListenersNotValid`：有端口冲突时为 True
+  - `ListenersNotValid`：同一 Gateway 内有端口冲突时为 True
 - **Listener 级别**（每个 Listener 独立）：
   - `Accepted`：无 validation_errors 时为 True
-  - `Conflicted`：通过 ListenerPortManager 检测，有冲突时为 True
+  - `Conflicted`：同一 Gateway 内 Listener 端口冲突时为 True（不跨 Gateway 检测）
   - `ResolvedRefs`：检查 certificateRef 的 kind（必须为 Secret）、Secret 是否存在、Secret 数据是否合法（包含 tls.crt/tls.key、非空、有效 PEM）、跨命名空间引用是否被 ReferenceGrant 允许
   - `supportedKinds`：基于协议计算支持的路由类型（HTTP/HTTPS → HTTPRoute+GRPCRoute，TCP → TCPRoute，UDP → UDPRoute，TLS → TLSRoute），如果 `allowedRoutes.kinds` 中有不匹配的类型则报 InvalidRouteKind
   - `attachedRoutes`：从 AttachedRouteTracker 获取挂载的路由数量
@@ -65,7 +62,6 @@ Gateway 资源同步到 Gateway 侧后，用于配置 Pingora 的监听器。每
 |---------|---------|---------|------|
 | Gateway ← Routes | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute/UDPRoute | parentRef | 路由通过 parentRef 挂载到 Gateway 的 Listener |
 | Gateway → Secret | Secret | certificateRefs | Listener TLS 配置引用 Secret 中的证书 |
-| Gateway ↔ Gateway | Gateway | ListenerPortManager | 不同 Gateway 的 Listener 占用相同端口时产生冲突 |
 | Gateway ← EdgionTls | EdgionTls | parentRef | EdgionTls 通过 parentRef 绑定到 Gateway |
 | Gateway ← GatewayClass | GatewayClass | gatewayClassName | Gateway 引用 GatewayClass |
 | Gateway ← EdgionGatewayConfig | EdgionGatewayConfig | 全局 | 全局配置影响所有 Gateway |

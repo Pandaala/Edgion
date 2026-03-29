@@ -48,6 +48,15 @@ static RR_CACHE: LazyLock<DashMap<String, Arc<RoundRobinSelector>>> = LazyLock::
 /// Cached `ConsistentHashRing` per service key.
 static CH_CACHE: LazyLock<DashMap<String, Arc<RwLock<ConsistentHashRing>>>> = LazyLock::new(DashMap::new);
 
+/// Session affinity map: token (CRC32 hex) → endpoint SocketAddr, per service key.
+/// Built lazily on first session persistence request. Invalidated when backends change.
+/// Cap: max 1024 entries per service to prevent memory explosion.
+static SP_AFFINITY: LazyLock<DashMap<String, Arc<std::collections::HashMap<String, std::net::SocketAddr>>>> =
+    LazyLock::new(DashMap::new);
+
+/// Max entries per service in the session affinity map.
+const SP_AFFINITY_MAX_PER_SERVICE: usize = 1024;
+
 // ── Selector cache API ────────────────────────────────────────────────
 
 /// Get or build a `RoundRobinSelector` for the service.
@@ -74,6 +83,53 @@ pub fn get_ch_ring(service_key: &str, backends: &[Backend]) -> Arc<RwLock<Consis
 pub fn invalidate_selector_cache(service_key: &str) {
     RR_CACHE.remove(service_key);
     CH_CACHE.remove(service_key);
+    SP_AFFINITY.remove(service_key);
+}
+
+// ── Session Persistence Affinity Map ─────────────────────────────────
+
+/// Look up a session token in the affinity map for a service.
+/// Returns the endpoint SocketAddr if the token is known.
+pub fn sp_affinity_lookup(service_key: &str, token: &str) -> Option<std::net::SocketAddr> {
+    SP_AFFINITY.get(service_key).and_then(|map| map.get(token).copied())
+}
+
+/// Build or refresh the session affinity map for a service from its current backends.
+/// Each backend's `ip:port` is hashed via CRC32 to produce the token key.
+/// Capped at `SP_AFFINITY_MAX_PER_SERVICE` entries.
+pub fn sp_affinity_build(service_key: &str, backends: &[Backend]) {
+    let mut map = std::collections::HashMap::with_capacity(backends.len().min(SP_AFFINITY_MAX_PER_SERVICE));
+    for b in backends.iter().take(SP_AFFINITY_MAX_PER_SERVICE) {
+        if let SocketAddr::Inet(addr) = b.addr {
+            let addr_str = addr.to_string();
+            let token = format!("{:08x}", crc32fast::hash(addr_str.as_bytes()));
+            map.insert(token, addr);
+        }
+    }
+    SP_AFFINITY.insert(service_key.to_string(), Arc::new(map));
+}
+
+/// Get or build the session affinity map for a service.
+/// Lazy: builds from backends on first access.
+pub fn sp_affinity_get_or_build(
+    service_key: &str,
+    backends: &[Backend],
+) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
+    SP_AFFINITY
+        .entry(service_key.to_string())
+        .or_insert_with(|| {
+            let mut map = std::collections::HashMap::with_capacity(backends.len().min(SP_AFFINITY_MAX_PER_SERVICE));
+            for b in backends.iter().take(SP_AFFINITY_MAX_PER_SERVICE) {
+                if let SocketAddr::Inet(addr) = b.addr {
+                    let addr_str = addr.to_string();
+                    let token = format!("{:08x}", crc32fast::hash(addr_str.as_bytes()));
+                    map.insert(token, addr);
+                }
+            }
+            Arc::new(map)
+        })
+        .value()
+        .clone()
 }
 
 // ── helpers ───────────────────────────────────────────────────────────

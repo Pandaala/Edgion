@@ -1,0 +1,46 @@
+# GRPCRoute header-only matching test (no method specified)
+# Replicates conformance test GRPCRouteHeaderMatching pattern.
+# Gateway API spec: omitting the method field means match all gRPC methods.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: header-only-match-test
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-match-gateway
+      namespace: edgion-test
+      sectionName: grpc
+
+  hostnames:
+    - "grpc-header-only.example.com"
+
+  rules:
+    # Rule 0: Single header match (Version: one)
+    - matches:
+        - headers:
+            - name: version
+              value: one
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+
+    # Rule 1: Single header match (Version: two)
+    - matches:
+        - headers:
+            - name: version
+              value: two
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+
+    # Rule 2: Multi-header AND match (Color: blue AND Shape: circle)
+    - matches:
+        - headers:
+            - name: color
+              value: blue
+            - name: shape
+              value: circle
+      backendRefs:
+        - name: test-grpc
+          port: 30021

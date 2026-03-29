@@ -7,6 +7,14 @@ description: 在仓库 tasks/ 目录下创建、更新或继续任务时使用�
 
 当工作需要记录到 `tasks/` 时使用此 skill。
 
+## 快速入口
+
+| 场景 | 直接入口 |
+|------|----------|
+| 新功能完整交付工作流（分析 → 设计 → 设计复审 → 实现 → 代码复审 → 测试补强 → 全量验证 → 总结） | [new_feature_work_flow.skill](new_feature_work_flow.skill) |
+| 新功能工作流输出模板 | [new_feature_work_flow_templates.md](new_feature_work_flow_templates.md) |
+| 新功能工作流 subagent 契约 | [new_feature_work_flow_subagents.md](new_feature_work_flow_subagents.md) |
+
 ## 目录规则
 
 - `tasks/working/` — 进行中的工作
@@ -258,6 +266,7 @@ tasks/working/<task-name>/
 1. 检查任务是否已存在于 `tasks/working/` 或 `tasks/todo/`
 2. 创建任务目录和主任务文件
 3. 创建 `00-context.md`，列出相关 skills 路径
+4. 新功能任务优先使用 [new_feature_work_flow.skill](new_feature_work_flow.skill) 作为执行模板
 4. 按生命周期阶段推进，按需创建对应文档
 5. 发现阻塞问题立即写入 `05-issues.md`
 6. 随工作推进更新主任务文件中的文档索引和状态

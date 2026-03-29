@@ -80,6 +80,12 @@ spec:
 | `Passthrough` | TLS 透传：Gateway 不终止 TLS，按 SNI 路由到后端 |
 | `Terminate` | TLS 终止：Gateway 解密后按 SNI 路由到后端 |
 
+当前 Edgion 的产品边界：
+
+- 支持标准 `Passthrough`
+- 支持标准 `Terminate`
+- 不支持 `TLSRouteModeMixed`
+
 ## 与 TCPRoute 的区别
 
 | 维度 | TCPRoute | TLSRoute |

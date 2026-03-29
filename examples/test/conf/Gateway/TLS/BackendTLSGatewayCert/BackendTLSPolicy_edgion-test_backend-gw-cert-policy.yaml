@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: backend-gw-cert-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: test-backend-gw-cert
+  validation:
+    caCertificateRefs:
+      - name: backend-ca
+        kind: Secret
+        group: ""
+    hostname: backend.example.com

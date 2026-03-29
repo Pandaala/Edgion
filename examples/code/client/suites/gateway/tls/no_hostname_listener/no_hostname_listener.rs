@@ -5,10 +5,10 @@ use std::time::Instant;
 pub struct GatewayTlsNoHostnameListenerTestSuite;
 
 impl GatewayTlsNoHostnameListenerTestSuite {
-    fn test_tls_listener_without_hostname_is_not_used() -> TestCase {
+    fn test_tls_listener_without_hostname_serves_as_catchall() -> TestCase {
         TestCase::new(
-            "tls_listener_without_hostname_is_not_used",
-            "Gateway TLS listener without hostname should not be used for cert selection",
+            "tls_listener_without_hostname_serves_as_catchall",
+            "Gateway TLS listener without hostname should serve as catch-all fallback",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -16,16 +16,17 @@ impl GatewayTlsNoHostnameListenerTestSuite {
                     let url = format!("https://{}:{}/health", host, ctx.https_port);
 
                     match ctx.http_client.get(&url).send().await {
-                        Ok(response) => TestResult::failed(
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(err) => TestResult::failed(
                             start.elapsed(),
-                            format!(
-                                "Expected TLS handshake to fail for listener without hostname, got status {}",
-                                response.status()
-                            ),
-                        ),
-                        Err(err) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            format!("Listener without hostname was rejected during TLS setup: {}", err),
+                            format!("TLS handshake or request failed for catch-all listener: {}", err),
                         ),
                     }
                 })
@@ -41,6 +42,6 @@ impl TestSuite for GatewayTlsNoHostnameListenerTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_tls_listener_without_hostname_is_not_used()]
+        vec![Self::test_tls_listener_without_hostname_serves_as_catchall()]
     }
 }

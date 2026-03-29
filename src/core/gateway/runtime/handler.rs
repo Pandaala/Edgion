@@ -1,4 +1,5 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::gateway::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
 use crate::core::gateway::routes::grpc::get_global_grpc_route_managers;
 use crate::core::gateway::routes::http::get_global_http_route_managers;
 use crate::core::gateway::runtime::matching::rebuild_gateway_tls_matcher;
@@ -8,6 +9,7 @@ use crate::core::gateway::runtime::store::{
 use crate::types::prelude_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// ConfHandler implementation for Gateway
 /// Stores Gateway resources in cache for dynamic lookup during bootstrap
@@ -47,6 +49,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     listeners = listener_count,
                     "Gateway stored"
                 );
+
+                update_gateway_backend_tls_store(&key, &gateway);
 
                 if let Err(e) = store.add_gateway(gateway.clone()) {
                     tracing::warn!(key = %key, error = %e, "Failed to add gateway to store");
@@ -101,6 +105,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 );
 
                 config_store.update_gateway(&gateway);
+                update_gateway_backend_tls_store(&key, &gateway);
 
                 if let Err(e) = store.add_gateway(gateway) {
                     tracing::warn!(key = %key, error = %e, "Failed to add gateway");
@@ -127,6 +132,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 );
 
                 config_store.update_gateway(&gateway);
+                update_gateway_backend_tls_store(&key, &gateway);
 
                 store.update_gateway(gateway);
             }
@@ -153,6 +159,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 };
 
                 config_store.remove_gateway(namespace, name);
+                get_global_gateway_backend_tls_store().remove(key);
 
                 if let Err(e) = store.remove_gateway(key) {
                     tracing::warn!(key = %key, error = %e, "Failed to remove gateway");
@@ -174,6 +181,23 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 get_global_grpc_route_managers().rebuild_all_port_managers();
             }
         }
+    }
+}
+
+/// Update GatewayBackendTlsStore from a Gateway's resolved client certificate.
+fn update_gateway_backend_tls_store(gateway_key: &str, gateway: &Gateway) {
+    let store = get_global_gateway_backend_tls_store();
+    let has_cert = gateway
+        .spec
+        .tls
+        .as_ref()
+        .and_then(|t| t.backend.as_ref())
+        .and_then(|b| b.resolved_client_certificate.as_ref());
+
+    if let Some(secret) = has_cert {
+        store.set(gateway_key.to_string(), Arc::new(secret.clone()));
+    } else {
+        store.remove(gateway_key);
     }
 }
 

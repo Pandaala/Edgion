@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: timeout-request
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: timeout-gateway
+      namespace: edgion-test
+  hostnames:
+    - "timeout-request.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      timeouts:
+        request: "1s"    # 端到端请求超时，后端延迟超过此值应返回 504
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

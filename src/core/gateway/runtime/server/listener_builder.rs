@@ -21,7 +21,7 @@ use crate::core::gateway::plugins::stream::{get_global_stream_plugin_store, Stre
 use crate::core::gateway::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
 use crate::core::gateway::routes::tcp::{get_global_tcp_route_managers, EdgionTcpProxy};
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTlsPassthroughProxy, EdgionTlsTcpProxy};
-use crate::core::gateway::routes::udp::{get_global_udp_route_managers, EdgionUdpProxy};
+use crate::core::gateway::routes::udp::{get_global_udp_route_managers, get_udp_listener_registry, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -305,6 +305,8 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
     let socket = UdpSocket::from_std(socket)?;
 
     let cancel_token = CancellationToken::new();
+    get_udp_listener_registry().register(port, cancel_token.clone());
+
     let edgion_udp = Arc::new(EdgionUdpProxy::new(
         port,
         udp_route_manager,
@@ -437,6 +439,16 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
 
             match tls_mode {
                 "Passthrough" => add_tls_passthrough_listener(server, &context),
+                "Mixed" => {
+                    // Mixed mode is not supported; the controller sets Accepted=False for
+                    // this listener. Skip silently so the gateway does not crash.
+                    tracing::warn!(
+                        gateway=%context.gateway_key,
+                        listener=%context.listener.name,
+                        "Skipping TLS listener with unsupported mode 'Mixed'"
+                    );
+                    Ok(())
+                }
                 _ => {
                     // Terminate mode
                     #[cfg(any(feature = "boringssl", feature = "openssl"))]

@@ -36,7 +36,7 @@ src/core/gateway/routes/http/
 2. **匹配阶段**（`match_route`）：
    - 调用 `tree.match_all_ext(path)` 一次性获取所有候选及 `MatchKind`。
    - 过滤：Exact 仅接受 `FullyConsumed`；Prefix 接受 `FullyConsumed` 或 `SegmentBoundary`。
-   - 按 `priority_weight` 降序排列，同权按 `header_matcher_count` 降序。
+   - 按 `priority_weight` 降序排列，同权按 `MatchSpecificity::cmp_precedence()` 执行完整 Gateway API 优先级链（method → headers → query params → timestamp → name → rule/match index）。
    - 依次对候选执行 `deep_match`，首个通过者即为最终匹配。
 
 `RadixPath` 核心字段：
@@ -45,7 +45,7 @@ src/core/gateway/routes/http/
 |------|------|
 | `original` | 原始路径模式 |
 | `normalized` | 路径归一化（合并连续斜杠） |
-| `priority_weight` | `segment_count * 4 + type_bonus` |
+| `priority_weight` | `path_char_count * 4 + type_bonus` |
 | `is_prefix_match` | 是否前缀匹配 |
 | `has_params` | 是否包含 `:param` 参数段 |
 | `segment_count` | 路径段数 |

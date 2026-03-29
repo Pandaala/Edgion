@@ -1277,6 +1277,7 @@ dependencies = [
  "colored",
  "console",
  "cookie",
+ "crc32fast",
  "dashmap",
  "etcd-client",
  "fred",

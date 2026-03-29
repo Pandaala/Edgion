@@ -82,7 +82,9 @@ description: Pingora ProxyHttp 生命周期回调：8 阶段处理链、Connecti
    - HTTP 请求通过 `port_routes.match_route()` 匹配（radix tree + regex 引擎）
    - 匹配失败返回 404
 
-3. **Preflight 处理**：CORS preflight 请求在插件执行前处理，从匹配路由的 EdgionPlugins 中提取 CORS 配置
+3. **Preflight 处理**：CORS preflight 请求分两条路径处理：
+   - **原生 `type: CORS` filter**：跳过 preflight handler，由 Step 4 的 `GapiCorsFilter` 处理（直接构建 204 响应）
+   - **EdgionPlugins CORS**：在插件执行前由 preflight handler 拦截，从匹配路由的 EdgionPlugins 中提取 CORS 配置
 
 4. **插件执行**（RequestFilter 阶段）：
    - 先执行全局插件（`EdgionGatewayConfig.spec.global_plugins_ref`）

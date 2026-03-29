@@ -23,6 +23,6 @@ spec:
             kind: EdgionPlugins
             name: all-endpoint-status-no-backend
       backendRefs:
-        - name: nonexistent-service
+        - name: no-endpoint-svc
           namespace: edgion-test
-          port: 39999
+          port: 38999

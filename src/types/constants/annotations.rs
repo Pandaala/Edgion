@@ -43,6 +43,11 @@ pub mod edgion {
     /// Test type for metrics collection (lb/retry/latency)
     /// Example: edgion.io/metrics-test-type: "lb"
     pub const METRICS_TEST_TYPE: &str = "edgion.io/metrics-test-type";
+
+    /// Per-Gateway override for SNI-Host mismatch detection (421 Misdirected Request).
+    /// When global `requireSniHostMatch` is false, set this to "true" on a Gateway
+    /// to enable listener-level 421 detection for that Gateway's HTTPS listeners.
+    pub const REQUIRE_SNI_HOST_MATCH: &str = "edgion.io/require-sni-host-match";
 }
 
 /// Standard Kubernetes annotations

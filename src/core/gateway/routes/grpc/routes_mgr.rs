@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
+use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule};
@@ -42,18 +43,18 @@ impl GrpcRouteRules {
     ///
     /// # Parameters
     /// - `session`: The HTTP session
-    /// - `gateway_infos`: All gateway/listener contexts available on this listener
+    /// - `index`: Pre-built gateway/listener index for this port
     /// - `hostname`: Request hostname for route-level hostname matching
     ///
     /// Returns matched route unit and the specific `GatewayInfo` that passed validation.
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         if let Some(ref engine) = self.match_engine {
-            engine.match_route(session, gateway_infos, hostname)
+            engine.match_route(session, index, hostname)
         } else {
             Err(EdError::RouteNotFound())
         }
@@ -126,11 +127,16 @@ impl DomainGrpcRouteRules {
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         let grpc_routes = self.grpc_routes.load();
-        grpc_routes.match_route(session, gateway_infos, hostname)
+        grpc_routes.match_route(session, index, hostname)
+    }
+
+    /// Returns true if this port has any gRPC routes registered.
+    pub fn has_routes(&self) -> bool {
+        self.grpc_routes.load().match_engine.is_some()
     }
 }
 

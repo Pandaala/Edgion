@@ -448,6 +448,11 @@ pub struct HTTPRequestMirrorFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<Fraction>,
 
+    /// Percentage of requests to mirror (0-100). Gateway API v1.5 feature.
+    /// Accepts both "percent" (Gateway API spec field name) and "percentage" (internal alias).
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "percent")]
+    pub percentage: Option<i32>,
+
     /// Connection timeout for mirror backend in milliseconds.
     #[serde(default = "default_mirror_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
@@ -767,6 +772,13 @@ pub struct SessionPersistence {
     /// to cookie-based session persistence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cookie_config: Option<CookieConfig>,
+
+    /// Edgion extension: strict mode.
+    /// When true, if the session-bound backend is unavailable, return error (no fallback).
+    /// When false (default), fallback to normal load balancing and update the session token.
+    /// Similar to Envoy's `strict` field on stateful_session filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 /// SessionPersistenceType specifies the type of session persistence
@@ -819,65 +831,92 @@ pub struct ParsedRouteRetry {
 
 use std::time::Duration;
 
-/// Pre-parsed route-level timeout configurations
-/// These are parsed once when the route is loaded and used at runtime
-#[derive(Debug, Clone)]
+/// Three-state timeout setting per Gateway API spec.
+/// - `Unset`: field not specified → fall back to global default
+/// - `Disabled`: explicitly set to `"0s"` → no timeout (infinite)
+/// - `Duration`: explicitly set to a positive value
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteTimeout {
+    Unset,
+    Disabled,
+    Duration(Duration),
+}
+
+impl RouteTimeout {
+    /// Returns the duration if explicitly set to a positive value, otherwise None.
+    pub fn as_duration(&self) -> Option<Duration> {
+        match self {
+            RouteTimeout::Duration(d) => Some(*d),
+            _ => None,
+        }
+    }
+
+    /// Returns true if explicitly disabled via "0s".
+    pub fn is_disabled(&self) -> bool {
+        matches!(self, RouteTimeout::Disabled)
+    }
+
+    pub fn parse(s: &str, field_name: &str) -> Self {
+        use crate::core::common::utils::parse_duration;
+        match parse_duration(s) {
+            Ok(d) if d.is_zero() => RouteTimeout::Disabled,
+            Ok(d) => RouteTimeout::Duration(d),
+            Err(e) => {
+                tracing::warn!("Invalid {} timeout '{}': {}", field_name, s, e);
+                RouteTimeout::Unset
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct ParsedRouteTimeouts {
     /// Parsed request timeout (end-to-end including retries)
     /// Gateway API v1.4 standard field
-    pub request_timeout: Option<Duration>,
+    pub request_timeout: RouteTimeout,
 
     /// Parsed backend request timeout
     /// Gateway API v1.4 standard field
-    pub backend_request_timeout: Option<Duration>,
+    pub backend_request_timeout: RouteTimeout,
 }
 
 impl ParsedRouteTimeouts {
     /// Parse route timeouts from HTTPRouteTimeouts
     /// Returns None if no timeouts are configured
     pub fn from_config(config: &HTTPRouteTimeouts) -> Option<Self> {
-        use crate::core::common::utils::parse_duration;
+        let request_timeout = config
+            .request
+            .as_ref()
+            .map(|s| RouteTimeout::parse(s, "request"))
+            .unwrap_or(RouteTimeout::Unset);
 
-        // Parse request timeout (end-to-end, Gateway API v1.4 standard)
-        let request_timeout = config.request.as_ref().and_then(|s| {
-            parse_duration(s)
-                .map_err(|e| {
-                    tracing::warn!("Invalid request timeout '{}': {}", s, e);
-                    e
-                })
-                .ok()
-        });
-
-        let backend_request_timeout = config.backend_request.as_ref().and_then(|s| {
-            parse_duration(s)
-                .map_err(|e| {
-                    tracing::warn!("Invalid backend_request timeout '{}': {}", s, e);
-                    e
-                })
-                .ok()
-        });
+        let backend_request_timeout = config
+            .backend_request
+            .as_ref()
+            .map(|s| RouteTimeout::parse(s, "backend_request"))
+            .unwrap_or(RouteTimeout::Unset);
 
         // Clamp: backendRequest must be <= request (Gateway API spec)
-        let backend_request_timeout = match (backend_request_timeout, request_timeout) {
+        let backend_request_timeout = match (backend_request_timeout.as_duration(), request_timeout.as_duration()) {
             (Some(br), Some(req)) if br > req => {
                 tracing::warn!(
                     "backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping to request timeout",
                     br,
                     req
                 );
-                Some(req)
+                RouteTimeout::Duration(req)
             }
-            (br, _) => br,
+            _ => backend_request_timeout,
         };
 
-        // Only create if at least one timeout is configured
-        if request_timeout.is_some() || backend_request_timeout.is_some() {
+        // Only create if at least one timeout is explicitly configured
+        if matches!(request_timeout, RouteTimeout::Unset) && matches!(backend_request_timeout, RouteTimeout::Unset) {
+            None
+        } else {
             Some(Self {
                 request_timeout,
                 backend_request_timeout,
             })
-        } else {
-            None
         }
     }
 }
@@ -915,8 +954,11 @@ mod tests {
             backend_request: Some("30s".to_string()),
         };
         let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
-        assert_eq!(parsed.request_timeout, Some(Duration::from_secs(10)));
-        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(parsed.request_timeout, RouteTimeout::Duration(Duration::from_secs(10)));
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
     }
 
     #[test]
@@ -926,8 +968,11 @@ mod tests {
             backend_request: Some("10s".to_string()),
         };
         let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
-        assert_eq!(parsed.request_timeout, Some(Duration::from_secs(30)));
-        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(parsed.request_timeout, RouteTimeout::Duration(Duration::from_secs(30)));
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
     }
 
     #[test]
@@ -937,7 +982,45 @@ mod tests {
             backend_request: Some("10s".to_string()),
         };
         let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
-        assert_eq!(parsed.request_timeout, None);
-        assert_eq!(parsed.backend_request_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(parsed.request_timeout, RouteTimeout::Unset);
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
+    }
+
+    #[test]
+    fn test_zero_timeout_means_disable() {
+        // Gateway API spec: "0s" means "no timeout" (disable), not zero-second timeout
+        let config = HTTPRouteTimeouts {
+            request: Some("0s".to_string()),
+            backend_request: Some("0s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, RouteTimeout::Disabled);
+        assert_eq!(parsed.backend_request_timeout, RouteTimeout::Disabled);
+    }
+
+    #[test]
+    fn test_zero_request_with_nonzero_backend() {
+        let config = HTTPRouteTimeouts {
+            request: Some("0s".to_string()),
+            backend_request: Some("10s".to_string()),
+        };
+        let parsed = ParsedRouteTimeouts::from_config(&config).unwrap();
+        assert_eq!(parsed.request_timeout, RouteTimeout::Disabled);
+        assert_eq!(
+            parsed.backend_request_timeout,
+            RouteTimeout::Duration(Duration::from_secs(10))
+        );
+    }
+
+    #[test]
+    fn test_no_timeouts_returns_none() {
+        let config = HTTPRouteTimeouts {
+            request: None,
+            backend_request: None,
+        };
+        assert!(ParsedRouteTimeouts::from_config(&config).is_none());
     }
 }

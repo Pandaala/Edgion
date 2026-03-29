@@ -20,23 +20,140 @@
 
 use super::super::gateway_info::GatewayInfo;
 use crate::core::gateway::observe::metrics::TestType;
+use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::types::constants::annotations::edgion as annotations;
+use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::Gateway;
 use arc_swap::ArcSwap;
 use kube::ResourceExt;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
+// ============================================================================
+// GatewayInfoIndex — pre-built per-port gateway/listener lookup
+// ============================================================================
+
+/// Pre-indexed Gateway/Listener lookup for a single port.
+/// Built once on Gateway change, used per-request with O(1) lookups.
+pub struct GatewayInfoIndex {
+    gateways: HashMap<String, GatewayListeners>,
+}
+
+impl GatewayInfoIndex {
+    fn new() -> Self {
+        Self {
+            gateways: HashMap::new(),
+        }
+    }
+
+    /// Fast path: gateway_key + listener_name → O(1)
+    #[inline]
+    pub fn get(&self, gateway_key: &str, listener_name: &str) -> Option<&ListenerEntry> {
+        self.gateways.get(gateway_key).and_then(|gl| gl.get(listener_name))
+    }
+
+    /// Slow path: gateway_key → iterate listeners for hostname matching
+    #[inline]
+    pub fn get_gateway(&self, gateway_key: &str) -> Option<&GatewayListeners> {
+        self.gateways.get(gateway_key)
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.gateways.is_empty()
+    }
+}
+
+/// All listeners of a single Gateway on one port, with O(1) listener_name lookup.
+pub struct GatewayListeners {
+    by_name: HashMap<String, ListenerEntry>,
+    all: Vec<ListenerEntry>,
+}
+
+impl GatewayListeners {
+    fn new() -> Self {
+        Self {
+            by_name: HashMap::new(),
+            all: Vec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, listener_name: &str) -> Option<&ListenerEntry> {
+        self.by_name.get(listener_name)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ListenerEntry> {
+        self.all.iter()
+    }
+
+    /// Check if another listener on this gateway has a more-specific hostname
+    /// that also matches `request_hostname`.
+    ///
+    /// Specificity: exact > wildcard > catch-all (no hostname).
+    /// Since `GatewayInfoIndex` is per-port, all entries share the same port
+    /// and cross-port checks are unnecessary.
+    pub fn has_more_specific(&self, request_hostname: &str, current_hostname: Option<&str>) -> bool {
+        if matches!(current_hostname, Some(h) if !h.starts_with("*.")) {
+            return false;
+        }
+
+        for entry in &self.all {
+            let other_host = match entry.hostname.as_deref() {
+                Some(h) => h,
+                None => continue,
+            };
+
+            if !hostname_matches_listener(request_hostname, other_host) {
+                continue;
+            }
+
+            match current_hostname {
+                None => {
+                    return true;
+                }
+                Some(current_host) => {
+                    if !other_host.starts_with("*.") {
+                        return true;
+                    }
+                    if other_host != current_host && other_host.len() > current_host.len() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn add(&mut self, entry: ListenerEntry) {
+        if let Some(ref name) = entry.info.listener_name {
+            self.by_name.insert(name.clone(), entry.clone());
+        }
+        self.all.push(entry);
+    }
+}
+
+/// A single Listener's pre-built matching info.
+/// Combines GatewayInfo (identity/metrics) + ListenerConfig (hostname + allowedRoutes).
+#[derive(Clone, Debug)]
+pub struct ListenerEntry {
+    pub info: GatewayInfo,
+    /// Listener hostname constraint (None = catch-all)
+    pub hostname: Option<String>,
+    /// AllowedRoutes from the Listener spec (for kind/namespace filtering)
+    pub allowed_routes: Option<AllowedRoutes>,
+}
+
 pub struct PortGatewayInfoStore {
     flat_data: ArcSwap<HashMap<u16, Arc<Vec<GatewayInfo>>>>,
-    grouped_data: ArcSwap<HashMap<u16, Arc<HashMap<String, Arc<Vec<GatewayInfo>>>>>>,
+    index_data: ArcSwap<HashMap<u16, Arc<GatewayInfoIndex>>>,
 }
 
 impl PortGatewayInfoStore {
     pub fn new() -> Self {
         Self {
             flat_data: ArcSwap::from_pointee(HashMap::new()),
-            grouped_data: ArcSwap::from_pointee(HashMap::new()),
+            index_data: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -50,26 +167,32 @@ impl PortGatewayInfoStore {
         data.get(&port).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
+    /// Get the pre-built GatewayInfoIndex for a given port.
+    ///
+    /// Returns an empty index if the port has no registered Gateways.
+    /// Hot-path call: O(1) ArcSwap load + HashMap get.
+    #[inline]
+    pub fn get_index(&self, port: u16) -> Arc<GatewayInfoIndex> {
+        let data = self.index_data.load();
+        data.get(&port)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(GatewayInfoIndex::new()))
+    }
+
     /// Return all ports that have at least one registered Gateway/Listener.
     pub fn all_ports(&self) -> Vec<u16> {
         let data = self.flat_data.load();
         data.keys().copied().collect()
     }
 
-    /// Get GatewayInfo contexts grouped by Gateway key for a given port.
-    #[inline]
-    pub fn get_grouped(&self, port: u16) -> Arc<HashMap<String, Arc<Vec<GatewayInfo>>>> {
-        let data = self.grouped_data.load();
-        data.get(&port).cloned().unwrap_or_else(|| Arc::new(HashMap::new()))
-    }
-
     /// Rebuild the store from the full list of Gateway resources.
     ///
     /// Iterates all Gateways and their Listeners, skipping conflicted ones,
-    /// and builds a port → Vec<GatewayInfo> mapping.
+    /// and builds both the flat port → Vec<GatewayInfo> mapping and the
+    /// per-port GatewayInfoIndex for O(1) route matching lookups.
     pub fn rebuild(&self, gateways: &[Gateway]) {
         let mut port_map: HashMap<u16, Vec<GatewayInfo>> = HashMap::new();
-        let mut grouped_port_map: HashMap<u16, HashMap<String, Vec<GatewayInfo>>> = HashMap::new();
+        let mut index_map: HashMap<u16, GatewayInfoIndex> = HashMap::new();
 
         for gateway in gateways {
             let gateway_namespace = gateway.metadata.namespace.clone();
@@ -92,6 +215,10 @@ impl PortGatewayInfoStore {
                 .get(annotations::METRICS_TEST_TYPE)
                 .map(|s| TestType::from_str(s));
 
+            let require_sni_host_match = gateway_annotations_map
+                .get(annotations::REQUIRE_SNI_HOST_MATCH)
+                .map(|v| v == "true");
+
             for listener in listeners {
                 if is_listener_conflicted(gateway, &listener.name) {
                     continue;
@@ -104,14 +231,25 @@ impl PortGatewayInfoStore {
                     Some(listener.name.clone()),
                     metrics_test_key.clone(),
                     metrics_test_type.clone(),
+                    require_sni_host_match,
                 );
-                port_map.entry(port).or_default().push(gi.clone());
-                grouped_port_map
+
+                let gateway_key = gi.gateway_key();
+                let entry = ListenerEntry {
+                    info: gi.clone(),
+                    hostname: listener.hostname.clone(),
+                    allowed_routes: listener.allowed_routes.clone(),
+                };
+
+                index_map
                     .entry(port)
-                    .or_default()
-                    .entry(gi.gateway_key())
-                    .or_default()
-                    .push(gi);
+                    .or_insert_with(GatewayInfoIndex::new)
+                    .gateways
+                    .entry(gateway_key)
+                    .or_insert_with(GatewayListeners::new)
+                    .add(entry);
+
+                port_map.entry(port).or_default().push(gi);
             }
         }
 
@@ -123,19 +261,13 @@ impl PortGatewayInfoStore {
             .map(|(port, infos)| (port, Arc::new(infos)))
             .collect();
 
-        let grouped_arc_map: HashMap<u16, Arc<HashMap<String, Arc<Vec<GatewayInfo>>>>> = grouped_port_map
+        let index_arc_map: HashMap<u16, Arc<GatewayInfoIndex>> = index_map
             .into_iter()
-            .map(|(port, gateway_infos)| {
-                let per_gateway = gateway_infos
-                    .into_iter()
-                    .map(|(gateway_key, infos)| (gateway_key, Arc::new(infos)))
-                    .collect();
-                (port, Arc::new(per_gateway))
-            })
+            .map(|(port, index)| (port, Arc::new(index)))
             .collect();
 
         self.flat_data.store(Arc::new(flat_arc_map));
-        self.grouped_data.store(Arc::new(grouped_arc_map));
+        self.index_data.store(Arc::new(index_arc_map));
 
         tracing::info!(
             component = "port_gateway_info_store",
@@ -167,6 +299,14 @@ impl PortGatewayInfoStore {
 impl Default for PortGatewayInfoStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub fn format_gateway_key(namespace: &str, name: &str) -> String {
+    if namespace.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}/{}", namespace, name)
     }
 }
 

@@ -499,6 +499,12 @@ where
                     tracing::warn!("Failed to serialize old status for comparison");
                 }
 
+                tracing::debug!(
+                    kind = self.kind,
+                    old_status_present = matches!(old_status, StatusExtractResult::Present(_)),
+                    "Status comparison: old_status captured before update_status()"
+                );
+
                 // 8. Update status (handler sets Gateway API conditions)
                 self.handler.update_status(&mut parsed_obj, ctx, &all_errors);
 
@@ -513,13 +519,25 @@ where
                 let status_changed = status_has_changed(self.kind, &old_status, &new_status);
 
                 if status_changed {
-                    tracing::debug!("Status semantically changed, will persist");
-                } else if matches!(
-                    (&old_status, &new_status),
-                    (StatusExtractResult::Present(_), StatusExtractResult::Present(_))
-                ) {
-                    crate::core::controller::conf_mgr::sync_runtime::record_status_write_skipped(self.kind);
-                    tracing::trace!("Status unchanged by semantic diff, skipping persist");
+                    tracing::debug!(
+                        kind = self.kind,
+                        old = ?old_status,
+                        new = ?new_status,
+                        "Status semantically changed, will persist"
+                    );
+                } else {
+                    if matches!(
+                        (&old_status, &new_status),
+                        (StatusExtractResult::Present(_), StatusExtractResult::Present(_))
+                    ) {
+                        crate::core::controller::conf_mgr::sync_runtime::record_status_write_skipped(self.kind);
+                    }
+                    tracing::debug!(
+                        kind = self.kind,
+                        old = ?old_status,
+                        new = ?new_status,
+                        "Status unchanged by semantic diff, skipping persist"
+                    );
                 }
 
                 // 10. Call on_change

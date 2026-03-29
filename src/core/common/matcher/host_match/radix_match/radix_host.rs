@@ -117,16 +117,18 @@ impl<T> RadixHost<T> {
         reversed_parts.join(".")
     }
 
-    /// Check if a request hostname matches this pattern
+    /// Check if a pre-normalized (lowercased) hostname matches this pattern.
+    ///
+    /// The caller MUST pass a hostname that is already lowercased.
+    /// Normalization happens once in `build_request_metadata()`.
     ///
     /// # Arguments
-    /// * `request_host` - The hostname from the request (will be lowercased)
+    /// * `request_host` - Pre-normalized lowercase hostname
     ///
     /// # Returns
     /// `true` if the hostname matches this pattern
     pub fn matches(&self, request_host: &str) -> bool {
-        let request_lower = request_host.to_lowercase();
-        let reversed_request = Self::reverse_hostname(&request_lower);
+        let reversed_request = Self::reverse_hostname(request_host);
 
         if self.is_wildcard {
             // For wildcard patterns, check if reversed request starts with the radix_key

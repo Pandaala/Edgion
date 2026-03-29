@@ -106,6 +106,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "health-check-transition" | "healthcheck-transition" => {
                 "HTTPRoute/Backend/HealthCheckTransition".to_string()
             }
+            "session-persistence" | "sp" => "HTTPRoute/Backend/SessionPersistence".to_string(),
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
@@ -122,6 +123,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "tls-passthrough" | "tlspassthrough" => "TLSRoute/Passthrough".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
+            "backend-tls-san" | "backendtlssan" => "Gateway/TLS/BackendTLSSAN".to_string(),
+            "backend-tls-gateway-cert" | "backendtlsgatewaycert" => "Gateway/TLS/BackendTLSGatewayCert".to_string(),
+            "misdirected-request" | "misdirectedrequest" | "421" => "Gateway/TLS/MisdirectedRequest".to_string(),
             "frontend-validation" | "frontendvalidation" | "fv-mtls" => "Gateway/FrontendValidation".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
@@ -136,6 +140,11 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
+            "ref-grant-status" => "Status/RefGrant".to_string(),
+            "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
+            "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
+            "grpc-route-status" | "grpcroutestatus" => "Status/GRPCRoute".to_string(),
+            "observed-generation-status" | "observedgeneration" => "Status/ObservedGeneration".to_string(),
             _ => cmd.to_string(),
         };
     }
@@ -165,7 +174,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/GrpcHealthCheck" => "HTTPRoute/Backend/GrpcHealthCheck",
         "HTTPRoute/Backend/HealthCheckTransition" => "HTTPRoute/Backend/HealthCheckTransition",
         "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
+        "HTTPRoute/Backend/SessionPersistence" => "HTTPRoute/Backend/SessionPersistence",
         "HTTPRoute/Filters/FilterConflict" => "HTTPRoute/Filters/FilterConflict",
+        "HTTPRoute/Filters/PercentMirror" => "HTTPRoute/Filters/PercentMirror",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
         "HTTPRoute/Filters/Security" => "HTTPRoute/Filters/Security",
         "HTTPRoute/Protocol" | "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
@@ -189,12 +200,16 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/Security" | "Gateway" => "Gateway/Security",
         "Gateway/RealIP" => "Gateway/RealIP",
         "Gateway/TLS/BackendTLS" => "Gateway/TLS/BackendTLS",
+        "Gateway/TLS/BackendTLSSAN" => "Gateway/TLS/BackendTLSSAN",
+        "Gateway/TLS/BackendTLSGatewayCert" => "Gateway/TLS/BackendTLSGatewayCert",
         "Gateway/TLS/GatewayTLS" => "Gateway/TLS/GatewayTLS",
+        "Gateway/TLS/MisdirectedRequest" => "Gateway/TLS/MisdirectedRequest",
         "Gateway/TLS/NoHostnameListener" => "Gateway/TLS/NoHostnameListener",
         "Gateway/FrontendValidation" => "Gateway/FrontendValidation",
         "EdgionPlugins/DebugAccessLog" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
+        "EdgionPlugins/Cors" => "EdgionPlugins",
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/BasicAuth" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
@@ -259,6 +274,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
             runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
             runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
+            runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
         }
         "HTTPRoute/Backend/LBRoundRobin" => {
             if !gateway {
@@ -330,6 +346,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::PartiallyInvalidTestSuite));
         }
+        "HTTPRoute/Backend/SessionPersistence" => {
+            if !gateway {
+                eprintln!("Error: Session Persistence tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
+        }
         "HTTPRoute/Filters" => {
             if !gateway {
                 eprintln!("Error: HTTPRoute/Filters tests require --gateway flag");
@@ -339,6 +362,14 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
             runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
             runner.add_suite(Box::new(suites::FilterConflictTestSuite));
+            runner.add_suite(Box::new(suites::PercentMirrorTestSuite));
+        }
+        "HTTPRoute/Filters/PercentMirror" => {
+            if !gateway {
+                eprintln!("Error: PercentMirror tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PercentMirrorTestSuite));
         }
         "HTTPRoute/Filters/FilterConflict" => {
             if !gateway {
@@ -504,6 +535,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::BackendTlsTestSuite));
         }
+        "Gateway/TLS/BackendTLSSAN" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/BackendTLSSAN tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsSanTestSuite));
+        }
+        "Gateway/TLS/BackendTLSGatewayCert" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/BackendTLSGatewayCert tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsGatewayCertTestSuite));
+        }
         "Gateway/TLS/GatewayTLS" => {
             if !gateway {
                 eprintln!("Error: Gateway/TLS/GatewayTLS tests require --gateway flag");
@@ -517,6 +562,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GatewayTlsNoHostnameListenerTestSuite));
+        }
+        "Gateway/TLS/MisdirectedRequest" => {
+            if !gateway {
+                eprintln!("Error: Gateway/TLS/MisdirectedRequest tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::MisdirectedRequestTestSuite));
         }
         "Gateway/FrontendValidation" => {
             if !gateway {
@@ -701,6 +753,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::BandwidthLimitTestSuite));
         }
+        "EdgionPlugins/Cors" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/Cors tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CorsPluginTestSuite));
+        }
         "EdgionPlugins/CtxSet" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/CtxSet tests require --gateway flag");
@@ -840,13 +899,48 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::CipherTestSuite));
         }
-        // ReferenceGrant Status tests
-        "ReferenceGrant/Status" | "ref-grant-status" => {
+        // Status tests
+        "Status/RefGrant" => {
             if !gateway {
-                eprintln!("Error: ReferenceGrant/Status tests require --gateway flag");
+                eprintln!("Error: Status/RefGrant tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RefGrantStatusTestSuite));
+        }
+        "Status/HostnameIntersection" => {
+            if !gateway {
+                eprintln!("Error: Status/HostnameIntersection tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::HostnameIntersectionStatusTestSuite));
+        }
+        "Status/BackendTLSPolicy" => {
+            if !gateway {
+                eprintln!("Error: Status/BackendTLSPolicy tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsStatusTestSuite));
+        }
+        "Status/TLSListenerMode" => {
+            if !gateway {
+                eprintln!("Error: Status/TLSListenerMode tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsListenerModeStatusTestSuite));
+        }
+        "Status/GRPCRoute" => {
+            if !gateway {
+                eprintln!("Error: Status/GRPCRoute tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcRouteStatusTestSuite));
+        }
+        "Status/ObservedGeneration" => {
+            if !gateway {
+                eprintln!("Error: Status/ObservedGeneration tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ObservedGenerationStatusTestSuite));
         }
         // Services tests (ACME, etc.)
         "Services/acme" => {
@@ -933,6 +1027,7 @@ async fn main() -> Result<()> {
                 let http_host = match suite.as_str() {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
                     "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+                    "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
                     "EdgionTls/port_only" => "port-only.example.com",
                     "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
                     _ => "test.example.com",
@@ -956,6 +1051,7 @@ async fn main() -> Result<()> {
                 let http_host = match suite.as_str() {
                     "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
                     "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+                    "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
                     "EdgionTls/port_only" => "port-only.example.com",
                     "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
                     _ => "test.example.com",

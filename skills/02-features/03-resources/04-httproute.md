@@ -182,6 +182,26 @@ spec:
 | `RequestMirror` | 请求镜像到备份后端 | 请求阶段（非阻塞） |
 | `ExtensionRef` | 引用 EdgionPlugins 扩展插件 | 取决于插件 |
 
+### 过滤器互斥约束
+
+`URLRewrite` 和 `RequestRedirect` **互斥**，不能在同一规则中同时出现。冲突检查覆盖三个层级：
+
+1. **规则级**：`rule.filters` 中同时包含 URLRewrite 和 RequestRedirect
+2. **BackendRef 级**：`backendRef.filters` 中同时包含两者
+3. **跨级别**：`rule.filters` 包含其中一个，`backendRef.filters` 包含另一个
+
+违反约束的规则将被标记为 `PartiallyInvalid`，该规则不会生效，但 HTTPRoute 中其他有效规则仍正常工作。
+
+### ExtensionRef 嵌套深度限制
+
+`ExtensionRef` 引用的 `EdgionPlugins` 内部可以继续包含 `ExtensionRef`，形成嵌套引用链。为防止递归引用导致的性能问题，Edgion 限制嵌套解析的最大深度：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `extensionRefMaxDepth` | `u32` | `5` | 嵌套 ExtensionRef 解析的最大层数 |
+
+超过深度限制的引用将被忽略，不会触发错误。大多数场景下默认值 5 已足够，仅在插件链特别复杂时才需要调整。
+
 ## 超时与重试
 
 ### timeouts (Gateway API v1.4)
@@ -189,7 +209,9 @@ spec:
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `request` | `Duration` | EdgionGatewayConfig 全局值 | 端到端请求超时（**含重试**） |
-| `backendRequest` | `Duration` | EdgionGatewayConfig 全局值 | 单次后端请求超时 |
+| `backendRequest` | `Duration` | EdgionGatewayConfig 全局值 | 单次后端请求超时（不得超过 `request`） |
+
+> **约束**：`backendRequest` 不能超过 `request`。如果配置的 `backendRequest` 大于 `request`，将被自动 clamp 为 `request` 的值，确保单次后端请求超时不会超过端到端限制。
 
 ### retry (Gateway API v1.4)
 
@@ -209,13 +231,27 @@ spec:
 
 ```yaml
 sessionPersistence:
-  sessionName: String?               # 会话 token 名称
-  absoluteTimeout: Duration?         # 绝对超时
-  idleTimeout: Duration?             # 空闲超时
+  sessionName: String?               # 会话 token 名称（默认 edgion-session-affinity）
+  absoluteTimeout: Duration?         # 绝对超时（Permanent Cookie 映射为 Max-Age）
+  idleTimeout: Duration?             # 空闲超时（当前版本不支持，预留 Redis 模式）
   type: Cookie | Header              # 保持类型（默认 Cookie）
   cookieConfig:
     lifetimeType: Permanent | Session # Cookie 生命周期
+  strict: bool?                      # Edgion 扩展：strict 模式（默认 false）
 ```
+
+### 运行时行为
+
+- **Token 生成**：后端 `ip:port` 的 CRC32 哈希（8 位 hex），不暴露后端拓扑
+- **Cookie 模式**：首次响应注入 `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax`（Permanent 加 `Max-Age`）
+- **Header 模式**：首次响应注入 `<name>: <token>`，客户端需在后续请求中携带
+- **后端选择**：Token 作为一致性哈希 key，确保同一 token 路由到同一后端
+- **Fallback**（默认）：绑定后端不可用时 fallback 到正常 LB，更新 token
+- **Strict 模式**：`strict: true` 时不 fallback，返回 503
+
+### 与插件的优先级
+
+DirectEndpoint / ExternalJump > Session Persistence > InternalJump > Round-Robin
 
 ## 流量分割
 

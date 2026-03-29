@@ -1,0 +1,12 @@
+//! ObservedGeneration Status Test Suite
+//!
+//! Tests that Gateway and GatewayClass status conditions include the correct
+//! `observedGeneration` field matching `metadata.generation`.
+//!
+//! Required config files (in examples/test/conf/Status/ObservedGeneration/):
+//! - GatewayClass_observed-gen-class.yaml           (with metadata.generation: 5)
+//! - Gateway_edgion-test_observed-gen-gateway.yaml  (with metadata.generation: 3)
+
+mod status_test;
+
+pub use status_test::ObservedGenerationStatusTestSuite;

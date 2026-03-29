@@ -11,9 +11,10 @@ pub use matching::{
     rebuild_gateway_tls_matcher, GatewayTlsEntry, GatewayTlsMatcher,
 };
 pub use server::{
-    end_response_400, end_response_404, end_response_421, end_response_500, end_response_503, GatewayBase,
-    ServerHeaderOpts,
+    end_response_400, end_response_404, end_response_421, end_response_500, end_response_503,
+    end_response_grpc_unavailable, end_response_grpc_unimplemented, GatewayBase, ServerHeaderOpts,
 };
 pub use store::{
     get_global_gateway_config_store, get_global_gateway_store, get_port_gateway_info_store, rebuild_port_gateway_infos,
+    GatewayInfoIndex,
 };

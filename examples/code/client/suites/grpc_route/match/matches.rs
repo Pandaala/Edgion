@@ -19,6 +19,17 @@ use super::super::test::HelloRequest;
 pub struct GrpcMatchTestSuite;
 
 impl GrpcMatchTestSuite {
+    /// Helper to create a tonic endpoint with a specific hostname for :authority header
+    fn make_endpoint(ctx: &TestContext, hostname: &str) -> Result<tonic::transport::Endpoint, String> {
+        let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
+        let endpoint =
+            tonic::transport::Endpoint::from_shared(grpc_url).map_err(|e| format!("Invalid endpoint: {}", e))?;
+        let origin_uri: http::Uri = format!("http://{}:{}", hostname, ctx.grpc_port)
+            .parse()
+            .map_err(|e| format!("Invalid origin URI: {}", e))?;
+        Ok(endpoint.origin(origin_uri))
+    }
+
     /// Test hostname positive match
     fn test_hostname_match_positive() -> TestCase {
         TestCase::new(
@@ -122,18 +133,23 @@ impl GrpcMatchTestSuite {
                             "Expected failure but got success (hostname should not match)".to_string(),
                         ),
                         Err(e) => {
-                            // should fail（404 or other error）
-                            // HTTP 404 may be mapped to Internal by tonic client
-                            if e.code() == tonic::Code::NotFound
+                            // should fail with Unimplemented (grpc-status 12) when GRPCRoutes exist but none match
+                            if e.code() == tonic::Code::Unimplemented
+                                || e.code() == tonic::Code::NotFound
                                 || e.code() == tonic::Code::Unavailable
-                                || e.code() == tonic::Code::Internal
                             {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!("Correctly rejected wrong hostname: {:?}", e.code()),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Unexpected error code: {:?}", e.code()))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Unexpected error code: {:?} (expected NotFound/Unavailable, got RST_STREAM?)",
+                                        e.code()
+                                    ),
+                                )
                             }
                         }
                     }
@@ -243,11 +259,10 @@ impl GrpcMatchTestSuite {
                             "Expected failure for wrong sectionName but got success".to_string(),
                         ),
                         Err(e) => {
-                            // should fail（404 or other error）
-                            // HTTP 404 may be mapped to Internal by tonic client
-                            if e.code() == tonic::Code::NotFound
+                            // should fail with Unimplemented (grpc-status 12) when GRPCRoutes exist but none match
+                            if e.code() == tonic::Code::Unimplemented
+                                || e.code() == tonic::Code::NotFound
                                 || e.code() == tonic::Code::Unavailable
-                                || e.code() == tonic::Code::Internal
                             {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -256,7 +271,11 @@ impl GrpcMatchTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Unexpected error code: {:?}, message: {}", e.code(), e.message()),
+                                    format!(
+                                        "Unexpected error code: {:?}, message: {} (expected NotFound/Unavailable)",
+                                        e.code(),
+                                        e.message()
+                                    ),
                                 )
                             }
                         }
@@ -450,16 +469,22 @@ impl GrpcMatchTestSuite {
                                 .to_string(),
                         ),
                         Err(e) => {
-                            if e.code() == tonic::Code::NotFound
+                            if e.code() == tonic::Code::Unimplemented
+                                || e.code() == tonic::Code::NotFound
                                 || e.code() == tonic::Code::Unavailable
-                                || e.code() == tonic::Code::Internal
                             {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!("Correctly rejected wrong hostname for regex route: {:?}", e.code()),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Unexpected error code: {:?}", e.code()))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Unexpected error code: {:?} (expected NotFound/Unavailable, got RST_STREAM?)",
+                                        e.code()
+                                    ),
+                                )
                             }
                         }
                     }
@@ -519,6 +544,213 @@ impl GrpcMatchTestSuite {
             })
         })
     }
+
+    /// Test header-only match (no method specified) — Version: one should match rule 0
+    fn test_header_only_match_version_one() -> TestCase {
+        TestCase::new(
+            "grpc_header_only_match_version_one",
+            "Test gRPC header-only match: Version=one matches rule 0",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let endpoint = match Self::make_endpoint(&ctx, "grpc-header-only.example.com") {
+                        Ok(ep) => ep,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Connect failed: {}", e)),
+                    };
+
+                    let mut request = tonic::Request::new(HelloRequest {
+                        name: "HeaderOnlyV1".to_string(),
+                    });
+                    request.metadata_mut().insert("version", "one".parse().unwrap());
+
+                    match client.say_hello(request).await {
+                        Ok(response) => {
+                            let reply = response.into_inner();
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Header-only Version=one matched: {}", reply.message),
+                            )
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("RPC failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test header-only match (no method specified) — Version: two should match rule 1
+    fn test_header_only_match_version_two() -> TestCase {
+        TestCase::new(
+            "grpc_header_only_match_version_two",
+            "Test gRPC header-only match: Version=two matches rule 1",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let endpoint = match Self::make_endpoint(&ctx, "grpc-header-only.example.com") {
+                        Ok(ep) => ep,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Connect failed: {}", e)),
+                    };
+
+                    let mut request = tonic::Request::new(HelloRequest {
+                        name: "HeaderOnlyV2".to_string(),
+                    });
+                    request.metadata_mut().insert("version", "two".parse().unwrap());
+
+                    match client.say_hello(request).await {
+                        Ok(response) => {
+                            let reply = response.into_inner();
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Header-only Version=two matched: {}", reply.message),
+                            )
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("RPC failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test header-only match with multiple headers (AND logic)
+    fn test_header_only_multi_header_and() -> TestCase {
+        TestCase::new(
+            "grpc_header_only_multi_header_and",
+            "Test gRPC header-only match: Color=blue AND Shape=circle matches rule 2",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let endpoint = match Self::make_endpoint(&ctx, "grpc-header-only.example.com") {
+                        Ok(ep) => ep,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Connect failed: {}", e)),
+                    };
+
+                    let mut request = tonic::Request::new(HelloRequest {
+                        name: "MultiHeader".to_string(),
+                    });
+                    request.metadata_mut().insert("color", "blue".parse().unwrap());
+                    request.metadata_mut().insert("shape", "circle".parse().unwrap());
+
+                    match client.say_hello(request).await {
+                        Ok(response) => {
+                            let reply = response.into_inner();
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("Multi-header AND match: {}", reply.message),
+                            )
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("RPC failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test that partial multi-header does NOT match (AND logic — all headers required)
+    fn test_header_only_partial_header_no_match() -> TestCase {
+        TestCase::new(
+            "grpc_header_only_partial_header_no_match",
+            "Test gRPC header-only: Color=blue alone (without Shape) should NOT match rule 2",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let endpoint = match Self::make_endpoint(&ctx, "grpc-header-only.example.com") {
+                        Ok(ep) => ep,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Connect failed: {}", e)),
+                    };
+
+                    // Only set Color=blue without Shape=circle — should NOT match rule 2
+                    // and no other rule matches Color=blue → UNIMPLEMENTED
+                    let mut request = tonic::Request::new(HelloRequest {
+                        name: "PartialHeader".to_string(),
+                    });
+                    request.metadata_mut().insert("color", "blue".parse().unwrap());
+
+                    match client.say_hello(request).await {
+                        Ok(_) => TestResult::failed(
+                            start.elapsed(),
+                            "Expected UNIMPLEMENTED but got success (partial header should not match AND rule)"
+                                .to_string(),
+                        ),
+                        Err(e) => {
+                            if e.code() == tonic::Code::Unimplemented {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Correctly returned UNIMPLEMENTED for partial header: {:?}", e.code()),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected UNIMPLEMENTED, got {:?}: {}", e.code(), e.message()),
+                                )
+                            }
+                        }
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test that a non-matching header returns gRPC UNIMPLEMENTED
+    fn test_header_only_no_match_unimplemented() -> TestCase {
+        TestCase::new(
+            "grpc_header_only_no_match_unimplemented",
+            "Test gRPC header-only: non-matching header returns UNIMPLEMENTED",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let endpoint = match Self::make_endpoint(&ctx, "grpc-header-only.example.com") {
+                        Ok(ep) => ep,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Connect failed: {}", e)),
+                    };
+
+                    // Send a header that matches NO rule
+                    let mut request = tonic::Request::new(HelloRequest {
+                        name: "NoMatch".to_string(),
+                    });
+                    request.metadata_mut().insert("version", "three".parse().unwrap());
+
+                    match client.say_hello(request).await {
+                        Ok(_) => {
+                            TestResult::failed(start.elapsed(), "Expected UNIMPLEMENTED but got success".to_string())
+                        }
+                        Err(e) => {
+                            if e.code() == tonic::Code::Unimplemented {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Correctly returned UNIMPLEMENTED: {:?}", e.code()),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected UNIMPLEMENTED, got {:?}: {}", e.code(), e.message()),
+                                )
+                            }
+                        }
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -533,6 +765,11 @@ impl TestSuite for GrpcMatchTestSuite {
             Self::test_hostname_match_negative(),
             Self::test_exact_service_method_match(),
             Self::test_header_match(),
+            Self::test_header_only_match_version_one(),
+            Self::test_header_only_match_version_two(),
+            Self::test_header_only_multi_header_and(),
+            Self::test_header_only_partial_header_no_match(),
+            Self::test_header_only_no_match_unimplemented(),
             Self::test_section_name_mismatch(),
             Self::test_regex_method_match(),
             Self::test_regex_service_only_match(),

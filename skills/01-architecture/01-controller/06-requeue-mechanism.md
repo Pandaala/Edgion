@@ -74,20 +74,7 @@ Controller 使用基于 requeue 的调和模式处理资源间依赖关系。当
 - `ref_grant/cross_ns_ref_manager.rs` — 命名空间级引用管理
 - `ref_grant/revalidation_listener.rs` — 监听器 + post-init 重校验函数
 
-### 5. ListenerPortManager
-
-**用途**: 解析 Gateway 间的端口冲突（多个 Gateway 监听同一端口）
-
-| 方向 | 触发条件 | 目标资源 | 条件 |
-|---|---|---|---|
-| Gateway → Gateway | 端口冲突检测 | 其他占用同端口的 Gateway | `get_conflicting_gateways()` 返回冲突方 |
-| Gateway 删除时 | 端口释放 | 之前冲突的 Gateway | requeue 使其清除 Conflicted 状态 |
-
-**关键文件**:
-- `listener_port_manager.rs` — 端口占用追踪
-- `handlers/gateway.rs` — on_change/on_delete: 冲突检测 + requeue
-
-### 6. AttachedRouteTracker
+### 5. AttachedRouteTracker
 
 **用途**: 追踪哪些 Route 附着到哪些 Gateway，用于 Gateway status 中的 attachedRoutes 计数更新
 
@@ -123,7 +110,7 @@ Controller 使用基于 requeue 的调和模式处理资源间依赖关系。当
 | EdgionTls | 是 | 是 | gateway_route_index, secret_ref |
 | TCPRoute | 是 | 是 | attached_route_tracker, service_ref |
 | UDPRoute | 是 | 是 | attached_route_tracker, service_ref |
-| Gateway | 是 | 是 | listener_port_manager, gateway_route_index（消费者） |
+| Gateway | 是 | 是 | gateway_route_index（消费者） |
 | Secret | 是 | 是 | 触发级联 requeue |
 | Service | 是 | 是 | 触发依赖路由 requeue |
 | ReferenceGrant | 是 | 是 | CrossNsRevalidationListener |

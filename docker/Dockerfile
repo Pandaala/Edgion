@@ -22,6 +22,7 @@ ARG RUST_VERSION=1.92
 ARG BINARY=edgion-gateway
 ARG BUILD_TYPE=bin
 ARG FEATURES=default
+ARG PROFILE=release
 
 # =============================================================================
 # Stage 1: Chef Planner - Analyze dependencies
@@ -54,15 +55,21 @@ FROM rust:${RUST_VERSION}-slim AS builder
 WORKDIR /app
 
 # Install additional build dependencies
+# lld: faster linker, lower peak memory than ld (important for debug builds)
 RUN apt-get update && apt-get install -y \
     g++ \
     cmake \
     git \
     libclang-dev \
+    lld \
     perl \
     pkg-config \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
+
+# Use lld as the linker for all targets to reduce link-time memory usage
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    CARGO_BUILD_JOBS=4
 
 # Install cargo-chef
 RUN cargo install cargo-chef
@@ -74,9 +81,14 @@ COPY --from=planner /app/recipe.json recipe.json
 ARG FEATURES
 ARG BINARY
 ARG BUILD_TYPE
+ARG PROFILE
 
 # Build dependencies (cached layer)
-RUN cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json
+RUN if [ "${PROFILE}" = "release" ]; then \
+      cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json; \
+    else \
+      cargo chef cook --features "${FEATURES}" --recipe-path recipe.json; \
+    fi
 
 # Copy source code
 COPY . .
@@ -84,19 +96,19 @@ COPY . .
 # Ensure config directory exists (for optional config files)
 RUN mkdir -p /app/config && touch /app/config/.placeholder
 
-# Build based on BUILD_TYPE
-# For bin: build binary and ctl
-# For example: build example only (no ctl bundled)
-RUN if [ "$BUILD_TYPE" = "example" ]; then \
-      echo "Building example: ${BINARY}"; \
-      cargo build --release --features "${FEATURES}" --example "${BINARY}"; \
-      cp /app/target/release/examples/${BINARY} /app/edgion-binary; \
+# Build based on BUILD_TYPE and PROFILE
+RUN PROFILE_FLAG=$([ "${PROFILE}" = "release" ] && echo "--release" || echo ""); \
+    OUT_DIR=$([ "${PROFILE}" = "release" ] && echo "release" || echo "debug"); \
+    if [ "$BUILD_TYPE" = "example" ]; then \
+      echo "Building example: ${BINARY} (${PROFILE})"; \
+      cargo build ${PROFILE_FLAG} --features "${FEATURES}" --example "${BINARY}"; \
+      cp /app/target/${OUT_DIR}/examples/${BINARY} /app/edgion-binary; \
       touch /app/edgion-ctl-binary; \
     else \
-      echo "Building bin: ${BINARY}"; \
-      cargo build --release --features "${FEATURES}" --bin "${BINARY}" --bin edgion-ctl; \
-      cp /app/target/release/${BINARY} /app/edgion-binary; \
-      cp /app/target/release/edgion-ctl /app/edgion-ctl-binary; \
+      echo "Building bin: ${BINARY} (${PROFILE})"; \
+      cargo build ${PROFILE_FLAG} --features "${FEATURES}" --bin "${BINARY}" --bin edgion-ctl; \
+      cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
+      cp /app/target/${OUT_DIR}/edgion-ctl /app/edgion-ctl-binary; \
     fi
 
 # =============================================================================
@@ -107,6 +119,7 @@ FROM debian:trixie-slim AS runtime
 # Build arguments
 ARG BINARY
 ARG BUILD_TYPE
+ARG PROFILE
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -122,8 +135,11 @@ WORKDIR /usr/local/edgion
 RUN chown -R edgion:edgion /usr/local/edgion
 
 # Copy binaries from builder
-COPY --from=builder /app/edgion-binary /usr/local/bin/${BINARY}
-RUN chmod +x /usr/local/bin/${BINARY}
+# Primary location: /usr/local/edgion/${BINARY} — owned by edgion, supports live hot-patch via kubectl cp.
+# Symlink from /usr/local/bin/ for compatibility with tools that expect it there.
+COPY --from=builder --chown=edgion:edgion /app/edgion-binary /usr/local/edgion/${BINARY}
+RUN chmod +x /usr/local/edgion/${BINARY} && \
+    ln -sf /usr/local/edgion/${BINARY} /usr/local/bin/${BINARY}
 
 # Copy ctl for bin builds only (example builds have empty file)
 COPY --from=builder /app/edgion-ctl-binary /tmp/edgion-ctl-binary
@@ -147,9 +163,11 @@ ENV RUST_BACKTRACE=0
 # Expose ports
 EXPOSE 80 443 10080 10443 18443 19000 19002 19010 50051 5800
 
-# Set entrypoint
+# Restart-loop entrypoint: when the binary is killed (e.g. by kubectl exec pkill during hot-patch),
+# the shell restarts it automatically without triggering a K8s pod restart.
+# This enables: kubectl cp new-binary → pkill → binary restarts in-place.
 ENTRYPOINT ["/bin/sh", "-c"]
-CMD ["exec /usr/local/bin/${BINARY}"]
+CMD ["while true; do /usr/local/edgion/${BINARY}; echo '[edgion] process exited, restarting in 1s...'; sleep 1; done"]
 
 # Labels
 LABEL maintainer="Edgion Team"

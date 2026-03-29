@@ -25,7 +25,7 @@ data:
     type = "kubernetes"
     gateway_class = "edgion"
     controller_name = "edgion.io/gateway-controller"
-    gateway_address = "10.51.60.14"
+    gateway_address = "PLACEHOLDER_WILL_BE_PATCHED"
     # Empty watch_namespaces = watch all namespaces.
     # Conformance tests create resources in gateway-conformance-* namespaces.
     endpoint_mode = "both"

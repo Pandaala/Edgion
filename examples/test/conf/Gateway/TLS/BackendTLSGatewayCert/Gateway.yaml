@@ -1,0 +1,16 @@
+# Gateway with spec.tls.backend.clientCertificateRef for mTLS to backends
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: backend-tls-gw-cert
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31321
+  tls:
+    backend:
+      clientCertificateRef:
+        name: gateway-client-cert

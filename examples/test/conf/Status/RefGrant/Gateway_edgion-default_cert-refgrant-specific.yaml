@@ -1,0 +1,25 @@
+# D2: Gateway with two HTTPS listeners, ReferenceGrant allows only specific Secret name
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cert-refgrant-specific
+  namespace: edgion-default
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-name-match
+      protocol: HTTPS
+      port: 31331
+      tls:
+        certificateRefs:
+          - kind: Secret
+            name: refgrant-test-cert
+            namespace: backend
+    - name: https-name-mismatch
+      protocol: HTTPS
+      port: 31332
+      tls:
+        certificateRefs:
+          - kind: Secret
+            name: other-cert
+            namespace: backend

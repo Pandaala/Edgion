@@ -14,4 +14,7 @@ pub mod services;
 pub mod tls;
 
 pub use cli::EdgionGatewayCli;
-pub use runtime::{end_response_400, end_response_404, end_response_421, end_response_500, end_response_503};
+pub use runtime::{
+    end_response_400, end_response_404, end_response_421, end_response_500, end_response_503,
+    end_response_grpc_unavailable, end_response_grpc_unimplemented,
+};

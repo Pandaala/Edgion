@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-backend-gw-cert
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30052
+      protocol: TCP

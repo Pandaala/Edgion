@@ -14,9 +14,9 @@ REPORT_OUTPUT="${REPORT_OUTPUT:-$CONFORMANCE_ROOT/conformance-report.yaml}"
 CONFORMANCE_PROFILES="${CONFORMANCE_PROFILES:-GATEWAY-HTTP,GATEWAY-GRPC}"
 TIMEOUT="${TIMEOUT:-30m}"
 
-# Default: Core features only.
-# Expand this list as more features are implemented.
-SUPPORTED_FEATURES="${SUPPORTED_FEATURES:-Gateway,HTTPRoute,ReferenceGrant}"
+# Default: empty — features are declared in conformance_test.go opts.SupportedFeatures.
+# Override with --supported-features, --core, --extended, or --all-features flags.
+SUPPORTED_FEATURES="${SUPPORTED_FEATURES:-}"
 
 show_help() {
   cat <<USAGE
@@ -79,10 +79,10 @@ HTTPRouteResponseHeaderModification,HTTPRouteBackendRequestHeaderModification,\
 HTTPRoutePortRedirect,HTTPRouteSchemeRedirect,HTTPRoutePathRedirect,\
 HTTPRouteRequestTimeout,HTTPRouteBackendTimeout,\
 HTTPRoute303RedirectStatusCode,HTTPRoute307RedirectStatusCode,HTTPRoute308RedirectStatusCode,\
-GRPCRoute,TCPRoute,GatewayPort8080"
+GRPCRoute,TCPRoute"
       shift ;;
     --all-features)
-      SUPPORTED_FEATURES=""
+      SUPPORTED_FEATURES="__ALL__"
       shift ;;
     -h|--help) show_help; exit 0 ;;
     *) echo "Unknown option: $1"; show_help; exit 1 ;;
@@ -117,11 +117,13 @@ ARGS=(
   "-conformance-profiles=${CONFORMANCE_PROFILES}"
 )
 
-if [[ -n "${SUPPORTED_FEATURES}" ]]; then
-  ARGS+=("-supported-features=${SUPPORTED_FEATURES}")
-else
+if [[ "${SUPPORTED_FEATURES}" == "__ALL__" ]]; then
   ARGS+=("-all-features")
+elif [[ -n "${SUPPORTED_FEATURES}" ]]; then
+  # Explicit override: pass to framework (overrides conformance_test.go opts)
+  ARGS+=("-supported-features=${SUPPORTED_FEATURES}")
 fi
+# Empty SUPPORTED_FEATURES = use features declared in conformance_test.go opts.SupportedFeatures
 
 if [[ -n "${RUN_TEST}" ]]; then
   ARGS+=("-run-test=${RUN_TEST}")
@@ -161,11 +163,13 @@ if [[ "${PORT_FORWARD}" == "true" ]]; then
   trap cleanup_pf EXIT
 fi
 
-echo "Running: go test ./... -run TestConformance -v -timeout ${TIMEOUT} -args ${ARGS[*]}"
+GO_RUN_FILTER="${GO_RUN_FILTER:-TestConformance}"
+
+echo "Running: go test ./... -run ${GO_RUN_FILTER} -v -timeout ${TIMEOUT} -args ${ARGS[*]}"
 echo ""
 
 go test ./... \
-  -run TestConformance \
+  -run "${GO_RUN_FILTER}" \
   -v \
   -timeout "${TIMEOUT}" \
   -count=1 \

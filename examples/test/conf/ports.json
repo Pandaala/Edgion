@@ -1,5 +1,5 @@
 {
-  "current_max": 31311,
+  "current_max": 31337,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -145,6 +145,32 @@
     },
     "HTTPRoute/Filters/FilterConflict": {
       "http": 31311
+    },
+    "HTTPRoute/Filters/PercentMirror": {
+      "http": 31322
+    },
+    "Gateway/FrontendValidation": {
+      "https": 31312,
+      "https_insecure": 31336
+    },
+    "Gateway/TLS/BackendTLSSAN": {
+      "http": 31320
+    },
+    "Gateway/TLS/BackendTLSGatewayCert": {
+      "http": 31321
+    },
+    "HTTPRoute/Backend/SessionPersistence": {
+      "http": 31313
+    },
+    "Status/RefGrant/GatewayCert": {
+      "d1_https": 31330,
+      "d2_https_match": 31331,
+      "d2_https_mismatch": 31332,
+      "d3_https": 31333,
+      "d4_https": 31334
+    },
+    "Gateway/TLS/MisdirectedRequest": {
+      "https": 31337
     }
   }
 }

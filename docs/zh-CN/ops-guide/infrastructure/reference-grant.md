@@ -10,7 +10,7 @@
 ## 示例：允许 Gateway 引用跨命名空间 Secret
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-gw-to-secret

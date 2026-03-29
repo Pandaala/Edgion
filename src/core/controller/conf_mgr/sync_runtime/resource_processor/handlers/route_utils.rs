@@ -3,12 +3,29 @@
 //! Deduplicates common logic used across gateway.rs, http_route.rs,
 //! grpc_route.rs, and other route handlers.
 
+use std::collections::HashSet;
+
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::{ParentReference, RefDenied};
 use crate::types::resources::gateway::AllowedRoutes;
 use crate::types::resources::http_route::RouteParentStatus;
+use crate::types::ResourceKind;
+
+/// Result of validating a parentRef for acceptance.
+pub struct AcceptedResult {
+    /// Acceptance errors. Non-empty means the route is rejected.
+    pub errors: Vec<AcceptedError>,
+    /// Names of listeners that accept this route (namespace + hostname intersection pass).
+    /// Empty when the route is rejected.
+    pub matched_listeners: Vec<String>,
+    /// Protocols of the matched listeners (e.g. "HTTPS", "TLS", "HTTP").
+    /// Populated alongside matched_listeners; same order is NOT guaranteed.
+    pub matched_listener_protocols: Vec<String>,
+}
 
 /// Check if a listener's namespace policy allows a route from the given namespace.
 ///
@@ -133,6 +150,47 @@ pub fn collect_ref_denied_errors(ref_denied_list: &[Option<&RefDenied>]) -> Vec<
     errors
 }
 
+/// Gateway API standard route kinds — only these are subject to allowedRoutes.kinds filtering.
+/// Non-route resources (e.g. EdgionTls for TLS config) bypass this check entirely.
+const GATEWAY_API_ROUTE_KINDS: &[&str] = &["HTTPRoute", "GRPCRoute", "TLSRoute", "TCPRoute", "UDPRoute"];
+
+/// Protocol default route kinds per Gateway API spec.
+/// Mirrors `get_supported_kinds_for_protocol()` in gateway.rs — keep in sync.
+pub(super) fn protocol_default_route_kinds(protocol: &str) -> &'static [&'static str] {
+    match protocol.to_uppercase().as_str() {
+        "HTTP" | "HTTPS" => &["HTTPRoute", "GRPCRoute"],
+        "TLS" => &["TLSRoute"],
+        "TCP" => &["TCPRoute"],
+        "UDP" => &["UDPRoute"],
+        _ => &[],
+    }
+}
+
+/// Check if a listener supports the given route kind based on allowedRoutes.kinds
+/// or protocol defaults per Gateway API spec.
+///
+/// Non-route resources (e.g. EdgionTls) always pass — `allowedRoutes.kinds` only
+/// governs Gateway API route kinds, not policy/config attachments.
+fn listener_supports_route_kind(listener: &crate::types::resources::gateway::Listener, route_kind: &str) -> bool {
+    if !GATEWAY_API_ROUTE_KINDS.contains(&route_kind) {
+        return true;
+    }
+
+    let kinds = listener
+        .allowed_routes
+        .as_ref()
+        .and_then(|ar| ar.kinds.as_ref())
+        .filter(|k| !k.is_empty());
+
+    match kinds {
+        Some(allowed_kinds) => allowed_kinds.iter().any(|rgk| {
+            let group = rgk.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+            group == "gateway.networking.k8s.io" && rgk.kind == route_kind
+        }),
+        None => protocol_default_route_kinds(&listener.protocol).contains(&route_kind),
+    }
+}
+
 /// Validate a parent ref for the Accepted condition.
 ///
 /// Checks namespace policy and (optionally) hostname intersection.
@@ -141,23 +199,34 @@ pub fn validate_parent_ref_accepted(
     route_ns: &str,
     parent_ref: &ParentReference,
     route_hostnames: Option<&Vec<String>>,
-) -> Vec<AcceptedError> {
-    let mut errors = Vec::new();
-
+    route_kind: &str,
+) -> AcceptedResult {
     let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
     if parent_group != "gateway.networking.k8s.io" {
-        return errors;
+        return AcceptedResult {
+            errors: Vec::new(),
+            matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
+        };
     }
     let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
     if parent_kind != "Gateway" {
-        return errors;
+        return AcceptedResult {
+            errors: Vec::new(),
+            matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
+        };
     }
 
     let parent_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
     let parent_name = &parent_ref.name;
 
     let Some(gateway) = lookup_gateway(parent_ns, parent_name) else {
-        return errors;
+        return AcceptedResult {
+            errors: Vec::new(),
+            matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
+        };
     };
 
     let empty_listeners = Vec::new();
@@ -168,18 +237,24 @@ pub fn validate_parent_ref_accepted(
             .iter()
             .any(|l| l.name == *section_name && parent_ref.port.is_none_or(|p| l.port == p));
         if !has_listener {
-            errors.push(AcceptedError::NoMatchingParent {
-                section_name: section_name.clone(),
-            });
-            return errors;
+            return AcceptedResult {
+                errors: vec![AcceptedError::NoMatchingParent {
+                    section_name: section_name.clone(),
+                }],
+                matched_listeners: Vec::new(),
+                matched_listener_protocols: Vec::new(),
+            };
         }
     } else if let Some(port) = parent_ref.port {
         let has_listener = listeners.iter().any(|l| l.port == port);
         if !has_listener {
-            errors.push(AcceptedError::NoMatchingParent {
-                section_name: format!("port:{}", port),
-            });
-            return errors;
+            return AcceptedResult {
+                errors: vec![AcceptedError::NoMatchingParent {
+                    section_name: format!("port:{}", port),
+                }],
+                matched_listeners: Vec::new(),
+                matched_listener_protocols: Vec::new(),
+            };
         }
     }
 
@@ -191,34 +266,58 @@ pub fn validate_parent_ref_accepted(
         })
         .collect();
 
-    let ns_allowed = matching_listeners
+    let ns_hostname_accepted: Vec<_> = matching_listeners
         .iter()
-        .any(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns));
-
-    if !ns_allowed {
-        errors.push(AcceptedError::NotAllowedByListeners {
-            resource_ns: route_ns.to_string(),
-        });
-        return errors;
-    }
-
-    if let Some(route_hs) = route_hostnames {
-        if !route_hs.is_empty() {
-            let hostname_match = matching_listeners.iter().any(|listener| match &listener.hostname {
+        .filter(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns))
+        .filter(|l| match route_hostnames {
+            None => true,
+            Some(route_hs) if route_hs.is_empty() => true,
+            Some(route_hs) => match &l.hostname {
                 None => true,
                 Some(listener_hn) => route_hs
                     .iter()
                     .any(|route_hn| hostnames_intersect(listener_hn, route_hn)),
-            });
-            if !hostname_match {
-                errors.push(AcceptedError::NoMatchingListenerHostname {
-                    hostnames: route_hs.clone(),
-                });
-            }
-        }
+            },
+        })
+        .collect();
+
+    let accepted: Vec<_> = ns_hostname_accepted
+        .iter()
+        .filter(|l| listener_supports_route_kind(l, route_kind))
+        .collect();
+    let accepted_listener_names: Vec<String> = accepted.iter().map(|l| l.name.clone()).collect();
+    let accepted_listener_protocols: Vec<String> = accepted.iter().map(|l| l.protocol.clone()).collect();
+
+    if accepted_listener_names.is_empty() {
+        let ns_allowed = matching_listeners
+            .iter()
+            .any(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns));
+        let errors = if !ns_allowed {
+            vec![AcceptedError::NotAllowedByListeners {
+                resource_ns: route_ns.to_string(),
+            }]
+        } else if ns_hostname_accepted.is_empty() {
+            vec![AcceptedError::NoMatchingListenerHostname {
+                hostnames: route_hostnames.cloned().unwrap_or_default(),
+            }]
+        } else {
+            // Listeners match namespace+hostname but not route kind
+            vec![AcceptedError::NotAllowedByListeners {
+                resource_ns: route_ns.to_string(),
+            }]
+        };
+        return AcceptedResult {
+            errors,
+            matched_listeners: Vec::new(),
+            matched_listener_protocols: Vec::new(),
+        };
     }
 
-    errors
+    AcceptedResult {
+        errors: Vec::new(),
+        matched_listeners: accepted_listener_names,
+        matched_listener_protocols: accepted_listener_protocols,
+    }
 }
 
 /// Remove stale parent statuses for parents no longer in the spec.
@@ -233,6 +332,50 @@ pub fn retain_current_parent_statuses(parents: &mut Vec<RouteParentStatus>, pare
                 && pr.port == ps.parent_ref.port
         })
     });
+}
+
+/// Update the attached-route tracker with only accepted parentRefs.
+///
+/// Called from `update_status()` in each route handler, after acceptance has
+/// been computed. Only parentRefs that pass all acceptance checks (namespace,
+/// sectionName/port match, hostname intersection) are counted.
+pub fn update_tracker_accepted_only(
+    route_kind: ResourceKind,
+    route_ns: &str,
+    route_name: &str,
+    parent_refs: Option<&Vec<ParentReference>>,
+    route_hostnames: Option<&Vec<String>>,
+) -> bool {
+    let route_key = format!("{}/{}", route_ns, route_name);
+    let Some(parent_refs) = parent_refs else {
+        return get_attached_route_tracker().remove_route(route_kind, &route_key);
+    };
+
+    let mut attachments = HashSet::new();
+
+    for parent_ref in parent_refs {
+        let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+        let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
+        if parent_group != "gateway.networking.k8s.io" || parent_kind != "Gateway" {
+            continue;
+        }
+
+        let result = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames, route_kind.as_str());
+        if !result.errors.is_empty() {
+            continue;
+        }
+
+        let gateway_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
+        let gateway_key = format!("{}/{}", gateway_ns, parent_ref.name);
+        for listener_name in &result.matched_listeners {
+            attachments.insert(Attachment {
+                gateway_key: gateway_key.clone(),
+                listener_name: listener_name.clone(),
+            });
+        }
+    }
+
+    get_attached_route_tracker().update_route(route_kind, &route_key, attachments)
 }
 
 /// Register Service backend references for a route.

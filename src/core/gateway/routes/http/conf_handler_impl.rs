@@ -3,6 +3,7 @@ use crate::core::common::matcher::host_match::radix_match::{RadixHost, RadixHost
 use crate::core::gateway::routes::http::lb_policy_sync::{cleanup_lb_policies_for_routes, sync_lb_policies_for_routes};
 use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
+use crate::core::gateway::routes::http::match_unit::MatchSpecificity;
 use crate::core::gateway::routes::http::routes_mgr::{
     resolved_ports_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
@@ -246,6 +247,36 @@ pub fn create_route_manager_handler() -> Box<dyn ConfHandler<HTTPRoute> + Send +
 // Route parsing and DomainRouteRules building
 // ============================================================================
 
+/// Extract creation timestamp as milliseconds since epoch from route metadata.
+/// Returns 0 if not available (treat as oldest for backward compat).
+fn extract_creation_ts_ms(route: &HTTPRoute) -> i64 {
+    route
+        .metadata
+        .creation_timestamp
+        .as_ref()
+        .map(|t| t.0.timestamp_millis())
+        .unwrap_or(0)
+}
+
+/// Build MatchSpecificity from an HTTPRouteMatch and route-level metadata.
+fn build_specificity(
+    match_item: &HTTPRouteMatch,
+    route_key: &str,
+    creation_ts_ms: i64,
+    rule_id: usize,
+    match_id: usize,
+) -> MatchSpecificity {
+    MatchSpecificity {
+        has_method: match_item.method.is_some(),
+        header_count: match_item.headers.as_ref().map(|h| h.len() as u16).unwrap_or(0),
+        query_count: match_item.query_params.as_ref().map(|q| q.len() as u16).unwrap_or(0),
+        creation_ts_ms,
+        route_key: route_key.to_string(),
+        rule_index: rule_id as u32,
+        match_index: match_id as u32,
+    }
+}
+
 /// Check if the path match is a regex type
 fn is_regex_path(match_item: &HTTPRouteMatch) -> bool {
     if let Some(ref path_match) = match_item.path {
@@ -267,6 +298,7 @@ fn create_regex_route_unit(
     match_item: &HTTPRouteMatch,
     rule: Arc<HTTPRouteRule>,
     parent_refs: Option<Vec<crate::types::resources::common::ParentReference>>,
+    creation_ts_ms: i64,
 ) -> Result<HttpRouteRuleUnit, String> {
     let path_value = match_item
         .path
@@ -276,6 +308,9 @@ fn create_regex_route_unit(
 
     let regex = Regex::new(path_value).map_err(|e| format!("Invalid regex '{}': {}", path_value, e))?;
     let (compiled_header_regexes, compiled_query_regexes) = HttpRouteRuleUnit::compile_match_regexes(match_item);
+
+    let has_query_matchers = match_item.query_params.as_ref().is_some_and(|qp| !qp.is_empty());
+    let specificity = build_specificity(match_item, resource_key, creation_ts_ms, rule_id, match_id);
 
     Ok(HttpRouteRuleUnit {
         resource_key: resource_key.to_string(),
@@ -292,6 +327,8 @@ fn create_regex_route_unit(
         parent_refs,
         compiled_header_regexes,
         compiled_query_regexes,
+        has_query_matchers,
+        specificity,
     })
 }
 
@@ -328,6 +365,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
 
         let accepted_refs_opt = Some(accepted_refs.clone());
         let route_sv = route.get_sync_version();
+        let creation_ts_ms = extract_creation_ts_ms(route);
 
         let effective_hostnames = get_effective_hostnames(route);
         for hostname in &effective_hostnames {
@@ -373,6 +411,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             match_item,
                             rule_arc.clone(),
                             accepted_refs_opt.clone(),
+                            creation_ts_ms,
                         ) {
                             Ok(mut regex_unit) => {
                                 regex_unit.matched_info.sv = route_sv;
@@ -384,6 +423,9 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                         }
                     } else {
                         let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(match_item);
+                        let has_qm = match_item.query_params.as_ref().is_some_and(|qp| !qp.is_empty());
+                        let specificity =
+                            build_specificity(match_item, &route.key_name(), creation_ts_ms, rule_id, match_id);
                         let rule_unit = HttpRouteRuleUnit {
                             resource_key: route.key_name(),
                             matched_info: MatchInfo::new(
@@ -399,6 +441,8 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                             parent_refs: accepted_refs_opt.clone(),
                             compiled_header_regexes: chr,
                             compiled_query_regexes: cqr,
+                            has_query_matchers: has_qm,
+                            specificity,
                         };
                         split.0.push(Arc::new(rule_unit));
                     }

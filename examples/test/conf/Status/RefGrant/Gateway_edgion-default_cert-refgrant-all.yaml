@@ -1,0 +1,18 @@
+# D1: Gateway HTTPS listener with cross-ns cert ref, wildcard ReferenceGrant (no name restriction)
+# Uses cert-store namespace (isolated from D2's specific-name grant in backend namespace)
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cert-refgrant-all
+  namespace: edgion-default
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-grant-all
+      protocol: HTTPS
+      port: 31330
+      tls:
+        certificateRefs:
+          - kind: Secret
+            name: refgrant-test-cert
+            namespace: cert-store

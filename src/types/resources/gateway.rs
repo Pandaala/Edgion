@@ -37,6 +37,10 @@ pub struct GatewaySpec {
     /// Addresses requested for this Gateway
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub addresses: Option<Vec<GatewayAddress>>,
+
+    /// Gateway-level TLS configuration (Gateway API v1.5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<GatewaySpecTLS>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -69,10 +73,69 @@ pub struct Listener {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendTLSValidation {
-    /// CACertificateRefs references Secrets containing CA certificate bundles
-    /// for validating client certificates. Secret must contain `ca.crt` key.
+    /// CACertificateRefs references Secrets or ConfigMaps containing CA certificate bundles
+    /// for validating client certificates. Must contain `ca.crt` key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_certificate_refs: Option<Vec<SecretObjectReference>>,
+
+    /// Validation mode: "AllowValidOnly" (default) or "AllowInsecureFallback"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+/// Gateway-level TLS configuration (Gateway API v1.5 spec.tls)
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySpecTLS {
+    /// Backend TLS — default client cert for upstream mTLS
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<GatewayBackendTLS>,
+    /// Frontend TLS configuration for client certificate validation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend: Option<GatewayFrontendTLS>,
+}
+
+/// Gateway-level backend TLS — default client cert for upstream mTLS
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayBackendTLS {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_certificate_ref: Option<SecretObjectReference>,
+    /// Resolved by Controller, not user-configured
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_client_certificate: Option<Secret>,
+}
+
+/// Gateway-level frontend TLS — client certificate validation config
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayFrontendTLS {
+    /// Default validation applied to all HTTPS/TLS listeners unless overridden by perPort
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<GatewayFrontendTLSDefault>,
+    /// Per-port validation overrides
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_port: Option<Vec<GatewayFrontendTLSPerPort>>,
+}
+
+/// Default frontend TLS validation config
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayFrontendTLSDefault {
+    /// Validation configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<FrontendTLSValidation>,
+}
+
+/// Per-port frontend TLS validation override
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayFrontendTLSPerPort {
+    /// Port number to override
+    pub port: i32,
+    /// TLS validation config for this port
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<GatewayFrontendTLSDefault>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -236,6 +299,7 @@ mod tests {
                     allowed_routes: None,
                 }]),
                 addresses: None,
+                tls: None,
             },
             status: None,
         };

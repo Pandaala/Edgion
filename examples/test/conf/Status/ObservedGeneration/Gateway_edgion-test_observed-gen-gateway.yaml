@@ -1,0 +1,12 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: observed-gen-gateway
+  namespace: edgion-test
+  generation: 3
+spec:
+  gatewayClassName: observed-gen-class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31380

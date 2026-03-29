@@ -7,7 +7,7 @@ use super::super::ref_grant::{
 };
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
-    update_attached_route_tracker, update_gateway_route_index,
+    update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -104,6 +104,18 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
                 .map(|e| e.message()),
         );
         errors
+    }
+
+    fn preparse(&self, route: &mut TCPRoute, _ctx: &HandlerContext) -> Vec<String> {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+        update_gateway_route_index(
+            ResourceKind::TCPRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
+        Vec::new()
     }
 
     async fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
@@ -224,15 +236,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
 
-        let tracker_changed = update_attached_route_tracker(
-            ResourceKind::TCPRoute,
-            route_ns,
-            route_name,
-            route.spec.parent_refs.as_ref(),
-        );
-        if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        }
+        requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
     }
 
     async fn on_delete(&self, route: &TCPRoute, ctx: &HandlerContext) {
@@ -266,7 +270,9 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let mut accepted_errors = super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None);
+                let accepted_result =
+                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None, "TCPRoute");
+                let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
                 let parent_status = status.parents.iter_mut().find(|ps| {
@@ -293,6 +299,14 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         } else {
             status.parents.clear();
         }
+
+        super::route_utils::update_tracker_accepted_only(
+            ResourceKind::TCPRoute,
+            route_ns,
+            route.metadata.name.as_deref().unwrap_or(""),
+            route.spec.parent_refs.as_ref(),
+            None,
+        );
     }
 }
 

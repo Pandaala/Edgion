@@ -54,7 +54,7 @@ from the control plane would be misleading.
 但引入全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。
 
 - 方案设计保留备查：[tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)
-- 不实现决策记录：[skills/08-gateway-api/01-not-implemented.md](../../../skills/08-gateway-api/01-not-implemented.md)
+- 不实现决策记录：[skills/08-kubernetes/01-gateway-api/01-not-implemented.md](../../../skills/08-kubernetes/01-gateway-api/01-not-implemented.md)
 
 ## 4. Resource Categories and Status Patterns
 
@@ -129,8 +129,9 @@ are invalid (all backend refs missing/denied). The result is stored in
 `spec.invalid_rule_indices: Option<Vec<usize>>` and synced to the Gateway via gRPC.
 
 **Controller side:** `find_invalid_rule_indices()` checks each rule — a rule is invalid
-if it has backend refs and ALL of them are unreachable (wrong kind, service not found,
-or cross-namespace ref denied). Three outcomes:
+if it has backend refs and ALL of them are unreachable (wrong kind or service not found).
+`ref_denied` backends are NOT treated as invalid — they stay in the route table so
+Gateway can match and return 500. Three outcomes:
 
 | Scenario | Accepted | PartiallyInvalid | invalid_rule_indices |
 |----------|----------|------------------|---------------------|

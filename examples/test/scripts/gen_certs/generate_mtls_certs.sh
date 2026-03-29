@@ -47,9 +47,11 @@ SECRET_OUTPUT_ROOT="${EDGION_GENERATED_SECRET_DIR:-$PROJECT_ROOT/integration_tes
 MTLS_SECRET_DIR="$SECRET_OUTPUT_ROOT/EdgionTls/mTLS"
 BACKEND_TLS_SECRET_DIR="$SECRET_OUTPUT_ROOT/HTTPRoute/Backend/BackendTLS"
 HEADER_CERT_AUTH_SECRET_DIR="$SECRET_OUTPUT_ROOT/EdgionPlugins/HeaderCertAuth"
+GATEWAY_BACKEND_TLS_SECRET_DIR="$SECRET_OUTPUT_ROOT/Gateway/TLS/BackendTLSGatewayCert"
+FV_SECRET_DIR="$SECRET_OUTPUT_ROOT/Gateway/FrontendValidation"
 
 mkdir -p "$CERTS_DIR"
-mkdir -p "$MTLS_SECRET_DIR" "$BACKEND_TLS_SECRET_DIR" "$HEADER_CERT_AUTH_SECRET_DIR"
+mkdir -p "$MTLS_SECRET_DIR" "$BACKEND_TLS_SECRET_DIR" "$HEADER_CERT_AUTH_SECRET_DIR" "$GATEWAY_BACKEND_TLS_SECRET_DIR" "$FV_SECRET_DIR"
 
 all_required_certs_exist() {
     local cert_files=(
@@ -65,6 +67,8 @@ all_required_certs_exist() {
         "intermediate-ca.crt"
         "mtls-server.crt"
         "mtls-server.key"
+        "fv-server.crt"
+        "fv-server.key"
     )
     local cert_file
     for cert_file in "${cert_files[@]}"; do
@@ -154,6 +158,30 @@ data:
 EOF
 }
 
+write_gateway_backend_tls_client_secret() {
+    if [ ! -f "$CERTS_DIR/valid-client.crt" ] || [ ! -f "$CERTS_DIR/valid-client.key" ]; then
+        log_error "Missing valid client cert/key for Gateway backend TLS Secret generation."
+        return 1
+    fi
+
+    local client_cert_b64
+    local client_key_b64
+    client_cert_b64=$(base64 < "$CERTS_DIR/valid-client.crt" | tr -d '\n')
+    client_key_b64=$(base64 < "$CERTS_DIR/valid-client.key" | tr -d '\n')
+
+    cat > "$GATEWAY_BACKEND_TLS_SECRET_DIR/Secret_edge_gateway-client-cert.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gateway-client-cert
+  namespace: edgion-test
+type: kubernetes.io/tls
+data:
+  tls.crt: $client_cert_b64
+  tls.key: $client_key_b64
+EOF
+}
+
 write_header_cert_auth_ca_secret() {
     if [ ! -f "$CERTS_DIR/client-ca.crt" ]; then
         log_error "Missing client-ca.crt for HeaderCertAuth Secret generation."
@@ -222,6 +250,10 @@ EOF
         -subj "/CN=invalid-client/O=Unknown/OU=Unknown" \
         2>/dev/null
 
+    cat > "$TEMP_DIR/invalid-client.ext" <<EOF
+extendedKeyUsage=clientAuth
+EOF
+
     openssl x509 -req \
         -in "$TEMP_DIR/invalid-client.csr" \
         -CA "$TEMP_DIR/untrusted-ca.crt" \
@@ -229,6 +261,7 @@ EOF
         -CAcreateserial \
         -out "$TEMP_DIR/invalid-client.crt" \
         -days 365 \
+        -extfile "$TEMP_DIR/invalid-client.ext" \
         2>/dev/null
 
     # Step 4: Non-matching SAN client cert
@@ -307,6 +340,15 @@ EOF
         -addext "subjectAltName=DNS:mtls.example.com,DNS:mtls-optional.example.com,DNS:mtls-san.example.com,DNS:mtls-chain.example.com" \
         2>/dev/null
 
+    # Step 7: FrontendValidation server cert (self-signed, SAN includes fv-mtls.example.com)
+    openssl req -x509 -newkey rsa:2048 -nodes \
+        -keyout "$TEMP_DIR/fv-server.key" \
+        -out "$TEMP_DIR/fv-server.crt" \
+        -days 365 \
+        -subj "/CN=fv-mtls.example.com" \
+        -addext "subjectAltName=DNS:fv-mtls.example.com" \
+        2>/dev/null
+
     cp "$TEMP_DIR/valid-client.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/valid-client.key" "$CERTS_DIR/"
     cp "$TEMP_DIR/invalid-client.crt" "$CERTS_DIR/"
@@ -319,6 +361,50 @@ EOF
     cp "$TEMP_DIR/intermediate-ca.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/mtls-server.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/mtls-server.key" "$CERTS_DIR/"
+    cp "$TEMP_DIR/fv-server.crt" "$CERTS_DIR/"
+    cp "$TEMP_DIR/fv-server.key" "$CERTS_DIR/"
+}
+
+write_frontend_validation_secrets() {
+    if [ ! -f "$CERTS_DIR/client-ca.crt" ]; then
+        log_error "Missing client-ca.crt for FrontendValidation Secret generation."
+        return 1
+    fi
+    if [ ! -f "$CERTS_DIR/fv-server.crt" ] || [ ! -f "$CERTS_DIR/fv-server.key" ]; then
+        log_error "Missing fv-server cert/key for FrontendValidation Secret generation."
+        return 1
+    fi
+
+    local ca_b64
+    local fv_cert_b64
+    local fv_key_b64
+
+    ca_b64=$(base64 < "$CERTS_DIR/client-ca.crt" | tr -d '\n')
+    fv_cert_b64=$(base64 < "$CERTS_DIR/fv-server.crt" | tr -d '\n')
+    fv_key_b64=$(base64 < "$CERTS_DIR/fv-server.key" | tr -d '\n')
+
+    cat > "$FV_SECRET_DIR/Secret_edgion-test_fv-client-ca.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fv-client-ca
+  namespace: edgion-test
+type: Opaque
+data:
+  ca.crt: $ca_b64
+EOF
+
+    cat > "$FV_SECRET_DIR/Secret_edgion-test_fv-server-cert.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fv-server-cert
+  namespace: edgion-test
+type: kubernetes.io/tls
+data:
+  tls.crt: $fv_cert_b64
+  tls.key: $fv_key_b64
+EOF
 }
 
 log_section "Generate mTLS certificate"
@@ -337,7 +423,9 @@ fi
 
 write_mtls_suite_secrets
 write_backend_tls_client_secret
+write_gateway_backend_tls_client_secret
 write_header_cert_auth_ca_secret
+write_frontend_validation_secrets
 
 log_section "Completed"
 log_success "Runtime mTLS-related Secret YAML files generated."
@@ -347,5 +435,10 @@ log_info "  - $MTLS_SECRET_DIR/Secret_edge_ca-chain.yaml"
 log_info "  - $MTLS_SECRET_DIR/Secret_edge_mtls-server.yaml"
 log_info "BackendTLS client cert secret:"
 log_info "  - $BACKEND_TLS_SECRET_DIR/ClientCert_edge_backend-client-cert.yaml"
+log_info "Gateway backend TLS client cert secret:"
+log_info "  - $GATEWAY_BACKEND_TLS_SECRET_DIR/Secret_edge_gateway-client-cert.yaml"
 log_info "HeaderCertAuth CA secret:"
 log_info "  - $HEADER_CERT_AUTH_SECRET_DIR/01_Secret_default_header-cert-ca.yaml"
+log_info "FrontendValidation secrets:"
+log_info "  - $FV_SECRET_DIR/Secret_edgion-test_fv-client-ca.yaml"
+log_info "  - $FV_SECRET_DIR/Secret_edgion-test_fv-server-cert.yaml"

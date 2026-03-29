@@ -35,7 +35,7 @@
 
 use anyhow::Result;
 use futures::TryStreamExt;
-use k8s_openapi::api::core::v1::{Endpoints, Namespace, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Namespace, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::runtime::watcher;
 use kube::runtime::WatchStreamExt;
@@ -63,10 +63,11 @@ use crate::types::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler,
-    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler,
+    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
+    UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -447,7 +448,14 @@ impl KubernetesController {
     /// - ReferenceGrant: Cross-namespace reference validation
     /// - Service: Route backend references need Service info
     fn phase1_kinds(&self) -> Vec<&'static str> {
-        let mut kinds = vec!["GatewayClass", "Gateway", "Secret", "ReferenceGrant", "Service"];
+        let mut kinds = vec![
+            "GatewayClass",
+            "Gateway",
+            "Secret",
+            "ConfigMap",
+            "ReferenceGrant",
+            "Service",
+        ];
         if self.endpoint_mode.uses_endpoint() {
             kinds.push("Endpoints");
         }
@@ -563,14 +571,33 @@ impl KubernetesController {
             h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
         }
 
+        // ConfigMap (CA certificates for frontendValidation and BackendTLSPolicy)
+        if self.should_watch("ConfigMap") {
+            h.push(spawn::<ConfigMap, _>(self, "ConfigMap", ConfigMapHandler::new(), &ctx));
+        }
+
         // ReferenceGrant (cross-namespace reference validation)
+        // Detect v1 vs v1beta1 at runtime; default to v1 watcher, fall back to v1beta1
         if self.should_watch("ReferenceGrant") {
-            h.push(spawn::<ReferenceGrant, _>(
-                self,
-                "ReferenceGrant",
-                ReferenceGrantHandler::new(),
-                &ctx,
-            ));
+            use super::version_detection::{detect_reference_grant_version, ReferenceGrantVersion};
+            match detect_reference_grant_version(&self.client).await {
+                Some(ReferenceGrantVersion::V1) | None => {
+                    h.push(spawn::<ReferenceGrant, _>(
+                        self,
+                        "ReferenceGrant",
+                        ReferenceGrantHandler::new(),
+                        &ctx,
+                    ));
+                }
+                Some(ReferenceGrantVersion::V1Beta1) => {
+                    h.push(spawn::<ReferenceGrantBeta, _>(
+                        self,
+                        "ReferenceGrant",
+                        ReferenceGrantBetaHandler::new(),
+                        &ctx,
+                    ));
+                }
+            }
         }
 
         // Service (Route backend references)

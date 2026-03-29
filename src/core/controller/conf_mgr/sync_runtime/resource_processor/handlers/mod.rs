@@ -5,6 +5,7 @@
 //! is handled by ResourceProcessor.
 
 mod backend_tls_policy;
+mod configmap;
 mod edgion_acme;
 mod edgion_gateway_config;
 mod edgion_plugins;
@@ -28,6 +29,7 @@ mod tls_route;
 mod udp_route;
 
 pub use backend_tls_policy::BackendTlsPolicyHandler;
+pub use configmap::ConfigMapHandler;
 pub use edgion_acme::EdgionAcmeHandler;
 pub use edgion_gateway_config::EdgionGatewayConfigHandler;
 pub use edgion_plugins::EdgionPluginsHandler;
@@ -41,16 +43,13 @@ pub use grpc_route::GrpcRouteHandler;
 pub use http_route::HttpRouteHandler;
 pub use link_sys::LinkSysHandler;
 pub use plugin_metadata::PluginMetadataHandler;
-pub use reference_grant::ReferenceGrantHandler;
+pub use reference_grant::{ReferenceGrantBetaHandler, ReferenceGrantHandler};
 pub use secret::SecretHandler;
 pub use service::ServiceHandler;
 pub use tcp_route::TcpRouteHandler;
 pub use tls_route::TlsRouteHandler;
 pub use udp_route::UdpRouteHandler;
 
-use std::collections::HashSet;
-
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_gateway_route_index;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::HandlerContext;
@@ -77,44 +76,6 @@ pub(crate) async fn requeue_parent_gateways(
         let gateway_key = parent_ref.build_parent_key(Some(route_ns));
         ctx.requeue("Gateway", gateway_key).await;
     }
-}
-
-/// Record a route's parentRef attachments in the global tracker.
-///
-/// Only reads parentRef fields (gateway ns/name, optional sectionName).
-/// Does NOT look up Gateway — works even if the target Gateway hasn't arrived yet.
-///
-/// Returns true if the attachments actually changed.
-pub(crate) fn update_attached_route_tracker(
-    route_kind: ResourceKind,
-    route_ns: &str,
-    route_name: &str,
-    parent_refs: Option<&Vec<ParentReference>>,
-) -> bool {
-    let route_key = format!("{}/{}", route_ns, route_name);
-    let Some(parent_refs) = parent_refs else {
-        return get_attached_route_tracker().remove_route(route_kind, &route_key);
-    };
-
-    let mut attachments = HashSet::new();
-
-    for parent_ref in parent_refs {
-        let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
-        let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
-        if parent_group != "gateway.networking.k8s.io" || parent_kind != "Gateway" {
-            continue;
-        }
-
-        let gateway_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
-        let gateway_name = &parent_ref.name;
-
-        attachments.insert(Attachment {
-            gateway_key: format!("{}/{}", gateway_ns, gateway_name),
-            listener_name: parent_ref.section_name.as_deref().unwrap_or("").to_string(),
-        });
-    }
-
-    get_attached_route_tracker().update_route(route_kind, &route_key, attachments)
 }
 
 /// Remove a route from the attached-route tracker.

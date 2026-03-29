@@ -144,6 +144,68 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+/// A hostname that has been normalized (port-stripped, FQDN-dot-removed, lowercased).
+///
+/// Construct via `NormalizedHostname::new()` which applies the normalization once.
+/// All downstream consumers can rely on the invariant — no further lowercasing needed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NormalizedHostname(String);
+
+impl NormalizedHostname {
+    /// Normalize and wrap a raw hostname.
+    /// Applies: trim, strip port (IPv4/IPv6), remove trailing FQDN dot, lowercase.
+    pub fn new(raw: &str) -> Self {
+        let h = raw.trim();
+
+        let host = if h.starts_with('[') {
+            match h.find(']') {
+                Some(end) => &h[1..end],
+                None => h,
+            }
+        } else {
+            match h.rfind(':') {
+                Some(pos) if h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => &h[..pos],
+                _ => h,
+            }
+        };
+
+        let host = host.strip_suffix('.').unwrap_or(host);
+        Self(host.to_ascii_lowercase())
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::ops::Deref for NormalizedHostname {
+    type Target = str;
+    #[inline]
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for NormalizedHostname {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for NormalizedHostname {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
@@ -159,9 +221,10 @@ pub struct RequestInfo {
     /// Trace ID from x-trace-id header
     #[serde(rename = "x-trace-id")]
     pub x_trace_id: Option<String>,
-    /// Hostname from the Host header
+    /// Normalized hostname from the Host header (lowercased, port-stripped).
+    /// Construct via `NormalizedHostname::new()` — never apply `to_lowercase()` again.
     #[serde(rename = "host")]
-    pub hostname: String,
+    pub hostname: NormalizedHostname,
     /// Request path from URI
     pub path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
@@ -192,6 +255,15 @@ pub struct RequestInfo {
     /// TLS connection id for correlating tls.log and access.log
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_id: Option<String>,
+    /// Listener name that matched the SNI during TLS handshake (Gateway TLS only).
+    /// None for HTTP connections, EdgionTls connections, or when TLS metadata is unavailable.
+    /// Used for 421 Misdirected Request detection.
+    #[serde(skip)]
+    pub tls_matched_listener: Option<String>,
+    /// Gateway key (ns/name) from TLS handshake matching (Gateway TLS only).
+    /// Used together with tls_matched_listener for 421 detection.
+    #[serde(skip)]
+    pub tls_matched_gateway_key: Option<String>,
     /// Listener port that received this request (set at context creation, always available)
     #[serde(rename = "listener-port")]
     pub listener_port: u16,
@@ -291,6 +363,17 @@ pub struct BackendContext {
     /// Current upstream index (for status updates)
     #[serde(skip)]
     pub current_upstream_id: Option<usize>,
+}
+
+/// Session persistence state for the current request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionPersistenceState {
+    /// No session persistence configured or token matched healthy backend (no action needed)
+    Inactive,
+    /// First request or stale token — inject new token in response
+    InjectNew,
+    /// Fallback happened — inject updated token in response
+    InjectUpdate,
 }
 
 /// Stored internal jump target info (lightweight, survives retries via Clone)
@@ -469,6 +552,14 @@ pub struct EdgionHttpContext {
 
     /// Per-request mirror state for RequestMirror plugin.
     pub mirror_state: Option<MirrorState>,
+
+    /// Session persistence state (set during request phase).
+    /// When InjectNew or InjectUpdate, upstream_response_filter will inject a token.
+    pub sp_state: SessionPersistenceState,
+
+    /// Session persistence: resolved target endpoint from affinity map lookup.
+    /// When Some, try_get_peer will route directly to this addr instead of running LB.
+    pub sp_target_addr: Option<std::net::SocketAddr>,
 }
 
 impl Default for EdgionHttpContext {
@@ -505,6 +596,8 @@ impl EdgionHttpContext {
             external_jump: None,
             response_headers_to_add: Vec::new(),
             mirror_state: None,
+            sp_state: SessionPersistenceState::Inactive,
+            sp_target_addr: None,
         }
     }
 

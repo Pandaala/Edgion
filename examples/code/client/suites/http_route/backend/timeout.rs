@@ -28,7 +28,7 @@ impl TimeoutTestSuite {
                     let trace_id = format!("timeout-normal-{}", uuid::Uuid::new_v4());
                     let request = ctx
                         .http_client
-                        .get(format!("{}/delay/1", ctx.http_url()))
+                        .get(format!("{}/echo", ctx.http_url()))
                         .header("Host", "timeout-backend.example.com")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store");
@@ -146,17 +146,15 @@ impl TimeoutTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Create 1s timeout HTTP client，simulate client disconnect
-                    let short_timeout_client = reqwest::Client::builder()
+                    // Use ctx.http_client with per-request 1s timeout instead of creating a new client,
+                    // which would lose DNS overrides and other framework configuration.
+                    // server delay 3s (will not trigger server timeout, backend timeout is 10s)
+                    // but client 1s will disconnect
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/3", ctx.http_url()))
                         .timeout(std::time::Duration::from_secs(1))
-                        .no_proxy()
-                        .build()
-                        .expect("Failed to create short timeout client");
-
-                    // server delay3s（will not trigger server timeout, backend timeout is10s）
-                    // but client1s will disconnect
-                    let mut request = short_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
-                    request = request.header("Host", "timeout-client.example.com");
+                        .header("Host", "timeout-client.example.com");
 
                     match request.send().await {
                         Ok(response) => {
@@ -208,6 +206,124 @@ impl TimeoutTestSuite {
         )
     }
 
+    /// RED: request timeout 端到端强制 — 路由设 request: "1s"，后端延迟 3s，期望 504
+    fn test_request_timeout_enforced() -> TestCase {
+        TestCase::new(
+            "request_timeout_enforced",
+            "request: \"1s\" + /delay/3 must return 504 (end-to-end enforcement)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/3", ctx.http_url()))
+                        .header("Host", "timeout-request.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let elapsed = start.elapsed();
+                            if status != 504 {
+                                return TestResult::failed(
+                                    elapsed,
+                                    format!("Expected 504 (request timeout), got {}", status),
+                                );
+                            }
+                            // Verify the timeout fired within the expected window:
+                            // request: "1s", so 504 must arrive well before the 3s backend delay.
+                            if elapsed.as_millis() > 1500 {
+                                return TestResult::failed(
+                                    elapsed,
+                                    format!(
+                                        "Got 504 but too late ({}ms > 1500ms) — not request_timeout",
+                                        elapsed.as_millis()
+                                    ),
+                                );
+                            }
+                            TestResult::passed_with_message(
+                                elapsed,
+                                format!(
+                                    "Got 504 after {}ms (request timeout enforced within window)",
+                                    elapsed.as_millis()
+                                ),
+                            )
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request error: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// RED: "0s" 禁用后端超时 — backendRequest: "0s" 时后端延迟 2s 应正常返回 200
+    fn test_backend_request_disabled() -> TestCase {
+        TestCase::new(
+            "backend_request_disabled",
+            "backendRequest: \"0s\" (disabled) + /delay/2 must return 200",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/2", ctx.http_url()))
+                        .header("Host", "timeout-backend-disabled.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let elapsed = start.elapsed();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    elapsed,
+                                    format!("Got 200 after {}ms (backendRequest disabled)", elapsed.as_millis()),
+                                )
+                            } else {
+                                TestResult::failed(elapsed, format!("Expected 200 (timeout disabled), got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request error: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// RED: "0s" 禁用请求超时 — request: "0s" 时后端延迟 2s 应正常返回 200
+    fn test_request_timeout_disabled() -> TestCase {
+        TestCase::new(
+            "request_timeout_disabled",
+            "request: \"0s\" (disabled) + /delay/2 must return 200",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/2", ctx.http_url()))
+                        .header("Host", "timeout-disabled.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let elapsed = start.elapsed();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    elapsed,
+                                    format!("Got 200 after {}ms (request timeout disabled)", elapsed.as_millis()),
+                                )
+                            } else {
+                                TestResult::failed(elapsed, format!("Expected 200 (timeout disabled), got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request error: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_client_read_timeout() -> TestCase {
         TestCase::new(
             "client_read_timeout",
@@ -216,16 +332,13 @@ impl TimeoutTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Create alonger timeout HTTP client（5s），simulate long wait client that won't timeout first
-                    let long_timeout_client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(5))
-                        .no_proxy()
-                        .build()
-                        .expect("Failed to create long timeout client");
-
                     let trace_id = format!("timeout-read-{}", uuid::Uuid::new_v4());
-                    let mut request = long_timeout_client.get(format!("{}/delay/3", ctx.http_url()));
-                    request = request
+                    // Use ctx.http_client with per-request timeout instead of creating a new client,
+                    // which would lose DNS overrides and other framework configuration.
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/delay/3", ctx.http_url()))
+                        .timeout(std::time::Duration::from_secs(5))
                         .header("Host", "timeout-client.example.com")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store");
@@ -294,6 +407,9 @@ impl TestSuite for TimeoutTestSuite {
         vec![
             Self::test_normal_response(),
             Self::test_backend_request_timeout(),
+            Self::test_request_timeout_enforced(),
+            Self::test_backend_request_disabled(),
+            Self::test_request_timeout_disabled(),
             Self::test_client_read_timeout(),
             Self::test_client_read_timeout_499(),
         ]

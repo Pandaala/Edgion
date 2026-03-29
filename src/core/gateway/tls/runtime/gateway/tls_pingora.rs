@@ -590,8 +590,41 @@ impl TlsCallback {
         ssl.set_verify_cert_store(store)
             .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
 
-        let verify_mode = SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT;
-        ssl.set_verify(verify_mode);
+        // Determine verify mode based on frontend validation mode
+        let mode = gateway_tls
+            .frontend_validation
+            .as_ref()
+            .and_then(|fv| fv.mode.as_deref())
+            .unwrap_or("AllowValidOnly");
+
+        if mode == "AllowInsecureFallback" {
+            // InsecureFallback: request client cert but accept all results (including
+            // invalid/missing certs). A plain SslVerifyMode::PEER still rejects invalid
+            // certs, so we need a custom verify callback that always returns 1.
+            #[cfg(feature = "boringssl")]
+            unsafe {
+                unsafe extern "C" fn insecure_fallback_verify_cb(
+                    _preverify_ok: std::os::raw::c_int,
+                    _ctx: *mut boring_sys::X509_STORE_CTX,
+                ) -> std::os::raw::c_int {
+                    1 // Always accept
+                }
+                let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
+                boring_sys::SSL_set_verify(
+                    ssl_ptr,
+                    SslVerifyMode::PEER.bits() as std::os::raw::c_int,
+                    Some(insecure_fallback_verify_cb),
+                );
+            }
+            #[cfg(not(feature = "boringssl"))]
+            {
+                // Without boringssl, no custom verify callback is available.
+                // SslVerifyMode::PEER alone will still reject invalid certs.
+                ssl.set_verify(SslVerifyMode::PEER);
+            }
+        } else {
+            ssl.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+        }
 
         #[cfg(feature = "boringssl")]
         {

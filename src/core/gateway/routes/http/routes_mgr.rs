@@ -4,7 +4,7 @@ use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRo
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::core::gateway::routes::http::match_unit::RouteMatchResult;
 use crate::core::gateway::routes::http::HttpRouteRuleUnit;
-use crate::core::gateway::runtime::GatewayInfo;
+use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
 use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::HTTPRoute;
@@ -147,27 +147,32 @@ impl RouteRules {
     }
 
     /// Match a route using the match engines.
-    /// Try match in order: regex → radix (exact + prefix).
-    /// Returns `RouteMatchResult` on success (route + matched gateway context).
+    ///
+    /// Per Gateway API spec, path match priority is: Exact > PathPrefix > RegularExpression.
+    /// Radix engine handles Exact and PathPrefix; regex engine handles RegularExpression.
+    /// Try radix first, fall back to regex only when radix finds no match.
     ///
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_infos`: All gateway/listener contexts available on this listener
+    /// - `index`: Pre-built gateway/listener index for this port
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
         ctx: &EdgionHttpContext,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
     ) -> Result<RouteMatchResult, EdError> {
-        if let Some(ref regex_engine) = self.regex_routes_engine {
-            if let Some(result) = regex_engine.match_route(session, ctx, gateway_infos)? {
-                return Ok(result);
+        if let Some(ref match_engine) = self.match_engine {
+            match match_engine.match_route(session, ctx, index) {
+                Ok(result) => return Ok(result),
+                Err(_) => {}
             }
         }
 
-        if let Some(ref match_engine) = self.match_engine {
-            return match_engine.match_route(session, ctx, gateway_infos);
+        if let Some(ref regex_engine) = self.regex_routes_engine {
+            if let Some(result) = regex_engine.match_route(session, ctx, index)? {
+                return Ok(result);
+            }
         }
 
         Err(EdError::RouteNotFound())
@@ -211,32 +216,34 @@ impl DomainRouteRules {
     /// # Parameters
     /// - `session`: The HTTP session
     /// - `ctx`: Request context containing hostname and other request info
-    /// - `gateway_infos`: All gateway/listener contexts available on this listener
+    /// - `index`: Pre-built gateway/listener index for this port
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
         ctx: &EdgionHttpContext,
-        gateway_infos: &[GatewayInfo],
+        index: &GatewayInfoIndex,
     ) -> Result<RouteMatchResult, EdError> {
-        let hostname = &ctx.request_info.hostname;
+        // ctx.request_info.hostname is a NormalizedHostname — already lowercased,
+        // port-stripped, FQDN-dot-removed. No further normalization needed.
+        let hostname: &str = &ctx.request_info.hostname;
 
         let exact_map = self.exact_domain_map.load();
         let wildcard_engine = self.wildcard_engine.load();
 
-        if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
-            return route_rules.match_route(session, ctx, gateway_infos);
+        if let Some(route_rules) = exact_map.get(hostname) {
+            return route_rules.match_route(session, ctx, index);
         }
 
         // Step 2: Try wildcard domain match (O(log n))
         if let Some(ref engine) = wildcard_engine.as_ref() {
             if let Some(route_rules) = engine.match_host(hostname) {
-                return route_rules.match_route(session, ctx, gateway_infos);
+                return route_rules.match_route(session, ctx, index);
             }
         }
 
         // Step 3: Try catch-all routes (from HTTPRoutes with no spec.hostnames)
         if let Some(ref catch_all) = **self.catch_all_routes.load() {
-            return catch_all.match_route(session, ctx, gateway_infos);
+            return catch_all.match_route(session, ctx, index);
         }
 
         Err(EdError::RouteNotFound())

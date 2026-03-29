@@ -21,6 +21,7 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 | `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS 重定向 |
 | `edgion.io/https-redirect-port` | `port` | HTTPS 重定向端口 |
 | `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins 绑定 |
+| `edgion.io/require-sni-host-match` | `"true"` | 启用 HTTPS listener 421 Misdirected Request 检测（全局关闭时 per-Gateway 开启） |
 | `edgion.io/metrics-test-key` | `string` | 测试用 Metrics 标签键 |
 | `edgion.io/metrics-test-type` | `string` | 测试用 Metrics 标签值 |
 

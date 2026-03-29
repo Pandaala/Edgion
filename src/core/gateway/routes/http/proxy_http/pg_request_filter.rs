@@ -2,8 +2,13 @@ use super::EdgionHttpProxy;
 use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_match_grpc_route};
 use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
+use crate::core::gateway::runtime::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_port_gateway_info_store;
-use crate::core::gateway::{end_response_400, end_response_404, end_response_421, end_response_500};
+use crate::core::gateway::runtime::store::port_gateway_info::format_gateway_key;
+use crate::core::gateway::{
+    end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
+};
+use crate::types::ctx::NormalizedHostname;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
 use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
@@ -23,10 +28,49 @@ pub async fn request_filter(
     }
 
     // Step 1: Route matching — single lookup against the global route table.
-    // Load gateway_infos dynamically from the global store so that Gateways
-    // added/removed at runtime are reflected without restart.
+    // Load the pre-built GatewayInfoIndex for O(1) gateway/listener lookups.
     let port = edgion_http.listener.port as u16;
-    let gateway_infos = get_port_gateway_info_store().get(port);
+    let gateway_index = get_port_gateway_info_store().get_index(port);
+
+    // HTTPS listener isolation: 421 Misdirected Request (Gateway API spec).
+    // If SNI matched listener A but Host should be served by a different listener → 421.
+    // Enabled by global requireSniHostMatch OR per-Gateway annotation edgion.io/require-sni-host-match.
+    // Only applies to Gateway TLS (tls_matched_listener is None for HTTP/EdgionTls).
+    if edgion_http.listener.protocol.eq_ignore_ascii_case("HTTPS") {
+        if let (Some(sni_listener_name), Some(gateway_key)) = (
+            ctx.request_info.tls_matched_listener.as_deref(),
+            ctx.request_info.tls_matched_gateway_key.as_deref(),
+        ) {
+            if let Some(gw_listeners) = gateway_index.get_gateway(gateway_key) {
+                if let Some(sni_entry) = gw_listeners.get(sni_listener_name) {
+                    let global_enabled = edgion_http
+                        .edgion_gateway_config
+                        .spec
+                        .security_protect
+                        .as_ref()
+                        .map(|s| s.require_sni_host_match)
+                        .unwrap_or(true);
+                    let gw_annotation_enabled = sni_entry.info.require_sni_host_match.unwrap_or(false);
+
+                    if global_enabled || gw_annotation_enabled {
+                        let sni_hostname = sni_entry.hostname.as_deref();
+                        let host: &str = &ctx.request_info.hostname;
+
+                        let host_matches_sni_listener = match sni_hostname {
+                            Some(h) => hostname_matches_listener(host, h),
+                            None => true, // catch-all listener accepts all hostnames
+                        };
+
+                        if !host_matches_sni_listener || gw_listeners.has_more_specific(host, sni_hostname) {
+                            ctx.add_error(EdgionStatus::SniHostMismatch);
+                            end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if ctx.request_info.is_grpc_request {
         if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
@@ -37,13 +81,26 @@ pub async fn request_filter(
 
         let grpc_port_manager = get_global_grpc_route_managers().get_or_create_port_manager(port);
         let grpc_routes = grpc_port_manager.load_route_table();
-        let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos).await;
+        let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_index).await;
+
+        // If GRPCRoutes exist on this port but none matched, return UNIMPLEMENTED
+        // per Gateway API spec. Only fall through to HTTP routes when no GRPCRoutes
+        // are configured (user may be routing gRPC via HTTPRoute).
+        // Scoped to pure gRPC only — gRPC-web may be routed via HTTPRoute.
+        if !ctx.is_grpc_route_matched
+            && grpc_routes.has_routes()
+            && ctx.request_info.discover_protocol.as_deref() == Some("grpc")
+        {
+            ctx.add_error(EdgionStatus::RouteNotFound);
+            end_response_grpc_unimplemented(session, ctx, &edgion_http.server_header_opts).await?;
+            return Ok(true);
+        }
     }
 
     if !ctx.is_grpc_route_matched {
         let http_port_manager = get_global_http_route_managers().get_or_create_port_manager(port);
         let port_routes = http_port_manager.load_route_table();
-        match port_routes.match_route(session, ctx, &gateway_infos) {
+        match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
                 ctx.gateway_info = result.matched_gateway;
                 ctx.route_unit = Some(result.route_unit);
@@ -59,31 +116,42 @@ pub async fn request_filter(
     // Step 1.5: Handle preflight requests (before plugin execution)
     // Check if this is a preflight request and handle it early
     if edgion_http.preflight_handler.is_preflight(session) {
-        // Get CORS config dynamically from matched route's EdgionPlugins
-        // This ensures we always get the latest config even if EdgionPlugin is updated
-        let cors_config = if let Some(ref route_unit) = ctx.route_unit {
-            let namespace = &route_unit.matched_info.rsc.ns;
-            extract_cors_config_from_route_filters(&route_unit.rule.filters, namespace)
-        } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
-            // gRPC routes don't have CORS config yet, so None
-            None
-        } else {
-            None
-        };
+        // If route has a native CORS filter (type: CORS), skip this preflight handler.
+        // GapiCorsFilter in Step 3 already has full preflight support and will handle it.
+        let has_native_cors = ctx
+            .route_unit
+            .as_ref()
+            .and_then(|ru| ru.rule.filters.as_ref())
+            .map(|filters| filters.iter().any(|f| f.filter_type == HTTPRouteFilterType::CORS))
+            .unwrap_or(false);
 
-        // Handle preflight request
-        match edgion_http
-            .preflight_handler
-            .handle_preflight(session, ctx, cors_config.as_ref())
-            .await
-        {
-            Ok(true) => {
-                return Ok(true);
-            }
-            Ok(false) => {}
-            Err(_) => {
-                end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-                return Ok(true);
+        if !has_native_cors {
+            // Get CORS config dynamically from matched route's EdgionPlugins
+            // This ensures we always get the latest config even if EdgionPlugin is updated
+            let cors_config = if let Some(ref route_unit) = ctx.route_unit {
+                let namespace = &route_unit.matched_info.rsc.ns;
+                extract_cors_config_from_route_filters(&route_unit.rule.filters, namespace)
+            } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
+                // gRPC routes don't have CORS config yet, so None
+                None
+            } else {
+                None
+            };
+
+            // Handle preflight request
+            match edgion_http
+                .preflight_handler
+                .handle_preflight(session, ctx, cors_config.as_ref())
+                .await
+            {
+                Ok(true) => {
+                    return Ok(true);
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+                    return Ok(true);
+                }
             }
         }
     }
@@ -191,24 +259,23 @@ async fn build_request_metadata(
         ctx.request_info.client_addr.clone()
     };
 
-    // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback)
-    // In HTTP/2, Pingora puts the hostname in the URI, not as a separate header
-    // uri.host() returns host without port; Host header may include port so we strip it.
+    // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback).
+    // NormalizedHostname::new() applies trim, port-strip, FQDN-dot-strip, and lowercase once.
     ctx.request_info.hostname = req_header
         .uri
         .host()
-        .map(normalize_host_for_matching)
+        .map(NormalizedHostname::new)
         .or_else(|| {
             req_header
                 .headers
                 .get("host")
-                .and_then(|h| h.to_str().ok().map(normalize_host_for_matching))
+                .and_then(|h| h.to_str().ok().map(NormalizedHostname::new))
         })
         .or_else(|| {
             req_header
                 .headers
                 .get(":authority")
-                .and_then(|h| h.to_str().ok().map(normalize_host_for_matching))
+                .and_then(|h| h.to_str().ok().map(NormalizedHostname::new))
         })
         .unwrap_or_default();
 
@@ -247,27 +314,19 @@ async fn build_request_metadata(
                 ctx.request_info.tls_id = meta.tls_id.clone();
                 ctx.request_info.sni = meta.sni.clone();
                 ctx.request_info.client_cert_info = meta.client_cert_info.clone();
+                // Extract Gateway TLS listener info for 421 Misdirected Request detection.
+                // Only set for Gateway TLS (not EdgionTls, which has no listener concept).
+                if let Some(ref matched) = meta.matched {
+                    if matched.rsc.kind == "Gateway" {
+                        ctx.request_info.tls_matched_listener = matched.section.clone();
+                        ctx.request_info.tls_matched_gateway_key =
+                            Some(format_gateway_key(&matched.rsc.ns, &matched.rsc.name));
+                    }
+                }
             } else if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
                 // Backward compatibility for connections created before metadata upgrade.
                 ctx.request_info.tls_id = Some(tls_id.0.to_string());
             }
-        }
-    }
-
-    // HTTPS listener isolation:
-    // 1) enforce SNI and Host consistency when enabled
-    // 2) reject requests whose Host does not match listener hostname constraint
-    if should_enforce_listener_isolation(edgion_http) {
-        if is_sni_host_mismatch(ctx.request_info.sni.as_deref(), &ctx.request_info.hostname) {
-            ctx.add_error(EdgionStatus::SniHostMismatch);
-            end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
-            return Ok(true);
-        }
-
-        if listener_hostname_mismatch(edgion_http.listener.hostname.as_deref(), &ctx.request_info.hostname) {
-            ctx.add_error(EdgionStatus::SniHostMismatch);
-            end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
-            return Ok(true);
         }
     }
 
@@ -285,61 +344,6 @@ async fn build_request_metadata(
     }
 
     Ok(false) // Continue processing
-}
-
-#[inline]
-fn should_enforce_listener_isolation(edgion_http: &EdgionHttpProxy) -> bool {
-    let require_sni_host_match = edgion_http
-        .edgion_gateway_config
-        .spec
-        .security_protect
-        .as_ref()
-        .map(|s| s.require_sni_host_match)
-        .unwrap_or(true);
-
-    require_sni_host_match && edgion_http.listener.protocol.eq_ignore_ascii_case("HTTPS")
-}
-
-#[inline]
-fn listener_hostname_mismatch(listener_hostname: Option<&str>, host: &str) -> bool {
-    let Some(listener_hostname) = listener_hostname else {
-        return false;
-    };
-    normalize_host_for_matching(listener_hostname) != normalize_host_for_matching(host)
-}
-
-#[inline]
-fn is_sni_host_mismatch(sni: Option<&str>, host: &str) -> bool {
-    let Some(sni) = sni else {
-        return false;
-    };
-    normalize_host_for_matching(sni) != normalize_host_for_matching(host)
-}
-
-/// Normalize a hostname from Host / :authority header for route matching:
-/// 1. Trim whitespace
-/// 2. Strip port (handling both IPv4 and IPv6 bracket notation)
-/// 3. Remove trailing dot (FQDN normalization)
-/// 4. Convert to lowercase (case-insensitive matching per RFC 4343)
-#[inline]
-fn normalize_host_for_matching(raw: &str) -> String {
-    let h = raw.trim();
-
-    let host = if h.starts_with('[') {
-        // IPv6 bracket notation: [::1]:port → ::1
-        match h.find(']') {
-            Some(end) => &h[1..end],
-            None => h,
-        }
-    } else {
-        match h.rfind(':') {
-            Some(pos) if h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => &h[..pos],
-            _ => h,
-        }
-    };
-
-    let host = host.strip_suffix('.').unwrap_or(host);
-    host.to_ascii_lowercase()
 }
 
 /// Append client IP to X-Forwarded-For header (inline for performance)

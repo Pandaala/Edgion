@@ -51,7 +51,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | 05 | [testing/](05-testing/SKILL.md) | 测试：单元测试、集成测试、K8s 测试、专项测试 |
 | 06 | [tracing/](06-tracing/SKILL.md) | 调试：Admin API、edgion-ctl、常见问题 |
 | 07 | [tasks/](07-tasks/SKILL.md) | 任务管理：目录规则、模板、生命周期阶段、完成检查清单 |
-| 08 | [gateway-api/](08-gateway-api/SKILL.md) | Gateway API 兼容性备忘 |
+| 08 | [kubernetes/](08-kubernetes/SKILL.md) | Kubernetes 相关：Gateway API 兼容性、API 版本升级策略 |
 | 09 | [misc/](09-misc/) | 杂项（TLS 排查等） |
 
 ## 开发生命周期速查

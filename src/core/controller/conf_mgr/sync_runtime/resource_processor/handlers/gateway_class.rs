@@ -6,7 +6,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_true, condition_types, update_condition, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use crate::types::prelude_resources::GatewayClass;
-use crate::types::resources::gateway_class::GatewayClassStatus;
+use crate::types::resources::gateway_class::{GatewayClassStatus, SupportedFeature};
 
 /// GatewayClass handler
 pub struct GatewayClassHandler {
@@ -87,35 +87,44 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
             ),
         );
 
-        status.supported_features = Some(vec![
-            "Gateway".to_string(),
-            "HTTPRoute".to_string(),
-            "ReferenceGrant".to_string(),
-            "HTTPRouteQueryParamMatching".to_string(),
-            "HTTPRouteMethodMatching".to_string(),
-            "HTTPRouteResponseHeaderModification".to_string(),
-            "HTTPRouteHostRewrite".to_string(),
-            "HTTPRoutePathRewrite".to_string(),
-            "HTTPRouteRequestMirror".to_string(),
-            "HTTPRouteRequestMultipleMirrors".to_string(),
-            "HTTPRouteRequestTimeout".to_string(),
-            "HTTPRouteBackendTimeout".to_string(),
-            "HTTPRouteBackendRequestHeaderModification".to_string(),
-            "HTTPRouteBackendProtocolH2C".to_string(),
-            "HTTPRouteBackendProtocolWebSocket".to_string(),
-            "HTTPRouteNamedRouteRule".to_string(),
-            "GatewayHTTPListenerIsolation".to_string(),
-            "GatewayPort8080".to_string(),
-            "HTTPRoutePathRedirect".to_string(),
-            "HTTPRoutePortRedirect".to_string(),
-            "HTTPRouteSchemeRedirect".to_string(),
-            "HTTPRouteRequestPercentageMirror".to_string(),
-            "HTTPRouteParentRefPort".to_string(),
-            "GRPCRoute".to_string(),
-            "TLSRoute".to_string(),
-            "TCPRoute".to_string(),
-            "UDPRoute".to_string(),
-            "GatewayFrontendClientCertificateValidation".to_string(),
-        ]);
+        // Gateway API v1.5 requires supportedFeatures as objects with `name` field.
+        // List MUST be sorted in ascending alphabetical order by name.
+        let mut features: Vec<&str> = vec![
+            "Gateway",
+            "GRPCRoute",
+            "GatewayFrontendClientCertificateValidation",
+            "GatewayHTTPListenerIsolation",
+            "GatewayPort8080",
+            "HTTPRoute",
+            "HTTPRouteBackendProtocolH2C",
+            "HTTPRouteBackendProtocolWebSocket",
+            "HTTPRouteBackendRequestHeaderModification",
+            "HTTPRouteBackendTimeout",
+            "HTTPRouteHostRewrite",
+            "HTTPRouteMethodMatching",
+            "HTTPRouteNamedRouteRule",
+            "HTTPRouteParentRefPort",
+            "HTTPRoutePathRedirect",
+            "HTTPRoutePathRewrite",
+            "HTTPRoutePortRedirect",
+            "HTTPRouteQueryParamMatching",
+            "HTTPRouteRequestMirror",
+            "HTTPRouteRequestMultipleMirrors",
+            "HTTPRouteRequestPercentageMirror",
+            "HTTPRouteRequestTimeout",
+            "HTTPRouteResponseHeaderModification",
+            "HTTPRouteSchemeRedirect",
+            "ReferenceGrant",
+            "TCPRoute",
+            "TLSRoute",
+            "UDPRoute",
+        ];
+        features.sort();
+        status.supported_features = Some(
+            features
+                .into_iter()
+                .map(|name| SupportedFeature { name: name.to_string() })
+                .collect(),
+        );
     }
 }

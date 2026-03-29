@@ -10,11 +10,12 @@ use crate::impl_resource_meta;
 // K8s native resources
 // =============================================================================
 
-use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 impl_resource_meta!(Service, Service, "Service");
 impl_resource_meta!(Secret, Secret, "Secret");
+impl_resource_meta!(ConfigMap, ConfigMap, "ConfigMap");
 impl_resource_meta!(Endpoints, Endpoint, "Endpoints");
 impl_resource_meta!(EndpointSlice, EndpointSlice, "EndpointSlice");
 
@@ -23,7 +24,8 @@ impl_resource_meta!(EndpointSlice, EndpointSlice, "EndpointSlice");
 // =============================================================================
 
 use crate::types::resources::{
-    BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, TCPRoute, TLSRoute, UDPRoute,
+    BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, ReferenceGrantBeta, TCPRoute,
+    TLSRoute, UDPRoute,
 };
 
 // Cluster-scoped
@@ -32,6 +34,7 @@ impl_resource_meta!(GatewayClass, GatewayClass, "GatewayClass", cluster_scoped);
 // Namespaced
 impl_resource_meta!(Gateway, Gateway, "Gateway");
 impl_resource_meta!(ReferenceGrant, ReferenceGrant, "ReferenceGrant");
+impl_resource_meta!(ReferenceGrantBeta, ReferenceGrant, "ReferenceGrant");
 impl_resource_meta!(BackendTLSPolicy, BackendTLSPolicy, "BackendTLSPolicy");
 
 // Routes (with pre_parse)

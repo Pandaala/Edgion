@@ -107,7 +107,7 @@ pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(Proce
 | `requeue(kind, key)` | 跨资源立即重入队 |
 | `requeue_with_chain(kind, key, chain)` | 带 TriggerChain 的延迟重入队（合并+循环检测） |
 | `requeue_all()` | Leader 切换时全量重入队，触发状态 reconciliation |
-| `clear_registry()` | 清空所有处理器及全局状态（ListenerPortManager、ServiceRefManager、ReferenceGrantStore 等） |
+| `clear_registry()` | 清空所有处理器及全局状态（ServiceRefManager、ReferenceGrantStore 等） |
 
 ## 模块布局
 
@@ -141,7 +141,6 @@ src/core/controller/
 │           ├── ref_grant/      # 跨命名空间引用校验（ReferenceGrant）
 │           ├── secret_utils/   # Secret 全局存储与引用管理
 │           ├── service_ref.rs  # Service 引用追踪
-│           ├── listener_port_manager.rs  # Gateway Listener 端口冲突检测
 │           ├── attached_route_tracker.rs # 路由挂载追踪
 │           ├── gateway_route_index.rs    # Gateway↔Route 索引
 │           ├── namespace_store.rs        # Namespace 存储

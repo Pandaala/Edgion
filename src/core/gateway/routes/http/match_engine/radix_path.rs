@@ -58,12 +58,11 @@ impl RadixPath {
         // Count segments and detect parameters
         let (segment_count, has_params) = count_segments_and_params(&normalized);
 
-        // Priority calculation:
-        // - More segments = higher priority (more specific path)
-        // - Static > Param (static routes are more specific)
-        // - Exact > Prefix (exact matches are more specific)
+        // Priority calculation per Gateway API spec:
+        // Prefix match priority uses "largest number of characters" (not segment count).
+        // Exact matches always beat prefix matches of the same path.
         //
-        // Formula: segment_count * 4 + type_bonus
+        // Formula: path_char_count * 4 + type_bonus
         // type_bonus: static_exact=3, param_exact=2, static_prefix=1, param_prefix=0
         let type_bonus = match (is_prefix_match, has_params) {
             (false, false) => 3, // static exact (highest)
@@ -71,7 +70,8 @@ impl RadixPath {
             (true, false) => 1,  // static prefix
             (true, true) => 0,   // param prefix (lowest)
         };
-        let priority_weight = segment_count * 4 + type_bonus;
+        let path_char_count = normalized.len();
+        let priority_weight = path_char_count * 4 + type_bonus;
 
         Self {
             original,
@@ -240,11 +240,13 @@ mod tests {
 
     #[test]
     fn test_static_vs_param_priority() {
-        let static_exact = RadixPath::new("/users/admin", 0, false);
-        let param_exact = RadixPath::new("/users/:id", 1, false);
-        let static_prefix = RadixPath::new("/users/admin", 2, true);
-        let param_prefix = RadixPath::new("/users/:id", 3, true);
+        // Same-length paths: type_bonus ordering holds
+        let static_exact = RadixPath::new("/users/ab", 0, false);
+        let param_exact = RadixPath::new("/users/:a", 1, false);
+        let static_prefix = RadixPath::new("/users/ab", 2, true);
+        let param_prefix = RadixPath::new("/users/:a", 3, true);
 
+        // "/users/ab" and "/users/:a" both have 9 chars, so type_bonus decides
         assert!(static_exact.priority_weight > param_exact.priority_weight);
         assert!(param_exact.priority_weight > static_prefix.priority_weight);
         assert!(static_prefix.priority_weight > param_prefix.priority_weight);
@@ -360,19 +362,22 @@ mod tests {
 
     #[test]
     fn test_priority_order_comprehensive() {
+        // "/a/b" has 4 chars, "/a/:b" has 5 chars
         let static_exact_2seg = RadixPath::new("/a/b", 0, false);
         let param_exact_2seg = RadixPath::new("/a/:b", 1, false);
         let static_prefix_2seg = RadixPath::new("/a/b", 2, true);
         let param_prefix_2seg = RadixPath::new("/a/:b", 3, true);
 
-        assert_eq!(static_exact_2seg.priority_weight, 2 * 4 + 3);
-        assert_eq!(param_exact_2seg.priority_weight, 2 * 4 + 2);
-        assert_eq!(static_prefix_2seg.priority_weight, 2 * 4 + 1);
-        assert_eq!(param_prefix_2seg.priority_weight, 2 * 4);
+        // priority_weight = path_char_count * 4 + type_bonus
+        assert_eq!(static_exact_2seg.priority_weight, 4 * 4 + 3); // "/a/b" = 4 chars
+        assert_eq!(param_exact_2seg.priority_weight, 5 * 4 + 2); // "/a/:b" = 5 chars
+        assert_eq!(static_prefix_2seg.priority_weight, 4 * 4 + 1); // "/a/b" = 4 chars
+        assert_eq!(param_prefix_2seg.priority_weight, 5 * 4); // "/a/:b" = 5 chars
 
-        assert!(static_exact_2seg.priority_weight > param_exact_2seg.priority_weight);
-        assert!(param_exact_2seg.priority_weight > static_prefix_2seg.priority_weight);
-        assert!(static_prefix_2seg.priority_weight > param_prefix_2seg.priority_weight);
+        // Same-path comparisons: exact > prefix, static > param
+        let static_exact = RadixPath::new("/a/b", 0, false);
+        let static_prefix = RadixPath::new("/a/b", 1, true);
+        assert!(static_exact.priority_weight > static_prefix.priority_weight);
     }
 
     #[test]

@@ -1,0 +1,14 @@
+# EndpointSlice with no ready endpoints - for testing AllEndpointStatus 0-endpoint behavior
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: no-endpoint-svc
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: no-endpoint-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 38999
+    protocol: TCP
+endpoints: []

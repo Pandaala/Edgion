@@ -14,7 +14,17 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+
+/// Maximum number of health check tasks that can run their probe loop
+/// concurrently. Tasks beyond this limit wait for a permit before
+/// starting their next probe cycle, providing natural backpressure
+/// without dropping or delaying individual tasks.
+const MAX_CONCURRENT_PROBE_CYCLES: usize = 50;
+
+static PROBE_SEMAPHORE: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PROBE_CYCLES)));
 
 static HEALTH_CHECK_MANAGER: LazyLock<Arc<HealthCheckManager>> = LazyLock::new(|| Arc::new(HealthCheckManager::new()));
 
@@ -130,8 +140,12 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    let semaphore = PROBE_SEMAPHORE.clone();
+
     loop {
         ticker.tick().await;
+
+        let _permit = semaphore.acquire().await.expect("probe semaphore closed");
 
         let backends = get_service_backends(&service_key);
         let hashes: Vec<u64> = backends.iter().map(backend_hash).collect();

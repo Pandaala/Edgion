@@ -356,6 +356,7 @@ impl ConfigClient {
             ResourceKind::PluginMetaData => Some(&self.plugin_metadata),
             // These are intentionally not cached on Gateway side
             ResourceKind::Secret => None,
+            ResourceKind::ConfigMap => None,
             ResourceKind::ReferenceGrant => None,
             ResourceKind::Unspecified => None,
         }
@@ -427,6 +428,7 @@ impl ConfigClient {
             ResourceKind::BackendTLSPolicy => self.backend_tls_policies.list().to_json("BackendTLSPolicy")?,
             ResourceKind::PluginMetaData => self.plugin_metadata.list().to_json("PluginMetaData")?,
             ResourceKind::Secret => return Err("Secret resources are not stored in ConfigClient".to_string()),
+            ResourceKind::ConfigMap => return Err("ConfigMap resources are not synced to Gateway".to_string()),
             ResourceKind::EdgionAcme => self.edgion_acme.list().to_json("EdgionAcme")?,
         };
 
@@ -617,6 +619,12 @@ impl ConfigClientEventDispatcher for ConfigClient {
             }
             ResourceKind::BackendTLSPolicy => apply_change!(BackendTLSPolicy, backend_tls_policies, "BackendTLSPolicy"),
             ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),
+            ResourceKind::ConfigMap => {
+                tracing::debug!(
+                    "skip resource change {:?} for ConfigMap (not synced to Gateway)",
+                    change
+                )
+            }
             ResourceKind::EdgionAcme => apply_change!(EdgionAcme, edgion_acme, "EdgionAcme"),
         }
     }

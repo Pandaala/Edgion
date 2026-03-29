@@ -66,7 +66,7 @@ rules:
 路由引用其他命名空间的资源（Gateway、Service）需要目标命名空间有对应的 ReferenceGrant：
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-route-from-app

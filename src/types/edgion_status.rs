@@ -101,4 +101,7 @@ pub enum EdgionStatus {
 
     /// Backend kind not supported (Gateway API conformance: return 500)
     BackendUnsupportedKind = 500_15,
+
+    /// Backend TLS certificate SAN validation failed
+    BackendTlsSanValidationFailed = 502_01,
 }

@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: backend-san-mismatch
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: test-backend-san-mismatch
+  validation:
+    caCertificateRefs:
+      - name: backend-ca
+        kind: Secret
+        group: ""
+    hostname: backend.example.com
+    subjectAltNames:
+      - type: Hostname
+        hostname: wrong.example.com

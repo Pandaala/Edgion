@@ -45,8 +45,16 @@ pub struct GatewayClassStatus {
     pub conditions: Vec<Condition>,
 
     /// SupportedFeatures is the set of features the GatewayClass supports.
+    /// Each entry is an object with a `name` field (Gateway API v1.5+ format).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub supported_features: Option<Vec<String>>,
+    pub supported_features: Option<Vec<SupportedFeature>>,
+}
+
+/// A feature supported by a GatewayClass (Gateway API v1.5+ format).
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+pub struct SupportedFeature {
+    /// The feature name (e.g., "Gateway", "HTTPRoute").
+    pub name: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]

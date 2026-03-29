@@ -18,7 +18,7 @@ Edgion 实现了 Kubernetes Gateway API v1.5.0 规范，支持 HTTP、gRPC、TCP
 | **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP 四层路由，按端口转发到后端 |
 | **TLSRoute** | gateway.networking.k8s.io/v1 | GA | TLS passthrough 路由，按 SNI 匹配后直接转发加密流量 |
 | **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP 路由，按端口转发 |
-| **ReferenceGrant** | gateway.networking.k8s.io/v1beta1 | Standard | 跨命名空间引用授权，仅在 Controller 侧使用（no_sync_kinds） |
+| **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 兼容) | Standard | 跨命名空间引用授权，仅在 Controller 侧使用（no_sync_kinds） |
 | **BackendTLSPolicy** | gateway.networking.k8s.io/v1alpha3 | Experimental | 后端 TLS 策略，配置 Gateway→Backend 的 mTLS |
 
 ## CRD 安装
@@ -113,4 +113,4 @@ spec:
 
 ## Gateway API 兼容性说明
 
-更详细的兼容性说明、有意偏差和已知限制，请参见 `skills/08-gateway-api/SKILL.md`。
+更详细的兼容性说明、有意偏差和已知限制，请参见 `skills/08-kubernetes/01-gateway-api/SKILL.md`。

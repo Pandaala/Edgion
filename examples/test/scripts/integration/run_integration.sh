@@ -577,6 +577,7 @@ run_all_tests() {
                     run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
                     run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
                     run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
+                    run_test "TLSRoute_Passthrough" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Passthrough" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TLSRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
@@ -598,6 +599,10 @@ run_all_tests() {
                     run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
                     run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
                     run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
+                    run_test "Gateway_TLS_BackendTLSSAN" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLSSAN" || test_failed=true
+                    run_test "Gateway_TLS_NoHostnameListener" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/NoHostnameListener" || test_failed=true
+                    run_test "Gateway_FrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i FrontendValidation" || test_failed=true
+                    run_test "Gateway_PortConflict" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i PortConflict" || test_failed=true
                 else
                     # Replace / with _ in item name for log file
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
@@ -634,6 +639,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
+                    run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
                     run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
                         run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
@@ -662,8 +668,15 @@ run_all_tests() {
                     run_test "EdgionTls_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
-            ReferenceGrant)
-                run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
+            Status)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+                    run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+                    run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
+                else
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "Status_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i ${G_ITEM}" || test_failed=true
+                fi
                 ;;
             *)
                 log_error "Unknown resource type: $G_RESOURCE"
@@ -704,8 +717,15 @@ run_all_tests() {
         else
             log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
         fi
+        run_test "HTTPRoute_Backend_RetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/RetryOnStatus" || test_failed=true
+        run_test "HTTPRoute_Backend_CircuitBreaker" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/CircuitBreaker" || test_failed=true
+        run_test "HTTPRoute_Backend_SessionPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
+        run_test "HTTPRoute_Backend_PartiallyInvalid" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/PartiallyInvalid" || test_failed=true
+        run_test "HTTPRoute_Backend_GrpcHealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/GrpcHealthCheck" || test_failed=true
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
+        run_test "HTTPRoute_Filters_HeaderModifier" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters/HeaderModifier" || test_failed=true
+        run_test "HTTPRoute_Filters_FilterConflict" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters/FilterConflict" || test_failed=true
         run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g websocket" || test_failed=true
         run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
         
@@ -723,7 +743,8 @@ run_all_tests() {
         run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
         run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
         run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
-        
+        run_test "TLSRoute_Passthrough" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Passthrough" || test_failed=true
+
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
         
@@ -774,7 +795,11 @@ run_all_tests() {
         run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
         run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
         run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
-        
+        run_test "Gateway_TLS_BackendTLSSAN" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLSSAN" || test_failed=true
+        run_test "Gateway_TLS_NoHostnameListener" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/NoHostnameListener" || test_failed=true
+        run_test "Gateway_FrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i FrontendValidation" || test_failed=true
+        run_test "Gateway_PortConflict" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i PortConflict" || test_failed=true
+
         # EdgionTls Tests
         run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
         run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
@@ -782,8 +807,10 @@ run_all_tests() {
         run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
         run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
         
-        # ReferenceGrant Status Tests
-        run_test "ReferenceGrant_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g ref-grant-status" || test_failed=true
+        # Controller Status Tests
+        run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+        run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+        run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
         
         # Gateway Dynamic Tests (if enabled)
         if $G_DYNAMIC_TEST; then
@@ -892,9 +919,17 @@ main() {
                     suites="${suites},${G_RESOURCE}/${G_ITEM}"
                 fi
             fi
+        elif [ "$G_RESOURCE" = "Status" ]; then
+            if [ -n "$G_ITEM" ]; then
+                suites="${base_suites},Status/${G_ITEM}"
+            else
+                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy"
+            fi
         elif [ -n "$G_ITEM" ]; then
             if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
                 suites="${base_suites},HTTPRoute/Backend/BackendTLS"
+            elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLSSAN" ]; then
+                suites="${base_suites},HTTPRoute/Backend/BackendTLSSAN,HTTPRoute/Backend/BackendTLS"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi

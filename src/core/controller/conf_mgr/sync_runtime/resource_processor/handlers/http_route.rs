@@ -7,7 +7,7 @@ use super::super::ref_grant::{
 };
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
-    update_attached_route_tracker, update_gateway_route_index,
+    update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
@@ -100,6 +100,18 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // find_invalid_rule_indices() in update_status(), which marks individual rules
         // as invalid via PartiallyInvalid condition rather than rejecting the entire route.
         errors
+    }
+
+    fn preparse(&self, route: &mut HTTPRoute, _ctx: &HandlerContext) -> Vec<String> {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = route.metadata.name.as_deref().unwrap_or("");
+        update_gateway_route_index(
+            ResourceKind::HTTPRoute,
+            route_ns,
+            route_name,
+            route.spec.parent_refs.as_ref(),
+        );
+        Vec::new()
     }
 
     async fn parse(&self, mut route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
@@ -233,15 +245,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             route.spec.parent_refs.as_ref(),
         );
 
-        let tracker_changed = update_attached_route_tracker(
-            ResourceKind::HTTPRoute,
-            route_ns,
-            route_name,
-            route.spec.parent_refs.as_ref(),
-        );
-        if tracker_changed {
-            requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        }
+        requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
     }
 
     async fn on_delete(&self, route: &HTTPRoute, ctx: &HandlerContext) {
@@ -282,22 +286,27 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(invalid_indices.clone())
         };
 
-        let all_rules_invalid = total_rules > 0 && valid_rules == 0;
+        let _all_rules_invalid = total_rules > 0 && valid_rules == 0;
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let mut accepted_errors =
-                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames);
+                let accepted_result = super::route_utils::validate_parent_ref_accepted(
+                    route_ns,
+                    parent_ref,
+                    route_hostnames,
+                    "HTTPRoute",
+                );
+                let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                if all_rules_invalid {
-                    accepted_errors.push(AcceptedError::Invalid {
-                        message: format!("All {} rules are invalid", total_rules),
-                    });
-                }
+                // Note: all_rules_invalid due to backend ref issues (InvalidKind,
+                // BackendNotFound) should NOT affect Accepted status. Per Gateway API
+                // spec, Accepted reflects whether the Gateway accepts the route, not
+                // whether backends are valid. Backend issues only affect ResolvedRefs.
+                // Only filter conflicts (rewrite+redirect) make a route un-accepted.
 
                 let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -349,6 +358,15 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         } else {
             status.parents.clear();
         }
+
+        // Update tracker with only accepted parentRefs so attachedRoutes count is accurate.
+        super::route_utils::update_tracker_accepted_only(
+            ResourceKind::HTTPRoute,
+            route_ns,
+            route.metadata.name.as_deref().unwrap_or(""),
+            route.spec.parent_refs.as_ref(),
+            route.spec.hostnames.as_ref(),
+        );
     }
 }
 
@@ -399,7 +417,7 @@ fn has_rewrite_redirect_conflict(filters: Option<&Vec<crate::types::resources::h
 /// A rule is invalid if:
 /// - It has backend refs and every one is unreachable (wrong kind, missing service, or cross-namespace ref denied)
 /// - It has conflicting URLRewrite + RequestRedirect filters
-fn find_invalid_rule_indices(route: &HTTPRoute, route_ns: &str) -> Vec<usize> {
+fn find_invalid_rule_indices(route: &HTTPRoute, _route_ns: &str) -> Vec<usize> {
     let mut invalid_indices = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for (idx, rule) in rules.iter().enumerate() {
@@ -439,25 +457,11 @@ fn find_invalid_rule_indices(route: &HTTPRoute, route_ns: &str) -> Vec<usize> {
                 }
             }
 
-            if let Some(backend_refs) = &rule.backend_refs {
-                if backend_refs.is_empty() {
-                    continue;
-                }
-                let all_invalid = backend_refs.iter().all(|br| {
-                    let kind = br.kind.as_deref().unwrap_or("Service");
-                    if kind != "Service" {
-                        return true;
-                    }
-                    let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                    if !super::route_utils::service_exists(ns, &br.name) {
-                        return true;
-                    }
-                    br.ref_denied.is_some()
-                });
-                if all_invalid {
-                    invalid_indices.push(idx);
-                }
-            }
+            // Note: rules where all backends are invalid (non-Service kind or
+            // non-existent) are NOT marked as invalid indices. The Gateway should
+            // still register these rules so requests match and get a 500 response
+            // (per Gateway API spec). Only filter conflicts above truly invalidate
+            // a rule.
         }
     }
     invalid_indices

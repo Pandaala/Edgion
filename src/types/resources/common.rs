@@ -6,6 +6,11 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Helper for `#[serde(skip_serializing_if)]` on `bool` fields.
+pub fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 /// Per Gateway API spec, `""` and `"core"` both represent the Kubernetes core API group.
 #[inline]
 pub fn is_core_api_group(group: &str) -> bool {

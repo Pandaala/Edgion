@@ -1,5 +1,6 @@
 pub mod circuit_breaker;
 pub mod discovery;
+pub mod gateway_backend_tls_store;
 pub mod health;
 pub mod policy;
 pub mod preload;
@@ -12,6 +13,7 @@ pub use discovery::{
     get_global_service_store, get_roundrobin_store, EndpointDiscovery, EndpointExt, EndpointSliceExt, EndpointStore,
     EpSliceStore, ServiceStore,
 };
+pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
 pub use policy::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
 pub use preload::preload_load_balancers;
@@ -573,6 +575,28 @@ fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, E
 }
 
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
+fn build_client_cert_key_from_secret(
+    secret: &k8s_openapi::api::core::v1::Secret,
+) -> Result<Option<Arc<CertKey>>, EdgionStatus> {
+    let data = secret.data.as_ref().ok_or(EdgionStatus::Unknown)?;
+    let cert_pem = data.get(CERT).ok_or(EdgionStatus::Unknown)?;
+    let key_pem = data.get(KEY).ok_or(EdgionStatus::Unknown)?;
+
+    let cert = X509::from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
+    let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
+
+    Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
+}
+
+#[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+fn build_client_cert_key_from_secret(
+    _secret: &k8s_openapi::api::core::v1::Secret,
+) -> Result<Option<Arc<()>>, EdgionStatus> {
+    tracing::warn!("upstream mTLS client cert from Gateway is not supported by this TLS feature set");
+    Ok(None)
+}
+
+#[cfg(any(feature = "boringssl", feature = "openssl"))]
 fn build_ca_chain(policy: &BackendTLSPolicy) -> Option<Arc<CaType>> {
     let mut ca_chain = Vec::new();
     for secret in policy.spec.resolved_ca_certificates.as_ref()? {
@@ -599,8 +623,25 @@ fn build_ca_chain(_policy: &BackendTLSPolicy) -> Option<Arc<()>> {
     None
 }
 
-fn create_tls_peer(addr: SocketAddr, policy: &Option<Arc<BackendTLSPolicy>>) -> Result<Box<HttpPeer>, EdgionStatus> {
+fn create_tls_peer(
+    addr: SocketAddr,
+    policy: &Option<Arc<BackendTLSPolicy>>,
+    gateway_key: Option<&str>,
+) -> Result<Box<HttpPeer>, EdgionStatus> {
     let Some(policy) = policy.as_ref() else {
+        // No BackendTLSPolicy — check Gateway-level default client cert
+        if let Some(gw_key) = gateway_key {
+            if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
+                #[cfg(any(feature = "boringssl", feature = "openssl"))]
+                if let Some(cert_key) = build_client_cert_key_from_secret(&gw_secret)? {
+                    let peer = HttpPeer::new_mtls(addr, String::new(), cert_key);
+                    return Ok(Box::new(peer));
+                }
+
+                #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+                let _ = gw_secret;
+            }
+        }
         return Ok(Box::new(HttpPeer::new(addr, false, String::new())));
     };
 
@@ -609,6 +650,17 @@ fn create_tls_peer(addr: SocketAddr, policy: &Option<Arc<BackendTLSPolicy>>) -> 
     #[cfg(any(feature = "boringssl", feature = "openssl"))]
     let mut peer = if let Some(cert_key) = build_client_cert_key(policy)? {
         HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+    } else if let Some(gw_key) = gateway_key {
+        // Policy exists but has no client cert — fallback to Gateway-level cert
+        if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
+            if let Some(cert_key) = build_client_cert_key_from_secret(&gw_secret)? {
+                HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+            } else {
+                HttpPeer::new(addr, true, sni)
+            }
+        } else {
+            HttpPeer::new(addr, true, sni)
+        }
     } else {
         HttpPeer::new(addr, true, sni)
     };
@@ -617,8 +669,50 @@ fn create_tls_peer(addr: SocketAddr, policy: &Option<Arc<BackendTLSPolicy>>) -> 
     let mut peer = HttpPeer::new(addr, true, sni);
 
     #[cfg(any(feature = "boringssl", feature = "openssl"))]
-    if let Some(ca_chain) = build_ca_chain(policy) {
-        peer.options.ca = Some(ca_chain);
+    if !policy.spec.use_system_ca {
+        if let Some(ca_chain) = build_ca_chain(policy) {
+            peer.options.ca = Some(ca_chain);
+        }
+    }
+    // When use_system_ca is true, peer.options.ca remains None,
+    // and Pingora uses the system CA trust store via set_default_verify_paths().
+
+    // Set upstream TLS handshake complete hook for SAN validation
+    // Also set group_key to isolate connection pools per policy, preventing
+    // connections with different SAN requirements from being reused.
+    #[cfg(any(feature = "boringssl", feature = "openssl"))]
+    if let Some(ref policy_sans) = policy.spec.validation.subject_alt_names {
+        if !policy_sans.is_empty() {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            // Hash each SAN's type + value to create a unique group key
+            for san in policy_sans.iter() {
+                match san.san_type {
+                    crate::types::resources::backend_tls_policy::SubjectAltNameType::Hostname => {
+                        "H".hash(&mut hasher);
+                        san.hostname.hash(&mut hasher);
+                    }
+                    crate::types::resources::backend_tls_policy::SubjectAltNameType::URI => {
+                        "U".hash(&mut hasher);
+                        san.uri.hash(&mut hasher);
+                    }
+                }
+            }
+            peer.group_key = hasher.finish();
+
+            let policy_sans = policy_sans.clone();
+            peer.options.upstream_tls_handshake_complete_hook = Some(std::sync::Arc::new(
+                move |ssl: &pingora_core::tls::ssl::SslRef| -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+                    let cert_sans =
+                        crate::core::gateway::tls::runtime::backend::cert_extractor::extract_sans_from_ssl(ssl);
+                    let result = crate::core::gateway::tls::validation::backend_san::validate_backend_sans(
+                        &cert_sans,
+                        &policy_sans,
+                    );
+                    Some(std::sync::Arc::new(result))
+                },
+            ));
+        }
     }
 
     Ok(Box::new(peer))
@@ -659,7 +753,14 @@ fn validate_backend_addr(addr: &SocketAddr, service_key: &str) -> Result<(), Edg
 }
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
-fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -> Result<Box<HttpPeer>, EdgionStatus> {
+pub(crate) fn try_get_peer(
+    ctx: &mut EdgionHttpContext,
+    session: &Session,
+    is_grpc: bool,
+) -> Result<Box<HttpPeer>, EdgionStatus> {
+    let gateway_key = ctx.gateway_info.gateway_key();
+    let gateway_key_ref = Some(gateway_key.as_str());
+
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
     let (br_name, br_port, br_kind, lb_policy, backend_tls_policy) = if is_grpc {
         // gRPC backend
@@ -707,7 +808,24 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             if !get_global_service_store().contains(&service_key) {
                 return Err(EdgionStatus::BackendServiceNotFound);
             }
-            let backend = select_backend_by_policy(&service_key, lb_policy, session)?;
+
+            // Session persistence: if sp_target_addr is set, use it directly (skip LB)
+            let backend = if let Some(target_addr) = ctx.sp_target_addr.take() {
+                let health_store = get_health_status_store();
+                let b = pingora_load_balancing::Backend {
+                    addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(target_addr),
+                    weight: 1,
+                    ext: Default::default(),
+                };
+                if is_backend_healthy(&service_key, &b, &health_store) {
+                    b
+                } else {
+                    // Target unhealthy — fall through to normal LB (fallback handled by caller)
+                    return Err(EdgionStatus::BackendEndpointSliceNotFoundByConsistent);
+                }
+            } else {
+                select_backend_by_policy(&service_key, lb_policy, session)?
+            };
 
             let lb_addr = backend.addr.clone();
             let mut peer_addr = lb_addr.clone();
@@ -740,7 +858,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 }
             }
 
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -781,7 +899,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
-            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -822,7 +940,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
-            let mut peer = create_tls_peer(addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -869,7 +987,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 }
             }
 
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -906,7 +1024,7 @@ fn try_get_peer(ctx: &mut EdgionHttpContext, session: &Session, is_grpc: bool) -
                 }
             }
 
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy)?;
+            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
