@@ -188,3 +188,44 @@ Handler 方法的上下文对象，提供以下共享资源：
 ### status_diff
 
 语义变更检测：比较新旧 status 时忽略 `lastTransitionTime` 等非语义字段，避免不必要的 K8s API 写入。通过 `status_semantically_changed(kind, old_json, new_json)` 判断是否需要持久化。
+
+## RawStore — 跨资源按 key 直接查询
+
+`ServerCache` 只存放经过 `handler.filter()` 的资源（如 `GatewayHandler` 按 `gatewayClassName` 过滤）。当 Route 需要查找不属于本 controller 的 Gateway 时（parentRef 可以指向任意 Gateway），`ServerCache` 查不到，导致 Route 状态计算错误。
+
+`RawStore<K>` 绕过 handler filter，提供按 key 的 O(1) 单条查询：
+
+```rust
+pub trait RawStore<K>: Send + Sync {
+    fn get(&self, key: &str) -> Option<Arc<K>>;  // key = "namespace/name" 或 "name"
+}
+```
+
+### 两种后端实现
+
+| 后端 | 类型 | 数据来源 | 注入时机 |
+|---|---|---|---|
+| `KubeRawStore<K>` | 包装 `reflector::Store<K>` | reflector 自动维护，与 K8s API 实时同步 | `run_with_api` 中 `reflector::store()` 之后立即注入 |
+| `FsRawStore<K>` | `RwLock<HashMap<String, Arc<K>>>` | `FileSystemResourceController` 在 InitApply/Apply/Delete 及 Worker 处理时手动维护 | `FileSystemResourceController::new()` 时注入 |
+
+### ProcessorObj 暴露接口
+
+`ProcessorObj` trait（object-safe）新增：
+
+```rust
+fn get_json_by_key(&self, key: &str) -> Option<String>;
+```
+
+实现：从 `raw_store` 取 `Arc<K>` → `serde_json::to_string`，返回 `Option<String>`。  
+`raw_store` 未注入时（init 阶段之前）返回 `None`，行为与之前一致，不退化。
+
+### 调用方
+
+| 函数 | 位置 | 查询目标 |
+|---|---|---|
+| `lookup_gateway` | `route_utils.rs` | `PROCESSOR_REGISTRY.get("Gateway")?.get_json_by_key("ns/name")` |
+| `lookup_service_cluster_ip` | `gateway.rs` | `PROCESSOR_REGISTRY.get("Service")?.get_json_by_key("ns/name")` |
+
+### 关键文件
+
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/raw_store.rs` — `RawStore<K>` trait、`KubeRawStore<K>`、`FsRawStore<K>`

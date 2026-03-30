@@ -44,6 +44,7 @@ use crate::types::ResourceMeta;
 
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
+use super::raw_store::RawStore;
 use super::{make_resource_key, SecretRefManager};
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
 
@@ -122,6 +123,16 @@ pub trait ProcessorObj: Send + Sync {
     /// Get WatchObj for ConfigSyncServer registration
     fn as_watch_obj(&self) -> Arc<dyn WatchObj>;
 
+    /// Look up a single resource by key from the raw store (bypasses handler filter).
+    ///
+    /// Key format: `"namespace/name"` for namespaced resources, `"name"` for
+    /// cluster-scoped resources.
+    ///
+    /// Returns the resource serialized as JSON, or `None` if:
+    /// - The raw store has not been injected yet (before controller init), or
+    /// - The resource does not exist in the raw store.
+    fn get_json_by_key(&self, key: &str) -> Option<String>;
+
     /// Enqueue a key for immediate processing (original events, init revalidation)
     async fn requeue(&self, key: String);
 
@@ -193,6 +204,11 @@ where
 
     /// Namespace filter
     namespace_filter: RwLock<Option<Arc<Vec<String>>>>,
+
+    /// Raw data source for cross-resource key lookups (bypasses handler filter).
+    /// K8s mode: injected as KubeRawStore after reflector::store() call.
+    /// FS mode: injected as FsRawStore on controller construction.
+    raw_store: RwLock<Option<Arc<dyn RawStore<K>>>>,
 }
 
 impl<K> ResourceProcessor<K>
@@ -224,6 +240,7 @@ where
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
+            raw_store: RwLock::new(None),
         }
     }
 
@@ -246,7 +263,17 @@ where
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
+            raw_store: RwLock::new(None),
         }
+    }
+
+    /// Inject the raw store backend.
+    ///
+    /// Called once during controller startup:
+    /// - K8s mode: immediately after `reflector::store()`, before any events arrive.
+    /// - FS mode: in `FileSystemResourceController::new()`.
+    pub fn set_raw_store(&self, store: Arc<dyn RawStore<K>>) {
+        *self.raw_store.write().unwrap() = Some(store);
     }
 
     /// Set metadata filter configuration
@@ -676,6 +703,12 @@ where
             self.workqueue.enqueue(key).await;
         }
         count
+    }
+
+    fn get_json_by_key(&self, key: &str) -> Option<String> {
+        let raw_store = self.raw_store.read().unwrap();
+        let arc_k = raw_store.as_ref()?.get(key)?;
+        serde_json::to_string(&*arc_k).ok()
     }
 }
 

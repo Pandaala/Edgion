@@ -21,6 +21,7 @@ pub mod handlers;
 pub mod listener_port_manager;
 pub mod namespace_store;
 mod processor;
+pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
 pub mod secret_utils;
@@ -31,6 +32,7 @@ pub mod status_utils;
 pub use context::HandlerContext;
 pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkItemResult};
+pub use raw_store::{FsRawStore, KubeRawStore, RawStore};
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
     resolved_refs_condition, set_parent_conditions, set_parent_conditions_full, update_condition, AcceptedError,

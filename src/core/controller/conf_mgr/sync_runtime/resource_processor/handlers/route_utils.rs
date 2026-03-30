@@ -418,15 +418,16 @@ pub fn clear_service_backend_refs(route_kind: crate::types::ResourceKind, route_
 }
 
 /// Look up a Gateway resource from the processor registry.
+///
+/// Uses the raw store (`get_json_by_key`) so that Gateways not belonging to
+/// this controller's `gatewayClassName` (which are excluded from `ServerCache`
+/// by the handler filter) are still found. This fixes incorrect Route status
+/// calculation when a Route's parentRef points to a foreign Gateway.
 pub fn lookup_gateway(namespace: &str, name: &str) -> Option<Gateway> {
     let processor = PROCESSOR_REGISTRY.get("Gateway")?;
-    let (json, _) = processor.as_watch_obj().list_json().ok()?;
-    let gateways: Vec<Gateway> = serde_json::from_str(&json).ok()?;
-
-    gateways.into_iter().find(|gw| {
-        gw.metadata.namespace.as_deref().unwrap_or("default") == namespace
-            && gw.metadata.name.as_deref().unwrap_or("") == name
-    })
+    let key = format!("{}/{}", namespace, name);
+    let json = processor.get_json_by_key(&key)?;
+    serde_json::from_str(&json).ok()
 }
 
 /// Resolve listener keys from parentRefs for per-listener route isolation.

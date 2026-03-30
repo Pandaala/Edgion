@@ -25,7 +25,7 @@ use super::namespace::NamespaceWatchMode;
 use super::InitSyncTimer;
 use super::ShutdownSignal;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    extract_status_value, ResourceProcessor, WorkItemResult,
+    extract_status_value, KubeRawStore, ResourceProcessor, WorkItemResult,
 };
 use crate::types::ResourceMeta;
 use anyhow::Result;
@@ -203,8 +203,13 @@ where
             "Starting ResourceController"
         );
 
-        // Create store and reflector stream
+        // Create store and reflector stream.
+        // Inject raw store immediately so cross-resource lookups work before any
+        // InitApply events arrive (the store will be empty until reflector fills it,
+        // which is fine — lookups return None during that window, same as before).
         let (store, writer) = reflector::store();
+        self.processor
+            .set_raw_store(Arc::new(KubeRawStore::new(store.clone())));
         let watcher_stream = watcher(api, self.watcher_config.clone());
         let mut stream = Box::pin(reflector(writer, watcher_stream));
 

@@ -129,6 +129,21 @@ start(shutdown_handle)
 
 Phase 2 等待 Phase 1 所有 Kind 在 `PROCESSOR_REGISTRY` 中标记 ready（超时 15 秒后降级为并行初始化）。
 
+## FsRawStore 维护
+
+`FileSystemResourceController` 在 `new()` 时创建 `FsRawStore<K>` 并注入到 `processor`，之后在每个事件路径同步维护：
+
+| 事件 / 路径 | FsRawStore 操作 |
+|---|---|
+| `InitApply` 解析成功 | `upsert(key, Arc::new(obj))` |
+| `Apply` 解析成功（init 阶段） | `upsert(key, Arc::new(obj))` |
+| `Apply` 解析成功（runtime 阶段，主循环） | `upsert(key, Arc::new(obj))` |
+| `Delete` | `remove(&key)` |
+| Worker：文件存在且解析成功 | `upsert(key, Arc::new(obj))` — 确保与 worker 实际处理版本一致 |
+| Worker：文件不存在 | `remove(&key)` — 兜底 Delete 事件丢失（channel lagged）的情况 |
+
+主循环和 Worker 双重维护是必要的：主循环保证响应及时，Worker 用文件重新读取的最新版本修正可能的版本漂移，并在 channel lagged 时兜底 Delete。
+
 ## 与 KubernetesCenter 的差异
 
 | 方面 | FileSystemCenter | KubernetesCenter |
@@ -139,6 +154,7 @@ Phase 2 等待 Phase 1 所有 Kind 在 `PROCESSOR_REGISTRY` 中标记 ready（�
 | Status 写入守卫 | `is_none_or` 始终返回 true | `leader_handle.is_leader()` 守卫 |
 | 410 Gone 处理 | 不适用 | 触发完整 KubernetesController 重建 |
 | 文件解析 | 从文件名提取 Kind/namespace/name | K8s API 返回结构化对象 |
+| RawStore 实现 | `FsRawStore`（手动维护 HashMap，双路维护） | `KubeRawStore`（包装 reflector Store，自动同步） |
 | Reload | 支持（Admin API 触发，新 server_id） | 支持（同上） |
 | 适用场景 | 开发、测试、CI | 生产 K8s 部署 |
 

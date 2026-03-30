@@ -15,7 +15,7 @@ use super::file_watcher::{build_path_from_key, KindEventReceiver};
 use super::status::FileSystemStatusHandler;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    extract_status_value, make_resource_key, ResourceProcessor, WorkItemResult,
+    extract_status_value, make_resource_key, FsRawStore, ResourceProcessor, WorkItemResult,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::types::ResourceMeta;
@@ -39,6 +39,8 @@ where
     conf_dir: PathBuf,
     event_rx: KindEventReceiver,
     shutdown_signal: Option<ShutdownSignal>,
+    /// Raw store shared with processor for cross-resource key lookups.
+    fs_raw_store: Arc<FsRawStore<K>>,
 }
 
 impl<K> FileSystemResourceController<K>
@@ -52,12 +54,15 @@ where
         conf_dir: PathBuf,
         event_rx: KindEventReceiver,
     ) -> Self {
+        let fs_raw_store = Arc::new(FsRawStore::new());
+        processor.set_raw_store(fs_raw_store.clone());
         Self {
             kind,
             processor,
             conf_dir,
             event_rx,
             shutdown_signal: None,
+            fs_raw_store,
         }
     }
 
@@ -130,6 +135,9 @@ where
                             match serde_yaml::from_str::<K>(&content) {
                                 Ok(obj) => {
                                     let key = make_resource_key(&obj);
+
+                                    // Maintain raw store for cross-resource lookups.
+                                    self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
 
                                     // Read existing status from .status file for comparison
                                     let existing_status_json = status_handler.read_status_json(kind, &key);
@@ -230,6 +238,7 @@ where
                                 self.conf_dir.clone(),
                                 kind,
                                 self.shutdown_signal.clone(),
+                                self.fs_raw_store.clone(),
                             ));
 
                             tracing::info!(
@@ -244,6 +253,7 @@ where
                                 match serde_yaml::from_str::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
+                                        self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
                                         let existing_status_json = status_handler.read_status_json(kind, &key);
                                         let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
@@ -290,6 +300,8 @@ where
                                 // Runtime phase - parse and enqueue
                                 match serde_yaml::from_str::<K>(&content) {
                                     Ok(obj) => {
+                                        let key = make_resource_key(&obj);
+                                        self.fs_raw_store.upsert(key, Arc::new(obj.clone()));
                                         self.processor.on_apply(&obj).await;
                                     }
                                     Err(e) => {
@@ -314,6 +326,8 @@ where
                             } else {
                                 // Parse delete info: "__DELETE__:kind:key"
                                 if let Some(key) = parse_delete_info(&info) {
+                                    // Remove from raw store immediately on delete.
+                                    self.fs_raw_store.remove(&key);
                                     // For delete, we need to get the cached object
                                     // The worker will handle the actual deletion
                                     if let Some(obj) = self.processor.get(&key) {
@@ -403,6 +417,7 @@ fn spawn_worker<K>(
     conf_dir: PathBuf,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
+    fs_raw_store: Arc<FsRawStore<K>>,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -440,7 +455,14 @@ where
                     let (store_obj, parse_error) = if path.exists() {
                         match std::fs::read_to_string(&path) {
                             Ok(content) => match serde_yaml::from_str::<K>(&content) {
-                                Ok(obj) => (Some(obj), None),
+                                Ok(obj) => {
+                                    // Keep raw store in sync with the latest file version.
+                                    // The main loop upserts on Apply events, but the worker
+                                    // re-reads the file (possibly a newer version), so we
+                                    // update here to stay consistent.
+                                    fs_raw_store.upsert(work_item.key.clone(), Arc::new(obj.clone()));
+                                    (Some(obj), None)
+                                }
                                 Err(e) => {
                                     let error_msg = e.to_string();
                                     tracing::warn!(
@@ -466,6 +488,10 @@ where
                             }
                         }
                     } else {
+                        // File no longer exists — resource was deleted.
+                        // Remove from raw store in case the main-loop Delete event
+                        // was missed (e.g. channel lagged).
+                        fs_raw_store.remove(&work_item.key);
                         (None, None)
                     };
 

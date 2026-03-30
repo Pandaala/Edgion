@@ -815,20 +815,12 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
 
 fn lookup_service_cluster_ip(namespace: &str, name: &str) -> Option<String> {
     let processor = PROCESSOR_REGISTRY.get("Service")?;
-    let (json, _) = processor.as_watch_obj().list_json().ok()?;
-    let services: Vec<Service> = serde_json::from_str(&json).ok()?;
-
-    services.into_iter().find_map(|svc| {
-        let svc_ns = svc.metadata.namespace.as_deref().unwrap_or("default");
-        let svc_name = svc.metadata.name.as_deref().unwrap_or("");
-        if svc_ns != namespace || svc_name != name {
-            return None;
-        }
-
-        svc.spec
-            .and_then(|spec| spec.cluster_ip)
-            .filter(|cluster_ip| !cluster_ip.is_empty() && cluster_ip != "None")
-    })
+    let key = format!("{}/{}", namespace, name);
+    let json = processor.get_json_by_key(&key)?;
+    let svc: Service = serde_json::from_str(&json).ok()?;
+    svc.spec
+        .and_then(|spec| spec.cluster_ip)
+        .filter(|cluster_ip| !cluster_ip.is_empty() && cluster_ip != "None")
 }
 
 /// Update or insert a condition in Gateway conditions list
