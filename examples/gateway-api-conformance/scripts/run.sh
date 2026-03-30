@@ -131,6 +131,9 @@ check_gateway_routing() {
   echo ""
 
   export GATEWAY_PROXY_HOST="${orb_node_ip}"
+  # When using the OrbStack node IP, traffic reaches gateway ports directly
+  # (no port-forward offset), so port map must be direct (80:80, 443:443, …).
+  export GATEWAY_PROXY_PORT_MAP="${GATEWAY_PROXY_PORT_MAP:-80:80,443:443,8443:8443}"
   # Enable gRPC proxy as well so gRPC conformance tests also go through TAL.
   export GATEWAY_PROXY_ENABLE_GRPC="${GATEWAY_PROXY_ENABLE_GRPC:-true}"
 }
@@ -339,6 +342,8 @@ if [[ "${PORT_FORWARD}" == "true" ]]; then
   #   2. Individual GATEWAY_PROXY_*_PORT env vars
   #   3. Built-in defaults (18080 / 18443 / 28443)
   export GATEWAY_PROXY_HOST="${GATEWAY_PROXY_HOST:-127.0.0.1}"
+  # Enable gRPC proxy so gRPC conformance tests also go through port-forward.
+  export GATEWAY_PROXY_ENABLE_GRPC="${GATEWAY_PROXY_ENABLE_GRPC:-true}"
 
   if [[ -n "${GATEWAY_PROXY_PORT_MAP:-}" ]]; then
     # Parse GATEWAY_PROXY_PORT_MAP ("80:18080,443:18443,8443:28443") so we know

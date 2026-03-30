@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 
 use super::sync_runtime::resource_processor::{
     get_attached_route_tracker, get_gateway_route_index, get_global_cross_ns_ref_manager,
-    get_global_reference_grant_store, get_service_ref_manager, ProcessorObj,
+    get_global_reference_grant_store, get_service_ref_manager, replace_all_secrets, ProcessorObj,
 };
 use super::sync_runtime::workqueue::TriggerChain;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
@@ -259,6 +259,9 @@ impl ProcessorRegistry {
 
         get_attached_route_tracker().clear();
         tracing::info!(component = "processor_registry", "Cleared AttachedRouteTracker");
+
+        replace_all_secrets(HashMap::new());
+        tracing::info!(component = "processor_registry", "Cleared GlobalSecretStore");
     }
 }
 

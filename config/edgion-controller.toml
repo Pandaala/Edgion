@@ -131,3 +131,15 @@ enabled = true
 no_sync_kinds = ["ReferenceGrant", "Secret"]
 # EventStore ring buffer default capacity for all resource types
 default_capacity = 200
+
+# ============================================================================
+# conf_sync Channel Security (mTLS)
+# ============================================================================
+# Omit this section entirely to keep plaintext gRPC (backward compatible).
+# When configured, Controller requires valid certificates to start gRPC listener.
+#
+# [conf_sync_security.tls]
+# cert = "certs/grpc/server.crt"   # Controller server certificate
+# key  = "certs/grpc/server.key"   # Controller server private key
+# ca   = "certs/grpc/ca.crt"       # CA certificate (verifies Gateway client cert)
+# skip_tls = false                 # Emergency bypass: true = skip TLS (INSECURE)

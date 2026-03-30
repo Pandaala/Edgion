@@ -179,8 +179,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
             }
             let rule_arc = Arc::new(rule.clone());
 
-            let effective_matches: &[crate::types::GRPCRouteMatch] =
-                rule.matches.as_deref().unwrap_or(&[]);
+            let effective_matches: &[crate::types::GRPCRouteMatch] = rule.matches.as_deref().unwrap_or(&[]);
 
             if effective_matches.is_empty() {
                 // Per Gateway API spec, a rule with no matches (or an empty matches list)

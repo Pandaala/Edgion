@@ -46,9 +46,14 @@ impl EdgionGatewayCli {
             .as_deref()
             .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr or set in config file"))?;
 
-        let sync_client = ConfigSyncClient::new(server_addr, "edgion-gateway".to_string(), Duration::from_secs(10))
-            .await
-            .map_err(|e| anyhow!("Failed to create ConfigSyncClient: {}", e))?;
+        let sync_client = ConfigSyncClient::new(
+            server_addr,
+            "edgion-gateway".to_string(),
+            Duration::from_secs(10),
+            config.conf_sync_security.tls.as_ref(),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to create ConfigSyncClient: {}", e))?;
 
         Ok(sync_client)
     }

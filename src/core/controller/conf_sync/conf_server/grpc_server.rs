@@ -10,6 +10,7 @@ use crate::core::common::conf_sync::proto::{
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest, WatchResponse,
     WatchServerMetaRequest,
 };
+use crate::core::common::config::ConfSyncTlsConfig;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::types::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
@@ -65,21 +66,49 @@ impl ConfigSyncGrpcServer {
     }
 
     /// Start the gRPC server on the given address
-    pub async fn serve(self, addr: std::net::SocketAddr) -> Result<(), tonic::transport::Error> {
+    pub async fn serve(self, addr: std::net::SocketAddr, tls_config: Option<&ConfSyncTlsConfig>) -> anyhow::Result<()> {
         let service = self.into_service();
-        tonic::transport::Server::builder()
-            .add_service(service)
-            .serve(addr)
-            .await
+        let mut builder = tonic::transport::Server::builder();
+
+        if let Some(tls) = tls_config {
+            if tls.skip_tls {
+                tracing::error!(
+                    component = "grpc_server",
+                    "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
+                );
+            } else {
+                let server_tls = load_server_tls(tls).await?;
+                builder = builder.tls_config(server_tls)?;
+                tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
+            }
+        }
+
+        builder.add_service(service).serve(addr).await?;
+        Ok(())
     }
 
     /// Start the gRPC server with graceful shutdown support
     pub async fn serve_with_shutdown(
         self,
         addr: std::net::SocketAddr,
+        tls_config: Option<&ConfSyncTlsConfig>,
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
-    ) -> Result<(), tonic::transport::Error> {
+    ) -> anyhow::Result<()> {
         let service = self.into_service();
+        let mut builder = tonic::transport::Server::builder();
+
+        if let Some(tls) = tls_config {
+            if tls.skip_tls {
+                tracing::error!(
+                    component = "grpc_server",
+                    "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
+                );
+            } else {
+                let server_tls = load_server_tls(tls).await?;
+                builder = builder.tls_config(server_tls)?;
+                tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
+            }
+        }
 
         tracing::info!(
             component = "grpc_server",
@@ -87,17 +116,20 @@ impl ConfigSyncGrpcServer {
             "Starting gRPC server with graceful shutdown support"
         );
 
-        let result = tonic::transport::Server::builder()
+        builder
             .add_service(service)
             .serve_with_shutdown(addr, shutdown_signal)
-            .await;
+            .await?;
 
         tracing::info!(component = "grpc_server", "gRPC server stopped");
 
-        result
+        Ok(())
     }
 
-    /// Start the gRPC server with reflection support
+    /// Start the gRPC server with reflection support.
+    /// NOTE: This method does NOT support mTLS. Use `serve()` or `serve_with_shutdown()`
+    /// for production deployments that require TLS.
+    #[allow(dead_code)]
     pub async fn serve_with_reflection(
         self,
         addr: std::net::SocketAddr,
@@ -115,6 +147,29 @@ impl ConfigSyncGrpcServer {
 
         Ok(())
     }
+}
+
+/// Load server TLS config from certificate files.
+/// Returns error if any file is missing or invalid — caller must not start the listener.
+async fn load_server_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::transport::ServerTlsConfig> {
+    cfg.validate()?;
+    let cert_path = cfg.cert_path();
+    let key_path = cfg.key_path();
+    let ca_path = cfg.ca_path();
+
+    let cert = tokio::fs::read(&cert_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read server cert {:?}: {}", cert_path, e))?;
+    let key = tokio::fs::read(&key_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read server key {:?}: {}", key_path, e))?;
+    let ca = tokio::fs::read(&ca_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read CA cert {:?}: {}", ca_path, e))?;
+
+    Ok(tonic::transport::ServerTlsConfig::new()
+        .identity(tonic::transport::Identity::from_pem(cert, key))
+        .client_ca_root(tonic::transport::Certificate::from_pem(ca)))
 }
 
 #[tonic::async_trait]

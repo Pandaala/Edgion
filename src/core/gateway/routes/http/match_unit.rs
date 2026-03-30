@@ -202,7 +202,24 @@ impl HttpRouteRuleUnit {
     /// Simple URL decode (percent-encoding)
     fn url_decode(s: &str) -> String {
         let mut result = String::new();
+        let mut byte_buf: Vec<u8> = Vec::new();
         let mut chars = s.chars();
+
+        // Flush accumulated percent-encoded bytes as UTF-8 into result
+        let flush = |buf: &mut Vec<u8>, out: &mut String| {
+            if !buf.is_empty() {
+                match std::str::from_utf8(buf) {
+                    Ok(s) => out.push_str(s),
+                    Err(_) => {
+                        // Invalid UTF-8: push each byte as Latin-1 char (preserves old behavior for ASCII)
+                        for &b in buf.iter() {
+                            out.push(b as char);
+                        }
+                    }
+                }
+                buf.clear();
+            }
+        };
 
         while let Some(c) = chars.next() {
             if c == '%' {
@@ -210,20 +227,25 @@ impl HttpRouteRuleUnit {
                 let hex: String = chars.by_ref().take(2).collect();
                 if hex.len() == 2 {
                     if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                        result.push(byte as char);
+                        byte_buf.push(byte);
                         continue;
                     }
                 }
-                // If decode failed, keep the % and hex as is
+                // If decode failed, flush any pending bytes and keep the % and hex as is
+                flush(&mut byte_buf, &mut result);
                 result.push('%');
                 result.push_str(&hex);
-            } else if c == '+' {
-                result.push(' ');
             } else {
-                result.push(c);
+                flush(&mut byte_buf, &mut result);
+                if c == '+' {
+                    result.push(' ');
+                } else {
+                    result.push(c);
+                }
             }
         }
 
+        flush(&mut byte_buf, &mut result);
         result
     }
 
@@ -428,6 +450,16 @@ mod tests {
     fn test_url_decode_special_chars() {
         assert_eq!(HttpRouteRuleUnit::url_decode("a%2Bb%3Dc"), "a+b=c");
         assert_eq!(HttpRouteRuleUnit::url_decode("100%25"), "100%");
+    }
+
+    #[test]
+    fn test_url_decode_multibyte_utf8() {
+        // Chinese character 你 = E4 BD A0
+        assert_eq!(HttpRouteRuleUnit::url_decode("%E4%BD%A0"), "你");
+        // Euro sign € = E2 82 AC
+        assert_eq!(HttpRouteRuleUnit::url_decode("%E2%82%AC"), "€");
+        // Mixed: ASCII + multi-byte + ASCII
+        assert_eq!(HttpRouteRuleUnit::url_decode("key%3D%E4%BD%A0%E5%A5%BD"), "key=你好");
     }
 
     #[test]

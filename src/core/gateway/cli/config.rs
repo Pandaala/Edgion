@@ -99,6 +99,12 @@ pub struct EdgionGatewayConfig {
     #[arg(long = "integration-testing-mode", default_value = "false")]
     #[serde(skip)]
     pub integration_testing_mode: bool,
+
+    /// conf_sync gRPC channel security (mTLS).
+    /// Omit this section to keep plaintext gRPC (backward compatible).
+    #[arg(skip)]
+    #[serde(default)]
+    pub conf_sync_security: crate::core::common::config::ConfSyncSecurityConfig,
 }
 
 /// Gateway configuration

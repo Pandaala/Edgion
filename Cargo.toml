@@ -193,6 +193,7 @@ md-5 = "0.10"
 cookie = "0.18.1"
 instant-acme = "0.8.4"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
+time = { version = "0.3", features = ["std"] }
 sha1 = "0.10.6"
 async_singleflight = "0.6"
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.

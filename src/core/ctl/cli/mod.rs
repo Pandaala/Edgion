@@ -108,17 +108,24 @@ pub enum Commands {
 
     /// Reload all resources from storage
     Reload,
+
+    /// Generate mTLS certificates for conf_sync gRPC channel
+    GenCerts(commands::gen_certs::GenCertsArgs),
 }
 
 impl Cli {
     pub async fn run(&self) -> Result<()> {
+        // GenCerts does not need an EdgionClient connection
+        if let Commands::GenCerts(args) = &self.command {
+            return commands::gen_certs::execute(args).await;
+        }
+
         // Create API client with target type
         let client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone())?;
 
         // Execute command
         match &self.command {
             Commands::Apply { file, dry_run } => {
-                // Apply command only supported for 'center' target
                 if self.target != TargetType::Center {
                     anyhow::bail!("apply command only supported for 'center' target");
                 }
@@ -139,7 +146,6 @@ impl Cli {
                 namespace,
                 file,
             } => {
-                // Delete command only supported for 'center' target
                 if self.target != TargetType::Center {
                     anyhow::bail!("delete command only supported for 'center' target");
                 }
@@ -153,12 +159,12 @@ impl Cli {
                 .await
             }
             Commands::Reload => {
-                // Reload command only supported for 'center' target
                 if self.target != TargetType::Center {
                     anyhow::bail!("reload command only supported for 'center' target");
                 }
                 commands::reload::reload(&client).await
             }
+            Commands::GenCerts(_) => unreachable!(), // handled above
         }
     }
 }

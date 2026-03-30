@@ -140,6 +140,24 @@ mod ssl_ctx_ex_data {
         }
     }
 
+    /// Peek at TlsConnMeta in SSL ex_data without taking ownership.
+    /// Used by mTLS verify callback to write ssl.log on failure.
+    ///
+    /// # Safety
+    /// `ssl_ptr` must be a valid SSL pointer during the call.
+    pub(super) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::types::ctx::TlsConnMeta> {
+        let idx = SSL_CTX_EX_DATA_IDX.load(Ordering::Acquire);
+        if idx < 0 {
+            return None;
+        }
+        let ptr = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
+        if ptr.is_null() {
+            return None;
+        }
+        let ctx = &*(ptr as *const SslCtx);
+        Some(ctx.meta.clone())
+    }
+
     /// Take SslCtx from SSL object. Transfers ownership back via Box::from_raw
     /// and clears the ex_data slot to prevent double-free in the free callback.
     pub(super) fn take_ssl_ctx(ssl: &TlsRef) -> Option<SslCtx> {
@@ -184,6 +202,16 @@ mod ssl_ctx_ex_data {
 
 use ssl_ctx_ex_data::{store_ssl_ctx, take_ssl_ctx};
 
+/// Peek at TlsConnMeta stored in SSL ex_data without taking ownership.
+/// Used by mTLS verify callback to write ssl.log on handshake failure.
+///
+/// # Safety
+/// `ssl_ptr` must be a valid SSL pointer during the call.
+#[cfg(feature = "boringssl")]
+pub(crate) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::types::ctx::TlsConnMeta> {
+    ssl_ctx_ex_data::peek_tls_conn_meta(ssl_ptr)
+}
+
 // ---------------------------------------------------------------------------
 // TlsCallback
 // ---------------------------------------------------------------------------
@@ -203,7 +231,7 @@ impl TlsAccept for TlsCallback {
         let mut ssl_ctx = SslCtx::new(self.port);
         // 1. Resolve SNI — done ONCE per connection
         let sni = if let Some(sni) = ssl.servername(NameType::HOST_NAME) {
-            sni.to_string()
+            sni.to_lowercase()
         } else if let Some(fallback_sni) = self
             .edgion_gateway_config
             .spec

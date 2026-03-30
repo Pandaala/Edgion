@@ -6,7 +6,9 @@
 //! **Note**: This module requires BoringSSL for custom verify callbacks.
 //! It will only be compiled when the `boringssl` feature is enabled.
 
+use crate::core::gateway::observe::logs::ssl_log::log_ssl;
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
+use crate::core::gateway::tls::runtime::gateway::tls_pingora::peek_tls_conn_meta;
 use crate::core::gateway::tls::validation::mtls::{validate_cn_whitelist, validate_san_whitelist};
 use crate::types::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
 use pingora_core::tls::ssl::SslRef;
@@ -126,11 +128,10 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
             std::ffi::CStr::from_ptr(error_ptr).to_string_lossy().into_owned()
         };
 
-        tracing::warn!(
-            error_code = error_code,
-            error = %error_str,
-            "Certificate chain verification failed, rejecting connection"
-        );
+        // Try to log to ssl.log with connection context
+        let ssl_ptr = boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
+            as *mut boring_sys::SSL;
+        log_mtls_failure(ssl_ptr, &format!("mTLS chain verify failed: {}", error_str));
         return 0;
     }
 
@@ -177,68 +178,59 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
     let ssl_ref: &SslRef = std::mem::transmute(&*ssl_ptr);
 
     // Perform whitelist validation
-    if perform_whitelist_validation(ssl_ref, client_auth) {
-        1 // Accept
-    } else {
-        0 // Reject
+    match perform_whitelist_validation(ssl_ref, client_auth) {
+        Ok(()) => 1,
+        Err(reason) => {
+            log_mtls_failure(ssl_ptr, &reason);
+            0
+        }
     }
 }
 
 /// Perform SAN/CN whitelist validation (safe Rust code)
-fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) -> bool {
+fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) -> Result<(), String> {
     // Extract client certificate
     let cert_info = match extract_client_cert_info(ssl) {
         Some(info) => info,
-        None => {
-            tracing::warn!("No client certificate in verify callback");
-            return false;
-        }
+        None => return Err("mTLS no client certificate".to_string()),
     };
-
-    tracing::debug!(
-        subject = %cert_info.subject,
-        sans = ?cert_info.sans,
-        cn = ?cert_info.cn,
-        "Validating client certificate whitelist"
-    );
 
     // Validate SAN whitelist
     if let Some(ref allowed_sans) = client_auth.allowed_sans {
         if !validate_san_whitelist(&cert_info, allowed_sans) {
-            tracing::warn!(
-                subject = %cert_info.subject,
-                sans = ?cert_info.sans,
-                allowed = ?allowed_sans,
-                "SAN whitelist validation failed"
-            );
-            return false;
+            return Err(format!(
+                "mTLS SAN whitelist failed: subject={}, sans={:?}",
+                cert_info.subject, cert_info.sans
+            ));
         }
     }
 
     // Validate CN whitelist
     if let Some(ref allowed_cns) = client_auth.allowed_cns {
         if !validate_cn_whitelist(&cert_info, allowed_cns) {
-            tracing::warn!(
-                subject = %cert_info.subject,
-                cn = ?cert_info.cn,
-                allowed = ?allowed_cns,
-                "CN whitelist validation failed"
-            );
-            return false;
+            return Err(format!(
+                "mTLS CN whitelist failed: subject={}, cn={:?}",
+                cert_info.subject, cert_info.cn
+            ));
         }
     }
 
-    // TODO(observability): Add metrics for:
-    // - mtls_validation_total counter (with status label: passed/failed, reason label)
-    // - mtls_san_whitelist_checks_total counter
-    // - mtls_cn_whitelist_checks_total counter
-    tracing::info!(
-        subject = %cert_info.subject,
-        fingerprint = %cert_info.fingerprint,
-        "Client certificate whitelist validation passed"
-    );
+    Ok(())
+}
 
-    true
+/// Log mTLS verification failure to ssl.log with connection context from SslCtx ex_data.
+/// Falls back to tracing::warn if SslCtx is not available (should not happen in normal flow).
+unsafe fn log_mtls_failure(ssl_ptr: *mut boring_sys::SSL, reason: &str) {
+    if ssl_ptr.is_null() {
+        tracing::warn!("{}", reason);
+        return;
+    }
+    if let Some(mut meta) = peek_tls_conn_meta(ssl_ptr) {
+        meta.err_log = Some(reason.to_string());
+        log_ssl(&meta);
+    } else {
+        tracing::warn!("{}", reason);
+    }
 }
 
 /// Set custom verify callback with SAN/CN whitelist validation

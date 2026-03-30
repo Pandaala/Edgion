@@ -4,6 +4,7 @@
 //! protocol listeners to the gateway server. It separates listener construction logic
 //! from the main gateway bootstrap process.
 
+use crate::core::gateway::runtime::ServerHeaderOpts;
 use anyhow::Result;
 use pingora_core::apps::HttpServerOptions;
 use pingora_core::connectors::TransportConnector;
@@ -160,7 +161,13 @@ pub fn add_http_listener(
         listener: context.listener.clone(),
         listener_key: context.listener_key.clone(),
         server_start_time: SystemTime::now(),
-        server_header_opts: Default::default(),
+        server_header_opts: {
+            let mut opts = ServerHeaderOpts::default();
+            if !enable_tls {
+                opts.remove_hsts();
+            }
+            opts
+        },
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
         parsed_timeouts,

@@ -343,6 +343,7 @@ mod tests {
             None,
             TriggerChain::default(),
             3,
+            20,
         )
     }
 

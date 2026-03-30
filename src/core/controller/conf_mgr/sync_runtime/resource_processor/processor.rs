@@ -399,6 +399,7 @@ where
             self.namespace_filter.read().unwrap().clone(),
             trigger_chain,
             self.workqueue.config().max_trigger_cycles,
+            self.workqueue.config().max_trigger_depth,
         )
     }
 

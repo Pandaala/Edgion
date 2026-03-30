@@ -188,7 +188,7 @@ path = "logs/tcp.log"
 
 # ：
 # [tcp_log.output.localFile.rotation]
-# strategy = "daily"  # 
+# strategy = "daily"  #
 # max_files = 10
 # check_interval_secs = 30
 
@@ -211,6 +211,18 @@ path = "logs/udp.log"
 
 # ：
 # [udp_log.output.localFile.rotation]
-# strategy = "daily"  # 
+# strategy = "daily"  #
 # max_files = 10
 # check_interval_secs = 30
+
+# ============================================================================
+# conf_sync Channel Security (mTLS)
+# ============================================================================
+# Omit this section entirely to keep plaintext gRPC (backward compatible).
+# Must match Controller's mTLS config — mismatched configs cause handshake failure.
+#
+# [conf_sync_security.tls]
+# cert = "certs/grpc/client.crt"   # Gateway client certificate
+# key  = "certs/grpc/client.key"   # Gateway client private key
+# ca   = "certs/grpc/ca.crt"       # CA certificate (verifies Controller server cert)
+# skip_tls = false                 # Emergency bypass: true = skip TLS (INSECURE)

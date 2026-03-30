@@ -41,6 +41,10 @@ impl ServerHeaderOpts {
         self.enable = enable;
     }
 
+    pub fn remove_hsts(&mut self) {
+        self.headers.remove(HSTS_KEY);
+    }
+
     /// Apply configured headers to response
     pub fn apply_to_response(&self, response: &mut ResponseHeader) {
         if self.enable {

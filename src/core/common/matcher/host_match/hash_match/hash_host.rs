@@ -36,6 +36,8 @@ impl<T> HashHost<T> {
     }
 
     pub fn insert(&mut self, k: &str, v: T) -> bool {
+        let k_lower = k.to_lowercase();
+        let k = k_lower.as_str();
         let key = if let Some(rest) = k.strip_prefix("*.") {
             if is_valid_domain(rest) {
                 format!(".{}", rest) // "*.aaa.com" -> ".aaa.com" to distinguish from "aaa.com"
@@ -61,6 +63,8 @@ impl<T> HashHost<T> {
     }
 
     pub fn get(&self, k: &str) -> Option<&T> {
+        let k_lower = k.to_lowercase();
+        let k = k_lower.as_str();
         if !is_valid_domain(k) {
             return None;
         }
@@ -85,6 +89,8 @@ impl<T> HashHost<T> {
     }
 
     pub fn get_mut(&mut self, k: &str) -> Option<&mut T> {
+        let k_lower = k.to_lowercase();
+        let k = k_lower.as_str();
         if !is_valid_domain(k) {
             return None;
         }

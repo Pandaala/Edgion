@@ -24,28 +24,32 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> 
     where
         T: Resource + Send + 'static,
     {
-        // Extract resource key and add event to compress_events
-        let key = resource.key_name();
+        // Collect log fields before acquiring lock to avoid holding lock during formatting
+        let name = resource.name_any();
+        let namespace = resource.namespace();
+        let version = resource.get_version();
+        let kind = std::any::type_name::<T>();
+
+        // Both compress_event and data update must be atomic under one lock so that
+        // process_compressed_events cannot observe an event whose data is not yet present.
+        let resource_key = resource.key_name();
         {
             let mut cache = self.cache_data.write().unwrap();
-            cache.add_compress_event(key, change);
-        }
-
-        tracing::info!(component = "cache_client", event = "apply_change", change = ?change, kind = std::any::type_name::<T>(), name = ?resource.name_any(), namespace = ?resource.namespace(), version = resource.get_version(), "Applying change to cache");
-
-        let mut cache = self.cache_data.write().unwrap();
-        let resource_key = resource.key_name(); // Use namespace/name as key
-        match change {
-            ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                cache.insert(resource_key, resource);
-            }
-            ResourceChange::EventDelete => {
-                cache.remove(&resource_key);
-            }
-            ResourceChange::InitStart | ResourceChange::InitDone => {
-                // Signal events: no data changes needed
+            cache.add_compress_event(resource_key.clone(), change);
+            match change {
+                ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                    cache.insert(resource_key, resource);
+                }
+                ResourceChange::EventDelete => {
+                    cache.remove(&resource_key);
+                }
+                ResourceChange::InitStart | ResourceChange::InitDone => {
+                    // Signal events: no data changes needed
+                }
             }
         }
+
+        tracing::info!(component = "cache_client", event = "apply_change", change = ?change, kind = kind, name = ?name, namespace = ?namespace, version = version, "Applying change to cache");
     }
 
     fn set_ready(&self) {
@@ -136,19 +140,24 @@ where
             let mut backoff_secs = BACKOFF_INIT_SECS;
 
             // Outer loop: perform list operation
+            let mut is_first_iteration = true;
             loop {
                 // === Backoff before list ===
-                // Add jitter (0-3s) to spread requests and prevent relist storms
-                let jitter_ms = rand::rng().random_range(0..3000);
-                let wait_duration =
-                    std::time::Duration::from_secs(backoff_secs) + std::time::Duration::from_millis(jitter_ms);
-                tracing::info!(
-                    kind = T::kind_name(),
-                    backoff_secs = backoff_secs,
-                    jitter_ms = jitter_ms,
-                    "Waiting before list"
-                );
-                tokio::time::sleep(wait_duration).await;
+                // Skip on first iteration to avoid delaying startup.
+                // Add jitter (0-3s) on retries to spread requests and prevent relist storms.
+                if !is_first_iteration {
+                    let jitter_ms = rand::rng().random_range(0..3000);
+                    let wait_duration =
+                        std::time::Duration::from_secs(backoff_secs) + std::time::Duration::from_millis(jitter_ms);
+                    tracing::info!(
+                        kind = T::kind_name(),
+                        backoff_secs = backoff_secs,
+                        jitter_ms = jitter_ms,
+                        "Waiting before list"
+                    );
+                    tokio::time::sleep(wait_duration).await;
+                }
+                is_first_iteration = false;
 
                 // Get gRPC conf_client
                 let mut client_guard = grpc_client.write().await;

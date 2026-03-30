@@ -35,7 +35,10 @@ fn verify_sha1(password: &str, encoded_hash: &str) -> bool {
         return false;
     };
     let actual = sha1::Sha1::digest(password.as_bytes());
-    actual.as_slice() == expected.as_slice()
+    // Constant-time comparison to prevent timing attacks
+    let a = actual.as_slice();
+    let b = expected.as_slice();
+    a.len() == b.len() && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 // ──────────────────── MD5-crypt / APR1 ($1$ / $apr1$) ──────────────────
@@ -57,7 +60,10 @@ fn verify_md5_variant(password: &str, hash: &str, magic: &[u8]) -> bool {
     };
     let salt = &after_magic[..dollar_pos];
     let computed = compute_md5_crypt(password.as_bytes(), salt.as_bytes(), magic);
-    computed == hash
+    // Constant-time comparison to prevent timing attacks
+    let a = computed.as_bytes();
+    let b = hash.as_bytes();
+    a.len() == b.len() && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Implements the MD5-crypt algorithm (Poul-Henning Kamp, FreeBSD).
