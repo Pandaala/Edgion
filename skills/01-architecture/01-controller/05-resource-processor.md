@@ -213,18 +213,24 @@ pub trait RawStore<K>: Send + Sync {
 `ProcessorObj` trait（object-safe）新增：
 
 ```rust
-fn get_json_by_key(&self, key: &str) -> Option<String>;
+fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
 ```
 
-实现：从 `raw_store` 取 `Arc<K>` → `serde_json::to_string`，返回 `Option<String>`。  
+实现：从 `raw_store` 取 `Arc<K>`，直接 coerce 为 `Arc<dyn Any + Send + Sync>` 返回，**零序列化开销**。  
+调用方通过 `downcast::<ConcreteType>()` 还原具体类型：
+
+```rust
+let arc: Arc<Gateway> = processor.get_raw_any(&key)?.downcast::<Gateway>().ok()?;
+```
+
 `raw_store` 未注入时（init 阶段之前）返回 `None`，行为与之前一致，不退化。
 
 ### 调用方
 
 | 函数 | 位置 | 查询目标 |
 |---|---|---|
-| `lookup_gateway` | `route_utils.rs` | `PROCESSOR_REGISTRY.get("Gateway")?.get_json_by_key("ns/name")` |
-| `lookup_service_cluster_ip` | `gateway.rs` | `PROCESSOR_REGISTRY.get("Service")?.get_json_by_key("ns/name")` |
+| `lookup_gateway` | `route_utils.rs` | `PROCESSOR_REGISTRY.get("Gateway")?.get_raw_any("ns/name")?.downcast::<Gateway>()` |
+| `lookup_service_cluster_ip` | `gateway.rs` | `PROCESSOR_REGISTRY.get("Service")?.get_raw_any("ns/name")?.downcast::<Service>()` |
 
 ### 关键文件
 

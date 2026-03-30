@@ -4,8 +4,8 @@
 //! - `KubeRawStore<K>`: wraps kube's reflector `Store<K>` (K8s mode)
 //! - `FsRawStore<K>`: self-maintained `HashMap` (FileSystem mode)
 //!
-//! The `ProcessorObj::get_json_by_key` method exposes this to callers
-//! in an object-safe way (returning `Option<String>` JSON).
+//! The `ProcessorObj::get_raw_any` method exposes this to callers
+//! in an object-safe way (returning `Option<Arc<dyn Any + Send + Sync>>`).
 //!
 //! Crucially, this bypasses the handler `filter()` step so cross-resource
 //! lookups (e.g. Route → Gateway) can find objects that were excluded from
@@ -17,8 +17,6 @@ use std::sync::{Arc, RwLock};
 
 use kube::runtime::reflector::Store;
 use kube::Resource;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 
 /// Raw data-source interface: look up a single resource by key, bypassing handler filter.
 ///
@@ -112,7 +110,7 @@ impl<K> FsRawStore<K> {
     }
 }
 
-impl<K: Send + Sync + Serialize + DeserializeOwned + 'static> RawStore<K> for FsRawStore<K> {
+impl<K: Send + Sync + 'static> RawStore<K> for FsRawStore<K> {
     fn get(&self, key: &str) -> Option<Arc<K>> {
         self.data.read().unwrap().get(key).cloned()
     }

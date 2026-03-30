@@ -37,7 +37,7 @@
                     （地址查询）
                            ▼
                         Gateway（lookup_service_cluster_ip，同名 Service 取 clusterIP）
-                        → 通过 RawStore.get_json_by_key("ns/name") O(1) 查询
+                        → 通过 RawStore.get_raw_any("ns/name") O(1) 零拷贝查询
 
                     ┌─────────────────────────────────────────────────────┐
                     │                 ReferenceGrant                       │
@@ -79,7 +79,7 @@
 |---------|---------|---------|------|
 | spec 引用 | Secret | `get_secret`（SecretStore） | listener TLS 证书、CA |
 | spec 引用 | ConfigMap | `get_configmap`（ConfigMapStore） | frontend CA（ConfigMap 类型） |
-| spec 引用 | Service（同名） | `PROCESSOR_REGISTRY.get("Service")` → `get_json_by_key("ns/name")`（RawStore，O(1)） | 推导 Gateway status 地址（clusterIP） |
+| spec 引用 | Service（同名） | `PROCESSOR_REGISTRY.get("Service")` → `get_raw_any("ns/name")?.downcast::<Service>()`（RawStore，O(1)，零拷贝） | 推导 Gateway status 地址（clusterIP） |
 | 权限校验 | ReferenceGrant | `get_global_reference_grant_store()` | 跨 ns 引用 Secret/CA 时校验权限 |
 | requeue 发出 | 各类 Route / EdgionTls | `gateway_route_index` → `ctx.requeue` | listener/hostname/port 变化时级联 |
 
@@ -91,7 +91,7 @@
 
 | 引用方向 | 目标资源 | 查询方式 | 用途 |
 |---------|---------|---------|------|
-| spec 引用 | Gateway（parentRef） | `PROCESSOR_REGISTRY.get("Gateway")` → `get_json_by_key("ns/name")`（RawStore，O(1)，不受 gatewayClassName filter 限制） | 验证 listener 匹配、Accepted condition |
+| spec 引用 | Gateway（parentRef） | `PROCESSOR_REGISTRY.get("Gateway")` → `get_raw_any("ns/name")?.downcast::<Gateway>()`（RawStore，O(1)，零拷贝，不受 gatewayClassName filter 限制） | 验证 listener 匹配、Accepted condition |
 | spec 引用 | Service（backendRef） | `PROCESSOR_REGISTRY.get("Service")` → `contains_key` | 验证 backend 存在性、ResolvedRefs |
 | 权限校验 | ReferenceGrant | `get_global_reference_grant_store()` | 跨 ns backendRef 权限 |
 | namespace 策略 | Namespace | `get_namespace_store()` | allowedRoutes Selector 策略 |
@@ -211,7 +211,7 @@ HTTPRoute / GRPCRoute 的 L4 版本，引用关系相同，区别：
 | **GatewayRouteIndex** | 各类 Route / EdgionTls（on_change 时写入） | GatewayHandler（on_change 时查关联 Route） |
 | **AttachedRouteTracker** | Route（`update_tracker_accepted_only`） | GatewayHandler（统计 listener 挂载路由数） |
 | **ListenerPortManager** | GatewayHandler（parse 时注册） | GatewayHandler（冲突检测） |
-| **RawStore**（每种资源各一个） | K8s 模式：reflector Store 自动维护；FS 模式：FileSystemResourceController 在 InitApply/Apply/Delete 及 Worker 处理时同步写入 | `lookup_gateway`（route_utils）、`lookup_service_cluster_ip`（gateway.rs）via `ProcessorObj::get_json_by_key` |
+| **RawStore**（每种资源各一个） | K8s 模式：reflector Store 自动维护；FS 模式：FileSystemResourceController 在 InitApply/Apply/Delete 及 Worker 处理时同步写入 | `lookup_gateway`（route_utils）、`lookup_service_cluster_ip`（gateway.rs）via `ProcessorObj::get_raw_any` |
 
 ---
 

@@ -6,6 +6,7 @@
 //! - ProcessorHandler<T> for resource-specific logic
 //! - Configuration (metadata filter, namespace filter, etc.)
 
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -128,10 +129,15 @@ pub trait ProcessorObj: Send + Sync {
     /// Key format: `"namespace/name"` for namespaced resources, `"name"` for
     /// cluster-scoped resources.
     ///
-    /// Returns the resource serialized as JSON, or `None` if:
+    /// Returns the resource as a type-erased `Arc<dyn Any + Send + Sync>`, or `None` if:
     /// - The raw store has not been injected yet (before controller init), or
     /// - The resource does not exist in the raw store.
-    fn get_json_by_key(&self, key: &str) -> Option<String>;
+    ///
+    /// Callers should downcast to the concrete type, e.g.:
+    /// ```ignore
+    /// let arc: Arc<Gateway> = processor.get_raw_any(&key)?.downcast().ok()?;
+    /// ```
+    fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
 
     /// Enqueue a key for immediate processing (original events, init revalidation)
     async fn requeue(&self, key: String);
@@ -705,10 +711,10 @@ where
         count
     }
 
-    fn get_json_by_key(&self, key: &str) -> Option<String> {
+    fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
         let raw_store = self.raw_store.read().unwrap();
         let arc_k = raw_store.as_ref()?.get(key)?;
-        serde_json::to_string(&*arc_k).ok()
+        Some(arc_k as Arc<dyn Any + Send + Sync>)
     }
 }
 

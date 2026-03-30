@@ -4,6 +4,7 @@
 //! grpc_route.rs, and other route handlers.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
@@ -419,15 +420,14 @@ pub fn clear_service_backend_refs(route_kind: crate::types::ResourceKind, route_
 
 /// Look up a Gateway resource from the processor registry.
 ///
-/// Uses the raw store (`get_json_by_key`) so that Gateways not belonging to
+/// Uses the raw store (`get_raw_any`) so that Gateways not belonging to
 /// this controller's `gatewayClassName` (which are excluded from `ServerCache`
 /// by the handler filter) are still found. This fixes incorrect Route status
 /// calculation when a Route's parentRef points to a foreign Gateway.
-pub fn lookup_gateway(namespace: &str, name: &str) -> Option<Gateway> {
+pub fn lookup_gateway(namespace: &str, name: &str) -> Option<Arc<Gateway>> {
     let processor = PROCESSOR_REGISTRY.get("Gateway")?;
     let key = format!("{}/{}", namespace, name);
-    let json = processor.get_json_by_key(&key)?;
-    serde_json::from_str(&json).ok()
+    processor.get_raw_any(&key)?.downcast::<Gateway>().ok()
 }
 
 /// Resolve listener keys from parentRefs for per-listener route isolation.

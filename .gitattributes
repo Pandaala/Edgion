@@ -1,0 +1,4 @@
+# Exclude examples, docs, and skills directories from GitHub language statistics
+examples/** linguist-vendored
+docs/** linguist-documentation
+skills/** linguist-documentation

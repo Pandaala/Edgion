@@ -26,6 +26,7 @@ use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Gateway handler
 ///
@@ -816,10 +817,10 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
 fn lookup_service_cluster_ip(namespace: &str, name: &str) -> Option<String> {
     let processor = PROCESSOR_REGISTRY.get("Service")?;
     let key = format!("{}/{}", namespace, name);
-    let json = processor.get_json_by_key(&key)?;
-    let svc: Service = serde_json::from_str(&json).ok()?;
+    let svc: Arc<Service> = processor.get_raw_any(&key)?.downcast::<Service>().ok()?;
     svc.spec
-        .and_then(|spec| spec.cluster_ip)
+        .as_ref()
+        .and_then(|spec| spec.cluster_ip.clone())
         .filter(|cluster_ip| !cluster_ip.is_empty() && cluster_ip != "None")
 }
 
