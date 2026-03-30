@@ -25,6 +25,13 @@ work_dir = "."
 server_addr = "http://127.0.0.1:50051"   # 必填：Controller gRPC 地址
 admin_listen = "0.0.0.0:5900"            # Admin API（当前固定 :5900）
 
+# ─── gRPC 通道安全（可选 mTLS）───
+# [conf_sync_security.tls]
+# cert = "certs/grpc/client.crt"    # Gateway 客户端证书
+# key  = "certs/grpc/client.key"    # 客户端私钥
+# ca   = "certs/grpc/ca.crt"        # 校验 Controller 服务端的 CA
+# skip_tls = false                   # true = 紧急降级明文（会输出 ERROR 日志）
+
 [logging]
 # 系统日志（非业务日志）
 log_dir = "logs"
@@ -101,6 +108,21 @@ ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "cred
 | `admin_listen` | `String` | — | Admin API 地址（**注意**：当前代码固定 `:5900`，此配置暂不生效） |
 
 > 注意：如果你改了 `gateway.admin_listen` 但端口没变，这不是你操作有误，而是当前实现还没接上这个字段。Gateway Admin API 当前固定 `5900`，Gateway Metrics API 当前固定 `5901`。
+
+### [conf_sync_security.tls]
+
+可选配置，启用后 Gateway 使用 mTLS 连接 Controller gRPC。
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `cert` | `String` | — | 客户端证书路径（PEM，相对 work_dir） |
+| `key` | `String` | — | 客户端私钥路径（PEM） |
+| `ca` | `String` | — | CA 证书路径（用于验证 Controller 服务端证书） |
+| `skip_tls` | `bool` | `false` | 紧急降级开关：`true` 跳过 TLS，以明文连接（输出 ERROR 日志） |
+
+> 不配置此 section 时，gRPC 以明文连接，与历史版本完全兼容。
+> 启用 mTLS 时，`[gateway].server_addr` 的 URI scheme 会自动切换为 `https://`。
+> 证书通过 `edgion-ctl gen-certs --output file --output-dir <dir>` 生成。
 
 ### [server]
 

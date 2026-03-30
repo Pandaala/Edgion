@@ -40,4 +40,5 @@ description: Controller↔Gateway 双向 gRPC 同步架构：ConfigSync 协议�
 - **ConfigSync 协议**：定义了 4 个 RPC 方法（GetServerInfo、List、Watch、WatchServerMeta），Gateway 通过这些方法与 Controller 同步资源配置。
 - **版本追踪**：`sync_version`（单调递增）和 `server_id`（UUID）配合使用，实现增量同步和 Controller 重启检测。
 - **不同步资源**：`ReferenceGrant` 和 `Secret` 是 `no_sync_kinds`，仅在 Controller 侧使用，不发送到 Gateway。
-- **模块分布**：`common/conf_sync`（Proto + 共享 traits）、`controller/conf_sync`（服务端）、`gateway/conf_sync`（客户端）。
+- **通道安全（mTLS）**：可选的 `[conf_sync_security.tls]` 配置，为 gRPC 通道启用双向 TLS 认证。证书通过 `edgion-ctl gen-certs` 生成。详见 [00-overview.md § 通道安全](00-overview.md#通道安全mtls)。
+- **模块分布**：`common/conf_sync`（Proto + 共享 traits）、`common/config`（TLS 配置结构）、`controller/conf_sync`（服务端）、`gateway/conf_sync`（客户端）、`ctl/certs`（证书生成）。

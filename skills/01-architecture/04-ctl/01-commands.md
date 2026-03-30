@@ -5,7 +5,7 @@ description: edgion-ctl 子命令详解：apply、get、delete、reload 的参�
 
 # edgion-ctl 子命令
 
-edgion-ctl 提供 4 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）。其中 apply、delete、reload 仅在 center target 下可用。
+edgion-ctl 提供 5 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）、gen-certs（生成 mTLS 证书）。其中 apply、delete、reload 仅在 center target 下可用，gen-certs 不依赖 target。
 
 ## apply
 
@@ -168,4 +168,87 @@ edgion-ctl reload
 
 # 连接指定地址的 Controller
 edgion-ctl --server http://10.0.0.1:5800 reload
+```
+
+## gen-certs
+
+生成 conf_sync gRPC mTLS 所需的证书束（CA + Server + Client），基于 rcgen 库实现。此命令不依赖 target，不需要连接任何服务。
+
+### 语法
+
+```bash
+edgion-ctl gen-certs [OPTIONS]
+```
+
+### 参数
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--output` | 输出目标：`file`（写入文件）或 `k8s`（写入 K8s Secret） | `file` |
+| `--output-dir` | 文件输出目录（仅 `--output file` 时生效） | `certs/grpc/` |
+| `--ca-days` | CA 证书有效天数 | `3650`（10 年） |
+| `--cert-days` | 服务端/客户端证书有效天数 | `365` |
+| `--server-san` | 额外 SAN（可多次指定） | 默认含 `localhost`、`127.0.0.1`、`::1` |
+| `--force` | 强制覆盖已有证书 | `false` |
+
+### 生成的文件
+
+```
+<output-dir>/
+├── ca.crt            # CA 证书（分发给双方校验对端）
+├── ca.key            # CA 私钥（仅签发用，不部署到运行时）
+├── server.crt        # Controller 服务端证书
+├── server.key        # Controller 服务端私钥
+├── client.crt        # Gateway 客户端证书
+└── client.key        # Gateway 客户端私钥
+```
+
+### 证书属性
+
+| 证书 | CN | SAN | EKU |
+|------|----|----|-----|
+| CA | edgion-grpc-ca | — | — |
+| Server | edgion-controller | localhost, 127.0.0.1, ::1, + `--server-san` | ServerAuth |
+| Client | edgion-gateway | — | ClientAuth |
+
+### 实现逻辑
+
+1. 使用 rcgen 创建自签 CA（ECDSA P-256）
+2. 用 CA 签发 Server 证书（含 SAN 和 ServerAuth EKU）
+3. 用 CA 签发 Client 证书（含 ClientAuth EKU）
+4. `--output file`：写入 PEM 文件到 `--output-dir`
+5. `--output k8s`：写入 K8s Secret（用于 Helm/Operator 部署）
+
+### 使用场景
+
+- 本地开发/测试：快速生成自签证书启用 mTLS
+- CI/CD：集成测试自动生成证书
+- 生产环境初始化：一次性生成后交由证书管理系统轮转
+
+### 示例
+
+```bash
+# 生成到默认目录 certs/grpc/
+edgion-ctl gen-certs --output file
+
+# 指定输出目录，强制覆盖
+edgion-ctl gen-certs --output file --output-dir /etc/edgion/certs --force
+
+# 添加 K8s Service FQDN 作为额外 SAN
+edgion-ctl gen-certs --output file \
+    --server-san edgion-controller.edgion-system.svc.cluster.local
+
+# 写入 K8s Secret
+edgion-ctl gen-certs --output k8s
+```
+
+### 模块结构
+
+```
+src/core/ctl/
+├── certs/
+│   └── mod.rs                # generate_certs() → CertBundle（CA、Server、Client）
+└── cli/
+    └── commands/
+        └── gen_certs.rs      # GenCertsArgs、write_to_files()、write_to_k8s_secrets()
 ```
