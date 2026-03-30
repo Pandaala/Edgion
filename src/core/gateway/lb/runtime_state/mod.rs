@@ -312,3 +312,84 @@ pub fn get_draining_backends(service_key: &str) -> Vec<SocketAddr> {
 pub fn all_service_keys() -> Vec<String> {
     SERVICES.iter().map(|e| e.key().clone()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pingora_core::protocols::l4::socket::SocketAddr;
+
+    fn inet(addr: &str) -> SocketAddr {
+        SocketAddr::Inet(addr.parse().unwrap())
+    }
+
+    /// P0-07 回归测试：retry 路径下所有 backend 计数最终归零。
+    ///
+    /// 场景：连接 A → 出错 retry → 连接 B → 成功
+    /// 期望：请求结束后 count(A) == 0, count(B) == 0
+    #[test]
+    fn test_leastconn_retry_counter_reaches_zero() {
+        let svc = "test-ns/p0-07-retry-leak";
+        let a = inet("127.0.0.1:19001");
+        let b = inet("127.0.0.1:19002");
+
+        // 模拟 connected_to_upstream(A): increment(A)
+        increment(svc, &a);
+        assert_eq!(get_count(svc, &a), 1, "A should be 1 after first connection");
+
+        // 模拟 update_peer_metrics on retry: take+decrement(A) before push_upstream(B)
+        decrement(svc, &a);
+        assert_eq!(get_count(svc, &a), 0, "A should reach 0 after retry cleanup");
+
+        // 模拟 connected_to_upstream(B): increment(B)
+        increment(svc, &b);
+        assert_eq!(get_count(svc, &b), 1, "B should be 1 after second connection");
+
+        // 模拟 logging: decrement(B) for final upstream
+        decrement(svc, &b);
+        assert_eq!(get_count(svc, &b), 0, "B should reach 0 after logging");
+
+        // cleanup
+        remove_service(svc);
+    }
+
+    /// 多次 retry 场景：A → B → C，全部归零。
+    #[test]
+    fn test_leastconn_multiple_retries_counter_reaches_zero() {
+        let svc = "test-ns/p0-07-multi-retry";
+        let a = inet("127.0.0.1:19011");
+        let b = inet("127.0.0.1:19012");
+        let c = inet("127.0.0.1:19013");
+
+        // Attempt 1: connect A
+        increment(svc, &a);
+        // Retry 1: update_peer_metrics cleans A, then connects B
+        decrement(svc, &a);
+        increment(svc, &b);
+        // Retry 2: update_peer_metrics cleans B, then connects C
+        decrement(svc, &b);
+        increment(svc, &c);
+        // logging: decrement C
+        decrement(svc, &c);
+
+        assert_eq!(get_count(svc, &a), 0, "A count should be 0");
+        assert_eq!(get_count(svc, &b), 0, "B count should be 0");
+        assert_eq!(get_count(svc, &c), 0, "C count should be 0");
+
+        remove_service(svc);
+    }
+
+    /// 连接失败（未进 connected_to_upstream）不产生 increment，decrement 是 no-op。
+    #[test]
+    fn test_leastconn_connect_failure_no_increment() {
+        let svc = "test-ns/p0-07-connect-fail";
+        let a = inet("127.0.0.1:19021");
+
+        // 连接失败：从未调 increment
+        assert_eq!(get_count(svc, &a), 0, "No increment means count stays 0");
+
+        // decrement 对不存在的条目是 no-op（不 panic，不下溢）
+        decrement(svc, &a);
+        assert_eq!(get_count(svc, &a), 0, "Spurious decrement should be no-op");
+        remove_service(svc);
+    }
+}

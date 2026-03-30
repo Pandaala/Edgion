@@ -442,6 +442,12 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 /// Update peer address info and metrics (inline for performance)
 #[inline]
 pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
+    // P0-07: retry 时清算上一次成功建连但中途放弃的 LeastConn backend。
+    // 必须在 push_upstream 之前执行，此时 current_upstream_id 仍指向上一次 entry。
+    if let Some((sk, addr)) = ctx.leastconn_incremented_backend.take() {
+        crate::core::gateway::lb::runtime_state::decrement(&sk, &addr);
+    }
+
     // Increment try count
     ctx.try_cnt += 1;
 

@@ -36,7 +36,7 @@ use std::net::IpAddr;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{IpRestrictionConfig, IpSource};
+use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
 
 /// IP Restriction plugin
 pub struct IpRestriction {
@@ -78,18 +78,18 @@ impl RequestFilter for IpRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Get client IP
-        let client_ip = match self.get_client_ip(session) {
-            Some(ip) => ip,
+        // Determine whether to deny this request
+        let should_deny = match self.get_client_ip(session) {
+            Some(ip) => !self.config.check_ip_access(&ip),
             None => {
                 plugin_log.push("No client IP; ");
-                // If we can't determine IP, allow by default (or could be configured)
-                return PluginRunningResult::GoodNext;
+                // Allow list configured means whitelist mode: unknown IP is not in whitelist → deny.
+                // Otherwise, fall back to default_action.
+                self.config.allow_matcher.is_some() || matches!(self.config.default_action, DefaultAction::Deny)
             }
         };
 
-        // Check access using config's check_ip_access method
-        if !self.config.check_ip_access(&client_ip) {
+        if should_deny {
             let message = self
                 .config
                 .message
@@ -105,9 +105,8 @@ impl RequestFilter for IpRestriction {
             );
             resp.insert_header("Content-Type", "application/json").ok();
 
-            let body = Bytes::from(format!(r#"{{"message":"{}"}}"#, message));
+            let body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
-            // Write response
             if let Err(_e) = session.write_response_header(resp, false).await {
                 return PluginRunningResult::ErrTerminateRequest;
             }
@@ -225,8 +224,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invalid_ip_continues() {
+    async fn test_missing_ip_denied_in_whitelist_mode() {
+        // Allow list configured = whitelist mode: unknown IP must be denied
         let config = create_ip_config_allow_list();
+        let plugin = IpRestriction::create(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        mock_session.expect_remote_addr().return_const("".to_string());
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.contains("No client IP"));
+        assert!(plugin_log.contains("Denied"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_ip_allowed_when_default_action_allow_and_no_whitelist() {
+        // Deny-only list + default_action=Allow: unknown IP should be allowed
+        let config = create_ip_config_deny_list();
         let plugin = IpRestriction::create(&config);
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
@@ -237,5 +256,31 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("No client IP"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_ip_denied_when_default_action_deny_and_no_whitelist() {
+        // Deny-only list + default_action=Deny: unknown IP should be denied
+        let config = IpRestrictionConfig::new(IpRestrictionConfig {
+            deny: Some(vec!["10.0.0.100".to_string()]),
+            default_action: DefaultAction::Deny,
+            ip_source: IpSource::ClientIp,
+            status: 403,
+            ..Default::default()
+        })
+        .unwrap();
+        let plugin = IpRestriction::create(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        mock_session.expect_remote_addr().return_const("".to_string());
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.contains("No client IP"));
+        assert!(plugin_log.contains("Denied"));
     }
 }

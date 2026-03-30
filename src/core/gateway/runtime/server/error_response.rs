@@ -14,6 +14,7 @@
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::types::EdgionHttpContext;
 use bytes::Bytes;
+use http::{HeaderMap, HeaderValue};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
@@ -37,14 +38,30 @@ async fn send_grpc_trailers_only(
 
     ctx.request_info.status = Some(200);
 
+    // Step 1: Send response headers with :status 200 and content-type.
+    // grpc-status and grpc-message must NOT go here — they must be in HTTP/2 trailers.
+    // Pingora ignores end_of_stream on write_response_header for H2 (always sends without
+    // END_STREAM), so we use a separate trailers frame to properly close the stream.
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
     resp.insert_header("content-type", "application/grpc").unwrap();
-    resp.insert_header("grpc-status", grpc_status.to_string().as_str())
-        .unwrap();
-    resp.insert_header("grpc-message", grpc_message).unwrap();
+    session.write_response_header(Box::new(resp), false).await?;
 
-    session.write_response_header(Box::new(resp), true).await?;
+    // Step 2: Send grpc-status and grpc-message as HTTP/2 trailers (HEADERS frame with
+    // END_STREAM). Per gRPC-over-HTTP/2 spec, the status must be in trailers, not in
+    // the initial response headers, unless the response is a trailers-only frame
+    // (HEADERS + END_STREAM). Since Pingora cannot set END_STREAM on response headers,
+    // we use the two-frame pattern: response headers + trailer headers with END_STREAM.
+    let mut trailers = HeaderMap::new();
+    trailers.insert(
+        http::header::HeaderName::from_static("grpc-status"),
+        HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+    );
+    trailers.insert(
+        http::header::HeaderName::from_static("grpc-message"),
+        HeaderValue::from_static(grpc_message),
+    );
+    session.as_downstream_mut().write_response_trailers(trailers).await?;
     Ok(())
 }
 

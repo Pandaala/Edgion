@@ -54,7 +54,7 @@
 
 ### 不引入爆炸
 
-- [ ] **无 Histogram 类型**（无 `metrics::histogram!`、无 `_bucket` / `_sum` / `_count`）
+- [ ] **Histogram 必须 opt-in**：`histogram!` 调用必须受 `enabled` 开关保护，且默认值为 `false`；禁止无开关的裸 `histogram!` 调用
 - [ ] **Label cardinality 有界**（值域 ≤ 数十个）— 绝不使用 path、user_id、ip、trace_id 作为 label
 - [ ] 新增指标是否真正必要？现有指标能否已经表达？能计算出来的不要额外存
 

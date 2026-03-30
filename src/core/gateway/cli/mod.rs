@@ -156,6 +156,7 @@ impl EdgionGatewayCli {
         // 5. Initialize RateLimit global configuration
         config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);
+        config::init_plugin_metadata_config(config.plugin_metadata.clone());
 
         // 5.1 Initialize AllEndpointStatus global configuration
         crate::core::gateway::plugins::http::all_endpoint_status::plugin::init_all_endpoint_status_global_config(

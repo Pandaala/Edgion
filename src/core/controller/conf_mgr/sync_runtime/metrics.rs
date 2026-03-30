@@ -6,14 +6,14 @@
 //! - Leader election status
 //! - Reload operations
 
-use metrics::{counter, gauge, histogram, Counter, Gauge, Histogram};
+use metrics::{counter, gauge, Counter, Gauge};
 use std::sync::LazyLock;
 use std::time::Instant;
 
 /// Metric names as constants
 pub mod names {
-    /// Initial sync duration in seconds (with labels: kind)
-    pub const INIT_SYNC_DURATION: &str = "edgion_controller_init_sync_duration_seconds";
+    /// Last initial sync duration in seconds (with labels: kind)
+    pub const INIT_SYNC_DURATION: &str = "edgion_controller_init_sync_duration_seconds_last";
     /// Number of active resource controllers
     pub const ACTIVE_CONTROLLERS: &str = "edgion_controller_active";
     /// Total resources watched (with labels: kind)
@@ -22,8 +22,8 @@ pub mod names {
     pub const LEADER_STATUS: &str = "edgion_controller_leader";
     /// Total reload operations triggered
     pub const RELOAD_TOTAL: &str = "edgion_controller_reload_total";
-    /// Reload duration in seconds
-    pub const RELOAD_DURATION: &str = "edgion_controller_reload_duration_seconds";
+    /// Last reload duration in seconds
+    pub const RELOAD_DURATION: &str = "edgion_controller_reload_duration_seconds_last";
     /// Total client notifications sent for reload
     pub const RELOAD_CLIENT_NOTIFICATIONS: &str = "edgion_controller_reload_client_notifications_total";
     /// Total status writes (with labels: kind, backend, result)
@@ -74,7 +74,7 @@ impl ControllerMetrics {
 
 /// Per-resource-kind metrics for init sync
 pub struct ResourceMetrics {
-    init_sync_duration: Histogram,
+    init_sync_duration: Gauge,
     resources_watched: Gauge,
 }
 
@@ -82,7 +82,7 @@ impl ResourceMetrics {
     /// Create metrics for a specific resource kind
     pub fn new(kind: &'static str) -> Self {
         Self {
-            init_sync_duration: histogram!(names::INIT_SYNC_DURATION, "kind" => kind),
+            init_sync_duration: gauge!(names::INIT_SYNC_DURATION, "kind" => kind),
             resources_watched: gauge!(names::RESOURCES_WATCHED, "kind" => kind),
         }
     }
@@ -90,7 +90,7 @@ impl ResourceMetrics {
     /// Record initial sync duration
     #[inline]
     pub fn init_sync_complete(&self, duration_secs: f64) {
-        self.init_sync_duration.record(duration_secs);
+        self.init_sync_duration.set(duration_secs);
     }
 
     /// Update the count of watched resources
@@ -138,8 +138,8 @@ pub fn reload_metrics() -> &'static ReloadMetrics {
 pub struct ReloadMetrics {
     /// Total reload operations triggered
     reload_total: Counter,
-    /// Reload duration histogram
-    reload_duration: Histogram,
+    /// Last reload duration
+    reload_duration: Gauge,
     /// Total client notifications sent
     client_notifications: Counter,
 }
@@ -148,7 +148,7 @@ impl ReloadMetrics {
     fn new() -> Self {
         Self {
             reload_total: counter!(names::RELOAD_TOTAL),
-            reload_duration: histogram!(names::RELOAD_DURATION),
+            reload_duration: gauge!(names::RELOAD_DURATION),
             client_notifications: counter!(names::RELOAD_CLIENT_NOTIFICATIONS),
         }
     }
@@ -162,7 +162,7 @@ impl ReloadMetrics {
     /// Record reload duration
     #[inline]
     pub fn reload_completed(&self, duration_secs: f64) {
-        self.reload_duration.record(duration_secs);
+        self.reload_duration.set(duration_secs);
     }
 
     /// Record a client notification sent

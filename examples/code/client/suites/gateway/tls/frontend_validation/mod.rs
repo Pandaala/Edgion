@@ -314,10 +314,7 @@ impl FrontendValidationTestSuite {
                     let client = match create_client_with_sni(HOSTNAME, &ctx.target_host, PORT_INVALID_CA) {
                         Ok(c) => c,
                         Err(e) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!("Failed to create client: {}", e),
-                            )
+                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
                         }
                     };
 
@@ -334,7 +331,8 @@ impl FrontendValidationTestSuite {
                         ),
                         Err(_) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "TLS connection failed as expected — Programmed=False listener is not registered".to_string(),
+                            "TLS connection failed as expected — Programmed=False listener is not registered"
+                                .to_string(),
                         ),
                     }
                 })

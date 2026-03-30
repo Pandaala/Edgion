@@ -112,7 +112,7 @@ pub async fn request_filter(
             Err(_) => {
                 ctx.add_error(EdgionStatus::RouteNotFound);
                 end_response_404(session, ctx, &edgion_http.server_header_opts).await?;
-                return Ok(true);  // Already sent error response, signal completion
+                return Ok(true); // Already sent error response, signal completion
             }
         }
     }

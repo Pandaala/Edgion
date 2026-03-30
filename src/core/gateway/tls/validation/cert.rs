@@ -623,8 +623,7 @@ mod tests {
         let dur_after = ::time::Duration::days(not_after_offset_days);
 
         let key_pair = KeyPair::generate().expect("rcgen key generation failed");
-        let mut params =
-            CertificateParams::new(vec!["example.com".to_string()]).expect("rcgen params failed");
+        let mut params = CertificateParams::new(vec!["example.com".to_string()]).expect("rcgen params failed");
         params.not_before = now + dur_before;
         params.not_after = now + dur_after;
         let cert = params.self_signed(&key_pair).expect("rcgen self-sign failed");
@@ -640,7 +639,10 @@ mod tests {
         let result = validate_cert(&tls);
         assert!(!result.is_valid, "expired cert should be invalid");
         assert!(
-            result.errors.iter().any(|e| matches!(e, CertValidationError::CertExpired { .. })),
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertExpired { .. })),
             "should report CertExpired, got: {:?}",
             result.errors
         );
@@ -655,7 +657,10 @@ mod tests {
         let result = validate_cert(&tls);
         assert!(!result.is_valid, "not-yet-valid cert should be invalid");
         assert!(
-            result.errors.iter().any(|e| matches!(e, CertValidationError::CertExpired { .. })),
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertExpired { .. })),
             "should report CertExpired, got: {:?}",
             result.errors
         );
@@ -670,7 +675,10 @@ mod tests {
         let result = validate_cert(&tls);
         // 只验证没有 CertExpired 错误
         assert!(
-            !result.errors.iter().any(|e| matches!(e, CertValidationError::CertExpired { .. })),
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertExpired { .. })),
             "valid cert should not report CertExpired, got: {:?}",
             result.errors
         );

@@ -350,9 +350,9 @@ pub(crate) fn is_listener_not_programmed(gateway: &Gateway, listener_name: &str)
         .and_then(|s| s.listeners.as_ref())
         .and_then(|listeners| listeners.iter().find(|ls| ls.name == listener_name))
         .map(|ls| {
-            ls.conditions.iter().any(|c| {
-                (c.type_ == "Programmed" || c.type_ == "Accepted") && c.status == "False"
-            })
+            ls.conditions
+                .iter()
+                .any(|c| (c.type_ == "Programmed" || c.type_ == "Accepted") && c.status == "False")
         })
         .unwrap_or(false)
 }
@@ -374,7 +374,7 @@ pub fn rebuild_listener_gateway_infos(gateways: &[Gateway]) {
 mod tests {
     use super::*;
     use crate::types::resources::common::Condition;
-    use crate::types::resources::gateway::{GatewaySpec, GatewayStatus, ListenerStatus, Listener};
+    use crate::types::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
     use kube::api::ObjectMeta;
 
     fn make_condition(type_: &str, status: &str) -> Condition {
@@ -443,10 +443,13 @@ mod tests {
 
     #[test]
     fn test_not_programmed_when_programmed_false() {
-        let gw = make_gateway("https", vec![
-            make_condition("Accepted", "True"),
-            make_condition("Programmed", "False"),
-        ]);
+        let gw = make_gateway(
+            "https",
+            vec![
+                make_condition("Accepted", "True"),
+                make_condition("Programmed", "False"),
+            ],
+        );
         assert!(is_listener_not_programmed(&gw, "https"));
     }
 
@@ -458,10 +461,10 @@ mod tests {
 
     #[test]
     fn test_not_programmed_false_when_all_true() {
-        let gw = make_gateway("https", vec![
-            make_condition("Accepted", "True"),
-            make_condition("Programmed", "True"),
-        ]);
+        let gw = make_gateway(
+            "https",
+            vec![make_condition("Accepted", "True"), make_condition("Programmed", "True")],
+        );
         assert!(!is_listener_not_programmed(&gw, "https"));
     }
 
@@ -482,10 +485,7 @@ mod tests {
 
         use crate::types::listener_key::ListenerKey;
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-        let key = ListenerKey::new(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443),
-            "HTTPS",
-        );
+        let key = ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443), "HTTPS");
         assert!(
             store.get_index(&key).is_empty(),
             "Programmed=False listener should not be registered in the index"
@@ -496,18 +496,15 @@ mod tests {
     fn test_rebuild_includes_programmed_true_listener() {
         let store = ListenerGatewayInfoStore::new();
 
-        let valid_gw = make_gateway("https", vec![
-            make_condition("Accepted", "True"),
-            make_condition("Programmed", "True"),
-        ]);
+        let valid_gw = make_gateway(
+            "https",
+            vec![make_condition("Accepted", "True"), make_condition("Programmed", "True")],
+        );
         store.rebuild(&[valid_gw]);
 
         use crate::types::listener_key::ListenerKey;
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-        let key = ListenerKey::new(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443),
-            "HTTPS",
-        );
+        let key = ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443), "HTTPS");
         assert!(
             !store.get_index(&key).is_empty(),
             "Programmed=True listener should be registered in the index"

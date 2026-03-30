@@ -560,6 +560,12 @@ pub struct EdgionHttpContext {
     /// Session persistence: resolved target endpoint from affinity map lookup.
     /// When Some, try_get_peer will route directly to this addr instead of running LB.
     pub sp_target_addr: Option<std::net::SocketAddr>,
+
+    /// P0-07: 上一次成功 increment 的 LeastConn backend (service_key, lb_addr)。
+    /// 由 connected_to_upstream 在 increment 后写入。
+    /// 由 update_peer_metrics 在 push_upstream 之前 take() + decrement()，
+    /// 确保 retry 中间 backend 计数不泄漏。
+    pub leastconn_incremented_backend: Option<(String, pingora_core::protocols::l4::socket::SocketAddr)>,
 }
 
 impl Default for EdgionHttpContext {
@@ -598,6 +604,7 @@ impl EdgionHttpContext {
             mirror_state: None,
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,
+            leastconn_incremented_backend: None,
         }
     }
 

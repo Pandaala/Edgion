@@ -82,6 +82,13 @@ path = "logs/udp_access.log"
 default_estimator_slots_k = 64           # CMS 默认精度（× 64KB 内存）
 max_estimator_slots_k = 1024             # CMS 最大精度上限
 gateway_instance_count = 1               # 静态实例数（无 Controller 推送时的 fallback）
+
+# ─── Plugin Metadata ───
+
+[plugin_metadata]
+# Ctx keys containing these substrings (case-insensitive) are excluded from access log.
+# Keys starting with `_` are always excluded regardless of this list.
+ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "credential"]
 ```
 
 ## 字段详解
@@ -143,6 +150,25 @@ LogConfig:
 | `default_estimator_slots_k` | `usize` | `64` | CMS 默认 slot 数（×1K），内存 ≈ slots_k × 64KB |
 | `max_estimator_slots_k` | `usize` | `1024` | CMS 最大 slot 数上限 |
 | `gateway_instance_count` | `u32` | `1` | Gateway 实例数（集群限流分母，无 Controller 时的静态 fallback） |
+
+### [plugin_metadata]
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `ctx_log_denylist` | `Vec<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx key 中包含这些子串（大小写不敏感）的条目不进入 access log |
+
+> **注意：** 在 TOML 中设置此字段会**完全替换**默认列表，而非追加。如需保留默认保护，须手动包含全部默认关键词再加上自定义词。
+
+**过滤规则**（两者满足其一则跳过）：
+1. Key 以 `_` 开头（plugin 内部私有约定）
+2. Key 包含 `ctx_log_denylist` 中任意子串（大小写不敏感匹配）
+
+**示例**：
+- `jwt_claims` → 命中 `claim` → 过滤 ✗
+- `jwe_payload` → 命中 `payload` → 过滤 ✗
+- `_internal_state` → `_` 前缀 → 过滤 ✗
+- `tenant_id` → 无命中，无前缀 → 保留 ✓
+- `user_id` → 无命中，无前缀 → 保留 ✓
 
 ## `integration_testing_mode`
 

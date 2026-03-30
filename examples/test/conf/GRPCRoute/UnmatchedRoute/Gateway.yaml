@@ -2,11 +2,11 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: grpc-test-gateway
+  name: grpc-unmatched-gateway
   namespace: edgion-test
 spec:
   gatewayClassName: public-gateway
   listeners:
     - name: grpc
       protocol: HTTP
-      port: 31061
+      port: 31062

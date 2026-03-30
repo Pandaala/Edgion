@@ -386,15 +386,13 @@ impl TlsCallback {
         match boring::asn1::Asn1Time::days_from_now(0) {
             Ok(now) => {
                 if cert.not_after() < &now {
-                    ssl_ctx.meta.err_log =
-                        Some(format!("cert_expired: not_after={}", cert.not_after()));
+                    ssl_ctx.meta.err_log = Some(format!("cert_expired: not_after={}", cert.not_after()));
                     return;
                 }
                 // not_before check: reject certs that are not yet valid.
                 // Mirrors the load-time check in validate_cert/check_expiration.
                 if cert.not_before() > &now {
-                    ssl_ctx.meta.err_log =
-                        Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
+                    ssl_ctx.meta.err_log = Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
                     return;
                 }
             }

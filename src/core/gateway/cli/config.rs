@@ -80,6 +80,11 @@ pub struct EdgionGatewayConfig {
     #[serde(default, alias = "auth_cache")]
     pub lru_cache: LruCacheGlobalConfig,
 
+    /// Plugin metadata global configuration
+    #[arg(skip)]
+    #[serde(default)]
+    pub plugin_metadata: PluginMetadataConfig,
+
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
     #[serde(default)]
@@ -268,7 +273,7 @@ pub struct RequestDurationConfig {
 impl Default for RequestDurationConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             buckets: vec![
                 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
             ],
@@ -295,11 +300,11 @@ pub struct RequestDurationLabels {
 impl Default for RequestDurationLabels {
     fn default() -> Self {
         Self {
-            gateway_namespace: true,
-            gateway_name: true,
-            route_namespace: true,
+            gateway_namespace: false,
+            gateway_name: false,
+            route_namespace: false,
             route_name: true,
-            backend_namespace: true,
+            backend_namespace: false,
             backend_name: true,
             protocol: true,
             status: true,
@@ -570,6 +575,67 @@ pub fn get_default_lru_cache_shards() -> usize {
         .unwrap_or(DEFAULT_LRU_CACHE_SHARDS)
 }
 
+// ============================================
+// Plugin Metadata Global Configuration
+// ============================================
+
+const DEFAULT_CTX_LOG_DENYLIST: &[&str] = &["auth", "pass", "claim", "payload", "token", "secret", "credential"];
+
+fn default_ctx_log_denylist() -> Vec<String> {
+    DEFAULT_CTX_LOG_DENYLIST.iter().map(|s| s.to_string()).collect()
+}
+
+/// Plugin metadata global configuration.
+///
+/// Controls cross-cutting plugin behaviors, e.g. which ctx keys are excluded from access log.
+///
+/// ## TOML Configuration Example:
+/// ```toml
+/// [plugin_metadata]
+/// ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "credential"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginMetadataConfig {
+    /// Ctx keys containing these substrings (case-insensitive) are excluded from access log.
+    /// Keys starting with `_` are always excluded regardless of this list.
+    /// Default covers common auth/credential patterns.
+    ///
+    /// **Warning:** Setting this field in TOML **replaces** the entire default list.
+    /// To extend the defaults, include all default keywords plus your additions.
+    #[serde(default = "default_ctx_log_denylist")]
+    pub ctx_log_denylist: Vec<String>,
+}
+
+impl Default for PluginMetadataConfig {
+    fn default() -> Self {
+        Self {
+            ctx_log_denylist: default_ctx_log_denylist(),
+        }
+    }
+}
+
+static PLUGIN_METADATA_CONFIG: OnceLock<PluginMetadataConfig> = OnceLock::new();
+
+/// Initialize the global plugin metadata configuration (call once at startup).
+pub fn init_plugin_metadata_config(config: PluginMetadataConfig) {
+    let _ = PLUGIN_METADATA_CONFIG.set(config);
+}
+
+/// Get the ctx log denylist from global config.
+///
+/// # Panics
+///
+/// Panics if called before `init_plugin_metadata_config` — this prevents silent PII leakage
+/// that would occur if the denylist were silently empty due to a missed init call.
+pub fn get_ctx_log_denylist() -> &'static [String] {
+    PLUGIN_METADATA_CONFIG
+        .get()
+        .expect("PluginMetadataConfig not initialized — call init_plugin_metadata_config at startup")
+        .ctx_log_denylist
+        .as_slice()
+}
+
 impl EdgionGatewayConfig {
     /// Load configuration from TOML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
@@ -711,5 +777,38 @@ mod tests {
         assert_eq!(config.default_estimator_slots_k, DEFAULT_ESTIMATOR_SLOTS_K);
         assert_eq!(config.max_estimator_slots_k, DEFAULT_MAX_ESTIMATOR_SLOTS_K);
         assert_eq!(config.gateway_instance_count, 1);
+    }
+
+    #[test]
+    fn test_plugin_metadata_config_default() {
+        let config = PluginMetadataConfig::default();
+        let denylist = config.ctx_log_denylist;
+        assert!(denylist.contains(&"auth".to_string()));
+        assert!(denylist.contains(&"claim".to_string()));
+        assert!(denylist.contains(&"payload".to_string()));
+        assert!(denylist.contains(&"token".to_string()));
+        assert!(denylist.contains(&"pass".to_string()));
+        assert!(denylist.contains(&"secret".to_string()));
+        assert!(denylist.contains(&"credential".to_string()));
+    }
+
+    #[test]
+    fn test_plugin_metadata_config_toml_deserialize() {
+        let toml = r#"
+[plugin_metadata]
+ctx_log_denylist = ["custom_key", "my_secret"]
+"#;
+        let config: EdgionGatewayConfig = toml::from_str(toml).expect("parse failed");
+        let denylist = &config.plugin_metadata.ctx_log_denylist;
+        assert!(denylist.contains(&"custom_key".to_string()));
+        assert!(denylist.contains(&"my_secret".to_string()));
+        assert!(!denylist.contains(&"auth".to_string()));
+    }
+
+    #[test]
+    fn test_get_ctx_log_denylist_returns_slice() {
+        init_plugin_metadata_config(PluginMetadataConfig::default());
+        let list = get_ctx_log_denylist();
+        assert!(!list.is_empty());
     }
 }

@@ -857,7 +857,10 @@ mod tests {
         // Programmed=False listener must not be in the TLS matcher
         let result = matcher.match_sni(&key, "api.example.com");
         assert!(result.is_none(), "Programmed=False listener should not serve TLS");
-        assert!(matcher.is_empty(), "matcher should be empty when only listener is invalid");
+        assert!(
+            matcher.is_empty(),
+            "matcher should be empty when only listener is invalid"
+        );
     }
 
     #[test]

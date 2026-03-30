@@ -278,19 +278,36 @@ where
 
         // Refresh LoadBalancer
         use futures::FutureExt;
-        if let Some(Err(e)) = lb.update_load_balancer().now_or_never() {
-            tracing::warn!(key = %service_key, error = %e, "Failed to refresh Endpoint LB");
-        } else {
-            tracing::debug!(
+        match lb.update_load_balancer().now_or_never() {
+            None => tracing::warn!(
+                service_key = %service_key,
+                "Endpoint LB update future was not ready immediately, update dropped"
+            ),
+            Some(Err(e)) => tracing::error!(
+                service_key = %service_key,
+                error = %e,
+                "Failed to refresh Endpoint LB"
+            ),
+            Some(Ok(())) => tracing::debug!(
                 service_key = %service_key,
                 "Updated existing Endpoint LB"
-            );
+            ),
         }
     }
 
     /// Get all service_keys that have existing LBs
     pub fn get_existing_service_keys(&self) -> Vec<String> {
         self.endpoints.load().keys().cloned().collect()
+    }
+
+    /// Get current backend addresses from the existing LB (if any), NOT from the data layer.
+    /// This captures the pre-update state of the LB, useful before calling update_lb_if_exists().
+    pub fn get_backends_from_lb(&self, service_key: &str) -> Vec<Backend> {
+        self.endpoints
+            .load()
+            .get(service_key)
+            .map(|lb| lb.get_current_backends())
+            .unwrap_or_default()
     }
 
     /// Get current backend addresses for a service from data layer.
@@ -353,13 +370,20 @@ where
 
         // Refresh LoadBalancer
         use futures::FutureExt;
-        if let Some(Err(e)) = lb.update_load_balancer().now_or_never() {
-            tracing::warn!(key = %service_key, error = %e, "Failed to refresh Endpoint LB");
-        } else {
-            tracing::debug!(
+        match lb.update_load_balancer().now_or_never() {
+            None => tracing::warn!(
+                service_key = %service_key,
+                "Endpoint LB update future was not ready immediately, update dropped"
+            ),
+            Some(Err(e)) => tracing::error!(
+                service_key = %service_key,
+                error = %e,
+                "Failed to refresh Endpoint LB"
+            ),
+            Some(Ok(())) => tracing::debug!(
                 service_key = %service_key,
                 "Updated existing Endpoint LB (from shared data layer)"
-            );
+            ),
         }
     }
 
@@ -432,15 +456,19 @@ where
         // Trigger LoadBalancer update using now_or_never for sync execution
         use futures::FutureExt;
         match lb.update_load_balancer().now_or_never() {
-            Some(Ok(_)) => {
-                tracing::debug!(key = %key, "Updated Endpoints and LoadBalancer in-place");
-            }
-            Some(Err(e)) => {
-                tracing::warn!(key = %key, error = %e, "Failed to refresh LoadBalancer, will retry on next update");
-            }
-            None => {
-                tracing::error!(key = %key, "LoadBalancer update blocked unexpectedly");
-            }
+            None => tracing::warn!(
+                key = %key,
+                "LoadBalancer update future was not ready immediately, update dropped"
+            ),
+            Some(Err(e)) => tracing::error!(
+                key = %key,
+                error = %e,
+                "Failed to refresh LoadBalancer"
+            ),
+            Some(Ok(_)) => tracing::debug!(
+                key = %key,
+                "Updated Endpoints and LoadBalancer in-place"
+            ),
         }
         Ok(())
     }

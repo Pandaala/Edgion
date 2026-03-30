@@ -45,7 +45,8 @@
 
 ```bash
 # OrbStack 全量测试 — 直接用 run.sh，不需要 port-forward
-# OrbStack 原生支持 macOS 直接访问 K8s ClusterIP，直连最稳定
+# OrbStack 原生支持 macOS 直接访问 K8s ClusterIP，直连最稳定。
+# 若 OrbStack 重启后路由丢失，run.sh 会自动检测并通过节点 IP 恢复，无需手动操作。
 bash scripts/run.sh
 
 # 单个测试
@@ -164,6 +165,17 @@ PROFILE=release ./scripts/orbstack-dev.sh rebuild   # release 构建
 ### `run.sh` — 运行 conformance 测试
 
 **做什么**：调用 `go test` 运行 Gateway API conformance 套件，支持 profile 过滤、单测试运行、自动 port-forward。
+
+每次启动前自动执行以下 **预检**，任何一项失败都会提前退出并给出明确提示，而不是让测试跑完才报错：
+
+| 检查 | 说明 |
+|------|------|
+| 残留进程 | 检测上次未退出的 `gateway-api-conformance.test` 和 `kubectl port-forward` 进程，提示 pkill 命令 |
+| Go 工具链 | 确认 `go` 在 PATH 中 |
+| 集群连通性 | `kubectl cluster-info` 快速验证 kubeconfig 是否有效 |
+| OrbStack 路由 | 探测 ClusterIP 可达性；若路由失效则自动查找 OrbStack 节点 IP 并启用 TAL 代理（见下） |
+| Gateway pod Ready | 至少一个 `edgion-gateway` pod 处于 Ready 状态 |
+| GatewayClass Accepted | `edgion` GatewayClass 的 Accepted condition 为 True |
 
 **关键参数**：
 
@@ -292,3 +304,17 @@ Edgion gateway 进程在启动时绑定 listener 端口，之后不支持动态�
 
 - **单个测试**：`orbstack-dev.sh test --run-test <Name>` 方便，port-forward 时间短不会断
 - **全量测试**：直接 `bash scripts/run.sh`。`orbstack-dev.sh test` 强制加 `--port-forward`，长时间运行容易断开
+
+**Q: OrbStack 重启后测试全超时，提示 ClusterIP 不可达，怎么办？**
+
+OrbStack 重启后，K8s pod/service CIDR（`192.168.194.x`）的路由条目可能从 Mac 路由表中丢失，导致 ClusterIP 流量漏到物理网关。
+
+`run.sh` 会自动检测这种情况：探测 ClusterIP 失败后，向 OrbStack 内置 DNS（`198.18.0.2`）查询 `orbstack-k8s.internal` 获取节点 IP，确认节点可达后自动启用 TAL 代理绕过丢失的路由，让测试正常运行。
+
+若 OrbStack 节点本身也不可达，脚本会提示重启 OrbStack.app。永久修复路由可在 OrbStack.app 重启后自动恢复，或手动执行：
+
+```bash
+# <orb_node_ip> 通常是 198.18.0.37，可从脚本输出中确认
+sudo route -n add -net 192.168.194.0/25 <orb_node_ip>
+sudo route -n add -net 192.168.194.128/25 <orb_node_ip>
+```

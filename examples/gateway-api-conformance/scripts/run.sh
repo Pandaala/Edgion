@@ -61,6 +61,185 @@ Examples:
 USAGE
 }
 
+# ─── OrbStack K8s routing check ──────────────────────────────────────────────
+#
+# On OrbStack, K8s pod/service CIDRs (192.168.194.x) are routed via the
+# OrbStack internal tunnel (utun4). After an OrbStack restart these routes
+# can be dropped, causing all ClusterIP traffic to leak to the physical
+# router and time out. This function detects that condition and, if OrbStack
+# is present, auto-enables TAL proxy mode via the K8s node's OrbStack IP
+# (orbstack-k8s.internal) so tests work without a full OrbStack restart.
+#
+# Detection flow:
+#   1. Quick TCP probe to ClusterIP:80                   → reachable? done.
+#   2. DNS query to OrbStack resolver (198.18.0.2)
+#      for orbstack-k8s.internal                         → resolved? use it.
+#   3. TCP probe to <orbstack-k8s-ip>:80                 → reachable? auto-proxy.
+#   4. Not reachable at all                              → fatal, ask restart.
+check_gateway_routing() {
+  # Only relevant when TAL proxy is not already configured by the caller.
+  if [[ -n "${GATEWAY_PROXY_HOST:-}" ]]; then
+    return
+  fi
+
+  local gw_svc_ip
+  gw_svc_ip=$(kubectl get svc edgion-gateway -n edgion-system \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+  if [[ -z "${gw_svc_ip}" ]]; then
+    return  # Service not found; check_gateway_pod_ready will give a clearer error.
+  fi
+
+  # Probe ClusterIP:80 with a 2-second timeout.
+  if bash -c "echo >/dev/tcp/${gw_svc_ip}/80" 2>/dev/null; then
+    return  # Direct ClusterIP access is working fine.
+  fi
+
+  echo "⚠  ClusterIP ${gw_svc_ip}:80 is not reachable — checking OrbStack routing..."
+
+  # Ask OrbStack's own DNS resolver for the K8s node address.
+  local orb_node_ip
+  orb_node_ip=$(dig +short +time=2 +tries=1 @198.18.0.2 orbstack-k8s.internal A \
+    2>/dev/null | grep -E '^[0-9]+\.' | head -1 || true)
+
+  if [[ -z "${orb_node_ip}" ]]; then
+    echo ""
+    echo "ERROR: Gateway ClusterIP ${gw_svc_ip} is unreachable and OrbStack K8s"
+    echo "       DNS (orbstack-k8s.internal) did not resolve."
+    echo ""
+    echo "  • If using OrbStack: restart OrbStack.app to restore K8s routing."
+    echo "  • Otherwise:         check cluster networking or use --port-forward."
+    exit 1
+  fi
+
+  # Verify the node itself is reachable via utun4.
+  if ! bash -c "echo >/dev/tcp/${orb_node_ip}/80" 2>/dev/null; then
+    echo ""
+    echo "ERROR: OrbStack K8s node ${orb_node_ip} is also unreachable on port 80."
+    echo "  Restart OrbStack.app to restore K8s networking, then retry."
+    exit 1
+  fi
+
+  echo "   OrbStack K8s node found at ${orb_node_ip} (orbstack-k8s.internal)."
+  echo "   Routes for ${gw_svc_ip%.*}.0/25 appear to be missing from the Mac"
+  echo "   routing table — likely caused by an OrbStack restart without a full"
+  echo "   OrbStack.app restart."
+  echo ""
+  echo "   Auto-enabling TAL proxy via ${orb_node_ip} so tests can proceed."
+  echo "   (Run 'sudo route -n add -net 192.168.194.0/25 ${orb_node_ip}' and"
+  echo "    'sudo route -n add -net 192.168.194.128/25 ${orb_node_ip}' to fix"
+  echo "    permanently, or restart OrbStack.app.)"
+  echo ""
+
+  export GATEWAY_PROXY_HOST="${orb_node_ip}"
+  # Enable gRPC proxy as well so gRPC conformance tests also go through TAL.
+  export GATEWAY_PROXY_ENABLE_GRPC="${GATEWAY_PROXY_ENABLE_GRPC:-true}"
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Stale process check ─────────────────────────────────────────────────────
+#
+# Leftover test binaries and port-forward processes from a previous run can
+# occupy ports and interfere with the new run. Detect and report them early.
+check_stale_processes() {
+  local pids pf_pids
+  pids=$(pgrep -f "gateway-api-conformance.test" 2>/dev/null || true)
+  pf_pids=$(pgrep -f "kubectl port-forward.*edgion" 2>/dev/null || true)
+
+  if [[ -z "${pids}" && -z "${pf_pids}" ]]; then
+    return
+  fi
+
+  echo "⚠  Stale processes detected from a previous test run:"
+  [[ -n "${pids}" ]]    && echo "   gateway-api-conformance.test  PIDs: ${pids}"
+  [[ -n "${pf_pids}" ]] && echo "   kubectl port-forward          PIDs: ${pf_pids}"
+  echo ""
+  echo "   These may cause port conflicts or test interference."
+  echo "   To clean up, run:"
+  [[ -n "${pids}" ]]    && echo "     pkill -f 'gateway-api-conformance.test'"
+  [[ -n "${pf_pids}" ]] && echo "     pkill -f 'kubectl port-forward.*edgion'"
+  echo ""
+  echo "ERROR: Please clean up stale processes before retrying."
+  exit 1
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Gateway pod readiness check ─────────────────────────────────────────────
+#
+# If no edgion-gateway pod is Ready the tests will time out en masse.
+# Fail fast with a clear message so the user doesn't wait 30 minutes.
+check_gateway_pod_ready() {
+  local ready_status
+  ready_status=$(kubectl get pods -n edgion-system -l app=edgion-gateway \
+    -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' \
+    2>/dev/null || true)
+
+  if echo "${ready_status}" | grep -qw "True"; then
+    return  # At least one pod is Ready.
+  fi
+
+  echo ""
+  echo "ERROR: No edgion-gateway pod is Ready in edgion-system."
+  kubectl get pods -n edgion-system -l app=edgion-gateway 2>/dev/null || true
+  echo ""
+  echo "  Wait for the gateway pod to become Ready, then retry."
+  exit 1
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── GatewayClass accepted check ─────────────────────────────────────────────
+#
+# If the GatewayClass exists but its Accepted condition is not True, the
+# controller is not reconciling — all tests will fail immediately.
+check_gatewayclass_accepted() {
+  local status
+  status=$(kubectl get gatewayclass "${GATEWAY_CLASS}" \
+    -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' \
+    2>/dev/null || true)
+
+  if [[ "${status}" == "True" ]]; then
+    return
+  fi
+
+  echo ""
+  if [[ -z "${status}" ]]; then
+    echo "ERROR: GatewayClass '${GATEWAY_CLASS}' not found."
+  else
+    echo "ERROR: GatewayClass '${GATEWAY_CLASS}' is not Accepted (status: ${status})."
+    kubectl get gatewayclass "${GATEWAY_CLASS}" 2>/dev/null || true
+  fi
+  echo ""
+  echo "  Ensure the controller is running and the GatewayClass status is Accepted."
+  exit 1
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── kubectl connectivity check ──────────────────────────────────────────────
+#
+# Fail fast if the cluster is unreachable before attempting any kubectl calls.
+check_kubectl_connected() {
+  if kubectl cluster-info &>/dev/null; then
+    return
+  fi
+  echo ""
+  echo "ERROR: Cannot connect to Kubernetes cluster."
+  kubectl cluster-info 2>&1 || true
+  echo ""
+  echo "  Check your kubeconfig and cluster connectivity, then retry."
+  exit 1
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── go toolchain check ───────────────────────────────────────────────────────
+check_go_installed() {
+  if command -v go &>/dev/null; then
+    return
+  fi
+  echo "ERROR: 'go' is not installed or not in PATH."
+  echo "  Install Go from https://go.dev/dl/ and retry."
+  exit 1
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
 PORT_FORWARD="${PORT_FORWARD:-false}"
 
 while [[ $# -gt 0 ]]; do
@@ -105,6 +284,13 @@ if [[ -n "${RUN_TEST}" ]]; then
   echo "  Run test           : ${RUN_TEST}"
 fi
 echo ""
+
+check_stale_processes
+check_go_installed
+check_kubectl_connected
+check_gateway_routing
+check_gateway_pod_ready
+check_gatewayclass_accepted
 
 cd "$CONFORMANCE_ROOT"
 

@@ -181,10 +181,7 @@ impl GrpcUnmatchedRouteTestSuite {
                                     format!("Matched method succeeded: {}", reply.message),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Unexpected response: {}", reply.message),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Unexpected response: {}", reply.message))
                             }
                         }
                         Err(e) => {
@@ -208,9 +205,6 @@ impl TestSuite for GrpcUnmatchedRouteTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_matched_method(),
-            Self::test_unmatched_method(),
-        ]
+        vec![Self::test_matched_method(), Self::test_unmatched_method()]
     }
 }

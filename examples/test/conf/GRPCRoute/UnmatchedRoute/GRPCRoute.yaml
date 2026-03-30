@@ -5,7 +5,7 @@ metadata:
   namespace: edgion-test
 spec:
   parentRefs:
-    - name: grpc-test-gateway
+    - name: grpc-unmatched-gateway
       namespace: edgion-test
       sectionName: grpc
 
