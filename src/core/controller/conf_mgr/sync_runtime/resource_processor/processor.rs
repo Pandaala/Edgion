@@ -415,8 +415,12 @@ where
                 WorkItemResult::Deleted { key: key.to_string() }
             }
             (None, None) => {
-                // Both empty -> already processed, skip
-                tracing::trace!(kind = self.kind, key = key, "Already processed, skipping");
+                // Resource absent from both store and cache: already deleted and cleaned up.
+                tracing::trace!(
+                    kind = self.kind,
+                    key = key,
+                    "Resource not found in store or cache, skipping"
+                );
                 WorkItemResult::Skipped
             }
         }
@@ -581,6 +585,12 @@ where
                 // completes, so cross-resource requeue (e.g., Gateway port
                 // changes triggering TLSRoute requeue) works correctly even
                 // when resources arrive out of order during the initial LIST.
+                //
+                // NOTE: on_change is intentionally called BEFORE save-to-cache (Step 11).
+                // Handlers that perform cross-resource lookups inside on_change (e.g.
+                // lookup_gateway) MUST use RawStore (via get_raw_any) rather than
+                // ServerCache, because the current resource has not yet been written
+                // to ServerCache at this point.
                 self.handler.on_change(&parsed_obj, ctx).await;
 
                 let phase = if is_init { "init" } else { "runtime" };

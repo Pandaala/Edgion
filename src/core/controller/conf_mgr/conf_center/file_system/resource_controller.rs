@@ -305,12 +305,18 @@ where
                                         self.processor.on_apply(&obj).await;
                                     }
                                     Err(e) => {
+                                        // File content is invalid — evict any stale entry from
+                                        // FsRawStore so cross-resource lookups don't return
+                                        // a previously-valid but now-outdated version.
+                                        if let Some(key) = extract_key_from_path(&path, kind) {
+                                            self.fs_raw_store.remove(&key);
+                                        }
                                         tracing::warn!(
                                             component = "fs_resource_controller",
                                             kind = kind,
                                             path = %path.display(),
                                             error = %e,
-                                            "Failed to parse resource for apply"
+                                            "Failed to parse resource for apply, evicted from raw store"
                                         );
                                     }
                                 }

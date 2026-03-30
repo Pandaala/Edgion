@@ -11,7 +11,7 @@ Controller 使用基于 requeue 的调和模式处理资源间依赖关系。当
 
 核心组件：
 
-- **Workqueue**（每种资源类型一个）— 就绪队列 + 延迟堆，支持去重和指数退避
+- **Workqueue**（每种资源类型一个）— 就绪队列 + 延迟堆，支持去重（dirty requeue 模式）
 - **PROCESSOR_REGISTRY**（全局单例）— 注册所有 Processor，提供 `requeue(kind, key)` 和 `requeue_with_chain(kind, key, chain)` 跨资源分发
 - **TriggerChain** — 因果追踪链，记录 requeue 级联路径，防止无限循环
 

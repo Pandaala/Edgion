@@ -208,8 +208,7 @@ where
         // InitApply events arrive (the store will be empty until reflector fills it,
         // which is fine — lookups return None during that window, same as before).
         let (store, writer) = reflector::store();
-        self.processor
-            .set_raw_store(Arc::new(KubeRawStore::new(store.clone())));
+        self.processor.set_raw_store(Arc::new(KubeRawStore::new(store.clone())));
         let watcher_stream = watcher(api, self.watcher_config.clone());
         let mut stream = Box::pin(reflector(writer, watcher_stream));
 

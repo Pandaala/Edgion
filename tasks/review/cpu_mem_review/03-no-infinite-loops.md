@@ -1,6 +1,7 @@
 # 死循环审查结论
 
 > 本次审查未发现死循环风险。以下记录已有的安全机制。
+> 深度复核日期: 2026-03-30
 
 ---
 
@@ -76,3 +77,28 @@
 1. **TriggerChain 参数可调低**: 当前 depth=20 + cycles=5 允许的最大级联工作量较大。可考虑收紧至 depth=10, cycles=3。
 2. **`plugin_ref_stack` 添加显式深度拒绝**: 当前仅做循环检测，无独立深度上限。建议 `push_plugin_ref()` 达到 10-20 层时返回错误。
 3. **`ProcessorRegistry::wait_kinds_ready()`**: 100ms 轮询可改为 Notify-based，仅启动时影响，优先级低。
+
+---
+
+## 深度复核补充说明
+
+复核过程中未发现任何新的死循环风险。上述所有保护机制经源码确认均实际存在且生效。
+
+以下是几处值得关注的"边界情况"，虽不是死循环但值得记录：
+
+### A. CPU-18 相关：100ms 轮询不是死循环
+
+`src/core/gateway/conf_sync/cache_client/cache_data.rs:103-117` 中的 100ms 轮询 task（约 17 个）是有计划终止的（通过 channel 关闭或进程退出），不是死循环，但有改为 Notify-based 唤醒的优化空间（见 CPU-18）。
+
+### B. 非阻塞的 busy-wait
+
+`ProcessorRegistry::wait_kinds_ready()` 使用 100ms 轮询，仅在启动初始化阶段使用，生产运行时不触发。
+
+### C. 所有 loop 均有退出条件
+
+全项目 `loop {}` 块均已验证：
+- 通过 channel 关闭（`recv()` 返回 `None`）退出
+- 通过 `CancellationToken` 退出
+- 通过 `tokio::select!` 的 `shutdown` 分支退出
+- 通过 budget 限制（DSL VM）退出
+- 通过错误后的退避重连（不会 busy-loop）
