@@ -179,8 +179,41 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
             }
             let rule_arc = Arc::new(rule.clone());
 
-            if let Some(matches) = &rule.matches {
-                for (match_id, match_item) in matches.iter().enumerate() {
+            let effective_matches: &[crate::types::GRPCRouteMatch] =
+                rule.matches.as_deref().unwrap_or(&[]);
+
+            if effective_matches.is_empty() {
+                // Per Gateway API spec, a rule with no matches (or an empty matches list)
+                // matches all gRPC traffic.  Synthesise a single catch-all unit so that
+                // `has_routes()` returns true for the listener and unmatched-hostname
+                // requests are correctly answered with UNIMPLEMENTED(12).
+                let specificity = GrpcMatchSpecificity {
+                    header_count: 0,
+                    creation_ts_ms,
+                    route_key: resource_key.to_string(),
+                    rule_index: rule_id as u32,
+                    match_index: 0,
+                };
+                units.push(Arc::new(GrpcRouteRuleUnit {
+                    resource_key: resource_key.to_string(),
+                    matched_info: GrpcMatchInfo::new(
+                        route_namespace.to_string(),
+                        route_name.to_string(),
+                        rule_id,
+                        0,
+                        crate::types::GRPCRouteMatch {
+                            method: None,
+                            headers: None,
+                        },
+                        route_sv,
+                        rule.name.clone(),
+                    ),
+                    rule: rule_arc.clone(),
+                    route_info: route_info.clone(),
+                    specificity,
+                }));
+            } else {
+                for (match_id, match_item) in effective_matches.iter().enumerate() {
                     let header_count = match_item.headers.as_ref().map(|h| h.len() as u16).unwrap_or(0);
                     let specificity = GrpcMatchSpecificity {
                         header_count,
