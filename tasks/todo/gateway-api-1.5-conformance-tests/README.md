@@ -1,81 +1,101 @@
-# Gateway API v1.5.0 Conformance Tests - 完整测试内容
+# Gateway API v1.5 Conformance Tests — 失败项跟踪
 
-本目录包含 Gateway API v1.5.0 官方 conformance 测试套件的所有测试用例详细说明。
-用于逐一核对 Edgion 网关实现的功能完整性。
+测试日期: 2026-03-29
+环境: OrbStack K8s v1.33.5, debug profile, Gateway API experimental CRDs v1.5.0
 
-## 测试总览
+## 总览
 
-**总计: 128 个测试用例**
+### 全量模式（`bash scripts/run.sh`）
 
-| 类别 | 数量 | 文件 |
-|------|------|------|
-| HTTPRoute | 52 | [01-httproute-tests.md](01-httproute-tests.md) |
-| Gateway / GatewayClass | 21 | [02-gateway-tests.md](02-gateway-tests.md) |
-| TLSRoute | 13 | [03-tlsroute-tests.md](03-tlsroute-tests.md) |
-| GRPCRoute | 5 | [04-grpcroute-tests.md](04-grpcroute-tests.md) |
-| BackendTLSPolicy | 6 | [05-backend-tls-policy-tests.md](05-backend-tls-policy-tests.md) |
-| ListenerSet | 10 | [06-listenerset-tests.md](06-listenerset-tests.md) |
-| Mesh | 21 | [07-mesh-tests.md](07-mesh-tests.md) |
-| UDPRoute | 1 | [08-udproute-tests.md](08-udproute-tests.md) |
+| Profile | Core Passed | Core Failed | Extended Passed | Extended Failed |
+|---------|-------------|-------------|-----------------|-----------------|
+| GATEWAY-HTTP | 33 | 0 | 24 | 4 |
+| GATEWAY-GRPC | 9 | 4 | — | — |
+| GATEWAY-TLS | 14 | 4 | — | — |
 
-## Conformance Profiles
+**总计**: 80 passed, 12 failed
 
-| Profile | Core Features | 说明 |
-|---------|--------------|------|
-| GATEWAY-HTTP | Gateway, ReferenceGrant, HTTPRoute | HTTP 网关路由 |
-| GATEWAY-TLS | Gateway, ReferenceGrant, TLSRoute | TLS 网关路由 |
-| GATEWAY-GRPC | Gateway, ReferenceGrant, GRPCRoute | gRPC 网关路由 |
-| MESH-HTTP | Mesh, HTTPRoute | 服务网格 HTTP |
-| MESH-GRPC | Mesh, GRPCRoute | 服务网格 gRPC |
+### --tls-only 模式（`setup-orbstack.sh --tls-only` + `run.sh --conformance-profiles GATEWAY-TLS`）
 
-## Extended Features 清单
+| Profile | Core Passed | Core Failed |
+|---------|-------------|-------------|
+| GATEWAY-TLS | 17 | 1 |
 
-### Gateway Extended
-- `GatewayPort8080` - 非标准端口监听
-- `GatewayStaticAddresses` - 静态地址分配
-- `GatewayHTTPListenerIsolation` - HTTP 监听器隔离
-- `GatewayHTTPSListenerDetectMisdirectedRequests` - HTTPS 错误路由检测
-- `GatewayInfrastructurePropagation` - 基础设施传播
-- `GatewayAddressEmpty` - 空地址支持
-- `ListenerSet` - 监听器集合 (v1.5 新增)
-- `GatewayBackendClientCertificate` - 后端客户端证书
-- `GatewayFrontendClientCertificateValidation` - 前端客户端证书验证
-- `GatewayFrontendClientCertificateValidationInsecureFallback` - 前端证书验证不安全回退
+TLS 部分从 14/18 提升到 **17/18**，3 个 TLS 失败确认为端口冲突环境问题，不是功能 bug。
 
-### HTTPRoute Extended
-- `HTTPRouteQueryParamMatching` - 查询参数匹配
-- `HTTPRouteMethodMatching` - HTTP 方法匹配
-- `HTTPRouteResponseHeaderModification` - 响应头修改
-- `HTTPRouteBackendRequestHeaderModification` - 后端请求头修改
-- `HTTPRouteHostRewrite` - Host 重写
-- `HTTPRoutePathRewrite` - 路径重写
-- `HTTPRouteRequestMirror` - 请求镜像
-- `HTTPRouteRequestMultipleMirrors` - 多目标请求镜像
-- `HTTPRouteRequestPercentageMirror` - 按比例请求镜像
-- `HTTPRouteRequestTimeout` - 请求超时
-- `HTTPRouteBackendTimeout` - 后端超时
-- `HTTPRouteParentRefPort` - 父引用端口
-- `HTTPRouteBackendProtocolH2C` - H2C 后端协议
-- `HTTPRouteBackendProtocolWebSocket` - WebSocket 后端协议
-- `HTTPRouteNamedRouteRule` - 命名路由规则
-- `HTTPRouteCORS` - CORS 支持 (v1.5 新增)
-- `HTTPRoutePortRedirect` - 端口重定向
-- `HTTPRouteSchemeRedirect` - 协议重定向
-- `HTTPRoutePathRedirect` - 路径重定向
-- `HTTPRoute303RedirectStatusCode` - 303 重定向
-- `HTTPRoute307RedirectStatusCode` - 307 重定向
-- `HTTPRoute308RedirectStatusCode` - 308 重定向
-- `HTTPRouteDestinationPortMatching` - 目标端口匹配 (experimental)
+## 失败分类
 
-### TLSRoute Extended
-- `TLSRouteModeTerminate` - TLS 终止模式
-- `TLSRouteModeMixed` - TLS 混合模式 (experimental, v1.5 新增)
+### 1. gRPC `Internal(13)` vs `Unimplemented(12)` — 4 个测试（真实 bug）
 
-### GRPCRoute Extended
-- `GRPCRouteNamedRouteRule` - gRPC 命名路由规则
+所有 4 个 GRPC 失败的**共同根因**：gateway 数据面在 gRPC 请求无匹配路由时直接关闭 stream（导致客户端收到 `Internal(13)`），应该返回 gRPC `Unimplemented(12)` status。
 
-## 数据来源
+- `01-GRPCExactMethodMatching.md`
+- `02-GRPCRouteHeaderMatching.md`
+- `03-GRPCRouteListenerHostnameMatching.md`
+- `04-GRPCRouteWeight.md`
 
-- 上游仓库: `kubernetes-sigs/gateway-api` tag `v1.5.0`
-- 测试代码: `conformance/tests/`
-- Conformance suite: `sigs.k8s.io/gateway-api/conformance v1.5.1`
+### 2. TLS Passthrough 端口冲突 — 3 个测试（✅ --tls-only 已通过）
+
+全量模式下 443 端口被 HTTPS terminate 占用，TLS passthrough 测试无法工作。
+`--tls-only` 模式下全部通过，**不是功能 bug**。
+
+- `05-TLSRouteSimpleSameNamespace.md` — ✅ PASS (--tls-only)
+- `07-TLSRouteInvalidBackendRefNonexistent.md` — ✅ PASS (--tls-only)
+- `08-TLSRouteInvalidBackendRefUnknownKind.md` — ✅ PASS (--tls-only)
+
+### 3. TLS Hostname Intersection 路由 — 1 个测试（真实 bug）
+
+`--tls-only` 模式仍失败。多 Gateway 共享 443 端口时 SNI hostname 路由不工作。
+
+- `06-TLSRouteHostnameIntersection.md`
+
+### 4. Frontend Client Certificate Validation — 3 个测试
+
+动态创建的 Gateway 无法绑定 listener，或 per-port mTLS 逻辑问题。
+
+- `09-GatewayFrontendClientCertificateValidation.md`
+- `10-GatewayFrontendClientCertificateValidationInsecureFallback.md`
+- `11-GatewayFrontendInvalidDefaultClientCertificateValidation.md`
+
+### 5. HTTPS SNI/Host Mismatch 检测 — 1 个测试
+
+- `12-HTTPRouteHTTPSListenerDetectMisdirectedRequests.md`
+
+## 真实 bug 汇总（需要代码修复）
+
+| # | 测试 | 根因 | 影响 |
+|---|------|------|------|
+| 1 | GRPC ×4 | gRPC 无匹配路由返回 Internal(13) 而非 Unimplemented(12) | 数据面 |
+| 2 | TLSRouteHostnameIntersection | 多 Gateway 共享端口的 SNI hostname 路由 | 数据面/控制面 |
+| 3 | mTLS ×3 | Frontend client certificate validation | 控制面/数据面 |
+| 4 | Misdirected Requests ×1 | HTTPS SNI/Host 不匹配未返回 421 | 数据面 |
+
+## 运行命令
+
+```bash
+# 全量测试（不需要 port-forward，OrbStack 直接访问 ClusterIP）
+cd examples/gateway-api-conformance
+bash scripts/run.sh
+
+# TLS 专用模式
+bash scripts/setup-orbstack.sh --tls-only --skip-build
+bash scripts/run.sh --conformance-profiles GATEWAY-TLS
+
+# 单测试
+GO_RUN_FILTER="TestConformance/<TestName>$" bash scripts/run.sh
+
+# 重建镜像 + 部署
+bash scripts/orbstack-dev.sh rebuild
+
+# 查看状态
+bash scripts/orbstack-dev.sh status
+```
+
+## 注意事项
+
+- OrbStack 下不需要 `--port-forward`，ClusterIP 可直接访问
+- 全量测试不用加 `--cleanup`（预创建 Gateway 需要保留）
+- 测试入口: `conformance_test.go`（feature 声明的唯一权威来源）
+- 当前声明了 3 个 profile: GATEWAY-HTTP, GATEWAY-GRPC, GATEWAY-TLS
+- `GO_RUN_FILTER` 单测模式的 conformance report 会把未运行的测试标记为 Passed，不可信
+- TLS 测试需要 `--tls-only` 环境，与全量 HTTP/GRPC 测试不兼容（443 端口冲突）
