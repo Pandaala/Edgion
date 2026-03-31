@@ -158,6 +158,22 @@ Phase 2 等待 Phase 1 所有 Kind 在 `PROCESSOR_REGISTRY` 中标记 ready（�
 | Reload | 支持（Admin API 触发，新 server_id） | 支持（同上） |
 | 适用场景 | 开发、测试、CI | 生产 K8s 部署 |
 
+## 多版本资源兼容
+
+FileSystemCenter 没有 API Server 帮忙做 CRD 多版本转换，因此多版本兼容应在文件读取边界完成：
+
+- watcher 仍按 `kind` 分发，不按 `apiVersion` 分发
+- `ResourceController` 读取 YAML 后，需要先识别 `apiVersion`
+- 若命中旧版本资源（例如 `BackendTLSPolicy/v1alpha3`），先反序列化为 legacy 类型
+- 然后立即转换为内部 canonical 类型，再写入 `FsRawStore`、进入 workqueue、运行 handler
+- worker 出队后重新读文件时，也必须复用同一套“解析并归一化”逻辑
+
+推荐原则：
+
+- 同一个 FileSystem controller 只维护一种内部类型
+- 旧版本 YAML 只是输入兼容层
+- status 持久化和后续 Gateway sync 都沿用 canonical 类型
+
 ## 关键文件
 
 - `src/core/controller/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter`（生命周期）

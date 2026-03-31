@@ -11,7 +11,7 @@ description: 功能深度参考 skill。面向用户/运维视角，涵盖二进
 ## 设计原则
 
 - **Schema 驱动**：每个资源、每个配置都有完整的字段定义和类型说明
-- **Gateway API v1.4 对齐**：Gateway API 标准资源引用 v1.4.0 规范，标注 Edgion 扩展点
+- **Gateway API v1.5 对齐**：Gateway API 标准资源引用 v1.5.0 规范，标注 Edgion 扩展点
 - **与架构编号对齐**：`03-resources/` 编号与 `01-architecture/05-resources/` 一一对应
 - **用户视角**：关注"怎么用"和"怎么配"，而非"内部怎么实现"
 
@@ -44,7 +44,7 @@ description: 功能深度参考 skill。面向用户/运维视角，涵盖二进
 
 ## Gateway API 版本
 
-Edgion 基于 **Gateway API v1.4.0**，支持范围：
+Edgion 基于 **Gateway API v1.5.0**，支持范围：
 
 | 资源 | API Version | 支持状态 |
 |------|-------------|---------|
@@ -54,9 +54,9 @@ Edgion 基于 **Gateway API v1.4.0**，支持范围：
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Core |
 | ReferenceGrant | `gateway.networking.k8s.io/v1` (v1beta1 兼容) | Core |
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
-| TLSRoute | `gateway.networking.k8s.io/v1` | GA |
+| TLSRoute | `gateway.networking.k8s.io/v1` | Standard（旧 alpha 版本兼容取决于安装清单） |
 | UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
-| BackendTLSPolicy | `gateway.networking.k8s.io/v1alpha3` | Experimental |
+| BackendTLSPolicy | `gateway.networking.k8s.io/v1`（`v1alpha3` 兼容） | Experimental / 多版本兼容 |
 
 Edgion 扩展资源（API group: `edgion.io`）：
 

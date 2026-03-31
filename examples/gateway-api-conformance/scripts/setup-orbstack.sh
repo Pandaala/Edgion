@@ -169,6 +169,8 @@ else
   delete_gateway_if_exists "gw-tlsroute-more-specific-wc-hostname-x-2"
   delete_gateway_if_exists "gw-tlsroute-less-specific-wc-hostname-x-3"
   delete_gateway_if_exists "gw-tlsroute-empty-hostname-x-4"
+  delete_gateway_if_exists "pre-bind-tls-terminate-8443"
+  delete_gateway_if_exists "pre-bind-tls-mixed-8883"
 fi
 kubectl apply --server-side --force-conflicts -f "$CONFORMANCE_GATEWAY_MANIFEST"
 sleep 3

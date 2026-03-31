@@ -5,15 +5,15 @@ description: BackendTLSPolicy 完整 Schema：上游后端 TLS 验证和 mTLS。
 
 # BackendTLSPolicy 资源
 
-> API: `gateway.networking.k8s.io/v1alpha3` | Scope: Namespaced
-> Gateway API v1.4.0 Experimental 资源
+> API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
+> Gateway API v1.5.0 资源；旧集群可能仍 served `v1alpha3`
 
 BackendTLSPolicy 定义网关到后端的 TLS 连接配置，包括 CA 验证和客户端证书（mTLS）。
 
 ## 完整 Schema
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: my-backend-tls
@@ -39,8 +39,16 @@ spec:
     wellKnownCACertificates: System                # 使用系统 CA（可选）
 
   options:                                         # Edgion 扩展选项
-    edgion.io/client-certificate-ref: "default/client-cert"  # 客户端证书（mTLS 到后端）
+    edgion.io/client-certificate-ref: "client-cert"          # 客户端证书（同 namespace）
 ```
+
+## 版本兼容策略
+
+- controller 内部主模型按 `v1` 处理
+- 若集群只 served `v1alpha3`，controller 可以回退监听旧版本，并在进入 handler 前转换成统一内部类型
+- 不建议同时为 `v1` 和 `v1alpha3` 启两个 watcher
+- 若集群已只 served `v1`，旧的 `v1alpha3` manifest 需要迁移为 `v1`
+- FileSystem 模式下可以接受 `v1` 和 `v1alpha3` 文件输入，但应在解析入口统一转换成 `v1` 内部模型
 
 ## spec 字段详解
 
@@ -74,7 +82,7 @@ spec:
 
 | Key | 值格式 | 说明 |
 |-----|--------|------|
-| `edgion.io/client-certificate-ref` | `ns/name` | 客户端证书 Secret（用于网关→后端 mTLS） |
+| `edgion.io/client-certificate-ref` | `name` | 客户端证书 Secret（同 namespace，用于网关→后端 mTLS） |
 
 ## Status Schema
 
