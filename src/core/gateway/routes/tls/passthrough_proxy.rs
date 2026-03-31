@@ -21,7 +21,7 @@ use super::proxy::{TlsContext, TlsUpstreamInfo};
 use super::sni_parser;
 use super::TlsRouteManager;
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
-use crate::core::gateway::backends::select_roundrobin_backend;
+use crate::core::gateway::backends::{select_roundrobin_backend, resolve_target_port, PortLookupSource};
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -165,9 +165,7 @@ impl EdgionTlsPassthroughProxy {
             };
 
             let mut upstream_addr = backend.addr;
-            if let Some(port) = backend_ref.port {
-                upstream_addr.set_port(port as u16);
-            }
+            resolve_target_port(&mut upstream_addr, backend_ref.port, &service_key, PortLookupSource::Auto);
             let upstream_addr_str = upstream_addr.to_string();
             let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
 

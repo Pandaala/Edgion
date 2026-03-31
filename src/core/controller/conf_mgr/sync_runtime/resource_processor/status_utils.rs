@@ -57,6 +57,7 @@ pub mod condition_reasons {
 
     // Conflicted reasons (for Listener port conflicts)
     pub const LISTENER_CONFLICT: &str = "ListenerConflict";
+    pub const PROTOCOL_CONFLICT: &str = "ProtocolConflict";
     pub const NO_CONFLICTS: &str = "NoConflicts";
 
     // Programmed reasons (for listener Programmed condition)

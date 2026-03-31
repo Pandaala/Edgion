@@ -28,30 +28,35 @@ use pingora_proxy::Session;
 ///
 /// HTTP → gRPC status mapping follows the gRPC over HTTP/2 spec and
 /// https://cloud.google.com/apis/design/errors#http_mapping.
-async fn send_grpc_trailers_only(
+pub(crate) async fn send_grpc_trailers_only(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
     http_status: u16,
 ) -> pingora_core::Result<()> {
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
+
     let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
 
     ctx.request_info.status = Some(200);
+    ctx.request_info.grpc_status = Some(grpc_status);
+    ctx.request_info.response_committed = true;
 
-    // Step 1: Send response headers with :status 200 and content-type.
-    // grpc-status and grpc-message must NOT go here — they must be in HTTP/2 trailers.
-    // Pingora ignores end_of_stream on write_response_header for H2 (always sends without
-    // END_STREAM), so we use a separate trailers frame to properly close the stream.
+    // Pingora's proxy Session.write_response_header() does NOT pass end_of_stream
+    // to the underlying H2 session, so we cannot use a single HEADERS+END_STREAM frame.
+    // Instead, use: HEADERS (no END_STREAM) → empty DATA → TRAILERS (with grpc-status).
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
     resp.insert_header("content-type", "application/grpc").unwrap();
     session.write_response_header(Box::new(resp), false).await?;
 
-    // Step 2: Send grpc-status and grpc-message as HTTP/2 trailers (HEADERS frame with
-    // END_STREAM). Per gRPC-over-HTTP/2 spec, the status must be in trailers, not in
-    // the initial response headers, unless the response is a trailers-only frame
-    // (HEADERS + END_STREAM). Since Pingora cannot set END_STREAM on response headers,
-    // we use the two-frame pattern: response headers + trailer headers with END_STREAM.
+    // Send empty body frame to transition the H2 stream to a state where trailers
+    // can be sent. Without this, write_response_trailers may silently fail.
+    session.write_response_body(Some(Bytes::new()), false).await?;
+
+    // Send grpc-status and grpc-message as HTTP/2 trailers.
     let mut trailers = HeaderMap::new();
     trailers.insert(
         http::header::HeaderName::from_static("grpc-status"),
@@ -96,8 +101,12 @@ pub async fn end_response_400(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 400).await;
     }
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
 
     ctx.request_info.status = Some(400);
+    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(400, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -131,8 +140,12 @@ pub async fn end_response_403(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 403).await;
     }
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
 
     ctx.request_info.status = Some(403);
+    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(403, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -166,8 +179,12 @@ pub async fn end_response_421(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 421).await;
     }
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
 
     ctx.request_info.status = Some(421);
+    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(421, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -199,8 +216,12 @@ pub async fn end_response_404(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 404).await;
     }
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
 
     ctx.request_info.status = Some(404);
+    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(404, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -225,23 +246,13 @@ pub async fn end_response_404(
 /// Send gRPC UNAVAILABLE (status 14) error response for backend errors.
 ///
 /// Used when no healthy upstream is available for a gRPC request.
+/// Delegates to [`send_grpc_trailers_only`] with HTTP 503 (maps to grpc-status 14).
 pub async fn end_response_grpc_unavailable(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    ctx.request_info.status = Some(200);
-
-    let mut resp = ResponseHeader::build(200, None)?;
-    server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "application/grpc").unwrap();
-    resp.insert_header("grpc-status", "14").unwrap();
-    resp.insert_header("grpc-message", "no healthy upstream").unwrap();
-
-    let resp_box = Box::new(resp);
-    session.write_response_header(resp_box, true).await?;
-
-    Ok(())
+    send_grpc_trailers_only(session, ctx, server_header_opts, 503).await
 }
 
 /// Send gRPC UNIMPLEMENTED (status 12) error response.
@@ -266,8 +277,12 @@ pub async fn end_response_500(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 500).await;
     }
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
 
     ctx.request_info.status = Some(500);
+    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(500, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -299,8 +314,12 @@ pub async fn end_response_503(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 503).await;
     }
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
 
     ctx.request_info.status = Some(503);
+    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(503, None)?;
     server_header_opts.apply_to_response(&mut resp);

@@ -63,11 +63,11 @@ use crate::types::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
-    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler,
-    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
-    UdpRouteHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
+    EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
+    EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
+    LinkSysHandler, PluginMetadataHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler,
+    ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -708,12 +708,25 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("TLSRoute") {
-            h.push(spawn::<TLSRoute, _>(
-                self,
-                "TLSRoute",
-                TlsRouteHandler::new(self.controller_name.clone()),
-                &ctx,
-            ));
+            use super::version_detection::{detect_tls_route_version, TLSRouteVersion};
+            match detect_tls_route_version(&self.client).await {
+                Some(TLSRouteVersion::V1) | None => {
+                    h.push(spawn::<TLSRoute, _>(
+                        self,
+                        "TLSRoute",
+                        TlsRouteHandler::new(self.controller_name.clone()),
+                        &ctx,
+                    ));
+                }
+                Some(TLSRouteVersion::V1Alpha3) => {
+                    h.push(spawn::<TLSRouteAlpha3, _>(
+                        self,
+                        "TLSRoute",
+                        TlsRouteAlpha3Handler::new(self.controller_name.clone()),
+                        &ctx,
+                    ));
+                }
+            }
         }
 
         // TLS related (depend on Secret being in cache)
@@ -726,12 +739,25 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("BackendTLSPolicy") {
-            h.push(spawn::<BackendTLSPolicy, _>(
-                self,
-                "BackendTLSPolicy",
-                BackendTlsPolicyHandler::new(self.controller_name.clone()),
-                &ctx,
-            ));
+            use super::version_detection::{detect_backend_tls_policy_version, BackendTLSPolicyVersion};
+            match detect_backend_tls_policy_version(&self.client).await {
+                Some(BackendTLSPolicyVersion::V1) | None => {
+                    h.push(spawn::<BackendTLSPolicy, _>(
+                        self,
+                        "BackendTLSPolicy",
+                        BackendTlsPolicyHandler::new(self.controller_name.clone()),
+                        &ctx,
+                    ));
+                }
+                Some(BackendTLSPolicyVersion::V1Alpha3) => {
+                    h.push(spawn::<BackendTLSPolicyAlpha3, _>(
+                        self,
+                        "BackendTLSPolicy",
+                        BackendTlsPolicyAlpha3Handler::new(self.controller_name.clone()),
+                        &ctx,
+                    ));
+                }
+            }
         }
 
         // Plugin resources

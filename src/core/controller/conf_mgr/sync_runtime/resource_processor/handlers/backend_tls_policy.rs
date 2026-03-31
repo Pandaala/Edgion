@@ -7,7 +7,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     update_condition, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use crate::types::prelude_resources::BackendTLSPolicy;
+use crate::types::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
 use crate::types::resources::backend_tls_policy::{
     BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, PolicyAncestorStatus,
 };
@@ -31,9 +31,8 @@ impl Default for BackendTlsPolicyHandler {
     }
 }
 
-#[async_trait::async_trait]
-impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
-    fn validate(&self, btp: &BackendTLSPolicy, _ctx: &HandlerContext) -> Vec<String> {
+impl BackendTlsPolicyHandler {
+    fn validate_policy(&self, btp: &BackendTLSPolicy) -> Vec<String> {
         let mut errors = Vec::new();
 
         let has_ca_refs = btp
@@ -55,7 +54,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         errors
     }
 
-    async fn parse(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
+    async fn parse_policy(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
             btp.metadata.namespace.clone(),
@@ -141,7 +140,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         ProcessResult::Continue(btp)
     }
 
-    async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+    async fn on_delete_policy(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
             btp.metadata.namespace.clone(),
@@ -154,7 +153,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         );
     }
 
-    fn update_status(&self, btp: &mut BackendTLSPolicy, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_policy_status(&self, btp: &mut BackendTLSPolicy, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = btp.metadata.generation;
 
         let mut resolved_ref_errors = Vec::new();
@@ -278,9 +277,7 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         // they require data-plane feedback which is not available in our architecture.
         let _ = (has_validation_errors, has_ref_errors);
     }
-}
 
-impl BackendTlsPolicyHandler {
     #[inline]
     fn is_secret_ref(ca_ref: &BackendTLSPolicyCACertificateRef) -> bool {
         is_core_api_group(&ca_ref.group) && ca_ref.kind == "Secret"
@@ -306,5 +303,71 @@ impl BackendTlsPolicyHandler {
     #[inline]
     fn secret_has_ca_cert(secret: &k8s_openapi::api::core::v1::Secret) -> bool {
         secret.data.as_ref().is_some_and(|d| d.contains_key(CA_CERT))
+    }
+}
+
+#[async_trait::async_trait]
+impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
+    fn validate(&self, btp: &BackendTLSPolicy, _ctx: &HandlerContext) -> Vec<String> {
+        self.validate_policy(btp)
+    }
+
+    async fn parse(&self, btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
+        self.parse_policy(btp, ctx).await
+    }
+
+    async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+        self.on_delete_policy(btp, ctx).await;
+    }
+
+    fn update_status(&self, btp: &mut BackendTLSPolicy, ctx: &HandlerContext, validation_errors: &[String]) {
+        self.update_policy_status(btp, ctx, validation_errors);
+    }
+}
+
+/// BackendTLSPolicy v1alpha3 compat handler.
+///
+/// Keeps the older watch endpoint working while reusing the same validation and
+/// runtime preprocessing logic as the v1 handler.
+pub struct BackendTlsPolicyAlpha3Handler {
+    inner: BackendTlsPolicyHandler,
+}
+
+impl BackendTlsPolicyAlpha3Handler {
+    pub fn new(controller_name: String) -> Self {
+        Self {
+            inner: BackendTlsPolicyHandler::new(controller_name),
+        }
+    }
+}
+
+impl Default for BackendTlsPolicyAlpha3Handler {
+    fn default() -> Self {
+        Self::new("edgion.io/gateway-controller".to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler {
+    fn validate(&self, btp: &BackendTLSPolicyAlpha3, _ctx: &HandlerContext) -> Vec<String> {
+        self.inner.validate_policy(&btp.clone().into())
+    }
+
+    async fn parse(&self, btp: BackendTLSPolicyAlpha3, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicyAlpha3> {
+        match self.inner.parse_policy(btp.into(), ctx).await {
+            ProcessResult::Continue(v1) => ProcessResult::Continue(v1.into()),
+            ProcessResult::Skip { reason } => ProcessResult::Skip { reason },
+        }
+    }
+
+    async fn on_delete(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
+        let v1: BackendTLSPolicy = btp.clone().into();
+        self.inner.on_delete_policy(&v1, ctx).await;
+    }
+
+    fn update_status(&self, btp: &mut BackendTLSPolicyAlpha3, ctx: &HandlerContext, validation_errors: &[String]) {
+        let mut v1: BackendTLSPolicy = btp.clone().into();
+        self.inner.update_policy_status(&mut v1, ctx, validation_errors);
+        *btp = v1.into();
     }
 }

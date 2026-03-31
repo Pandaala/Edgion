@@ -12,7 +12,7 @@ use super::{
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::prelude_resources::TLSRoute;
+use crate::types::prelude_resources::{TLSRoute, TLSRouteAlpha3};
 use crate::types::resources::common::RefDenied;
 use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::resources::tls_route::TLSRouteStatus;
@@ -92,19 +92,12 @@ impl Default for TlsRouteHandler {
     }
 }
 
-#[async_trait::async_trait]
-impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
-    fn validate(&self, route: &TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let errors = validate_tls_route_if_enabled(route);
-        // Note: backend ref validation (service existence, kind check) is handled by
-        // update_status() via ResolvedRefs condition. It must not affect Accepted.
-        errors
+impl TlsRouteHandler {
+    fn validate_route(&self, route: &TLSRoute) -> Vec<String> {
+        validate_tls_route_if_enabled(route)
     }
 
-    fn preparse(&self, route: &mut TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
-        // Register in gateway_route_index at the earliest opportunity (before parse)
-        // so that if this TLSRoute is processed before its parent Gateway, the
-        // Gateway's on_change can find and requeue it to re-resolve resolved_listeners.
+    fn preparse_route(&self, route: &mut TLSRoute) -> Vec<String> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         update_gateway_route_index(
@@ -116,14 +109,10 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         Vec::new()
     }
 
-    async fn parse(&self, mut route: TLSRoute, _ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
-        // Record cross-namespace references for revalidation when ReferenceGrant changes
+    async fn parse_route(&self, mut route: TLSRoute) -> ProcessResult<TLSRoute> {
         Self::record_cross_ns_refs(&route);
-
-        // Register Service backend references for cross-resource requeue
         Self::register_service_refs(&route);
 
-        // Mark denied cross-namespace references
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         if let Some(rules) = &mut route.spec.rules {
             for rule in rules {
@@ -159,11 +148,8 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             }
         }
 
-        // Treat resolved_listeners as controller-derived state.
-        // Clear any stale value before recomputing from current parentRefs.
         route.spec.resolved_listeners = None;
 
-        // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
             let listener_keys =
                 super::route_utils::resolve_listener_keys(parent_refs, route_ns, route.metadata.namespace.as_deref());
@@ -183,7 +169,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         ProcessResult::Continue(route)
     }
 
-    async fn on_change(&self, route: &TLSRoute, ctx: &HandlerContext) {
+    async fn on_change_route(&self, route: &TLSRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -197,7 +183,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
     }
 
-    async fn on_delete(&self, route: &TLSRoute, ctx: &HandlerContext) {
+    async fn on_delete_route(&self, route: &TLSRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -213,7 +199,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
         }
     }
 
-    fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_route_status(&self, route: &mut TLSRoute, validation_errors: &[String]) {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
@@ -266,6 +252,96 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
             route.spec.parent_refs.as_ref(),
             route.spec.hostnames.as_ref(),
         );
+    }
+}
+
+#[async_trait::async_trait]
+impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
+    fn validate(&self, route: &TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
+        self.validate_route(route)
+    }
+
+    fn preparse(&self, route: &mut TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
+        self.preparse_route(route)
+    }
+
+    async fn parse(&self, route: TLSRoute, _ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
+        self.parse_route(route).await
+    }
+
+    async fn on_change(&self, route: &TLSRoute, ctx: &HandlerContext) {
+        self.on_change_route(route, ctx).await;
+    }
+
+    async fn on_delete(&self, route: &TLSRoute, ctx: &HandlerContext) {
+        self.on_delete_route(route, ctx).await;
+    }
+
+    fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
+        self.update_route_status(route, validation_errors);
+    }
+}
+
+// ============================================================================
+// TLSRoute v1alpha3 compat handler
+// ============================================================================
+
+/// TLSRoute v1alpha3 compat handler.
+///
+/// Keeps the older watch endpoint working while reusing the same validation and
+/// runtime preprocessing logic as the v1 handler.
+pub struct TlsRouteAlpha3Handler {
+    inner: TlsRouteHandler,
+}
+
+impl TlsRouteAlpha3Handler {
+    pub fn new(controller_name: String) -> Self {
+        Self {
+            inner: TlsRouteHandler::new(controller_name),
+        }
+    }
+}
+
+impl Default for TlsRouteAlpha3Handler {
+    fn default() -> Self {
+        Self::new("edgion.io/gateway-controller".to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl ProcessorHandler<TLSRouteAlpha3> for TlsRouteAlpha3Handler {
+    fn validate(&self, route: &TLSRouteAlpha3, _ctx: &HandlerContext) -> Vec<String> {
+        self.inner.validate_route(&route.clone().into())
+    }
+
+    fn preparse(&self, route: &mut TLSRouteAlpha3, _ctx: &HandlerContext) -> Vec<String> {
+        let mut v1: TLSRoute = route.clone().into();
+        let errors = self.inner.preparse_route(&mut v1);
+        *route = v1.into();
+        errors
+    }
+
+    async fn parse(&self, route: TLSRouteAlpha3, _ctx: &HandlerContext) -> ProcessResult<TLSRouteAlpha3> {
+        match self.inner.parse_route(route.into()).await {
+            ProcessResult::Continue(v1) => ProcessResult::Continue(v1.into()),
+            ProcessResult::Skip { reason } => ProcessResult::Skip { reason },
+        }
+    }
+
+    async fn on_change(&self, route: &TLSRouteAlpha3, ctx: &HandlerContext) {
+        let v1: TLSRoute = route.clone().into();
+        self.inner.on_change_route(&v1, ctx).await;
+    }
+
+    async fn on_delete(&self, route: &TLSRouteAlpha3, ctx: &HandlerContext) {
+        let v1: TLSRoute = route.clone().into();
+        self.inner.on_delete_route(&v1, ctx).await;
+    }
+
+    fn update_status(&self, route: &mut TLSRouteAlpha3, _ctx: &HandlerContext, validation_errors: &[String]) {
+        let mut v1: TLSRoute = route.clone().into();
+        self.inner.update_route_status(&mut v1, validation_errors);
+        *route = v1.into();
     }
 }
 

@@ -260,7 +260,7 @@ fn get_port_from_backend_ref_or_service(
 
 /// Which endpoint resource to query when resolving targetPort by port name.
 #[derive(Debug, Clone, Copy)]
-enum PortLookupSource {
+pub(crate) enum PortLookupSource {
     /// Determine from global endpoint mode (for `EdgionService::Service`).
     Auto,
     /// Force EndpointSlice (for `EdgionService::ServiceEndpointSlice`).
@@ -277,7 +277,7 @@ enum PortLookupSource {
 ///   br_port (Service port) -> Service.spec.ports[].name -> EndpointSlice/Endpoint port name -> targetPort
 ///
 /// If the Service has only one port, or `br_port` is None, the address is already correct.
-fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key: &str, source: PortLookupSource) {
+pub(crate) fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key: &str, source: PortLookupSource) {
     let Some(br_port_val) = br_port else {
         return;
     };

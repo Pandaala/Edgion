@@ -267,6 +267,14 @@ pub struct RequestInfo {
     /// Listener port that received this request (set at context creation, always available)
     #[serde(rename = "listener-port")]
     pub listener_port: u16,
+    /// gRPC status code sent in the trailers-only response (e.g. 12=UNIMPLEMENTED, 14=UNAVAILABLE).
+    /// None for non-gRPC requests or when no gRPC error was generated locally.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grpc_status: Option<u16>,
+    /// Whether an HTTP/gRPC response has already been written to downstream.
+    /// Used as a guard to prevent double-write across error response paths.
+    #[serde(skip)]
+    pub response_committed: bool,
 }
 
 /// Backend TLS connection information

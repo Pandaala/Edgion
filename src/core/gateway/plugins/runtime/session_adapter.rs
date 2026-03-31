@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::Uri;
+use http::{HeaderMap, HeaderValue, Uri};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::collections::HashMap;
@@ -89,21 +89,47 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.path_params = Some(params);
     }
 
-    /// Build a gRPC trailers-only response header from an HTTP status code.
+    /// Send a gRPC trailers-only error response using the three-frame pattern:
+    /// HEADERS (no END_STREAM) -> empty DATA -> TRAILERS (grpc-status + grpc-message).
     ///
-    /// Called when a plugin sends a non-200 HTTP response on a gRPC stream.
-    /// Converts it to a proper `grpc-status` trailers-only response so the
-    /// client receives the right gRPC error code instead of RST_STREAM.
-    fn build_grpc_error_response(http_status: u16) -> PluginSessionResult<Box<ResponseHeader>> {
+    /// Pingora's proxy Session.write_response_header() does NOT propagate end_of_stream
+    /// to the underlying H2 session, so a single HEADERS+END_STREAM frame cannot be used.
+    async fn send_grpc_error_three_frame(
+        inner: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        http_status: u16,
+    ) -> PluginSessionResult<()> {
         let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
+        ctx.request_info.status = Some(200);
+        ctx.request_info.grpc_status = Some(grpc_status);
+        ctx.request_info.response_committed = true;
+
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        resp.insert_header("grpc-status", grpc_status.to_string().as_str())
+        inner
+            .write_response_header(Box::new(resp), false)
+            .await
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        resp.insert_header("grpc-message", grpc_message)
+        inner
+            .write_response_body(Some(Bytes::new()), false)
+            .await
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        Ok(Box::new(resp))
+
+        let mut trailers = HeaderMap::new();
+        trailers.insert(
+            http::header::HeaderName::from_static("grpc-status"),
+            HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+        );
+        trailers.insert(
+            http::header::HeaderName::from_static("grpc-message"),
+            HeaderValue::from_static(grpc_message),
+        );
+        inner
+            .as_downstream_mut()
+            .write_response_trailers(trailers)
+            .await
+            .map_err(|e| Box::new(e) as PluginSessionError)
     }
 
     /// Parse path parameters from pattern and actual path.
@@ -237,14 +263,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     ) -> PluginSessionResult<()> {
         let http_status = resp.status.as_u16();
         if self.ctx.request_info.is_grpc_request && http_status != 200 {
-            let grpc_resp = Self::build_grpc_error_response(http_status)?;
-            self.ctx.request_info.status = Some(200);
             self.grpc_response_terminated = true;
-            return self
-                .inner
-                .write_response_header(grpc_resp, true)
-                .await
-                .map_err(|e| Box::new(e) as PluginSessionError);
+            return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
         }
         self.inner
             .write_response_header(resp, end_of_stream)
@@ -260,14 +280,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Box::pin(async move {
             let http_status = resp.status.as_u16();
             if self.ctx.request_info.is_grpc_request && http_status != 200 {
-                let grpc_resp = Self::build_grpc_error_response(http_status)?;
-                self.ctx.request_info.status = Some(200);
                 self.grpc_response_terminated = true;
-                return self
-                    .inner
-                    .write_response_header(grpc_resp, true)
-                    .await
-                    .map_err(|e| Box::new(e) as PluginSessionError);
+                return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
             }
             self.inner
                 .write_response_header(resp, end_of_stream)

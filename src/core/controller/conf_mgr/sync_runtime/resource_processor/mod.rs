@@ -41,11 +41,11 @@ pub use status_utils::{
 
 // Re-export handlers
 pub use handlers::{
-    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
-    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler,
-    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
-    UdpRouteHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
+    EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
+    EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
+    LinkSysHandler, PluginMetadataHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler,
+    ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 // Re-export generic ref_manager types

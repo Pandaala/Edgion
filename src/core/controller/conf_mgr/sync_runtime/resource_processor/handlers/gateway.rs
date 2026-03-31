@@ -20,7 +20,8 @@ use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
-    GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
+    GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, Listener as GatewayListener, ListenerStatus,
+    RouteGroupKind,
 };
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
@@ -144,6 +145,9 @@ struct ListenerInfo {
     insecure_fallback_mode: bool,
     /// True when listener TLS mode is not supported for its protocol/feature set.
     unsupported_tls_mode: bool,
+    /// True when this TLS listener shares a port with another TLS listener
+    /// that uses a different termination mode (e.g. Terminate + Passthrough).
+    mixed_tls_conflict: bool,
 }
 
 impl GatewayHandler {
@@ -455,11 +459,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let gateway_key_for_tracker = format!("{}/{}", gateway_ns, gateway_name);
 
         // Pre-compute per-listener info while gateway is only immutably borrowed.
-        let listener_infos: Vec<ListenerInfo> = gateway
-            .spec
-            .listeners
-            .as_deref()
-            .unwrap_or_default()
+        let listeners_slice = gateway.spec.listeners.as_deref().unwrap_or_default();
+
+        let mixed_tls_listeners = detect_mixed_tls_mode_listeners(listeners_slice, gateway.spec.addresses.as_ref());
+
+        let listener_infos: Vec<ListenerInfo> = listeners_slice
             .iter()
             .map(|l| {
                 let route_count = tracker.count_for_listener(&gateway_key_for_tracker, &l.name);
@@ -467,10 +471,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l);
                 resolved_refs_errors.append(&mut kind_errors);
 
-                // Check if all CA refs are invalid (no valid CA certificate)
                 let no_valid_ca_certificate = has_all_ca_refs_invalid(l, &resolved_refs_errors);
 
-                // Check if insecure fallback mode
                 let insecure_fallback_mode = l
                     .tls
                     .as_ref()
@@ -479,6 +481,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     == Some("AllowInsecureFallback");
 
                 let unsupported_tls_mode = listener_has_unsupported_tls_mode(l);
+                let mixed_tls_conflict = mixed_tls_listeners.contains(&l.name);
 
                 ListenerInfo {
                     name: l.name.clone(),
@@ -488,6 +491,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     no_valid_ca_certificate,
                     insecure_fallback_mode,
                     unsupported_tls_mode,
+                    mixed_tls_conflict,
                 }
             })
             .collect();
@@ -616,6 +620,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 no_valid_ca_certificate,
                 insecure_fallback_mode: _,
                 unsupported_tls_mode,
+                mixed_tls_conflict,
             } in listener_infos
             {
                 let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == name);
@@ -636,8 +641,17 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 ls.supported_kinds = supported_kinds;
                 ls.attached_routes = route_count;
 
-                // Set Conflicted condition based on ListenerPortManager
-                let is_conflicted = if let Some(reason) = conflicts.get(&ls.name) {
+                // Set Conflicted condition: mixed TLS mode or ListenerPortManager conflicts
+                let is_conflicted = if mixed_tls_conflict {
+                    let cond = condition_true(
+                        condition_types::CONFLICTED,
+                        condition_reasons::PROTOCOL_CONFLICT,
+                        "Mixed TLS termination modes on the same port are not supported",
+                        generation,
+                    );
+                    update_gateway_condition(&mut ls.conditions, cond);
+                    true
+                } else if let Some(reason) = conflicts.get(&ls.name) {
                     let cond = condition_true(
                         condition_types::CONFLICTED,
                         condition_reasons::LISTENER_CONFLICT,
@@ -657,7 +671,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     false
                 };
 
-                // Update other listener conditions (pass conflict status for Programmed/Ready)
                 update_listener_conditions(
                     ls,
                     validation_errors,
@@ -666,6 +679,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     &resolved_refs_errors,
                     no_valid_ca_certificate,
                     unsupported_tls_mode,
+                    mixed_tls_conflict,
                 );
             }
 
@@ -858,9 +872,18 @@ fn update_listener_conditions(
     resolved_refs_errors: &[GatewayResolvedRefsError],
     no_valid_ca_certificate: bool,
     unsupported_tls_mode: bool,
+    mixed_tls_conflict: bool,
 ) {
-    // Accepted: False if unsupported TLS mode
-    if unsupported_tls_mode {
+    // Accepted: False if mixed TLS termination on the same port
+    if mixed_tls_conflict {
+        let cond = condition_false(
+            condition_types::ACCEPTED,
+            condition_reasons::PROTOCOL_CONFLICT,
+            "Mixed TLS termination modes on the same port are not supported",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if unsupported_tls_mode {
         let cond = condition_false(
             condition_types::ACCEPTED,
             condition_reasons::UNSUPPORTED_VALUE,
@@ -924,7 +947,7 @@ fn update_listener_conditions(
             generation,
         );
         update_gateway_condition(&mut ls.conditions, cond);
-    } else if has_unresolved_refs || !validation_errors.is_empty() || no_valid_ca_certificate || unsupported_tls_mode {
+    } else if has_unresolved_refs || !validation_errors.is_empty() || no_valid_ca_certificate || unsupported_tls_mode || mixed_tls_conflict {
         let cond = condition_false(
             condition_types::PROGRAMMED,
             condition_reasons::INVALID_LISTENER,
@@ -1249,14 +1272,55 @@ fn has_all_ca_refs_invalid(listener: &GatewayListener, errors: &[GatewayResolved
     ca_error_count >= ca_ref_count
 }
 
+/// Returns the set of listener names that participate in a mixed TLS termination
+/// conflict — i.e. TLS listeners on the same port with different modes
+/// (e.g. one Terminate and one Passthrough).
+fn detect_mixed_tls_mode_listeners(
+    listeners: &[GatewayListener],
+    addresses: Option<&Vec<GatewayAddress>>,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashMap;
+    let mut port_modes: HashMap<u16, Vec<(String, String)>> = HashMap::new();
+
+    for l in listeners {
+        if !l.protocol.eq_ignore_ascii_case("TLS") {
+            continue;
+        }
+        let mode = l
+            .tls
+            .as_ref()
+            .and_then(|t| t.mode.as_deref())
+            .unwrap_or("Terminate")
+            .to_string();
+        let addr = resolve_listener_addr(addresses, l.port);
+        port_modes
+            .entry(addr.port())
+            .or_default()
+            .push((l.name.clone(), mode));
+    }
+
+    let mut result = std::collections::HashSet::new();
+    for entries in port_modes.values() {
+        if entries.len() < 2 {
+            continue;
+        }
+        let first_mode = &entries[0].1;
+        if entries.iter().any(|(_, m)| m != first_mode) {
+            for (name, _) in entries {
+                result.insert(name.clone());
+            }
+        }
+    }
+    result
+}
+
 fn listener_has_unsupported_tls_mode(listener: &GatewayListener) -> bool {
     let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_deref()) else {
         return false;
     };
 
     match listener.protocol.to_uppercase().as_str() {
-        // We currently only advertise/pass conformance for TLS passthrough listeners.
-        "TLS" => mode != "Passthrough",
+        "TLS" => mode != "Passthrough" && mode != "Terminate",
         "HTTPS" => mode != "Terminate",
         _ => false,
     }

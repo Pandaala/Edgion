@@ -28,7 +28,7 @@ mod tcp_route;
 mod tls_route;
 mod udp_route;
 
-pub use backend_tls_policy::BackendTlsPolicyHandler;
+pub use backend_tls_policy::{BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler};
 pub use configmap::ConfigMapHandler;
 pub use edgion_acme::EdgionAcmeHandler;
 pub use edgion_gateway_config::EdgionGatewayConfigHandler;
@@ -47,7 +47,7 @@ pub use reference_grant::{ReferenceGrantBetaHandler, ReferenceGrantHandler};
 pub use secret::SecretHandler;
 pub use service::ServiceHandler;
 pub use tcp_route::TcpRouteHandler;
-pub use tls_route::TlsRouteHandler;
+pub use tls_route::{TlsRouteAlpha3Handler, TlsRouteHandler};
 pub use udp_route::UdpRouteHandler;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;

@@ -18,7 +18,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, make_resource_key, FsRawStore, ResourceProcessor, WorkItemResult,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::types::ResourceMeta;
+use crate::types::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3, TLSRoute, TLSRouteAlpha3};
+use crate::types::{ResourceKind, ResourceMeta};
 use anyhow::Result;
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -132,7 +133,7 @@ where
                         }
                         FileSystemEvent::InitApply { path, content } => {
                             // Parse YAML content to resource type
-                            match serde_yaml::from_str::<K>(&content) {
+                            match parse_resource_content::<K>(&content) {
                                 Ok(obj) => {
                                     let key = make_resource_key(&obj);
 
@@ -250,7 +251,7 @@ where
                         FileSystemEvent::Apply { path, content } => {
                             if !init_done {
                                 // During init phase, treat as InitApply
-                                match serde_yaml::from_str::<K>(&content) {
+                                match parse_resource_content::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
@@ -298,7 +299,7 @@ where
                                 }
                             } else {
                                 // Runtime phase - parse and enqueue
-                                match serde_yaml::from_str::<K>(&content) {
+                                match parse_resource_content::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         self.fs_raw_store.upsert(key, Arc::new(obj.clone()));
@@ -460,7 +461,7 @@ where
 
                     let (store_obj, parse_error) = if path.exists() {
                         match std::fs::read_to_string(&path) {
-                            Ok(content) => match serde_yaml::from_str::<K>(&content) {
+                            Ok(content) => match parse_resource_content::<K>(&content) {
                                 Ok(obj) => {
                                     // Keep raw store in sync with the latest file version.
                                     // The main loop upserts on Apply events, but the worker
@@ -643,5 +644,205 @@ fn extract_key_from_path(path: &std::path::Path, expected_kind: &str) -> Option<
         })
     } else {
         None
+    }
+}
+
+fn parse_resource_content<K>(content: &str) -> serde_yaml::Result<K>
+where
+    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
+{
+    let kind = K::resource_kind();
+
+    if kind != ResourceKind::BackendTLSPolicy && kind != ResourceKind::TLSRoute {
+        return serde_yaml::from_str::<K>(content);
+    }
+
+    match extract_api_version(content).as_deref() {
+        Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::BackendTLSPolicy => {
+            let legacy: BackendTLSPolicyAlpha3 = serde_yaml::from_str(content)?;
+            let canonical: BackendTLSPolicy = legacy.into();
+            let normalized = serde_yaml::to_string(&canonical)?;
+            serde_yaml::from_str::<K>(&normalized)
+        }
+        Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::TLSRoute => {
+            let legacy: TLSRouteAlpha3 = serde_yaml::from_str(content)?;
+            let canonical: TLSRoute = legacy.into();
+            let normalized = serde_yaml::to_string(&canonical)?;
+            serde_yaml::from_str::<K>(&normalized)
+        }
+        _ => serde_yaml::from_str::<K>(content),
+    }
+}
+
+fn extract_api_version(content: &str) -> Option<String> {
+    let value: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
+    value.get("apiVersion")?.as_str().map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_resource_content;
+    use crate::types::prelude_resources::{
+        BackendTLSPolicy, BackendTLSPolicyAlpha3, BackendTLSPolicyAlpha3Spec, BackendTLSPolicySpec,
+        BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, TLSBackendRef, TLSRoute,
+        TLSRouteAlpha3, TLSRouteAlpha3Spec, TLSRouteRule, TLSRouteSpec, TLSRouteStatus,
+    };
+    use crate::types::resources::common::ParentReference;
+
+    fn make_policy() -> BackendTLSPolicy {
+        BackendTLSPolicy {
+            metadata: kube::api::ObjectMeta {
+                name: Some("btls".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: BackendTLSPolicySpec {
+                target_refs: vec![BackendTLSPolicyTargetRef {
+                    group: "".to_string(),
+                    kind: "Service".to_string(),
+                    name: "backend".to_string(),
+                    section_name: None,
+                }],
+                validation: BackendTLSPolicyValidation {
+                    ca_certificate_refs: None,
+                    hostname: "backend.default.svc".to_string(),
+                    subject_alt_names: None,
+                    well_known_ca_certificates: None,
+                },
+                options: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+                use_system_ca: false,
+            },
+            status: Some(BackendTLSPolicyStatus { ancestors: vec![] }),
+        }
+    }
+
+    #[test]
+    fn parse_backend_tls_policy_v1alpha3_into_canonical_v1() {
+        let policy = make_policy();
+        let alpha3 = BackendTLSPolicyAlpha3 {
+            metadata: policy.metadata.clone(),
+            spec: BackendTLSPolicyAlpha3Spec {
+                target_refs: policy.spec.target_refs.clone(),
+                validation: policy.spec.validation.clone(),
+                options: policy.spec.options.clone(),
+                resolved_ca_certificates: policy.spec.resolved_ca_certificates.clone(),
+                resolved_client_certificate: policy.spec.resolved_client_certificate.clone(),
+                use_system_ca: policy.spec.use_system_ca,
+            },
+            status: policy.status.clone(),
+        };
+        let yaml = serde_yaml::to_string(&alpha3).unwrap();
+
+        let parsed: BackendTLSPolicy = parse_resource_content(&yaml).unwrap();
+        let serialized = serde_yaml::to_value(&parsed).unwrap();
+
+        assert_eq!(
+            serialized.get("apiVersion").and_then(|v| v.as_str()),
+            Some("gateway.networking.k8s.io/v1")
+        );
+        assert_eq!(parsed.spec.validation.hostname, "backend.default.svc");
+        assert_eq!(parsed.spec.target_refs[0].name, "backend");
+    }
+
+    #[test]
+    fn parse_backend_tls_policy_v1_keeps_canonical_type() {
+        let policy = make_policy();
+        let yaml = serde_yaml::to_string(&policy).unwrap();
+
+        let parsed: BackendTLSPolicy = parse_resource_content(&yaml).unwrap();
+        let serialized = serde_yaml::to_value(&parsed).unwrap();
+
+        assert_eq!(
+            serialized.get("apiVersion").and_then(|v| v.as_str()),
+            Some("gateway.networking.k8s.io/v1")
+        );
+        assert_eq!(parsed.metadata.name.as_deref(), Some("btls"));
+    }
+
+    fn make_tls_route() -> TLSRoute {
+        TLSRoute {
+            metadata: kube::api::ObjectMeta {
+                name: Some("tr".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: TLSRouteSpec {
+                parent_refs: Some(vec![ParentReference {
+                    group: Some("gateway.networking.k8s.io".to_string()),
+                    kind: Some("Gateway".to_string()),
+                    namespace: Some("default".to_string()),
+                    name: "gw".to_string(),
+                    section_name: None,
+                    port: None,
+                }]),
+                hostnames: Some(vec!["example.com".to_string()]),
+                rules: Some(vec![TLSRouteRule {
+                    backend_refs: Some(vec![TLSBackendRef {
+                        name: "svc".to_string(),
+                        namespace: None,
+                        port: Some(443),
+                        weight: Some(1),
+                        group: None,
+                        kind: None,
+                        extension_info: Default::default(),
+                        plugin_runtime: Default::default(),
+                        ref_denied: None,
+                    }]),
+                    backend_finder: Default::default(),
+                    plugin_runtime: Default::default(),
+                    proxy_protocol_version: None,
+                    upstream_tls: false,
+                    stream_plugin_store_key: None,
+                    max_connect_retries: 1,
+                }]),
+                resolved_listeners: None,
+            },
+            status: Some(TLSRouteStatus { parents: vec![] }),
+        }
+    }
+
+    #[test]
+    fn parse_tls_route_v1alpha3_into_canonical_v1() {
+        let route = make_tls_route();
+        let alpha3 = TLSRouteAlpha3 {
+            metadata: route.metadata.clone(),
+            spec: TLSRouteAlpha3Spec {
+                parent_refs: route.spec.parent_refs.clone(),
+                hostnames: route.spec.hostnames.clone(),
+                rules: route.spec.rules.clone(),
+            },
+            status: route.status.clone(),
+        };
+        let yaml = serde_yaml::to_string(&alpha3).unwrap();
+
+        let parsed: TLSRoute = parse_resource_content(&yaml).unwrap();
+        let serialized = serde_yaml::to_value(&parsed).unwrap();
+
+        assert_eq!(
+            serialized.get("apiVersion").and_then(|v| v.as_str()),
+            Some("gateway.networking.k8s.io/v1")
+        );
+        assert_eq!(parsed.spec.hostnames.as_ref().unwrap()[0], "example.com");
+        assert_eq!(
+            parsed.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0].name,
+            "svc"
+        );
+    }
+
+    #[test]
+    fn parse_tls_route_v1_keeps_canonical_type() {
+        let route = make_tls_route();
+        let yaml = serde_yaml::to_string(&route).unwrap();
+
+        let parsed: TLSRoute = parse_resource_content(&yaml).unwrap();
+        let serialized = serde_yaml::to_value(&parsed).unwrap();
+
+        assert_eq!(
+            serialized.get("apiVersion").and_then(|v| v.as_str()),
+            Some("gateway.networking.k8s.io/v1")
+        );
+        assert_eq!(parsed.metadata.name.as_deref(), Some("tr"));
     }
 }

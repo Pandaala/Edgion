@@ -10,6 +10,7 @@ pub use matching::{
     check_gateway_listener_match, get_gateway_tls_matcher, hostname_matches_listener, match_gateway_tls,
     rebuild_gateway_tls_matcher, GatewayTlsEntry, GatewayTlsMatcher,
 };
+pub(crate) use server::send_grpc_trailers_only;
 pub use server::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_503,
     end_response_grpc_unavailable, end_response_grpc_unimplemented, GatewayBase, ServerHeaderOpts,
