@@ -25,6 +25,12 @@ use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::{ListenerKey, MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use serde::Serialize;
 
+fn is_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
+    let group_ok = matches!(group, None | Some("") | Some("core"));
+    let kind_ok = matches!(kind, None | Some("Service"));
+    group_ok && kind_ok
+}
+
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
 }
@@ -235,6 +241,13 @@ impl EdgionTlsTcpProxy {
                     return;
                 }
             };
+            if !is_service_backend_ref(backend_ref.group.as_deref(), backend_ref.kind.as_deref()) {
+                last_err = format!(
+                    "unsupported backend kind: group={:?}, kind={:?}, name={}",
+                    backend_ref.group, backend_ref.kind, backend_ref.name
+                );
+                continue;
+            }
 
             // 4b. Resolve backend address via EndpointSlice
             let namespace = backend_ref

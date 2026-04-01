@@ -798,6 +798,7 @@ mod tests {
                     max_connect_retries: 1,
                 }]),
                 resolved_listeners: None,
+                effective_hostnames: None,
             },
             status: Some(TLSRouteStatus { parents: vec![] }),
         }

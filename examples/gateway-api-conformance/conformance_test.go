@@ -77,6 +77,10 @@ func TestConformance(t *testing.T) {
 	// TLSRoute support (needed for HTTPRouteDisallowedKind status test)
 	opts.SupportedFeatures.Insert(features.SupportTLSRoute)
 
+	// TLS Terminate: gateway terminates TLS, forwards plaintext TCP to backends.
+	// Mixed mode (Terminate + Passthrough on same port) is NOT supported.
+	opts.SupportedFeatures.Insert(features.SupportTLSRouteModeTerminate)
+
 	// CORS support — disabled: CORS preflight handling is incomplete
 	// (simple requests work, but preflight OPTIONS with auth/method/header
 	// negotiation fails on several sub-tests)

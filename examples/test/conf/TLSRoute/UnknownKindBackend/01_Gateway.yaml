@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-unknown-kind-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/backend-protocol: "tcp"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls-unknown-kind
+      protocol: TLS
+      port: 31291
+      hostname: "*.sandbox.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test

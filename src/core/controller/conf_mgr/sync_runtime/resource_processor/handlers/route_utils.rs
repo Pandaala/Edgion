@@ -111,16 +111,24 @@ pub fn service_exists(namespace: &str, name: &str) -> bool {
     processor.contains_key(&format!("{}/{}", namespace, name))
 }
 
-/// Validate backend refs: check kind is "Service" and the Service exists.
+/// Validate backend refs: check group/kind target core Service and the Service exists.
 ///
 /// Each tuple is `(kind, namespace, name)` extracted from the route's backend refs.
 /// Returns typed errors for ResolvedRefs condition generation.
 pub fn validate_backend_refs(
     route_ns: &str,
-    backend_refs: &[(Option<&str>, Option<&str>, &str)],
+    backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)],
 ) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
-    for &(kind, namespace, name) in backend_refs {
+    for &(group, kind, namespace, name) in backend_refs {
+        let group_str = group.unwrap_or("");
+        if !group_str.is_empty() && group_str != "core" {
+            errors.push(ResolvedRefsError::InvalidKind {
+                kind: format!("{group_str}/{}", kind.unwrap_or("Service")),
+                name: name.to_string(),
+            });
+            continue;
+        }
         let kind_str = kind.unwrap_or("Service");
         if kind_str != "Service" {
             errors.push(ResolvedRefsError::InvalidKind {
@@ -388,7 +396,7 @@ pub fn register_service_backend_refs(
     route_kind: crate::types::ResourceKind,
     route_ns: &str,
     route_name: &str,
-    backend_refs: &[(Option<&str>, Option<&str>, &str)], // (kind, namespace, name)
+    backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)], // (group, kind, namespace, name)
 ) {
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceRef;
@@ -398,7 +406,11 @@ pub fn register_service_backend_refs(
     let manager = get_service_ref_manager();
     manager.clear_resource_refs(&resource_ref);
 
-    for &(kind, namespace, name) in backend_refs {
+    for &(group, kind, namespace, name) in backend_refs {
+        let group_str = group.unwrap_or("");
+        if !group_str.is_empty() && group_str != "core" {
+            continue;
+        }
         let kind_str = kind.unwrap_or("Service");
         if kind_str != "Service" {
             continue;
@@ -452,7 +464,29 @@ pub fn resolve_listener_keys(
     route_namespace: &str,
     fallback_namespace: Option<&str>,
 ) -> Vec<ListenerKey> {
+    let (mut keys, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace);
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// Like `resolve_listener_keys`, but also returns the listener hostnames
+/// (positionally paired with the keys) for effective hostname computation.
+pub fn resolve_listener_keys_with_hostnames(
+    parent_refs: &[ParentReference],
+    route_namespace: &str,
+    fallback_namespace: Option<&str>,
+) -> (Vec<ListenerKey>, Vec<Option<String>>) {
+    resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace)
+}
+
+fn resolve_listeners_inner(
+    parent_refs: &[ParentReference],
+    route_namespace: &str,
+    fallback_namespace: Option<&str>,
+) -> (Vec<ListenerKey>, Vec<Option<String>>) {
     let mut listener_keys = Vec::new();
+    let mut listener_hostnames: Vec<Option<String>> = Vec::new();
 
     for parent_ref in parent_refs {
         let gw_ns = parent_ref
@@ -469,45 +503,101 @@ pub fn resolve_listener_keys(
             continue;
         };
 
+        let mut collect = |l: &crate::types::resources::gateway::Listener| {
+            if listener_allows_route_namespace(&l.allowed_routes, route_namespace, gw_ns) {
+                let addr = resolve_listener_addr(gw_addresses, l.port);
+                listener_keys.push(ListenerKey::new(addr, &l.protocol));
+                listener_hostnames.push(l.hostname.clone());
+            }
+        };
+
         if let Some(section_name) = &parent_ref.section_name {
-            // sectionName specified -- find that specific listener
             if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                // Per Gateway API spec: when both sectionName and port are
-                // specified, the port must also match.
                 if let Some(port) = parent_ref.port {
                     if listener.port != port {
                         continue;
                     }
                 }
-                if listener_allows_route_namespace(&listener.allowed_routes, route_namespace, gw_ns) {
-                    let addr = resolve_listener_addr(gw_addresses, listener.port);
-                    listener_keys.push(ListenerKey::new(addr, &listener.protocol));
-                }
+                collect(listener);
             }
         } else if let Some(port) = parent_ref.port {
-            // Explicit port -- find listeners matching the port
             for listener in listeners {
                 if listener.port == port {
-                    if listener_allows_route_namespace(&listener.allowed_routes, route_namespace, gw_ns) {
-                        let addr = resolve_listener_addr(gw_addresses, listener.port);
-                        listener_keys.push(ListenerKey::new(addr, &listener.protocol));
-                    }
+                    collect(listener);
                 }
             }
         } else {
-            // No sectionName, no port -- all listeners
             for listener in listeners {
-                if listener_allows_route_namespace(&listener.allowed_routes, route_namespace, gw_ns) {
-                    let addr = resolve_listener_addr(gw_addresses, listener.port);
-                    listener_keys.push(ListenerKey::new(addr, &listener.protocol));
+                collect(listener);
+            }
+        }
+    }
+
+    (listener_keys, listener_hostnames)
+}
+
+/// Compute effective hostnames = intersection of route hostnames with listener hostnames.
+///
+/// Per Gateway API spec, a route's effective hostname on a listener is the
+/// intersection of the route's hostnames with the listener's hostname.
+/// The result is deduplicated.
+pub fn compute_effective_hostnames(
+    route_hostnames: &[String],
+    listener_hostnames: &[Option<String>],
+) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut effective: BTreeSet<String> = BTreeSet::new();
+
+    if route_hostnames.is_empty() {
+        // Route matches all hostnames; effective = listener hostnames
+        for lh in listener_hostnames {
+            if let Some(h) = lh {
+                effective.insert(h.to_ascii_lowercase());
+            }
+            // None listener hostname = all hostnames; nothing specific to add
+        }
+        return effective.into_iter().collect();
+    }
+
+    for lh in listener_hostnames {
+        match lh {
+            None => {
+                // Listener accepts all hostnames; effective = route hostnames
+                for rh in route_hostnames {
+                    effective.insert(rh.to_ascii_lowercase());
+                }
+            }
+            Some(listener_host) => {
+                for rh in route_hostnames {
+                    if let Some(intersected) = hostname_intersection(listener_host, rh) {
+                        effective.insert(intersected.to_ascii_lowercase());
+                    }
                 }
             }
         }
     }
 
-    listener_keys.sort_unstable();
-    listener_keys.dedup();
-    listener_keys
+    effective.into_iter().collect()
+}
+
+/// Compute the intersection of two hostnames, returning the more specific one.
+/// Returns None if they do not intersect.
+fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
+    if hostnames_intersect(a, b) {
+        // Return the more specific hostname (non-wildcard > wildcard, longer suffix > shorter)
+        let a_wild = a.starts_with("*.");
+        let b_wild = b.starts_with("*.");
+        match (a_wild, b_wild) {
+            (false, true) => Some(a),  // a is exact, b is wildcard
+            (true, false) => Some(b),  // b is exact, a is wildcard
+            _ => {
+                // Both exact (must be equal) or both wildcard (more specific = longer)
+                if a.len() >= b.len() { Some(a) } else { Some(b) }
+            }
+        }
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

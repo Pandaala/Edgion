@@ -483,9 +483,15 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 let unsupported_tls_mode = listener_has_unsupported_tls_mode(l);
                 let mixed_tls_conflict = mixed_tls_listeners.contains(&l.name);
 
+                let effective_kinds = if mixed_tls_conflict {
+                    Vec::new()
+                } else {
+                    supported_kinds
+                };
+
                 ListenerInfo {
                     name: l.name.clone(),
-                    supported_kinds,
+                    supported_kinds: effective_kinds,
                     route_count,
                     resolved_refs_errors,
                     no_valid_ca_certificate,

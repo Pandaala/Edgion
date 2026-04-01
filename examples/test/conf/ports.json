@@ -140,6 +140,9 @@
     "TLSRoute/Passthrough": {
       "tls": 31290
     },
+    "TLSRoute/UnknownKindBackend": {
+      "tls": 31291
+    },
     "HTTPRoute/MultiPort": {
       "http": 31300
     },

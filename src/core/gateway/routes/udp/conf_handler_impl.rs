@@ -135,8 +135,11 @@ impl GlobalUdpRouteManagers {
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 if let Some(backend_refs) = &rule.backend_refs {
-                    let backends: Vec<_> = backend_refs.to_vec();
-                    let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
+                    let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
+                        .iter()
+                        .filter(|br| is_service_backend_ref(br))
+                        .map(|br| (br.clone(), br.weight))
+                        .unzip();
 
                     rule.backend_finder.init(backends, weights);
 
@@ -152,6 +155,20 @@ impl GlobalUdpRouteManagers {
 
         Ok(Arc::new(route))
     }
+}
+
+/// A BackendRef is routable only when it targets a core Service
+/// (group is "" or "core" and kind is "Service" or omitted).
+fn is_service_backend_ref(br: &crate::types::resources::udp_route::UDPBackendRef) -> bool {
+    let group_ok = match br.group.as_deref() {
+        None | Some("") | Some("core") => true,
+        _ => false,
+    };
+    let kind_ok = match br.kind.as_deref() {
+        None | Some("Service") => true,
+        _ => false,
+    };
+    group_ok && kind_ok
 }
 
 #[cfg(test)]
@@ -415,5 +432,35 @@ mod tests {
             .match_route()
             .is_some());
         assert_eq!(managers.stats().route_cache, 1);
+    }
+
+    #[test]
+    fn test_is_service_backend_ref_filters_unknown_kind() {
+        let valid = UDPBackendRef {
+            name: "svc".to_string(),
+            namespace: None,
+            port: Some(80),
+            weight: Some(1),
+            group: None,
+            kind: None,
+            extension_info: Default::default(),
+            plugin_runtime: Default::default(),
+            ref_denied: None,
+        };
+        assert!(is_service_backend_ref(&valid));
+
+        let explicit_service = UDPBackendRef {
+            group: Some("core".to_string()),
+            kind: Some("Service".to_string()),
+            ..valid.clone()
+        };
+        assert!(is_service_backend_ref(&explicit_service));
+
+        let unknown_kind = UDPBackendRef {
+            group: Some("example.com".to_string()),
+            kind: Some("Foo".to_string()),
+            ..valid
+        };
+        assert!(!is_service_backend_ref(&unknown_kind));
     }
 }

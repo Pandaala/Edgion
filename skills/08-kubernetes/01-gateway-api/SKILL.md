@@ -16,19 +16,33 @@ Use this note when changing Gateway API behavior in Edgion and you need to under
 | [03-conformance-workflow.md](03-conformance-workflow.md) | 跨会话工作流：逐项推进 conformance 测试（环境检查→功能分析→运行→诊断→记录） |
 | [04-api-version-upgrade.md](04-api-version-upgrade.md) | K8s API 生命周期与 Controller 升级策略 |
 | [05-batch-conformance-debugging.md](05-batch-conformance-debugging.md) | 批量 conformance 失败的日志采集、时序关联和根因定位（Batch 7 专用） |
+| [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md) | Conformance 排障手册：Pre-flight 检查、常见失败模式（namespace 被删、端口未绑定、进程残留等）、高效运行技巧 |
 
 
-## ConformanceProfiles 声明状态
+## Conformance 最新结果（feature-03-29, 2026-04-01）
 
-Edgion 在 conformance 测试中声明以下 profiles（GEP-1709）：
+**381 PASS / 7 FAIL / 56 SKIP**（in-cluster 模式，OrbStack K8s）
 
-| Profile | 状态 | 说明 |
+### Profile 声明状态
+
+| Profile | 声明 | 结果 |
 |---------|------|------|
-| `GATEWAY-HTTP` | ✅ 已声明 | Core: Gateway + HTTPRoute + ReferenceGrant |
-| `GATEWAY-GRPC` | ⚠️ 已声明，未验证 | Core: Gateway + GRPCRoute + ReferenceGrant。功能已实现，但未实际跑过 conformance test，可能需要修 status condition |
-| `GATEWAY-TLS` | ❌ 未声明 | TLS Passthrough 已实现；TLS Terminate 走标准 `mode=Terminate` 路径但仍需补 status 与测试。Mixed 明确不支持；需跑通 TLSRoute conformance 后再声明 |
-| `MESH-HTTP` | ❌ 不适用 | Edgion 不是 service mesh |
-| `MESH-GRPC` | ❌ 不适用 | Edgion 不是 service mesh |
+| `GATEWAY-HTTP` | ✅ | Core 全部通过；2 个 HTTPS listener 数据面 FAIL |
+| `GATEWAY-GRPC` | ✅ | Core 全部通过（含 weight/header/hostname matching） |
+| `GATEWAY-TLS` | ✅ | Status tests 大部分通过；5 个 FAIL（数据面 + 2 个 status reason） |
+| `MESH-*` | ❌ | 不适用（Edgion 不是 service mesh），56 个 SKIP 中 21 个是 Mesh |
+
+### 7 个 FAIL
+
+| 测试 | 类别 | 原因 |
+|------|------|------|
+| `HTTPRouteHTTPSListener` | HTTPS 数据面 | HTTPS 请求 15s 超时 |
+| `HTTPRouteHTTPSListenerDetectMisdirectedRequests` | HTTPS 数据面 | 421 检测超时 |
+| `TLSRouteSimpleSameNamespace` | TLS Passthrough 数据面 | client EOF |
+| `TLSRouteTerminateSimpleSameNamespace` | TLS Terminate 数据面 | 15s 超时 |
+| `TLSRouteHostnameIntersection` | TLS 数据面 | hostname 交集匹配不生效 |
+| `TLSRouteListenerMixedTerminationNotSupported` | Controller Status | 返回 `UnsupportedValue`，预期 `ProtocolConflict` |
+| `TLSRouteListenerTerminateSupportedKinds` | Controller Status | Terminate listener SupportedKinds 超时 |
 
 配置位置：`examples/gateway-api-conformance/conformance_test.go`（`opts.ConformanceProfiles`）
 

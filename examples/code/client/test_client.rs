@@ -122,6 +122,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "tls-stream-plugins" | "tlsstreamplugins" => "TLSRoute/StreamPlugins".to_string(),
             "tls-multi-sni" | "tlsmultisni" | "multi-sni" => "TLSRoute/MultiSNI".to_string(),
             "tls-passthrough" | "tlspassthrough" => "TLSRoute/Passthrough".to_string(),
+            "tls-unknown-kind-backend" | "tlsunknownkindbackend" => "TLSRoute/UnknownKindBackend".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "backend-tls-san" | "backendtlssan" => "Gateway/TLS/BackendTLSSAN".to_string(),
@@ -200,6 +201,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "TLSRoute/MultiSNI" => "TLSRoute/MultiSNI",
         "TLSRoute/BothAbsentParentRef" => "TLSRoute/BothAbsentParentRef",
         "TLSRoute/Passthrough" => "TLSRoute/Passthrough",
+        "TLSRoute/UnknownKindBackend" => "TLSRoute/UnknownKindBackend",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         // Gateway
@@ -521,6 +523,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TlsPassthroughTestSuite));
+        }
+        "TLSRoute/UnknownKindBackend" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/UnknownKindBackend tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsUnknownKindBackendTestSuite));
         }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));

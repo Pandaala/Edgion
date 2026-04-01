@@ -46,7 +46,12 @@ impl TlsRouteHandler {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {
                     for br in backend_refs {
-                        backend_refs_list.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                        backend_refs_list.push((
+                            br.group.as_deref(),
+                            br.kind.as_deref(),
+                            br.namespace.as_deref(),
+                            br.name.as_str(),
+                        ));
                     }
                 }
             }
@@ -149,12 +154,24 @@ impl TlsRouteHandler {
         }
 
         route.spec.resolved_listeners = None;
+        route.spec.effective_hostnames = None;
 
         if let Some(parent_refs) = &route.spec.parent_refs {
-            let listener_keys =
-                super::route_utils::resolve_listener_keys(parent_refs, route_ns, route.metadata.namespace.as_deref());
+            let (listener_keys, listener_hostnames) = super::route_utils::resolve_listener_keys_with_hostnames(
+                parent_refs,
+                route_ns,
+                route.metadata.namespace.as_deref(),
+            );
             if !listener_keys.is_empty() {
                 route.spec.resolved_listeners = Some(listener_keys);
+            }
+
+            let effective = super::route_utils::compute_effective_hostnames(
+                route.spec.hostnames.as_deref().unwrap_or_default(),
+                &listener_hostnames,
+            );
+            if !effective.is_empty() {
+                route.spec.effective_hostnames = Some(effective);
             }
         }
 
@@ -345,13 +362,18 @@ impl ProcessorHandler<TLSRouteAlpha3> for TlsRouteAlpha3Handler {
     }
 }
 
-fn collect_backend_ref_tuples(route: &TLSRoute) -> Vec<(Option<&str>, Option<&str>, &str)> {
+fn collect_backend_ref_tuples(route: &TLSRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
     let mut tuples = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
             if let Some(backend_refs) = &rule.backend_refs {
                 for br in backend_refs {
-                    tuples.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                    tuples.push((
+                        br.group.as_deref(),
+                        br.kind.as_deref(),
+                        br.namespace.as_deref(),
+                        br.name.as_str(),
+                    ));
                 }
             }
         }

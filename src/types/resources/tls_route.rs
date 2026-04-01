@@ -49,6 +49,11 @@ pub struct TLSRouteSpec {
     /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
+
+    /// Effective hostnames after intersecting route hostnames with listener hostnames.
+    /// Set by Controller; used by Gateway for route matching instead of raw `hostnames`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_hostnames: Option<Vec<String>>,
 }
 
 /// TLSRouteRule defines TLS routing rules
@@ -201,6 +206,7 @@ impl From<TLSRouteAlpha3> for TLSRoute {
                 hostnames: alpha3.spec.hostnames,
                 rules: alpha3.spec.rules,
                 resolved_listeners: None,
+                effective_hostnames: None,
             },
             status: alpha3.status,
         }
@@ -278,6 +284,7 @@ mod tests {
                     max_connect_retries: 1,
                 }]),
                 resolved_listeners: None,
+                effective_hostnames: None,
             },
             status: Some(TLSRouteStatus { parents: vec![] }),
         }

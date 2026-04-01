@@ -46,7 +46,12 @@ impl HttpRouteHandler {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {
                     for br in backend_refs {
-                        backend_refs_list.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                        backend_refs_list.push((
+                            br.group.as_deref(),
+                            br.kind.as_deref(),
+                            br.namespace.as_deref(),
+                            br.name.as_str(),
+                        ));
                     }
                 }
             }
@@ -333,14 +338,19 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     }
 }
 
-/// Extract (kind, namespace, name) tuples from all backend refs for shared validation.
-fn collect_backend_ref_tuples(route: &HTTPRoute) -> Vec<(Option<&str>, Option<&str>, &str)> {
+/// Extract (group, kind, namespace, name) tuples from all backend refs for shared validation.
+fn collect_backend_ref_tuples(route: &HTTPRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
     let mut tuples = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
             if let Some(backend_refs) = &rule.backend_refs {
                 for br in backend_refs {
-                    tuples.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                    tuples.push((
+                        br.group.as_deref(),
+                        br.kind.as_deref(),
+                        br.namespace.as_deref(),
+                        br.name.as_str(),
+                    ));
                 }
             }
         }

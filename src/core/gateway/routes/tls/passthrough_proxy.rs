@@ -28,6 +28,12 @@ use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::ResourceMeta;
 use crate::types::{ListenerKey, MatchedInfo, Rsc};
 
+fn is_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
+    let group_ok = matches!(group, None | Some("") | Some("core"));
+    let kind_ok = matches!(kind, None | Some("Service"));
+    group_ok && kind_ok
+}
+
 /// TLS Passthrough proxy service.
 ///
 /// Binds as a plain TCP listener. On each connection:
@@ -148,6 +154,13 @@ impl EdgionTlsPassthroughProxy {
                     return;
                 }
             };
+            if !is_service_backend_ref(backend_ref.group.as_deref(), backend_ref.kind.as_deref()) {
+                last_err = format!(
+                    "unsupported backend kind: group={:?}, kind={:?}, name={}",
+                    backend_ref.group, backend_ref.kind, backend_ref.name
+                );
+                continue;
+            }
 
             let namespace = backend_ref
                 .namespace

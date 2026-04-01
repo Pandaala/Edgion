@@ -262,11 +262,16 @@ while [[ $# -gt 0 ]]; do
     --extended)
       SUPPORTED_FEATURES="Gateway,HTTPRoute,ReferenceGrant,\
 HTTPRouteQueryParamMatching,HTTPRouteMethodMatching,\
-HTTPRouteResponseHeaderModification,HTTPRouteBackendRequestHeaderModification,\
-HTTPRoutePortRedirect,HTTPRouteSchemeRedirect,HTTPRoutePathRedirect,\
-HTTPRouteRequestTimeout,HTTPRouteBackendTimeout,\
+HTTPRouteResponseHeaderModification,HTTPRouteHostRewrite,HTTPRoutePathRewrite,\
+HTTPRouteRequestMirror,HTTPRouteRequestTimeout,HTTPRouteBackendTimeout,\
+HTTPRouteBackendRequestHeaderModification,\
+HTTPRouteBackendProtocolH2C,HTTPRouteBackendProtocolWebSocket,HTTPRouteNamedRouteRule,\
+GatewayHTTPListenerIsolation,GatewayHTTPSListenerDetectMisdirectedRequests,\
+HTTPRoutePathRedirect,HTTPRoutePortRedirect,HTTPRouteSchemeRedirect,\
 HTTPRoute303RedirectStatusCode,HTTPRoute307RedirectStatusCode,HTTPRoute308RedirectStatusCode,\
-GRPCRoute,TCPRoute"
+HTTPRouteRequestPercentageMirror,HTTPRouteRequestMultipleMirrors,\
+HTTPRouteDestinationPortMatching,\
+TLSRoute,GRPCRoute"
       shift ;;
     --all-features)
       SUPPORTED_FEATURES="__ALL__"

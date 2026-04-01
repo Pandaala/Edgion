@@ -26,7 +26,7 @@ pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
 
 pub use tls_route::{
     TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite, TlsProxyProtocolTestSuite,
-    TlsRouteTestSuite, TlsStreamPluginsTestSuite,
+    TlsRouteTestSuite, TlsStreamPluginsTestSuite, TlsUnknownKindBackendTestSuite,
 };
 
 pub use udp_route::UdpTestSuite;
