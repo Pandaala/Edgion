@@ -141,21 +141,23 @@ impl BackendTlsPolicyHandler {
                     ctx.secret_ref_manager().add_ref(cm_key.clone(), resource_ref.clone());
 
                     if let Some(cm) = get_configmap(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
-                        if let Some(data) = &cm.data {
-                            if let Some(ca_pem) = data.get(CA_CERT) {
-                                let mut secret_data = BTreeMap::new();
-                                secret_data.insert(CA_CERT.to_string(), ByteString(ca_pem.as_bytes().to_vec()));
-                                let synthetic_secret = k8s_openapi::api::core::v1::Secret {
-                                    metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                                        name: Some(ca_ref.name.clone()),
-                                        namespace: policy_ns.cloned(),
-                                        ..Default::default()
-                                    },
-                                    data: Some(secret_data),
+                        let ca_pem = cm.data.as_ref()
+                            .and_then(|d| d.get(CA_CERT))
+                            .filter(|v| !v.trim().is_empty());
+
+                        if let Some(ca_pem) = ca_pem {
+                            let mut secret_data = BTreeMap::new();
+                            secret_data.insert(CA_CERT.to_string(), ByteString(ca_pem.as_bytes().to_vec()));
+                            let synthetic_secret = k8s_openapi::api::core::v1::Secret {
+                                metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                                    name: Some(ca_ref.name.clone()),
+                                    namespace: policy_ns.cloned(),
                                     ..Default::default()
-                                };
-                                resolved_ca_secrets.push(synthetic_secret);
-                            }
+                                },
+                                data: Some(secret_data),
+                                ..Default::default()
+                            };
+                            resolved_ca_secrets.push(synthetic_secret);
                         }
                     } else {
                         tracing::info!(

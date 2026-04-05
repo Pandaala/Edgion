@@ -12,52 +12,53 @@ description: 资源间依赖关系速查：spec 引用、Controller 内 Store �
 ```
                         ┌──────────────────────────────────────────────────────────┐
                         │  Secret  ──on_change──► requeue 所有 SecretRefManager 登记方 │
-                        └──────────────────┬───────────────────────────────────────┘
+                        └───────────��──────┬──────────────────────���────────────────┘
                                            │ 被引用（certificateRef / secretRef / 凭据）
-                    ┌──────────────────────┼──────────────────────┐
+                    ┌──────────��───────────┼─────────────��────────┐
                     ▼                      ▼                       ▼
                 Gateway               EdgionTls            EdgionPlugins
            BackendTLSPolicy           EdgionAcme
 
-                        ┌──────────────────────────────────────────────────────────┐
-                        │  ConfigMap  ──on_change──► requeue SecretRefManager 登记方 │
-                        └──────────────────┬───────────────────────────────────────┘
-                                           │ 被引用（frontend CA）
-                                           ▼
-                                        Gateway
+                        ┌───────────────���────────────────────��────────────────────��┐
+                        │  ConfigMap  ──on_change──► requeue SecretRefManager 登记方 ��
+                        └──────────────────┬────────────���───────────────────���──────┘
+                                           │ 被引用（frontend CA / backend CA）
+                                    ┌──────┴──────┐
+                                    ▼             ▼
+                                 Gateway   BackendTLSPolicy
 
                         ┌──────────────────────────────────────────────────────────┐
                         │  Service  ──on_change──► requeue ServiceRefManager 登记方  │
-                        └──────────────────┬───────────────────────────────────────┘
+                        └──────────────────┬───────────────��───────────────────────┘
                                            │ 被引用（backendRef / clusterIP）
-                    ┌──────────────────────┴──────────────────────┐
+                    ┌──���───────────────────┴──────────────────────┐
                     ▼                                              ▼
           各类 Route（HTTP/GRPC/TCP/TLS/UDP）                   Gateway
-         （验证 backend 存在性）                          （推导 status 地址）
+         （验证 backend 存在性）                          （推导 status ��址）
 
-                        ┌──────────────────────────────────────────────────────────┐
+                        ┌───────��──────────────────────────────────────────────────┐
                         │  ReferenceGrant  ──on_change──► requeue 跨 ns 引用方       │
-                        └──────────────────┬───────────────────────────────────────┘
-                                           │ 被查询（跨 ns 引用权限校验）
+                        ���──────────────────┬──��────────────────────────────────────┘
+                                           │ 被查询（跨 ns 引���权限校验）
                     ┌──────────────────────┴──────────────────────┐
                     ▼                                              ▼
                 Gateway（跨 ns Secret/CA）              各类 Route（跨 ns backendRef）
 
                         ┌──────────────────────────────────────────────────────────┐
                         │  Namespace  ──label 变更──► requeue Selector Gateway       │
-                        └──────────────────┬───────────────────────────────────────┘
+                        └──────────────────┬────���──────────────────────────────────┘
                                            │ 被查询（allowedRoutes Selector 策略）
                                            ▼
                                      各类 Route（listener 是否允许该 namespace）
 
-                        ┌──────────────────────────────────────────────────────────┐
+                        ┌─��────────────────────────────────────────────────────────┐
                         │  Gateway  ──on_change──► requeue gateway_route_index 中的 Route │
-                        └──────────────────┬───────────────────────────────────────┘
+                        └──────────────────┬───��───────────────────────────────────┘
                                            │ 被引用（parentRef）
                     ┌──────────────────────┴──────────────────────┐
                     ▼                                              ▼
-          各类 Route（验证 listener 匹配）                      EdgionTls
-          ──on_change──► requeue 父 Gateway
+          各�� Route（验证 listener 匹配）                      EdgionTls
+          ��─on_change──► requeue �� Gateway
 ```
 
 ## Store 与写入/读取方
@@ -65,13 +66,14 @@ description: 资源间依赖关系速查：spec 引用、Controller 内 Store �
 | Store | 写入方 | 读取方 |
 |-------|--------|--------|
 | **SecretStore** | SecretHandler | Gateway、EdgionTls、EdgionPlugins、BackendTLSPolicy、EdgionAcme |
-| **ConfigMapStore** | ConfigMapHandler | Gateway（frontend CA） |
+| **ConfigMapStore** | ConfigMapHandler | Gateway（frontend CA）、BackendTLSPolicy（backend CA） |
 | **NamespaceStore** | K8s Namespace informer | 各类 Route（allowedRoutes Selector） |
 | **ReferenceGrantStore** | ReferenceGrantHandler | Gateway、各类 Route（跨 ns 权限） |
-| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme（parse 时注册） | SecretHandler/ConfigMapHandler（on_change 时查依赖方） |
-| **ServiceRefManager** | 各类 Route（parse 时注册 backend） | ServiceHandler（on_change 时查依赖方） |
+| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme（parse 时注册） | SecretHandler/ConfigMapHandler���on_change 时查依赖方） |
+| **ServiceRefManager** | ��类 Route（parse 时注册 backend） | ServiceHandler（on_change 时查依赖方）、BackendTLSPolicy（resolve_ancestor_gateways 时读取） |
 | **CrossNsRefManager** | Gateway/各类 Route（parse 时注册跨 ns 引用） | ReferenceGrantHandler（on_change 时查依赖方） |
-| **GatewayRouteIndex** | 各类 Route/EdgionTls（on_change 时写入） | GatewayHandler（on_change 时查关联 Route） |
+| **GatewayRouteIndex** | 各类 Route/EdgionTls（on_change 时写入） | GatewayHandler（on_change 时查关联 Route）、BackendTLSPolicy（resolve_ancestor_gateways 时读取） |
+| **BackendTLSPolicyTargetManager** | BackendTLSPolicy（parse 时注册 targetRef） | BackendTLSPolicy（update_status 时冲突检测） |
 
 ## 无外部依赖的资源
 

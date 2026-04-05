@@ -48,8 +48,9 @@ requeue 当前 siblings（共享同一 target 的其他 BackendTLSPolicy），�
 ### update_status
 
 使用合成的 PolicyAncestorStatus（因 BackendTLSPolicy 的 target 是 Service 而非 Gateway）：
-- `Accepted`：
-  - validation_errors 不为空 → `False, Reason=Invalid`（优先级最高）
+- `Accepted`（优先级：Invalid > NoValidCACertificate > Conflicted > Accepted）：
+  - validation_errors 不为空 → `False, Reason=Invalid`
+  - 所有 CA refs 都无效（kind 错误 + ref 未解析 ≥ 总 ref 数） → `False, Reason=NoValidCACertificate`
   - 冲突检测：遍历 target refs 调用 `is_policy_winner()`，非 winner → `False, Reason=Conflicted`
   - 其他 → `True, Reason=Accepted`
 - `ResolvedRefs`：校验所有 caCertificateRef 的 kind/group 合法性、CA Secret/ConfigMap 是否已解析、客户端证书 Secret 是否存在且包含 tls.crt 和 tls.key

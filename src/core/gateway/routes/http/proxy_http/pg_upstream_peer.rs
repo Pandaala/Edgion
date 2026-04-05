@@ -329,7 +329,7 @@ pub async fn select_http_backend(
         .or(Some(route_unit.matched_info.rsc.ns.as_str()));
 
     backend_ref.backend_tls_policy =
-        crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace);
+        crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
 
     // BackendTLSPolicy is applied via the peer builder; no per-request logging needed
 

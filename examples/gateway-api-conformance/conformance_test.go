@@ -85,6 +85,7 @@ func declaredSupportedFeatures() sets.Set[features.FeatureName] {
 
 	// BackendTLSPolicy: CA certificate validation for backend TLS re-encryption.
 	supported.Insert(features.SupportBackendTLSPolicy)
+	supported.Insert(features.SupportBackendTLSPolicySANValidation)
 
 	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
 	supported.Insert(features.SupportGRPCRoute)

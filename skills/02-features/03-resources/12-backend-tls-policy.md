@@ -27,9 +27,9 @@ spec:
 
   validation:
     hostname: "backend.internal.svc"               # 必填：TLS SNI 和证书验证主机名
-    caCertificateRefs:                             # CA 证书引用
+    caCertificateRefs:                             # CA 证书引用（Secret 或 ConfigMap）
       - group: ""
-        kind: Secret
+        kind: ConfigMap                            # ConfigMap: 读取 ca.crt key
         name: backend-ca-cert
     subjectAltNames:                               # SAN 白名单（可选）
       - type: Hostname
@@ -66,7 +66,7 @@ spec:
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `String` | 是 | TLS SNI 和证书验证的主机名 |
-| `caCertificateRefs` | `Vec<CACertRef>?` | 否 | CA 证书引用列表 |
+| `caCertificateRefs` | `Vec<CACertRef>?` | 否 | CA 证书引用列表（支持 Secret 和 ConfigMap，ConfigMap 读取 `ca.crt` key） |
 | `subjectAltNames` | `Vec<SubjectAltName>?` | 否 | SAN 白名单 |
 | `wellKnownCACertificates` | `String?` | 否 | `System`：使用系统 CA 证书 |
 
@@ -86,6 +86,8 @@ spec:
 
 ## Status Schema
 
+ancestorRef 通过 `Service → Route → Gateway` 三步查询自动解析，指向关联的 Gateway（非 BackendTLSPolicy 自身）。
+
 ```yaml
 status:
   ancestors:
@@ -98,4 +100,32 @@ status:
       conditions:
         - type: Accepted
           status: "True"
+          reason: Accepted
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
 ```
+
+### Accepted condition reasons
+
+| Reason | 含义 | 优先级 |
+|--------|------|--------|
+| `Invalid` | 校验失败（如 caCertificateRefs 和 wellKnownCACertificates 互斥） | 1（最高） |
+| `NoValidCACertificate` | 所有 CA 证书引用都无效 | 2 |
+| `Conflicted` | 同一 target 存在更高优先级的 policy | 3 |
+| `Accepted` | 正常接受 | 4 |
+
+### ResolvedRefs condition reasons
+
+| Reason | 含义 | 优先级 |
+|--------|------|--------|
+| `InvalidKind` | caCertificateRef kind 不支持（非 Secret/ConfigMap） | 1（最高） |
+| `InvalidCACertificateRef` | CA ref 不存在或缺少 `ca.crt` key | 2 |
+| `ResolvedRefs` | 所有引用已解析 | 3 |
+
+### 冲突检测
+
+多个 BackendTLSPolicy 指向同一 Service（相同 sectionName）时，按 Gateway API 优先级规则只有一个被 Accepted：
+- 先按 `creationTimestamp` 升序（更早创建的优先）
+- 相同时间按 `{namespace}/{name}` 字典序
+- 不同 `sectionName` 不冲突
