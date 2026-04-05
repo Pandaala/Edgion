@@ -9,6 +9,7 @@ set -euo pipefail
 #   ./scripts/in-cluster-runner.sh --run-only         # Skip build, re-run in existing pod
 #   ./scripts/in-cluster-runner.sh --core             # Only core features
 #   ./scripts/in-cluster-runner.sh --cleanup          # Tear down runner pod + RBAC
+#   ./scripts/in-cluster-runner.sh --force-recreate   # Recreate runner pod even if Ready
 #
 # The script:
 #   1. Cross-compiles the Go test binary (linux/amd64)
@@ -25,13 +26,16 @@ NAMESPACE="edgion-system"
 RUNNER_POD="conformance-runner"
 RUNNER_SA="conformance-runner"
 TEST_DIR="/opt/conformance"
+TENANT_LABEL="system"
 RUN_ONLY=false
 CLEANUP_ONLY=false
+FORCE_RECREATE=false
+FORCE_COPY=false
 TIMEOUT="30m"
 EXTRA_ARGS=()
 
 # Conformance profiles and features — mirrors run.sh defaults
-CONFORMANCE_PROFILES="GATEWAY-HTTP,GATEWAY-GRPC"
+CONFORMANCE_PROFILES="GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS"
 GATEWAY_CLASS="edgion"
 SUPPORTED_FEATURES=""
 
@@ -39,6 +43,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-only)       RUN_ONLY=true;                shift ;;
     --cleanup)        CLEANUP_ONLY=true;            shift ;;
+    --force-recreate) FORCE_RECREATE=true;          shift ;;
+    --force-copy)     FORCE_COPY=true;              shift ;;
     --timeout)        TIMEOUT="$2";                 shift 2 ;;
     --core)           SUPPORTED_FEATURES="Gateway,HTTPRoute,ReferenceGrant"; shift ;;
     --conformance-profiles) CONFORMANCE_PROFILES="$2"; shift 2 ;;
@@ -46,11 +52,35 @@ while [[ $# -gt 0 ]]; do
     --supported-features) SUPPORTED_FEATURES="$2";  shift 2 ;;
     --run-test)       EXTRA_ARGS+=("-run-test=$2"); shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--run-only|--cleanup|--core|--timeout <dur>|--run-test <name>]"
+      echo "Usage: $0 [--run-only|--cleanup|--force-recreate|--force-copy|--core|--timeout <dur>|--run-test <name>|--conformance-profiles <list>|--gateway-class <name>|--supported-features <list>]"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+is_runner_ready() {
+  local phase ready
+  phase=$(kubectl get pod "$RUNNER_POD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  ready=$(kubectl get pod "$RUNNER_POD" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+  [[ "${phase}" == "Running" && "${ready}" == "True" ]]
+}
+
+require_gateway_service() {
+  local gw_svc_ip
+  gw_svc_ip=$(kubectl get svc edgion-gateway -n "$NAMESPACE" \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+
+  if [[ -n "${gw_svc_ip}" && "${gw_svc_ip}" != "None" ]]; then
+    return
+  fi
+
+  echo ""
+  echo "ERROR: Service edgion-gateway was not found in namespace ${NAMESPACE}, or it has no ClusterIP."
+  echo "       Conformance requires the controller to publish this Service address into Gateway status.addresses."
+  echo ""
+  kubectl get svc -n "$NAMESPACE" edgion-gateway 2>/dev/null || true
+  exit 1
+}
 
 cleanup_runner() {
   echo "=== Cleaning up conformance runner ==="
@@ -66,12 +96,27 @@ if [[ "$CLEANUP_ONLY" == "true" ]]; then
   exit 0
 fi
 
+require_gateway_service
+
 # ── Step 1: Cross-compile test binary ─────────────────────────────────────────
 if [[ "$RUN_ONLY" != "true" ]]; then
   echo "=== [1/4] Cross-compiling conformance test binary (linux/amd64) ==="
   cd "$CONFORMANCE_ROOT"
   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o conformance-test.bin .
   echo "  Binary: $(ls -lh conformance-test.bin | awk '{print $5}')"
+
+  pod_ready=false
+  if is_runner_ready; then
+    pod_ready=true
+  fi
+
+  if [[ "$FORCE_RECREATE" == "true" ]]; then
+    echo ""
+    echo "=== [2/4] Force recreate requested: deleting old runner pod ==="
+    kubectl delete pod "$RUNNER_POD" -n "$NAMESPACE" --ignore-not-found --wait=false 2>/dev/null || true
+    pod_ready=false
+    sleep 2
+  fi
 
   # ── Step 2: Create RBAC ──────────────────────────────────────────────────────
   echo ""
@@ -132,14 +177,16 @@ subjects:
 YAML
   echo "  RBAC applied."
 
-  # ── Step 3: Deploy runner pod ────────────────────────────────────────────────
+  # ── Step 3: Deploy or reuse runner pod ───────────────────────────────────────
   echo ""
-  echo "=== [3/4] Deploying runner pod ==="
-  # Delete old pod if exists
-  kubectl delete pod "$RUNNER_POD" -n "$NAMESPACE" --ignore-not-found --wait=false 2>/dev/null || true
-  sleep 2
-
-  kubectl apply -f - <<YAML
+  if [[ "$pod_ready" == "true" ]]; then
+    echo "=== [3/4] Reusing existing ready runner pod ==="
+  else
+    echo "=== [3/4] Deploying runner pod ==="
+    # Recreate non-ready pod to avoid being stuck with an unschedulable spec.
+    kubectl delete pod "$RUNNER_POD" -n "$NAMESPACE" --ignore-not-found --wait=false 2>/dev/null || true
+    sleep 2
+    kubectl apply -f - <<YAML
 apiVersion: v1
 kind: Pod
 metadata:
@@ -147,7 +194,9 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app: conformance-runner
+    meta.zoom.us/tenant: ${TENANT_LABEL}
 spec:
+  serviceAccount: ${RUNNER_SA}
   serviceAccountName: ${RUNNER_SA}
   containers:
   - name: runner
@@ -155,8 +204,8 @@ spec:
     command: ["sleep", "infinity"]
     resources:
       requests:
-        cpu: 500m
-        memory: 512Mi
+        cpu: 100m
+        memory: 128Mi
       limits:
         cpu: 2000m
         memory: 2Gi
@@ -168,17 +217,40 @@ spec:
     emptyDir: {}
 YAML
 
-  echo "  Waiting for runner pod to be ready..."
-  kubectl wait --for=condition=Ready pod/"$RUNNER_POD" -n "$NAMESPACE" --timeout=120s
-  echo "  Runner pod is ready."
+    echo "  Waiting for runner pod to be ready..."
+    kubectl wait --for=condition=Ready pod/"$RUNNER_POD" -n "$NAMESPACE" --timeout=120s
+    echo "  Runner pod is ready."
+  fi
 
-  # ── Step 4: Copy test binary ─────────────────────────────────────────────────
+  # ── Step 4: Copy test binary (conditional) ───────────────────────────────────
+  # Default behavior:
+  # - Reused ready pod: skip copy to speed up iterative runs.
+  # - Fresh/recreated pod: copy required.
+  # - --force-copy: always copy.
+  should_copy=false
+  if [[ "$FORCE_COPY" == "true" ]]; then
+    should_copy=true
+  elif [[ "$pod_ready" != "true" ]]; then
+    should_copy=true
+  fi
+
   echo ""
-  echo "=== [4/4] Copying test binary to runner pod ==="
-  kubectl cp "$CONFORMANCE_ROOT/conformance-test.bin" \
-    "$NAMESPACE/$RUNNER_POD:$TEST_DIR/conformance-test.bin"
-  kubectl exec -n "$NAMESPACE" "$RUNNER_POD" -- chmod +x "$TEST_DIR/conformance-test.bin"
-  echo "  Binary copied."
+  if [[ "$should_copy" == "true" ]]; then
+    echo "=== [4/4] Copying test binary to runner pod ==="
+    kubectl cp "$CONFORMANCE_ROOT/conformance-test.bin" \
+      "$NAMESPACE/$RUNNER_POD:$TEST_DIR/conformance-test.bin"
+    kubectl exec -n "$NAMESPACE" "$RUNNER_POD" -- chmod +x "$TEST_DIR/conformance-test.bin"
+    echo "  Binary copied."
+  else
+    echo "=== [4/4] Reusing existing binary in runner pod (skip copy) ==="
+    if ! kubectl exec -n "$NAMESPACE" "$RUNNER_POD" -- test -x "$TEST_DIR/conformance-test.bin"; then
+      echo "  Existing binary not found or not executable; copying now..."
+      kubectl cp "$CONFORMANCE_ROOT/conformance-test.bin" \
+        "$NAMESPACE/$RUNNER_POD:$TEST_DIR/conformance-test.bin"
+      kubectl exec -n "$NAMESPACE" "$RUNNER_POD" -- chmod +x "$TEST_DIR/conformance-test.bin"
+      echo "  Binary copied."
+    fi
+  fi
 fi
 
 # ── Run tests inside the pod ─────────────────────────────────────────────────

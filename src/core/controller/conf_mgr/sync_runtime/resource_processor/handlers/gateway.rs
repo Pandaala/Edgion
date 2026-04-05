@@ -16,6 +16,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     make_conflict_key, ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::types::constants::app::GATEWAY_NAME;
 use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
@@ -28,6 +29,8 @@ use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+const GATEWAY_SYSTEM_NAMESPACE: &str = "edgion-system";
 
 /// Gateway handler
 ///
@@ -812,8 +815,8 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
 
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
     let gateway_name = gateway.metadata.name.as_deref().unwrap_or("");
-    if !gateway_name.is_empty() {
-        if let Some(cluster_ip) = lookup_service_cluster_ip(gateway_ns, gateway_name) {
+    for (service_ns, service_name) in gateway_service_lookup_candidates(gateway_ns, gateway_name) {
+        if let Some(cluster_ip) = lookup_service_cluster_ip(&service_ns, &service_name) {
             return vec![GatewayStatusAddress {
                 address_type: Some("IPAddress".to_string()),
                 value: cluster_ip,
@@ -832,6 +835,18 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
         address_type: Some("IPAddress".to_string()),
         value: "0.0.0.0".to_string(),
     }]
+}
+
+fn gateway_service_lookup_candidates(gateway_ns: &str, gateway_name: &str) -> Vec<(String, String)> {
+    let mut candidates = vec![(GATEWAY_SYSTEM_NAMESPACE.to_string(), GATEWAY_NAME.to_string())];
+
+    if !gateway_name.is_empty()
+        && (gateway_ns != GATEWAY_SYSTEM_NAMESPACE || gateway_name != GATEWAY_NAME)
+    {
+        candidates.push((gateway_ns.to_string(), gateway_name.to_string()));
+    }
+
+    candidates
 }
 
 fn lookup_service_cluster_ip(namespace: &str, name: &str) -> Option<String> {
@@ -1399,5 +1414,31 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
             kind: "TLSRoute".to_string(),
         }],
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gateway_service_lookup_candidates;
+    use crate::types::constants::app::GATEWAY_NAME;
+
+    #[test]
+    fn gateway_service_lookup_prefers_fixed_edgion_gateway_service() {
+        let candidates = gateway_service_lookup_candidates("gateway-conformance-infra", "same-namespace");
+
+        assert_eq!(
+            candidates,
+            vec![
+                ("edgion-system".to_string(), GATEWAY_NAME.to_string()),
+                ("gateway-conformance-infra".to_string(), "same-namespace".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn gateway_service_lookup_avoids_duplicate_fixed_service_candidate() {
+        let candidates = gateway_service_lookup_candidates("edgion-system", GATEWAY_NAME);
+
+        assert_eq!(candidates, vec![("edgion-system".to_string(), GATEWAY_NAME.to_string())]);
     }
 }

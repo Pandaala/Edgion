@@ -9,9 +9,7 @@ CLEANUP="${CLEANUP:-false}"
 DEBUG="${DEBUG:-true}"
 RUN_TEST="${RUN_TEST:-}"
 REPORT_OUTPUT="${REPORT_OUTPUT:-$CONFORMANCE_ROOT/conformance-report.yaml}"
-# ⚠ GATEWAY-GRPC declared but not yet validated against real conformance run.
-# GATEWAY-TLS not declared — needs SupportTLSRoute + status condition work first.
-CONFORMANCE_PROFILES="${CONFORMANCE_PROFILES:-GATEWAY-HTTP,GATEWAY-GRPC}"
+CONFORMANCE_PROFILES="${CONFORMANCE_PROFILES:-GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS}"
 TIMEOUT="${TIMEOUT:-30m}"
 
 # Default: empty — features are declared in conformance_test.go opts.SupportedFeatures.
@@ -34,7 +32,7 @@ Options:
   --timeout <duration>          Test timeout (default: 30m)
   --report <path>               Conformance report output path
   --conformance-profiles <list> Comma-separated conformance profile list
-                                (default: GATEWAY-HTTP; options: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS)
+                                (default: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS; options: GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS)
   --port-forward                Auto-start kubectl port-forward and route traffic
                                 through localhost (for clusters with unreachable pod IPs)
   -h, --help                    Show this help

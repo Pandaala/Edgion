@@ -115,6 +115,19 @@ impl<T> HashHost<T> {
         matched_start.and_then(move |pos| self.map.get_mut(&k[pos..]))
     }
 
+    /// Exact-only mutable lookup: returns `Some` only if `k` was inserted as
+    /// a literal (non-wildcard) key.  Does **not** fall back to wildcard suffix
+    /// matching.  Use this when building a store to avoid accidentally merging
+    /// a new hostname entry into an existing wildcard bucket.
+    pub fn get_mut_exact(&mut self, k: &str) -> Option<&mut T> {
+        let k_lower = k.to_lowercase();
+        let k = k_lower.as_str();
+        if !is_valid_domain(k) {
+            return None;
+        }
+        self.map.get_mut(k)
+    }
+
     pub fn remove(&mut self, k: &str) -> Option<T> {
         self.map.remove(k)
     }
@@ -226,6 +239,31 @@ mod tests {
 
         assert_eq!(host.get("api.example.com"), Some(&"modified".to_string()));
         assert_eq!(host.get("web.example.com"), Some(&"modified".to_string()));
+    }
+
+    #[test]
+    fn test_get_mut_exact_does_not_match_wildcard() {
+        let mut host: HashHost<Vec<&str>> = HashHost::new();
+        host.insert("*.wildcard.org", vec!["wildcard"]);
+
+        // get_mut would return the wildcard bucket; get_mut_exact must not.
+        assert!(
+            host.get_mut_exact("fourth-example.wildcard.org").is_none(),
+            "get_mut_exact must not fall back to wildcard"
+        );
+        assert!(
+            host.get_mut("fourth-example.wildcard.org").is_some(),
+            "get_mut should still fall back to wildcard"
+        );
+
+        // After inserting the exact key, get_mut_exact should find it.
+        host.insert("fourth-example.wildcard.org", vec!["exact"]);
+        assert_eq!(
+            host.get_mut_exact("fourth-example.wildcard.org"),
+            Some(&mut vec!["exact"]),
+        );
+        // get (read) should also prefer exact over wildcard.
+        assert_eq!(host.get("fourth-example.wildcard.org"), Some(&vec!["exact"]));
     }
 
     #[test]

@@ -191,7 +191,7 @@ impl GatewayTlsMatcher {
                             HashHost::new()
                         });
 
-                        if let Some(existing) = host_matcher.get_mut(hostname) {
+                        if let Some(existing) = host_matcher.get_mut_exact(hostname) {
                             existing.push(entry);
                         } else {
                             host_matcher.insert(hostname, vec![entry]);
@@ -861,6 +861,37 @@ mod tests {
             matcher.is_empty(),
             "matcher should be empty when only listener is invalid"
         );
+    }
+
+    #[test]
+    fn test_exact_hostname_not_merged_into_wildcard_bucket() {
+        let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
+
+        let tls_wildcard = make_tls_config("wildcard-cert", Some("default"));
+        let tls_exact = make_tls_config("exact-cert", Some("default"));
+
+        let listener_wc = create_test_listener("https-wc", Some("*.wildcard.org"), Some(tls_wildcard));
+        let listener_exact =
+            create_test_listener("https-exact", Some("fourth-example.wildcard.org"), Some(tls_exact));
+
+        let gateway = create_test_gateway("test-gw", "default", vec![listener_wc, listener_exact]);
+        matcher.rebuild_from_gateways(&[gateway]);
+
+        // Exact hostname must match the exact listener, not the wildcard one
+        let result = matcher.match_sni(&key, "fourth-example.wildcard.org");
+        assert!(result.is_some(), "exact hostname should match");
+        let entry = result.unwrap();
+        assert_eq!(
+            entry.listener_name, "https-exact",
+            "exact hostname must select the exact listener, not the wildcard"
+        );
+        assert_eq!(entry.certificate_refs[0].name, "exact-cert");
+
+        // Other subdomains should still match the wildcard
+        let result = matcher.match_sni(&key, "other.wildcard.org");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().listener_name, "https-wc");
     }
 
     #[test]
