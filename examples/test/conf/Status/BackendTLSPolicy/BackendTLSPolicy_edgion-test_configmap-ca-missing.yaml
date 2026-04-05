@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: configmap-ca-missing
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: test-backend-configmap-missing
+  validation:
+    caCertificateRefs:
+      - name: nonexistent-configmap
+        kind: ConfigMap
+        group: ""
+    hostname: backend.example.com

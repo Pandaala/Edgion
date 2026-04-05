@@ -2,6 +2,15 @@
 //!
 //! Handles BackendTLSPolicy resources with Gateway API standard status management.
 
+use std::collections::BTreeMap;
+
+use k8s_openapi::ByteString;
+
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::{
+    get_backend_tls_policy_target_manager, get_sibling_policies, is_policy_winner, make_target_conflict_key,
+    remove_policy_timestamp, set_policy_timestamp,
+};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::get_configmap;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key, get_secret,
     update_condition, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -73,6 +82,33 @@ impl BackendTlsPolicyHandler {
             );
         }
 
+        // --- Conflict detection: register target refs ---
+        let target_manager = get_backend_tls_policy_target_manager();
+
+        // Find old siblings BEFORE clearing (they may need status re-evaluation
+        // if this policy's targetRef changed).
+        let old_siblings = get_sibling_policies(&resource_ref);
+
+        // Clear old target registrations and re-register with current targetRefs.
+        target_manager.clear_resource_refs(&resource_ref);
+
+        let policy_ns_str = btp.metadata.namespace.as_deref().unwrap_or("default");
+        for target_ref in &btp.spec.target_refs {
+            let target_key =
+                make_target_conflict_key(policy_ns_str, &target_ref.name, target_ref.section_name.as_deref());
+            target_manager.add_ref(target_key, resource_ref.clone());
+        }
+
+        // Store creation timestamp for conflict precedence sorting.
+        let policy_resource_key = resource_ref.resource_key();
+        let ts_string = btp.metadata.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339());
+        set_policy_timestamp(&policy_resource_key, ts_string.as_deref());
+
+        // Requeue old siblings whose conflict status may have changed.
+        for sibling in old_siblings {
+            ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+        }
+
         // Clear old references first to handle updates safely.
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
@@ -86,22 +122,48 @@ impl BackendTlsPolicyHandler {
 
         if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
             for ca_ref in refs {
-                if !Self::is_secret_ref(ca_ref) {
-                    continue;
-                }
+                if Self::is_secret_ref(ca_ref) {
+                    let secret_key = format_secret_key(policy_ns, &ca_ref.name);
+                    ctx.secret_ref_manager()
+                        .add_ref(secret_key.clone(), resource_ref.clone());
 
-                let secret_key = format_secret_key(policy_ns, &ca_ref.name);
-                ctx.secret_ref_manager()
-                    .add_ref(secret_key.clone(), resource_ref.clone());
+                    if let Some(secret) = get_secret(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
+                        resolved_ca_secrets.push(secret);
+                    } else {
+                        tracing::info!(
+                            policy = %resource_ref.key(),
+                            secret_key = %secret_key,
+                            "CA Secret not found yet, BackendTLSPolicy will be reprocessed when Secret arrives"
+                        );
+                    }
+                } else if Self::is_configmap_ref(ca_ref) {
+                    let cm_key = format_secret_key(policy_ns, &ca_ref.name);
+                    ctx.secret_ref_manager().add_ref(cm_key.clone(), resource_ref.clone());
 
-                if let Some(secret) = get_secret(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
-                    resolved_ca_secrets.push(secret);
-                } else {
-                    tracing::info!(
-                        policy = %resource_ref.key(),
-                        secret_key = %secret_key,
-                        "CA Secret not found yet, BackendTLSPolicy will be reprocessed when Secret arrives"
-                    );
+                    if let Some(cm) = get_configmap(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
+                        if let Some(data) = &cm.data {
+                            if let Some(ca_pem) = data.get(CA_CERT) {
+                                let mut secret_data = BTreeMap::new();
+                                secret_data.insert(CA_CERT.to_string(), ByteString(ca_pem.as_bytes().to_vec()));
+                                let synthetic_secret = k8s_openapi::api::core::v1::Secret {
+                                    metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                                        name: Some(ca_ref.name.clone()),
+                                        namespace: policy_ns.cloned(),
+                                        ..Default::default()
+                                    },
+                                    data: Some(secret_data),
+                                    ..Default::default()
+                                };
+                                resolved_ca_secrets.push(synthetic_secret);
+                            }
+                        }
+                    } else {
+                        tracing::info!(
+                            policy = %resource_ref.key(),
+                            configmap_key = %cm_key,
+                            "CA ConfigMap not found yet, BackendTLSPolicy will be reprocessed when ConfigMap arrives"
+                        );
+                    }
                 }
             }
         }
@@ -146,31 +208,52 @@ impl BackendTlsPolicyHandler {
             btp.metadata.namespace.clone(),
             btp.metadata.name.clone().unwrap_or_default(),
         );
+
+        // Find siblings BEFORE clearing (they may become Accepted after this delete).
+        let siblings = get_sibling_policies(&resource_ref);
+
+        // Clear target ref registrations and timestamp.
+        get_backend_tls_policy_target_manager().clear_resource_refs(&resource_ref);
+        remove_policy_timestamp(&resource_ref.resource_key());
+
+        // Clear secret refs.
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+
         tracing::debug!(
             policy = %resource_ref.key(),
-            "Cleared secret references on BackendTLSPolicy delete"
+            sibling_count = siblings.len(),
+            "Cleared references on BackendTLSPolicy delete"
         );
+
+        // Requeue sibling policies — a previously Conflicted sibling may now win.
+        for sibling in siblings {
+            ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+        }
     }
 
     fn update_policy_status(&self, btp: &mut BackendTLSPolicy, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = btp.metadata.generation;
 
-        let mut resolved_ref_errors = Vec::new();
-        resolved_ref_errors.extend_from_slice(validation_errors);
+        // --- Classify CA reference errors with precise reasons ---
+        let mut kind_errors = Vec::new(); // → reason: InvalidKind
+        let mut ref_errors = Vec::new(); // → reason: InvalidCACertificateRef
+        let mut client_cert_errors = Vec::new();
 
         if !btp.spec.use_system_ca {
             if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
                 for ca_ref in refs {
-                    if !Self::is_secret_ref(ca_ref) {
-                        resolved_ref_errors.push(format!(
-                            "Unsupported caCertificateRef kind/group: {}/{}",
+                    if Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref) {
+                        if !Self::is_ca_resolved(btp, &ca_ref.name) {
+                            ref_errors.push(format!(
+                                "{} '{}' not found or missing '{}' key",
+                                ca_ref.kind, ca_ref.name, CA_CERT
+                            ));
+                        }
+                    } else {
+                        kind_errors.push(format!(
+                            "Unsupported caCertificateRef kind: {}/{}",
                             ca_ref.group, ca_ref.kind
                         ));
-                        continue;
-                    }
-                    if !Self::is_ca_secret_resolved(btp, &ca_ref.name) {
-                        resolved_ref_errors.push(format!("CA Secret '{}' not found", ca_ref.name));
                     }
                 }
             }
@@ -179,10 +262,10 @@ impl BackendTlsPolicyHandler {
         match btp.client_certificate_secret_ref() {
             Ok(Some(client_ref)) => {
                 if btp.spec.resolved_client_certificate.is_none() {
-                    resolved_ref_errors.push(format!("Client certificate Secret '{}' not found", client_ref.name));
+                    client_cert_errors.push(format!("Client certificate Secret '{}' not found", client_ref.name));
                 } else if let Some(secret) = &btp.spec.resolved_client_certificate {
                     if !Self::secret_has_client_cert_pair(secret) {
-                        resolved_ref_errors.push(format!(
+                        client_cert_errors.push(format!(
                             "Client certificate Secret '{}' must contain '{}' and '{}'",
                             client_ref.name, CERT, KEY
                         ));
@@ -190,92 +273,213 @@ impl BackendTlsPolicyHandler {
                 }
             }
             Ok(None) => {}
-            Err(err) => resolved_ref_errors.push(err),
+            Err(err) => client_cert_errors.push(err),
         }
 
-        // Initialize status if not present
+        // --- Check if ALL CA certificate refs are invalid (Gateway API v1.5 spec:
+        // "If ALL CACertificateRefs are invalid, the implementation MUST also ensure
+        //  the Accepted Condition is set to status: False, with Reason NoValidCACertificate.")
+        let all_ca_refs_invalid = if !btp.spec.use_system_ca {
+            let total_ca_refs = btp
+                .spec
+                .validation
+                .ca_certificate_refs
+                .as_ref()
+                .map_or(0, |refs| refs.len());
+            total_ca_refs > 0 && (kind_errors.len() + ref_errors.len()) >= total_ca_refs
+        } else {
+            false
+        };
+
+        // --- Conflict detection ---
+        let is_conflicted = if validation_errors.is_empty() {
+            let policy_ns = btp.metadata.namespace.as_deref().unwrap_or("default");
+            let policy_key = format!("{}/{}", policy_ns, btp.metadata.name.as_deref().unwrap_or(""));
+            btp.spec.target_refs.iter().any(|target_ref| {
+                let target_key =
+                    make_target_conflict_key(policy_ns, &target_ref.name, target_ref.section_name.as_deref());
+                !is_policy_winner(&policy_key, &target_key)
+            })
+        } else {
+            false
+        };
+
+        // --- Resolve ancestor Gateways ---
+        let ancestor_gateways = Self::resolve_ancestor_gateways(btp);
+
         let status = btp
             .status
             .get_or_insert_with(|| BackendTLSPolicyStatus { ancestors: vec![] });
 
-        // BackendTLSPolicy targets Services (via target_refs), but ancestors refer to Gateways.
-        // For now, we create a synthetic ancestor representing this policy.
-        let synthetic_ancestor = ParentReference {
-            group: Some("gateway.networking.k8s.io".to_string()),
-            kind: Some("BackendTLSPolicy".to_string()),
-            namespace: btp.metadata.namespace.clone(),
-            name: btp.metadata.name.clone().unwrap_or_default(),
-            section_name: None,
-            port: None,
-        };
+        // Build Gateway ParentReferences
+        let gateway_refs: Vec<ParentReference> = ancestor_gateways
+            .iter()
+            .map(|(ns, name)| ParentReference {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: Some("Gateway".to_string()),
+                namespace: Some(ns.clone()),
+                name: name.clone(),
+                section_name: None,
+                port: None,
+            })
+            .collect();
 
-        // Find or create ancestor status
-        let ancestor_status = status.ancestors.iter_mut().find(|as_| {
-            as_.ancestor_ref.name == synthetic_ancestor.name
-                && as_.ancestor_ref.namespace == synthetic_ancestor.namespace
-        });
+        // Rebuild ancestors list
+        status.ancestors.clear();
 
-        let conditions = if let Some(as_) = ancestor_status {
-            &mut as_.conditions
-        } else {
+        for gw_ref in &gateway_refs {
+            let mut conditions = Vec::new();
+
+            // Accepted condition — priority: Invalid > NoValidCACertificate > Conflicted > Accepted
+            if !validation_errors.is_empty() {
+                update_condition(
+                    &mut conditions,
+                    condition_false(
+                        condition_types::ACCEPTED,
+                        condition_reasons::INVALID,
+                        validation_errors.join("; "),
+                        generation,
+                    ),
+                );
+            } else if all_ca_refs_invalid {
+                update_condition(
+                    &mut conditions,
+                    condition_false(
+                        condition_types::ACCEPTED,
+                        condition_reasons::NO_VALID_CA_CERTIFICATE,
+                        "All CA certificate references are invalid",
+                        generation,
+                    ),
+                );
+            } else if is_conflicted {
+                update_condition(
+                    &mut conditions,
+                    condition_false(
+                        condition_types::ACCEPTED,
+                        condition_reasons::POLICY_CONFLICTED,
+                        "Policy conflicts with an older policy targeting the same backend",
+                        generation,
+                    ),
+                );
+            } else {
+                update_condition(
+                    &mut conditions,
+                    condition_true(
+                        condition_types::ACCEPTED,
+                        condition_reasons::ACCEPTED,
+                        "Policy accepted",
+                        generation,
+                    ),
+                );
+            }
+
+            // ResolvedRefs condition — use precise reason per Gateway API conformance
+            if !kind_errors.is_empty() {
+                update_condition(
+                    &mut conditions,
+                    condition_false(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::INVALID_KIND,
+                        kind_errors.join("; "),
+                        generation,
+                    ),
+                );
+            } else if !ref_errors.is_empty() || !client_cert_errors.is_empty() {
+                let all_errors: Vec<&str> = ref_errors
+                    .iter()
+                    .chain(client_cert_errors.iter())
+                    .map(|s| s.as_str())
+                    .collect();
+                update_condition(
+                    &mut conditions,
+                    condition_false(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::INVALID_CA_CERTIFICATE_REF,
+                        all_errors.join("; "),
+                        generation,
+                    ),
+                );
+            } else {
+                update_condition(
+                    &mut conditions,
+                    condition_true(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::RESOLVED_REFS,
+                        "All references resolved",
+                        generation,
+                    ),
+                );
+            }
+
             status.ancestors.push(PolicyAncestorStatus {
-                ancestor_ref: synthetic_ancestor,
+                ancestor_ref: gw_ref.clone(),
                 controller_name: self.controller_name.clone(),
-                conditions: Vec::new(),
+                conditions,
             });
-            &mut status.ancestors.last_mut().expect("just inserted").conditions
-        };
+        }
+    }
 
-        let has_validation_errors = !validation_errors.is_empty();
-        let has_ref_errors = !resolved_ref_errors.is_empty();
+    async fn on_change_policy(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+        let resource_ref = ResourceRef::new(
+            ResourceKind::BackendTLSPolicy,
+            btp.metadata.namespace.clone(),
+            btp.metadata.name.clone().unwrap_or_default(),
+        );
 
-        if validation_errors.is_empty() {
-            update_condition(
-                conditions,
-                condition_true(
-                    condition_types::ACCEPTED,
-                    condition_reasons::ACCEPTED,
-                    "Policy accepted",
-                    generation,
-                ),
+        // Requeue sibling policies so their conflict status gets re-evaluated.
+        let siblings = get_sibling_policies(&resource_ref);
+        if !siblings.is_empty() {
+            tracing::debug!(
+                policy = %resource_ref.key(),
+                sibling_count = siblings.len(),
+                "Requeuing sibling BackendTLSPolicies for conflict re-evaluation"
             );
-        } else {
-            update_condition(
-                conditions,
-                condition_false(
-                    condition_types::ACCEPTED,
-                    "Invalid",
-                    validation_errors.join("; "),
-                    generation,
-                ),
-            );
+            for sibling in siblings {
+                ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+            }
+        }
+    }
+
+    /// Resolve the Gateway ancestors for a BackendTLSPolicy.
+    ///
+    /// Chain: BTP.targetRef(Service) -> ServiceRefManager(service->routes) -> GatewayRouteIndex(route->gateways)
+    ///
+    /// Returns deduplicated list of (gateway_ns, gateway_name).
+    fn resolve_ancestor_gateways(btp: &BackendTLSPolicy) -> Vec<(String, String)> {
+        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index;
+        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
+
+        let policy_ns = btp.metadata.namespace.as_deref().unwrap_or("default");
+        let service_ref_manager = get_service_ref_manager();
+        let route_index = get_gateway_route_index();
+
+        let mut gateways = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for target_ref in &btp.spec.target_refs {
+            // Per Gateway API spec, targetRef can only reference resources in the same namespace.
+            let service_key = format!("{}/{}", policy_ns, target_ref.name);
+
+            // Step 1: Service -> Routes
+            let routes = service_ref_manager.get_refs(&service_key);
+
+            for route_ref in &routes {
+                let route_key = route_ref.resource_key();
+
+                // Step 2: Route -> Gateways
+                let gw_keys = route_index.get_gateways_for_route(route_ref.kind, &route_key);
+
+                for gw_key in gw_keys {
+                    if seen.insert(gw_key.clone()) {
+                        if let Some((ns, name)) = gw_key.split_once('/') {
+                            gateways.push((ns.to_string(), name.to_string()));
+                        }
+                    }
+                }
+            }
         }
 
-        if resolved_ref_errors.is_empty() {
-            update_condition(
-                conditions,
-                condition_true(
-                    condition_types::RESOLVED_REFS,
-                    condition_reasons::RESOLVED_REFS,
-                    "All references resolved",
-                    generation,
-                ),
-            );
-        } else {
-            update_condition(
-                conditions,
-                condition_false(
-                    condition_types::RESOLVED_REFS,
-                    condition_reasons::BACKEND_NOT_FOUND,
-                    resolved_ref_errors.join("; "),
-                    generation,
-                ),
-            );
-        }
-
-        // Programmed and Ready conditions intentionally omitted:
-        // they require data-plane feedback which is not available in our architecture.
-        let _ = (has_validation_errors, has_ref_errors);
+        gateways
     }
 
     #[inline]
@@ -284,7 +488,12 @@ impl BackendTlsPolicyHandler {
     }
 
     #[inline]
-    fn is_ca_secret_resolved(btp: &BackendTLSPolicy, name: &str) -> bool {
+    fn is_configmap_ref(ca_ref: &BackendTLSPolicyCACertificateRef) -> bool {
+        is_core_api_group(&ca_ref.group) && ca_ref.kind == "ConfigMap"
+    }
+
+    #[inline]
+    fn is_ca_resolved(btp: &BackendTLSPolicy, name: &str) -> bool {
         btp.spec
             .resolved_ca_certificates
             .as_ref()
@@ -314,6 +523,10 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
 
     async fn parse(&self, btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
         self.parse_policy(btp, ctx).await
+    }
+
+    async fn on_change(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+        self.on_change_policy(btp, ctx).await;
     }
 
     async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
@@ -358,6 +571,11 @@ impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler 
             ProcessResult::Continue(v1) => ProcessResult::Continue(v1.into()),
             ProcessResult::Skip { reason } => ProcessResult::Skip { reason },
         }
+    }
+
+    async fn on_change(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
+        let v1: BackendTLSPolicy = btp.clone().into();
+        self.inner.on_change_policy(&v1, ctx).await;
     }
 
     async fn on_delete(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {

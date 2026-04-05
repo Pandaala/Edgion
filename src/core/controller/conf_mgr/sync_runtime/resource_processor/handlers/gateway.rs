@@ -840,9 +840,7 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
 fn gateway_service_lookup_candidates(gateway_ns: &str, gateway_name: &str) -> Vec<(String, String)> {
     let mut candidates = vec![(GATEWAY_SYSTEM_NAMESPACE.to_string(), GATEWAY_NAME.to_string())];
 
-    if !gateway_name.is_empty()
-        && (gateway_ns != GATEWAY_SYSTEM_NAMESPACE || gateway_name != GATEWAY_NAME)
-    {
+    if !gateway_name.is_empty() && (gateway_ns != GATEWAY_SYSTEM_NAMESPACE || gateway_name != GATEWAY_NAME) {
         candidates.push((gateway_ns.to_string(), gateway_name.to_string()));
     }
 
@@ -915,7 +913,7 @@ fn update_listener_conditions(
     } else if no_valid_ca_certificate {
         let cond = condition_false(
             condition_types::ACCEPTED,
-            "NoValidCACertificate",
+            condition_reasons::NO_VALID_CA_CERTIFICATE,
             "All frontend validation CA certificate references are invalid",
             generation,
         );
@@ -968,7 +966,12 @@ fn update_listener_conditions(
             generation,
         );
         update_gateway_condition(&mut ls.conditions, cond);
-    } else if has_unresolved_refs || !validation_errors.is_empty() || no_valid_ca_certificate || unsupported_tls_mode || mixed_tls_conflict {
+    } else if has_unresolved_refs
+        || !validation_errors.is_empty()
+        || no_valid_ca_certificate
+        || unsupported_tls_mode
+        || mixed_tls_conflict
+    {
         let cond = condition_false(
             condition_types::PROGRAMMED,
             condition_reasons::INVALID_LISTENER,
@@ -1019,7 +1022,7 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
         .iter()
         .any(|e| matches!(e, GatewayResolvedRefsError::InvalidCACertificateRef { .. }))
     {
-        return "InvalidCACertificateRef";
+        return condition_reasons::INVALID_CA_CERTIFICATE_REF;
     }
     "InvalidCertificateRef"
 }
@@ -1314,10 +1317,7 @@ fn detect_mixed_tls_mode_listeners(
             .unwrap_or("Terminate")
             .to_string();
         let addr = resolve_listener_addr(addresses, l.port);
-        port_modes
-            .entry(addr.port())
-            .or_default()
-            .push((l.name.clone(), mode));
+        port_modes.entry(addr.port()).or_default().push((l.name.clone(), mode));
     }
 
     let mut result = std::collections::HashSet::new();
@@ -1439,6 +1439,9 @@ mod tests {
     fn gateway_service_lookup_avoids_duplicate_fixed_service_candidate() {
         let candidates = gateway_service_lookup_candidates("edgion-system", GATEWAY_NAME);
 
-        assert_eq!(candidates, vec![("edgion-system".to_string(), GATEWAY_NAME.to_string())]);
+        assert_eq!(
+            candidates,
+            vec![("edgion-system".to_string(), GATEWAY_NAME.to_string())]
+        );
     }
 }

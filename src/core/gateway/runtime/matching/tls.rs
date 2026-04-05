@@ -872,8 +872,7 @@ mod tests {
         let tls_exact = make_tls_config("exact-cert", Some("default"));
 
         let listener_wc = create_test_listener("https-wc", Some("*.wildcard.org"), Some(tls_wildcard));
-        let listener_exact =
-            create_test_listener("https-exact", Some("fourth-example.wildcard.org"), Some(tls_exact));
+        let listener_exact = create_test_listener("https-exact", Some("fourth-example.wildcard.org"), Some(tls_exact));
 
         let gateway = create_test_gateway("test-gw", "default", vec![listener_wc, listener_exact]);
         matcher.rebuild_from_gateways(&[gateway]);

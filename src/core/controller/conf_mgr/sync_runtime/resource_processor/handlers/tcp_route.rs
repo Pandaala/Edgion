@@ -6,8 +6,8 @@ use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_tcp_route_if_enabled,
 };
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
-    update_gateway_route_index,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
+    requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -204,6 +204,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         );
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
+        requeue_backend_tls_policies_for_route(ResourceKind::TCPRoute, route_ns, route_name, ctx).await;
     }
 
     async fn on_delete(&self, route: &TCPRoute, ctx: &HandlerContext) {
@@ -212,6 +213,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+        requeue_backend_tls_policies_for_route(ResourceKind::TCPRoute, route_ns, route_name, ctx).await;
         super::route_utils::clear_service_backend_refs(ResourceKind::TCPRoute, route_ns, route_name);
 
         remove_from_gateway_route_index(ResourceKind::TCPRoute, route_ns, route_name);

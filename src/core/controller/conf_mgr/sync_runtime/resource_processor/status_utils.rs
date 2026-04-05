@@ -60,6 +60,16 @@ pub mod condition_reasons {
     pub const PROTOCOL_CONFLICT: &str = "ProtocolConflict";
     pub const NO_CONFLICTS: &str = "NoConflicts";
 
+    // Policy conflict reason (for policy attachment conflicts)
+    /// Another policy targeting the same resource has higher precedence
+    pub const POLICY_CONFLICTED: &str = "Conflicted";
+
+    // BackendTLSPolicy-specific reasons (Gateway API v1.5 conformance)
+    /// ALL CACertificateRefs are invalid — Accepted condition must be False.
+    pub const NO_VALID_CA_CERTIFICATE: &str = "NoValidCACertificate";
+    /// CACertificateRef cannot be resolved (resource not found or misconfigured).
+    pub const INVALID_CA_CERTIFICATE_REF: &str = "InvalidCACertificateRef";
+
     // Programmed reasons (for listener Programmed condition)
     pub const PROGRAMMED: &str = "Programmed";
     pub const INVALID_LISTENER: &str = "Invalid";

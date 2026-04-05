@@ -11,7 +11,7 @@ Use this note when changing Gateway API behavior in Edgion and you need to under
 
 | 文件 | 内容 |
 |------|------|
-| [01-not-implemented.md](01-not-implemented.md) | 不实现/暂不实现的 Gateway API 功能：addresses 上报、跨类型 Hostname 冲突、infrastructure、`ListenerSet`、`HTTPRouteRequestMultipleMirrors`、BTP、`TLSRouteModeMixed`、TLS profile；已完成项：~~frontendValidation~~ ✅ |
+| [01-not-implemented.md](01-not-implemented.md) | 不实现/暂不实现的 Gateway API 功能：addresses 上报、跨类型 Hostname 冲突、infrastructure、`ListenerSet`、`HTTPRouteRequestMultipleMirrors`、BackendTLSPolicy conformance（已实现，SANValidation 暂不声明）、BackendTrafficPolicy、`TLSRouteModeMixed`、TLS profile；已完成项：~~frontendValidation~~ ✅ |
 | [02-conformance-testing.md](02-conformance-testing.md) | 如何运行、调试和逐步验证 Gateway API conformance tests：脚本用法、粒度控制、Port-Forward、调试技巧 |
 | [03-conformance-workflow.md](03-conformance-workflow.md) | 跨会话工作流：逐项推进 conformance 测试（环境检查→功能分析→运行→诊断→记录） |
 | [04-api-version-upgrade.md](04-api-version-upgrade.md) | K8s API 生命周期与 Controller 升级策略 |

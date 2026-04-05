@@ -541,10 +541,7 @@ fn resolve_listeners_inner(
 /// Per Gateway API spec, a route's effective hostname on a listener is the
 /// intersection of the route's hostnames with the listener's hostname.
 /// The result is deduplicated.
-pub fn compute_effective_hostnames(
-    route_hostnames: &[String],
-    listener_hostnames: &[Option<String>],
-) -> Vec<String> {
+pub fn compute_effective_hostnames(route_hostnames: &[String], listener_hostnames: &[Option<String>]) -> Vec<String> {
     use std::collections::BTreeSet;
     let mut effective: BTreeSet<String> = BTreeSet::new();
 
@@ -588,11 +585,15 @@ fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
         let a_wild = a.starts_with("*.");
         let b_wild = b.starts_with("*.");
         match (a_wild, b_wild) {
-            (false, true) => Some(a),  // a is exact, b is wildcard
-            (true, false) => Some(b),  // b is exact, a is wildcard
+            (false, true) => Some(a), // a is exact, b is wildcard
+            (true, false) => Some(b), // b is exact, a is wildcard
             _ => {
                 // Both exact (must be equal) or both wildcard (more specific = longer)
-                if a.len() >= b.len() { Some(a) } else { Some(b) }
+                if a.len() >= b.len() {
+                    Some(a)
+                } else {
+                    Some(b)
+                }
             }
         }
     } else {

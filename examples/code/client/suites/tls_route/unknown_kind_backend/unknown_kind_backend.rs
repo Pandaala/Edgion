@@ -1,6 +1,6 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use crate::suites::tls_route::basic::basic::make_tls_connector;
 use crate::suites::status::helpers;
+use crate::suites::tls_route::basic::basic::make_tls_connector;
 use async_trait::async_trait;
 use rustls::pki_types::ServerName;
 use serde_json::Value;
@@ -62,10 +62,9 @@ impl TlsUnknownKindBackendTestSuite {
                                     start.elapsed(),
                                     format!("Expected rejection but received {n} bytes"),
                                 ),
-                                Err(_) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Read timed out unexpectedly".to_string(),
-                                ),
+                                Err(_) => {
+                                    TestResult::failed(start.elapsed(), "Read timed out unexpectedly".to_string())
+                                }
                             }
                         }
                         Err(_) => TestResult::passed_with_message(
@@ -133,7 +132,8 @@ impl TlsUnknownKindBackendTestSuite {
                     let start = Instant::now();
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    match helpers::fetch_resource_status(&ctx, "TLSRoute", ROUTE_NAMESPACE, "tls-unknown-kind-only").await
+                    match helpers::fetch_resource_status(&ctx, "TLSRoute", ROUTE_NAMESPACE, "tls-unknown-kind-only")
+                        .await
                     {
                         Ok(route) => {
                             if !helpers::has_condition(&route, "Accepted", "True") {

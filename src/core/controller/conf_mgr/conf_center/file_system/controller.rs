@@ -31,7 +31,7 @@ use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceMeta;
 use anyhow::Result;
-use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -44,7 +44,7 @@ use tokio::task::JoinHandle;
 
 // Import handlers
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
     GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler, ReferenceGrantHandler,
     SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
@@ -132,7 +132,14 @@ impl FileSystemController {
 
     /// Phase 1 foundation resource kinds for FileSystem mode.
     fn phase1_kinds(&self) -> Vec<&'static str> {
-        let mut kinds = vec!["GatewayClass", "Gateway", "Secret", "ReferenceGrant", "Service"];
+        let mut kinds = vec![
+            "GatewayClass",
+            "Gateway",
+            "Secret",
+            "ConfigMap",
+            "ReferenceGrant",
+            "Service",
+        ];
         if self.endpoint_mode.uses_endpoint() {
             kinds.push("Endpoints");
         }
@@ -192,6 +199,18 @@ impl FileSystemController {
             spawn::<Secret, _>(
                 "Secret",
                 SecretHandler::new(),
+                watcher,
+                secret_ref_manager,
+                shutdown_signal.clone(),
+            )
+            .await,
+        );
+
+        // ConfigMap (CA certificates for frontendValidation and BackendTLSPolicy)
+        handles.push(
+            spawn::<ConfigMap, _>(
+                "ConfigMap",
+                ConfigMapHandler::new(),
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),

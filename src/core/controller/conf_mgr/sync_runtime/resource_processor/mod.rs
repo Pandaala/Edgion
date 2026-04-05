@@ -13,6 +13,7 @@
 //! - `HandlerContext`: Context passed to handler methods
 
 pub mod attached_route_tracker;
+pub mod backend_tls_policy_ref;
 pub mod configmap_utils;
 mod context;
 pub mod gateway_route_index;
@@ -80,6 +81,12 @@ pub use gateway_route_index::get_gateway_route_index;
 
 // Re-export service_ref utilities
 pub use service_ref::get_service_ref_manager;
+
+// Re-export backend_tls_policy_ref utilities
+pub use backend_tls_policy_ref::{
+    get_backend_tls_policy_target_manager, get_sibling_policies, is_policy_winner, make_target_conflict_key,
+    remove_policy_timestamp, set_policy_timestamp,
+};
 
 // Re-export namespace_store utilities
 pub use namespace_store::get_namespace_store;
