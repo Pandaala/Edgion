@@ -156,6 +156,23 @@ Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-bre
 
 Controller 解析 `frontend_validation` CA 引用（Secret/ConfigMap），per-listener 合并，设置 listener status conditions。Gateway 数据面 `configure_gateway_frontend_mtls()` 加载 CA 证书配置 SSL verify mode：AllowValidOnly 用 `PEER | FAIL_IF_NO_PEER_CERT`，AllowInsecureFallback 用自定义 verify callback 始终 accept（boringssl FFI）。与 EdgionTls `client_auth` 完全独立。
 
+## GRPCRoute retry.codes
+
+**决定：不实现（架构限制）**
+
+gRPC 状态码（0–16）位于 HTTP/2 trailers 的 `grpc-status` 头中。基于状态码的重试需要在响应流结束前读取 trailers 并做出重试决策，但 Pingora 代理架构在响应完成后才能读取 trailers，此时已无法回溯重试。
+
+GRPCRoute retry 的其他字段正常工作：
+
+- `retry.attempts`：支持（控制最大重试次数）
+- `retry.backoff`：支持（指数退避，上限 30s）
+- `retry.codes`：**不支持**，YAML 中可以填写但运行时忽略，并输出 warn 日志
+
+当前行为：Controller 解析 GRPCRoute 时，若 `retry.codes` 非空，输出警告日志 `"GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"`，然后将 `ParsedRouteRetry.codes` 设为 `None`。重试仅基于连接错误 / 上游不可达触发，不按 gRPC 状态码区分。
+
+- 替代方案：在客户端 gRPC SDK 层配置 retry policy（如 gRPC service config 的 `retryPolicy.retryableStatusCodes`），客户端能完整读取 trailers 并按状态码重试
+- 相关代码：`src/types/resources/grpc_route.rs` 第 526–541 行
+
 ## GATEWAY-TLS ConformanceProfile
 
 **决定：暂不声明**

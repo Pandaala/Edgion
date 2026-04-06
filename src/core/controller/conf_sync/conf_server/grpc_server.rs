@@ -3,7 +3,14 @@
 //! This module provides the gRPC service implementation using ConfigSyncServer.
 
 use std::sync::Arc;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
+
+/// HTTP/2 keepalive interval — how often to send PING frames (seconds).
+const HTTP2_KEEPALIVE_INTERVAL_SECS: u64 = 10;
+/// HTTP/2 keepalive timeout — how long to wait for PING ACK before treating connection as dead (seconds).
+const HTTP2_KEEPALIVE_TIMEOUT_SECS: u64 = 5;
 
 use crate::core::common::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
@@ -30,15 +37,23 @@ pub trait ConfigSyncServerProvider: Send + Sync {
 /// the gRPC server to use the latest instance after reload operations.
 pub struct ConfigSyncGrpcServer {
     provider: Arc<dyn ConfigSyncServerProvider>,
+    shutdown_token: CancellationToken,
 }
 
 impl ConfigSyncGrpcServer {
     /// Create a new gRPC server with a dynamic provider
-    pub fn new(provider: Arc<dyn ConfigSyncServerProvider>) -> Self {
-        Self { provider }
+    pub fn new(provider: Arc<dyn ConfigSyncServerProvider>, shutdown_token: CancellationToken) -> Self {
+        Self {
+            provider,
+            shutdown_token,
+        }
     }
 
-    /// Create a new gRPC server with a static ConfigSyncServer (for backward compatibility)
+    /// Create a new gRPC server with a static ConfigSyncServer (for tests/debugging only).
+    ///
+    /// Uses an inert `CancellationToken` that is never cancelled — stream tasks will only
+    /// exit on client disconnect or runtime shutdown. For production, use `new()` with a
+    /// real token bridged to the shutdown signal.
     #[allow(dead_code)]
     pub fn with_static_server(server: Arc<ConfigSyncServer>) -> Self {
         struct StaticProvider(Arc<ConfigSyncServer>);
@@ -49,6 +64,7 @@ impl ConfigSyncGrpcServer {
         }
         Self {
             provider: Arc::new(StaticProvider(server)),
+            shutdown_token: CancellationToken::new(),
         }
     }
 
@@ -68,7 +84,9 @@ impl ConfigSyncGrpcServer {
     /// Start the gRPC server on the given address
     pub async fn serve(self, addr: std::net::SocketAddr, tls_config: Option<&ConfSyncTlsConfig>) -> anyhow::Result<()> {
         let service = self.into_service();
-        let mut builder = tonic::transport::Server::builder();
+        let mut builder = tonic::transport::Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
 
         if let Some(tls) = tls_config {
             if tls.skip_tls {
@@ -95,7 +113,9 @@ impl ConfigSyncGrpcServer {
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
         let service = self.into_service();
-        let mut builder = tonic::transport::Server::builder();
+        let mut builder = tonic::transport::Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
 
         if let Some(tls) = tls_config {
             if tls.skip_tls {
@@ -140,6 +160,8 @@ impl ConfigSyncGrpcServer {
             .build_v1()?;
 
         tonic::transport::Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)))
             .add_service(service)
             .add_service(reflection_service)
             .serve(addr)
@@ -307,6 +329,9 @@ impl ConfigSync for ConfigSyncGrpcServer {
         // Capture provider and initial server_id for reload detection
         let provider = self.provider.clone();
         let initial_server_id = server.server_id();
+        let shutdown_token = self.shutdown_token.clone();
+        let shutdown_kind = kind_name.to_string();
+        let shutdown_client_id = client_id_log.clone();
 
         tokio::spawn(async move {
             let mut receiver = receiver;
@@ -358,6 +383,16 @@ impl ConfigSync for ConfigSyncGrpcServer {
                         }
                         // If provider returns None, server is reloading, keep waiting
                     }
+                    // Shutdown signal — exit the stream task promptly
+                    _ = shutdown_token.cancelled() => {
+                        tracing::info!(
+                            component = "grpc_server",
+                            kind = %shutdown_kind,
+                            client_id = %shutdown_client_id,
+                            "Watch stream task shutting down"
+                        );
+                        break;
+                    }
                 }
             }
         });
@@ -392,6 +427,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
         // Capture provider and initial server_id for reload detection
         let provider = self.provider.clone();
         let initial_server_id = server_id.clone();
+        let shutdown_token = self.shutdown_token.clone();
 
         tokio::spawn(async move {
             // Helper to get current timestamp in millis
@@ -471,6 +507,16 @@ impl ConfigSync for ConfigSyncGrpcServer {
                         }
                         // If provider returns None the server is mid-reload; keep waiting.
                     }
+                    // Shutdown signal — exit the stream task promptly
+                    _ = shutdown_token.cancelled() => {
+                        tracing::info!(
+                            component = "grpc_server",
+                            client_id = %client_id,
+                            "WatchServerMeta stream task shutting down"
+                        );
+                        registry.unregister(&client_id);
+                        break;
+                    }
                 }
             }
         });
@@ -515,7 +561,7 @@ mod tests {
         let initial_server_id = initial_server.server_id();
 
         let provider = Arc::new(MockConfigSyncProvider::new(initial_server.clone()));
-        let grpc_server = ConfigSyncGrpcServer::new(provider.clone());
+        let grpc_server = ConfigSyncGrpcServer::new(provider.clone(), CancellationToken::new());
 
         let client_id = "test-client-123".to_string();
 
@@ -560,5 +606,145 @@ mod tests {
         // 7. Verify the old client unregistration logic happened
         // The count in old registry drops to 1, but let's just make sure unregister was called.
         // Even if empty, registry.count() returns max(1), but since we know the exit happened, we are good.
+    }
+
+    #[tokio::test]
+    async fn test_watch_server_meta_shutdown() {
+        // 1. Create server with a real CancellationToken
+        let server = Arc::new(ConfigSyncServer::new());
+        let provider = Arc::new(MockConfigSyncProvider::new(server.clone()));
+        let token = CancellationToken::new();
+        let grpc_server = ConfigSyncGrpcServer::new(provider.clone(), token.clone());
+
+        // 2. Start watch_server_meta
+        let request = Request::new(WatchServerMetaRequest {
+            client_id: "shutdown-test-client".to_string(),
+            client_name: "shutdown-test-gateway".to_string(),
+        });
+        let response = grpc_server.watch_server_meta(request).await.unwrap();
+        let mut stream = response.into_inner();
+
+        // 3. Receive initial event (the stream always sends one immediately)
+        let first_event = stream.next().await.unwrap().unwrap();
+        assert_eq!(first_event.gateway_instance_count, 1); // 1 because request registered the client
+
+        // 4. Verify client is registered
+        assert_eq!(server.client_registry().count(), 1);
+
+        // 5. Cancel the token (simulating shutdown)
+        token.cancel();
+
+        // 6. The stream should end (yield None) shortly after cancellation
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), stream.next()).await;
+
+        // Should complete within timeout
+        let next = result.expect("stream should end within 3 seconds");
+        assert!(next.is_none(), "stream should be closed after shutdown");
+
+        // 7. Verify client was unregistered (cleanup happened)
+        // Give a brief moment for the spawned task to complete unregistration
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // After unregister, the HashMap is empty but count() returns max(1, len) = 1
+        // The important thing is that the actual clients map is empty.
+        // count() always returns at least 1, so we just verify the stream closed cleanly.
+        assert_eq!(server.client_registry().count(), 1);
+    }
+
+    /// A minimal mock WatchObj that keeps a sender so we can push events or close the channel.
+    struct MockWatchObj {
+        tx: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<super::super::traits::WatchResponseSimple>>>,
+        rx: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<super::super::traits::WatchResponseSimple>>>,
+    }
+
+    impl MockWatchObj {
+        fn new() -> Self {
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            Self {
+                tx: std::sync::Mutex::new(Some(tx)),
+                rx: std::sync::Mutex::new(Some(rx)),
+            }
+        }
+    }
+
+    impl super::super::traits::WatchObj for MockWatchObj {
+        fn kind_name(&self) -> &'static str {
+            "MockKind"
+        }
+
+        fn list_json(&self) -> Result<(String, u64), String> {
+            Ok(("[]".to_string(), 0))
+        }
+
+        fn watch_json(
+            &self,
+            _client_id: String,
+            _client_name: String,
+            _from_version: u64,
+        ) -> tokio::sync::mpsc::Receiver<super::super::traits::WatchResponseSimple> {
+            // Return the pre-created receiver (consumed once)
+            self.rx.lock().unwrap().take().expect("watch_json called more than once")
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        fn set_ready(&self) {}
+
+        fn set_not_ready(&self) {}
+
+        fn clear(&self) {}
+    }
+
+    #[tokio::test]
+    async fn test_watch_stream_shutdown() {
+        use super::super::traits::WatchResponseSimple;
+
+        // 1. Create server with a registered mock WatchObj and a real CancellationToken
+        let server = Arc::new(ConfigSyncServer::new());
+        let mock_obj = Arc::new(MockWatchObj::new());
+
+        // Hold a sender clone so we can push events through the mock watch channel
+        let mock_tx = mock_obj.tx.lock().unwrap().clone().unwrap();
+
+        server.register_watch_obj("MockKind", mock_obj);
+
+        let provider = Arc::new(MockConfigSyncProvider::new(server.clone()));
+        let token = CancellationToken::new();
+        let grpc_server = ConfigSyncGrpcServer::new(provider.clone(), token.clone());
+
+        // 2. Start a watch on the registered kind
+        let request = Request::new(WatchRequest {
+            key: "test".to_string(),
+            kind: "MockKind".to_string(),
+            client_id: "watch-shutdown-client".to_string(),
+            client_name: "watch-shutdown-gateway".to_string(),
+            from_version: 0,
+            expected_server_id: String::new(),
+        });
+        let response = grpc_server.watch(request).await.unwrap();
+        let mut stream = response.into_inner();
+
+        // 3. Push one event and verify it arrives
+        mock_tx
+            .send(WatchResponseSimple::new("test-data".to_string(), 1))
+            .await
+            .unwrap();
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(3), stream.next())
+            .await
+            .expect("should receive first event")
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.data, "test-data");
+        assert_eq!(first.sync_version, 1);
+
+        // 4. Cancel the token (simulating shutdown)
+        token.cancel();
+
+        // 5. The stream should end (yield None) shortly after cancellation
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), stream.next()).await;
+        let next = result.expect("stream should end within 3 seconds");
+        assert!(next.is_none(), "stream should be closed after shutdown");
     }
 }

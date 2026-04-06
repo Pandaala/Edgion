@@ -1,8 +1,9 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::udp::routes_mgr::{
     get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
 };
-use crate::types::{ListenerKey, ResourceMeta, UDPRoute};
+use crate::types::{ResourceMeta, UDPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -65,65 +66,23 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             "partial update"
         );
 
-        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
-
-        // Collect old listeners from routes being removed or updated BEFORE modifying the cache
-        for key in remove.iter().chain(update.keys()) {
-            if let Some(existing) = self.get_route(key) {
-                for lk in resolved_listeners_for_route(&existing) {
-                    affected_listeners.insert(lk.clone());
-                }
-            }
-        }
-
-        // Process removals
-        for key in &remove {
-            self.remove_route(key);
-            tracing::debug!(resource_key = %key, "Removed UDPRoute");
-        }
-
-        // Process updates (remove old, add new)
-        for (key, route) in update {
-            self.remove_route(&key);
-            match self.initialize_route(route) {
-                Ok(initialized) => {
-                    for lk in resolved_listeners_for_route(&initialized) {
-                        affected_listeners.insert(lk.clone());
-                    }
+        apply_l4_partial_update(
+            "UDPRoute",
+            add,
+            update,
+            remove,
+            |key| self.get_route(key),
+            |r| resolved_listeners_for_route(r).to_vec(),
+            |key| self.remove_route(key),
+            |route| {
+                self.initialize_route(route).map(|initialized| {
+                    let lks = resolved_listeners_for_route(&initialized).to_vec();
                     self.insert_route(initialized);
-                    tracing::debug!(resource_key = %key, "Updated UDPRoute");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        resource_key = %key,
-                        error = %e,
-                        "Failed to update UDPRoute"
-                    );
-                }
-            }
-        }
-
-        // Process additions
-        for (key, route) in add {
-            match self.initialize_route(route) {
-                Ok(initialized) => {
-                    for lk in resolved_listeners_for_route(&initialized) {
-                        affected_listeners.insert(lk.clone());
-                    }
-                    self.insert_route(initialized);
-                    tracing::debug!(resource_key = %key, "Added UDPRoute");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        resource_key = %key,
-                        error = %e,
-                        "Failed to add UDPRoute"
-                    );
-                }
-            }
-        }
-
-        self.rebuild_affected_listener_managers(&affected_listeners);
+                    lks
+                })
+            },
+            |affected| self.rebuild_affected_listener_managers(affected),
+        );
     }
 }
 
@@ -177,6 +136,7 @@ mod tests {
     use crate::core::common::conf_sync::traits::ConfHandler;
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::udp_route::*;
+    use crate::types::ListenerKey;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);

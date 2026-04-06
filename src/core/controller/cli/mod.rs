@@ -10,6 +10,7 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 
 /// Provider that wraps ConfMgr to dynamically provide ConfigSyncServer
@@ -157,14 +158,19 @@ impl EdgionControllerCli {
             "Starting gRPC and Admin API servers with graceful shutdown support"
         );
 
-        // Create independent shutdown signals for each service
-        let grpc_shutdown = {
-            let mut signal = shutdown_handle.signal();
-            async move { signal.wait().await }
-        };
+        // Create shutdown signals with ordered shutdown:
+        // Admin drains immediately, gRPC continues serving for 2s to let clients finish last sync.
         let admin_shutdown = {
             let mut signal = shutdown_handle.signal();
             async move { signal.wait().await }
+        };
+        let grpc_shutdown = {
+            let mut signal = shutdown_handle.signal();
+            async move {
+                signal.wait().await;
+                // Brief delay so Admin API finishes first — gRPC clients can complete final sync
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
         };
 
         // Create provider that dynamically obtains ConfigSyncServer from ConfMgr
@@ -173,39 +179,68 @@ impl EdgionControllerCli {
             conf_mgr: conf_mgr.clone(),
         });
 
+        // Create shutdown token for gRPC stream tasks
+        let grpc_shutdown_token = CancellationToken::new();
+
+        // Bridge: cancel token when ShutdownHandle fires
+        {
+            let mut signal = shutdown_handle.signal();
+            let token = grpc_shutdown_token.clone();
+            tokio::spawn(async move {
+                signal.wait().await;
+                token.cancel();
+            });
+        }
+
         // Create gRPC server with dynamic provider
         // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
-        let grpc_server = ConfigSyncGrpcServer::new(provider);
+        let grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token);
 
         let tls_ref = tls_config.as_ref();
 
-        // Run both services concurrently with shutdown support
-        let (sync_result, admin_result) = tokio::join!(
-            grpc_server.serve_with_shutdown(grpc_addr, tls_ref, grpc_shutdown),
-            serve_admin_api_with_shutdown(conf_mgr.clone(), schema_validator, admin_addr, admin_shutdown)
-        );
-
-        // Check results
-        if let Err(e) = &sync_result {
-            tracing::error!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "grpc_server_error",
-                error = %e,
-                "gRPC server failed"
-            );
+        // Run both services concurrently with shutdown support and global timeout.
+        // In K8s, kubelet sends SIGKILL after terminationGracePeriodSeconds (default 30s).
+        // We use 25s to leave headroom. The 2s gRPC delay is included in this budget.
+        match tokio::time::timeout(std::time::Duration::from_secs(25), async {
+            tokio::join!(
+                grpc_server.serve_with_shutdown(grpc_addr, tls_ref, grpc_shutdown),
+                serve_admin_api_with_shutdown(
+                    conf_mgr.clone(),
+                    schema_validator,
+                    admin_addr,
+                    admin_shutdown
+                )
+            )
+        })
+        .await
+        {
+            Ok((sync_result, admin_result)) => {
+                if let Err(e) = &sync_result {
+                    tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "grpc_server_error",
+                        error = %e,
+                        "gRPC server failed"
+                    );
+                }
+                if let Err(e) = &admin_result {
+                    tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "admin_api_error",
+                        error = %e,
+                        "Admin API server failed"
+                    );
+                }
+                sync_result?;
+                admin_result?;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    "Graceful shutdown timed out after 25s, forcing exit"
+                );
+            }
         }
-
-        if let Err(e) = &admin_result {
-            tracing::error!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                event = "admin_api_error",
-                error = %e,
-                "Admin API server failed"
-            );
-        }
-
-        sync_result?;
-        admin_result?;
 
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,

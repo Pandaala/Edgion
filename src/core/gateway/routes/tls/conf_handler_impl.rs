@@ -1,7 +1,8 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
-use crate::types::{ListenerKey, ResourceMeta, TLSRoute};
+use crate::types::{ResourceMeta, TLSRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -63,62 +64,23 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             "partial update"
         );
 
-        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
-
-        // Collect old listeners from routes being removed or updated BEFORE modifying the cache
-        for key in remove.iter().chain(update.keys()) {
-            if let Some(entry) = self.get_route(key) {
-                for lk in resolved_listeners_for_route(&entry) {
-                    affected_listeners.insert(lk.clone());
-                }
-            }
-        }
-
-        for (key, route) in add {
-            match self.initialize_route(route) {
-                Ok(initialized) => {
-                    for lk in resolved_listeners_for_route(&initialized) {
-                        affected_listeners.insert(lk.clone());
-                    }
+        apply_l4_partial_update(
+            "TLSRoute",
+            add,
+            update,
+            remove,
+            |key| self.get_route(key),
+            |r| resolved_listeners_for_route(r).to_vec(),
+            |key| self.remove_route(key),
+            |route| {
+                self.initialize_route(route).map(|initialized| {
+                    let lks = resolved_listeners_for_route(&initialized).to_vec();
                     self.insert_route(initialized);
-                    tracing::debug!(resource_key = %key, "Added TLSRoute");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        resource_key = %key,
-                        error = %e,
-                        "Failed to add TLSRoute"
-                    );
-                }
-            }
-        }
-
-        for (key, route) in update {
-            self.remove_route(&key);
-            match self.initialize_route(route) {
-                Ok(initialized) => {
-                    for lk in resolved_listeners_for_route(&initialized) {
-                        affected_listeners.insert(lk.clone());
-                    }
-                    self.insert_route(initialized);
-                    tracing::debug!(resource_key = %key, "Updated TLSRoute");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        resource_key = %key,
-                        error = %e,
-                        "Failed to update TLSRoute, old version removed"
-                    );
-                }
-            }
-        }
-
-        for key in remove {
-            self.remove_route(&key);
-            tracing::debug!(resource_key = %key, "Removed TLSRoute");
-        }
-
-        self.rebuild_affected_listener_managers(&affected_listeners);
+                    lks
+                })
+            },
+            |affected| self.rebuild_affected_listener_managers(affected),
+        );
     }
 }
 
@@ -229,6 +191,7 @@ fn is_service_backend_ref(br: &crate::types::resources::tls_route::TLSBackendRef
 mod tests {
     use super::*;
     use crate::types::resources::common::ParentReference;
+    use crate::types::ListenerKey;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
@@ -513,5 +476,147 @@ mod tests {
             ..valid
         };
         assert!(!is_service_backend_ref(&wrong_kind));
+    }
+
+    #[test]
+    fn test_misclassified_add_rebuilds_old_listener() {
+        // Simulates upstream misclassification: an existing key is sent in
+        // the `add` bucket. Bug 2: pre-collection of affected listeners
+        // excludes keys in the `add` bucket, so L443 is not scheduled for
+        // rebuild and retains stale route data.
+
+        let managers = GlobalTlsRouteManagers::new();
+        let key443 = make_listener_key(443, "TLS");
+        let key8443 = make_listener_key(8443, "TLS");
+
+        // Setup: route-x bound to L443
+        let mut add = HashMap::new();
+        add.insert(
+            "default/route-x".to_string(),
+            create_test_tls_route("default", "route-x", "gw1", "v1.example.com", 443, key443.clone()),
+        );
+        managers.partial_update(add, HashMap::new(), HashSet::new());
+        let mgr443 = managers.get_or_create_listener_manager(&key443);
+        assert!(
+            mgr443.load_route_table().match_route("v1.example.com").is_some(),
+            "test setup failed: v1.example.com should be in L443"
+        );
+
+        // Misclassified add: same key, new version bound to L8443
+        // (L8443 doesn't exist yet — it will be created lazily)
+        let mut misclassified_add = HashMap::new();
+        misclassified_add.insert(
+            "default/route-x".to_string(),
+            create_test_tls_route("default", "route-x", "gw1", "v2.example.com", 8443, key8443.clone()),
+        );
+        managers.partial_update(misclassified_add, HashMap::new(), HashSet::new());
+
+        // L443 must be rebuilt: v1.example.com should be gone
+        assert!(
+            mgr443.load_route_table().match_route("v1.example.com").is_none(),
+            "Bug 2: L443 still has stale route after misclassified add"
+        );
+        // L8443 should have the new route (created lazily during partial_update)
+        let mgr8443 = managers.get_or_create_listener_manager(&key8443);
+        assert!(
+            mgr8443.load_route_table().match_route("v2.example.com").is_some(),
+            "Bug 2 (corollary): L8443 should have the new route"
+        );
+    }
+
+    #[test]
+    fn test_same_batch_add_remove_same_listener() {
+        // Same batch: remove route-a and add route-b on the same listener.
+        // Verifies the final state has only route-b (no stale route-a, no
+        // missing route-b).
+        let managers = GlobalTlsRouteManagers::new();
+        let key443 = make_listener_key(443, "TLS");
+
+        let mut add = HashMap::new();
+        add.insert(
+            "default/route-a".to_string(),
+            create_test_tls_route("default", "route-a", "gw1", "old.example.com", 443, key443.clone()),
+        );
+        managers.partial_update(add, HashMap::new(), HashSet::new());
+
+        // Single batch: remove route-a, add route-b on same listener
+        let mut add2 = HashMap::new();
+        add2.insert(
+            "default/route-b".to_string(),
+            create_test_tls_route("default", "route-b", "gw1", "new.example.com", 443, key443.clone()),
+        );
+        let mut remove = HashSet::new();
+        remove.insert("default/route-a".to_string());
+        managers.partial_update(add2, HashMap::new(), remove);
+
+        let mgr = managers.get_or_create_listener_manager(&key443);
+        let table = mgr.load_route_table();
+        assert!(
+            table.match_route("new.example.com").is_some(),
+            "route-b should be routable"
+        );
+        assert!(
+            table.match_route("old.example.com").is_none(),
+            "route-a should be removed"
+        );
+    }
+
+    #[test]
+    fn test_update_listener_migration() {
+        // Update moves a route from one listener to another.
+        // Both the source (L443) and destination (L9443) listener managers
+        // must be rebuilt: L443 loses the route, L9443 gains it.
+        let managers = GlobalTlsRouteManagers::new();
+        let key443 = make_listener_key(443, "TLS");
+        let key9443 = make_listener_key(9443, "TLS");
+
+        let mut add = HashMap::new();
+        add.insert(
+            "default/route-y".to_string(),
+            create_test_tls_route("default", "route-y", "gw1", "svc.example.com", 443, key443.clone()),
+        );
+        managers.partial_update(add, HashMap::new(), HashSet::new());
+
+        // Migrate route-y from L443 to L9443
+        let mut update = HashMap::new();
+        update.insert(
+            "default/route-y".to_string(),
+            create_test_tls_route("default", "route-y", "gw1", "svc.example.com", 9443, key9443.clone()),
+        );
+        managers.partial_update(HashMap::new(), update, HashSet::new());
+
+        let mgr443 = managers.get_or_create_listener_manager(&key443);
+        assert!(
+            mgr443.load_route_table().match_route("svc.example.com").is_none(),
+            "L443 should not have route after migration"
+        );
+        let mgr9443 = managers.get_or_create_listener_manager(&key9443);
+        assert!(
+            mgr9443.load_route_table().match_route("svc.example.com").is_some(),
+            "L9443 should have route after migration"
+        );
+    }
+
+    #[test]
+    fn test_update_nonexistent_key_is_safe() {
+        // Updating a key that doesn't exist in cache (remove_cached is a no-op,
+        // init_and_insert runs, new route is inserted). Verifies no panic and
+        // the new route appears in the target listener.
+        let managers = GlobalTlsRouteManagers::new();
+        let key443 = make_listener_key(443, "TLS");
+
+        // Update a key that was never added — behaves like an add
+        let mut update = HashMap::new();
+        update.insert(
+            "default/route-ghost".to_string(),
+            create_test_tls_route("default", "route-ghost", "gw1", "ghost.example.com", 443, key443.clone()),
+        );
+        managers.partial_update(HashMap::new(), update, HashSet::new());
+
+        let mgr = managers.get_or_create_listener_manager(&key443);
+        assert!(
+            mgr.load_route_table().match_route("ghost.example.com").is_some(),
+            "update of nonexistent key should insert the new route"
+        );
     }
 }

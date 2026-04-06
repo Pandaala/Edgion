@@ -37,7 +37,7 @@ pub use cors::CorsPluginTestSuite;
 pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;
 pub use direct_endpoint::DirectEndpointTestSuite;
-pub use dsl::DslTestSuite;
+pub use dsl::{DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite};
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::DynamicInternalUpstreamTestSuite;
 pub use forward_auth::ForwardAuthTestSuite;

@@ -414,16 +414,10 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
     let backend_tls_policy = crate::core::gateway::backends::policy::get_global_backend_tls_policy_store().stats();
 
     let gateway_class_store = SimpleCountStats {
-        count: crate::core::gateway::config::gateway_class::get_gateway_class_store()
-            .read()
-            .unwrap()
-            .len(),
+        count: crate::core::gateway::config::gateway_class::count_gateway_classes(),
     };
     let edgion_gateway_config_store = SimpleCountStats {
-        count: crate::core::gateway::config::edgion_gateway::get_edgion_gateway_config_store()
-            .read()
-            .unwrap()
-            .len(),
+        count: crate::core::gateway::config::edgion_gateway::count_edgion_gateway_configs(),
     };
 
     Json(ApiResponse::success(StoreStatsResponse {
@@ -1437,5 +1431,32 @@ pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Resul
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
+    Ok(())
+}
+
+/// Serve the admin API on the specified port with graceful shutdown support
+pub async fn serve_with_shutdown(
+    config_client: Arc<ConfigClient>,
+    port: u16,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let app = create_admin_router(config_client);
+    let addr_str = format!("0.0.0.0:{}", port);
+    let addr: std::net::SocketAddr = addr_str.parse()?;
+
+    tracing::info!(
+        component = "admin_api_gateway",
+        event = "server_starting",
+        addr = %addr,
+        integration_testing = crate::core::common::config::is_integration_testing_mode(),
+        "Gateway Admin API server listening"
+    );
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
+
+    tracing::info!(component = "admin_api_gateway", "Admin API server stopped");
     Ok(())
 }

@@ -51,7 +51,10 @@ impl ConfigSyncClient {
         let mut endpoint = tonic::transport::Endpoint::from_shared(uri.clone())
             .map_err(|e| anyhow::anyhow!("Invalid gRPC URI '{}': {}", uri, e))?
             .timeout(timeout)
-            .connect_timeout(timeout);
+            .connect_timeout(timeout)
+            .http2_keep_alive_interval(Duration::from_secs(10))
+            .keep_alive_timeout(Duration::from_secs(5))
+            .keep_alive_while_idle(true);
 
         if let Some(tls) = tls_config {
             if tls.skip_tls {

@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-grpc-error
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "grpc-error-test"
+        source: |
+          let auth = req.header("authorization")
+          if auth == nil {
+            return grpc_error(16, "unauthenticated")
+          }
+          if auth == "invalid" {
+            return grpc_error(7, "permission denied")
+          }
+        errorPolicy: deny

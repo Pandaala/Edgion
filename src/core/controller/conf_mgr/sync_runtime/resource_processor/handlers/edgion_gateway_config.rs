@@ -27,6 +27,7 @@ impl Default for EdgionGatewayConfigHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     async fn parse(&self, egc: EdgionGatewayConfig, _ctx: &HandlerContext) -> ProcessResult<EdgionGatewayConfig> {
+        egc.spec.check_deprecated_fields();
         ProcessResult::Continue(egc)
     }
 

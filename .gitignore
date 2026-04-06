@@ -39,3 +39,4 @@ examples/test/k8s-conf/
 .understand-anything/
 
 docs/superpowers/
+.worktrees/

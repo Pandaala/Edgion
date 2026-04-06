@@ -4,7 +4,7 @@ pub mod api;
 pub mod registry;
 pub mod test_metrics;
 
-pub use api::{create_metrics_router, serve};
+pub use api::{create_metrics_router, serve, serve_with_shutdown};
 pub use registry::{
     global_metrics, record_backend_request, record_cb_ejection, record_cb_recovery, record_cb_rejection,
     record_mirror_metric, record_request_duration, status_group, GatewayMetrics,

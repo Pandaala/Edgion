@@ -1,5 +1,6 @@
 pub mod grpc;
 pub mod http;
+mod l4_partial_update;
 pub mod tcp;
 pub mod tls;
 pub mod udp;
