@@ -66,9 +66,11 @@ impl CsrfToken {
             return false;
         }
 
-        // Verify signature
+        // Verify signature (constant-time comparison to prevent timing attacks)
         let expected_sign = Self::gen_sign(&self.random, self.expires, key);
-        if self.sign != expected_sign {
+        let a = self.sign.as_bytes();
+        let b = expected_sign.as_bytes();
+        if a.len() != b.len() || a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) != 0 {
             return false;
         }
 

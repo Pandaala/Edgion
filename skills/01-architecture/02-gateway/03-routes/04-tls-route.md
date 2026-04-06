@@ -1,6 +1,6 @@
 ---
 name: gateway-tls-route
-description: TLS 路由：SNI 匹配、per-port 路由表、TLS 代理实现。
+description: TLS 路由：SNI 匹配、per-listener 路由表、TLS 代理实现。
 ---
 
 # TLS 路由
@@ -16,7 +16,7 @@ src/core/gateway/routes/tls/
 ├── mod.rs                  # 模块入口与类型导出
 ├── conf_handler_impl.rs    # ConfHandler<TLSRoute> 实现
 ├── routes_mgr.rs           # TlsRouteManager / GlobalTlsRouteManagers
-├── gateway_tls_routes.rs   # TlsRouteTable：per-port TLS 路由表（SNI 索引）
+├── gateway_tls_routes.rs   # TlsRouteTable：per-listener TLS 路由表（SNI 索引）
 └── proxy.rs                # EdgionTlsTcpProxy：TLS 透传代理实现
 ```
 
@@ -43,26 +43,26 @@ pub struct TlsRouteTable {
 2. 无 hostname 的路由归入 `catch_all_routes`。
 3. 将分桶结果插入 `HashHost` 匹配器。
 
-## Per-port 路由管理
+## Per-listener 路由管理
 
-`GlobalTlsRouteManagers` 遵循统一的 per-port 管理模式：
+`GlobalTlsRouteManagers` 遵循统一的 per-listener 管理模式：
 
 ```
 GlobalTlsRouteManagers
-├── route_cache: DashMap<String, Arc<TLSRoute>>    # 全局路由缓存
-└── by_port: DashMap<u16, Arc<TlsRouteManager>>
+├── route_cache: DashMap<String, Arc<TLSRoute>>        # 全局路由缓存
+└── by_listener: DashMap<ListenerKey, Arc<TlsRouteManager>>
     └── TlsRouteManager
-        └── route_table: ArcSwap<TlsRouteTable>    # per-port 快照
+        └── route_table: ArcSwap<TlsRouteTable>        # per-listener 快照
 ```
 
-### 端口分桶
+### Listener 分桶
 
-通过 `resolved_ports`（Controller 预计算）将路由分配到对应端口。无 `resolved_ports` 的路由会打印警告并跳过。
+通过 `resolved_listeners`（Controller 预计算）将路由分配到对应 listener。无 `resolved_listeners` 的路由会打印警告并跳过。
 
 ### 重建策略
 
-- `rebuild_all_port_managers`：全量重建所有端口，清理无路由的过期端口。
-- `rebuild_affected_port_managers`：仅重建受影响端口（增量更新时使用）。
+- `rebuild_all_listener_managers`：全量重建所有 listener，清理无路由的过期 listener。
+- `rebuild_affected_listener_managers`：仅重建受影响 listener（增量更新时使用）。
 
 ## TLS 透传代理
 

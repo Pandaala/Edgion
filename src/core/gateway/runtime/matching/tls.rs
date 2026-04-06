@@ -16,6 +16,8 @@
 //! without touching any HashMap.
 
 use crate::core::common::matcher::HashHost;
+use crate::core::gateway::runtime::store::listener_gateway_info::is_listener_not_programmed;
+use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{FrontendTLSValidation, SecretObjectReference};
 use arc_swap::ArcSwap;
@@ -33,8 +35,8 @@ pub struct GatewayTlsEntry {
     pub gateway_name: String,
     /// Listener name
     pub listener_name: String,
-    /// Listener port
-    pub port: u16,
+    /// Listener key identifying the physical listener ("{addr}/{protocol}")
+    pub listener_key: ListenerKey,
     /// Hostname pattern (e.g., "*.example.com")
     pub hostname: String,
     /// References to Secrets containing certificates
@@ -49,19 +51,19 @@ pub struct GatewayTlsEntry {
 
 /// Combined matcher data atomically swapped via `ArcSwap`.
 struct TlsMatcherData {
-    /// Hostname-based matcher: port -> (hostname/SNI -> entries)
-    port_map: HashMap<u16, HashHost<Vec<GatewayTlsEntry>>>,
-    /// Catch-all fallback: port -> entries (listeners without hostname)
-    fallback_map: HashMap<u16, Vec<GatewayTlsEntry>>,
+    /// Hostname-based matcher: listener_key -> (hostname/SNI -> entries)
+    listener_map: HashMap<ListenerKey, HashHost<Vec<GatewayTlsEntry>>>,
+    /// Catch-all fallback: listener_key -> entries (listeners without hostname)
+    fallback_listener_map: HashMap<ListenerKey, Vec<GatewayTlsEntry>>,
 }
 
-/// Gateway TLS Matcher for port and hostname-based certificate lookup
+/// Gateway TLS Matcher for listener and hostname-based certificate lookup
 ///
 /// Uses ArcSwap for lock-free reads during TLS handshake.
 /// The inner Option provides fast-path for the common case where
 /// no Gateway TLS is configured (avoids HashMap allocation and lookup).
 ///
-/// ## Lookup priority (per port)
+/// ## Lookup priority (per listener)
 /// 1. Exact hostname match (via HashHost)
 /// 2. Wildcard hostname match (via HashHost)
 /// 3. Catch-all fallback (listeners without hostname)
@@ -84,21 +86,21 @@ impl GatewayTlsMatcher {
         self.data.load().is_none()
     }
 
-    /// Match SNI against Gateway Listener hostnames with port dimension
+    /// Match SNI against Gateway Listener hostnames with listener key dimension
     ///
     /// Returns the first matching GatewayTlsEntry when found.
     ///
     /// ## Parameters
-    /// - `port`: The listening port (from TCP connection)
+    /// - `key`: The listener key identifying the physical listener
     /// - `sni`: Server Name Indication from TLS Client Hello
     ///
     #[inline]
-    pub fn match_sni_with_port(&self, port: u16, sni: &str) -> Option<GatewayTlsEntry> {
+    pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<GatewayTlsEntry> {
         let data_guard = self.data.load();
         let data = data_guard.as_ref().as_ref()?;
 
         // 1) Hostname-based lookup (exact > wildcard)
-        if let Some(host_matcher) = data.port_map.get(&port) {
+        if let Some(host_matcher) = data.listener_map.get(key) {
             if let Some(entries) = host_matcher.get(sni) {
                 if let Some(entry) = entries.first() {
                     return Some(entry.clone());
@@ -107,7 +109,7 @@ impl GatewayTlsMatcher {
         }
 
         // 2) Catch-all fallback (listeners without hostname)
-        if let Some(entries) = data.fallback_map.get(&port) {
+        if let Some(entries) = data.fallback_listener_map.get(key) {
             if let Some(entry) = entries.first() {
                 return Some(entry.clone());
             }
@@ -116,16 +118,16 @@ impl GatewayTlsMatcher {
         None
     }
 
-    /// Rebuild matcher from Gateway list with port dimension
+    /// Rebuild matcher from Gateway list with listener key dimension
     ///
     /// Extracts TLS configurations from all Gateway Listeners and builds
-    /// a port -> hostname-based matcher for certificate lookup.
+    /// a listener_key -> hostname-based matcher for certificate lookup.
     pub fn rebuild_from_gateways(&self, gateways: &[Gateway]) {
-        let mut port_map: HashMap<u16, HashHost<Vec<GatewayTlsEntry>>> = HashMap::new();
-        let mut fallback_map: HashMap<u16, Vec<GatewayTlsEntry>> = HashMap::new();
+        let mut listener_map: HashMap<ListenerKey, HashHost<Vec<GatewayTlsEntry>>> = HashMap::new();
+        let mut fallback_listener_map: HashMap<ListenerKey, Vec<GatewayTlsEntry>> = HashMap::new();
         let mut hostname_entry_count = 0usize;
         let mut fallback_entry_count = 0usize;
-        let mut port_count = 0usize;
+        let mut listener_count = 0usize;
 
         for gateway in gateways {
             let gateway_namespace = gateway.namespace().unwrap_or_default();
@@ -144,6 +146,13 @@ impl GatewayTlsMatcher {
                     None => continue,
                 };
 
+                // Skip listeners the Controller has marked as not programmed (e.g. invalid CA cert
+                // reference, unresolvable Secret). Registering them would allow a broken TLS config
+                // to serve or shadow valid listeners on the same port.
+                if is_listener_not_programmed(gateway, &listener.name) {
+                    continue;
+                }
+
                 // For listeners using EdgionTls cert-provider, certificate_refs may be
                 // absent because certs are loaded dynamically via the EdgionTls CRD.
                 // We still need to register these listeners so that TLS termination
@@ -160,14 +169,16 @@ impl GatewayTlsMatcher {
                     _ => continue,
                 };
 
-                let port = listener.port as u16;
+                let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
+                let listener_key = ListenerKey::new(addr, &listener.protocol);
+
                 match &listener.hostname {
                     Some(hostname) => {
                         let entry = GatewayTlsEntry {
                             gateway_namespace: gateway_namespace.clone(),
                             gateway_name: gateway_name.clone(),
                             listener_name: listener.name.clone(),
-                            port,
+                            listener_key: listener_key.clone(),
                             hostname: hostname.clone(),
                             certificate_refs: cert_refs,
                             secrets: tls_config.secrets.clone(),
@@ -175,12 +186,12 @@ impl GatewayTlsMatcher {
                             resolved_frontend_ca_secrets: tls_config.resolved_frontend_ca_secrets.clone(),
                         };
 
-                        let host_matcher = port_map.entry(port).or_insert_with(|| {
-                            port_count += 1;
+                        let host_matcher = listener_map.entry(listener_key).or_insert_with(|| {
+                            listener_count += 1;
                             HashHost::new()
                         });
 
-                        if let Some(existing) = host_matcher.get_mut(hostname) {
+                        if let Some(existing) = host_matcher.get_mut_exact(hostname) {
                             existing.push(entry);
                         } else {
                             host_matcher.insert(hostname, vec![entry]);
@@ -188,19 +199,19 @@ impl GatewayTlsMatcher {
                         hostname_entry_count += 1;
                     }
                     None => {
-                        // Catch-all listener (no hostname) — register as fallback for this port
+                        // Catch-all listener (no hostname) — register as fallback for this listener
                         let entry = GatewayTlsEntry {
                             gateway_namespace: gateway_namespace.clone(),
                             gateway_name: gateway_name.clone(),
                             listener_name: listener.name.clone(),
-                            port,
+                            listener_key: listener_key.clone(),
                             hostname: String::new(),
                             certificate_refs: cert_refs,
                             secrets: tls_config.secrets.clone(),
                             frontend_validation: tls_config.frontend_validation.clone(),
                             resolved_frontend_ca_secrets: tls_config.resolved_frontend_ca_secrets.clone(),
                         };
-                        fallback_map.entry(port).or_default().push(entry);
+                        fallback_listener_map.entry(listener_key).or_default().push(entry);
                         fallback_entry_count += 1;
                     }
                 }
@@ -212,15 +223,17 @@ impl GatewayTlsMatcher {
         tracing::info!(
             component = "gateway_tls_matcher",
             gateways = gateways.len(),
-            ports = port_count,
+            listeners = listener_count,
             hostname_entries = hostname_entry_count,
             fallback_entries = fallback_entry_count,
             "Rebuilt Gateway TLS matcher"
         );
 
         if total_entries > 0 {
-            self.data
-                .store(Arc::new(Some(TlsMatcherData { port_map, fallback_map })));
+            self.data.store(Arc::new(Some(TlsMatcherData {
+                listener_map,
+                fallback_listener_map,
+            })));
         } else {
             self.data.store(Arc::new(None));
         }
@@ -229,7 +242,7 @@ impl GatewayTlsMatcher {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GatewayTlsMatcherStats {
-    pub port_count: usize,
+    pub listener_count: usize,
     pub is_empty: bool,
 }
 
@@ -239,15 +252,15 @@ impl GatewayTlsMatcher {
         let data = self.data.load();
         match data.as_ref() {
             Some(d) => {
-                let mut all_ports: std::collections::HashSet<u16> = d.port_map.keys().copied().collect();
-                all_ports.extend(d.fallback_map.keys());
+                let mut all_keys: std::collections::HashSet<&ListenerKey> = d.listener_map.keys().collect();
+                all_keys.extend(d.fallback_listener_map.keys());
                 GatewayTlsMatcherStats {
-                    port_count: all_ports.len(),
+                    listener_count: all_keys.len(),
                     is_empty: false,
                 }
             }
             None => GatewayTlsMatcherStats {
-                port_count: 0,
+                listener_count: 0,
                 is_empty: true,
             },
         }
@@ -268,11 +281,11 @@ pub fn get_gateway_tls_matcher() -> &'static GatewayTlsMatcher {
     &GATEWAY_TLS_MATCHER
 }
 
-/// Match SNI against Gateway TLS configurations with port
+/// Match SNI against Gateway TLS configurations with listener key
 ///
-/// This is the preferred method when port is known (during TLS handshake).
-pub fn match_gateway_tls_with_port(port: u16, sni: &str) -> Option<GatewayTlsEntry> {
-    get_gateway_tls_matcher().match_sni_with_port(port, sni)
+/// This is the preferred method when listener key is known (during TLS handshake).
+pub fn match_gateway_tls(key: &ListenerKey, sni: &str) -> Option<GatewayTlsEntry> {
+    get_gateway_tls_matcher().match_sni(key, sni)
 }
 
 /// Rebuild Gateway TLS matcher from Gateway list
@@ -285,6 +298,12 @@ mod tests {
     use super::*;
     use crate::types::resources::gateway::{GatewaySpec, GatewayTLSConfig, Listener};
     use kube::api::ObjectMeta;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    /// Helper: build a ListenerKey for test gateways (no addresses -> 0.0.0.0).
+    fn test_listener_key(port: u16) -> ListenerKey {
+        ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port), "HTTPS")
+    }
 
     fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) -> Gateway {
         Gateway {
@@ -342,6 +361,7 @@ mod tests {
     #[test]
     fn test_rebuild_from_gateways() {
         let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
 
         let listener = create_test_listener(
             "https",
@@ -353,7 +373,7 @@ mod tests {
         matcher.rebuild_from_gateways(&[gateway]);
 
         // Test exact match
-        let result = matcher.match_sni_with_port(443, "example.com");
+        let result = matcher.match_sni(&key, "example.com");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "test-gw");
@@ -365,6 +385,7 @@ mod tests {
     #[test]
     fn test_no_tls_config() {
         let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
 
         let listener = create_test_listener("http", Some("example.com"), None);
         let gateway = create_test_gateway("test-gw", "default", vec![listener]);
@@ -372,13 +393,14 @@ mod tests {
         matcher.rebuild_from_gateways(&[gateway]);
 
         // Should not find any entry
-        let result = matcher.match_sni_with_port(443, "example.com");
+        let result = matcher.match_sni(&key, "example.com");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_no_hostname() {
         let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
 
         let tls_config = GatewayTLSConfig {
             mode: Some("Terminate".to_string()),
@@ -399,21 +421,22 @@ mod tests {
 
         matcher.rebuild_from_gateways(&[gateway]);
 
-        // Hostname-less listeners serve as catch-all fallback for any SNI on the same port.
-        let result = matcher.match_sni_with_port(443, "example.com");
+        // Hostname-less listeners serve as catch-all fallback for any SNI on the same listener.
+        let result = matcher.match_sni(&key, "example.com");
         assert!(result.is_some(), "Catch-all listener should match any SNI");
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "test-gw");
         assert_eq!(entry.listener_name, "https");
 
         // Should also match other arbitrary SNIs
-        let result = matcher.match_sni_with_port(443, "anything.foo.bar");
+        let result = matcher.match_sni(&key, "anything.foo.bar");
         assert!(result.is_some(), "Catch-all listener should match any SNI");
     }
 
     #[test]
     fn test_wildcard_match() {
         let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
 
         let tls_config = GatewayTLSConfig {
             mode: Some("Terminate".to_string()),
@@ -436,24 +459,25 @@ mod tests {
         matcher.rebuild_from_gateways(&[gateway]);
 
         // Test wildcard match - subdomain should match
-        let result = matcher.match_sni_with_port(443, "api.example.com");
+        let result = matcher.match_sni(&key, "api.example.com");
         assert!(result.is_some(), "api.example.com should match *.example.com");
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "wildcard-gw");
         assert_eq!(entry.certificate_refs[0].name, "wildcard-cert");
 
         // Another subdomain should also match
-        let result = matcher.match_sni_with_port(443, "www.example.com");
+        let result = matcher.match_sni(&key, "www.example.com");
         assert!(result.is_some(), "www.example.com should match *.example.com");
 
         // Root domain should NOT match wildcard
-        let result = matcher.match_sni_with_port(443, "example.com");
+        let result = matcher.match_sni(&key, "example.com");
         assert!(result.is_none(), "example.com should NOT match *.example.com");
     }
 
     #[test]
     fn test_multiple_gateways_multiple_listeners() {
         let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
 
         // Gateway 1: api.example.com
         let tls_config1 = GatewayTLSConfig {
@@ -506,14 +530,14 @@ mod tests {
         matcher.rebuild_from_gateways(&[gateway1, gateway2]);
 
         // Test api.example.com
-        let result = matcher.match_sni_with_port(443, "api.example.com");
+        let result = matcher.match_sni(&key, "api.example.com");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "api-gateway");
         assert_eq!(entry.certificate_refs[0].name, "api-cert");
 
         // Test www.example.com
-        let result = matcher.match_sni_with_port(443, "www.example.com");
+        let result = matcher.match_sni(&key, "www.example.com");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "web-gateway");
@@ -521,7 +545,7 @@ mod tests {
         assert_eq!(entry.certificate_refs[0].name, "www-cert");
 
         // Test admin.example.com
-        let result = matcher.match_sni_with_port(443, "admin.example.com");
+        let result = matcher.match_sni(&key, "admin.example.com");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.gateway_name, "web-gateway");
@@ -529,13 +553,14 @@ mod tests {
         assert_eq!(entry.certificate_refs[0].name, "admin-cert");
 
         // Test unknown domain
-        let result = matcher.match_sni_with_port(443, "unknown.example.com");
+        let result = matcher.match_sni(&key, "unknown.example.com");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_certificate_ref_namespace_fallback() {
         let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
 
         // Certificate ref without explicit namespace should use Gateway's namespace
         let tls_config = GatewayTLSConfig {
@@ -557,7 +582,7 @@ mod tests {
 
         matcher.rebuild_from_gateways(&[gateway]);
 
-        let result = matcher.match_sni_with_port(443, "test.example.com");
+        let result = matcher.match_sni(&key, "test.example.com");
         assert!(result.is_some());
         let entry = result.unwrap();
 
@@ -570,12 +595,13 @@ mod tests {
     #[test]
     fn test_empty_matcher_fast_path() {
         let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
 
         // New matcher should be empty
         assert!(matcher.is_empty(), "New matcher should be empty");
 
         // Match should fail immediately without HashMap lookup
-        let result = matcher.match_sni_with_port(443, "example.com");
+        let result = matcher.match_sni(&key, "example.com");
         assert!(result.is_none());
 
         // Rebuild with empty gateway list
@@ -589,7 +615,7 @@ mod tests {
         assert!(matcher.is_empty(), "Matcher should be empty when gateway has no TLS");
 
         // Match should still fail fast
-        let result = matcher.match_sni_with_port(443, "example.com");
+        let result = matcher.match_sni(&key, "example.com");
         assert!(result.is_none());
     }
 
@@ -636,8 +662,11 @@ mod tests {
     }
 
     #[test]
-    fn test_port_dimension_matching() {
+    fn test_listener_dimension_matching() {
         let matcher = GatewayTlsMatcher::new();
+        let key_443 = test_listener_key(443);
+        let key_8443 = test_listener_key(8443);
+        let key_9443 = test_listener_key(9443);
 
         // Same hostname on different ports with different certs
         let tls_config_443 = GatewayTLSConfig {
@@ -677,28 +706,30 @@ mod tests {
 
         matcher.rebuild_from_gateways(&[gateway]);
 
-        // Test port 443
-        let result = matcher.match_sni_with_port(443, "api.example.com");
-        assert!(result.is_some(), "Should find cert for port 443");
+        // Test listener on port 443
+        let result = matcher.match_sni(&key_443, "api.example.com");
+        assert!(result.is_some(), "Should find cert for listener on port 443");
         let entry = result.unwrap();
-        assert_eq!(entry.port, 443);
+        assert_eq!(entry.listener_key, key_443);
         assert_eq!(entry.certificate_refs[0].name, "cert-443");
 
-        // Test port 8443
-        let result = matcher.match_sni_with_port(8443, "api.example.com");
-        assert!(result.is_some(), "Should find cert for port 8443");
+        // Test listener on port 8443
+        let result = matcher.match_sni(&key_8443, "api.example.com");
+        assert!(result.is_some(), "Should find cert for listener on port 8443");
         let entry = result.unwrap();
-        assert_eq!(entry.port, 8443);
+        assert_eq!(entry.listener_key, key_8443);
         assert_eq!(entry.certificate_refs[0].name, "cert-8443");
 
-        // Test non-existent port
-        let result = matcher.match_sni_with_port(9443, "api.example.com");
-        assert!(result.is_none(), "Should not find cert for port 9443");
+        // Test non-existent listener
+        let result = matcher.match_sni(&key_9443, "api.example.com");
+        assert!(result.is_none(), "Should not find cert for listener on port 9443");
     }
 
     #[test]
-    fn test_multiple_ports_different_hostnames() {
+    fn test_multiple_listeners_different_hostnames() {
         let matcher = GatewayTlsMatcher::new();
+        let key_443 = test_listener_key(443);
+        let key_8443 = test_listener_key(8443);
 
         let tls_config_api = GatewayTLSConfig {
             mode: Some("Terminate".to_string()),
@@ -739,28 +770,30 @@ mod tests {
 
         matcher.rebuild_from_gateways(&[gateway]);
 
-        // api.example.com on port 443
-        let result = matcher.match_sni_with_port(443, "api.example.com");
+        // api.example.com on listener 443
+        let result = matcher.match_sni(&key_443, "api.example.com");
         assert!(result.is_some());
         assert_eq!(result.unwrap().certificate_refs[0].name, "api-cert");
 
-        // admin.example.com on port 8443
-        let result = matcher.match_sni_with_port(8443, "admin.example.com");
+        // admin.example.com on listener 8443
+        let result = matcher.match_sni(&key_8443, "admin.example.com");
         assert!(result.is_some());
         assert_eq!(result.unwrap().certificate_refs[0].name, "admin-cert");
 
-        // api.example.com on port 8443 should fail (wrong port)
-        let result = matcher.match_sni_with_port(8443, "api.example.com");
+        // api.example.com on listener 8443 should fail (wrong listener)
+        let result = matcher.match_sni(&key_8443, "api.example.com");
         assert!(result.is_none());
 
-        // admin.example.com on port 443 should fail (wrong port)
-        let result = matcher.match_sni_with_port(443, "admin.example.com");
+        // admin.example.com on listener 443 should fail (wrong listener)
+        let result = matcher.match_sni(&key_443, "admin.example.com");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_catchall_with_hostname_priority() {
         let matcher = GatewayTlsMatcher::new();
+        let key_443 = test_listener_key(443);
+        let key_8443 = test_listener_key(8443);
 
         // Listener 1: specific hostname on port 443
         let tls_specific = make_tls_config("specific-cert", Some("default"));
@@ -775,17 +808,138 @@ mod tests {
         matcher.rebuild_from_gateways(&[gateway]);
 
         // Exact hostname should use the specific cert, not catch-all
-        let result = matcher.match_sni_with_port(443, "api.example.com");
+        let result = matcher.match_sni(&key_443, "api.example.com");
         assert!(result.is_some());
         assert_eq!(result.unwrap().certificate_refs[0].name, "specific-cert");
 
         // Unknown hostname should fall back to catch-all
-        let result = matcher.match_sni_with_port(443, "unknown.example.com");
+        let result = matcher.match_sni(&key_443, "unknown.example.com");
         assert!(result.is_some(), "Unknown SNI should match catch-all");
         assert_eq!(result.unwrap().certificate_refs[0].name, "catchall-cert");
 
-        // Different port should not match either
-        let result = matcher.match_sni_with_port(8443, "unknown.example.com");
-        assert!(result.is_none(), "Different port should not match");
+        // Different listener should not match either
+        let result = matcher.match_sni(&key_8443, "unknown.example.com");
+        assert!(result.is_none(), "Different listener should not match");
+    }
+
+    #[test]
+    fn test_programmed_false_listener_not_registered() {
+        use crate::types::resources::common::Condition;
+        use crate::types::resources::gateway::{GatewayStatus, ListenerStatus};
+
+        let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
+
+        let tls_config = make_tls_config("server-cert", Some("default"));
+        let listener = create_test_listener("https", Some("api.example.com"), Some(tls_config));
+
+        let mut gateway = create_test_gateway("test-gw", "default", vec![listener]);
+        gateway.status = Some(GatewayStatus {
+            addresses: None,
+            conditions: None,
+            listeners: Some(vec![ListenerStatus {
+                name: "https".to_string(),
+                supported_kinds: vec![],
+                attached_routes: 0,
+                conditions: vec![Condition {
+                    last_transition_time: "2024-01-01T00:00:00Z".to_string(),
+                    message: String::new(),
+                    observed_generation: None,
+                    reason: "Invalid".to_string(),
+                    status: "False".to_string(),
+                    type_: "Programmed".to_string(),
+                }],
+            }]),
+        });
+
+        matcher.rebuild_from_gateways(&[gateway]);
+
+        // Programmed=False listener must not be in the TLS matcher
+        let result = matcher.match_sni(&key, "api.example.com");
+        assert!(result.is_none(), "Programmed=False listener should not serve TLS");
+        assert!(
+            matcher.is_empty(),
+            "matcher should be empty when only listener is invalid"
+        );
+    }
+
+    #[test]
+    fn test_exact_hostname_not_merged_into_wildcard_bucket() {
+        let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
+
+        let tls_wildcard = make_tls_config("wildcard-cert", Some("default"));
+        let tls_exact = make_tls_config("exact-cert", Some("default"));
+
+        let listener_wc = create_test_listener("https-wc", Some("*.wildcard.org"), Some(tls_wildcard));
+        let listener_exact = create_test_listener("https-exact", Some("fourth-example.wildcard.org"), Some(tls_exact));
+
+        let gateway = create_test_gateway("test-gw", "default", vec![listener_wc, listener_exact]);
+        matcher.rebuild_from_gateways(&[gateway]);
+
+        // Exact hostname must match the exact listener, not the wildcard one
+        let result = matcher.match_sni(&key, "fourth-example.wildcard.org");
+        assert!(result.is_some(), "exact hostname should match");
+        let entry = result.unwrap();
+        assert_eq!(
+            entry.listener_name, "https-exact",
+            "exact hostname must select the exact listener, not the wildcard"
+        );
+        assert_eq!(entry.certificate_refs[0].name, "exact-cert");
+
+        // Other subdomains should still match the wildcard
+        let result = matcher.match_sni(&key, "other.wildcard.org");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().listener_name, "https-wc");
+    }
+
+    #[test]
+    fn test_programmed_false_does_not_shadow_valid_listener() {
+        use crate::types::resources::common::Condition;
+        use crate::types::resources::gateway::{GatewayStatus, ListenerStatus};
+
+        let matcher = GatewayTlsMatcher::new();
+        let key = test_listener_key(443);
+
+        // Invalid gateway: Programmed=False, catch-all (no hostname), valid cert
+        let invalid_tls = make_tls_config("invalid-cert", Some("default"));
+        let invalid_listener = create_test_listener("https", None, Some(invalid_tls));
+        let mut invalid_gw = create_test_gateway("invalid-gw", "default", vec![invalid_listener]);
+        invalid_gw.status = Some(GatewayStatus {
+            addresses: None,
+            conditions: None,
+            listeners: Some(vec![ListenerStatus {
+                name: "https".to_string(),
+                supported_kinds: vec![],
+                attached_routes: 0,
+                conditions: vec![Condition {
+                    last_transition_time: "2024-01-01T00:00:00Z".to_string(),
+                    message: String::new(),
+                    observed_generation: None,
+                    reason: "NoValidCACertificate".to_string(),
+                    status: "False".to_string(),
+                    type_: "Programmed".to_string(),
+                }],
+            }]),
+        });
+
+        // Valid gateway: Programmed=True, same port, specific hostname
+        let valid_tls = make_tls_config("valid-cert", Some("default"));
+        let valid_listener = create_test_listener("https", Some("api.example.com"), Some(valid_tls));
+        let valid_gw = create_test_gateway("valid-gw", "default", vec![valid_listener]);
+
+        matcher.rebuild_from_gateways(&[invalid_gw, valid_gw]);
+
+        // Valid listener should still match
+        let result = matcher.match_sni(&key, "api.example.com");
+        assert!(result.is_some(), "valid listener should still be registered");
+        assert_eq!(result.unwrap().gateway_name, "valid-gw");
+
+        // Invalid listener's cert should NOT appear as catch-all fallback
+        let fallback = matcher.match_sni(&key, "unknown.example.com");
+        assert!(
+            fallback.is_none() || fallback.as_ref().map(|e| e.gateway_name.as_str()) == Some("valid-gw"),
+            "catch-all should not use the invalid gateway's cert"
+        );
     }
 }

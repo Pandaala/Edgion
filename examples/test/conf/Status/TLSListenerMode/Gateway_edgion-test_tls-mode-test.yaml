@@ -16,3 +16,8 @@ spec:
       port: 31326
       tls:
         mode: Mixed
+    - name: terminate
+      protocol: TLS
+      port: 31327
+      tls:
+        mode: Terminate

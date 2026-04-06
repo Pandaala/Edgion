@@ -1,19 +1,20 @@
 #![allow(dead_code)]
 
 use crate::core::common::matcher::HashHost;
+use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;
 use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 struct TlsCertMatcherData {
-    port_matcher: HashMap<u16, HashHost<Vec<Arc<EdgionTls>>>>,
+    listener_matcher: HashMap<ListenerKey, HashHost<Vec<Arc<EdgionTls>>>>,
 }
 
 impl TlsCertMatcherData {
     fn new() -> Self {
         Self {
-            port_matcher: HashMap::new(),
+            listener_matcher: HashMap::new(),
         }
     }
 }
@@ -35,19 +36,19 @@ impl TlsCertMatcher {
         }
     }
 
-    /// Atomically replace port-specific matchers.
+    /// Atomically replace listener-specific matchers.
     ///
     /// # Warning
     /// Do not call this method frequently. Maintain at least 100ms interval between calls.
-    pub fn set(&self, port_matcher: HashMap<u16, HashHost<Vec<Arc<EdgionTls>>>>) {
-        self.data.store(Arc::new(TlsCertMatcherData { port_matcher }));
+    pub fn set(&self, listener_matcher: HashMap<ListenerKey, HashHost<Vec<Arc<EdgionTls>>>>) {
+        self.data.store(Arc::new(TlsCertMatcherData { listener_matcher }));
     }
 
-    /// Match with port dimension.
-    pub fn match_sni_with_port(&self, port: u16, sni: &str) -> Option<Arc<EdgionTls>> {
+    /// Match SNI against certificates for a specific listener.
+    pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {
         let snapshot = self.data.load();
 
-        if let Some(host_matcher) = snapshot.port_matcher.get(&port) {
+        if let Some(host_matcher) = snapshot.listener_matcher.get(key) {
             if let Some(tls_list) = host_matcher.get(sni) {
                 if let Some(first) = tls_list.first() {
                     return Some(first.clone());
@@ -59,9 +60,9 @@ impl TlsCertMatcher {
 }
 
 impl TlsCertMatcher {
-    /// Number of ports with certificate matchers configured.
-    pub fn port_count(&self) -> usize {
-        self.data.load().port_matcher.len()
+    /// Number of listeners with certificate matchers configured.
+    pub fn listener_count(&self) -> usize {
+        self.data.load().listener_matcher.len()
     }
 }
 
@@ -71,11 +72,13 @@ pub fn get_tls_cert_matcher() -> &'static TlsCertMatcher {
     &TLS_CERT_MATCHER
 }
 
-pub fn set_tls_cert_matcher(port_matcher: HashMap<u16, HashHost<Vec<Arc<EdgionTls>>>>) -> anyhow::Result<()> {
-    get_tls_cert_matcher().set(port_matcher);
+pub fn set_tls_cert_matcher(
+    listener_matcher: HashMap<ListenerKey, HashHost<Vec<Arc<EdgionTls>>>>,
+) -> anyhow::Result<()> {
+    get_tls_cert_matcher().set(listener_matcher);
     Ok(())
 }
 
-pub fn match_sni_with_port(port: u16, sni: &str) -> Option<Arc<EdgionTls>> {
-    get_tls_cert_matcher().match_sni_with_port(port, sni)
+pub fn match_sni(key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {
+    get_tls_cert_matcher().match_sni(key, sni)
 }

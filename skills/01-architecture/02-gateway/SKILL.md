@@ -48,8 +48,8 @@ description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TL
 │  │   ├── upstream_response    → response plugins             │
 │  │   └── logging              → AccessLog + Metrics          │
 │  │                                                           │
-│  ├── TCP/TLS Routes (per-port 路由)                          │
-│  └── UDP Routes (per-port 路由)                              │
+│  ├── TCP/TLS Routes (per-listener 路由)                      │
+│  └── UDP Routes (per-listener 路由)                          │
 │                                                              │
 │  Admin API (:5900)   Metrics API (:5901)                     │
 │                                                              │

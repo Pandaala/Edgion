@@ -306,7 +306,9 @@ pub fn record_mirror_metric(status: &'static str, duration_ms: f64) {
         "status" => status.to_string(),
     )
     .increment(1);
-    histogram!(names::MIRROR_DURATION_MS).record(duration_ms);
+    if crate::core::gateway::cli::config::get_request_duration_config().enabled {
+        histogram!(names::MIRROR_DURATION_MS).record(duration_ms);
+    }
 }
 
 /// Record end-to-end request duration histogram.

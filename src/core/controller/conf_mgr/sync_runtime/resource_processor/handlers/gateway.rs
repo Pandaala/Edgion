@@ -13,18 +13,24 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_att
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
     get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_listener_port_manager, get_secret,
-    make_port_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    make_conflict_key, ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::types::constants::app::GATEWAY_NAME;
+use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
-    GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, Listener as GatewayListener, ListenerStatus, RouteGroupKind,
+    GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, Listener as GatewayListener, ListenerStatus,
+    RouteGroupKind,
 };
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+const GATEWAY_SYSTEM_NAMESPACE: &str = "edgion-system";
 
 /// Gateway handler
 ///
@@ -140,8 +146,11 @@ struct ListenerInfo {
     no_valid_ca_certificate: bool,
     /// True when frontend validation uses AllowInsecureFallback mode
     insecure_fallback_mode: bool,
-    /// True when listener TLS mode is not supported (e.g. Mixed)
+    /// True when listener TLS mode is not supported for its protocol/feature set.
     unsupported_tls_mode: bool,
+    /// True when this TLS listener shares a port with another TLS listener
+    /// that uses a different termination mode (e.g. Terminate + Passthrough).
+    mixed_tls_conflict: bool,
 }
 
 impl GatewayHandler {
@@ -186,15 +195,16 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         cross_ns_manager.clear_resource_refs(&cross_ns_ref);
 
         // Register listeners to ListenerPortManager (empty list clears stale registrations)
-        let listener_ports: Vec<(String, String, Option<String>)> = g
+        let listener_ports: Vec<(String, ConflictKey, Option<String>)> = g
             .spec
             .listeners
             .as_deref()
             .unwrap_or_default()
             .iter()
             .map(|l| {
-                let port_key = make_port_key(l.port, &l.protocol);
-                (l.name.clone(), port_key, l.hostname.clone())
+                let addr = resolve_listener_addr(g.spec.addresses.as_ref(), l.port);
+                let conflict_key = make_conflict_key(addr);
+                (l.name.clone(), conflict_key, l.hostname.clone())
             })
             .collect();
         let gateway_key_for_port_mgr = format!(
@@ -452,11 +462,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let gateway_key_for_tracker = format!("{}/{}", gateway_ns, gateway_name);
 
         // Pre-compute per-listener info while gateway is only immutably borrowed.
-        let listener_infos: Vec<ListenerInfo> = gateway
-            .spec
-            .listeners
-            .as_deref()
-            .unwrap_or_default()
+        let listeners_slice = gateway.spec.listeners.as_deref().unwrap_or_default();
+
+        let mixed_tls_listeners = detect_mixed_tls_mode_listeners(listeners_slice, gateway.spec.addresses.as_ref());
+
+        let listener_infos: Vec<ListenerInfo> = listeners_slice
             .iter()
             .map(|l| {
                 let route_count = tracker.count_for_listener(&gateway_key_for_tracker, &l.name);
@@ -464,10 +474,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l);
                 resolved_refs_errors.append(&mut kind_errors);
 
-                // Check if all CA refs are invalid (no valid CA certificate)
                 let no_valid_ca_certificate = has_all_ca_refs_invalid(l, &resolved_refs_errors);
 
-                // Check if insecure fallback mode
                 let insecure_fallback_mode = l
                     .tls
                     .as_ref()
@@ -475,21 +483,24 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     .and_then(|fv| fv.mode.as_deref())
                     == Some("AllowInsecureFallback");
 
-                // Check if TLS mode is unsupported (only Terminate and Passthrough are supported)
-                let unsupported_tls_mode = l
-                    .tls
-                    .as_ref()
-                    .and_then(|t| t.mode.as_deref())
-                    .is_some_and(|mode| mode != "Terminate" && mode != "Passthrough");
+                let unsupported_tls_mode = listener_has_unsupported_tls_mode(l);
+                let mixed_tls_conflict = mixed_tls_listeners.contains(&l.name);
+
+                let effective_kinds = if mixed_tls_conflict {
+                    Vec::new()
+                } else {
+                    supported_kinds
+                };
 
                 ListenerInfo {
                     name: l.name.clone(),
-                    supported_kinds,
+                    supported_kinds: effective_kinds,
                     route_count,
                     resolved_refs_errors,
                     no_valid_ca_certificate,
                     insecure_fallback_mode,
                     unsupported_tls_mode,
+                    mixed_tls_conflict,
                 }
             })
             .collect();
@@ -618,6 +629,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 no_valid_ca_certificate,
                 insecure_fallback_mode: _,
                 unsupported_tls_mode,
+                mixed_tls_conflict,
             } in listener_infos
             {
                 let listener_status = listener_statuses.iter_mut().find(|ls| ls.name == name);
@@ -638,8 +650,17 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 ls.supported_kinds = supported_kinds;
                 ls.attached_routes = route_count;
 
-                // Set Conflicted condition based on ListenerPortManager
-                let is_conflicted = if let Some(reason) = conflicts.get(&ls.name) {
+                // Set Conflicted condition: mixed TLS mode or ListenerPortManager conflicts
+                let is_conflicted = if mixed_tls_conflict {
+                    let cond = condition_true(
+                        condition_types::CONFLICTED,
+                        condition_reasons::PROTOCOL_CONFLICT,
+                        "Mixed TLS termination modes on the same port are not supported",
+                        generation,
+                    );
+                    update_gateway_condition(&mut ls.conditions, cond);
+                    true
+                } else if let Some(reason) = conflicts.get(&ls.name) {
                     let cond = condition_true(
                         condition_types::CONFLICTED,
                         condition_reasons::LISTENER_CONFLICT,
@@ -659,7 +680,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     false
                 };
 
-                // Update other listener conditions (pass conflict status for Programmed/Ready)
                 update_listener_conditions(
                     ls,
                     validation_errors,
@@ -668,6 +688,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     &resolved_refs_errors,
                     no_valid_ca_certificate,
                     unsupported_tls_mode,
+                    mixed_tls_conflict,
                 );
             }
 
@@ -794,8 +815,8 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
 
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
     let gateway_name = gateway.metadata.name.as_deref().unwrap_or("");
-    if !gateway_name.is_empty() {
-        if let Some(cluster_ip) = lookup_service_cluster_ip(gateway_ns, gateway_name) {
+    for (service_ns, service_name) in gateway_service_lookup_candidates(gateway_ns, gateway_name) {
+        if let Some(cluster_ip) = lookup_service_cluster_ip(&service_ns, &service_name) {
             return vec![GatewayStatusAddress {
                 address_type: Some("IPAddress".to_string()),
                 value: cluster_ip,
@@ -816,22 +837,24 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
     }]
 }
 
+fn gateway_service_lookup_candidates(gateway_ns: &str, gateway_name: &str) -> Vec<(String, String)> {
+    let mut candidates = vec![(GATEWAY_SYSTEM_NAMESPACE.to_string(), GATEWAY_NAME.to_string())];
+
+    if !gateway_name.is_empty() && (gateway_ns != GATEWAY_SYSTEM_NAMESPACE || gateway_name != GATEWAY_NAME) {
+        candidates.push((gateway_ns.to_string(), gateway_name.to_string()));
+    }
+
+    candidates
+}
+
 fn lookup_service_cluster_ip(namespace: &str, name: &str) -> Option<String> {
     let processor = PROCESSOR_REGISTRY.get("Service")?;
-    let (json, _) = processor.as_watch_obj().list_json().ok()?;
-    let services: Vec<Service> = serde_json::from_str(&json).ok()?;
-
-    services.into_iter().find_map(|svc| {
-        let svc_ns = svc.metadata.namespace.as_deref().unwrap_or("default");
-        let svc_name = svc.metadata.name.as_deref().unwrap_or("");
-        if svc_ns != namespace || svc_name != name {
-            return None;
-        }
-
-        svc.spec
-            .and_then(|spec| spec.cluster_ip)
-            .filter(|cluster_ip| !cluster_ip.is_empty() && cluster_ip != "None")
-    })
+    let key = format!("{}/{}", namespace, name);
+    let svc: Arc<Service> = processor.get_raw_any(&key)?.downcast::<Service>().ok()?;
+    svc.spec
+        .as_ref()
+        .and_then(|spec| spec.cluster_ip.clone())
+        .filter(|cluster_ip| !cluster_ip.is_empty() && cluster_ip != "None")
 }
 
 /// Update or insert a condition in Gateway conditions list
@@ -868,12 +891,21 @@ fn update_listener_conditions(
     resolved_refs_errors: &[GatewayResolvedRefsError],
     no_valid_ca_certificate: bool,
     unsupported_tls_mode: bool,
+    mixed_tls_conflict: bool,
 ) {
-    // Accepted: False if unsupported TLS mode
-    if unsupported_tls_mode {
+    // Accepted: False if mixed TLS termination on the same port
+    if mixed_tls_conflict {
         let cond = condition_false(
             condition_types::ACCEPTED,
-            condition_reasons::UNSUPPORTED_TLS_MODE,
+            condition_reasons::PROTOCOL_CONFLICT,
+            "Mixed TLS termination modes on the same port are not supported",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if unsupported_tls_mode {
+        let cond = condition_false(
+            condition_types::ACCEPTED,
+            condition_reasons::UNSUPPORTED_VALUE,
             "Listener TLS mode is not supported",
             generation,
         );
@@ -881,7 +913,7 @@ fn update_listener_conditions(
     } else if no_valid_ca_certificate {
         let cond = condition_false(
             condition_types::ACCEPTED,
-            "NoValidCACertificate",
+            condition_reasons::NO_VALID_CA_CERTIFICATE,
             "All frontend validation CA certificate references are invalid",
             generation,
         );
@@ -934,7 +966,12 @@ fn update_listener_conditions(
             generation,
         );
         update_gateway_condition(&mut ls.conditions, cond);
-    } else if has_unresolved_refs || !validation_errors.is_empty() || no_valid_ca_certificate || unsupported_tls_mode {
+    } else if has_unresolved_refs
+        || !validation_errors.is_empty()
+        || no_valid_ca_certificate
+        || unsupported_tls_mode
+        || mixed_tls_conflict
+    {
         let cond = condition_false(
             condition_types::PROGRAMMED,
             condition_reasons::INVALID_LISTENER,
@@ -985,7 +1022,7 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
         .iter()
         .any(|e| matches!(e, GatewayResolvedRefsError::InvalidCACertificateRef { .. }))
     {
-        return "InvalidCACertificateRef";
+        return condition_reasons::INVALID_CA_CERTIFICATE_REF;
     }
     "InvalidCertificateRef"
 }
@@ -1259,8 +1296,63 @@ fn has_all_ca_refs_invalid(listener: &GatewayListener, errors: &[GatewayResolved
     ca_error_count >= ca_ref_count
 }
 
+/// Returns the set of listener names that participate in a mixed TLS termination
+/// conflict — i.e. TLS listeners on the same port with different modes
+/// (e.g. one Terminate and one Passthrough).
+fn detect_mixed_tls_mode_listeners(
+    listeners: &[GatewayListener],
+    addresses: Option<&Vec<GatewayAddress>>,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashMap;
+    let mut port_modes: HashMap<u16, Vec<(String, String)>> = HashMap::new();
+
+    for l in listeners {
+        if !l.protocol.eq_ignore_ascii_case("TLS") {
+            continue;
+        }
+        let mode = l
+            .tls
+            .as_ref()
+            .and_then(|t| t.mode.as_deref())
+            .unwrap_or("Terminate")
+            .to_string();
+        let addr = resolve_listener_addr(addresses, l.port);
+        port_modes.entry(addr.port()).or_default().push((l.name.clone(), mode));
+    }
+
+    let mut result = std::collections::HashSet::new();
+    for entries in port_modes.values() {
+        if entries.len() < 2 {
+            continue;
+        }
+        let first_mode = &entries[0].1;
+        if entries.iter().any(|(_, m)| m != first_mode) {
+            for (name, _) in entries {
+                result.insert(name.clone());
+            }
+        }
+    }
+    result
+}
+
+fn listener_has_unsupported_tls_mode(listener: &GatewayListener) -> bool {
+    let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_deref()) else {
+        return false;
+    };
+
+    match listener.protocol.to_uppercase().as_str() {
+        "TLS" => mode != "Passthrough" && mode != "Terminate",
+        "HTTPS" => mode != "Terminate",
+        _ => false,
+    }
+}
+
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
 fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, Vec<GatewayResolvedRefsError>) {
+    if listener_has_unsupported_tls_mode(listener) {
+        return (Vec::new(), Vec::new());
+    }
+
     let protocol_kinds = get_supported_kinds_for_protocol(&listener.protocol);
     let requested_kinds = listener
         .allowed_routes
@@ -1322,5 +1414,34 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
             kind: "TLSRoute".to_string(),
         }],
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gateway_service_lookup_candidates;
+    use crate::types::constants::app::GATEWAY_NAME;
+
+    #[test]
+    fn gateway_service_lookup_prefers_fixed_edgion_gateway_service() {
+        let candidates = gateway_service_lookup_candidates("gateway-conformance-infra", "same-namespace");
+
+        assert_eq!(
+            candidates,
+            vec![
+                ("edgion-system".to_string(), GATEWAY_NAME.to_string()),
+                ("gateway-conformance-infra".to_string(), "same-namespace".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn gateway_service_lookup_avoids_duplicate_fixed_service_candidate() {
+        let candidates = gateway_service_lookup_candidates("edgion-system", GATEWAY_NAME);
+
+        assert_eq!(
+            candidates,
+            vec![("edgion-system".to_string(), GATEWAY_NAME.to_string())]
+        );
     }
 }

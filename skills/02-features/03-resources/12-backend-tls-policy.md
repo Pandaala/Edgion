@@ -5,15 +5,15 @@ description: BackendTLSPolicy 完整 Schema：上游后端 TLS 验证和 mTLS。
 
 # BackendTLSPolicy 资源
 
-> API: `gateway.networking.k8s.io/v1alpha3` | Scope: Namespaced
-> Gateway API v1.4.0 Experimental 资源
+> API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
+> Gateway API v1.5.0 资源；旧集群可能仍 served `v1alpha3`
 
 BackendTLSPolicy 定义网关到后端的 TLS 连接配置，包括 CA 验证和客户端证书（mTLS）。
 
 ## 完整 Schema
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: my-backend-tls
@@ -27,9 +27,9 @@ spec:
 
   validation:
     hostname: "backend.internal.svc"               # 必填：TLS SNI 和证书验证主机名
-    caCertificateRefs:                             # CA 证书引用
+    caCertificateRefs:                             # CA 证书引用（Secret 或 ConfigMap）
       - group: ""
-        kind: Secret
+        kind: ConfigMap                            # ConfigMap: 读取 ca.crt key
         name: backend-ca-cert
     subjectAltNames:                               # SAN 白名单（可选）
       - type: Hostname
@@ -39,8 +39,16 @@ spec:
     wellKnownCACertificates: System                # 使用系统 CA（可选）
 
   options:                                         # Edgion 扩展选项
-    edgion.io/client-certificate-ref: "default/client-cert"  # 客户端证书（mTLS 到后端）
+    edgion.io/client-certificate-ref: "client-cert"          # 客户端证书（同 namespace）
 ```
+
+## 版本兼容策略
+
+- controller 内部主模型按 `v1` 处理
+- 若集群只 served `v1alpha3`，controller 可以回退监听旧版本，并在进入 handler 前转换成统一内部类型
+- 不建议同时为 `v1` 和 `v1alpha3` 启两个 watcher
+- 若集群已只 served `v1`，旧的 `v1alpha3` manifest 需要迁移为 `v1`
+- FileSystem 模式下可以接受 `v1` 和 `v1alpha3` 文件输入，但应在解析入口统一转换成 `v1` 内部模型
 
 ## spec 字段详解
 
@@ -58,7 +66,7 @@ spec:
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `String` | 是 | TLS SNI 和证书验证的主机名 |
-| `caCertificateRefs` | `Vec<CACertRef>?` | 否 | CA 证书引用列表 |
+| `caCertificateRefs` | `Vec<CACertRef>?` | 否 | CA 证书引用列表（支持 Secret 和 ConfigMap，ConfigMap 读取 `ca.crt` key） |
 | `subjectAltNames` | `Vec<SubjectAltName>?` | 否 | SAN 白名单 |
 | `wellKnownCACertificates` | `String?` | 否 | `System`：使用系统 CA 证书 |
 
@@ -74,9 +82,11 @@ spec:
 
 | Key | 值格式 | 说明 |
 |-----|--------|------|
-| `edgion.io/client-certificate-ref` | `ns/name` | 客户端证书 Secret（用于网关→后端 mTLS） |
+| `edgion.io/client-certificate-ref` | `name` | 客户端证书 Secret（同 namespace，用于网关→后端 mTLS） |
 
 ## Status Schema
+
+ancestorRef 通过 `Service → Route → Gateway` 三步查询自动解析，指向关联的 Gateway（非 BackendTLSPolicy 自身）。
 
 ```yaml
 status:
@@ -90,4 +100,32 @@ status:
       conditions:
         - type: Accepted
           status: "True"
+          reason: Accepted
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
 ```
+
+### Accepted condition reasons
+
+| Reason | 含义 | 优先级 |
+|--------|------|--------|
+| `Invalid` | 校验失败（如 caCertificateRefs 和 wellKnownCACertificates 互斥） | 1（最高） |
+| `NoValidCACertificate` | 所有 CA 证书引用都无效 | 2 |
+| `Conflicted` | 同一 target 存在更高优先级的 policy | 3 |
+| `Accepted` | 正常接受 | 4 |
+
+### ResolvedRefs condition reasons
+
+| Reason | 含义 | 优先级 |
+|--------|------|--------|
+| `InvalidKind` | caCertificateRef kind 不支持（非 Secret/ConfigMap） | 1（最高） |
+| `InvalidCACertificateRef` | CA ref 不存在或缺少 `ca.crt` key | 2 |
+| `ResolvedRefs` | 所有引用已解析 | 3 |
+
+### 冲突检测
+
+多个 BackendTLSPolicy 指向同一 Service（相同 sectionName）时，按 Gateway API 优先级规则只有一个被 Accepted：
+- 先按 `creationTimestamp` 升序（更早创建的优先）
+- 相同时间按 `{namespace}/{name}` 字典序
+- 不同 `sectionName` 不冲突

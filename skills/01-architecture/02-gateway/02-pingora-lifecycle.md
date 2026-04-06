@@ -77,7 +77,7 @@ description: Pingora ProxyHttp 生命周期回调：8 阶段处理链、Connecti
    - 安全校验：SNI-Host 一致性检查、Listener hostname 隔离、X-Forwarded-For 长度限制
 
 2. **路由匹配**：
-   - 从 `PortGatewayInfoStore` 动态加载当前端口的 GatewayInfo 列表
+   - 从 `ListenerGatewayInfoStore` 动态加载当前 Listener 的 GatewayInfo 列表（通过 `EdgionHttpProxy.listener_key` 查找）
    - gRPC 请求优先尝试 GRPCRoute 匹配（`try_match_grpc_route`）
    - HTTP 请求通过 `port_routes.match_route()` 匹配（radix tree + regex 引擎）
    - 匹配失败返回 404

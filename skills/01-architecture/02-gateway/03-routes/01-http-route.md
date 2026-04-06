@@ -103,14 +103,14 @@ radix tree 内部支持 `:param` 参数匹配；`::` 双冒号转义为字面冒
 
 1. 同步 LB 策略。
 2. 清空 `route_cache`，全量替换。
-3. 调用 `rebuild_all_port_managers` 重建所有端口路由表。
+3. 调用 `rebuild_all_listener_managers` 重建所有 listener 路由表。
 
 ### partial_update
 
-1. 计算受影响端口集合（从变更路由的 `resolved_ports` / `parentRef.port` 获取）。
+1. 计算受影响 listener 集合（从变更路由的 `resolved_listeners` 获取）。
 2. 合并 add+update，同步 LB 策略，清理 remove 的 LB 策略。
 3. 更新 `route_cache`。
-4. 调用 `rebuild_affected_port_managers` 仅重建受影响端口。
+4. 调用 `rebuild_affected_listener_managers` 仅重建受影响 listener。
 
 ### 路由解析
 

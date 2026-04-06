@@ -29,7 +29,7 @@ GRPCRoute 定义 gRPC 层的路由规则。其 Controller 侧处理逻辑与 HTT
 与 HTTPRoute 处理模式完全一致：
 1. 记录跨命名空间引用到 CrossNsRefManager
 2. 注册 Service 引用到 ServiceRefManager
-3. 清除并重算 `resolved_ports`（从 parentRef 解析 Listener 端口）
+3. 清除并重算 `resolved_listeners`（通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`）
 4. 解析 `resolved_hostnames`（路由 hostnames 与 Gateway Listener hostnames 的交集）
 5. 标记被拒绝的跨命名空间 backendRef（设置 `ref_denied`）
 
@@ -52,7 +52,7 @@ GRPCRoute 的 ConfHandler 将路由编译到 `GlobalGrpcRouteManagers`：
 1. **preparse**：在路由缓存中调用 `route.preparse()` 构建运行时结构
 2. **路由单元**：每条规则编译为 `GrpcRouteRuleUnit`，包含 `GrpcMatchInfo`（service、method、headers 匹配）
 3. **域名匹配**：使用 resolved_hostnames（优先）或 spec.hostnames 作为匹配域名，无 hostname 时使用 `*` 全匹配
-4. **per-port 管理**：根据 resolved_ports 注册到对应端口的路由管理器，变更时仅重建受影响端口的路由表
+4. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器，变更时仅重建受影响 listener 的路由表
 5. **gRPC-Web 支持**：通过 content-type 检测自动支持 gRPC-Web 协议
 
 ## 跨资源关联

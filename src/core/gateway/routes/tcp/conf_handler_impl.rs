@@ -1,8 +1,8 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::routes::tcp::routes_mgr::{
-    get_global_tcp_route_managers, resolved_ports_for_route, GlobalTcpRouteManagers,
+    get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
 };
-use crate::types::{ResourceMeta, TCPRoute};
+use crate::types::{ListenerKey, ResourceMeta, TCPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -48,7 +48,7 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             }
         }
 
-        self.rebuild_all_port_managers();
+        self.rebuild_all_listener_managers();
     }
 
     fn partial_update(
@@ -65,13 +65,13 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             "partial update"
         );
 
-        let mut affected_ports: HashSet<u16> = HashSet::new();
+        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
-        // Collect old ports from routes being removed or updated BEFORE modifying the cache
+        // Collect old listeners from routes being removed or updated BEFORE modifying the cache
         for key in remove.iter().chain(update.keys()) {
             if let Some(existing) = self.get_route(key) {
-                for &port in resolved_ports_for_route(&existing) {
-                    affected_ports.insert(port);
+                for lk in resolved_listeners_for_route(&existing) {
+                    affected_listeners.insert(lk.clone());
                 }
             }
         }
@@ -87,8 +87,8 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             self.remove_route(&key);
             match self.initialize_route(route) {
                 Ok(initialized) => {
-                    for &port in resolved_ports_for_route(&initialized) {
-                        affected_ports.insert(port);
+                    for lk in resolved_listeners_for_route(&initialized) {
+                        affected_listeners.insert(lk.clone());
                     }
                     self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Updated TCPRoute");
@@ -107,8 +107,8 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
         for (key, route) in add {
             match self.initialize_route(route) {
                 Ok(initialized) => {
-                    for &port in resolved_ports_for_route(&initialized) {
-                        affected_ports.insert(port);
+                    for lk in resolved_listeners_for_route(&initialized) {
+                        affected_listeners.insert(lk.clone());
                     }
                     self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Added TCPRoute");
@@ -123,7 +123,7 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             }
         }
 
-        self.rebuild_affected_port_managers(&affected_ports);
+        self.rebuild_affected_listener_managers(&affected_listeners);
     }
 }
 
@@ -142,8 +142,11 @@ impl GlobalTcpRouteManagers {
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 if let Some(backend_refs) = &rule.backend_refs {
-                    let backends: Vec<_> = backend_refs.to_vec();
-                    let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
+                    let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
+                        .iter()
+                        .filter(|br| is_service_backend_ref(br))
+                        .map(|br| (br.clone(), br.weight))
+                        .unzip();
 
                     rule.backend_finder.init(backends, weights);
 
@@ -190,6 +193,20 @@ impl GlobalTcpRouteManagers {
     }
 }
 
+/// A BackendRef is routable only when it targets a core Service
+/// (group is "" or "core" and kind is "Service" or omitted).
+fn is_service_backend_ref(br: &crate::types::resources::tcp_route::TCPBackendRef) -> bool {
+    let group_ok = match br.group.as_deref() {
+        None | Some("") | Some("core") => true,
+        _ => false,
+    };
+    let kind_ok = match br.kind.as_deref() {
+        None | Some("Service") => true,
+        _ => false,
+    };
+    group_ok && kind_ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,7 +214,19 @@ mod tests {
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::tcp_route::*;
 
-    fn create_test_tcp_route(namespace: &str, name: &str, gateway: &str, listener_name: &str, port: u16) -> TCPRoute {
+    fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
+        ListenerKey::new(addr, protocol)
+    }
+
+    fn create_test_tcp_route(
+        namespace: &str,
+        name: &str,
+        gateway: &str,
+        listener_name: &str,
+        port: u16,
+        listener_key: ListenerKey,
+    ) -> TCPRoute {
         TCPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
@@ -227,7 +256,7 @@ mod tests {
                     stream_plugin_store_key: None,
                     backend_finder: Default::default(),
                 }]),
-                resolved_ports: Some(vec![port]),
+                resolved_listeners: Some(vec![listener_key]),
             },
             status: None,
         }
@@ -236,25 +265,56 @@ mod tests {
     #[test]
     fn test_tcp_route_full_set() {
         let managers = GlobalTcpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
-        let _ = managers.get_or_create_port_manager(9001);
+        let key9000 = make_listener_key(9000, "TCP");
+        let key9001 = make_listener_key(9001, "TCP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
+        let _ = managers.get_or_create_listener_manager(&key9001);
 
         let mut data = HashMap::new();
-        let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000);
-        let route2 = create_test_tcp_route("default", "route2", "gateway1", "tcp-9001", 9001);
+        let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000, key9000.clone());
+        let route2 = create_test_tcp_route("default", "route2", "gateway1", "tcp-9001", 9001, key9001.clone());
 
         data.insert("default/route1".to_string(), route1);
         data.insert("default/route2".to_string(), route2);
 
         managers.full_set(&data);
 
-        let mgr9000 = managers.get_or_create_port_manager(9000);
+        let mgr9000 = managers.get_or_create_listener_manager(&key9000);
         assert!(mgr9000.load_route_table().match_route().is_some());
 
-        let mgr9001 = managers.get_or_create_port_manager(9001);
+        let mgr9001 = managers.get_or_create_listener_manager(&key9001);
         assert!(mgr9001.load_route_table().match_route().is_some());
 
-        let mgr9002 = managers.get_or_create_port_manager(9002);
+        let key9002 = make_listener_key(9002, "TCP");
+        let mgr9002 = managers.get_or_create_listener_manager(&key9002);
         assert!(mgr9002.load_route_table().match_route().is_none());
+    }
+
+    #[test]
+    fn test_is_service_backend_ref_filters_unknown_kind() {
+        let valid = TCPBackendRef {
+            name: "svc".to_string(),
+            namespace: None,
+            port: Some(80),
+            weight: Some(1),
+            group: None,
+            kind: None,
+            ref_denied: None,
+        };
+        assert!(is_service_backend_ref(&valid));
+
+        let explicit_service = TCPBackendRef {
+            group: Some("".to_string()),
+            kind: Some("Service".to_string()),
+            ..valid.clone()
+        };
+        assert!(is_service_backend_ref(&explicit_service));
+
+        let unknown_kind = TCPBackendRef {
+            group: Some("example.com".to_string()),
+            kind: Some("Foo".to_string()),
+            ..valid.clone()
+        };
+        assert!(!is_service_backend_ref(&unknown_kind));
     }
 }

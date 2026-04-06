@@ -1,5 +1,6 @@
 # Go test binary
 conformance-test
+conformance-test.bin
 conformance-test.exe
 *.test
 

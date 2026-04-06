@@ -1,5 +1,6 @@
 use crate::core::common::matcher::HashHost;
 use crate::core::gateway::tls::validation::cert::{validate_cert, CertValidationResult};
+use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
@@ -192,12 +193,12 @@ impl TlsStore {
     }
 
     /// Rebuild the TLS certificate matcher from provided data.
-    /// Only port-resolved certs are admitted into the matcher.
+    /// Only listener-resolved certs are admitted into the matcher.
     ///
     /// # Arguments
     /// * `tls_data` - Reference to the TLS data map (already locked)
     fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) -> anyhow::Result<()> {
-        let mut port_host_map: HashMap<u16, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
+        let mut listener_host_map: HashMap<ListenerKey, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
         let mut total_hosts = 0;
         let mut valid_certs = 0;
         let mut invalid_certs = 0;
@@ -216,10 +217,10 @@ impl TlsStore {
 
             let tls = &entry.tls;
 
-            match &tls.spec.resolved_ports {
-                Some(ports) if !ports.is_empty() => {
-                    for &port in ports {
-                        let host_map = port_host_map.entry(port).or_default();
+            match &tls.spec.resolved_listeners {
+                Some(listeners) if !listeners.is_empty() => {
+                    for listener_key in listeners {
+                        let host_map = listener_host_map.entry(listener_key.clone()).or_default();
                         for host in &tls.spec.hosts {
                             host_map.entry(host.clone()).or_default().push(tls.clone());
                             total_hosts += 1;
@@ -234,22 +235,22 @@ impl TlsStore {
                         key = %key,
                         hosts = ?tls.spec.hosts,
                         parent_refs = ?tls.spec.parent_refs,
-                        "Skipping EdgionTls from matcher because no listener ports were resolved"
+                        "Skipping EdgionTls from matcher because no listener keys were resolved"
                     );
                 }
             }
         }
 
-        let mut port_matcher = HashMap::new();
-        for (port, host_map) in port_host_map {
+        let mut listener_matcher = HashMap::new();
+        for (listener_key, host_map) in listener_host_map {
             let mut matcher = HashHost::new();
             for (host, tls_list) in host_map {
                 matcher.insert(&host, tls_list);
             }
-            port_matcher.insert(port, matcher);
+            listener_matcher.insert(listener_key, matcher);
         }
 
-        super::cert_matcher::set_tls_cert_matcher(port_matcher)?;
+        super::cert_matcher::set_tls_cert_matcher(listener_matcher)?;
 
         tracing::info!(
             component = "tls_store",

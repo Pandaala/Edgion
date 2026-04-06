@@ -66,7 +66,7 @@ impl TlsBothAbsentParentRefTestSuite {
                                     }
                                     Ok(Ok(_)) => TestResult::failed(
                                         start.elapsed(),
-                                        "Connection closed immediately (0 bytes) — resolved_ports may be empty"
+                                        "Connection closed immediately (0 bytes) — resolved_listeners may be empty"
                                             .to_string(),
                                     ),
                                     Ok(Err(e)) => {
@@ -94,7 +94,7 @@ impl TlsBothAbsentParentRefTestSuite {
     /// Test: delete Gateway, verify TLS fails, re-apply Gateway, verify TLS recovers.
     /// This validates the requeue mechanism: when a Gateway is re-added after
     /// TLSRoute and EdgionTls already exist, they should be requeued and
-    /// their resolved_ports re-resolved from the new Gateway's listeners.
+    /// their resolved_listeners re-resolved from the new Gateway's listeners.
     fn test_gateway_requeue_cycle() -> TestCase {
         TestCase::new(
             "tls_both_absent_gateway_requeue",
@@ -136,8 +136,6 @@ kind: Gateway
 metadata:
   name: tls-route-both-absent-gw
   namespace: edgion-test
-  annotations:
-    edgion.io/backend-protocol: "tcp"
 spec:
   gatewayClassName: public-gateway
   listeners:

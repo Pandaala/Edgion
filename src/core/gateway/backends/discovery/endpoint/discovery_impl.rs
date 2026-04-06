@@ -261,4 +261,12 @@ where
     pub fn endpoint(&self) -> Endpoints {
         self.discovery.endpoint()
     }
+
+    /// Get current backend addresses from the internal discovery state (pre-update snapshot).
+    /// Used to capture old backends before LB is refreshed.
+    pub fn get_current_backends(&self) -> Vec<Backend> {
+        let port = self.discovery.get_port();
+        let ep = self.discovery.endpoint.read().unwrap();
+        ep.build_backends(port).into_iter().collect()
+    }
 }

@@ -43,8 +43,12 @@ description: 资源分类与处理：通用处理流程、每种资源的功能�
 | [17-edgion-acme.md](17-edgion-acme.md) | EdgionAcme 资源 | 自动证书 |
 | **基础设施** | | |
 | [18-link-sys.md](18-link-sys.md) | LinkSys 资源 | 外部系统连接 |
+| **关联关系** | | |
+| [19-resource-dependency.md](19-resource-dependency.md) | 资源间依赖关系 | 理解跨资源引用、Store 查询、requeue 级联 |
 
 ## 资源关联总图
+
+spec 层面引用关系（简图）：
 
 ```
 GatewayClass ──────► Gateway ◄────── EdgionGatewayConfig
@@ -71,3 +75,5 @@ HTTPRoute/GRPCRoute ──► EdgionPlugins (HTTP 插件)
 
 AccessLog/Plugin 数据 ──► LinkSys (外部系统)
 ```
+
+Controller 内部 Store 查询与 requeue 级联见 [19-resource-dependency.md](19-resource-dependency.md)。

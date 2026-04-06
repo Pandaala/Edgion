@@ -1,8 +1,8 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::routes::udp::routes_mgr::{
-    get_global_udp_route_managers, resolved_ports_for_route, GlobalUdpRouteManagers,
+    get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
 };
-use crate::types::{ResourceMeta, UDPRoute};
+use crate::types::{ListenerKey, ResourceMeta, UDPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -48,7 +48,7 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             }
         }
 
-        self.rebuild_all_port_managers();
+        self.rebuild_all_listener_managers();
     }
 
     fn partial_update(
@@ -65,13 +65,13 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             "partial update"
         );
 
-        let mut affected_ports: HashSet<u16> = HashSet::new();
+        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
-        // Collect old ports from routes being removed or updated BEFORE modifying the cache
+        // Collect old listeners from routes being removed or updated BEFORE modifying the cache
         for key in remove.iter().chain(update.keys()) {
             if let Some(existing) = self.get_route(key) {
-                for &port in resolved_ports_for_route(&existing) {
-                    affected_ports.insert(port);
+                for lk in resolved_listeners_for_route(&existing) {
+                    affected_listeners.insert(lk.clone());
                 }
             }
         }
@@ -87,8 +87,8 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             self.remove_route(&key);
             match self.initialize_route(route) {
                 Ok(initialized) => {
-                    for &port in resolved_ports_for_route(&initialized) {
-                        affected_ports.insert(port);
+                    for lk in resolved_listeners_for_route(&initialized) {
+                        affected_listeners.insert(lk.clone());
                     }
                     self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Updated UDPRoute");
@@ -107,8 +107,8 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
         for (key, route) in add {
             match self.initialize_route(route) {
                 Ok(initialized) => {
-                    for &port in resolved_ports_for_route(&initialized) {
-                        affected_ports.insert(port);
+                    for lk in resolved_listeners_for_route(&initialized) {
+                        affected_listeners.insert(lk.clone());
                     }
                     self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Added UDPRoute");
@@ -123,7 +123,7 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             }
         }
 
-        self.rebuild_affected_port_managers(&affected_ports);
+        self.rebuild_affected_listener_managers(&affected_listeners);
     }
 }
 
@@ -135,8 +135,11 @@ impl GlobalUdpRouteManagers {
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 if let Some(backend_refs) = &rule.backend_refs {
-                    let backends: Vec<_> = backend_refs.to_vec();
-                    let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
+                    let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
+                        .iter()
+                        .filter(|br| is_service_backend_ref(br))
+                        .map(|br| (br.clone(), br.weight))
+                        .unzip();
 
                     rule.backend_finder.init(backends, weights);
 
@@ -154,6 +157,20 @@ impl GlobalUdpRouteManagers {
     }
 }
 
+/// A BackendRef is routable only when it targets a core Service
+/// (group is "" or "core" and kind is "Service" or omitted).
+fn is_service_backend_ref(br: &crate::types::resources::udp_route::UDPBackendRef) -> bool {
+    let group_ok = match br.group.as_deref() {
+        None | Some("") | Some("core") => true,
+        _ => false,
+    };
+    let kind_ok = match br.kind.as_deref() {
+        None | Some("Service") => true,
+        _ => false,
+    };
+    group_ok && kind_ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,7 +178,19 @@ mod tests {
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::udp_route::*;
 
-    fn create_test_udp_route(namespace: &str, name: &str, gateway: &str, listener_name: &str, port: u16) -> UDPRoute {
+    fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
+        ListenerKey::new(addr, protocol)
+    }
+
+    fn create_test_udp_route(
+        namespace: &str,
+        name: &str,
+        gateway: &str,
+        listener_name: &str,
+        port: u16,
+        listener_key: ListenerKey,
+    ) -> UDPRoute {
         UDPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
@@ -193,7 +222,7 @@ mod tests {
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                 }]),
-                resolved_ports: Some(vec![port]),
+                resolved_listeners: Some(vec![listener_key]),
             },
             status: None,
         }
@@ -202,40 +231,44 @@ mod tests {
     #[test]
     fn test_udp_route_full_set() {
         let managers = GlobalUdpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
-        let _ = managers.get_or_create_port_manager(9001);
+        let key9000 = make_listener_key(9000, "UDP");
+        let key9001 = make_listener_key(9001, "UDP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
+        let _ = managers.get_or_create_listener_manager(&key9001);
 
         let mut data = HashMap::new();
-        let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
-        let route2 = create_test_udp_route("default", "route2", "gateway1", "udp-9001", 9001);
+        let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
+        let route2 = create_test_udp_route("default", "route2", "gateway1", "udp-9001", 9001, key9001.clone());
 
         data.insert("default/route1".to_string(), route1);
         data.insert("default/route2".to_string(), route2);
 
         managers.full_set(&data);
 
-        let mgr9000 = managers.get_or_create_port_manager(9000);
+        let mgr9000 = managers.get_or_create_listener_manager(&key9000);
         assert!(mgr9000.load_route_table().match_route().is_some());
 
-        let mgr9001 = managers.get_or_create_port_manager(9001);
+        let mgr9001 = managers.get_or_create_listener_manager(&key9001);
         assert!(mgr9001.load_route_table().match_route().is_some());
 
-        let mgr9002 = managers.get_or_create_port_manager(9002);
+        let key9002 = make_listener_key(9002, "UDP");
+        let mgr9002 = managers.get_or_create_listener_manager(&key9002);
         assert!(mgr9002.load_route_table().match_route().is_none());
     }
 
     #[test]
     fn test_udp_route_partial_update_add_remove() {
         let managers = GlobalUdpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
+        let key9000 = make_listener_key(9000, "UDP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
 
         // Add a route
-        let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
+        let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
         let mut add = HashMap::new();
         add.insert("default/route1".to_string(), route1);
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
-        let mgr = managers.get_or_create_port_manager(9000);
+        let mgr = managers.get_or_create_listener_manager(&key9000);
         assert!(mgr.load_route_table().match_route().is_some());
 
         // Remove the route
@@ -249,35 +282,37 @@ mod tests {
     #[test]
     fn test_udp_route_partial_update_update() {
         let managers = GlobalUdpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
-        let _ = managers.get_or_create_port_manager(9001);
+        let key9000 = make_listener_key(9000, "UDP");
+        let key9001 = make_listener_key(9001, "UDP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
+        let _ = managers.get_or_create_listener_manager(&key9001);
 
-        // Add initial route on port 9000
-        let route = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
+        // Add initial route on listener 9000
+        let route = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
         let mut add = HashMap::new();
         add.insert("default/route1".to_string(), route);
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
         assert!(managers
-            .get_or_create_port_manager(9000)
+            .get_or_create_listener_manager(&key9000)
             .load_route_table()
             .match_route()
             .is_some());
 
-        // Update route to port 9001
-        let updated_route = create_test_udp_route("default", "route1", "gateway1", "udp-9001", 9001);
+        // Update route to listener 9001
+        let updated_route = create_test_udp_route("default", "route1", "gateway1", "udp-9001", 9001, key9001.clone());
         let mut update = HashMap::new();
         update.insert("default/route1".to_string(), updated_route);
         managers.partial_update(HashMap::new(), update, HashSet::new());
 
-        // Port 9000 should be empty, port 9001 should have the route
+        // Listener 9000 should be empty, listener 9001 should have the route
         assert!(managers
-            .get_or_create_port_manager(9000)
+            .get_or_create_listener_manager(&key9000)
             .load_route_table()
             .match_route()
             .is_none());
         assert!(managers
-            .get_or_create_port_manager(9001)
+            .get_or_create_listener_manager(&key9001)
             .load_route_table()
             .match_route()
             .is_some());
@@ -286,17 +321,18 @@ mod tests {
     #[test]
     fn test_full_set_clears_previous_state() {
         let managers = GlobalUdpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
+        let key9000 = make_listener_key(9000, "UDP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
 
         // First full_set
         let mut data = HashMap::new();
         data.insert(
             "default/route1".to_string(),
-            create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000),
+            create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone()),
         );
         managers.full_set(&data);
         assert!(managers
-            .get_or_create_port_manager(9000)
+            .get_or_create_listener_manager(&key9000)
             .load_route_table()
             .match_route()
             .is_some());
@@ -304,7 +340,7 @@ mod tests {
         // Second full_set with empty data should clear everything
         managers.full_set(&HashMap::new());
         assert!(managers
-            .get_or_create_port_manager(9000)
+            .get_or_create_listener_manager(&key9000)
             .load_route_table()
             .match_route()
             .is_none());
@@ -312,48 +348,51 @@ mod tests {
     }
 
     #[test]
-    fn test_route_without_resolved_ports_skipped() {
+    fn test_route_without_resolved_listeners_skipped() {
         let managers = GlobalUdpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
+        let key9000 = make_listener_key(9000, "UDP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
 
-        // Create a route without resolved_ports
-        let mut route = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
-        route.spec.resolved_ports = None;
+        // Create a route without resolved_listeners
+        let mut route = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
+        route.spec.resolved_listeners = None;
 
         let mut data = HashMap::new();
         data.insert("default/route1".to_string(), route);
         managers.full_set(&data);
 
-        // Route is in cache but not assigned to any port
+        // Route is in cache but not assigned to any listener
         assert_eq!(managers.stats().route_cache, 1);
         assert!(managers
-            .get_or_create_port_manager(9000)
+            .get_or_create_listener_manager(&key9000)
             .load_route_table()
             .match_route()
             .is_none());
     }
 
     #[test]
-    fn test_multi_port_route() {
+    fn test_multi_listener_route() {
         let managers = GlobalUdpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
-        let _ = managers.get_or_create_port_manager(9001);
+        let key9000 = make_listener_key(9000, "UDP");
+        let key9001 = make_listener_key(9001, "UDP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
+        let _ = managers.get_or_create_listener_manager(&key9001);
 
-        // Create a route that resolves to multiple ports
-        let mut route = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
-        route.spec.resolved_ports = Some(vec![9000, 9001]);
+        // Create a route that resolves to multiple listeners
+        let mut route = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
+        route.spec.resolved_listeners = Some(vec![key9000.clone(), key9001.clone()]);
 
         let mut data = HashMap::new();
         data.insert("default/route1".to_string(), route);
         managers.full_set(&data);
 
         assert!(managers
-            .get_or_create_port_manager(9000)
+            .get_or_create_listener_manager(&key9000)
             .load_route_table()
             .match_route()
             .is_some());
         assert!(managers
-            .get_or_create_port_manager(9001)
+            .get_or_create_listener_manager(&key9001)
             .load_route_table()
             .match_route()
             .is_some());
@@ -362,17 +401,19 @@ mod tests {
     #[test]
     fn test_partial_update_concurrent_add_and_remove() {
         let managers = GlobalUdpRouteManagers::new();
-        let _ = managers.get_or_create_port_manager(9000);
-        let _ = managers.get_or_create_port_manager(9001);
+        let key9000 = make_listener_key(9000, "UDP");
+        let key9001 = make_listener_key(9001, "UDP");
+        let _ = managers.get_or_create_listener_manager(&key9000);
+        let _ = managers.get_or_create_listener_manager(&key9001);
 
         // Add initial route
-        let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000);
+        let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
         let mut add = HashMap::new();
         add.insert("default/route1".to_string(), route1);
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
         // Simultaneously add route2 on 9001 and remove route1 on 9000
-        let route2 = create_test_udp_route("default", "route2", "gateway1", "udp-9001", 9001);
+        let route2 = create_test_udp_route("default", "route2", "gateway1", "udp-9001", 9001, key9001.clone());
         let mut add = HashMap::new();
         add.insert("default/route2".to_string(), route2);
         let mut remove = HashSet::new();
@@ -381,15 +422,45 @@ mod tests {
         managers.partial_update(add, HashMap::new(), remove);
 
         assert!(managers
-            .get_or_create_port_manager(9000)
+            .get_or_create_listener_manager(&key9000)
             .load_route_table()
             .match_route()
             .is_none());
         assert!(managers
-            .get_or_create_port_manager(9001)
+            .get_or_create_listener_manager(&key9001)
             .load_route_table()
             .match_route()
             .is_some());
         assert_eq!(managers.stats().route_cache, 1);
+    }
+
+    #[test]
+    fn test_is_service_backend_ref_filters_unknown_kind() {
+        let valid = UDPBackendRef {
+            name: "svc".to_string(),
+            namespace: None,
+            port: Some(80),
+            weight: Some(1),
+            group: None,
+            kind: None,
+            extension_info: Default::default(),
+            plugin_runtime: Default::default(),
+            ref_denied: None,
+        };
+        assert!(is_service_backend_ref(&valid));
+
+        let explicit_service = UDPBackendRef {
+            group: Some("core".to_string()),
+            kind: Some("Service".to_string()),
+            ..valid.clone()
+        };
+        assert!(is_service_backend_ref(&explicit_service));
+
+        let unknown_kind = UDPBackendRef {
+            group: Some("example.com".to_string()),
+            kind: Some("Foo".to_string()),
+            ..valid
+        };
+        assert!(!is_service_backend_ref(&unknown_kind));
     }
 }

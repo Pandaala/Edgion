@@ -1,13 +1,13 @@
 ---
 name: gateway-udp-route
-description: UDP 路由：per-port 路由表、无状态代理、ConfHandler。
+description: UDP 路由：per-listener 路由表、无状态代理、ConfHandler。
 ---
 
 # UDP 路由
 
 ## 概述
 
-UDPRoute 实现了 Gateway API 的 L4 UDP 路由功能。UDP 路由是最简单的路由类型：无连接状态、无主机名匹配维度，每个端口绑定至多一条路由，使用 first-match 语义选择后端。
+UDPRoute 实现了 Gateway API 的 L4 UDP 路由功能。UDP 路由是最简单的路由类型：无连接状态、无主机名匹配维度，每个 listener 绑定至多一条路由，使用 first-match 语义选择后端。
 
 ## 模块结构
 
@@ -16,11 +16,11 @@ src/core/gateway/routes/udp/
 ├── mod.rs                # 模块入口与类型导出
 ├── conf_handler_impl.rs  # ConfHandler<UDPRoute> 实现
 ├── routes_mgr.rs         # UdpPortRouteManager / GlobalUdpRouteManagers
-├── udp_route_table.rs    # UdpRouteTable：per-port 不可变路由快照
+├── udp_route_table.rs    # UdpRouteTable：per-listener 不可变路由快照
 └── edgion_udp.rs         # EdgionUdpProxy：UDP 代理实现
 ```
 
-## Per-port 路由表
+## Per-listener 路由表
 
 `UdpRouteTable` 结构与 `TcpRouteTable` 完全一致：
 
@@ -37,24 +37,24 @@ pub struct UdpRouteTable {
 
 ## 路由管理
 
-`GlobalUdpRouteManagers` 遵循统一的 per-port 管理模式：
+`GlobalUdpRouteManagers` 遵循统一的 per-listener 管理模式：
 
 ```
 GlobalUdpRouteManagers
-├── route_cache: DashMap<String, Arc<UDPRoute>>    # 全局路由缓存
-└── by_port: DashMap<u16, Arc<UdpPortRouteManager>>
+├── route_cache: DashMap<String, Arc<UDPRoute>>        # 全局路由缓存
+└── by_listener: DashMap<ListenerKey, Arc<UdpPortRouteManager>>
     └── UdpPortRouteManager
-        └── route_table: ArcSwap<UdpRouteTable>    # per-port 快照
+        └── route_table: ArcSwap<UdpRouteTable>        # per-listener 快照
 ```
 
-### 端口分桶
+### Listener 分桶
 
-通过 `resolved_ports`（Controller 预计算）将路由分配到对应端口。无 `resolved_ports` 的路由会打印警告并跳过。
+通过 `resolved_listeners`（Controller 预计算）将路由分配到对应 listener。无 `resolved_listeners` 的路由会打印警告并跳过。
 
 ### 重建策略
 
-- `rebuild_all_port_managers`：全量重建所有端口路由表，清理无路由的过期端口。
-- `rebuild_affected_port_managers`：仅重建受影响端口（增量更新时使用）。
+- `rebuild_all_listener_managers`：全量重建所有 listener 路由表，清理无路由的过期 listener。
+- `rebuild_affected_listener_managers`：仅重建受影响 listener（增量更新时使用）。
 
 ## UDP 无状态代理
 
@@ -70,8 +70,8 @@ GlobalUdpRouteManagers
 
 `ConfHandler<UDPRoute>` 实现与 TCPRoute 完全一致：
 
-- `full_set`：清空 route_cache，全量替换，调用 `rebuild_all_port_managers`。
-- `partial_update`：计算受影响端口，更新 route_cache，调用 `rebuild_affected_port_managers`。
+- `full_set`：清空 route_cache，全量替换，调用 `rebuild_all_listener_managers`。
+- `partial_update`：计算受影响 listener，更新 route_cache，调用 `rebuild_affected_listener_managers`。
 
 路由的 `ArcSwap` 原子切换确保已有数据包处理不受影响。
 

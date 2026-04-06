@@ -43,8 +43,9 @@ ResourceController<K>
 ```
 run_with_api(api)
 │
-├── Step 1: 创建 Reflector store + watcher stream
+├── Step 1: 创建 Reflector store + watcher stream，注入 KubeRawStore
 │   store, writer = reflector::store()
+│   processor.set_raw_store(KubeRawStore::new(store.clone()))  # ← 立即注入，早于任何 InitApply
 │   watcher_stream = watcher(api, watcher_config)
 │   stream = reflector(writer, watcher_stream)  # 合并后的事件流
 │
@@ -91,6 +92,11 @@ Step 7-8: Runtime Phase (WATCH)
 Runtime 阶段使用 Go operator 风格的 workqueue：所有事件（Apply/Delete）先 enqueue key，
 由 worker 统一 dequeue 处理。worker 从 reflector store 获取最新对象状态，
 因此即使多个事件在短时间内到达，也只会处理一次最新状态。
+
+> **KubeRawStore 说明**：`KubeRawStore` 包装的是 reflector `Store<K>`（内部为 `Arc<DashMap>`），
+> 与 `writer` 共享同一份底层数据，clone 只复制 Arc 指针，无额外内存开销。
+> 包含所有 K8s 对象，不受 `gatewayClassName` 等 handler filter 影响，
+> 供 `lookup_gateway` / `lookup_service_cluster_ip` 等跨资源查询使用。
 
 ## ResourceProcessor 11 步流水线
 
@@ -210,13 +216,13 @@ dequeue():
 
 ```rust
 pub struct WorkqueueConfig {
-    pub max_retries: u32,                // 最大重试次数
-    pub initial_backoff: Duration,       // 初始退避时间
-    pub max_backoff: Duration,           // 最大退避时间
     pub default_requeue_delay: Duration, // 跨资源 requeue 延迟
     pub max_trigger_cycles: usize,       // 触发链最大深度
+    pub max_trigger_depth: usize,        // 触发链最大总长度（安全上限）
 }
 ```
+
+> **不做指数退避重试**：status 写入失败（如 K8s API 短暂不可用）依赖 watcher 重连后的全量重建自愈，无法可靠区分瞬时抖动与永久失败，显式重试价值有限。
 
 ### TriggerChain（级联追踪）
 

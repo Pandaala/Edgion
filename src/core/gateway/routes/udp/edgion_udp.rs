@@ -11,6 +11,7 @@ use crate::core::gateway::backends::select_roundrobin_backend;
 use crate::core::gateway::observe::{log_udp, UdpLogEntry};
 use crate::core::gateway::routes::udp::UdpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use crate::types::ListenerKey;
 
 /// UDP session timeout (60 seconds of inactivity)
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -45,6 +46,7 @@ struct ClientSession {
 /// loop, the session cleanup loop, and all upstream listener tasks.
 pub struct EdgionUdpProxy {
     pub listener_port: u16,
+    pub listener_key: ListenerKey,
     pub udp_route_manager: Arc<UdpPortRouteManager>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub socket: Arc<UdpSocket>,
@@ -55,6 +57,7 @@ pub struct EdgionUdpProxy {
 impl EdgionUdpProxy {
     pub fn new(
         listener_port: u16,
+        listener_key: ListenerKey,
         udp_route_manager: Arc<UdpPortRouteManager>,
         edgion_gateway_config: Arc<EdgionGatewayConfig>,
         socket: UdpSocket,
@@ -62,6 +65,7 @@ impl EdgionUdpProxy {
     ) -> Self {
         Self {
             listener_port,
+            listener_key,
             udp_route_manager,
             edgion_gateway_config,
             socket: Arc::new(socket),
@@ -346,6 +350,11 @@ impl EdgionUdpProxy {
 mod tests {
     use super::*;
     use crate::core::gateway::routes::udp::UdpPortRouteManager;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn make_test_listener_key(port: u16) -> ListenerKey {
+        ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port), "UDP")
+    }
 
     fn make_test_config() -> Arc<EdgionGatewayConfig> {
         let json = serde_json::json!({
@@ -381,7 +390,14 @@ mod tests {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
         let config = make_test_config();
-        let proxy = Arc::new(EdgionUdpProxy::new(19998, manager, config, socket, cancel.clone()));
+        let proxy = Arc::new(EdgionUdpProxy::new(
+            19998,
+            make_test_listener_key(19998),
+            manager,
+            config,
+            socket,
+            cancel.clone(),
+        ));
 
         let handle = tokio::spawn({
             let proxy = proxy.clone();
@@ -403,7 +419,14 @@ mod tests {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
         let config = make_test_config();
-        let proxy = Arc::new(EdgionUdpProxy::new(19997, manager, config, socket, cancel.clone()));
+        let proxy = Arc::new(EdgionUdpProxy::new(
+            19997,
+            make_test_listener_key(19997),
+            manager,
+            config,
+            socket,
+            cancel.clone(),
+        ));
 
         let handle = tokio::spawn({
             let proxy = proxy.clone();
@@ -425,7 +448,14 @@ mod tests {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
         let config = make_test_config();
-        let proxy = Arc::new(EdgionUdpProxy::new(19996, manager, config, socket, cancel));
+        let proxy = Arc::new(EdgionUdpProxy::new(
+            19996,
+            make_test_listener_key(19996),
+            manager,
+            config,
+            socket,
+            cancel,
+        ));
 
         assert_eq!(proxy.session_count(), 0);
     }
@@ -436,7 +466,14 @@ mod tests {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
         let config = make_test_config();
-        let proxy = Arc::new(EdgionUdpProxy::new(19995, manager, config, socket, cancel));
+        let proxy = Arc::new(EdgionUdpProxy::new(
+            19995,
+            make_test_listener_key(19995),
+            manager,
+            config,
+            socket,
+            cancel,
+        ));
 
         // Manually insert an expired session
         let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
@@ -466,7 +503,14 @@ mod tests {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
         let config = make_test_config();
-        let proxy = Arc::new(EdgionUdpProxy::new(19994, manager, config, socket, cancel));
+        let proxy = Arc::new(EdgionUdpProxy::new(
+            19994,
+            make_test_listener_key(19994),
+            manager,
+            config,
+            socket,
+            cancel,
+        ));
 
         // Insert an active session (recent last_activity)
         let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());

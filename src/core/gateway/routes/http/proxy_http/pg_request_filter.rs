@@ -3,8 +3,8 @@ use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_match_grpc_route};
 use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
 use crate::core::gateway::runtime::hostname_matches_listener;
-use crate::core::gateway::runtime::store::get_port_gateway_info_store;
-use crate::core::gateway::runtime::store::port_gateway_info::format_gateway_key;
+use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
+use crate::core::gateway::runtime::store::listener_gateway_info::format_gateway_key;
 use crate::core::gateway::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
 };
@@ -29,8 +29,7 @@ pub async fn request_filter(
 
     // Step 1: Route matching — single lookup against the global route table.
     // Load the pre-built GatewayInfoIndex for O(1) gateway/listener lookups.
-    let port = edgion_http.listener.port as u16;
-    let gateway_index = get_port_gateway_info_store().get_index(port);
+    let gateway_index = get_listener_gateway_info_store().get_index(&edgion_http.listener_key);
 
     // HTTPS listener isolation: 421 Misdirected Request (Gateway API spec).
     // If SNI matched listener A but Host should be served by a different listener → 421.
@@ -79,8 +78,9 @@ pub async fn request_filter(
             return Ok(true);
         }
 
-        let grpc_port_manager = get_global_grpc_route_managers().get_or_create_port_manager(port);
-        let grpc_routes = grpc_port_manager.load_route_table();
+        let grpc_listener_manager =
+            get_global_grpc_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
+        let grpc_routes = grpc_listener_manager.load_route_table();
         let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_index).await;
 
         // If GRPCRoutes exist on this port but none matched, return UNIMPLEMENTED
@@ -93,13 +93,17 @@ pub async fn request_filter(
         {
             ctx.add_error(EdgionStatus::RouteNotFound);
             end_response_grpc_unimplemented(session, ctx, &edgion_http.server_header_opts).await?;
+            // gRPC trailers-only response (HTTP 200 + grpc-status: 12, END_STREAM=true) already
+            // written above. Return Ok(true) to signal response is fully handled.
+            // Returning Err causes Pingora to call fail_to_proxy(), overwriting our response.
             return Ok(true);
         }
     }
 
     if !ctx.is_grpc_route_matched {
-        let http_port_manager = get_global_http_route_managers().get_or_create_port_manager(port);
-        let port_routes = http_port_manager.load_route_table();
+        let http_listener_manager =
+            get_global_http_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
+        let port_routes = http_listener_manager.load_route_table();
         match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
                 ctx.gateway_info = result.matched_gateway;
@@ -108,7 +112,7 @@ pub async fn request_filter(
             Err(_) => {
                 ctx.add_error(EdgionStatus::RouteNotFound);
                 end_response_404(session, ctx, &edgion_http.server_header_opts).await?;
-                return Ok(true);
+                return Ok(true); // Already sent error response, signal completion
             }
         }
     }
@@ -174,6 +178,9 @@ pub async fn request_filter(
                     .run_request_plugins(session, ctx)
                     .await;
                 if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+                    if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
+                        let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
+                    }
                     return Ok(true);
                 }
             }
@@ -182,19 +189,23 @@ pub async fn request_filter(
 
     // Step 3: Run route-level plugins based on matched route type
     if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
-        // Run gRPC route plugins (inline for consistency with HTTP route handling)
         grpc_route_unit
             .rule
             .plugin_runtime
             .run_request_plugins(session, ctx)
             .await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
+                let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
+            }
             return Ok(true);
         }
     } else if let Some(route_unit) = ctx.route_unit.clone() {
-        // Run HTTP route plugins
         route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
+                let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
+            }
             return Ok(true);
         }
     }

@@ -136,14 +136,15 @@ go test ./... -run "TestConformance/<TestName>" -v -timeout 10m -count=1 \
 |------|---------|------|
 | GatewayClass not Accepted | Controller 未启动或 crash | `orbstack-dev.sh logs c` |
 | Gateway no address | gateway_address 配置错误 | 重新运行 setup-orbstack.sh |
-| HTTPRoute test timeout | Pod IP 不可达 | 用 `--port-forward` |
+| HTTP/gRPC test timeout | Pod IP 不可达 | 用 in-cluster 模式（推荐）或 `--port-forward` |
+| gRPC tests hang/crash | port-forward 不支持 gRPC 长连接 | 必须用 in-cluster 模式 |
 | 测试 SKIP | feature 未在 supported-features 中声明 | 检查 conformance_test.go |
 | Pod CrashLoopBackOff | Binary crash | `orbstack-dev.sh logs c/g` |
+
+详细排障手册见 [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md)。
 
 ## 相关文件
 
 - 测试入口: `examples/gateway-api-conformance/conformance_test.go`
 - 运行脚本: `examples/gateway-api-conformance/scripts/run.sh`
-- 测试详情: `tasks/todo/gateway-api-1.5-conformance-tests/`
 - 不实现项: `skills/08-kubernetes/01-gateway-api/01-not-implemented.md`
-- PLAN 历史: `examples/gateway-api-conformance/PLAN.md`

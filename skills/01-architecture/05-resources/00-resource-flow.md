@@ -64,7 +64,7 @@ ClientCache 收到事件后，通过 EventDispatch 分发给对应资源类型�
 
 ConfHandler 将数据写入运行时存储：
 
-- 路由类资源：写入 per-port 的路由管理器（`GlobalHttpRouteManagers`、`GlobalTcpRouteManagers` 等），通过 `ArcSwap` 原子切换路由表
+- 路由类资源：写入 per-listener 的路由管理器（`GlobalHttpRouteManagers`、`GlobalTcpRouteManagers` 等），以 `ListenerKey`（格式 `"{addr}/{protocol}"`）为索引，通过 `ArcSwap` 原子切换路由表
 - TLS 资源：写入 `TlsStore`，更新 SNI 证书匹配表
 - 后端资源：写入后端发现存储，更新负载均衡目标列表
 - 插件资源：写入插件配置存储，通过 ExtensionRef 被路由引用

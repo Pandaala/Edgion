@@ -320,7 +320,7 @@ struct StoreStatsResponse {
     udp_routes: crate::core::gateway::routes::udp::UdpRouteManagerStats,
     tls_routes: crate::core::gateway::routes::tls::TlsRouteManagerStats,
     gateway_config: GatewayConfigStats,
-    port_gateway_info: crate::core::gateway::runtime::store::port_gateway_info::PortGatewayInfoStats,
+    listener_gateway_info: crate::core::gateway::runtime::store::listener_gateway_info::ListenerGatewayInfoStats,
     gateway_tls_matcher: crate::core::gateway::runtime::matching::tls::GatewayTlsMatcherStats,
     tls_store: TlsStoreStats,
     tls_cert_matcher: TlsCertMatcherStats,
@@ -347,7 +347,7 @@ struct TlsStoreStats {
 
 #[derive(Serialize)]
 struct TlsCertMatcherStats {
-    port_count: usize,
+    listener_count: usize,
 }
 
 #[derive(Serialize)]
@@ -381,8 +381,8 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
     let gateway_config = GatewayConfigStats {
         gateways: crate::core::gateway::runtime::store::config::get_global_gateway_config_store().gateway_count(),
     };
-    let port_gateway_info =
-        crate::core::gateway::runtime::store::port_gateway_info::get_port_gateway_info_store().stats();
+    let listener_gateway_info =
+        crate::core::gateway::runtime::store::listener_gateway_info::get_listener_gateway_info_store().stats();
     let gateway_tls_matcher = crate::core::gateway::runtime::matching::tls::get_gateway_tls_matcher().stats();
 
     let tls = crate::core::gateway::tls::store::tls_store::get_global_tls_store();
@@ -394,7 +394,7 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
     };
 
     let tls_cert_matcher = TlsCertMatcherStats {
-        port_count: crate::core::gateway::tls::store::cert_matcher::get_tls_cert_matcher().port_count(),
+        listener_count: crate::core::gateway::tls::store::cert_matcher::get_tls_cert_matcher().listener_count(),
     };
 
     let plugin_store = PluginStoreStats {
@@ -433,7 +433,7 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
         udp_routes,
         tls_routes,
         gateway_config,
-        port_gateway_info,
+        listener_gateway_info,
         gateway_tls_matcher,
         tls_store,
         tls_cert_matcher,

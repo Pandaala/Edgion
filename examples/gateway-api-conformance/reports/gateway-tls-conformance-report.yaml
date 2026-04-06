@@ -1,0 +1,44 @@
+apiVersion: gateway.networking.k8s.io/v1
+date: "2026-04-06T00:58:44Z"
+gatewayAPIChannel: UNDEFINED
+gatewayAPIVersion: UNDEFINED
+implementation:
+  contact:
+  - '@edgion'
+  organization: Edgion
+  project: Edgion
+  url: https://github.com/edgion/edgion
+  version: dev
+kind: ConformanceReport
+mode: default
+profiles:
+- core:
+    result: success
+    statistics:
+      Failed: 0
+      Passed: 18
+      Skipped: 0
+  extended:
+    failedTests:
+    - TLSRouteTerminateSimpleSameNamespace
+    result: failure
+    statistics:
+      Failed: 1
+      Passed: 2
+      Skipped: 0
+    supportedFeatures:
+    - GatewayHTTPListenerIsolation
+    - GatewayHTTPSListenerDetectMisdirectedRequests
+    - TLSRouteModeTerminate
+    unsupportedFeatures:
+    - GatewayAddressEmpty
+    - GatewayBackendClientCertificate
+    - GatewayFrontendClientCertificateValidation
+    - GatewayFrontendClientCertificateValidationInsecureFallback
+    - GatewayInfrastructurePropagation
+    - GatewayPort8080
+    - GatewayStaticAddresses
+    - ListenerSet
+    - TLSRouteModeMixed
+  name: GATEWAY-TLS
+  summary: Core tests succeeded. Extended tests failed with 1 test failures.

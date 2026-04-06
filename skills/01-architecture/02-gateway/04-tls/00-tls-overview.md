@@ -35,7 +35,7 @@ src/core/gateway/tls/
 ├── store/
 │   ├── mod.rs
 │   ├── tls_store.rs                # TlsStore：证书存储与验证
-│   ├── cert_matcher.rs             # TlsCertMatcher：port+SNI 证书匹配
+│   ├── cert_matcher.rs             # TlsCertMatcher：listener+SNI 证书匹配
 │   └── conf_handler.rs             # ConfHandler<EdgionTls> 实现
 ├── runtime/
 │   ├── mod.rs
@@ -74,7 +74,7 @@ src/core/gateway/tls/
 
 ```rust
 struct TlsCertMatcherData {
-    port_matcher: HashMap<u16, HashHost<Vec<Arc<EdgionTls>>>>,
+    listener_matcher: HashMap<ListenerKey, HashHost<Vec<Arc<EdgionTls>>>>,
 }
 
 pub struct TlsCertMatcher {
@@ -82,11 +82,11 @@ pub struct TlsCertMatcher {
 }
 ```
 
-- 两层索引：`Port → HashHost(SNI → EdgionTls)`。
+- 两层索引：`ListenerKey → HashHost(SNI → EdgionTls)`。
 - `HashHost` 支持精确和通配主机名匹配（`*.example.com`）。
-- 使用 `ArcSwap` 实现无锁读取，匹配调用（`match_sni_with_port`）发生在 TLS 握手回调中，必须快速返回。
+- 使用 `ArcSwap` 实现无锁读取，匹配调用（`match_sni`）发生在 TLS 握手回调中，必须快速返回。
 - 全局单例：`TLS_CERT_MATCHER`（`LazyLock<TlsCertMatcher>`）。
-- 仅包含已通过验证且有 `resolved_ports` 的证书（未绑定端口的证书被跳过）。
+- 仅包含已通过验证且有 `resolved_listeners` 的证书（未绑定 listener 的证书被跳过）。
 
 ### GatewayTlsMatcher
 
@@ -94,12 +94,12 @@ pub struct TlsCertMatcher {
 
 ```rust
 struct TlsMatcherData {
-    port_map: HashMap<u16, HashHost<Vec<GatewayTlsEntry>>>,
+    listener_map: HashMap<ListenerKey, HashHost<Vec<GatewayTlsEntry>>>,
 }
 ```
 
 - 从 Gateway 资源的 Listener TLS 配置中提取证书引用。
-- 同样使用 `Port → HashHost(hostname → GatewayTlsEntry)` 两层索引。
+- 同样使用 `ListenerKey → HashHost(hostname → GatewayTlsEntry)` 两层索引。
 - `ArcSwap` 无锁读取，内层 `Option` 提供快速路径（无 Gateway TLS 配置时直接返回）。
 - 全局单例：`GATEWAY_TLS_MATCHER`。
 - 通过 `rebuild_from_gateways` 在 Gateway 配置变更时重建。
@@ -109,13 +109,13 @@ struct TlsMatcherData {
 TLS 握手时，`TlsCallback::match_and_apply_cert` 按以下优先级查找证书：
 
 ```
-1. EdgionTls（TlsCertMatcher::match_sni_with_port）
+1. EdgionTls（TlsCertMatcher::match_sni）
    └── 匹配成功 → 应用 EdgionTls 证书
        ├── 配置 mTLS（如有 client_auth）
        ├── 设置最低 TLS 版本（如有 min_tls_version）
        └── 设置密码套件（如有 ciphers）
 
-2. Gateway TLS（GatewayTlsMatcher::match_sni_with_port）
+2. Gateway TLS（GatewayTlsMatcher::match_sni）
    └── 匹配成功 → 从 Gateway Listener 的 certificateRefs 获取 Secret
        ├── 优先使用内联 secrets
        └── 回退到从全局 SecretStore 查找
@@ -135,7 +135,7 @@ TLS 握手时，`TlsCallback::match_and_apply_cert` 按以下优先级查找证�
 | 文件 | 职责 |
 |------|------|
 | `src/core/gateway/tls/store/tls_store.rs` | TlsStore：证书存储与验证 |
-| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher：port+SNI 匹配 |
+| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher：listener+SNI 匹配 |
 | `src/core/gateway/tls/store/conf_handler.rs` | ConfHandler<EdgionTls> 实现 |
 | `src/core/gateway/runtime/matching/tls.rs` | GatewayTlsMatcher |
 | `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | TlsCallback |

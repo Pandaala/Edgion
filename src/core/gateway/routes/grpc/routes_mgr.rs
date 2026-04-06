@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
-use crate::core::gateway::runtime::store::port_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
-use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule};
+use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule, ListenerKey};
 
 /// gRPC route rules for a specific domain
 pub struct GrpcRouteRules {
@@ -141,10 +141,10 @@ impl DomainGrpcRouteRules {
 }
 
 // ============================================================================
-// Per-port gRPC route manager (mirrors HttpPortRouteManager pattern)
+// Per-listener gRPC route manager (mirrors HttpPortRouteManager pattern)
 // ============================================================================
 
-/// Per-port gRPC route manager.
+/// Per-listener gRPC route manager.
 pub struct GrpcPortRouteManager {
     route_table: ArcSwap<DomainGrpcRouteRules>,
 }
@@ -177,13 +177,13 @@ impl GrpcPortRouteManager {
 // Global gRPC route managers (mirrors GlobalHttpRouteManagers pattern)
 // ============================================================================
 
-/// Global wrapper managing `port -> Arc<GrpcPortRouteManager>`.
+/// Global wrapper managing `ListenerKey -> Arc<GrpcPortRouteManager>`.
 pub struct GlobalGrpcRouteManagers {
     /// Canonical route store: resource_key -> GRPCRoute
     pub(crate) route_cache: DashMap<String, GRPCRoute>,
 
-    /// port -> per-port manager
-    pub(crate) by_port: DashMap<u16, Arc<GrpcPortRouteManager>>,
+    /// listener -> per-listener manager
+    pub(crate) by_listener: DashMap<ListenerKey, Arc<GrpcPortRouteManager>>,
 
     /// Cached parsed route units per resource_key.
     pub(crate) route_units_cache: Mutex<HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>,
@@ -199,101 +199,82 @@ impl GlobalGrpcRouteManagers {
     pub fn new() -> Self {
         Self {
             route_cache: DashMap::new(),
-            by_port: DashMap::new(),
+            by_listener: DashMap::new(),
             route_units_cache: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Get or create a per-port `GrpcPortRouteManager`.
-    pub fn get_or_create_port_manager(&self, port: u16) -> Arc<GrpcPortRouteManager> {
-        self.by_port
-            .entry(port)
+    /// Get or create a per-listener `GrpcPortRouteManager`.
+    pub fn get_or_create_listener_manager(&self, key: &ListenerKey) -> Arc<GrpcPortRouteManager> {
+        self.by_listener
+            .entry(key.clone())
             .or_insert_with(|| Arc::new(GrpcPortRouteManager::new()))
             .value()
             .clone()
     }
 
-    /// Rebuild all per-port managers from the current route cache and units cache.
-    pub fn rebuild_all_port_managers(&self) {
-        // Pre-create port managers for all known ports
-        for entry in self.route_cache.iter() {
-            if let Some(parent_refs) = &entry.value().spec.parent_refs {
-                for pr in parent_refs {
-                    if let Some(port) = pr.port {
-                        self.get_or_create_port_manager(port as u16);
-                    }
-                }
-            }
-        }
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
-        for port in pgis.all_ports() {
-            self.get_or_create_port_manager(port);
+    /// Rebuild all per-listener managers from the current route cache and units cache.
+    pub fn rebuild_all_listener_managers(&self) {
+        // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
+        for key in pgis.all_listener_keys() {
+            self.get_or_create_listener_manager(&key);
         }
 
-        let port_buckets = self.bucket_units_by_port();
+        let listener_buckets = self.bucket_units_by_listener();
 
-        let mut rebuilt_ports = 0u32;
+        let mut rebuilt_listeners = 0u32;
 
-        for (port, units) in &port_buckets {
-            let manager = self.get_or_create_port_manager(*port);
+        for (key, units) in &listener_buckets {
+            let manager = self.get_or_create_listener_manager(key);
             let table = build_grpc_route_rules_from_units(units);
             manager.store_route_table(table);
-            rebuilt_ports += 1;
+            rebuilt_listeners += 1;
         }
 
-        let active_ports: HashSet<u16> = pgis.all_ports().into_iter().collect();
-        let stale_ports: Vec<u16> = self
-            .by_port
+        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
+        let stale_listeners: Vec<ListenerKey> = self
+            .by_listener
             .iter()
-            .filter(|e| !port_buckets.contains_key(e.key()) && !active_ports.contains(e.key()))
-            .map(|e| *e.key())
+            .filter(|e| !listener_buckets.contains_key(e.key()) && !active_listeners.contains(e.key()))
+            .map(|e| e.key().clone())
             .collect();
-        for port in &stale_ports {
-            self.by_port.remove(port);
+        for key in &stale_listeners {
+            self.by_listener.remove(key);
         }
-        for entry in self.by_port.iter() {
-            let port = *entry.key();
-            if !port_buckets.contains_key(&port) {
+        for entry in self.by_listener.iter() {
+            let key = entry.key().clone();
+            if !listener_buckets.contains_key(&key) {
                 entry.value().store_route_table(DomainGrpcRouteRules::new());
             }
         }
 
         tracing::info!(
             component = "global_grpc_route_managers",
-            ports = port_buckets.len(),
-            rebuilt_ports,
-            removed_stale_ports = stale_ports.len(),
-            "Rebuilt all per-port gRPC route managers"
+            listeners = listener_buckets.len(),
+            rebuilt_listeners,
+            removed_stale_listeners = stale_listeners.len(),
+            "Rebuilt all per-listener gRPC route managers"
         );
     }
 
-    /// Rebuild only the per-port managers for the given set of affected ports.
-    pub fn rebuild_affected_port_managers(&self, affected_ports: &HashSet<u16>) {
-        if affected_ports.is_empty() {
+    /// Rebuild only the per-listener managers for the given set of affected listeners.
+    pub fn rebuild_affected_listener_managers(&self, affected_listeners: &HashSet<ListenerKey>) {
+        if affected_listeners.is_empty() {
             return;
         }
 
         let units_cache = self.route_units_cache.lock().unwrap();
-        let mut port_buckets: HashMap<u16, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
-        for &port in affected_ports {
-            port_buckets.insert(port, HashMap::new());
+        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
+        for key in affected_listeners {
+            listener_buckets.insert(key.clone(), HashMap::new());
         }
 
         for entry in self.route_cache.iter() {
             let route = entry.value();
-            let ports = resolved_ports_for_grpc_route(route);
-            let effective_ports: Vec<u16> = if !ports.is_empty() {
-                ports.to_vec()
-            } else {
-                let fb = extract_ports_from_grpc_parent_refs(route);
-                if fb.is_empty() {
-                    affected_ports.iter().copied().collect()
-                } else {
-                    fb
-                }
-            };
-            for port in effective_ports {
-                if let Some(bucket) = port_buckets.get_mut(&port) {
+            let listeners = resolved_listeners_for_grpc_route(route);
+            for key in listeners {
+                if let Some(bucket) = listener_buckets.get_mut(key) {
                     if let Some(units) = units_cache.get(entry.key()) {
                         bucket.insert(entry.key().clone(), units.clone());
                     }
@@ -302,80 +283,73 @@ impl GlobalGrpcRouteManagers {
         }
         drop(units_cache);
 
-        let pgis = crate::core::gateway::runtime::store::get_port_gateway_info_store();
-        let active_ports: HashSet<u16> = pgis.all_ports().into_iter().collect();
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
+        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
         let mut removed_stale = 0usize;
-        for (port, units) in &port_buckets {
-            let manager = self.get_or_create_port_manager(*port);
+        for (key, units) in &listener_buckets {
+            let manager = self.get_or_create_listener_manager(key);
             let table = build_grpc_route_rules_from_units(units);
             manager.store_route_table(table);
-            if units.is_empty() && !active_ports.contains(port) {
-                self.by_port.remove(port);
+            if units.is_empty() && !active_listeners.contains(key) {
+                self.by_listener.remove(key);
                 removed_stale += 1;
             }
         }
 
         tracing::info!(
             component = "global_grpc_route_managers",
-            affected = affected_ports.len(),
-            removed_stale_ports = removed_stale,
-            "Rebuilt affected per-port gRPC route managers"
+            affected = affected_listeners.len(),
+            removed_stale_listeners = removed_stale,
+            "Rebuilt affected per-listener gRPC route managers"
         );
     }
 
-    /// Bucket all cached units by their routes' resolved ports.
+    /// Bucket all cached units by their routes' resolved listeners.
     ///
-    /// When a route has no `resolved_ports`, falls back to parentRef.port,
-    /// then to all known ports for backward compatibility.
-    fn bucket_units_by_port(&self) -> HashMap<u16, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> {
+    /// When a route has no `resolved_listeners`, it is skipped with a warning.
+    fn bucket_units_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> {
         let units_cache = self.route_units_cache.lock().unwrap();
-        let mut port_buckets: HashMap<u16, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
+        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
 
         for entry in self.route_cache.iter() {
             let route_key = entry.key().clone();
             let route = entry.value();
-            let ports = resolved_ports_for_grpc_route(route);
+            let listeners = resolved_listeners_for_grpc_route(route);
 
-            let effective_ports: Vec<u16> = if !ports.is_empty() {
-                ports.to_vec()
-            } else {
-                let fb = extract_ports_from_grpc_parent_refs(route);
-                if fb.is_empty() {
-                    self.by_port.iter().map(|e| *e.key()).collect()
-                } else {
-                    fb
-                }
-            };
+            if listeners.is_empty() {
+                tracing::warn!(route = %route_key, "GRPCRoute has no resolved_listeners, skipping");
+                continue;
+            }
 
             if let Some(units) = units_cache.get(&route_key) {
-                for port in &effective_ports {
-                    port_buckets
-                        .entry(*port)
+                for key in listeners {
+                    listener_buckets
+                        .entry(key.clone())
                         .or_default()
                         .insert(route_key.clone(), units.clone());
                 }
             }
         }
 
-        port_buckets
+        listener_buckets
     }
 
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> GrpcRouteManagerStats {
         let grpc_routes = self.route_cache.len();
-        let port_count = self.by_port.len();
+        let listener_count = self.by_listener.len();
         let route_units_cache = self.route_units_cache.lock().unwrap().len();
 
         GrpcRouteManagerStats {
             grpc_routes,
             resource_keys: grpc_routes,
             route_units_cache,
-            port_count,
+            listener_count,
         }
     }
 }
 
-/// Build DomainGrpcRouteRules from a per-port units map.
+/// Build DomainGrpcRouteRules from a per-listener units map.
 fn build_grpc_route_rules_from_units(all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>) -> DomainGrpcRouteRules {
     let mut resource_keys = HashSet::new();
     let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
@@ -404,24 +378,9 @@ fn build_grpc_route_rules_from_units(all_units: &HashMap<String, Vec<Arc<GrpcRou
     domain
 }
 
-/// Get the resolved listener ports for a GRPCRoute.
-pub(crate) fn resolved_ports_for_grpc_route(route: &GRPCRoute) -> &[u16] {
-    route.spec.resolved_ports.as_deref().unwrap_or_default()
-}
-
-/// Extract ports directly from parentRef.port fields (fallback).
-fn extract_ports_from_grpc_parent_refs(route: &GRPCRoute) -> Vec<u16> {
-    let mut ports = Vec::new();
-    if let Some(parent_refs) = &route.spec.parent_refs {
-        for pr in parent_refs {
-            if let Some(port) = pr.port {
-                ports.push(port as u16);
-            }
-        }
-    }
-    ports.sort_unstable();
-    ports.dedup();
-    ports
+/// Get the resolved listeners for a GRPCRoute.
+pub(crate) fn resolved_listeners_for_grpc_route(route: &GRPCRoute) -> &[ListenerKey] {
+    route.spec.resolved_listeners.as_deref().unwrap_or_default()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -429,7 +388,7 @@ pub struct GrpcRouteManagerStats {
     pub grpc_routes: usize,
     pub resource_keys: usize,
     pub route_units_cache: usize,
-    pub port_count: usize,
+    pub listener_count: usize,
 }
 
 static GLOBAL_GRPC_ROUTE_MANAGERS: OnceLock<GlobalGrpcRouteManagers> = OnceLock::new();

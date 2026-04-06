@@ -46,9 +46,11 @@ CERTS_DIR="$PROJECT_ROOT/examples/test/certs"
 SECRET_OUTPUT_ROOT="${EDGION_GENERATED_SECRET_DIR:-$PROJECT_ROOT/integration_testing/generated_secrets_manual}"
 SECRET_OUTPUT_DIR="$SECRET_OUTPUT_ROOT/base"
 SECRET_OUTPUT_FILE="$SECRET_OUTPUT_DIR/Secret_edgion-test_edge-tls.yaml"
+STATUS_REFGRANT_SECRET_DIR="$SECRET_OUTPUT_ROOT/Status/RefGrant"
 
 mkdir -p "$CERTS_DIR"
 mkdir -p "$SECRET_OUTPUT_DIR"
+mkdir -p "$STATUS_REFGRANT_SECRET_DIR"
 
 REQUIRED_SAN_ENTRIES=(
     "DNS:test.example.com"
@@ -93,6 +95,39 @@ data:
   tls.crt: $cert_b64
   tls.key: $key_b64
 EOF
+}
+
+write_status_refgrant_tls_secrets() {
+    local cert_file=$1
+    local key_file=$2
+
+    create_secret_yaml \
+        "refgrant-test-cert" \
+        "cert-store" \
+        "$cert_file" \
+        "$key_file" \
+        "$STATUS_REFGRANT_SECRET_DIR/Secret_cert-store_refgrant-test-cert.yaml"
+
+    create_secret_yaml \
+        "refgrant-test-cert" \
+        "backend" \
+        "$cert_file" \
+        "$key_file" \
+        "$STATUS_REFGRANT_SECRET_DIR/Secret_backend_refgrant-test-cert.yaml"
+
+    create_secret_yaml \
+        "other-cert" \
+        "backend" \
+        "$cert_file" \
+        "$key_file" \
+        "$STATUS_REFGRANT_SECRET_DIR/Secret_backend_other-cert.yaml"
+
+    create_secret_yaml \
+        "no-grant-cert" \
+        "backend" \
+        "$cert_file" \
+        "$key_file" \
+        "$STATUS_REFGRANT_SECRET_DIR/Secret_backend_no-grant-cert.yaml"
 }
 
 generate_tls_cert() {
@@ -152,7 +187,10 @@ create_secret_yaml \
     "$CERTS_DIR/server.key" \
     "$SECRET_OUTPUT_FILE"
 
+write_status_refgrant_tls_secrets "$CERTS_DIR/server.crt" "$CERTS_DIR/server.key"
+
 log_section "Completed"
 log_success "Runtime TLS Secret generated."
 log_info "Secret YAML: $SECRET_OUTPUT_FILE"
+log_info "Status/RefGrant runtime Secrets: $STATUS_REFGRANT_SECRET_DIR"
 log_info "Test cert files: $CERTS_DIR/ca.pem, $CERTS_DIR/server.crt, $CERTS_DIR/server.key"

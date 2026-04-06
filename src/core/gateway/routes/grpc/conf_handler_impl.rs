@@ -2,10 +2,10 @@ use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::routes::grpc::match_unit::{
     GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo, CATCH_ALL_HOSTNAME,
 };
-use crate::core::gateway::routes::grpc::routes_mgr::{resolved_ports_for_grpc_route, GlobalGrpcRouteManagers};
+use crate::core::gateway::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
 use crate::core::gateway::routes::http::conf_handler_impl::filter_accepted_parent_refs;
-use crate::types::{GRPCRoute, ResourceMeta};
+use crate::types::{GRPCRoute, ListenerKey, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -61,8 +61,8 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
 
         *self.route_units_cache.lock().unwrap() = new_units_cache;
 
-        // Step 2: Rebuild all per-port managers
-        self.rebuild_all_port_managers();
+        // Step 2: Rebuild all per-listener managers
+        self.rebuild_all_listener_managers();
 
         tracing::info!(component = "grpc_route_manager", "full set done");
     }
@@ -87,53 +87,29 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             add_or_update.insert(key, route);
         }
 
-        // Compute affected ports BEFORE updating cache
-        let mut affected_ports = HashSet::new();
-        let mut needs_all_ports = false;
+        // Compute affected listeners BEFORE updating cache
+        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
         for (key, route) in &add_or_update {
-            let ports = resolved_ports_for_grpc_route(route);
-            if ports.is_empty() {
-                if let Some(parent_refs) = &route.spec.parent_refs {
-                    let any_port = parent_refs.iter().any(|pr| pr.port.is_some());
-                    if any_port {
-                        for pr in parent_refs {
-                            if let Some(p) = pr.port {
-                                affected_ports.insert(p as u16);
-                            }
-                        }
-                    } else {
-                        needs_all_ports = true;
-                    }
-                } else {
-                    needs_all_ports = true;
-                }
+            let listeners = resolved_listeners_for_grpc_route(route);
+            if listeners.is_empty() {
+                tracing::warn!(route = %key, "GRPCRoute has no resolved_listeners during partial_update");
             } else {
-                for &port in ports {
-                    affected_ports.insert(port);
+                for listener in listeners {
+                    affected_listeners.insert(listener.clone());
                 }
             }
             if let Some(old) = self.route_cache.get(key) {
-                for &port in resolved_ports_for_grpc_route(old.value()) {
-                    affected_ports.insert(port);
+                for listener in resolved_listeners_for_grpc_route(old.value()) {
+                    affected_listeners.insert(listener.clone());
                 }
             }
         }
         for key in &remove {
             if let Some(old) = self.route_cache.get(key) {
-                let ports = resolved_ports_for_grpc_route(old.value());
-                if ports.is_empty() {
-                    needs_all_ports = true;
-                } else {
-                    for &port in ports {
-                        affected_ports.insert(port);
-                    }
+                for listener in resolved_listeners_for_grpc_route(old.value()) {
+                    affected_listeners.insert(listener.clone());
                 }
-            }
-        }
-        if needs_all_ports {
-            for entry in self.by_port.iter() {
-                affected_ports.insert(*entry.key());
             }
         }
 
@@ -151,8 +127,8 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             }
         }
 
-        // Rebuild affected port managers
-        self.rebuild_affected_port_managers(&affected_ports);
+        // Rebuild affected listener managers
+        self.rebuild_affected_listener_managers(&affected_listeners);
 
         tracing::info!(component = "grpc_route_manager", "partial update done");
     }
@@ -203,8 +179,40 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
             }
             let rule_arc = Arc::new(rule.clone());
 
-            if let Some(matches) = &rule.matches {
-                for (match_id, match_item) in matches.iter().enumerate() {
+            let effective_matches: &[crate::types::GRPCRouteMatch] = rule.matches.as_deref().unwrap_or(&[]);
+
+            if effective_matches.is_empty() {
+                // Per Gateway API spec, a rule with no matches (or an empty matches list)
+                // matches all gRPC traffic.  Synthesise a single catch-all unit so that
+                // `has_routes()` returns true for the listener and unmatched-hostname
+                // requests are correctly answered with UNIMPLEMENTED(12).
+                let specificity = GrpcMatchSpecificity {
+                    header_count: 0,
+                    creation_ts_ms,
+                    route_key: resource_key.to_string(),
+                    rule_index: rule_id as u32,
+                    match_index: 0,
+                };
+                units.push(Arc::new(GrpcRouteRuleUnit {
+                    resource_key: resource_key.to_string(),
+                    matched_info: GrpcMatchInfo::new(
+                        route_namespace.to_string(),
+                        route_name.to_string(),
+                        rule_id,
+                        0,
+                        crate::types::GRPCRouteMatch {
+                            method: None,
+                            headers: None,
+                        },
+                        route_sv,
+                        rule.name.clone(),
+                    ),
+                    rule: rule_arc.clone(),
+                    route_info: route_info.clone(),
+                    specificity,
+                }));
+            } else {
+                for (match_id, match_item) in effective_matches.iter().enumerate() {
                     let header_count = match_item.headers.as_ref().map(|h| h.len() as u16).unwrap_or(0);
                     let specificity = GrpcMatchSpecificity {
                         header_count,

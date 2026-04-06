@@ -40,7 +40,8 @@ pub async fn connected_to_upstream(
     }
 
     // Record connection time (time from start_time to connection established)
-    if let Some(upstream) = ctx.get_current_upstream_mut() {
+    // P0-07: upstream borrow ends at block exit so we can write ctx.leastconn_incremented_backend after
+    let leastconn_backend = if let Some(upstream) = ctx.get_current_upstream_mut() {
         let ct = upstream.start_time.elapsed().as_millis() as u64;
         upstream.ct = Some(ct);
 
@@ -50,7 +51,16 @@ pub async fn connected_to_upstream(
             &upstream.lb_policy,
         ) {
             crate::core::gateway::lb::runtime_state::increment(service_key, addr);
+            Some((service_key.to_string(), addr.clone()))
+        } else {
+            None
         }
+    } else {
+        None
+    };
+    // upstream borrow dropped here — safe to write ctx
+    if let Some(backend) = leastconn_backend {
+        ctx.leastconn_incremented_backend = Some(backend);
     }
 
     // For gRPC-Web or WebSocket, log connection establishment immediately

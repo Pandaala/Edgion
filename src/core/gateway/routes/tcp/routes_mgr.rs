@@ -6,16 +6,17 @@ use std::sync::OnceLock;
 
 use crate::core::gateway::routes::tcp::tcp_route_table::TcpRouteTable;
 use crate::types::resources::TCPRoute;
+use crate::types::ListenerKey;
 use crate::types::ResourceMeta;
 
-/// Per-port TCP route manager.
+/// Per-listener TCP route manager.
 ///
 /// Each instance owns an atomically-swappable `TcpRouteTable` snapshot.
 /// `EdgionTcpProxy` holds an `Arc<TcpPortRouteManager>` and calls
 /// `load_route_table()` per-connection for lock-free lookups.
 ///
 /// Route data is owned by `GlobalTcpRouteManagers`; this struct only
-/// holds the compiled route snapshot for one port.
+/// holds the compiled route snapshot for one listener.
 pub struct TcpPortRouteManager {
     route_table: ArcSwap<TcpRouteTable>,
 }
@@ -38,7 +39,7 @@ impl TcpPortRouteManager {
         self.route_table.load()
     }
 
-    /// Rebuild the route table from routes belonging to this port.
+    /// Rebuild the route table from routes belonging to this listener.
     /// Called by `GlobalTcpRouteManagers` during rebuild.
     pub fn rebuild(&self, routes: &HashMap<String, Arc<TCPRoute>>) {
         let new_table = TcpRouteTable::from_routes(routes);
@@ -46,25 +47,25 @@ impl TcpPortRouteManager {
         tracing::debug!(
             component = "tcp_port_route_manager",
             routes = routes.len(),
-            "Rebuilt per-port TCP route table"
+            "Rebuilt per-listener TCP route table"
         );
 
         self.route_table.store(Arc::new(new_table));
     }
 }
 
-/// Global wrapper managing `port -> Arc<TcpPortRouteManager>`.
+/// Global wrapper managing `ListenerKey -> Arc<TcpPortRouteManager>`.
 ///
 /// Owns the canonical route cache (`resource_key -> Arc<TCPRoute>`) and
 /// implements `ConfHandler<TCPRoute>`. On every change it rebuilds all
-/// per-port managers by resolving each route's target ports from its
-/// `parentRefs`.
+/// per-listener managers by resolving each route's target listeners from its
+/// `spec.resolved_listeners`.
 pub struct GlobalTcpRouteManagers {
     /// Canonical route store: resource_key -> initialized Arc<TCPRoute>
     route_cache: DashMap<String, Arc<TCPRoute>>,
 
-    /// port -> per-port manager (stable Arc held by listeners)
-    by_port: DashMap<u16, Arc<TcpPortRouteManager>>,
+    /// listener -> per-listener manager (stable Arc held by listeners)
+    by_listener: DashMap<ListenerKey, Arc<TcpPortRouteManager>>,
 }
 
 impl Default for GlobalTcpRouteManagers {
@@ -77,17 +78,17 @@ impl GlobalTcpRouteManagers {
     pub fn new() -> Self {
         Self {
             route_cache: DashMap::new(),
-            by_port: DashMap::new(),
+            by_listener: DashMap::new(),
         }
     }
 
-    /// Get or create a per-port `TcpPortRouteManager`.
+    /// Get or create a per-listener `TcpPortRouteManager`.
     ///
     /// Called by `listener_builder` at startup. The returned `Arc` is stable;
     /// route updates only swap the inner `ArcSwap<TcpRouteTable>`.
-    pub fn get_or_create_port_manager(&self, port: u16) -> Arc<TcpPortRouteManager> {
-        self.by_port
-            .entry(port)
+    pub fn get_or_create_listener_manager(&self, key: &ListenerKey) -> Arc<TcpPortRouteManager> {
+        self.by_listener
+            .entry(key.clone())
             .or_insert_with(|| Arc::new(TcpPortRouteManager::new()))
             .value()
             .clone()
@@ -114,127 +115,137 @@ impl GlobalTcpRouteManagers {
         self.route_cache.clear();
     }
 
-    /// Rebuild all per-port managers from the current route cache.
+    /// Rebuild all per-listener managers from the current route cache.
     ///
-    /// 1. Bucket each route by its target ports (from parentRef)
-    /// 2. For each port that has routes: rebuild the manager
-    /// 3. For ports that no longer have routes: rebuild with empty set
-    pub fn rebuild_all_port_managers(&self) {
-        let port_buckets = self.bucket_routes_by_port();
+    /// 1. Bucket each route by its target listeners (from resolved_listeners)
+    /// 2. For each listener that has routes: rebuild the manager
+    /// 3. For listeners that no longer have routes: rebuild with empty set
+    pub fn rebuild_all_listener_managers(&self) {
+        // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
+        for key in pgis.all_listener_keys() {
+            self.get_or_create_listener_manager(&key);
+        }
 
-        let mut rebuilt_ports = 0u32;
+        let listener_buckets = self.bucket_routes_by_listener();
 
-        for (port, routes) in &port_buckets {
-            let manager = self.get_or_create_port_manager(*port);
+        let mut rebuilt_listeners = 0u32;
+
+        for (key, routes) in &listener_buckets {
+            let manager = self.get_or_create_listener_manager(key);
             manager.rebuild(routes);
-            rebuilt_ports += 1;
+            rebuilt_listeners += 1;
         }
 
-        // Remove stale port entries that no longer have any routes
-        let stale_ports: Vec<u16> = self
-            .by_port
+        // Remove stale listener entries that no longer have any routes and are not
+        // registered in ListenerGatewayInfoStore
+        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
+        let stale_listeners: Vec<ListenerKey> = self
+            .by_listener
             .iter()
-            .filter(|e| !port_buckets.contains_key(e.key()))
-            .map(|e| *e.key())
+            .filter(|e| !listener_buckets.contains_key(e.key()) && !active_listeners.contains(e.key()))
+            .map(|e| e.key().clone())
             .collect();
-        for port in &stale_ports {
-            self.by_port.remove(port);
+        for key in &stale_listeners {
+            self.by_listener.remove(key);
         }
 
-        let total_routes: usize = port_buckets.values().map(|r| r.len()).sum();
+        let total_routes: usize = listener_buckets.values().map(|r| r.len()).sum();
         tracing::info!(
             component = "global_tcp_route_managers",
-            ports = port_buckets.len(),
+            listeners = listener_buckets.len(),
             total_route_entries = total_routes,
-            rebuilt_ports,
-            removed_stale_ports = stale_ports.len(),
-            "Rebuilt all per-port TCP route managers"
+            rebuilt_listeners,
+            removed_stale_listeners = stale_listeners.len(),
+            "Rebuilt all per-listener TCP route managers"
         );
     }
 
-    /// Rebuild only the per-port managers for the given set of affected ports.
+    /// Rebuild only the per-listener managers for the given set of affected listeners.
     ///
     /// Single-pass: iterates route_cache once, bucketing routes into only the
-    /// affected ports. Ports in `affected_ports` that end up with no routes
+    /// affected listeners. Listeners in `affected_listeners` that end up with no routes
     /// are rebuilt with an empty set (clearing stale entries).
-    pub fn rebuild_affected_port_managers(&self, affected_ports: &HashSet<u16>) {
-        if affected_ports.is_empty() {
+    pub fn rebuild_affected_listener_managers(&self, affected_listeners: &HashSet<ListenerKey>) {
+        if affected_listeners.is_empty() {
             return;
         }
 
-        let mut port_buckets: HashMap<u16, HashMap<String, Arc<TCPRoute>>> = HashMap::new();
-        for &port in affected_ports {
-            port_buckets.insert(port, HashMap::new());
+        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<TCPRoute>>> = HashMap::new();
+        for key in affected_listeners {
+            listener_buckets.insert(key.clone(), HashMap::new());
         }
 
         for entry in self.route_cache.iter() {
-            let route_ports = resolved_ports_for_route(entry.value());
-            for &port in route_ports {
-                if let Some(bucket) = port_buckets.get_mut(&port) {
+            let route_listeners = resolved_listeners_for_route(entry.value());
+            for key in route_listeners {
+                if let Some(bucket) = listener_buckets.get_mut(key) {
                     bucket.insert(entry.key().clone(), entry.value().clone());
                 }
             }
         }
 
+        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
+        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
         let mut removed_stale = 0usize;
-        for (port, routes) in &port_buckets {
-            let manager = self.get_or_create_port_manager(*port);
+        for (key, routes) in &listener_buckets {
+            let manager = self.get_or_create_listener_manager(key);
             manager.rebuild(routes);
-            if routes.is_empty() {
-                self.by_port.remove(port);
+            if routes.is_empty() && !active_listeners.contains(key) {
+                self.by_listener.remove(key);
                 removed_stale += 1;
             }
         }
 
         tracing::info!(
             component = "global_tcp_route_managers",
-            affected = affected_ports.len(),
-            removed_stale_ports = removed_stale,
-            "Rebuilt affected per-port TCP route managers"
+            affected = affected_listeners.len(),
+            removed_stale_listeners = removed_stale,
+            "Rebuilt affected per-listener TCP route managers"
         );
     }
 
-    /// Bucket all cached routes by their resolved ports.
-    fn bucket_routes_by_port(&self) -> HashMap<u16, HashMap<String, Arc<TCPRoute>>> {
-        let mut port_buckets: HashMap<u16, HashMap<String, Arc<TCPRoute>>> = HashMap::new();
+    /// Bucket all cached routes by their resolved listeners.
+    fn bucket_routes_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Arc<TCPRoute>>> {
+        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<TCPRoute>>> = HashMap::new();
 
         for entry in self.route_cache.iter() {
             let route_key = entry.key().clone();
             let route = entry.value().clone();
-            let ports = resolved_ports_for_route(&route);
+            let listeners = resolved_listeners_for_route(&route);
 
-            if ports.is_empty() {
+            if listeners.is_empty() {
                 tracing::warn!(
                     route = %route_key,
-                    "TCPRoute has no resolved_ports, skipping port assignment"
+                    "TCPRoute has no resolved_listeners, skipping listener assignment"
                 );
                 continue;
             }
 
-            for &port in ports {
-                port_buckets
-                    .entry(port)
+            for key in listeners {
+                listener_buckets
+                    .entry(key.clone())
                     .or_default()
                     .insert(route_key.clone(), route.clone());
             }
         }
 
-        port_buckets
+        listener_buckets
     }
 }
 
-/// Get the resolved listener ports for a TCPRoute.
+/// Get the resolved listeners for a TCPRoute.
 ///
-/// Uses `spec.resolved_ports` which is pre-computed by the controller
-/// from parentRef.port / parentRef.sectionName → Gateway listener.port.
-pub(crate) fn resolved_ports_for_route(route: &TCPRoute) -> &[u16] {
-    route.spec.resolved_ports.as_deref().unwrap_or_default()
+/// Uses `spec.resolved_listeners` which is pre-computed by the controller
+/// from parentRef.port / parentRef.sectionName → Gateway listener.
+pub(crate) fn resolved_listeners_for_route(route: &TCPRoute) -> &[ListenerKey] {
+    route.spec.resolved_listeners.as_deref().unwrap_or_default()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TcpRouteManagerStats {
     pub route_cache: usize,
-    pub port_count: usize,
+    pub listener_count: usize,
 }
 
 impl GlobalTcpRouteManagers {
@@ -242,7 +253,7 @@ impl GlobalTcpRouteManagers {
     pub fn stats(&self) -> TcpRouteManagerStats {
         TcpRouteManagerStats {
             route_cache: self.route_cache.len(),
-            port_count: self.by_port.len(),
+            listener_count: self.by_listener.len(),
         }
     }
 }

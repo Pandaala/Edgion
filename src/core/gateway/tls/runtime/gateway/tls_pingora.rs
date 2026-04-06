@@ -1,11 +1,12 @@
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
 use crate::core::gateway::observe::logs::ssl_log::log_ssl;
 use crate::core::gateway::observe::logs::LogBuffer;
-use crate::core::gateway::runtime::matching::{match_gateway_tls_with_port, GatewayTlsEntry};
+use crate::core::gateway::runtime::matching::{match_gateway_tls, GatewayTlsEntry};
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
-use crate::core::gateway::tls::store::cert_matcher::match_sni_with_port;
+use crate::core::gateway::tls::store::cert_matcher::match_sni;
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+use crate::types::listener_key::ListenerKey;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
 use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
@@ -139,6 +140,24 @@ mod ssl_ctx_ex_data {
         }
     }
 
+    /// Peek at TlsConnMeta in SSL ex_data without taking ownership.
+    /// Used by mTLS verify callback to write ssl.log on failure.
+    ///
+    /// # Safety
+    /// `ssl_ptr` must be a valid SSL pointer during the call.
+    pub(super) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::types::ctx::TlsConnMeta> {
+        let idx = SSL_CTX_EX_DATA_IDX.load(Ordering::Acquire);
+        if idx < 0 {
+            return None;
+        }
+        let ptr = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
+        if ptr.is_null() {
+            return None;
+        }
+        let ctx = &*(ptr as *const SslCtx);
+        Some(ctx.meta.clone())
+    }
+
     /// Take SslCtx from SSL object. Transfers ownership back via Box::from_raw
     /// and clears the ex_data slot to prevent double-free in the free callback.
     pub(super) fn take_ssl_ctx(ssl: &TlsRef) -> Option<SslCtx> {
@@ -183,15 +202,26 @@ mod ssl_ctx_ex_data {
 
 use ssl_ctx_ex_data::{store_ssl_ctx, take_ssl_ctx};
 
+/// Peek at TlsConnMeta stored in SSL ex_data without taking ownership.
+/// Used by mTLS verify callback to write ssl.log on handshake failure.
+///
+/// # Safety
+/// `ssl_ptr` must be a valid SSL pointer during the call.
+#[cfg(feature = "boringssl")]
+pub(crate) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::types::ctx::TlsConnMeta> {
+    ssl_ctx_ex_data::peek_tls_conn_meta(ssl_ptr)
+}
+
 // ---------------------------------------------------------------------------
 // TlsCallback
 // ---------------------------------------------------------------------------
 
 /// TLS callback handler for dynamic certificate loading.
 ///
-/// Supports port-based certificate lookup for Gateway API semantics.
+/// Supports listener-key-based certificate lookup for Gateway API semantics.
 pub struct TlsCallback {
     port: u16,
+    listener_key: ListenerKey,
     edgion_gateway_config: Arc<EdgionGatewayConfig>,
 }
 
@@ -201,7 +231,7 @@ impl TlsAccept for TlsCallback {
         let mut ssl_ctx = SslCtx::new(self.port);
         // 1. Resolve SNI — done ONCE per connection
         let sni = if let Some(sni) = ssl.servername(NameType::HOST_NAME) {
-            sni.to_string()
+            sni.to_lowercase()
         } else if let Some(fallback_sni) = self
             .edgion_gateway_config
             .spec
@@ -286,30 +316,34 @@ impl TlsAccept for TlsCallback {
 }
 
 impl TlsCallback {
-    /// Create a new TlsCallback with port information
+    /// Create a new TlsCallback with listener key information
     ///
     /// # Parameters
-    /// - `port`: The listening port for this TLS service
+    /// - `port`: The listening port (retained for TlsConnMeta logging)
+    /// - `listener_key`: The listener key identifying the physical listener
     /// - `edgion_gateway_config`: Gateway configuration for fallback behavior
-    pub fn new(port: u16, edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
+    pub fn new(port: u16, listener_key: ListenerKey, edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
         Self {
             port,
+            listener_key,
             edgion_gateway_config,
         }
     }
 
-    /// Create TLS settings with callback for the specified port
+    /// Create TLS settings with callback for the specified listener
     ///
     /// # Parameters
-    /// - `port`: The listening port (used for port-dimension certificate lookup)
+    /// - `port`: The listening port (retained for TlsConnMeta logging)
+    /// - `listener_key`: The listener key for certificate lookup
     /// - `edgion_gateway_config`: Gateway configuration
     /// - `enable_http2`: Whether to enable HTTP/2 ALPN negotiation
     pub fn new_tls_settings_with_callback(
         port: u16,
+        listener_key: ListenerKey,
         edgion_gateway_config: Arc<EdgionGatewayConfig>,
         enable_http2: bool,
     ) -> Result<TlsSettings> {
-        let callback = Box::new(TlsCallback::new(port, edgion_gateway_config));
+        let callback = Box::new(TlsCallback::new(port, listener_key, edgion_gateway_config));
         let mut settings =
             TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
 
@@ -326,16 +360,16 @@ impl TlsCallback {
     /// `apply_edgion_tls_cert` / `apply_gateway_tls_cert` handle ssl_log
     /// population internally (cert, mtls, error fields).
     fn match_and_apply_cert(&self, ssl: &mut SslRef, sni: &str, ssl_ctx: &mut SslCtx) -> bool {
-        // Layer 1: EdgionTls (port-aware)
-        if let Some(edgion_tls) = match_sni_with_port(self.port, sni) {
+        // Layer 1: EdgionTls (listener-key-aware)
+        if let Some(edgion_tls) = match_sni(&self.listener_key, sni) {
             ssl_ctx.meta.is_mtls = edgion_tls.spec.client_auth.is_some();
             ssl_ctx.matched_edgion_tls = Some(edgion_tls.clone());
             self.apply_edgion_tls_cert(ssl, &edgion_tls, ssl_ctx);
             return true;
         }
 
-        // Layer 2: Gateway TLS (port-aware)
-        if let Some(gw) = match_gateway_tls_with_port(self.port, sni) {
+        // Layer 2: Gateway TLS (listener-key-aware)
+        if let Some(gw) = match_gateway_tls(&self.listener_key, sni) {
             self.apply_gateway_tls_cert(ssl, &gw, ssl_ctx);
             return true;
         }
@@ -372,6 +406,36 @@ impl TlsCallback {
                 return;
             }
         };
+        // Runtime expiry check: cert may have expired after being loaded into the store.
+        // X509 is already parsed here, so this is just one time comparison per connection.
+        // Note: only implemented for boringssl; openssl/rustls builds rely on the TLS
+        // handshake itself to reject expired certs, but err_log will not reflect it.
+        #[cfg(feature = "boringssl")]
+        match boring::asn1::Asn1Time::days_from_now(0) {
+            Ok(now) => {
+                if cert.not_after() < &now {
+                    ssl_ctx.meta.err_log = Some(format!("cert_expired: not_after={}", cert.not_after()));
+                    return;
+                }
+                // not_before check: reject certs that are not yet valid.
+                // Mirrors the load-time check in validate_cert/check_expiration.
+                if cert.not_before() > &now {
+                    ssl_ctx.meta.err_log = Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
+                    return;
+                }
+            }
+            Err(e) => {
+                // days_from_now(0) can only fail due to BoringSSL internal allocation failure
+                // (effectively impossible). Log the error but allow the connection to proceed
+                // rather than causing a complete outage — the cert was already validated at
+                // load time (layer 1), and BoringSSL will reject genuinely broken certs.
+                let _ = ssl_ctx
+                    .meta
+                    .log
+                    .get_or_insert_with(crate::core::gateway::observe::logs::LogBuffer::new)
+                    .push(&format!("[warn] cert_expiry_check_failed: {e}"));
+            }
+        }
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
             ssl_ctx.meta.err_log = Some(format!("et: set cert: {e}"));
             return;

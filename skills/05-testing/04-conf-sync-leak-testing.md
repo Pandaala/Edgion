@@ -54,10 +54,10 @@ Both scripts are **self-contained** — they auto-start and auto-stop the enviro
 |----------|-------------------|-------------------|
 | HTTPRoute | `httproute` | RouteManager (exact_domains, wildcard_domains, catch_all, http_routes) |
 | GRPCRoute | `grpcroute` | GrpcRouteManager (grpc_routes, resource_keys) |
-| TCPRoute | `tcproute` | GlobalTcpRouteManagers (route_cache, port_count) |
-| UDPRoute | `udproute` | GlobalUdpRouteManagers (route_cache, port_count) |
-| TLSRoute | `tlsroute` | GlobalTlsRouteManagers (route_cache, port_count) |
-| EdgionTls | `edgiontls` | TlsStore (entries), TlsCertMatcher (port_count) |
+| TCPRoute | `tcproute` | GlobalTcpRouteManagers (route_cache, listener_count) |
+| UDPRoute | `udproute` | GlobalUdpRouteManagers (route_cache, listener_count) |
+| TLSRoute | `tlsroute` | GlobalTlsRouteManagers (route_cache, listener_count) |
+| EdgionTls | `edgiontls` | TlsStore (entries), TlsCertMatcher (listener_count) |
 | EdgionPlugins | `edgionplugins` | PluginStore (plugins) |
 | EdgionStreamPlugins | `edgionstreamplugins` | StreamPluginStore (plugins) |
 | BackendTLSPolicy | `backendtlspolicy` | BackendTLSPolicyStore (policies, reverse_index_targets) |
@@ -125,7 +125,29 @@ examples/test/conf/conf-sync-leak-test/
 
 examples/test/scripts/conf-sync/
 ├── run_conf_sync_test.sh                 # Basic cyclic test
-└── run_conf_sync_advanced_test.sh        # Advanced scenario test
+├── run_conf_sync_advanced_test.sh        # Advanced scenario test
+└── run_conf_sync_mtls_test.sh            # mTLS end-to-end test
+
+examples/test/scripts/gen_certs/
+└── generate_conf_sync_certs.sh           # Uses edgion-ctl gen-certs for conf_sync mTLS certs
+```
+
+## mTLS Channel Test
+
+`run_conf_sync_mtls_test.sh` tests the conf_sync gRPC mTLS feature end-to-end:
+
+1. Generates mTLS certificates via `edgion-ctl gen-certs --output file`
+2. Creates TOML configs with `[conf_sync_security.tls]` section
+3. Starts Controller with server TLS + client CA verification
+4. Starts Gateway with client cert + server CA trust
+5. Verifies: mTLS log entries, health, readiness, server_id match, resource sync, plaintext rejection
+
+```bash
+# Full run
+./examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh
+
+# Keep services running after test for manual inspection
+./examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh --keep-alive
 ```
 
 ## Adding New Resources to Coverage

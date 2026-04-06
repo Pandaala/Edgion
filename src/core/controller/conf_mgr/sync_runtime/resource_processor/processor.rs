@@ -6,6 +6,7 @@
 //! - ProcessorHandler<T> for resource-specific logic
 //! - Configuration (metadata filter, namespace filter, etc.)
 
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -44,6 +45,7 @@ use crate::types::ResourceMeta;
 
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
+use super::raw_store::RawStore;
 use super::{make_resource_key, SecretRefManager};
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
 
@@ -122,6 +124,21 @@ pub trait ProcessorObj: Send + Sync {
     /// Get WatchObj for ConfigSyncServer registration
     fn as_watch_obj(&self) -> Arc<dyn WatchObj>;
 
+    /// Look up a single resource by key from the raw store (bypasses handler filter).
+    ///
+    /// Key format: `"namespace/name"` for namespaced resources, `"name"` for
+    /// cluster-scoped resources.
+    ///
+    /// Returns the resource as a type-erased `Arc<dyn Any + Send + Sync>`, or `None` if:
+    /// - The raw store has not been injected yet (before controller init), or
+    /// - The resource does not exist in the raw store.
+    ///
+    /// Callers should downcast to the concrete type, e.g.:
+    /// ```ignore
+    /// let arc: Arc<Gateway> = processor.get_raw_any(&key)?.downcast().ok()?;
+    /// ```
+    fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
+
     /// Enqueue a key for immediate processing (original events, init revalidation)
     async fn requeue(&self, key: String);
 
@@ -193,6 +210,11 @@ where
 
     /// Namespace filter
     namespace_filter: RwLock<Option<Arc<Vec<String>>>>,
+
+    /// Raw data source for cross-resource key lookups (bypasses handler filter).
+    /// K8s mode: injected as KubeRawStore after reflector::store() call.
+    /// FS mode: injected as FsRawStore on controller construction.
+    raw_store: RwLock<Option<Arc<dyn RawStore<K>>>>,
 }
 
 impl<K> ResourceProcessor<K>
@@ -224,6 +246,7 @@ where
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
+            raw_store: RwLock::new(None),
         }
     }
 
@@ -246,7 +269,17 @@ where
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
+            raw_store: RwLock::new(None),
         }
+    }
+
+    /// Inject the raw store backend.
+    ///
+    /// Called once during controller startup:
+    /// - K8s mode: immediately after `reflector::store()`, before any events arrive.
+    /// - FS mode: in `FileSystemResourceController::new()`.
+    pub fn set_raw_store(&self, store: Arc<dyn RawStore<K>>) {
+        *self.raw_store.write().unwrap() = Some(store);
     }
 
     /// Set metadata filter configuration
@@ -382,8 +415,12 @@ where
                 WorkItemResult::Deleted { key: key.to_string() }
             }
             (None, None) => {
-                // Both empty -> already processed, skip
-                tracing::trace!(kind = self.kind, key = key, "Already processed, skipping");
+                // Resource absent from both store and cache: already deleted and cleaned up.
+                tracing::trace!(
+                    kind = self.kind,
+                    key = key,
+                    "Resource not found in store or cache, skipping"
+                );
                 WorkItemResult::Skipped
             }
         }
@@ -399,6 +436,7 @@ where
             self.namespace_filter.read().unwrap().clone(),
             trigger_chain,
             self.workqueue.config().max_trigger_cycles,
+            self.workqueue.config().max_trigger_depth,
         )
     }
 
@@ -547,6 +585,12 @@ where
                 // completes, so cross-resource requeue (e.g., Gateway port
                 // changes triggering TLSRoute requeue) works correctly even
                 // when resources arrive out of order during the initial LIST.
+                //
+                // NOTE: on_change is intentionally called BEFORE save-to-cache (Step 11).
+                // Handlers that perform cross-resource lookups inside on_change (e.g.
+                // lookup_gateway) MUST use RawStore (via get_raw_any) rather than
+                // ServerCache, because the current resource has not yet been written
+                // to ServerCache at this point.
                 self.handler.on_change(&parsed_obj, ctx).await;
 
                 let phase = if is_init { "init" } else { "runtime" };
@@ -675,6 +719,12 @@ where
             self.workqueue.enqueue(key).await;
         }
         count
+    }
+
+    fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
+        let raw_store = self.raw_store.read().unwrap();
+        let arc_k = raw_store.as_ref()?.get(key)?;
+        Some(arc_k as Arc<dyn Any + Send + Sync>)
     }
 }
 

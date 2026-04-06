@@ -3,8 +3,6 @@ kind: Gateway
 metadata:
   name: leak-test-gateway
   namespace: edgion-test
-  annotations:
-    edgion.io/backend-protocol: "tcp"
 spec:
   gatewayClassName: public-gateway
   listeners:

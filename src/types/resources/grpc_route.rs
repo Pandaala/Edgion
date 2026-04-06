@@ -16,6 +16,7 @@ use super::http_route::{
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::plugins::PluginRuntime;
+use crate::types::ListenerKey;
 
 /// API group for GRPCRoute
 pub const GRPC_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -48,10 +49,10 @@ pub struct GRPCRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_hostnames: Option<Vec<String>>,
 
-    /// Pre-computed listener ports from parentRef resolution (set by Controller).
-    /// Used by Gateway to bind this route to per-port route tables.
+    /// Pre-computed listener keys from parentRef resolution (set by Controller).
+    /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resolved_ports: Option<Vec<u16>>,
+    pub resolved_listeners: Option<Vec<ListenerKey>>,
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.

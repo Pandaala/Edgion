@@ -1,7 +1,7 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::core::gateway::routes::tls::routes_mgr::resolved_ports_for_route;
+use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
-use crate::types::{ResourceMeta, TLSRoute};
+use crate::types::{ListenerKey, ResourceMeta, TLSRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -46,7 +46,7 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             }
         }
 
-        self.rebuild_all_port_managers();
+        self.rebuild_all_listener_managers();
     }
 
     fn partial_update(
@@ -63,13 +63,13 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             "partial update"
         );
 
-        let mut affected_ports: HashSet<u16> = HashSet::new();
+        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
-        // Collect old ports from routes being removed or updated BEFORE modifying the cache
+        // Collect old listeners from routes being removed or updated BEFORE modifying the cache
         for key in remove.iter().chain(update.keys()) {
             if let Some(entry) = self.get_route(key) {
-                for &port in resolved_ports_for_route(&entry) {
-                    affected_ports.insert(port);
+                for lk in resolved_listeners_for_route(&entry) {
+                    affected_listeners.insert(lk.clone());
                 }
             }
         }
@@ -77,8 +77,8 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
         for (key, route) in add {
             match self.initialize_route(route) {
                 Ok(initialized) => {
-                    for &port in resolved_ports_for_route(&initialized) {
-                        affected_ports.insert(port);
+                    for lk in resolved_listeners_for_route(&initialized) {
+                        affected_listeners.insert(lk.clone());
                     }
                     self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Added TLSRoute");
@@ -97,8 +97,8 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             self.remove_route(&key);
             match self.initialize_route(route) {
                 Ok(initialized) => {
-                    for &port in resolved_ports_for_route(&initialized) {
-                        affected_ports.insert(port);
+                    for lk in resolved_listeners_for_route(&initialized) {
+                        affected_listeners.insert(lk.clone());
                     }
                     self.insert_route(initialized);
                     tracing::debug!(resource_key = %key, "Updated TLSRoute");
@@ -118,7 +118,7 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             tracing::debug!(resource_key = %key, "Removed TLSRoute");
         }
 
-        self.rebuild_affected_port_managers(&affected_ports);
+        self.rebuild_affected_listener_managers(&affected_listeners);
     }
 }
 
@@ -155,8 +155,11 @@ impl GlobalTlsRouteManagers {
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 if let Some(backend_refs) = &rule.backend_refs {
-                    let backends: Vec<_> = backend_refs.to_vec();
-                    let weights: Vec<_> = backend_refs.iter().map(|br| br.weight).collect();
+                    let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
+                        .iter()
+                        .filter(|br| is_service_backend_ref(br))
+                        .map(|br| (br.clone(), br.weight))
+                        .unzip();
 
                     rule.backend_finder.init(backends, weights);
 
@@ -216,12 +219,38 @@ impl GlobalTlsRouteManagers {
     }
 }
 
+/// A BackendRef is routable only when it targets a core Service
+/// (group is "" or "core" and kind is "Service" or omitted).
+fn is_service_backend_ref(br: &crate::types::resources::tls_route::TLSBackendRef) -> bool {
+    let group_ok = match br.group.as_deref() {
+        None | Some("") | Some("core") => true,
+        _ => false,
+    };
+    let kind_ok = match br.kind.as_deref() {
+        None | Some("Service") => true,
+        _ => false,
+    };
+    group_ok && kind_ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::resources::common::ParentReference;
 
-    fn create_test_tls_route(namespace: &str, name: &str, gateway: &str, hostname: &str) -> TLSRoute {
+    fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
+        ListenerKey::new(addr, protocol)
+    }
+
+    fn create_test_tls_route(
+        namespace: &str,
+        name: &str,
+        gateway: &str,
+        hostname: &str,
+        port: u16,
+        listener_key: ListenerKey,
+    ) -> TLSRoute {
         use crate::types::resources::tls_route::*;
 
         TLSRoute {
@@ -237,7 +266,7 @@ mod tests {
                     namespace: Some(namespace.to_string()),
                     name: gateway.to_string(),
                     section_name: None,
-                    port: Some(443),
+                    port: Some(port as i32),
                 }]),
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![TLSRouteRule {
@@ -259,7 +288,8 @@ mod tests {
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
                 }]),
-                resolved_ports: Some(vec![443]),
+                resolved_listeners: Some(vec![listener_key]),
+                effective_hostnames: Some(vec![hostname.to_string()]),
             },
             status: None,
         }
@@ -270,6 +300,8 @@ mod tests {
         name: &str,
         gateway: &str,
         hostname: &str,
+        port: u16,
+        listener_key: ListenerKey,
         annotations: std::collections::BTreeMap<String, String>,
     ) -> TLSRoute {
         use crate::types::resources::tls_route::*;
@@ -288,7 +320,7 @@ mod tests {
                     namespace: Some(namespace.to_string()),
                     name: gateway.to_string(),
                     section_name: None,
-                    port: Some(443),
+                    port: Some(port as i32),
                 }]),
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![TLSRouteRule {
@@ -310,7 +342,8 @@ mod tests {
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
                 }]),
-                resolved_ports: Some(vec![443]),
+                resolved_listeners: Some(vec![listener_key]),
+                effective_hostnames: Some(vec![hostname.to_string()]),
             },
             status: None,
         }
@@ -319,17 +352,18 @@ mod tests {
     #[test]
     fn test_tls_route_full_set() {
         let managers = GlobalTlsRouteManagers::new();
+        let key443 = make_listener_key(443, "TLS");
 
         let mut data = HashMap::new();
-        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
-        let route2 = create_test_tls_route("default", "route2", "gateway1", "api.example.com");
+        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com", 443, key443.clone());
+        let route2 = create_test_tls_route("default", "route2", "gateway1", "api.example.com", 443, key443.clone());
 
         data.insert("default/route1".to_string(), route1);
         data.insert("default/route2".to_string(), route2);
 
         managers.full_set(&data);
 
-        let mgr = managers.get_or_create_port_manager(443);
+        let mgr = managers.get_or_create_listener_manager(&key443);
         let table = mgr.load_route_table();
         assert!(table.match_route("test.example.com").is_some());
         assert!(table.match_route("api.example.com").is_some());
@@ -339,14 +373,15 @@ mod tests {
     #[test]
     fn test_tls_route_partial_update() {
         let managers = GlobalTlsRouteManagers::new();
+        let key443 = make_listener_key(443, "TLS");
 
         let mut add = HashMap::new();
-        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com");
+        let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com", 443, key443.clone());
         add.insert("default/route1".to_string(), route1);
 
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
-        let mgr = managers.get_or_create_port_manager(443);
+        let mgr = managers.get_or_create_listener_manager(&key443);
         let table = mgr.load_route_table();
         assert!(table.match_route("test.example.com").is_some());
 
@@ -363,8 +398,9 @@ mod tests {
         let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
+        let key = make_listener_key(443, "TLS");
 
-        let route = create_annotated_tls_route("default", "pp2-route", "gw1", "*.sandbox.com", annotations);
+        let route = create_annotated_tls_route("default", "pp2-route", "gw1", "*.sandbox.com", 443, key, annotations);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
@@ -378,8 +414,9 @@ mod tests {
         let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v1".to_string());
+        let key = make_listener_key(443, "TLS");
 
-        let route = create_annotated_tls_route("default", "pp1-route", "gw1", "*.sandbox.com", annotations);
+        let route = create_annotated_tls_route("default", "pp1-route", "gw1", "*.sandbox.com", 443, key, annotations);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
@@ -391,8 +428,9 @@ mod tests {
         let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/upstream-tls".to_string(), "true".to_string());
+        let key = make_listener_key(443, "TLS");
 
-        let route = create_annotated_tls_route("default", "tls-up", "gw1", "test.com", annotations);
+        let route = create_annotated_tls_route("default", "tls-up", "gw1", "test.com", 443, key, annotations);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
@@ -404,8 +442,9 @@ mod tests {
         let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/upstream-tls".to_string(), "false".to_string());
+        let key = make_listener_key(443, "TLS");
 
-        let route = create_annotated_tls_route("default", "tls-up-false", "gw1", "test.com", annotations);
+        let route = create_annotated_tls_route("default", "tls-up-false", "gw1", "test.com", 443, key, annotations);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
@@ -420,8 +459,9 @@ mod tests {
             "edgion.io/edgion-stream-plugins".to_string(),
             "sandbox/sandbox-stream-plugins".to_string(),
         );
+        let key = make_listener_key(443, "TLS");
 
-        let route = create_annotated_tls_route("default", "sp-route", "gw1", "test.com", annotations);
+        let route = create_annotated_tls_route("default", "sp-route", "gw1", "test.com", 443, key, annotations);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
@@ -436,8 +476,9 @@ mod tests {
         let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "my-plugins".to_string());
+        let key = make_listener_key(443, "TLS");
 
-        let route = create_annotated_tls_route("sandbox", "sp-route", "gw1", "test.com", annotations);
+        let route = create_annotated_tls_route("sandbox", "sp-route", "gw1", "test.com", 443, key, annotations);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
@@ -451,8 +492,9 @@ mod tests {
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
         annotations.insert("edgion.io/upstream-tls".to_string(), "TRUE".to_string());
         annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "ns/plugins".to_string());
+        let key = make_listener_key(443, "TLS");
 
-        let route = create_annotated_tls_route("default", "combo", "gw1", "*.sandbox.com", annotations);
+        let route = create_annotated_tls_route("default", "combo", "gw1", "*.sandbox.com", 443, key, annotations);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
@@ -464,12 +506,52 @@ mod tests {
     #[test]
     fn test_no_annotations() {
         let managers = GlobalTlsRouteManagers::new();
-        let route = create_test_tls_route("default", "plain", "gw1", "test.com");
+        let key = make_listener_key(443, "TLS");
+        let route = create_test_tls_route("default", "plain", "gw1", "test.com", 443, key);
         let initialized = managers.initialize_route(route).unwrap();
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, None);
         assert!(!rule.upstream_tls);
         assert!(rule.stream_plugin_store_key.is_none());
+    }
+
+    #[test]
+    fn test_is_service_backend_ref_filters_unknown_kind() {
+        use crate::types::resources::tls_route::TLSBackendRef;
+
+        let valid = TLSBackendRef {
+            name: "svc".to_string(),
+            namespace: None,
+            port: Some(443),
+            weight: Some(1),
+            group: None,
+            kind: None,
+            extension_info: Default::default(),
+            plugin_runtime: Default::default(),
+            ref_denied: None,
+        };
+        assert!(is_service_backend_ref(&valid));
+
+        let explicit_service = TLSBackendRef {
+            group: Some("core".to_string()),
+            kind: Some("Service".to_string()),
+            ..valid.clone()
+        };
+        assert!(is_service_backend_ref(&explicit_service));
+
+        let unknown_kind = TLSBackendRef {
+            group: Some("example.com".to_string()),
+            kind: Some("Foo".to_string()),
+            ..valid.clone()
+        };
+        assert!(!is_service_backend_ref(&unknown_kind));
+
+        let wrong_kind = TLSBackendRef {
+            group: Some("".to_string()),
+            kind: Some("Deployment".to_string()),
+            ..valid
+        };
+        assert!(!is_service_backend_ref(&wrong_kind));
     }
 }

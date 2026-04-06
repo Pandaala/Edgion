@@ -39,6 +39,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **路由匹配规则** — 各引擎匹配逻辑 | [01-architecture/02-gateway/03-routes/00-route-matching.md](01-architecture/02-gateway/03-routes/00-route-matching.md) |
 | **编码规范** — 日志 ID、日志安全、可观测性 | [03-coding/SKILL.md](03-coding/SKILL.md) |
 | **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
+| **全局 Review** — 安全/正确性/可观测性检查清单 + 已关闭误报条目 | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
 
 ## 目录总览
 
@@ -53,6 +54,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | 07 | [tasks/](07-tasks/SKILL.md) | 任务管理：目录规则、模板、生命周期阶段、完成检查清单 |
 | 08 | [kubernetes/](08-kubernetes/SKILL.md) | Kubernetes 相关：Gateway API 兼容性、API 版本升级策略 |
 | 09 | [misc/](09-misc/) | 杂项（TLS 排查等） |
+| 10 | [fully-review/](10-fully-review/SKILL.md) | 全局 Review 指南：各维度检查清单、安全误判规则、已关闭条目 |
 
 ## 开发生命周期速查
 
@@ -64,7 +66,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | 2 Design | 方案设计、Schema 确认 | `01-architecture/`, `02-features/` |
 | 3 Implementation | 编码 | `01-architecture/`（开发指南）, `02-features/`（配置 Schema）, `03-coding/` |
 | 4 Testing | 测试验证 | `05-testing/` |
-| 5 Review | 代码审查 | `04-review/` |
+| 5 Review | 代码审查 | `04-review/`, `10-fully-review/`（全局 review 或评审 AI 报告时） |
 
 ## 用户文档
 

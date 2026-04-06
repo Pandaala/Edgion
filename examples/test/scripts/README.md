@@ -7,14 +7,23 @@ This directory contains the test and build scripts used by the Edgion project.
 ```text
 scripts/
 ├── gen_certs/          # Runtime certificate generation scripts
+│   ├── generate_tls_certs.sh
+│   ├── generate_backend_certs.sh
+│   ├── generate_mtls_certs.sh
+│   └── generate_conf_sync_certs.sh   # conf_sync gRPC mTLS certs (uses edgion-ctl gen-certs)
 ├── ci/                 # CI/CD scripts
 │   └── check.sh        # fmt/clippy/unit test checks
+├── conf-sync/          # conf_sync channel tests
+│   ├── run_conf_sync_test.sh          # Leak detection test
+│   ├── run_conf_sync_advanced_test.sh # Advanced leak detection
+│   └── run_conf_sync_mtls_test.sh     # mTLS end-to-end test
 ├── integration/        # Integration test scripts
 │   ├── run_direct.sh   # Direct tests without the Gateway
 │   └── run_integration.sh  # End-to-end tests through the Gateway
 └── utils/              # Utility scripts
     ├── prepare.sh      # Prebuild test components
     ├── start_all.sh    # Start all test services
+    ├── start_all_with_conf.sh  # Start with config loading
     └── kill_all.sh     # Stop all test services
 ```
 
@@ -83,6 +92,37 @@ Covered areas:
 - TLS: `mtls`, `backend-tls`
 - Load balancing: `lb-rr` (RoundRobin), `lb-ch` (ConsistentHash), `weighted-backend`
 - Advanced features: `timeout`, `real-ip`, `security`, `plugin-logs`
+
+## conf_sync Tests
+
+### `run_conf_sync_mtls_test.sh`
+
+End-to-end test for the conf_sync gRPC mTLS feature. Verifies that Controller and
+Gateway can communicate over a mutually authenticated TLS channel.
+
+```bash
+# Full run: generate certs → start with mTLS → verify → stop
+./scripts/conf-sync/run_conf_sync_mtls_test.sh
+
+# Attach to a running mTLS environment
+./scripts/conf-sync/run_conf_sync_mtls_test.sh --no-start
+
+# Keep services running after test
+./scripts/conf-sync/run_conf_sync_mtls_test.sh --keep-alive
+```
+
+The test performs the following verifications:
+- mTLS log entries confirm TLS is active on both sides
+- Controller and Gateway pass health checks
+- Gateway reaches `ready` state (implies successful mTLS-based config sync)
+- `server_id` matches between Controller and Gateway
+- Gateway has synced resources from Controller
+- `resource_diff` passes over the mTLS channel
+- Plain-text connections to the mTLS port are rejected
+
+### `run_conf_sync_test.sh` / `run_conf_sync_advanced_test.sh`
+
+Leak detection tests for the conf_sync pipeline (inject/delete cycles).
 
 ## Utility Scripts
 

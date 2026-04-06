@@ -11,6 +11,7 @@ use std::sync::Arc;
 use super::common::{ParentReference, RefDenied};
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::plugins::StreamPluginRuntime;
+use crate::types::ListenerKey;
 
 /// API group for TCPRoute
 pub const TCP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
@@ -38,10 +39,10 @@ pub struct TCPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<TCPRouteRule>>,
 
-    /// Pre-computed listener ports from parentRef resolution (set by Controller).
-    /// Used by Gateway to bind this route to per-port route tables.
+    /// Pre-computed listener keys from parentRef resolution (set by Controller).
+    /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resolved_ports: Option<Vec<u16>>,
+    pub resolved_listeners: Option<Vec<ListenerKey>>,
 }
 
 /// TCPRouteRule defines TCP routing rules

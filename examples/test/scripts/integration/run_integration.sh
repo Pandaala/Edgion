@@ -545,6 +545,7 @@ run_all_tests() {
                     fi
                     run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
                     run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
+                    run_test "HTTPRoute_Protocol_H2C" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
                     run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
                 else
                     # Run specified sub-item test
@@ -672,7 +673,9 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
                     run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+                    run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
                     run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
+                    run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "Status_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i ${G_ITEM}" || test_failed=true
@@ -810,7 +813,9 @@ run_all_tests() {
         # Controller Status Tests
         run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
         run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+        run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
         run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
+        run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
         
         # Gateway Dynamic Tests (if enabled)
         if $G_DYNAMIC_TEST; then
@@ -923,7 +928,7 @@ main() {
             if [ -n "$G_ITEM" ]; then
                 suites="${base_suites},Status/${G_ITEM}"
             else
-                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy"
+                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
             fi
         elif [ -n "$G_ITEM" ]; then
             if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then

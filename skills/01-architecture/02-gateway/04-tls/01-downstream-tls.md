@@ -23,8 +23,8 @@ description: 下游 TLS（客户端→网关）：Pingora Listener TLS 回调、
    - 两者均无则记录 `"no SNI"` 错误并中止。
 
 2. **证书匹配与应用**（`match_and_apply_cert`）：
-   - Layer 1：`TlsCertMatcher::match_sni_with_port(port, sni)` 查找 EdgionTls。
-   - Layer 2：`GatewayTlsMatcher::match_sni_with_port(port, sni)` 查找 Gateway TLS。
+   - Layer 1：`TlsCertMatcher::match_sni(key: &ListenerKey, sni)` 查找 EdgionTls。
+   - Layer 2：`GatewayTlsMatcher::match_sni(key: &ListenerKey, sni)` 查找 Gateway TLS。
    - 匹配成功后应用证书和私钥到 SSL 连接。
 
 3. **SslCtx 存储**：
@@ -82,7 +82,7 @@ Gateway API 标准的前端客户端证书验证，通过 `spec.tls.frontend` �
 2. 根据 `mode` 选择 verify mode：AllowValidOnly 用标准 SSL verify，AllowInsecureFallback 用 `boring_sys::SSL_set_verify` + `insecure_fallback_verify_cb`。
 3. 设置 `verify_depth(10)`。
 
-per-port 配置由 Controller 合并到每个 listener 的 `GatewayTlsConfig` 中，Gateway 侧无需额外处理。
+per-listener 配置由 Controller 合并到每个 listener 的 `GatewayTlsConfig` 中，Gateway 侧无需额外处理。
 
 ## EdgionTls mTLS 客户端验证
 
@@ -138,7 +138,7 @@ certificate_callback          handshake_complete_callback
 | 文件 | 职责 |
 |------|------|
 | `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | TlsCallback、SslCtx、证书应用 |
-| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher（EdgionTls 匹配） |
+| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher（EdgionTls listener+SNI 匹配） |
 | `src/core/gateway/runtime/matching/tls.rs` | GatewayTlsMatcher（Gateway 回退匹配） |
 | `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | 客户端证书信息提取 |
 | `src/core/gateway/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS 验证回调 |

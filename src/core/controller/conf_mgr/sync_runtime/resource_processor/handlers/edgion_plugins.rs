@@ -962,7 +962,7 @@ mod tests {
         ))]);
 
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1027,7 +1027,7 @@ mod tests {
         )))]);
 
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1081,7 +1081,7 @@ mod tests {
         ))]);
 
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1149,7 +1149,7 @@ mod tests {
         }))]);
 
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1220,7 +1220,7 @@ mod tests {
         ))]);
 
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5);
+        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,

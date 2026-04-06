@@ -109,13 +109,70 @@ List 和 Watch 请求均携带 `expected_server_id`。如果 Gateway 发送的 `
 
 `no_sync_kinds` 在 `ProcessorRegistry.all_watch_objs()` 调用时排除这些资源，它们不会出现在 `supported_kinds` 列表中。
 
+## 通道安全（mTLS）
+
+conf_sync gRPC 通道支持可选的 mTLS 加密，通过 TOML 配置的 `[conf_sync_security.tls]` section 控制。
+
+### 配置结构
+
+```rust
+// src/core/common/config/mod.rs
+pub struct ConfSyncSecurityConfig {
+    pub tls: Option<ConfSyncTlsConfig>,
+}
+
+pub struct ConfSyncTlsConfig {
+    pub cert: String,      // 证书路径（相对 work_dir 或绝对）
+    pub key: String,       // 私钥路径
+    pub ca: String,        // CA 证书路径（校验对端）
+    pub skip_tls: bool,    // 紧急跳过 TLS（仅故障降级用）
+}
+```
+
+路径解析通过 `ConfSyncTlsConfig::resolve_path()` 基于 `work_dir` 处理，与其他配置路径行为一致。
+
+### 工作模式
+
+| 配置状态 | Controller | Gateway |
+|----------|-----------|---------|
+| 无 `[conf_sync_security]` | 明文 gRPC（向后兼容） | 明文连接 |
+| 有 TLS config + 证书有效 | mTLS gRPC | mTLS 连接 |
+| 有 TLS config + 证书缺失 | **gRPC 不启动**（严格模式） | 连接失败，backoff 重试 |
+| `skip_tls = true` | 明文 + ERROR 日志 | 明文 + ERROR 日志 |
+
+### 实现位置
+
+| 组件 | 文件 | 关键函数 |
+|------|------|---------|
+| Server TLS | `controller/conf_sync/conf_server/grpc_server.rs` | `load_server_tls()` → `ServerTlsConfig::new().identity().client_ca_root()` |
+| Client TLS | `gateway/conf_sync/conf_client/grpc_client.rs` | `load_client_tls()` → `ClientTlsConfig::new().ca_certificate().identity()` |
+| Controller CLI | `controller/cli/mod.rs` | `start_services()` 接收 `Option<ConfSyncTlsConfig>` |
+| Gateway CLI | `gateway/cli/mod.rs` | `create_config_sync_client()` 传入 `config.conf_sync_security.tls.as_ref()` |
+
+### 证书生成
+
+`edgion-ctl gen-certs` 子命令使用 rcgen 生成完整证书束：
+
+- **CA**：自签 ECDSA P-256，CN=edgion-grpc-ca
+- **Server cert**：CN=edgion-controller，SAN 含 localhost/127.0.0.1/::1 + K8s FQDN，EKU=ServerAuth
+- **Client cert**：CN=edgion-gateway，EKU=ClientAuth
+
+证书生成逻辑：`src/core/ctl/certs/mod.rs`
+子命令入口：`src/core/ctl/cli/commands/gen_certs.rs`
+
+### 集成测试
+
+`examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh` — 端到端 mTLS 测试，验证证书生成 → 配置注入 → mTLS 启动 → 配置同步 → 明文拒绝。详见 [05-testing/04-conf-sync-leak-testing.md](../../05-testing/04-conf-sync-leak-testing.md)。
+
 ## 模块分布
 
 | 模块 | 路径 | 职责 |
 |------|------|------|
 | **common/conf_sync** | `src/core/common/conf_sync/` | Proto 定义、共享 traits（`CacheEventDispatch`、`ConfHandler`、`ResourceChange`）、共享事件/列表/Watch 类型 |
-| **controller/conf_sync** | `src/core/controller/conf_sync/` | 服务端实现：`ConfigSyncServer`、`ConfigSyncGrpcServer`、`ClientRegistry`、`WatchObj` trait |
-| **gateway/conf_sync** | `src/core/gateway/conf_sync/` | 客户端实现：`ConfigSyncClient`、`ClientCache<T>`、`CacheData`、event_dispatch |
+| **common/config** | `src/core/common/config/mod.rs` | `ConfSyncSecurityConfig`、`ConfSyncTlsConfig` 配置结构 |
+| **controller/conf_sync** | `src/core/controller/conf_sync/` | 服务端实现：`ConfigSyncServer`、`ConfigSyncGrpcServer`（含 mTLS）、`ClientRegistry`、`WatchObj` trait |
+| **gateway/conf_sync** | `src/core/gateway/conf_sync/` | 客户端实现：`ConfigSyncClient`（含 mTLS）、`ClientCache<T>`、`CacheData`、event_dispatch |
+| **ctl/certs** | `src/core/ctl/certs/mod.rs` | 证书生成（rcgen）：`generate_certs()` → `CertBundle` |
 
 ### 关键文件
 

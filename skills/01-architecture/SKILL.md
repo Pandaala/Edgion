@@ -147,5 +147,4 @@ CLI 工具：3 种 target 模式（center/server/client）、apply/delete/get/re
 
 ### [06-gateway-api.md](06-gateway-api.md) — Gateway API 合规性
 
-Gateway API v1.4.0 支持范围、一致性测试、Edgion 扩展点、有意偏差。
-
+Gateway API v1.5.0 支持范围、一致性测试、Edgion 扩展点、有意偏差。

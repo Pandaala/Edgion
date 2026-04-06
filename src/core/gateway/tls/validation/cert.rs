@@ -144,7 +144,7 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     }
 
     // 4. Parse certificate and check expiration
-    let (der_data, not_before, not_after) = match parse_and_validate_cert(&cert_pem) {
+    let (der_data, not_before_ts, not_after_ts) = match parse_and_validate_cert(&cert_pem) {
         Ok(data) => data,
         Err(e) => {
             errors.push(CertValidationError::CertParseError(e.to_string()));
@@ -153,7 +153,7 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     };
 
     // 5. Check expiration
-    if let Err(e) = check_expiration_from_strings(&not_before, &not_after) {
+    if let Err(e) = check_expiration(not_before_ts, not_after_ts) {
         errors.push(e);
     }
 
@@ -182,8 +182,8 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
 }
 
 /// Parse X.509 certificate from PEM string and perform validation
-/// Returns the certificate data for further validation
-fn parse_and_validate_cert(pem_str: &str) -> Result<(Vec<u8>, String, String), String> {
+/// Returns (der_data, not_before_unix_ts, not_after_unix_ts)
+fn parse_and_validate_cert(pem_str: &str) -> Result<(Vec<u8>, i64, i64), String> {
     // Parse PEM
     let pem = Pem::iter_from_buffer(pem_str.as_bytes())
         .next()
@@ -194,19 +194,43 @@ fn parse_and_validate_cert(pem_str: &str) -> Result<(Vec<u8>, String, String), S
     let der_data = pem.contents.to_vec();
     let (_, cert) = X509Certificate::from_der(&der_data).map_err(|e| format!("X.509 parse error: {}", e))?;
 
-    // Extract validity dates
-    let not_before = cert.validity().not_before.to_string();
-    let not_after = cert.validity().not_after.to_string();
+    // Extract validity as Unix timestamps (avoids string roundtrip)
+    let not_before_ts = cert.validity().not_before.timestamp();
+    let not_after_ts = cert.validity().not_after.timestamp();
 
-    Ok((der_data, not_before, not_after))
+    Ok((der_data, not_before_ts, not_after_ts))
 }
 
-/// Check if certificate is expired or not yet valid from string dates
-fn check_expiration_from_strings(not_before_str: &str, not_after_str: &str) -> Result<(), CertValidationError> {
-    // For simplicity, we skip actual date parsing in this implementation
-    // In production, you would parse these dates and compare with current time
-    // For now, we just validate the certificate can be parsed (done in parse step)
-    let _ = (not_before_str, not_after_str);
+/// Check if certificate validity period covers current time
+fn check_expiration(not_before_ts: i64, not_after_ts: i64) -> Result<(), CertValidationError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // unwrap_or_default(): if system clock is set before Unix epoch, duration_since returns Err
+    // and we fall back to 0 (1970-01-01). Any cert with not_before > 0 will then be rejected,
+    // which is the correct defensive behavior — a misconfigured clock should not allow certs through.
+    // try_from/unwrap_or(i64::MAX): u64→i64 overflow only occurs after year ~292 billion; unreachable.
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    )
+    .unwrap_or(i64::MAX);
+
+    // Both bounds are inclusive per RFC 5280: valid if not_before <= now <= not_after
+    if now > not_after_ts || now < not_before_ts {
+        let fmt = |ts: i64| {
+            chrono::DateTime::from_timestamp(ts, 0)
+                .map(|dt: chrono::DateTime<chrono::Utc>| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .unwrap_or_else(|| ts.to_string())
+        };
+        return Err(CertValidationError::CertExpired {
+            not_before: fmt(not_before_ts),
+            not_after: fmt(not_after_ts),
+            current: fmt(now),
+        });
+    }
+
     Ok(())
 }
 
@@ -395,7 +419,7 @@ mod tests {
                     data: Some(data),
                     ..Default::default()
                 }),
-                resolved_ports: None,
+                resolved_listeners: None,
             },
             status: None,
         }
@@ -587,5 +611,76 @@ mod tests {
         validate_mtls_config(&config, &mut errors);
 
         assert!(errors.is_empty(), "Terminate mode should not require CA Secret");
+    }
+
+    /// 生成指定有效期的自签名证书，返回 (cert_pem, key_pem)
+    fn make_cert_with_validity(not_before_offset_days: i64, not_after_offset_days: i64) -> (String, String) {
+        use rcgen::{CertificateParams, KeyPair};
+
+        // Use absolute crate paths to avoid conflict with x509_parser::prelude::time module
+        let now = ::time::OffsetDateTime::now_utc();
+        let dur_before = ::time::Duration::days(not_before_offset_days);
+        let dur_after = ::time::Duration::days(not_after_offset_days);
+
+        let key_pair = KeyPair::generate().expect("rcgen key generation failed");
+        let mut params = CertificateParams::new(vec!["example.com".to_string()]).expect("rcgen params failed");
+        params.not_before = now + dur_before;
+        params.not_after = now + dur_after;
+        let cert = params.self_signed(&key_pair).expect("rcgen self-sign failed");
+        (cert.pem(), key_pair.serialize_pem())
+    }
+
+    #[test]
+    fn test_expired_cert_is_invalid() {
+        // 证书昨天就过期了
+        let (cert_pem, key_pem) = make_cert_with_validity(-30, -1);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(!result.is_valid, "expired cert should be invalid");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertExpired { .. })),
+            "should report CertExpired, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_not_yet_valid_cert_is_invalid() {
+        // 证书明天才生效
+        let (cert_pem, key_pem) = make_cert_with_validity(1, 365);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(!result.is_valid, "not-yet-valid cert should be invalid");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertExpired { .. })),
+            "should report CertExpired, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_valid_cert_passes_expiry_check() {
+        // 证书昨天生效，一年后过期
+        let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
+
+        let result = validate_cert(&tls);
+        // 只验证没有 CertExpired 错误
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertExpired { .. })),
+            "valid cert should not report CertExpired, got: {:?}",
+            result.errors
+        );
     }
 }

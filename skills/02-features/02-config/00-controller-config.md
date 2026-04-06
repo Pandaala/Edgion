@@ -50,6 +50,13 @@ default_capacity = 200            # EventStore 默认容量（所有资源类型
 # Service = 1000
 # no_sync_kinds = ["ReferenceGrant", "Secret"]   # 不同步到 Gateway 的资源
 
+# ─── gRPC 通道安全（可选 mTLS）───
+# [conf_sync_security.tls]
+# cert = "certs/grpc/server.crt"    # Controller 服务端证书
+# key  = "certs/grpc/server.key"    # 服务端私钥
+# ca   = "certs/grpc/ca.crt"        # 校验 Gateway 客户端的 CA
+# skip_tls = false                   # true = 紧急降级明文（会输出 ERROR 日志）
+
 # ─── FileSystem 模式 ───
 [conf_center]
 type = "filesystem"
@@ -119,6 +126,20 @@ endpoint_mode = "EndpointSlice"            # EndpointSlice | Endpoints | Both
 | `default_capacity` | `u32` | `200` | EventStore 默认容量 |
 | `capacity_overrides` | `Map<String, u32>` | `{}` | 按 kind 覆盖容量 |
 | `no_sync_kinds` | `Vec<String>?` | `["ReferenceGrant", "Secret"]` | 不同步到 Gateway 的资源列表（设置后完全替换默认） |
+
+### [conf_sync_security.tls]
+
+可选配置，启用后 Controller 的 gRPC 端口使用 mTLS。
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `cert` | `String` | — | 服务端证书路径（PEM，相对 work_dir） |
+| `key` | `String` | — | 服务端私钥路径（PEM） |
+| `ca` | `String` | — | CA 证书路径（用于验证 Gateway 客户端证书） |
+| `skip_tls` | `bool` | `false` | 紧急降级开关：`true` 跳过 TLS，以明文启动（输出 ERROR 日志） |
+
+> 不配置此 section 时，gRPC 以明文运行，与历史版本完全兼容。
+> 证书通过 `edgion-ctl gen-certs --output file --output-dir <dir>` 生成。
 
 ### [conf_center] — FileSystem
 

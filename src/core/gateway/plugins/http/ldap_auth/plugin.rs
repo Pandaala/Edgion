@@ -151,10 +151,12 @@ impl LdapAuth {
     }
 
     fn build_bind_dn(&self, username: &str) -> Result<String, &'static str> {
-        // Reject dangerous DN special chars to reduce LDAP injection risk.
-        if username
-            .chars()
-            .any(|c| matches!(c, '\\' | ',' | '+' | '"' | '<' | '>' | ';' | '\0'))
+        // Allowlist: only permit characters safe in LDAP DN attribute values.
+        // This prevents LDAP injection via DN special chars (RFC 4514).
+        if username.is_empty()
+            || !username
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '@' | '-' | '_'))
         {
             return Err("invalid username characters");
         }

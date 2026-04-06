@@ -6,8 +6,8 @@ use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_grpc_route_if_enabled,
 };
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
-    update_gateway_route_index,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
+    requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
@@ -47,7 +47,12 @@ impl GrpcRouteHandler {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {
                     for br in backend_refs {
-                        backend_refs_list.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                        backend_refs_list.push((
+                            br.group.as_deref(),
+                            br.kind.as_deref(),
+                            br.namespace.as_deref(),
+                            br.name.as_str(),
+                        ));
                     }
                 }
             }
@@ -121,9 +126,9 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         // Register Service backend references for cross-resource requeue
         Self::register_service_refs(&route);
 
-        // Treat resolved_ports as controller-derived state.
+        // Treat resolved_listeners as controller-derived state.
         // Clear any user-provided or stale value before recomputing from current parentRefs.
-        route.spec.resolved_ports = None;
+        route.spec.resolved_listeners = None;
 
         // Resolve effective hostnames (intersection with Gateway listener hostnames)
         if let Some(parent_refs) = &route.spec.parent_refs {
@@ -144,50 +149,13 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             }
         }
 
-        // Resolve listener ports from parentRefs for per-port route isolation
+        // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
-            let route_ns_ports = route.metadata.namespace.as_deref().unwrap_or("default");
-            let mut ports = Vec::new();
-            for parent_ref in parent_refs {
-                if let Some(port) = parent_ref.port {
-                    ports.push(port as u16);
-                } else {
-                    let gw_ns = parent_ref
-                        .namespace
-                        .as_deref()
-                        .or(route.metadata.namespace.as_deref())
-                        .unwrap_or("default");
-                    if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
-                        if let Some(listeners) = &gateway.spec.listeners {
-                            if let Some(section_name) = &parent_ref.section_name {
-                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns_ports,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            } else {
-                                for listener in listeners {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns_ports,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if !ports.is_empty() {
-                ports.sort_unstable();
-                ports.dedup();
-                route.spec.resolved_ports = Some(ports);
+            let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+            let listener_keys =
+                super::route_utils::resolve_listener_keys(parent_refs, route_ns, route.metadata.namespace.as_deref());
+            if !listener_keys.is_empty() {
+                route.spec.resolved_listeners = Some(listener_keys);
             }
         }
 
@@ -242,6 +210,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         );
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
+        requeue_backend_tls_policies_for_route(ResourceKind::GRPCRoute, route_ns, route_name, ctx).await;
     }
 
     async fn on_delete(&self, route: &GRPCRoute, ctx: &HandlerContext) {
@@ -250,6 +219,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+        requeue_backend_tls_policies_for_route(ResourceKind::GRPCRoute, route_ns, route_name, ctx).await;
         super::route_utils::clear_service_backend_refs(ResourceKind::GRPCRoute, route_ns, route_name);
 
         remove_from_gateway_route_index(ResourceKind::GRPCRoute, route_ns, route_name);
@@ -380,11 +350,12 @@ mod tests {
             None,
             TriggerChain::default(),
             3,
+            20,
         )
     }
 
     #[tokio::test]
-    async fn parse_clears_stale_resolved_ports_when_current_parent_refs_cannot_resolve() {
+    async fn parse_clears_stale_resolved_listeners_when_current_parent_refs_cannot_resolve() {
         let handler = GrpcRouteHandler::default();
         let ctx = make_ctx();
         let route: GRPCRoute = serde_json::from_value(json!({
@@ -395,7 +366,6 @@ mod tests {
                 "namespace": "default"
             },
             "spec": {
-                "resolvedPorts": [9090],
                 "parentRefs": [
                     {
                         "name": "missing-gateway"
@@ -411,20 +381,25 @@ mod tests {
         };
 
         assert_eq!(
-            parsed.spec.resolved_ports, None,
-            "stale or user-provided resolvedPorts must be cleared when current parentRefs cannot be resolved"
+            parsed.spec.resolved_listeners, None,
+            "stale or user-provided resolvedListeners must be cleared when current parentRefs cannot be resolved"
         );
     }
 }
 
-/// Extract (kind, namespace, name) tuples from all backend refs for shared validation.
-fn collect_backend_ref_tuples(route: &GRPCRoute) -> Vec<(Option<&str>, Option<&str>, &str)> {
+/// Extract (group, kind, namespace, name) tuples from all backend refs for shared validation.
+fn collect_backend_ref_tuples(route: &GRPCRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
     let mut tuples = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
             if let Some(backend_refs) = &rule.backend_refs {
                 for br in backend_refs {
-                    tuples.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                    tuples.push((
+                        br.group.as_deref(),
+                        br.kind.as_deref(),
+                        br.namespace.as_deref(),
+                        br.name.as_str(),
+                    ));
                 }
             }
         }

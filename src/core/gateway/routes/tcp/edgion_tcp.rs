@@ -16,6 +16,7 @@ use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
 use crate::core::gateway::routes::tcp::TcpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use crate::types::ListenerKey;
 
 /// TCP connection context
 pub struct TcpContext {
@@ -48,6 +49,7 @@ pub enum TcpStatus {
 /// TCP proxy service for Gateway TCP listeners.
 pub struct EdgionTcpProxy {
     pub listener_port: u16,
+    pub listener_key: ListenerKey,
     pub tcp_route_manager: Arc<TcpPortRouteManager>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub connector: TransportConnector,

@@ -35,10 +35,10 @@ HTTPRoute 的 `preparse()` 方法在类型层面构建运行时结构：
 
 1. **记录跨命名空间引用**：将 backendRef 中的跨命名空间引用注册到 CrossNsRefManager，ReferenceGrant 变更时自动 requeue
 2. **注册 Service 引用**：将所有 Service 类型的 backendRef 注册到 ServiceRefManager，Service 变更时自动 requeue
-3. **清除并重算 resolved_ports**：从 parentRef 解析目标 Listener 的端口号，用于 Gateway 侧的 per-port 路由隔离。解析逻辑：
-   - parentRef.port 已指定 → 直接使用
-   - parentRef.sectionName 已指定 → 查找对应 Listener 获取端口
-   - 都未指定 → 使用 Gateway 所有 Listener 的端口（需通过 allowedRoutes 命名空间检查）
+3. **清除并重算 resolved_listeners**：从 parentRef 解析目标 Listener 的地址和协议，产出 `Vec<ListenerKey>`（格式 `"{addr}/{protocol}"`），用于 Gateway 侧的 per-listener 路由隔离。解析逻辑通过 `resolve_listener_keys()`（`handlers/route_utils.rs` 中 6 个 handler 共用）：
+   - 总是查找 Gateway 来获取地址和协议（不再有只取 parentRef.port 的快速路径）
+   - sectionName + port 同时存在时，校验两者一致性
+   - 都未指定 → 使用 Gateway 所有 Listener（需通过 allowedRoutes 命名空间检查）
 4. **解析 resolved_hostnames**：计算路由 hostnames 与 Gateway Listener hostnames 的交集
 5. **标记被拒绝的跨命名空间引用**：对每个跨命名空间的 backendRef 检查 ReferenceGrant，未授权的设置 `ref_denied` 字段，Gateway 侧据此拒绝请求
 
@@ -64,7 +64,7 @@ HTTPRoute 的 `preparse()` 方法在类型层面构建运行时结构：
 HTTPRoute 的 ConfHandler 实现路由的编译和注册：
 
 1. **parentRef 过滤**：仅编译 `Accepted=True` 的 parentRef（尚无 status 时乐观全部编译）
-2. **per-port 路由管理**：根据 resolved_ports 将路由规则注册到对应端口的 `HttpRouteManager`
+2. **per-listener 路由管理**：根据 resolved_listeners 将路由规则注册到对应 `ListenerKey` 的 `HttpRouteManager`
 3. **域名路由表**：每个端口维护 `domain → route_rules` 映射，无 hostname 的路由注册到 `*`（全匹配）
 4. **多级匹配引擎**：
    - `RadixHostMatchEngine`：基于 Radix Tree 的域名匹配

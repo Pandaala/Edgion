@@ -107,7 +107,8 @@ impl PartiallyInvalidTestSuite {
                             if status == 500 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "All-invalid route returns 500 as expected (route accepted, backends unresolvable)".to_string(),
+                                    "All-invalid route returns 500 as expected (route accepted, backends unresolvable)"
+                                        .to_string(),
                                 )
                             } else {
                                 TestResult::failed(

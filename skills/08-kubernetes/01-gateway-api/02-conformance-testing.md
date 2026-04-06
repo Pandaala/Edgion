@@ -31,7 +31,7 @@ description: 如何运行、调试和逐步验证 Gateway API conformance tests
 | `GatewayStatusMustHaveListeners` | 10s | 60s |
 | `HTTPRouteMustHaveCondition` | 10s | 60s |
 | `RouteMustHaveParents` | 10s | 60s |
-| `MaxTimeToConsistency` | 30s | 30s |
+| `MaxTimeToConsistency` | 15s | 30s |
 | `LatestObservedGenerationSet` | 10s | 60s |
 | `DefaultTestTimeout` | 15s | 60s |
 | `RequiredConsecutiveSuccesses` | 3 | 3 |
@@ -74,15 +74,52 @@ GO_RUN_FILTER="TestConformance/HTTPRoute" bash scripts/run.sh
 bash scripts/run.sh --supported-features "Gateway,HTTPRoute,ReferenceGrant"
 ```
 
-### Port-Forward 模式
+### Port-Forward 模式（TAL）
 
-集群 Pod IP 不可达时使用：
+集群 Pod IP 不可达时使用。TAL（Transport Access Layer）负责统一处理地址改写，支持灵活的端口映射配置。
+
+**快速启用：**
 
 ```bash
 bash scripts/run.sh --port-forward
 ```
 
-自动 `kubectl port-forward` 到 edgion-gateway pod，HTTP→8080, HTTPS→8443。
+自动启动 `kubectl port-forward` 到 edgion-gateway pod，默认绑定本地端口（HTTP:18080, HTTPS:18443, HTTPS-8443:28443）。
+
+**高级用法 — 统一端口映射表（推荐）：**
+
+```bash
+export GATEWAY_PROXY_PORT_MAP="80:18080,443:18443,8443:28443"
+./scripts/run.sh --port-forward
+```
+
+`GATEWAY_PROXY_PORT_MAP` 格式：`gwPort:localPort,gwPort:localPort,...`，允许为每个 gateway 端口独立配置本地转发端口。
+
+**兼容旧用法（逐个指定）：**
+
+```bash
+export GATEWAY_PROXY_HOST=127.0.0.1
+export GATEWAY_PROXY_HTTP_PORT=18080
+export GATEWAY_PROXY_HTTPS_PORT=18443
+export GATEWAY_PROXY_HTTPS_8443_PORT=28443
+./scripts/run.sh --port-forward
+```
+
+**启用 gRPC proxy：**
+
+```bash
+GATEWAY_PROXY_ENABLE_GRPC=true ./scripts/run.sh --port-forward
+```
+
+用于 `GRPCRoute*` 系列测试。
+
+**调试 TAL 地址改写：**
+
+```bash
+TAL_DEBUG=true ./scripts/run.sh --port-forward
+```
+
+在 test 输出中查看 `[TAL] resolved ...` 日志。
 
 ## 更新二进制（localpatch）
 
@@ -135,7 +172,7 @@ kubectl exec -n edgion-system $POD -- sh -c "kill -9 $CTRL_PID"
 
 ### Hostname 冲突检测规则（重要）
 
-Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 port+protocol+hostname 组合，不是 hostname 相交。
+Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 socket-address+hostname 组合（冲突检测 key 通过 `make_conflict_key(SocketAddr)` 按 socket 地址分组），不是 hostname 相交。
 
 - `None`（wildcard）+ `None` → **Conflicted**（两个都是 wildcard）
 - `foo.example.com` + `foo.example.com` → **Conflicted**
@@ -144,36 +181,69 @@ Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 port+protocol+hos
 
 错误地将"相交"视为"冲突"会导致多个测试失败（`GatewayHTTPListenerIsolation` 等）。
 
-## Conformance Profiles 当前状态
+## Conformance 最新结果（feature-03-29, 2026-04-01）
 
-| Profile | 声明 | 说明 |
-|---------|------|------|
-| GATEWAY-HTTP | ✅ | 已声明，Gateway + HTTPRoute core 已验证 |
-| GATEWAY-GRPC | ✅ | 已声明，GRPCRoute core 已验证 |
-| GATEWAY-TLS | ❌ | 未声明，需通过 core tests 后再声明 |
+**381 PASS / 7 FAIL / 56 SKIP**（in-cluster 模式）
 
-## Gateway 测试当前状态（feature-03-25 分支）
+详见 `SKILL.md` 中的 FAIL 列表和 profile 状态。
 
-| 测试 | 状态 | 备注 |
-|------|------|------|
-| GatewayClassObservedGenerationBump | ✅ | |
-| GatewayInvalidRouteKind | ✅ | |
-| GatewayInvalidTLSConfiguration（4个子测试） | ✅ | |
-| GatewayModifyListeners | ✅ | |
-| GatewayObservedGenerationBump | ✅ | |
-| GatewaySecretInvalidReferenceGrant | ✅ | |
-| GatewaySecretMissingReferenceGrant | ✅ | |
-| GatewaySecretReferenceGrantAllInNamespace | ✅ | |
-| GatewaySecretReferenceGrantSpecific | ✅ | |
-| GatewayWithAttachedRoutes（3个子测试） | ✅ | |
-| GatewayHTTPListenerIsolation | ✅ | |
-| GatewayFrontendInvalidDefaultClientCertificateValidation | ✅ | |
-| GatewayFrontendClientCertificateValidation | ⚠️ | 数据面已实现，待 conformance 验证（需 8443 端口预绑定） |
-| GatewayFrontendClientCertificateValidationInsecureFallback | ⚠️ | 数据面已实现（InsecureFallback verify callback），待 conformance 验证 |
-| GatewayInvalidFrontendClientCertificateValidation | ❌ | `default_valid_configuration` 子测试 status 问题 |
-| GatewayStaticAddresses | ⏭ SKIP | 明确不实现（地址由 TOML 配置决定） |
-| GatewayOptionalAddressValue | ⏭ SKIP | 明确不实现 |
-| GatewayWithAttachedRoutesWithPort8080 | ⏭ SKIP | 明确不实现（端口只能启动时绑定） |
-| GatewayInfrastructure | ⏭ SKIP | 明确不实现 |
-| GatewayBackendClientCertificateFeature | ⏭ SKIP | 需要 BackendTLSPolicy CRD |
-| GatewayInvalidTLSBackendConfiguration | ⏭ SKIP | 需要 BackendTLSPolicy CRD |
+## In-Cluster 运行方式（推荐）
+
+OrbStack 路由不稳定时用 in-cluster 方式跑，避免 port-forward 和网络问题：
+
+```bash
+# 1. 编译 linux/arm64 binary
+cd examples/gateway-api-conformance
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -o /tmp/conformance-test-linux .
+
+# 2. 创建 runner pod（用已有镜像避免 Docker Hub 限流）
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: conformance-runner
+  namespace: edgion-system
+spec:
+  containers:
+  - name: runner
+    image: pandaala/edgion-controller:conformance-dev
+    imagePullPolicy: IfNotPresent
+    command: ["sh", "-c", "sleep infinity"]
+  restartPolicy: Never
+  serviceAccountName: edgion-controller
+EOF
+
+# 3. 授权 cluster-admin（conformance suite 需要操作 CRD/namespace）
+kubectl apply -f - <<'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: conformance-runner-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: edgion-controller
+  namespace: edgion-system
+EOF
+
+# 4. 拷贝 binary 并启动（nohup 防止 kubectl exec 断开杀进程）
+kubectl cp /tmp/conformance-test-linux edgion-system/conformance-runner:/tmp/conformance-test
+kubectl exec -n edgion-system conformance-runner -- chmod +x /tmp/conformance-test
+kubectl exec -n edgion-system conformance-runner -- sh -c '
+nohup /tmp/conformance-test \
+  -test.run=TestConformance -test.v -test.timeout=30m -test.count=1 \
+  -gateway-class=edgion -cleanup-base-resources=false -debug=true \
+  -allow-crds-mismatch -conformance-profiles=GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS \
+  > /tmp/conformance.log 2>&1 &
+echo "PID=$!"'
+
+# 5. 监控
+kubectl exec -n edgion-system conformance-runner -- sh -c \
+  'wc -l /tmp/conformance.log; tail -3 /tmp/conformance.log; ls /proc/$(pgrep conformance)/stat 2>/dev/null && echo alive || echo done'
+
+# 6. 取回日志
+kubectl cp edgion-system/conformance-runner:/tmp/conformance.log /tmp/conformance-final.log
+```

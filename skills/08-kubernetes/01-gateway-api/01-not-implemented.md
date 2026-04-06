@@ -125,6 +125,19 @@ Edgion 的 Gateway 进程在**启动时**通过 `configure_listeners` 绑定所�
 - conformance 报告中 `GatewayWithAttachedRoutesWithPort8080`、`GatewayPort8080`、`HTTPRouteListenerPortMatching`、`HTTPRouteRedirectPortAndScheme` 标记为 skipped
 - 若未来需要支持动态端口，需要重新评估 Pingora 的 `Server::add_service` 是否支持运行时调用，以及 Controller→Gateway 配置同步的时序问题
 
+## BackendTLSPolicy Conformance
+
+**决定：已实现（声明 `SupportBackendTLSPolicy`，暂不声明 `SupportBackendTLSPolicySANValidation`）**
+
+数据面和控制面 status 均已实现：
+- ancestorRef 正确指向关联的 Gateway（通过 Service → Route → Gateway 三步查询）
+- 支持 Secret 和 ConfigMap 类型的 `caCertificateRefs`
+- 同一 Service 多 Policy 冲突检测（按 creationTimestamp + name 排序）
+- Status reason 值符合 conformance 精确要求（`InvalidKind`、`InvalidCACertificateRef`、`Conflicted`）
+- Route on_change/on_delete 自动 requeue 关联的 BTP 以更新 ancestor 状态
+
+Status 报告的局限性：`ancestorRef` 指向 Gateway 表示"控制面认为该 Policy 在此 Gateway 上生效"，但不代表数据面 TLS 连接一定成功（证书不匹配、后端不支持 TLS 等运行时问题无法通过 status 反映）。
+
 ## BackendTrafficPolicy (BTP)
 
 **决定：暂不实现（等 GA）**
@@ -139,7 +152,7 @@ Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-bre
 
 ## ~~frontendValidation 标准化~~ ✅ 已完成
 
-Controller 解析 `frontend_validation` CA 引用（Secret/ConfigMap），per-port 合并，设置 listener status conditions。Gateway 数据面 `configure_gateway_frontend_mtls()` 加载 CA 证书配置 SSL verify mode：AllowValidOnly 用 `PEER | FAIL_IF_NO_PEER_CERT`，AllowInsecureFallback 用自定义 verify callback 始终 accept（boringssl FFI）。与 EdgionTls `client_auth` 完全独立。
+Controller 解析 `frontend_validation` CA 引用（Secret/ConfigMap），per-listener 合并，设置 listener status conditions。Gateway 数据面 `configure_gateway_frontend_mtls()` 加载 CA 证书配置 SSL verify mode：AllowValidOnly 用 `PEER | FAIL_IF_NO_PEER_CERT`，AllowInsecureFallback 用自定义 verify callback 始终 accept（boringssl FFI）。与 EdgionTls `client_auth` 完全独立。
 
 ## GATEWAY-TLS ConformanceProfile
 

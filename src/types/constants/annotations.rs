@@ -4,8 +4,6 @@
 pub mod edgion {
     /// Enable HTTP/2 support on the listener
     pub const ENABLE_HTTP2: &str = "edgion.io/enable-http2";
-    /// Backend protocol (tcp, http, grpc, etc.)
-    pub const BACKEND_PROTOCOL: &str = "edgion.io/backend-protocol";
     /// Enable automatic HTTP to HTTPS redirect
     pub const HTTP_TO_HTTPS_REDIRECT: &str = "edgion.io/http-to-https-redirect";
     /// Target port for HTTPS redirect

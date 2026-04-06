@@ -1,3 +1,4 @@
+use crate::core::common::config::ConfSyncTlsConfig;
 use crate::core::common::{config::EdgionControllerConfig, utils};
 use crate::core::controller::api::serve_with_shutdown as serve_admin_api_with_shutdown;
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
@@ -145,6 +146,7 @@ impl EdgionControllerCli {
         schema_validator: Arc<SchemaValidator>,
         grpc_addr: SocketAddr,
         admin_addr: SocketAddr,
+        tls_config: Option<ConfSyncTlsConfig>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
         tracing::info!(
@@ -175,9 +177,11 @@ impl EdgionControllerCli {
         // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
         let grpc_server = ConfigSyncGrpcServer::new(provider);
 
+        let tls_ref = tls_config.as_ref();
+
         // Run both services concurrently with shutdown support
         let (sync_result, admin_result) = tokio::join!(
-            grpc_server.serve_with_shutdown(grpc_addr, grpc_shutdown),
+            grpc_server.serve_with_shutdown(grpc_addr, tls_ref, grpc_shutdown),
             serve_admin_api_with_shutdown(conf_mgr.clone(), schema_validator, admin_addr, admin_shutdown)
         );
 
@@ -200,7 +204,7 @@ impl EdgionControllerCli {
             );
         }
 
-        sync_result.map_err(|e| anyhow!("gRPC server error: {}", e))?;
+        sync_result?;
         admin_result?;
 
         tracing::info!(
@@ -303,7 +307,16 @@ impl EdgionControllerCli {
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
         let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:8080")?;
+        let tls_config = config.conf_sync_security.tls.clone();
 
-        Self::start_services(conf_mgr, schema_validator, grpc_addr, admin_addr, shutdown_handle).await
+        Self::start_services(
+            conf_mgr,
+            schema_validator,
+            grpc_addr,
+            admin_addr,
+            tls_config,
+            shutdown_handle,
+        )
+        .await
     }
 }

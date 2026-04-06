@@ -3,7 +3,7 @@
 // Tests TLS termination + SNI-based routing + TCP forwarding to backend.
 //
 // Required config files (in examples/test/conf/TLSRoute/Basic/):
-// - 01_Gateway.yaml        # Gateway with TLS listener (protocol=TLS, backend-protocol=tcp)
+// - 01_Gateway.yaml        # Gateway with TLS listener (protocol=TLS, mode=Terminate)
 // - 02_EdgionTls.yaml      # Wildcard certificate *.sandbox.example.com
 // - 03_TLSRoute.yaml       # TLSRoute matching *.sandbox.example.com
 // - Service_test-tcp.yaml / EndpointSlice_test-tcp.yaml

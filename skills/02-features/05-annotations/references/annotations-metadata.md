@@ -6,7 +6,7 @@ Use this file when the task is about real Kubernetes object annotations under `m
 
 - `src/types/constants/annotations.rs`
 - `src/core/gateway/runtime/server/listener_builder.rs`
-- `src/core/gateway/runtime/store/port_gateway_info.rs`
+- `src/core/gateway/runtime/store/listener_gateway_info.rs`
 - `src/core/gateway/routes/tcp/conf_handler_impl.rs`
 - `src/core/gateway/routes/tls/conf_handler_impl.rs`
 - `src/types/resources/http_route_preparse.rs`
@@ -22,7 +22,6 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/enable-http2` | `"true"` / `"false"` | enabled | Controls HTTP/2 support for listeners built from this Gateway. For HTTP listeners this enables h2c; for HTTPS listeners it enables ALPN h2. |
-| `edgion.io/backend-protocol` | string, commonly `"tcp"` | none | Used by TLS listener handling to choose backend protocol behavior. Current examples use `"tcp"` for TLS termination to raw TCP backends. |
 | `edgion.io/http-to-https-redirect` | `"true"` / `"false"` | disabled | On non-TLS listeners, enables redirect before normal HTTP proxying. |
 | `edgion.io/https-redirect-port` | integer string | `443` | Target port used when HTTP-to-HTTPS redirect is enabled. |
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |

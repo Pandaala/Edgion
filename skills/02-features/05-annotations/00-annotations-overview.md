@@ -17,7 +17,6 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 | 注解 | 值 | 说明 |
 |------|---|------|
 | `edgion.io/enable-http2` | `"true"\|"false"` | 启用 HTTP/2 |
-| `edgion.io/backend-protocol` | `HTTP\|HTTPS\|H2\|H2C` | 后端协议 |
 | `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS 重定向 |
 | `edgion.io/https-redirect-port` | `port` | HTTPS 重定向端口 |
 | `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins 绑定 |

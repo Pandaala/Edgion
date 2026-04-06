@@ -14,7 +14,7 @@ use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
-use crate::core::gateway::backends::select_roundrobin_backend;
+use crate::core::gateway::backends::{resolve_target_port, select_roundrobin_backend, PortLookupSource};
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::observe::AccessLogger;
@@ -22,8 +22,14 @@ use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
 use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
+use crate::types::{ListenerKey, MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use serde::Serialize;
+
+fn is_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
+    let group_ok = matches!(group, None | Some("") | Some("core"));
+    let kind_ok = matches!(kind, None | Some("Service"));
+    group_ok && kind_ok
+}
 
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
@@ -116,6 +122,7 @@ impl TlsContext {
 /// only the inner `ArcSwap<TlsRouteTable>`, so the Arc stays stable.
 pub struct EdgionTlsTcpProxy {
     pub listener_port: u16,
+    pub listener_key: ListenerKey,
     pub tls_route_manager: Arc<TlsRouteManager>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
@@ -234,6 +241,13 @@ impl EdgionTlsTcpProxy {
                     return;
                 }
             };
+            if !is_service_backend_ref(backend_ref.group.as_deref(), backend_ref.kind.as_deref()) {
+                last_err = format!(
+                    "unsupported backend kind: group={:?}, kind={:?}, name={}",
+                    backend_ref.group, backend_ref.kind, backend_ref.name
+                );
+                continue;
+            }
 
             // 4b. Resolve backend address via EndpointSlice
             let namespace = backend_ref
@@ -252,9 +266,12 @@ impl EdgionTlsTcpProxy {
             };
 
             let mut upstream_addr = backend.addr;
-            if let Some(port) = backend_ref.port {
-                upstream_addr.set_port(port as u16);
-            }
+            resolve_target_port(
+                &mut upstream_addr,
+                backend_ref.port,
+                &service_key,
+                PortLookupSource::Auto,
+            );
             let upstream_addr_str = upstream_addr.to_string();
             let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
 

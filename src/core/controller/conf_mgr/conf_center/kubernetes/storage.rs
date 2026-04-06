@@ -3,6 +3,9 @@
 //! Implements the CenterApi trait by calling Kubernetes API.
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
+use super::version_detection::{
+    probe_backend_tls_policy_version, probe_tls_route_version, BackendTLSPolicyVersion, TLSRouteVersion,
+};
 use crate::core::controller::conf_mgr::conf_center::traits::{
     CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
 };
@@ -12,6 +15,7 @@ use kube::api::{DeleteParams, ListParams, Patch, PatchParams};
 use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
 use kube::discovery::Scope;
 use kube::{Api, Client};
+use serde_json::json;
 
 /// Kubernetes API based configuration writer
 ///
@@ -38,8 +42,8 @@ impl KubernetesStorage {
         &self.client
     }
 
-    /// Resolve ApiResource and Scope for a resource kind (static mapping, no network call)
-    fn resolve_api_resource(&self, kind: &str) -> Result<(ApiResource, Scope), ConfWriterError> {
+    /// Resolve ApiResource and Scope for a resource kind.
+    async fn resolve_api_resource(&self, kind: &str) -> Result<(ApiResource, Scope), ConfWriterError> {
         // Static mapping of resource kinds to their ApiResource and Scope
         // This avoids expensive Discovery calls on every API operation
         let (ar, scope) = match kind {
@@ -80,10 +84,28 @@ impl KubernetesStorage {
                 )),
                 Scope::Namespaced,
             ),
-            "TLSRoute" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
-                Scope::Namespaced,
-            ),
+            "TLSRoute" => match probe_tls_route_version(&self.client)
+                .await
+                .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect TLSRoute version: {}", e)))?
+            {
+                Some(TLSRouteVersion::V1) => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
+                    Scope::Namespaced,
+                ),
+                Some(TLSRouteVersion::V1Alpha3) => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        "v1alpha3",
+                        "TLSRoute",
+                    )),
+                    Scope::Namespaced,
+                ),
+                None => {
+                    return Err(ConfWriterError::NotFound(
+                        "TLSRoute CRD not found (expected v1 or v1alpha3)".to_string(),
+                    ))
+                }
+            },
             "ReferenceGrant" => (
                 ApiResource::from_gvk(&GroupVersionKind::gvk(
                     "gateway.networking.k8s.io",
@@ -92,14 +114,32 @@ impl KubernetesStorage {
                 )),
                 Scope::Namespaced,
             ),
-            "BackendTLSPolicy" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk(
-                    "gateway.networking.k8s.io",
-                    "v1alpha3",
-                    "BackendTLSPolicy",
-                )),
-                Scope::Namespaced,
-            ),
+            "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client)
+                .await
+                .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect BackendTLSPolicy version: {}", e)))?
+            {
+                Some(BackendTLSPolicyVersion::V1) => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        "v1",
+                        "BackendTLSPolicy",
+                    )),
+                    Scope::Namespaced,
+                ),
+                Some(BackendTLSPolicyVersion::V1Alpha3) => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        "v1alpha3",
+                        "BackendTLSPolicy",
+                    )),
+                    Scope::Namespaced,
+                ),
+                None => {
+                    return Err(ConfWriterError::NotFound(
+                        "BackendTLSPolicy CRD not found (expected v1 or v1alpha3)".to_string(),
+                    ))
+                }
+            },
             // Core resources
             "Secret" => (
                 ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
@@ -152,13 +192,37 @@ impl KubernetesStorage {
         Ok((ar, scope))
     }
 
+    async fn backend_tls_policy_api_version(&self) -> Result<Option<&'static str>, ConfWriterError> {
+        let version = probe_backend_tls_policy_version(&self.client)
+            .await
+            .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect BackendTLSPolicy version: {}", e)))?;
+
+        Ok(match version {
+            Some(BackendTLSPolicyVersion::V1) => Some("gateway.networking.k8s.io/v1"),
+            Some(BackendTLSPolicyVersion::V1Alpha3) => Some("gateway.networking.k8s.io/v1alpha3"),
+            None => None,
+        })
+    }
+
+    async fn tls_route_api_version(&self) -> Result<Option<&'static str>, ConfWriterError> {
+        let version = probe_tls_route_version(&self.client)
+            .await
+            .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect TLSRoute version: {}", e)))?;
+
+        Ok(match version {
+            Some(TLSRouteVersion::V1) => Some("gateway.networking.k8s.io/v1"),
+            Some(TLSRouteVersion::V1Alpha3) => Some("gateway.networking.k8s.io/v1alpha3"),
+            None => None,
+        })
+    }
+
     /// Create a dynamic API for the given kind and namespace (no Discovery call)
     ///
     /// # Arguments
     /// * `kind` - Resource kind
     /// * `namespace` - For namespaced resources: Some(ns) = specific namespace, None = default namespace
-    fn dynamic_api(&self, kind: &str, namespace: Option<&str>) -> Result<Api<DynamicObject>, ConfWriterError> {
-        let (ar, scope) = self.resolve_api_resource(kind)?;
+    async fn dynamic_api(&self, kind: &str, namespace: Option<&str>) -> Result<Api<DynamicObject>, ConfWriterError> {
+        let (ar, scope) = self.resolve_api_resource(kind).await?;
 
         let api: Api<DynamicObject> = match scope {
             Scope::Namespaced => {
@@ -171,12 +235,45 @@ impl KubernetesStorage {
         Ok(api)
     }
 
+    async fn parse_dynamic_object(&self, kind: &str, content: &str) -> Result<DynamicObject, ConfWriterError> {
+        let mut value: serde_json::Value = serde_yaml::from_str(content)
+            .map_err(|e| ConfWriterError::ParseError(format!("Failed to parse YAML: {}", e)))?;
+
+        if kind == "BackendTLSPolicy" {
+            let Some(api_version) = self.backend_tls_policy_api_version().await? else {
+                return Err(ConfWriterError::NotFound(
+                    "BackendTLSPolicy CRD not found (expected v1 or v1alpha3)".to_string(),
+                ));
+            };
+
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("apiVersion".to_string(), json!(api_version));
+                obj.insert("kind".to_string(), json!("BackendTLSPolicy"));
+            }
+        }
+
+        if kind == "TLSRoute" {
+            let Some(api_version) = self.tls_route_api_version().await? else {
+                return Err(ConfWriterError::NotFound(
+                    "TLSRoute CRD not found (expected v1 or v1alpha3)".to_string(),
+                ));
+            };
+
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("apiVersion".to_string(), json!(api_version));
+                obj.insert("kind".to_string(), json!("TLSRoute"));
+            }
+        }
+
+        serde_json::from_value(value).map_err(|e| ConfWriterError::ParseError(format!("Failed to parse object: {}", e)))
+    }
+
     /// Create a dynamic API that lists resources across ALL namespaces (no Discovery call)
     ///
     /// For cluster-scoped resources, behaves the same as `dynamic_api`.
     /// For namespaced resources, uses `Api::all_with()` to list across all namespaces.
-    fn dynamic_api_all_namespaces(&self, kind: &str) -> Result<Api<DynamicObject>, ConfWriterError> {
-        let (ar, _scope) = self.resolve_api_resource(kind)?;
+    async fn dynamic_api_all_namespaces(&self, kind: &str) -> Result<Api<DynamicObject>, ConfWriterError> {
+        let (ar, _scope) = self.resolve_api_resource(kind).await?;
         // Always use Api::all_with to list across all namespaces
         Ok(Api::all_with(self.client.clone(), &ar))
     }
@@ -206,11 +303,10 @@ impl CenterApi for KubernetesStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace)?;
+        let api = self.dynamic_api(kind, namespace).await?;
 
         // Parse content as DynamicObject
-        let obj: DynamicObject = serde_yaml::from_str(&content)
-            .map_err(|e| ConfWriterError::ParseError(format!("Failed to parse YAML: {}", e)))?;
+        let obj = self.parse_dynamic_object(kind, &content).await?;
 
         // Use server-side apply
         let params = PatchParams::apply("edgion-controller").force();
@@ -237,11 +333,10 @@ impl CenterApi for KubernetesStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace)?;
+        let api = self.dynamic_api(kind, namespace).await?;
 
         // Parse content as DynamicObject
-        let obj: DynamicObject = serde_yaml::from_str(&content)
-            .map_err(|e| ConfWriterError::ParseError(format!("Failed to parse YAML: {}", e)))?;
+        let obj = self.parse_dynamic_object(kind, &content).await?;
 
         // Use K8s API create (fails if resource already exists with 409)
         api.create(&Default::default(), &obj)
@@ -267,11 +362,10 @@ impl CenterApi for KubernetesStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace)?;
+        let api = self.dynamic_api(kind, namespace).await?;
 
         // Parse content as DynamicObject
-        let mut obj: DynamicObject = serde_yaml::from_str(&content)
-            .map_err(|e| ConfWriterError::ParseError(format!("Failed to parse YAML: {}", e)))?;
+        let mut obj = self.parse_dynamic_object(kind, &content).await?;
 
         // Get current resource to obtain resourceVersion (required for replace)
         let current = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
@@ -299,7 +393,7 @@ impl CenterApi for KubernetesStorage {
     }
 
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace)?;
+        let api = self.dynamic_api(kind, namespace).await?;
 
         let obj = api.get(name).await.map_err(|e| match e {
             kube::Error::Api(ae) if ae.code == 404 => {
@@ -315,7 +409,7 @@ impl CenterApi for KubernetesStorage {
     }
 
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace)?;
+        let api = self.dynamic_api(kind, namespace).await?;
 
         let params = DeleteParams::default();
         api.delete(name, &params).await.map_err(|e| match e {
@@ -418,7 +512,7 @@ impl CenterApi for KubernetesStorage {
 
     async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
         // Use dynamic_api_all_namespaces to list across ALL namespaces
-        let api = self.dynamic_api_all_namespaces(kind)?;
+        let api = self.dynamic_api_all_namespaces(kind).await?;
 
         let mut lp = ListParams::default();
 
@@ -479,7 +573,7 @@ impl CenterApi for KubernetesStorage {
         namespace: &str,
         opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError> {
-        let api = self.dynamic_api(kind, Some(namespace))?;
+        let api = self.dynamic_api(kind, Some(namespace)).await?;
 
         let mut lp = ListParams::default();
 

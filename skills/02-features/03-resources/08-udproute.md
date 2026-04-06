@@ -57,5 +57,5 @@ spec:
 ## 特点
 
 - **无匹配条件**：UDP 路由仅按端口转发
-- **per-port 隔离**：每个 Listener 端口独立路由
+- **per-listener 隔离**：每个 Listener（按 `ListenerKey` 索引）独立路由
 - **无连接状态**：UDP 无连接概念，每个数据报独立路由

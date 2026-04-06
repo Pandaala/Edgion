@@ -260,7 +260,7 @@ fn get_port_from_backend_ref_or_service(
 
 /// Which endpoint resource to query when resolving targetPort by port name.
 #[derive(Debug, Clone, Copy)]
-enum PortLookupSource {
+pub(crate) enum PortLookupSource {
     /// Determine from global endpoint mode (for `EdgionService::Service`).
     Auto,
     /// Force EndpointSlice (for `EdgionService::ServiceEndpointSlice`).
@@ -276,8 +276,15 @@ enum PortLookupSource {
 /// different port entry. This function looks up the correct targetPort via:
 ///   br_port (Service port) -> Service.spec.ports[].name -> EndpointSlice/Endpoint port name -> targetPort
 ///
-/// If the Service has only one port, or `br_port` is None, the address is already correct.
-fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key: &str, source: PortLookupSource) {
+/// For single-port Services where port != targetPort (e.g. port:443 -> targetPort:8443),
+/// the addr may still carry the Service port if the LB was built before EndpointSlice sync.
+/// This function corrects it by looking up the targetPort directly from the Service spec.
+pub(crate) fn resolve_target_port(
+    addr: &mut SocketAddr,
+    br_port: Option<i32>,
+    service_key: &str,
+    source: PortLookupSource,
+) {
     let Some(br_port_val) = br_port else {
         return;
     };
@@ -291,10 +298,6 @@ fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key:
         return;
     };
 
-    if svc_ports.len() <= 1 {
-        return;
-    }
-
     let Some(svc_port_entry) = svc_ports.iter().find(|p| p.port == br_port_val) else {
         tracing::warn!(
             service_key = %service_key,
@@ -304,9 +307,32 @@ fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key:
         return;
     };
 
-    let Some(port_name) = svc_port_entry.name.as_deref().filter(|n| !n.is_empty()) else {
+    // For single-port Services (or when port name is empty), fall back to
+    // direct targetPort lookup from the Service spec. This handles cases where
+    // port != targetPort and the LB backend address carries the wrong port.
+    if svc_ports.len() <= 1 || svc_port_entry.name.as_deref().map_or(true, |n| n.is_empty()) {
+        if let Some(tp) = &svc_port_entry.target_port {
+            let target = match tp {
+                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(p) => Some(*p as u16),
+                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::String(s) => s.parse::<u16>().ok(),
+            };
+            if let Some(target_port) = target {
+                let current_port = addr.as_inet().map(|a| a.port()).unwrap_or(0);
+                if current_port != target_port {
+                    tracing::debug!(
+                        service_key = %service_key,
+                        from_port = current_port,
+                        to_port = target_port,
+                        "Resolved targetPort from Service spec"
+                    );
+                    addr.set_port(target_port);
+                }
+            }
+        }
         return;
-    };
+    }
+
+    let port_name = svc_port_entry.name.as_deref().unwrap();
 
     let use_endpoint_slice = match source {
         PortLookupSource::EndpointSlice => true,
@@ -1031,11 +1057,19 @@ pub(crate) fn try_get_peer(
     }
 }
 
-/// Query BackendTLSPolicy for a given Service
+/// Query BackendTLSPolicy for a given Service, optionally scoped to a specific port.
 ///
-/// Performs reverse lookup: finds all BackendTLSPolicies whose targetRefs point to the given Service.
-/// Returns the highest priority policy (sorted by Gateway API precedence rules).
-pub fn query_backend_tls_policy_for_service(name: &str, namespace: Option<&str>) -> Option<Arc<BackendTLSPolicy>> {
+/// When `port` is provided, resolves the port number to a port name via the Service
+/// spec, then applies Gateway API sectionName matching:
+///   1. Prefer policies whose targetRef.sectionName matches the port name (most specific).
+///   2. Fall back to policies with no sectionName (applies to entire Service).
+///
+/// When `port` is None, returns the highest-priority policy regardless of sectionName.
+pub fn query_backend_tls_policy_for_service(
+    name: &str,
+    namespace: Option<&str>,
+    port: Option<i32>,
+) -> Option<Arc<BackendTLSPolicy>> {
     let policy_store = get_global_backend_tls_policy_store();
     let policies = policy_store.get_policies_for_target(name, namespace);
 
@@ -1043,8 +1077,44 @@ pub fn query_backend_tls_policy_for_service(name: &str, namespace: Option<&str>)
         return None;
     }
 
-    // Return the highest priority policy (first one, already sorted)
+    let port_name = port.and_then(|p| resolve_port_name(name, namespace, p));
+
+    if let Some(ref pn) = port_name {
+        // 1) Exact sectionName match
+        if let Some(exact) = policies.iter().find(|pol| {
+            pol.spec.target_refs.iter().any(|tr| {
+                tr.section_name.as_deref() == Some(pn.as_str())
+            })
+        }) {
+            return Some(exact.clone());
+        }
+    }
+
+    // 2) Fall back to policies with no sectionName
+    if let Some(wildcard) = policies.iter().find(|pol| {
+        pol.spec.target_refs.iter().any(|tr| tr.section_name.is_none())
+    }) {
+        return Some(wildcard.clone());
+    }
+
+    // 3) Last resort: highest priority policy (original behavior)
     policies.into_iter().next()
+}
+
+/// Resolve a Service port number to its port name.
+fn resolve_port_name(service_name: &str, namespace: Option<&str>, port: i32) -> Option<String> {
+    let ns = namespace.unwrap_or("");
+    let key = format!("{}/{}", ns, service_name);
+    let svc_store = get_global_service_store();
+    svc_store.with_service(&key, |svc| {
+        svc.spec.as_ref()?.ports.as_ref()?.iter().find_map(|sp| {
+            if sp.port == port {
+                sp.name.clone()
+            } else {
+                None
+            }
+        })
+    })?
 }
 
 /// Get HTTP peer from service and endpoint slice stores using load balancing

@@ -179,6 +179,23 @@ impl GatewayRouteIndex {
         }
     }
 
+    /// Get all Gateways that a given route references via parentRefs.
+    ///
+    /// Returns gateway keys (e.g., `"default/my-gateway"`).
+    /// Used by BackendTLSPolicy to resolve ancestors:
+    /// BTP.targetRef(Service) → ServiceRefManager → Route → this method → Gateway(s)
+    pub fn get_gateways_for_route(&self, route_kind: ResourceKind, route_key: &str) -> Vec<String> {
+        let entry = RouteEntry {
+            kind: route_kind,
+            key: route_key.to_string(),
+        };
+        let rev = self.reverse.read().unwrap();
+        match rev.get(&entry) {
+            Some(gw_keys) => gw_keys.iter().cloned().collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// Get all unique routes across all gateways.
     /// Used for post-init revalidation to ensure routes that registered
     /// after their parent Gateway's on_change are reprocessed.
@@ -318,5 +335,24 @@ mod tests {
         idx.update_route(ResourceKind::HTTPRoute, "default/r1", &[non_gw_ref], "default");
 
         assert!(idx.get_routes_for_gateway("default/svc1").is_empty());
+    }
+
+    #[test]
+    fn test_get_gateways_for_route() {
+        let idx = GatewayRouteIndex::new();
+        idx.update_route(
+            ResourceKind::HTTPRoute,
+            "default/r1",
+            &[pr("default", "gw1"), pr("other", "gw2")],
+            "default",
+        );
+
+        let mut gateways = idx.get_gateways_for_route(ResourceKind::HTTPRoute, "default/r1");
+        gateways.sort();
+        assert_eq!(gateways, vec!["default/gw1", "other/gw2"]);
+
+        // Non-existent route returns empty
+        let empty = idx.get_gateways_for_route(ResourceKind::HTTPRoute, "default/nonexistent");
+        assert!(empty.is_empty());
     }
 }

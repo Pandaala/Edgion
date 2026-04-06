@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
-use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener};
+use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener, ListenerKey};
 
 // Sub-modules
 pub mod parse_timeout;
@@ -41,6 +41,8 @@ pub struct EdgionHttpProxy {
     pub gateway_class_name: Option<String>,
 
     pub listener: Listener,
+
+    pub listener_key: ListenerKey,
 
     pub server_start_time: SystemTime,
 

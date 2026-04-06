@@ -159,10 +159,30 @@ impl ConfigSyncServer {
 
     /// List resources by kind name
     pub fn list(&self, kind: &str) -> Result<ListDataSimple, String> {
+        // 64 MB hard limit — prevents OOM when serializing very large resource sets
+        // (e.g. thousands of EndpointSlices). Pagination is the long-term solution.
+        const MAX_LIST_BYTES: usize = 64 * 1024 * 1024;
+
         let map = self.watch_objects.read().unwrap();
         let obj = map.get(kind).ok_or_else(|| format!("Unknown kind: {}", kind))?;
 
         let (data, sync_version) = obj.list_json()?;
+
+        if data.len() > MAX_LIST_BYTES {
+            tracing::warn!(
+                component = "config_sync_server",
+                kind = kind,
+                size_bytes = data.len(),
+                limit_bytes = MAX_LIST_BYTES,
+                "List response exceeds size limit, rejecting to prevent OOM"
+            );
+            return Err(format!(
+                "List response for kind '{}' is too large ({} bytes, limit {} bytes)",
+                kind,
+                data.len(),
+                MAX_LIST_BYTES
+            ));
+        }
 
         Ok(ListDataSimple {
             data,

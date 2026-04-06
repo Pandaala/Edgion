@@ -60,6 +60,43 @@ pub struct BackendTLSPolicySpec {
     pub use_system_ca: bool,
 }
 
+/// BackendTLSPolicy (v1alpha3 — legacy, converted to/from v1 when needed)
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[kube(
+    group = "gateway.networking.k8s.io",
+    version = "v1alpha3",
+    kind = "BackendTLSPolicyAlpha3",
+    plural = "backendtlspolicies",
+    shortname = "btlspolicy",
+    namespaced,
+    status = "BackendTLSPolicyStatus"
+)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendTLSPolicyAlpha3Spec {
+    /// TargetRefs identifies the API object(s) to apply the policy to.
+    pub target_refs: Vec<BackendTLSPolicyTargetRef>,
+
+    /// Validation contains backend TLS validation configuration.
+    pub validation: BackendTLSPolicyValidation,
+
+    /// Options are a list of key/value pairs to enable extended TLS configuration.
+    /// Implementation-specific field for configuring TLS options like minimum TLS version or cipher suites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<HashMap<String, String>>,
+
+    /// Resolved CA certificate Secrets (runtime only, filled by controller).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
+
+    /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_client_certificate: Option<Secret>,
+
+    /// Whether to use system CA certificates for backend TLS verification (runtime only, filled by controller).
+    #[serde(default, skip_serializing_if = "crate::types::resources::common::is_false")]
+    pub use_system_ca: bool,
+}
+
 /// BackendTLSPolicyTargetRef identifies an API object to apply policy to.
 /// Note: Per Gateway API spec, targetRef can only reference resources in the same namespace.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -227,6 +264,40 @@ impl BackendTLSPolicy {
     }
 }
 
+impl From<BackendTLSPolicyAlpha3> for BackendTLSPolicy {
+    fn from(alpha3: BackendTLSPolicyAlpha3) -> Self {
+        Self {
+            metadata: alpha3.metadata,
+            spec: BackendTLSPolicySpec {
+                target_refs: alpha3.spec.target_refs,
+                validation: alpha3.spec.validation,
+                options: alpha3.spec.options,
+                resolved_ca_certificates: alpha3.spec.resolved_ca_certificates,
+                resolved_client_certificate: alpha3.spec.resolved_client_certificate,
+                use_system_ca: alpha3.spec.use_system_ca,
+            },
+            status: alpha3.status,
+        }
+    }
+}
+
+impl From<BackendTLSPolicy> for BackendTLSPolicyAlpha3 {
+    fn from(v1: BackendTLSPolicy) -> Self {
+        Self {
+            metadata: v1.metadata,
+            spec: BackendTLSPolicyAlpha3Spec {
+                target_refs: v1.spec.target_refs,
+                validation: v1.spec.validation,
+                options: v1.spec.options,
+                resolved_ca_certificates: v1.spec.resolved_ca_certificates,
+                resolved_client_certificate: v1.spec.resolved_client_certificate,
+                use_system_ca: v1.spec.use_system_ca,
+            },
+            status: v1.status,
+        }
+    }
+}
+
 // ============================================================================
 // BackendTLSPolicy Status (Gateway API standard)
 // ============================================================================
@@ -365,5 +436,35 @@ mod tests {
         let policy = make_policy(None);
         let json = serde_json::to_value(&policy.spec).unwrap();
         assert!(json.get("useSystemCa").is_none());
+    }
+
+    #[test]
+    fn test_alpha3_roundtrip_conversion_preserves_runtime_fields() {
+        let mut policy = make_policy(Some(HashMap::from([(
+            OPTION_CLIENT_CERTIFICATE_REF.to_string(),
+            "client-cert".to_string(),
+        )])));
+        policy.spec.use_system_ca = true;
+        policy.status = Some(BackendTLSPolicyStatus { ancestors: vec![] });
+
+        let alpha3: BackendTLSPolicyAlpha3 = policy.clone().into();
+        let restored: BackendTLSPolicy = alpha3.into();
+
+        assert_eq!(restored.spec.target_refs, policy.spec.target_refs);
+        assert_eq!(restored.spec.validation, policy.spec.validation);
+        assert_eq!(restored.spec.options, policy.spec.options);
+        assert_eq!(restored.spec.use_system_ca, policy.spec.use_system_ca);
+        assert_eq!(restored.status.as_ref().unwrap().ancestors.len(), 0);
+    }
+
+    #[test]
+    fn test_v1_type_can_deserialize_alpha3_payload() {
+        let policy = make_policy(None);
+        let alpha3: BackendTLSPolicyAlpha3 = policy.into();
+        let json = serde_json::to_string(&alpha3).unwrap();
+
+        let restored: BackendTLSPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.spec.target_refs.len(), 1);
+        assert_eq!(restored.spec.validation.hostname, "backend.example.com");
     }
 }

@@ -23,7 +23,7 @@ spec:
 
   securityProtect:
     xForwardedForLimit: 500
-    requireSniHostMatch: false
+    requireSniHostMatch: true
 
   httpTimeout:
     client:

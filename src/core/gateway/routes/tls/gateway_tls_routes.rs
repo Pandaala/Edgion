@@ -36,14 +36,25 @@ impl TlsRouteTable {
 
     /// Build a TlsRouteTable from a flat set of routes belonging to one port.
     ///
-    /// Each route's `spec.hostnames` are used to bucket into the `HashHost`
-    /// matcher. Routes with no hostnames go to `catch_all_routes`.
+    /// When the controller has set `resolved_listeners`, we use
+    /// `effective_hostnames` (the route×listener intersection) for bucketing.
+    /// Otherwise we fall back to raw `spec.hostnames` for backward compat.
+    /// Routes with no effective hostnames go to `catch_all_routes`.
     pub fn from_routes(routes: &HashMap<String, Arc<TLSRoute>>) -> Self {
         let mut buckets: HashMap<String, Vec<Arc<TLSRoute>>> = HashMap::new();
         let mut catch_all: Vec<Arc<TLSRoute>> = Vec::new();
 
         for route in routes.values() {
-            let hostnames: Vec<String> = route.spec.hostnames.as_ref().map(|h| h.to_vec()).unwrap_or_default();
+            let hostnames: Vec<String> = if route.spec.resolved_listeners.is_some() {
+                // Controller has processed this route; use the computed intersection.
+                // Empty effective_hostnames means no valid intersection — route
+                // should not match anything, so it falls into catch_all (which is
+                // only consulted after exact/wildcard misses).
+                route.spec.effective_hostnames.as_ref().cloned().unwrap_or_default()
+            } else {
+                // Legacy path: route not yet processed by the new controller.
+                route.spec.hostnames.as_ref().cloned().unwrap_or_default()
+            };
 
             if hostnames.is_empty() {
                 catch_all.push(route.clone());
@@ -126,7 +137,8 @@ mod tests {
                 }]),
                 hostnames: Some(vec![hostname.to_string()]),
                 rules: Some(vec![]),
-                resolved_ports: None,
+                resolved_listeners: None,
+                effective_hostnames: None,
             },
             status: None,
         }

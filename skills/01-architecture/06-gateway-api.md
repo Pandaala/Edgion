@@ -16,10 +16,10 @@ Edgion 实现了 Kubernetes Gateway API v1.5.0 规范，支持 HTTP、gRPC、TCP
 | **HTTPRoute** | gateway.networking.k8s.io/v1 | Standard | HTTP 路由规则：主机名匹配、路径匹配、Header 匹配、请求重定向/重写/镜像 |
 | **GRPCRoute** | gateway.networking.k8s.io/v1 | Standard | gRPC 路由规则：Service/Method 匹配、Header 匹配 |
 | **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP 四层路由，按端口转发到后端 |
-| **TLSRoute** | gateway.networking.k8s.io/v1 | GA | TLS passthrough 路由，按 SNI 匹配后直接转发加密流量 |
+| **TLSRoute** | gateway.networking.k8s.io/v1（v1alpha3 兼容） | Standard / Experimental 安装清单下 served versions 可能不同 | TLS passthrough 路由，按 SNI 匹配后直接转发加密流量 |
 | **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP 路由，按端口转发 |
 | **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 兼容) | Standard | 跨命名空间引用授权，仅在 Controller 侧使用（no_sync_kinds） |
-| **BackendTLSPolicy** | gateway.networking.k8s.io/v1alpha3 | Experimental | 后端 TLS 策略，配置 Gateway→Backend 的 mTLS |
+| **BackendTLSPolicy** | gateway.networking.k8s.io/v1（v1alpha3 兼容） | Standard / Experimental 安装清单下 served versions 可能不同 | 后端 TLS 策略，配置 Gateway→Backend 的 mTLS |
 
 ## CRD 安装
 
@@ -29,7 +29,7 @@ Gateway API 标准 CRD 通过官方 YAML 安装：
 # 安装 Standard channel CRDs
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
 
-# 安装 Experimental channel CRDs（包含 TCPRoute、TLSRoute、UDPRoute 等）
+# 安装 Experimental channel CRDs（包含 TCPRoute、UDPRoute，以及部分资源的旧 served 版本）
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml
 ```
 
@@ -71,6 +71,16 @@ go test -v -run TestConformance ./...
 - 跨命名空间引用（ReferenceGrant）
 - TLS 终止和 TLS passthrough
 - BackendTLSPolicy 后端 mTLS
+
+## 多版本兼容提示
+
+Gateway API 同一 release 下，`standard-install.yaml` 与 `experimental-install.yaml` 对同一资源暴露的 served versions 可能不同。
+
+实务建议：
+
+- controller 优先 watch 最新稳定版本
+- 旧版本仅作为 fallback 输入版本
+- 依赖 API Server 的多版本 CRD 转换时，不要为同一资源默认同时起多个版本 watcher
 
 ## 扩展点
 

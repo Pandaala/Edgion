@@ -25,6 +25,9 @@ Thumbs.db
 # Integration test workspace (generated at runtime, do not commit)
 integration_testing/
 
+# Generated conf_sync mTLS certificates (never commit private keys)
+examples/test/certs/conf-sync-grpc/
+
 # Cross-compilation config (personal dev workflow)
 Cross.toml
 Dockerfile.cross

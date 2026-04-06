@@ -28,7 +28,7 @@ mod tcp_route;
 mod tls_route;
 mod udp_route;
 
-pub use backend_tls_policy::BackendTlsPolicyHandler;
+pub use backend_tls_policy::{BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler};
 pub use configmap::ConfigMapHandler;
 pub use edgion_acme::EdgionAcmeHandler;
 pub use edgion_gateway_config::EdgionGatewayConfigHandler;
@@ -47,7 +47,7 @@ pub use reference_grant::{ReferenceGrantBetaHandler, ReferenceGrantHandler};
 pub use secret::SecretHandler;
 pub use service::ServiceHandler;
 pub use tcp_route::TcpRouteHandler;
-pub use tls_route::TlsRouteHandler;
+pub use tls_route::{TlsRouteAlpha3Handler, TlsRouteHandler};
 pub use udp_route::UdpRouteHandler;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
@@ -102,4 +102,42 @@ pub(crate) fn update_gateway_route_index(
 pub(crate) fn remove_from_gateway_route_index(route_kind: ResourceKind, route_ns: &str, route_name: &str) {
     let route_key = format!("{}/{}", route_ns, route_name);
     get_gateway_route_index().remove_route(route_kind, &route_key);
+}
+
+/// Requeue BackendTLSPolicies bound to backend Services of this route.
+///
+/// When a route changes, any BTP targeting its backend Services needs to
+/// re-resolve its ancestor Gateways (the route may have changed parentRefs).
+///
+/// Chain: Route → ServiceRefManager(reverse: route→services) → BackendTLSPolicyTargetManager(forward: service→BTPs)
+pub(crate) async fn requeue_backend_tls_policies_for_route(
+    route_kind: ResourceKind,
+    route_ns: &str,
+    route_name: &str,
+    ctx: &HandlerContext,
+) {
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::get_backend_tls_policy_target_manager;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceRef;
+
+    let route_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
+    let service_keys = get_service_ref_manager().get_dependencies(&route_ref.key());
+
+    if service_keys.is_empty() {
+        return;
+    }
+
+    let target_manager = get_backend_tls_policy_target_manager();
+    for service_key in &service_keys {
+        let btps = target_manager.get_refs(service_key);
+        for btp_ref in btps {
+            tracing::debug!(
+                route = %route_ref.resource_key(),
+                btp = %btp_ref.resource_key(),
+                service = %service_key,
+                "Requeuing BackendTLSPolicy due to route change"
+            );
+            ctx.requeue(btp_ref.kind_str(), btp_ref.resource_key()).await;
+        }
+    }
 }

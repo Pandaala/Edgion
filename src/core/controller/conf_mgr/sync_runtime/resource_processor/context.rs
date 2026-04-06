@@ -36,6 +36,9 @@ pub struct HandlerContext {
 
     /// Maximum times a (kind, key) pair may repeat in a trigger chain
     max_trigger_cycles: usize,
+
+    /// Maximum total depth of a trigger chain (safety net for cross-kind loops)
+    max_trigger_depth: usize,
 }
 
 impl HandlerContext {
@@ -46,6 +49,7 @@ impl HandlerContext {
         namespace_filter: Option<Arc<Vec<String>>>,
         trigger_chain: TriggerChain,
         max_trigger_cycles: usize,
+        max_trigger_depth: usize,
     ) -> Self {
         Self {
             secret_ref_manager,
@@ -53,6 +57,7 @@ impl HandlerContext {
             namespace_filter,
             trigger_chain,
             max_trigger_cycles,
+            max_trigger_depth,
         }
     }
 
@@ -84,6 +89,17 @@ impl HandlerContext {
     ///
     /// Uses the delay subsystem (`requeue_with_chain`) for coalescing.
     pub async fn requeue(&self, kind: &str, key: String) {
+        if self.trigger_chain.depth() >= self.max_trigger_depth {
+            tracing::error!(
+                target_kind = kind,
+                target_key = %key,
+                chain = %self.trigger_chain,
+                depth = self.trigger_chain.depth(),
+                max_depth = self.max_trigger_depth,
+                "Trigger chain depth limit reached, dropping requeue"
+            );
+            return;
+        }
         if self
             .trigger_chain
             .would_exceed_cycle_limit(kind, &key, self.max_trigger_cycles)

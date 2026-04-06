@@ -50,12 +50,25 @@ pub mod condition_reasons {
     pub const INVALID: &str = "Invalid";
     /// TLS listener mode is not supported (e.g. Mixed mode for TLSRoute)
     pub const UNSUPPORTED_TLS_MODE: &str = "UnsupportedTLSMode";
+    /// Listener field value is not supported by the current implementation.
+    pub const UNSUPPORTED_VALUE: &str = "UnsupportedValue";
     /// HTTPS/TLS listener missing tls block or certificateRefs
     pub const INVALID_TLS_CONFIGURATION: &str = "InvalidTLSConfiguration";
 
     // Conflicted reasons (for Listener port conflicts)
     pub const LISTENER_CONFLICT: &str = "ListenerConflict";
+    pub const PROTOCOL_CONFLICT: &str = "ProtocolConflict";
     pub const NO_CONFLICTS: &str = "NoConflicts";
+
+    // Policy conflict reason (for policy attachment conflicts)
+    /// Another policy targeting the same resource has higher precedence
+    pub const POLICY_CONFLICTED: &str = "Conflicted";
+
+    // BackendTLSPolicy-specific reasons (Gateway API v1.5 conformance)
+    /// ALL CACertificateRefs are invalid — Accepted condition must be False.
+    pub const NO_VALID_CA_CERTIFICATE: &str = "NoValidCACertificate";
+    /// CACertificateRef cannot be resolved (resource not found or misconfigured).
+    pub const INVALID_CA_CERTIFICATE_REF: &str = "InvalidCACertificateRef";
 
     // Programmed reasons (for listener Programmed condition)
     pub const PROGRAMMED: &str = "Programmed";

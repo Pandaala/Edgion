@@ -1,6 +1,6 @@
 ---
 name: resource-tcp-route
-description: TCPRoute 资源：L4 TCP 路由、per-port 路由表、first-match 语义。
+description: TCPRoute 资源：L4 TCP 路由、per-listener 路由表、first-match 语义。
 ---
 
 # TCPRoute 资源
@@ -28,8 +28,8 @@ TCPRoute 定义 L4 TCP 层的路由规则，将 TCP 连接转发到后端 Servic
 1. 记录跨命名空间引用到 CrossNsRefManager
 2. 注册 Service 引用到 ServiceRefManager
 3. 标记被拒绝的跨命名空间 backendRef（设置 `ref_denied`）
-4. 清除并重算 `resolved_ports`：从 parentRef 解析 Listener 端口，逻辑与 HTTPRoute 相同（parentRef.port 优先，否则通过 sectionName 或全部 Listener 获取，受 allowedRoutes 命名空间策略约束）
-5. 若 resolved_ports 为 None，记录 debug 日志（Gateway 可能尚未到达）
+4. 清除并重算 `resolved_listeners`：通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`（总是查找 Gateway 获取地址和协议，sectionName+port 同时存在时校验一致性），受 allowedRoutes 命名空间策略约束
+5. 若 resolved_listeners 为 None，记录 debug 日志（Gateway 可能尚未到达）
 
 ### on_change
 
@@ -48,8 +48,8 @@ TCPRoute 定义 L4 TCP 层的路由规则，将 TCP 连接转发到后端 Servic
 TCPRoute 的 ConfHandler 将路由编译到 `GlobalTcpRouteManagers`：
 
 1. **路由初始化**：调用 `initialize_route()` 验证并准备路由数据
-2. **per-port 管理**：根据 resolved_ports 注册到对应端口的路由管理器
-3. **全量/增量更新**：full_set 时清空并重建所有路由缓存和端口管理器；partial_update 时收集受影响的端口（旧端口 + 新端口），仅重建这些端口的路由表
+2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
+3. **全量/增量更新**：full_set 时清空并重建所有路由缓存和 listener 管理器；partial_update 时收集受影响的 listener（旧 listener + 新 listener），仅重建这些 listener 的路由表
 4. **first-match 语义**：同一端口上多个 TCPRoute 时按注册顺序匹配第一个
 
 ## 跨资源关联

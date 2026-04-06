@@ -5,8 +5,6 @@ kind: Gateway
 metadata:
   name: gateway-18443-tls
   namespace: edgion-system
-  annotations:
-    edgion.io/backend-protocol: "tcp"
 spec:
   gatewayClassName: public-gateway
   listeners:

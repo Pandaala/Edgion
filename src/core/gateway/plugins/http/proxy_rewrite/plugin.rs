@@ -169,13 +169,15 @@ impl ProxyRewrite {
             }
         } else if let Some(ref regex_uri) = self.config.regex_uri {
             if let Some(caps) = captures {
-                // Replace capture groups in replacement template
+                // Replace capture groups $1-$9 directly (path-safe: no encoding of '/')
                 let mut result = regex_uri.replacement.clone();
                 for (i, cap) in caps.iter().enumerate().skip(1) {
                     if let Some(m) = cap {
                         result = result.replace(&format!("${}", i), m.as_str());
                     }
                 }
+                // Resolve remaining variables ($uri, $arg_name, etc.) with proper encoding
+                let result = self.resolve_variables(&result, original_path, session, None, true);
                 // Preserve original query string
                 let final_uri = self.build_uri_with_query(&result, original_query);
 

@@ -146,6 +146,116 @@ impl BackendTlsStatusTestSuite {
             },
         )
     }
+
+    fn test_configmap_ca_accepted() -> TestCase {
+        TestCase::new(
+            "configmap_ca_accepted",
+            "BackendTLSPolicy with ConfigMap caCertificateRef should be Accepted=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "BackendTLSPolicy", POLICY_NAMESPACE, "configmap-ca")
+                        .await
+                    {
+                        Ok(policy) => {
+                            if helpers::has_condition(&policy, "Accepted", "True") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Accepted=True as expected for ConfigMap CA ref".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected Accepted=True, got status: {}",
+                                        serde_json::to_string_pretty(&policy["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_configmap_ca_resolved_refs() -> TestCase {
+        TestCase::new(
+            "configmap_ca_resolved_refs",
+            "BackendTLSPolicy with valid ConfigMap caCertificateRef should have ResolvedRefs=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "BackendTLSPolicy", POLICY_NAMESPACE, "configmap-ca")
+                        .await
+                    {
+                        Ok(policy) => {
+                            if helpers::has_condition(&policy, "ResolvedRefs", "True") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ResolvedRefs=True as expected (ConfigMap CA resolved)".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected ResolvedRefs=True, got status: {}",
+                                        serde_json::to_string_pretty(&policy["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_configmap_ca_missing_unresolved() -> TestCase {
+        TestCase::new(
+            "configmap_ca_missing_unresolved",
+            "BackendTLSPolicy referencing non-existent ConfigMap should have ResolvedRefs=False",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(
+                        &ctx,
+                        "BackendTLSPolicy",
+                        POLICY_NAMESPACE,
+                        "configmap-ca-missing",
+                    )
+                    .await
+                    {
+                        Ok(policy) => {
+                            if helpers::has_condition(&policy, "ResolvedRefs", "False") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ResolvedRefs=False as expected (ConfigMap not found)".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected ResolvedRefs=False, got status: {}",
+                                        serde_json::to_string_pretty(&policy["status"]).unwrap_or_default()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -160,6 +270,9 @@ impl TestSuite for BackendTlsStatusTestSuite {
             Self::test_system_ca_resolved_refs(),
             Self::test_both_rejected(),
             Self::test_neither_rejected(),
+            Self::test_configmap_ca_accepted(),
+            Self::test_configmap_ca_resolved_refs(),
+            Self::test_configmap_ca_missing_unresolved(),
         ]
     }
 }

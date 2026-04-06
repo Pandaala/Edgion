@@ -1,6 +1,6 @@
 ---
 name: route-common-concepts
-description: 路由通用概念：parentRef 挂载、backendRef 后端引用、跨命名空间、resolved_ports。
+description: 路由通用概念：parentRef 挂载、backendRef 后端引用、跨命名空间、resolved_listeners。
 ---
 
 # 路由通用概念
@@ -29,7 +29,7 @@ spec:
 | `group` | `String?` | 否 | 默认 `gateway.networking.k8s.io` |
 | `kind` | `String?` | 否 | 默认 `Gateway` |
 
-### 端口解析规则（resolved_ports）
+### 端口解析规则（resolved_listeners）
 
 Controller 根据 parentRef 自动计算路由的目标端口：
 

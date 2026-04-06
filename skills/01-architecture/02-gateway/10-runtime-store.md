@@ -30,7 +30,7 @@ pub struct GatewayStore {
 
 ## Gateway 配置存储（GatewayConfigStore）
 
-`GatewayConfigStore` 提供按端口查询的 Gateway 动态配置，采用两层匹配结构：
+`GatewayConfigStore` 提供按 Listener 查询的 Gateway ��态配置，采用两层匹配结构：
 
 ```rust
 pub struct GatewayListenerConfig {
@@ -54,12 +54,12 @@ pub struct GatewayListenerConfig {
 
 全局单例：`get_global_gateway_config_store()`
 
-## PortGatewayInfo Store
+## ListenerGatewayInfo Store
 
-`PortGatewayInfoStore` 管理每个端口的 Gateway 信息聚合视图：
+`ListenerGatewayInfoStore` 管理每个 Listener 的 Gateway 信息聚合视图，以 `ListenerKey`（格式 `"{addr}/{protocol}"`）为索引：
 
-- `get_port_gateway_info_store()` — 获取全局实例
-- `rebuild_port_gateway_infos()` — 重建端口-Gateway 映射关系
+- `get_listener_gateway_info_store()` — 获取全局实例
+- `rebuild_listener_gateway_infos()` — 重建 Listener-Gateway 映射关系
 - 提供 `GatewayInfo`（包含 Gateway 的聚合运行时信息）
 
 ## ArcSwap 无锁读取模式
@@ -101,6 +101,6 @@ src/core/gateway/runtime/
 └── store/
     ├── mod.rs                # 模块导出
     ├── gateway.rs            # GatewayStore（Gateway 资源 CRUD）
-    ├── config.rs             # GatewayConfigStore（按端口的 Listener 配置）
-    └── port_gateway_info.rs  # PortGatewayInfoStore（端口-Gateway 映射）
+    ├── config.rs             # GatewayConfigStore（Listener ��置）
+    └── listener_gateway_info.rs  # ListenerGatewayInfoStore（Listener-Gateway 映射）
 ```

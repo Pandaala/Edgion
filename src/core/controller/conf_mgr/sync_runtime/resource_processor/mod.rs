@@ -13,6 +13,7 @@
 //! - `HandlerContext`: Context passed to handler methods
 
 pub mod attached_route_tracker;
+pub mod backend_tls_policy_ref;
 pub mod configmap_utils;
 mod context;
 pub mod gateway_route_index;
@@ -21,6 +22,7 @@ pub mod handlers;
 pub mod listener_port_manager;
 pub mod namespace_store;
 mod processor;
+pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
 pub mod secret_utils;
@@ -31,6 +33,7 @@ pub mod status_utils;
 pub use context::HandlerContext;
 pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkItemResult};
+pub use raw_store::{FsRawStore, KubeRawStore, RawStore};
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
     resolved_refs_condition, set_parent_conditions, set_parent_conditions_full, update_condition, AcceptedError,
@@ -39,11 +42,11 @@ pub use status_utils::{
 
 // Re-export handlers
 pub use handlers::{
-    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
-    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, PluginMetadataHandler,
-    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
-    UdpRouteHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
+    EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
+    EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
+    LinkSysHandler, PluginMetadataHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler,
+    ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 // Re-export generic ref_manager types
@@ -66,7 +69,9 @@ pub use ref_grant::{
 };
 
 // Re-export listener_port_manager utilities
-pub use listener_port_manager::{get_listener_port_manager, make_port_key, ListenerPortManager, ListenerRef};
+pub use listener_port_manager::{
+    get_listener_port_manager, make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey,
+};
 
 // Re-export attached_route_tracker utilities
 pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};
@@ -76,6 +81,12 @@ pub use gateway_route_index::get_gateway_route_index;
 
 // Re-export service_ref utilities
 pub use service_ref::get_service_ref_manager;
+
+// Re-export backend_tls_policy_ref utilities
+pub use backend_tls_policy_ref::{
+    get_backend_tls_policy_target_manager, get_sibling_policies, is_policy_winner, make_target_conflict_key,
+    remove_policy_timestamp, set_policy_timestamp,
+};
 
 // Re-export namespace_store utilities
 pub use namespace_store::get_namespace_store;

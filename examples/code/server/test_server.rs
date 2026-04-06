@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use axum::{
     body::Body,
     extract::{ConnectInfo, Extension, Path, Request as AxumRequest},
+    http::Version,
     response::IntoResponse,
     routing::get,
     Router,
@@ -243,6 +244,7 @@ async fn start_http_server(port: u16) -> Result<()> {
 fn create_echo_router(server_addr_str: String) -> Router {
     Router::new()
         .route("/health", get(health_handler))
+        .route("/version", get(version_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
         .route("/request-header-test", get(header_echo_handler))
         .route("/both-headers-test", get(header_echo_handler))
@@ -318,6 +320,30 @@ async fn header_echo_handler(
 
 async fn health_handler() -> impl IntoResponse {
     "OK"
+}
+
+fn format_http_version(version: Version) -> &'static str {
+    match version {
+        Version::HTTP_09 => "HTTP/0.9",
+        Version::HTTP_10 => "HTTP/1.0",
+        Version::HTTP_11 => "HTTP/1.1",
+        Version::HTTP_2 => "HTTP/2.0",
+        Version::HTTP_3 => "HTTP/3.0",
+        _ => "HTTP/unknown",
+    }
+}
+
+async fn version_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(server_addr): Extension<String>,
+    req: AxumRequest<Body>,
+) -> impl IntoResponse {
+    format!(
+        "Server: {}\nClient: {}\nVersion: {}\n",
+        server_addr,
+        addr,
+        format_http_version(req.version())
+    )
 }
 
 async fn echo_handler(

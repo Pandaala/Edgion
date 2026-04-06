@@ -90,17 +90,16 @@ pub async fn upstream_peer_grpc(
         Ok(Some(())) => {}
         Ok(None) => {
             ctx.add_error(EdgionStatus::GrpcUpstreamNotRouteMatched);
-            end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
-            // gRPC trailers-only response (HTTP 200 + grpc-status: 14, END_STREAM=true) already
-            // written above. Return HTTPStatus(200) so Pingora treats this as "response already
-            // handled" and does NOT send RST_STREAM. InternalError would cause Pingora to reset
-            // the H2 stream, and the client would see code=Internal(13) instead of Unavailable(14).
+            if !ctx.request_info.response_committed {
+                end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
+            }
             return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
         }
         Err(_) => {
             ctx.add_error(EdgionStatus::GrpcUpstreamNotBackendRefs);
-            end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
-            // Same reasoning as Ok(None): response already sent, signal Pingora to stop cleanly.
+            if !ctx.request_info.response_committed {
+                end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
+            }
             return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
         }
     }
@@ -330,7 +329,7 @@ pub async fn select_http_backend(
         .or(Some(route_unit.matched_info.rsc.ns.as_str()));
 
     backend_ref.backend_tls_policy =
-        crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace);
+        crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
 
     // BackendTLSPolicy is applied via the peer builder; no per-request logging needed
 
@@ -341,10 +340,9 @@ pub async fn select_http_backend(
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         ctx.add_error(EdgionStatus::Unknown);
-        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-        // Use HTTPStatus(200) for gRPC so fail_to_proxy does not attempt to write
-        // another error response on an already-closed H2 stream (would set upstream
-        // status to 500 in logs and emit a redundant write attempt).
+        if !ctx.request_info.response_committed {
+            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        }
         let err_type = if ctx.request_info.is_grpc_request {
             ErrorType::HTTPStatus(200)
         } else {
@@ -442,6 +440,12 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 /// Update peer address info and metrics (inline for performance)
 #[inline]
 pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
+    // P0-07: retry 时清算上一次成功建连但中途放弃的 LeastConn backend。
+    // 必须在 push_upstream 之前执行，此时 current_upstream_id 仍指向上一次 entry。
+    if let Some((sk, addr)) = ctx.leastconn_incremented_backend.take() {
+        crate::core::gateway::lb::runtime_state::decrement(&sk, &addr);
+    }
+
     // Increment try count
     ctx.try_cnt += 1;
 

@@ -162,6 +162,12 @@ pub struct EdgionControllerConfig {
     #[serde(default)]
     pub conf_center: ConfCenterConfig,
 
+    /// conf_sync gRPC channel security (mTLS).
+    /// Omit this section to keep plaintext gRPC (backward compatible).
+    #[arg(skip)]
+    #[serde(default)]
+    pub conf_sync_security: ConfSyncSecurityConfig,
+
     /// Optional federated center connection. Absent = feature disabled.
     #[arg(skip)]
     #[serde(default)]
@@ -297,6 +303,76 @@ impl ConfSyncConfig {
             return *v;
         }
         self.default_capacity
+    }
+}
+
+/// conf_sync gRPC channel security configuration.
+/// The entire section is optional; omitting it = no security enhancement (backward compatible).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ConfSyncSecurityConfig {
+    /// mTLS configuration (optional)
+    pub tls: Option<ConfSyncTlsConfig>,
+    // Reserved: token authentication can be added here later
+}
+
+/// mTLS certificate file paths for conf_sync gRPC channel.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ConfSyncTlsConfig {
+    /// Certificate file path (relative to work_dir or absolute)
+    pub cert: String,
+    /// Private key file path
+    pub key: String,
+    /// CA certificate path (used to verify the peer)
+    pub ca: String,
+    /// Emergency bypass: skip TLS and start in plaintext with ERROR log.
+    /// Only for emergency use during cert rotation failures. Must not stay enabled.
+    #[serde(default)]
+    pub skip_tls: bool,
+}
+
+impl std::fmt::Debug for ConfSyncTlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfSyncTlsConfig")
+            .field("cert", &self.cert)
+            .field("key", &"***")
+            .field("ca", &self.ca)
+            .field("skip_tls", &self.skip_tls)
+            .finish()
+    }
+}
+
+impl ConfSyncTlsConfig {
+    /// Validate that all required paths are non-empty.
+    /// Called before attempting to load certificates.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.cert.trim().is_empty() {
+            anyhow::bail!("conf_sync_security.tls.cert must not be empty");
+        }
+        if self.key.trim().is_empty() {
+            anyhow::bail!("conf_sync_security.tls.key must not be empty");
+        }
+        if self.ca.trim().is_empty() {
+            anyhow::bail!("conf_sync_security.tls.ca must not be empty");
+        }
+        Ok(())
+    }
+
+    /// Resolve a path: absolute paths used as-is, relative paths joined with work_dir.
+    fn resolve_path(path: &str) -> PathBuf {
+        crate::types::work_dir().resolve(path)
+    }
+
+    pub fn cert_path(&self) -> PathBuf {
+        Self::resolve_path(&self.cert)
+    }
+
+    pub fn key_path(&self) -> PathBuf {
+        Self::resolve_path(&self.key)
+    }
+
+    pub fn ca_path(&self) -> PathBuf {
+        Self::resolve_path(&self.ca)
     }
 }
 

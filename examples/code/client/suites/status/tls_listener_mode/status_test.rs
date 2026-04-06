@@ -2,7 +2,8 @@
 //!
 //! Tests that Gateway listener status correctly reflects TLS mode support:
 //! 1. Passthrough mode → Accepted=True
-//! 2. Mixed mode → Accepted=False, reason=UnsupportedTLSMode
+//! 2. Mixed mode → Accepted=False, reason=UnsupportedValue
+//! 3. Terminate mode → Accepted=True (defaults to TCP backend without annotation)
 
 use super::super::helpers;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -73,7 +74,7 @@ impl TlsListenerModeStatusTestSuite {
     fn test_mixed_unsupported() -> TestCase {
         TestCase::new(
             "mixed_unsupported_tls_mode",
-            "TLS Mixed listener should have Accepted=False with reason UnsupportedTLSMode",
+            "TLS Mixed listener should have Accepted=False with reason UnsupportedValue",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -85,17 +86,17 @@ impl TlsListenerModeStatusTestSuite {
                             match cond {
                                 Some(c)
                                     if c["status"].as_str() == Some("False")
-                                        && c["reason"].as_str() == Some("UnsupportedTLSMode") =>
+                                        && c["reason"].as_str() == Some("UnsupportedValue") =>
                                 {
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        "mixed listener: Accepted=False(UnsupportedTLSMode)".to_string(),
+                                        "mixed listener: Accepted=False(UnsupportedValue)".to_string(),
                                     )
                                 }
                                 Some(c) => TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "mixed listener: expected Accepted=False(UnsupportedTLSMode), got: {}",
+                                        "mixed listener: expected Accepted=False(UnsupportedValue), got: {}",
                                         serde_json::to_string_pretty(c).unwrap_or_default()
                                     ),
                                 ),
@@ -103,6 +104,47 @@ impl TlsListenerModeStatusTestSuite {
                                     start.elapsed(),
                                     format!(
                                         "mixed listener: Accepted condition not found. listeners: {}",
+                                        serde_json::to_string_pretty(&gateway["status"]["listeners"])
+                                            .unwrap_or_default()
+                                    ),
+                                ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_terminate_accepted() -> TestCase {
+        TestCase::new(
+            "terminate_accepted",
+            "TLS Terminate listener should have Accepted=True (defaults to TCP backend)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                        Ok(gateway) => {
+                            let cond = Self::find_listener_condition(&gateway, "terminate", "Accepted");
+                            match cond {
+                                Some(c) if c["status"].as_str() == Some("True") => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "terminate listener: Accepted=True".to_string(),
+                                ),
+                                Some(c) => TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "terminate listener: expected Accepted=True, got: {}",
+                                        serde_json::to_string_pretty(c).unwrap_or_default()
+                                    ),
+                                ),
+                                None => TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "terminate listener: Accepted condition not found. listeners: {}",
                                         serde_json::to_string_pretty(&gateway["status"]["listeners"])
                                             .unwrap_or_default()
                                     ),
@@ -124,6 +166,10 @@ impl TestSuite for TlsListenerModeStatusTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_passthrough_accepted(), Self::test_mixed_unsupported()]
+        vec![
+            Self::test_passthrough_accepted(),
+            Self::test_mixed_unsupported(),
+            Self::test_terminate_accepted(),
+        ]
     }
 }

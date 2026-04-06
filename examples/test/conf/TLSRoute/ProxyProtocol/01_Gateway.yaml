@@ -4,8 +4,6 @@ kind: Gateway
 metadata:
   name: tls-route-pp2-gw
   namespace: edgion-test
-  annotations:
-    edgion.io/backend-protocol: "tcp"
 spec:
   gatewayClassName: public-gateway
   listeners:

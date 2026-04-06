@@ -6,6 +6,7 @@ mod multi_sni;
 mod passthrough;
 mod proxy_protocol;
 mod stream_plugins;
+mod unknown_kind_backend;
 
 pub use basic::TlsRouteTestSuite;
 pub use both_absent_parent_ref::TlsBothAbsentParentRefTestSuite;
@@ -13,3 +14,4 @@ pub use multi_sni::TlsMultiSniTestSuite;
 pub use passthrough::TlsPassthroughTestSuite;
 pub use proxy_protocol::TlsProxyProtocolTestSuite;
 pub use stream_plugins::TlsStreamPluginsTestSuite;
+pub use unknown_kind_backend::TlsUnknownKindBackendTestSuite;

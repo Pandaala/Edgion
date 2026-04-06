@@ -190,7 +190,7 @@ where
     // ==================== Data Layer Methods ====================
 
     /// Replace all data in data layer (full_set), does NOT create LBs
-    /// Must acquire creation_lock
+    /// Acquires creation_lock internally
     /// Returns all service_keys in the new data
     pub fn replace_data_only(&self, data: HashMap<String, EndpointSlice>) -> HashSet<String> {
         let _lock = self.creation_lock.lock().unwrap();
@@ -216,7 +216,7 @@ where
     }
 
     /// Incrementally update data layer (partial_update), does NOT create LBs
-    /// Must acquire creation_lock
+    /// Acquires creation_lock internally
     /// Returns affected service_keys
     pub fn update_data_only(
         &self,
@@ -227,8 +227,8 @@ where
         let _lock = self.creation_lock.lock().unwrap();
 
         let mut affected_services: HashSet<String> = HashSet::new();
-        let mut ep_slices = self.ep_slices.write().unwrap();
         let mut service_to_slices = self.service_to_slices.write().unwrap();
+        let mut ep_slices = self.ep_slices.write().unwrap();
 
         // Process remove
         for ep_key in remove {
@@ -295,7 +295,7 @@ where
     }
 
     /// Update LB if it exists, using latest data from data layer (in-place update)
-    /// Must acquire creation_lock
+    /// Acquires creation_lock internally
     /// If data layer has no data for this service, removes the LB
     pub fn update_lb_if_exists(&self, service_key: &str) {
         let _lock = self.creation_lock.lock().unwrap();
@@ -312,11 +312,21 @@ where
             Some(slices) if !slices.is_empty() => {
                 // In-place update: update discovery data, then refresh LB
                 lb.update_slices(slices);
-                lb.update_load_balancer().now_or_never();
-                tracing::debug!(
-                    service_key = %service_key,
-                    "Updated existing LB in-place"
-                );
+                match lb.update_load_balancer().now_or_never() {
+                    None => tracing::warn!(
+                        service_key = %service_key,
+                        "LB update future was not ready immediately, update dropped"
+                    ),
+                    Some(Err(e)) => tracing::error!(
+                        service_key = %service_key,
+                        error = %e,
+                        "Failed to update EndpointSlice LB backend list"
+                    ),
+                    Some(Ok(())) => tracing::debug!(
+                        service_key = %service_key,
+                        "Updated existing LB in-place"
+                    ),
+                }
             }
             _ => {
                 // Data layer has no data, remove the LB
@@ -334,6 +344,16 @@ where
     /// Get all service_keys that have existing LBs
     pub fn get_existing_service_keys(&self) -> Vec<String> {
         self.service_lbs.load().keys().cloned().collect()
+    }
+
+    /// Get current backend addresses from the existing LB (if any), NOT from the data layer.
+    /// This captures the pre-update state of the LB, useful before calling update_lb_if_exists().
+    pub fn get_backends_from_lb(&self, service_key: &str) -> Vec<Backend> {
+        self.service_lbs
+            .load()
+            .get(service_key)
+            .map(|lb| lb.get_current_backends())
+            .unwrap_or_default()
     }
 
     /// Get current backend addresses for a service from data layer.
@@ -380,11 +400,21 @@ where
             Some(slices) if !slices.is_empty() => {
                 // In-place update: update discovery data, then refresh LB
                 lb.update_slices(slices);
-                lb.update_load_balancer().now_or_never();
-                tracing::debug!(
-                    service_key = %service_key,
-                    "Updated existing LB in-place (from shared data layer)"
-                );
+                match lb.update_load_balancer().now_or_never() {
+                    None => tracing::warn!(
+                        service_key = %service_key,
+                        "LB update future was not ready immediately, update dropped"
+                    ),
+                    Some(Err(e)) => tracing::error!(
+                        service_key = %service_key,
+                        error = %e,
+                        "Failed to update EndpointSlice LB backend list"
+                    ),
+                    Some(Ok(())) => tracing::debug!(
+                        service_key = %service_key,
+                        "Updated existing LB in-place (from shared data layer)"
+                    ),
+                }
             }
             _ => {
                 // No data in RoundRobin store, remove the LB

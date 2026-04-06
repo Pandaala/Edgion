@@ -1,0 +1,24 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: unmatched-method-test
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-unmatched-gateway
+      namespace: edgion-test
+      sectionName: grpc
+
+  hostnames:
+    - "grpc.example.com"
+
+  rules:
+    # Only route exact method: test.TestService.SayHello
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: test-grpc
+          port: 30021

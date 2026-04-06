@@ -13,20 +13,20 @@ pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, HeaderModifierTestSuite,
+    CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, H2cTestSuite, HeaderModifierTestSuite,
     HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite,
     HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
     PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
     TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
-pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite};
+pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite};
 
 pub use tcp_route::{TcpStreamPluginsTestSuite, TcpTestSuite};
 
 pub use tls_route::{
     TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite, TlsProxyProtocolTestSuite,
-    TlsRouteTestSuite, TlsStreamPluginsTestSuite,
+    TlsRouteTestSuite, TlsStreamPluginsTestSuite, TlsUnknownKindBackendTestSuite,
 };
 
 pub use udp_route::UdpTestSuite;
@@ -59,11 +59,13 @@ pub use edgion_plugins::{
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
 pub use status::BackendTlsStatusTestSuite;
+pub use status::GatewayFrontendValidationStatusTestSuite;
 pub use status::GrpcRouteStatusTestSuite;
 pub use status::HostnameIntersectionStatusTestSuite;
 pub use status::ObservedGenerationStatusTestSuite;
 pub use status::RefGrantStatusTestSuite;
 pub use status::TlsListenerModeStatusTestSuite;
+pub use status::TlsRouteStatusTestSuite;
 
 // Services tests (ACME, etc.)
 pub use services::AcmeTestSuite;

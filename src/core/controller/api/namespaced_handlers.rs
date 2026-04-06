@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use k8s_openapi::api::core::v1::{Endpoints, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::sync::Arc;
 
@@ -205,6 +205,15 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
+        crate::types::ResourceKind::ConfigMap => {
+            let cm: ConfigMap = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &cm, is_k8s)?;
+            let json_content = serde_json::to_string(&cm).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
         crate::types::ResourceKind::Gateway => {
             let gateway: Gateway = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &gateway, is_k8s)?;
@@ -386,6 +395,15 @@ pub async fn update_namespaced(
             let secret: Secret = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &secret, is_k8s)?;
             let json_content = serde_json::to_string(&secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
+        crate::types::ResourceKind::ConfigMap => {
+            let cm: ConfigMap = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &cm, is_k8s)?;
+            let json_content = serde_json::to_string(&cm).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await

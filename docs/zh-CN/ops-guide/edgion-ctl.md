@@ -162,6 +162,56 @@ edgion-ctl delete -f route.yaml
 edgion-ctl reload
 ```
 
+### gen-certs - 生成 mTLS 证书
+
+生成 conf_sync gRPC 通道 mTLS 所需的自签证书束。此命令不依赖运行中的 Controller 或 Gateway。
+
+```bash
+edgion-ctl gen-certs [OPTIONS]
+```
+
+**选项:**
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `--output` | 输出目标：`file`（写入文件）或 `k8s`（写入 K8s Secret） | `file` |
+| `--output-dir` | 输出目录（仅 `--output file` 时生效） | `certs/grpc/` |
+| `--ca-days` | CA 证书有效天数 | `3650` |
+| `--cert-days` | 服务端/客户端证书有效天数 | `365` |
+| `--server-san` | 额外 SAN 条目（可多次指定） | 默认包含 localhost、127.0.0.1、::1 |
+| `--force` | 强制覆盖已有证书 | `false` |
+
+**生成的文件:**
+
+```
+<output-dir>/
+├── ca.crt        # CA 证书
+├── ca.key        # CA 私钥（仅签发用）
+├── server.crt    # Controller 服务端证书
+├── server.key    # Controller 服务端私钥
+├── client.crt    # Gateway 客户端证书
+└── client.key    # Gateway 客户端私钥
+```
+
+**示例:**
+
+```bash
+# 生成到默认目录
+edgion-ctl gen-certs --output file
+
+# 指定输出目录，强制覆盖
+edgion-ctl gen-certs --output file --output-dir /etc/edgion/certs --force
+
+# 添加 K8s Service FQDN 作为 SAN
+edgion-ctl gen-certs --output file \
+    --server-san edgion-controller.edgion-system.svc.cluster.local
+
+# 写入 K8s Secret
+edgion-ctl gen-certs --output k8s
+```
+
+生成证书后，在 TOML 文件中配置 mTLS。详见[控制面 mTLS](infrastructure/mtls.md#控制面-mtlsconf_sync-grpc)。
+
 ## 连接配置
 
 ### 默认连接

@@ -38,4 +38,7 @@ edgion-ctl apply -f config-dir/
 
 # 重载所有资源
 edgion-ctl reload
+
+# 生成 conf_sync gRPC mTLS 证书
+edgion-ctl gen-certs --output file --output-dir certs/grpc/
 ```

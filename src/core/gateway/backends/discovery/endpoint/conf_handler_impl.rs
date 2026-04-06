@@ -60,7 +60,7 @@ impl EndpointHandler {
 
         for service_key in affected_services {
             let old_addrs: HashSet<SocketAddr> = roundrobin_store
-                .get_backends_for_service(service_key)
+                .get_backends_from_lb(service_key)
                 .into_iter()
                 .map(|b| b.addr)
                 .collect();
@@ -138,10 +138,12 @@ impl ConfHandler<Endpoints> for EndpointHandler {
         // 5. Clear stale services (removed by full_set)
         let stale_services: HashSet<String> = old_keys.difference(&all_services).cloned().collect();
         if !stale_services.is_empty() {
+            let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
             for service_key in &stale_services {
                 config_store.set_endpoint_config(service_key, None);
                 get_health_check_manager().reconcile_service(service_key);
                 runtime_state::remove_service(service_key);
+                cb_store.remove_service(service_key);
             }
         }
 

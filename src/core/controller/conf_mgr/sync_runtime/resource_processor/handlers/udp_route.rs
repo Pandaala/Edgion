@@ -6,8 +6,8 @@ use super::super::ref_grant::{
     get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_udp_route_if_enabled,
 };
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_parent_gateways,
-    update_gateway_route_index,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
+    requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -46,7 +46,12 @@ impl UdpRouteHandler {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {
                     for br in backend_refs {
-                        backend_refs_list.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                        backend_refs_list.push((
+                            br.group.as_deref(),
+                            br.kind.as_deref(),
+                            br.namespace.as_deref(),
+                            br.name.as_str(),
+                        ));
                     }
                 }
             }
@@ -161,62 +166,24 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
             }
         }
 
-        // Treat resolved_ports as controller-derived state.
+        // Treat resolved_listeners as controller-derived state.
         // Clear any stale value before recomputing from current parentRefs.
-        route.spec.resolved_ports = None;
+        route.spec.resolved_listeners = None;
 
-        // Resolve listener ports from parentRefs (mirrors TLSRoute pattern)
+        // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
-            let mut ports = Vec::new();
-            for parent_ref in parent_refs {
-                if let Some(port) = parent_ref.port {
-                    ports.push(port as u16);
-                } else {
-                    let gw_ns = parent_ref
-                        .namespace
-                        .as_deref()
-                        .or(route.metadata.namespace.as_deref())
-                        .unwrap_or("default");
-                    if let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &parent_ref.name) {
-                        if let Some(listeners) = &gateway.spec.listeners {
-                            if let Some(section_name) = &parent_ref.section_name {
-                                if let Some(listener) = listeners.iter().find(|l| l.name == *section_name) {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            } else {
-                                for listener in listeners {
-                                    if super::route_utils::listener_allows_route_namespace(
-                                        &listener.allowed_routes,
-                                        route_ns,
-                                        gw_ns,
-                                    ) {
-                                        ports.push(listener.port as u16);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !ports.is_empty() {
-                ports.sort_unstable();
-                ports.dedup();
-                route.spec.resolved_ports = Some(ports);
+            let listener_keys =
+                super::route_utils::resolve_listener_keys(parent_refs, route_ns, route.metadata.namespace.as_deref());
+            if !listener_keys.is_empty() {
+                route.spec.resolved_listeners = Some(listener_keys);
             }
         }
 
-        if route.spec.resolved_ports.is_none() {
+        if route.spec.resolved_listeners.is_none() {
             tracing::debug!(
                 route = %route.metadata.name.as_deref().unwrap_or(""),
                 ns = route_ns,
-                "UDPRoute has no resolved_ports: Gateway not yet available or no matching listeners"
+                "UDPRoute has no resolved_listeners: Gateway not yet available or no matching listeners"
             );
         }
 
@@ -228,7 +195,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
         // Register in gateway_route_index so Gateway changes trigger requeue
-        // (required because parse() calls lookup_gateway() for resolved_ports)
+        // (required because parse() calls lookup_gateway() for resolved_listeners)
         update_gateway_route_index(
             ResourceKind::UDPRoute,
             route_ns,
@@ -237,6 +204,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         );
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
+        requeue_backend_tls_policies_for_route(ResourceKind::UDPRoute, route_ns, route_name, ctx).await;
     }
 
     async fn on_delete(&self, route: &UDPRoute, ctx: &HandlerContext) {
@@ -245,6 +213,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
+        requeue_backend_tls_policies_for_route(ResourceKind::UDPRoute, route_ns, route_name, ctx).await;
         super::route_utils::clear_service_backend_refs(ResourceKind::UDPRoute, route_ns, route_name);
 
         remove_from_gateway_route_index(ResourceKind::UDPRoute, route_ns, route_name);
@@ -310,13 +279,18 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
     }
 }
 
-fn collect_backend_ref_tuples(route: &UDPRoute) -> Vec<(Option<&str>, Option<&str>, &str)> {
+fn collect_backend_ref_tuples(route: &UDPRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
     let mut tuples = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {
             if let Some(backend_refs) = &rule.backend_refs {
                 for br in backend_refs {
-                    tuples.push((br.kind.as_deref(), br.namespace.as_deref(), br.name.as_str()));
+                    tuples.push((
+                        br.group.as_deref(),
+                        br.kind.as_deref(),
+                        br.namespace.as_deref(),
+                        br.name.as_str(),
+                    ));
                 }
             }
         }

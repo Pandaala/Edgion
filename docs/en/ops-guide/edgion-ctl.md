@@ -162,6 +162,56 @@ Reload all resources from storage. **Only supported with the center target.**
 edgion-ctl reload
 ```
 
+### gen-certs - Generate mTLS Certificates
+
+Generate a self-signed certificate bundle for securing the conf_sync gRPC channel with mTLS. This command does not require a running Controller or Gateway.
+
+```bash
+edgion-ctl gen-certs [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--output` | Output target: `file` or `k8s` | `file` |
+| `--output-dir` | Output directory (for `--output file`) | `certs/grpc/` |
+| `--ca-days` | CA certificate validity (days) | `3650` |
+| `--cert-days` | Server/client certificate validity (days) | `365` |
+| `--server-san` | Additional SAN entries (repeatable) | localhost, 127.0.0.1, ::1 included by default |
+| `--force` | Overwrite existing certificates | `false` |
+
+**Generated files:**
+
+```
+<output-dir>/
+├── ca.crt        # CA certificate
+├── ca.key        # CA private key (for signing only)
+├── server.crt    # Controller server certificate
+├── server.key    # Controller server private key
+├── client.crt    # Gateway client certificate
+└── client.key    # Gateway client private key
+```
+
+**Examples:**
+
+```bash
+# Generate to default directory
+edgion-ctl gen-certs --output file
+
+# Custom output directory with force overwrite
+edgion-ctl gen-certs --output file --output-dir /etc/edgion/certs --force
+
+# Add K8s service FQDN as SAN
+edgion-ctl gen-certs --output file \
+    --server-san edgion-controller.edgion-system.svc.cluster.local
+
+# Generate as K8s Secrets
+edgion-ctl gen-certs --output k8s
+```
+
+After generating certificates, configure mTLS in your TOML files. See [Control Plane mTLS](infrastructure/mtls.md#control-plane-mtls-conf_sync-grpc) for details.
+
 ## Connection Configuration
 
 ### Default Connections

@@ -1,5 +1,5 @@
 {
-  "current_max": 31337,
+  "current_max": 31338,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -44,11 +44,17 @@
     "HTTPRoute/Protocol/WebSocket": {
       "http": 31080
     },
+    "HTTPRoute/Protocol/H2C": {
+      "http": 31081
+    },
     "GRPCRoute/Basic": {
       "grpc": 31050
     },
     "GRPCRoute/Match": {
       "grpc": 31060
+    },
+    "GRPCRoute/UnmatchedRoute": {
+      "grpc": 31062
     },
     "TCPRoute/Basic": {
       "tcp": 31090,
@@ -134,6 +140,9 @@
     "TLSRoute/Passthrough": {
       "tls": 31290
     },
+    "TLSRoute/UnknownKindBackend": {
+      "tls": 31291
+    },
     "HTTPRoute/MultiPort": {
       "http": 31300
     },
@@ -151,7 +160,8 @@
     },
     "Gateway/FrontendValidation": {
       "https": 31312,
-      "https_insecure": 31336
+      "https_insecure": 31336,
+      "https_invalid_ca": 31338
     },
     "Gateway/TLS/BackendTLSSAN": {
       "http": 31320

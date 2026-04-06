@@ -1,5 +1,6 @@
 use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
+use crate::core::common::config::ConfSyncTlsConfig;
 use crate::core::gateway::cli::config::set_gateway_instance_count;
 use crate::core::gateway::conf_sync::conf_client::ConfigClient;
 use crate::types::ResourceKind;
@@ -20,42 +21,52 @@ pub struct ConfigSyncClient {
 }
 
 impl ConfigSyncClient {
-    /// Create a new ConfigSync conf_client and connect to conf_server_old
+    /// Create a new ConfigSync client and connect to the server.
     /// Uses lazy connection to allow cold start even if the server is not available immediately.
     ///
-    /// # Arguments
-    /// * `grpc_server_addr` - Address of the gRPC server
-    /// * `client_name` - Human-readable name for this client
-    /// * `timeout` - Connection and request timeout
+    /// TODO: Currently this allows cold start (gateway starts without controller).
+    /// However, without local cache persistence, the gateway will have no configuration
+    /// and cannot serve traffic until it successfully connects to the controller.
+    /// Future improvements should include:
+    /// 1. Persisting configuration to local disk (Snapshot)
+    /// 2. Loading from local disk on startup if controller is unreachable
     pub async fn new(
         grpc_server_addr: &str,
         client_name: String,
         timeout: Duration,
-    ) -> Result<Self, tonic::transport::Error> {
+        tls_config: Option<&ConfSyncTlsConfig>,
+    ) -> anyhow::Result<Self> {
         let client_id = Uuid::new_v4().to_string();
         let config_client = Arc::new(ConfigClient::new(client_id.clone(), client_name.clone()));
 
-        // TODO: Currently this allows cold start (gateway starts without controller).
-        // However, without local cache persistence, the gateway will have no configuration
-        // and cannot serve traffic until it successfully connects to the controller.
-        // Future improvements should include:
-        // 1. Persisting configuration to local disk (Snapshot)
-        // 2. Loading from local disk on startup if controller is unreachable
+        let use_tls = tls_config.map_or(false, |t| !t.skip_tls);
+        let uri = build_grpc_uri(grpc_server_addr, use_tls);
+
         tracing::info!(
             server_addr = grpc_server_addr,
+            tls_enabled = use_tls,
             "Initializing gRPC client with lazy connection"
         );
 
-        // Ensure uri has scheme
-        let uri = if grpc_server_addr.starts_with("http") {
-            grpc_server_addr.to_string()
-        } else {
-            format!("http://{}", grpc_server_addr)
-        };
-
-        let endpoint = tonic::transport::Endpoint::from_shared(uri)?
+        let mut endpoint = tonic::transport::Endpoint::from_shared(uri.clone())
+            .map_err(|e| anyhow::anyhow!("Invalid gRPC URI '{}': {}", uri, e))?
             .timeout(timeout)
             .connect_timeout(timeout);
+
+        if let Some(tls) = tls_config {
+            if tls.skip_tls {
+                tracing::error!(
+                    component = "grpc_client",
+                    "conf_sync mTLS skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
+                );
+            } else {
+                let client_tls = load_client_tls(tls).await?;
+                endpoint = endpoint
+                    .tls_config(client_tls)
+                    .map_err(|e| anyhow::anyhow!("Failed to configure client TLS: {}", e))?;
+                tracing::info!(component = "grpc_client", "conf_sync mTLS enabled for gRPC client");
+            }
+        }
 
         // connect_lazy returns a Channel immediately, connection happens on first request
         let channel = endpoint.connect_lazy();
@@ -257,4 +268,39 @@ impl ConfigSyncClient {
 
         Ok(())
     }
+}
+
+/// Build the gRPC URI with the appropriate scheme based on TLS setting.
+fn build_grpc_uri(addr: &str, tls: bool) -> String {
+    let host = addr
+        .strip_prefix("https://")
+        .or_else(|| addr.strip_prefix("http://"))
+        .unwrap_or(addr);
+    if tls {
+        format!("https://{}", host)
+    } else {
+        format!("http://{}", host)
+    }
+}
+
+/// Load client TLS config from certificate files.
+async fn load_client_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::transport::ClientTlsConfig> {
+    cfg.validate()?;
+    let cert_path = cfg.cert_path();
+    let key_path = cfg.key_path();
+    let ca_path = cfg.ca_path();
+
+    let ca = tokio::fs::read(&ca_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read CA cert {:?}: {}", ca_path, e))?;
+    let cert = tokio::fs::read(&cert_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read client cert {:?}: {}", cert_path, e))?;
+    let key = tokio::fs::read(&key_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read client key {:?}: {}", key_path, e))?;
+
+    Ok(tonic::transport::ClientTlsConfig::new()
+        .ca_certificate(tonic::transport::Certificate::from_pem(ca))
+        .identity(tonic::transport::Identity::from_pem(cert, key)))
 }

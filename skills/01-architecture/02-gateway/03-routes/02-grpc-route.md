@@ -88,21 +88,21 @@ gRPC 路由通过 `integration.rs` 模块集成到 HTTP 请求处理管道中：
 
 ## 路由管理
 
-`GlobalGrpcRouteManagers` 遵循与 HTTP 相同的 per-port 管理模式：
+`GlobalGrpcRouteManagers` 遵循与 HTTP 相同的 per-listener 管理模式：
 
 ```
 GlobalGrpcRouteManagers
 ├── route_cache: DashMap<String, GRPCRoute>
-├── by_port: DashMap<u16, Arc<GrpcPortRouteManager>>
+├── by_listener: DashMap<ListenerKey, Arc<GrpcPortRouteManager>>
 └── route_units_cache: Mutex<HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>
 ```
 
 特有设计：
 
-- `route_units_cache` 缓存解析后的路由单元，避免每次端口重建时重复解析。
+- `route_units_cache` 缓存解析后的路由单元，避免每次 listener 重建时重复解析。
 - gRPC 不使用 hostname 维度分隔（与 HTTP 不同），所有路由放入单个 `GrpcRouteRules`。
 - 在 `GrpcMatchEngine::match_route` 中通过 `deep_match` 验证请求 hostname 与路由 `effective_hostnames` 的关系。
-- 端口分桶逻辑与 HTTP 一致：`resolved_ports` → `parentRef.port` → 全部端口（回退）。
+- listener 分桶逻辑与 HTTP 一致：`resolved_listeners` 为空的路由直接 skip+warn（不再有广播到所有端口的兜底行为）。
 
 ## 关键源文件
 
