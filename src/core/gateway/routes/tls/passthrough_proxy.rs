@@ -24,6 +24,8 @@ use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::{resolve_target_port, select_roundrobin_backend, PortLookupSource};
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
+use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
+use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::ResourceMeta;
 use crate::types::{ListenerKey, MatchedInfo, Rsc};
@@ -112,6 +114,16 @@ impl EdgionTlsPassthroughProxy {
     /// downstream. These must be forwarded to upstream before starting the
     /// bidirectional relay.
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str, initial_bytes: &[u8]) {
+        // 0. Verify SNI is accepted by at least one listener on this port.
+        //    Multiple Gateways share the same physical port, so the route table
+        //    is a union of all their TLSRoutes. Without this check, an SNI that
+        //    only matches a wildcard route from a different Gateway would be
+        //    incorrectly forwarded.
+        if !self.sni_accepted_by_any_listener(sni) {
+            ctx.err_log = Some("no listener accepts SNI".to_string());
+            return;
+        }
+
         // 1. Match TLSRoute by SNI
         let route_table = self.tls_route_manager.load_route_table();
         let tls_route = match route_table.match_route(sni) {
@@ -345,6 +357,31 @@ impl EdgionTlsPassthroughProxy {
                 }
             }
         }
+    }
+
+    /// Check if any listener on this port accepts the given SNI hostname.
+    ///
+    /// A listener with `hostname: None` (catch-all) accepts any SNI.
+    /// A listener with a concrete or wildcard hostname must match via
+    /// `hostname_matches_listener`.
+    fn sni_accepted_by_any_listener(&self, sni: &str) -> bool {
+        let store = get_listener_gateway_info_store();
+        let index = store.get_index(&self.listener_key);
+        if index.is_empty() {
+            return true;
+        }
+
+        for (_, gw_listeners) in index.iter_gateways() {
+            for entry in gw_listeners.iter() {
+                match entry.hostname.as_deref() {
+                    None => return true,
+                    Some(h) if hostname_matches_listener(sni, h) => return true,
+                    _ => {}
+                }
+            }
+        }
+
+        false
     }
 
     fn is_tls_proxy_log_enabled(&self) -> bool {

@@ -35,10 +35,6 @@ use tokio_util::sync::CancellationToken;
 /// Default: "true" (enabled)
 pub const ANNOTATION_ENABLE_HTTP2: &str = "edgion.io/enable-http2";
 
-/// Annotation key to specify backend protocol for TLS listeners
-/// Set to "tcp" for TLS terminate to TCP backend
-pub const ANNOTATION_BACKEND_PROTOCOL: &str = "edgion.io/backend-protocol";
-
 /// Annotation key to enable HTTP to HTTPS redirect
 /// Set to "true" to redirect all HTTP requests to HTTPS
 /// Default: "false" (disabled)
@@ -473,21 +469,12 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
                     Ok(())
                 }
                 _ => {
-                    // Terminate mode
+                    // Terminate mode — default to TCP backend (TLSRoute semantics).
+                    // `protocol: TLS` + `mode: Terminate` inherently means TLS→TCP;
+                    // HTTPS already covers TLS→HTTP. No annotation required.
                     #[cfg(any(feature = "boringssl", feature = "openssl"))]
                     {
-                        let backend_protocol = context
-                            .gateway_annotations
-                            .get(ANNOTATION_BACKEND_PROTOCOL)
-                            .map(|s| s.as_str());
-
-                        match backend_protocol {
-                            Some("tcp") => add_tls_terminate_to_tcp_listener(server, &context),
-                            _ => anyhow::bail!(
-                                "TLS Terminate mode requires '{}' annotation set to 'tcp'",
-                                ANNOTATION_BACKEND_PROTOCOL
-                            ),
-                        }
+                        add_tls_terminate_to_tcp_listener(server, &context)
                     }
 
                     #[cfg(not(any(feature = "boringssl", feature = "openssl")))]

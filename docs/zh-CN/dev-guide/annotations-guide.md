@@ -32,7 +32,6 @@
 | Key | 作用 |
 |-----|------|
 | `edgion.io/enable-http2` | 控制 HTTP/2 支持 |
-| `edgion.io/backend-protocol` | TLS listener 的后端协议扩展，当前常见值是 `"tcp"` |
 | `edgion.io/http-to-https-redirect` | 非 TLS listener 上启用重定向 |
 | `edgion.io/https-redirect-port` | 重定向目标端口 |
 | `edgion.io/metrics-test-key` | 集成测试 metrics 关联键 |

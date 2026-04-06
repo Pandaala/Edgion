@@ -63,6 +63,11 @@ impl GatewayInfoIndex {
     pub fn is_empty(&self) -> bool {
         self.gateways.is_empty()
     }
+
+    /// Iterate over all (gateway_key, GatewayListeners) pairs in this index.
+    pub fn iter_gateways(&self) -> impl Iterator<Item = (&str, &GatewayListeners)> {
+        self.gateways.iter().map(|(k, v)| (k.as_str(), v))
+    }
 }
 
 /// All listeners of a single Gateway on one port, with O(1) listener_name lookup.

@@ -276,7 +276,9 @@ pub(crate) enum PortLookupSource {
 /// different port entry. This function looks up the correct targetPort via:
 ///   br_port (Service port) -> Service.spec.ports[].name -> EndpointSlice/Endpoint port name -> targetPort
 ///
-/// If the Service has only one port, or `br_port` is None, the address is already correct.
+/// For single-port Services where port != targetPort (e.g. port:443 -> targetPort:8443),
+/// the addr may still carry the Service port if the LB was built before EndpointSlice sync.
+/// This function corrects it by looking up the targetPort directly from the Service spec.
 pub(crate) fn resolve_target_port(
     addr: &mut SocketAddr,
     br_port: Option<i32>,
@@ -296,10 +298,6 @@ pub(crate) fn resolve_target_port(
         return;
     };
 
-    if svc_ports.len() <= 1 {
-        return;
-    }
-
     let Some(svc_port_entry) = svc_ports.iter().find(|p| p.port == br_port_val) else {
         tracing::warn!(
             service_key = %service_key,
@@ -309,9 +307,32 @@ pub(crate) fn resolve_target_port(
         return;
     };
 
-    let Some(port_name) = svc_port_entry.name.as_deref().filter(|n| !n.is_empty()) else {
+    // For single-port Services (or when port name is empty), fall back to
+    // direct targetPort lookup from the Service spec. This handles cases where
+    // port != targetPort and the LB backend address carries the wrong port.
+    if svc_ports.len() <= 1 || svc_port_entry.name.as_deref().map_or(true, |n| n.is_empty()) {
+        if let Some(tp) = &svc_port_entry.target_port {
+            let target = match tp {
+                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(p) => Some(*p as u16),
+                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::String(s) => s.parse::<u16>().ok(),
+            };
+            if let Some(target_port) = target {
+                let current_port = addr.as_inet().map(|a| a.port()).unwrap_or(0);
+                if current_port != target_port {
+                    tracing::debug!(
+                        service_key = %service_key,
+                        from_port = current_port,
+                        to_port = target_port,
+                        "Resolved targetPort from Service spec"
+                    );
+                    addr.set_port(target_port);
+                }
+            }
+        }
         return;
-    };
+    }
+
+    let port_name = svc_port_entry.name.as_deref().unwrap();
 
     let use_endpoint_slice = match source {
         PortLookupSource::EndpointSlice => true,

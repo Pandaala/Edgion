@@ -32,7 +32,6 @@ If the placement is wrong, the code path and the documentation usually drift wit
 | Key | Effect |
 |-----|--------|
 | `edgion.io/enable-http2` | Controls HTTP/2 support |
-| `edgion.io/backend-protocol` | Backend protocol extension for TLS listeners; the common current value is `"tcp"` |
 | `edgion.io/http-to-https-redirect` | Enables redirect on non-TLS listeners |
 | `edgion.io/https-redirect-port` | Target redirect port |
 | `edgion.io/metrics-test-key` | Integration-test metrics correlation key |

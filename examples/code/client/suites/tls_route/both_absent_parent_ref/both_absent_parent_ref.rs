@@ -136,8 +136,6 @@ kind: Gateway
 metadata:
   name: tls-route-both-absent-gw
   namespace: edgion-test
-  annotations:
-    edgion.io/backend-protocol: "tcp"
 spec:
   gatewayClassName: public-gateway
   listeners:

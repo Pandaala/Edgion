@@ -3,7 +3,7 @@
 //! Tests that Gateway listener status correctly reflects TLS mode support:
 //! 1. Passthrough mode → Accepted=True
 //! 2. Mixed mode → Accepted=False, reason=UnsupportedValue
-//! 3. Terminate mode on a TLS listener → Accepted=False, Programmed=False, supportedKinds=[]
+//! 3. Terminate mode → Accepted=True (defaults to TCP backend without annotation)
 
 use super::super::helpers;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -117,10 +117,10 @@ impl TlsListenerModeStatusTestSuite {
         )
     }
 
-    fn test_terminate_unsupported() -> TestCase {
+    fn test_terminate_accepted() -> TestCase {
         TestCase::new(
-            "terminate_unsupported_tls_mode",
-            "TLS Terminate listener should have Accepted=False(UnsupportedValue), Programmed=False, and no supportedKinds",
+            "terminate_accepted",
+            "TLS Terminate listener should have Accepted=True (defaults to TCP backend)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -128,93 +128,28 @@ impl TlsListenerModeStatusTestSuite {
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
                         Ok(gateway) => {
-                            let generation = gateway["metadata"]["generation"].as_i64();
-                            let listener = gateway["status"]["listeners"]
-                                .as_array()
-                                .and_then(|listeners| listeners.iter().find(|l| l["name"].as_str() == Some("terminate")));
-
-                            let Some(listener) = listener else {
-                                return TestResult::failed(
+                            let cond = Self::find_listener_condition(&gateway, "terminate", "Accepted");
+                            match cond {
+                                Some(c) if c["status"].as_str() == Some("True") => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "terminate listener: Accepted=True".to_string(),
+                                ),
+                                Some(c) => TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "terminate listener not found. listeners: {}",
+                                        "terminate listener: expected Accepted=True, got: {}",
+                                        serde_json::to_string_pretty(c).unwrap_or_default()
+                                    ),
+                                ),
+                                None => TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "terminate listener: Accepted condition not found. listeners: {}",
                                         serde_json::to_string_pretty(&gateway["status"]["listeners"])
                                             .unwrap_or_default()
                                     ),
-                                );
-                            };
-
-                            let accepted = Self::find_listener_condition(&gateway, "terminate", "Accepted");
-                            match accepted {
-                                Some(c)
-                                    if c["status"].as_str() == Some("False")
-                                        && c["reason"].as_str() == Some("UnsupportedValue")
-                                        && c["observedGeneration"].as_i64() == generation => {}
-                                Some(c) => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "terminate listener: expected Accepted=False(UnsupportedValue) with observedGeneration={:?}, got: {}",
-                                            generation,
-                                            serde_json::to_string_pretty(c).unwrap_or_default()
-                                        ),
-                                    );
-                                }
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "terminate listener: Accepted condition not found. listener: {}",
-                                            serde_json::to_string_pretty(listener).unwrap_or_default()
-                                        ),
-                                    );
-                                }
+                                ),
                             }
-
-                            let programmed = Self::find_listener_condition(&gateway, "terminate", "Programmed");
-                            match programmed {
-                                Some(c)
-                                    if c["status"].as_str() == Some("False")
-                                        && c["observedGeneration"].as_i64() == generation => {}
-                                Some(c) => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "terminate listener: expected Programmed=False with observedGeneration={:?}, got: {}",
-                                            generation,
-                                            serde_json::to_string_pretty(c).unwrap_or_default()
-                                        ),
-                                    );
-                                }
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "terminate listener: Programmed condition not found. listener: {}",
-                                            serde_json::to_string_pretty(listener).unwrap_or_default()
-                                        ),
-                                    );
-                                }
-                            }
-
-                            let supported_kinds_empty = listener["supportedKinds"]
-                                .as_array()
-                                .is_some_and(|kinds| kinds.is_empty());
-                            if !supported_kinds_empty {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "terminate listener: expected supportedKinds=[], got: {}",
-                                        serde_json::to_string_pretty(&listener["supportedKinds"]).unwrap_or_default()
-                                    ),
-                                );
-                            }
-
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "terminate listener: Accepted=False(UnsupportedValue), Programmed=False, supportedKinds=[]"
-                                    .to_string(),
-                            )
                         }
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -234,7 +169,7 @@ impl TestSuite for TlsListenerModeStatusTestSuite {
         vec![
             Self::test_passthrough_accepted(),
             Self::test_mixed_unsupported(),
-            Self::test_terminate_unsupported(),
+            Self::test_terminate_accepted(),
         ]
     }
 }

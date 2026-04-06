@@ -1,16 +1,6 @@
 # Pre-created Gateways for TLSRoute conformance runs.
 # These must be applied BEFORE starting the gateway pod so that listeners are
-# created at startup (Edgion does not support dynamic listener creation yet).
-#
-# This manifest is intentionally TLS-focused. It avoids the pre-created HTTPS
-# listener on port 443 from the default manifest because that listener conflicts
-# with the TLS passthrough listeners required by TLSRoute data-plane tests.
-#
-# Port 8443 is pre-bound for TLS Terminate tests (TerminateSimple,
-# TerminateSupportedKinds, TerminateNotSupported, MixedNotSupported).
-# Port 8883 is pre-bound for the MixedTerminationSameNamespace test.
-# The conformance suite will update these Gateways at runtime; the important
-# thing is that the ports are already bound by the gateway process.
+# created at startup (Edgion binds physical listeners only at boot time).
 ---
 apiVersion: v1
 kind: Namespace
@@ -133,22 +123,18 @@ spec:
       mode: Passthrough
 ---
 # Pre-bind port 8443 for TLS Terminate tests.
-# The conformance suite creates Gateways on this port at runtime; we only need
-# the port to be bound by the gateway process before the tests start.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: pre-bind-tls-terminate-8443
+  name: gateway-tlsroute-terminate
   namespace: gateway-conformance-infra
-  annotations:
-    edgion.io/backend-protocol: tcp
 spec:
   gatewayClassName: edgion
   listeners:
-  - name: tls-terminate
+  - name: tlsterminate
     port: 8443
     protocol: TLS
-    hostname: terminate.example.com
+    hostname: tls.example.com
     allowedRoutes:
       namespaces:
         from: Same
@@ -165,8 +151,6 @@ kind: Gateway
 metadata:
   name: pre-bind-tls-mixed-8883
   namespace: gateway-conformance-infra
-  annotations:
-    edgion.io/backend-protocol: tcp
 spec:
   gatewayClassName: edgion
   listeners:

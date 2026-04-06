@@ -21,7 +21,6 @@ metadata:
   annotations:
     # Edgion 扩展注解
     edgion.io/enable-http2: "true"              # 启用 HTTP/2（默认 false）
-    edgion.io/backend-protocol: "HTTP"          # 后端协议：HTTP | HTTPS | H2 | H2C
     edgion.io/http-to-https-redirect: "true"    # HTTP→HTTPS 自动重定向
     edgion.io/https-redirect-port: "443"        # HTTPS 重定向端口
     edgion.io/edgion-stream-plugins: "ns/name"  # Gateway 级别 StreamPlugins 绑定
@@ -166,7 +165,6 @@ status:
 | 注解 | 值 | 默认 | 说明 |
 |------|---|------|------|
 | `edgion.io/enable-http2` | `"true"\|"false"` | `"false"` | Listener 启用 HTTP/2 |
-| `edgion.io/backend-protocol` | `HTTP\|HTTPS\|H2\|H2C` | `HTTP` | 上游后端协议 |
 | `edgion.io/http-to-https-redirect` | `"true"\|"false"` | `"false"` | HTTP→HTTPS 自动重定向 |
 | `edgion.io/https-redirect-port` | `port` | `"443"` | HTTPS 重定向目标端口 |
 | `edgion.io/edgion-stream-plugins` | `ns/name` | — | Gateway 级别 StreamPlugins |

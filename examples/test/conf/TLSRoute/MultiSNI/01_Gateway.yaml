@@ -5,8 +5,6 @@ kind: Gateway
 metadata:
   name: tls-route-multi-sni-gw
   namespace: edgion-test
-  annotations:
-    edgion.io/backend-protocol: "tcp"
 spec:
   gatewayClassName: public-gateway
   listeners:
