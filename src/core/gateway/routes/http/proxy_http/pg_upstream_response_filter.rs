@@ -70,10 +70,9 @@ pub fn upstream_response_filter(
         if let Some(parsed_retry) = route_unit.rule.parsed_retry.as_ref() {
             if let Some(codes) = parsed_retry.codes.as_ref() {
                 if codes.contains(&status_code) {
-                    // Determine max_retries: rule.retry.attempts > annotation > global
+                    // Determine max_retries: rule.retry.attempts > global
                     let max_retries = parsed_retry
                         .attempts
-                        .or(route_unit.rule.parsed_max_retries)
                         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
                     // Check request timeout

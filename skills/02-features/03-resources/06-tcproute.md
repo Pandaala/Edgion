@@ -21,7 +21,6 @@ metadata:
   annotations:
     edgion.io/edgion-stream-plugins: "default/my-stream-plugins"  # StreamPlugins 绑定
     edgion.io/proxy-protocol: "1"                                  # Proxy Protocol 版本
-    edgion.io/upstream-tls: "true"                                 # 上游启用 TLS
     edgion.io/max-connect-retries: "3"                             # 最大连接重试
 spec:
   parentRefs:
@@ -65,7 +64,6 @@ spec:
 |------|------|------|------|
 | `edgion.io/edgion-stream-plugins` | `ns/name` | — | 绑定 EdgionStreamPlugins |
 | `edgion.io/proxy-protocol` | `"1"\|"2"` | — | 向上游发送 Proxy Protocol |
-| `edgion.io/upstream-tls` | `"true"\|"false"` | `"false"` | 上游连接启用 TLS |
 | `edgion.io/max-connect-retries` | `u32` | `1` | 最大上游连接重试次数 |
 
 ## 特点

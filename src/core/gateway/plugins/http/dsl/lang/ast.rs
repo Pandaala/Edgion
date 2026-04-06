@@ -57,6 +57,12 @@ pub enum StmtKind {
     /// `return next()`
     ReturnNext,
 
+    /// `return terminate()`
+    ReturnTerminate,
+
+    /// `return grpc_error(code, message)`
+    ReturnGrpcError { code: Expr, message: Expr },
+
     /// `break` — exit current loop
     Break,
 

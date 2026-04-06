@@ -67,7 +67,6 @@ spec:
       defaultConnectTimeout: "5s"
       defaultRequestTimeout: "60s"
       defaultIdleTimeout: "300s"
-      defaultMaxRetries: 3                  # uint32
 
   # ─── 最大重试 ───
   maxRetries: 3                             # uint32, 上游连接最大重试次数
@@ -129,7 +128,6 @@ spec:
 | `defaultConnectTimeout` | `Duration` | `5s` | 上游连接超时 |
 | `defaultRequestTimeout` | `Duration` | `60s` | 总请求超时（含重试） |
 | `defaultIdleTimeout` | `Duration` | `300s` | 连接池空闲超时 |
-| `defaultMaxRetries` | `u32` | `3` | 最大重试次数 |
 
 ### spec.realIp
 

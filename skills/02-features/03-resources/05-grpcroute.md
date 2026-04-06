@@ -18,8 +18,6 @@ kind: GRPCRoute
 metadata:
   name: my-grpc-route
   namespace: default
-  annotations:
-    edgion.io/max-retries: "3"
 spec:
   parentRefs:
     - name: my-gateway
@@ -77,9 +75,9 @@ spec:
         backendRequest: "10s"
 
       retry:
-        attempts: 3
-        backoff: "500ms"
-        codes:                                     # gRPC 状态码
+        attempts: 3                                # 最大重试次数
+        backoff: "500ms"                           # 重试退避间隔（指数退避基数）
+        codes:                                     # gRPC 状态码（⚠️ 尚不支持，见下方说明）
           - 14                                     # UNAVAILABLE
 
       sessionPersistence:
@@ -123,6 +121,14 @@ spec:
 ## gRPC-Web 支持
 
 Edgion 自动检测 gRPC-Web 请求（通过 `content-type` 头），无需额外配置。gRPC-Web 请求按 GRPCRoute 规则路由。
+
+## 重试支持
+
+GRPCRoute 支持 `retry.attempts`（最大重试次数）和 `retry.backoff`（指数退避基数，上限 30s）。
+
+**`retry.codes` 限制**：GRPCRoute 的 `codes` 字段包含 gRPC 状态码（0-16），而非 HTTP 状态码。gRPC 状态码位于 HTTP/2 trailers（`grpc-status`）中，当前 Pingora 代理架构无法在 trailers 阶段拦截并触发重试。因此 `codes` 字段会被解析但 **运行时忽略**，并输出警告日志。未来实现 trailers 拦截后将支持此功能。
+
+当前重试仅在连接失败（`fail_to_connect`）和代理错误（`error_while_proxy`）时触发，与 HTTPRoute 的连接级重试行为一致。
 
 ## 与 HTTPRoute 的区别
 

@@ -25,33 +25,11 @@ use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTls
 use crate::core::gateway::routes::udp::{get_global_udp_route_managers, get_udp_listener_registry, EdgionUdpProxy};
 #[cfg(any(feature = "boringssl", feature = "openssl"))]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
+use crate::types::constants::annotations::edgion;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::gateway::Listener;
 use crate::types::ListenerKey;
 use tokio_util::sync::CancellationToken;
-
-/// Annotation key to control HTTP/2 support
-/// Set to "false" to disable HTTP/2 (both h2c and ALPN)
-/// Default: "true" (enabled)
-pub const ANNOTATION_ENABLE_HTTP2: &str = "edgion.io/enable-http2";
-
-/// Annotation key to enable HTTP to HTTPS redirect
-/// Set to "true" to redirect all HTTP requests to HTTPS
-/// Default: "false" (disabled)
-pub const ANNOTATION_HTTP_TO_HTTPS_REDIRECT: &str = "edgion.io/http-to-https-redirect";
-
-/// Annotation key to specify HTTPS redirect port
-/// Default: 443
-pub const ANNOTATION_HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
-
-/// Annotation key to reference an EdgionStreamPlugins resource for TCP-level connection filtering.
-///
-/// Value format: "namespace/name" pointing to an EdgionStreamPlugins resource.
-/// When set, incoming TCP connections are filtered by the referenced stream plugins
-/// **before** TLS handshake or HTTP parsing, providing efficient early rejection.
-///
-/// Example: `edgion.io/edgion-stream-plugins: "default/global-ip-filter"`
-pub const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
 
 /// Context passed to listener builders containing gateway-level information and listener config
 #[derive(Clone)]
@@ -93,7 +71,7 @@ pub fn add_http_listener(
     let http_to_https_redirect = !enable_tls
         && context
             .gateway_annotations
-            .get(ANNOTATION_HTTP_TO_HTTPS_REDIRECT)
+            .get(edgion::HTTP_TO_HTTPS_REDIRECT)
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
@@ -101,11 +79,11 @@ pub fn add_http_listener(
     if http_to_https_redirect {
         let https_port: u16 = context
             .gateway_annotations
-            .get(ANNOTATION_HTTPS_REDIRECT_PORT)
+            .get(edgion::HTTPS_REDIRECT_PORT)
             .and_then(|v| v.parse().ok())
             .unwrap_or(443);
 
-        let redirect_handler = EdgionHttpRedirectProxy::new(https_port);
+        let redirect_handler = EdgionHttpRedirectProxy::new(https_port, context.access_logger.clone());
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
         http_service.add_tcp(&addr);
@@ -496,7 +474,7 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
 /// The annotation value should be "namespace/name" referencing an EdgionStreamPlugins resource.
 /// The filter runs at TCP level, before TLS handshake or HTTP parsing.
 fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContext) {
-    let Some(annotation_value) = context.gateway_annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS) else {
+    let Some(annotation_value) = context.gateway_annotations.get(edgion::EDGION_STREAM_PLUGINS) else {
         return;
     };
 

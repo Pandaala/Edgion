@@ -97,11 +97,6 @@ spec:
                           type: string
                           description: "Idle timeout for backend connection pool"
                           default: "300s"
-                        defaultMaxRetries:
-                          type: integer
-                          description: "Maximum number of retries"
-                          format: int32
-                          default: 3
 
                 # ============================================
                 # Max Retries

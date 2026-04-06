@@ -1082,18 +1082,20 @@ pub fn query_backend_tls_policy_for_service(
     if let Some(ref pn) = port_name {
         // 1) Exact sectionName match
         if let Some(exact) = policies.iter().find(|pol| {
-            pol.spec.target_refs.iter().any(|tr| {
-                tr.section_name.as_deref() == Some(pn.as_str())
-            })
+            pol.spec
+                .target_refs
+                .iter()
+                .any(|tr| tr.section_name.as_deref() == Some(pn.as_str()))
         }) {
             return Some(exact.clone());
         }
     }
 
     // 2) Fall back to policies with no sectionName
-    if let Some(wildcard) = policies.iter().find(|pol| {
-        pol.spec.target_refs.iter().any(|tr| tr.section_name.is_none())
-    }) {
+    if let Some(wildcard) = policies
+        .iter()
+        .find(|pol| pol.spec.target_refs.iter().any(|tr| tr.section_name.is_none()))
+    {
         return Some(wildcard.clone());
     }
 
@@ -1107,13 +1109,12 @@ fn resolve_port_name(service_name: &str, namespace: Option<&str>, port: i32) -> 
     let key = format!("{}/{}", ns, service_name);
     let svc_store = get_global_service_store();
     svc_store.with_service(&key, |svc| {
-        svc.spec.as_ref()?.ports.as_ref()?.iter().find_map(|sp| {
-            if sp.port == port {
-                sp.name.clone()
-            } else {
-                None
-            }
-        })
+        svc.spec
+            .as_ref()?
+            .ports
+            .as_ref()?
+            .iter()
+            .find_map(|sp| if sp.port == port { sp.name.clone() } else { None })
     })?
 }
 

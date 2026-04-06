@@ -42,12 +42,11 @@ pub fn error_while_proxy(
     let max_retries = ctx
         .route_unit
         .as_ref()
-        .and_then(|unit| {
-            unit.rule
-                .parsed_retry
+        .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
+        .or_else(|| {
+            ctx.grpc_route_unit
                 .as_ref()
-                .and_then(|r| r.attempts)
-                .or(unit.rule.parsed_max_retries)
+                .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
         })
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
@@ -55,6 +54,11 @@ pub fn error_while_proxy(
         .route_unit
         .as_ref()
         .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+        .or_else(|| {
+            ctx.grpc_route_unit
+                .as_ref()
+                .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
+        })
         .and_then(|t| t.request_timeout.as_duration())
         .map(|timeout| ctx.start_time.elapsed() >= timeout)
         .unwrap_or(false);

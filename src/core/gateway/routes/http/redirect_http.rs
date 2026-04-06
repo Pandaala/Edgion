@@ -8,9 +8,20 @@ use http::StatusCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
+use std::sync::Arc;
+use std::time::Instant;
 
-/// Simple context for HTTP redirect - minimal state needed
-pub struct RedirectContext;
+use crate::core::gateway::observe::AccessLogger;
+
+/// Context for HTTP redirect - tracks request metadata for access logging
+pub struct RedirectContext {
+    pub start_time: Instant,
+    pub client_addr: String,
+    pub host: String,
+    pub path: String,
+    pub status: u16,
+    pub redirect_url: String,
+}
 
 /// HTTP to HTTPS redirect proxy
 ///
@@ -24,12 +35,17 @@ pub struct RedirectContext;
 pub struct EdgionHttpRedirectProxy {
     /// Target HTTPS port (default: 443)
     pub https_port: u16,
+    /// Access logger for recording redirect events
+    pub access_logger: Arc<AccessLogger>,
 }
 
 impl EdgionHttpRedirectProxy {
     /// Create a new HTTP to HTTPS redirect handler
-    pub fn new(https_port: u16) -> Self {
-        Self { https_port }
+    pub fn new(https_port: u16, access_logger: Arc<AccessLogger>) -> Self {
+        Self {
+            https_port,
+            access_logger,
+        }
     }
 
     /// Build the HTTPS redirect URL from host and URI components
@@ -49,23 +65,6 @@ impl EdgionHttpRedirectProxy {
             format!("https://{}:{}{}", host_without_port, self.https_port, uri)
         }
     }
-
-    /// Build the HTTPS redirect URL from a Session
-    fn build_redirect_url(&self, session: &Session) -> String {
-        let req_header = session.req_header();
-
-        // Get host from Host header
-        let host = req_header
-            .headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("localhost");
-
-        // Get the original URI (path + query)
-        let uri = req_header.uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-
-        self.build_redirect_url_from_parts(host, uri)
-    }
 }
 
 #[async_trait]
@@ -73,7 +72,14 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     type CTX = RedirectContext;
 
     fn new_ctx(&self) -> Self::CTX {
-        RedirectContext
+        RedirectContext {
+            start_time: Instant::now(),
+            client_addr: String::new(),
+            host: String::new(),
+            path: String::new(),
+            status: 0,
+            redirect_url: String::new(),
+        }
     }
 
     /// This should never be called since we always return early in request_filter
@@ -84,11 +90,30 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     }
 
     /// Intercept all requests and return a 301 redirect
-    async fn request_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> pingora_core::Result<bool>
+    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<bool>
     where
         Self::CTX: Send + Sync,
     {
-        let redirect_url = self.build_redirect_url(session);
+        // Populate context for access logging
+        ctx.client_addr = session.client_addr().map(|a| a.to_string()).unwrap_or_default();
+
+        let req_header = session.req_header();
+        ctx.host = req_header
+            .headers
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("localhost")
+            .to_string();
+        ctx.path = req_header
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str().to_string())
+            .unwrap_or_else(|| "/".to_string());
+
+        let redirect_url = self.build_redirect_url_from_parts(&ctx.host, &ctx.path);
+        ctx.status = 301;
+
+        ctx.redirect_url = redirect_url.clone();
 
         // Build 301 response
         let mut resp = ResponseHeader::build(StatusCode::MOVED_PERMANENTLY, Some(3))?;
@@ -101,24 +126,60 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
 
         Ok(true)
     }
+
+    /// Log the redirect request after completion
+    async fn logging(&self, _session: &mut Session, e: Option<&pingora_core::Error>, ctx: &mut Self::CTX)
+    where
+        Self::CTX: Send + Sync,
+    {
+        let latency_ms = ctx.start_time.elapsed().as_millis() as u64;
+        let error_msg = e.map(|err| err.to_string());
+
+        let log_entry = serde_json::json!({
+            "ts": chrono::Utc::now().timestamp_millis(),
+            "type": "redirect",
+            "request_info": {
+                "client-addr": ctx.client_addr,
+                "host": ctx.host,
+                "path": ctx.path,
+                "status": ctx.status,
+            },
+            "redirect_url": ctx.redirect_url,
+            "latency_ms": latency_ms,
+            "error": error_msg,
+        });
+
+        if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
+            tracing::debug!(
+                access_log = %log_entry,
+                "Redirect access log"
+            );
+        }
+
+        self.access_logger.send(log_entry.to_string()).await;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn test_access_logger() -> Arc<AccessLogger> {
+        Arc::new(AccessLogger::new())
+    }
+
     #[test]
     fn test_redirect_creation() {
-        let redirect = EdgionHttpRedirectProxy::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
         assert_eq!(redirect.https_port, 443);
 
-        let redirect = EdgionHttpRedirectProxy::new(8443);
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger());
         assert_eq!(redirect.https_port, 8443);
     }
 
     #[test]
     fn test_build_redirect_url_default_port() {
-        let redirect = EdgionHttpRedirectProxy::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
 
         // Simple path
         assert_eq!(
@@ -141,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_custom_port() {
-        let redirect = EdgionHttpRedirectProxy::new(8443);
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger());
 
         // Simple path
         assert_eq!(
@@ -164,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_special_cases() {
-        let redirect = EdgionHttpRedirectProxy::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
 
         // IPv4 address
         assert_eq!(
@@ -199,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_new_ctx() {
-        let redirect = EdgionHttpRedirectProxy::new(443);
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
         let _ctx = redirect.new_ctx(); // Should not panic
     }
 }

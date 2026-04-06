@@ -642,6 +642,36 @@ impl Vm {
                         body: body_str,
                     });
                 }
+                OpCode::ReturnTerminate => {
+                    return Ok(PluginRunningResult::ErrTerminateRequest);
+                }
+                OpCode::ReturnGrpcError => {
+                    let message = state.pop()?;
+                    let code = state.pop()?;
+                    let grpc_code = match &code {
+                        Value::Int(n) => {
+                            let c = *n;
+                            if !(0..=16).contains(&c) {
+                                tracing::warn!(
+                                    "DSL grpc_error code {} out of valid range (0-16), using 13 (INTERNAL)",
+                                    c
+                                );
+                                13u16
+                            } else {
+                                c as u16
+                            }
+                        }
+                        _ => 13, // INTERNAL
+                    };
+                    let message_str = match message {
+                        Value::Nil => None,
+                        other => Some(other.into_string()),
+                    };
+                    return Ok(PluginRunningResult::ErrGrpcError {
+                        grpc_status: grpc_code,
+                        message: message_str,
+                    });
+                }
             }
         }
     }

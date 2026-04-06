@@ -122,12 +122,11 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
     }
 }
 
-/// Annotation key for referencing EdgionStreamPlugins from TLSRoute.
-const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
+use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 
 impl GlobalTlsRouteManagers {
     /// Initialize a TLSRoute by setting up BackendSelector, proxy protocol,
-    /// upstream TLS, and stream plugin store key from annotations.
+    /// and stream plugin store key from annotations.
     fn initialize_route(&self, mut route: TLSRoute) -> Result<Arc<TLSRoute>, String> {
         let route_key = route.key_name();
         let annotations = route.metadata.annotations.as_ref();
@@ -138,11 +137,6 @@ impl GlobalTlsRouteManagers {
                 "v2" => Some(2u8),
                 _ => None,
             });
-
-        let upstream_tls = annotations
-            .and_then(|a| a.get(crate::types::constants::annotations::edgion::UPSTREAM_TLS))
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
 
         let store_key = Self::resolve_stream_plugin_store_key(&route);
 
@@ -172,7 +166,6 @@ impl GlobalTlsRouteManagers {
                 }
 
                 rule.proxy_protocol_version = proxy_protocol_version;
-                rule.upstream_tls = upstream_tls;
                 rule.max_connect_retries = max_connect_retries;
 
                 if let Some(ref key) = store_key {
@@ -187,11 +180,10 @@ impl GlobalTlsRouteManagers {
             }
         }
 
-        if proxy_protocol_version.is_some() || upstream_tls || max_connect_retries > 1 {
+        if proxy_protocol_version.is_some() || max_connect_retries > 1 {
             tracing::info!(
                 route = %route_key,
                 proxy_protocol = ?proxy_protocol_version,
-                upstream_tls,
                 max_connect_retries,
                 "TLSRoute configured with extended options"
             );
@@ -202,7 +194,7 @@ impl GlobalTlsRouteManagers {
 
     fn resolve_stream_plugin_store_key(route: &TLSRoute) -> Option<String> {
         let annotations = route.metadata.annotations.as_ref()?;
-        let annotation_value = annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS)?;
+        let annotation_value = annotations.get(EDGION_STREAM_PLUGINS)?;
         let trimmed = annotation_value.trim();
         if trimmed.is_empty() {
             return None;
@@ -284,7 +276,7 @@ mod tests {
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                     proxy_protocol_version: None,
-                    upstream_tls: false,
+
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
                 }]),
@@ -338,7 +330,7 @@ mod tests {
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                     proxy_protocol_version: None,
-                    upstream_tls: false,
+
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
                 }]),
@@ -405,7 +397,6 @@ mod tests {
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, Some(2));
-        assert!(!rule.upstream_tls);
         assert!(rule.stream_plugin_store_key.is_none());
     }
 
@@ -421,34 +412,6 @@ mod tests {
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, None);
-    }
-
-    #[test]
-    fn test_upstream_tls_annotation() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/upstream-tls".to_string(), "true".to_string());
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("default", "tls-up", "gw1", "test.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert!(rule.upstream_tls);
-    }
-
-    #[test]
-    fn test_upstream_tls_annotation_false() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/upstream-tls".to_string(), "false".to_string());
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("default", "tls-up-false", "gw1", "test.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert!(!rule.upstream_tls);
     }
 
     #[test]
@@ -490,7 +453,6 @@ mod tests {
         let managers = GlobalTlsRouteManagers::new();
         let mut annotations = std::collections::BTreeMap::new();
         annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
-        annotations.insert("edgion.io/upstream-tls".to_string(), "TRUE".to_string());
         annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "ns/plugins".to_string());
         let key = make_listener_key(443, "TLS");
 
@@ -499,7 +461,6 @@ mod tests {
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, Some(2));
-        assert!(rule.upstream_tls);
         assert_eq!(rule.stream_plugin_store_key, Some("ns/plugins".to_string()));
     }
 
@@ -512,7 +473,6 @@ mod tests {
 
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, None);
-        assert!(!rule.upstream_tls);
         assert!(rule.stream_plugin_store_key.is_none());
     }
 

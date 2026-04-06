@@ -624,6 +624,13 @@ impl PluginRuntime {
                 }
                 session_adapter.set_terminate();
                 break;
+            } else if let PluginRunningResult::ErrGrpcError { grpc_status, message } = result {
+                // Send gRPC native error: HTTP 200 + grpc-status/grpc-message trailers
+                let _ = session_adapter
+                    .send_grpc_error_direct(grpc_status, message.as_deref())
+                    .await;
+                session_adapter.set_terminate();
+                break;
             }
         }
 
@@ -672,6 +679,12 @@ impl PluginRuntime {
             filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
+                session_adapter.set_terminate();
+                break;
+            } else if matches!(result, PluginRunningResult::ErrGrpcError { .. }) {
+                // In response filter stage, gRPC error cannot be sent (sync context,
+                // response already committed). Treat as terminate.
+                tracing::warn!("DSL grpc_error() in upstream_response_filter stage is not supported, terminating");
                 session_adapter.set_terminate();
                 break;
             }
@@ -774,6 +787,12 @@ impl PluginRuntime {
             filter_logs.push(plugin_log);
 
             if ErrTerminateRequest == result {
+                session_adapter.set_terminate();
+                break;
+            } else if matches!(result, PluginRunningResult::ErrGrpcError { .. }) {
+                // In upstream_response stage, response is already committed.
+                // Treat as terminate.
+                tracing::warn!("DSL grpc_error() in upstream_response stage is not supported, terminating");
                 session_adapter.set_terminate();
                 break;
             }

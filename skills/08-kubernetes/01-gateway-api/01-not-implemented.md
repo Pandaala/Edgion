@@ -138,6 +138,8 @@ Edgion 的 Gateway 进程在**启动时**通过 `configure_listeners` 绑定所�
 
 Status 报告的局限性：`ancestorRef` 指向 Gateway 表示"控制面认为该 Policy 在此 Gateway 上生效"，但不代表数据面 TLS 连接一定成功（证书不匹配、后端不支持 TLS 等运行时问题无法通过 status 反映）。
 
+**适用范围：仅 HTTPRoute / GRPCRoute。** BackendTLSPolicy 不对 TLSRoute 生效。TLSRoute Passthrough 透传原始 TLS 流量，Gateway 不与后端建立新连接；TLSRoute Terminate 按 SNI 转发解密流量到后端，属于纯 stream 层代理，不涉及 L7 后端 TLS 配置。需要后端 TLS（re-encrypt）的场景应使用 HTTPRoute / GRPCRoute + BackendTLSPolicy。
+
 ## BackendTrafficPolicy (BTP)
 
 **决定：暂不实现（等 GA）**

@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route::{
-    BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
-    RouteTimeout as HttpRouteTimeout, SessionPersistence,
+    BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference, ParsedRouteRetry,
+    ParsedRouteTimeouts as HttpParsedRouteTimeouts, RouteTimeout as HttpRouteTimeout, SessionPersistence,
 };
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::gateway::lb::BackendSelector;
@@ -115,6 +115,12 @@ pub struct GRPCRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_timeouts: Option<HttpParsedRouteTimeouts>,
+
+    /// Pre-parsed retry configuration from GRPCRouteRule.retry (not serialized)
+    /// Only attempts and backoff are supported; codes require gRPC trailers interception (not yet implemented)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_retry: Option<ParsedRouteRetry>,
 }
 
 impl Clone for GRPCRouteRule {
@@ -132,6 +138,7 @@ impl Clone for GRPCRouteRule {
             backend_finder: BackendSelector::new(),
             plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
+            parsed_retry: self.parsed_retry.clone(),
         }
     }
 }
@@ -476,6 +483,62 @@ impl GRPCRoute {
 
                     tracing::debug!("Parsed route-level timeouts for GRPCRoute rule");
                 }
+            }
+        }
+    }
+
+    /// Parse and pre-process retry configurations for all rules
+    ///
+    /// Only `attempts` and `backoff` are supported for GRPCRoute.
+    /// `codes` (gRPC status codes) require trailers-level interception which is not yet implemented;
+    /// if configured, a warning is logged and the field is ignored.
+    pub fn parse_retry(&mut self) {
+        let Some(rules) = self.spec.rules.as_mut() else {
+            return;
+        };
+
+        for rule in rules.iter_mut() {
+            let Some(retry) = &rule.retry else {
+                continue;
+            };
+
+            let attempts = retry.attempts.map(|a| a.max(0) as u32);
+
+            let route_id = format!(
+                "{}/{}",
+                self.metadata.namespace.as_deref().unwrap_or("default"),
+                self.metadata.name.as_deref().unwrap_or("")
+            );
+
+            let backoff = retry.backoff.as_deref().and_then(|s| {
+                crate::core::common::utils::parse_duration(s)
+                    .map_err(|e| {
+                        tracing::warn!(
+                            route = %route_id,
+                            value = %s,
+                            error = %e,
+                            "Invalid retry backoff duration in GRPCRoute, backoff disabled"
+                        );
+                    })
+                    .ok()
+            });
+
+            // gRPC retry.codes are gRPC status codes (0-16), not HTTP status codes.
+            // Status-code-based retry requires intercepting gRPC trailers (grpc-status),
+            // which is not supported in the current Pingora proxy architecture.
+            if retry.codes.as_ref().is_some_and(|c| !c.is_empty()) {
+                tracing::warn!(
+                    route = %route_id,
+                    "GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"
+                );
+            }
+
+            if attempts.is_some() || backoff.is_some() {
+                rule.parsed_retry = Some(ParsedRouteRetry {
+                    attempts,
+                    backoff,
+                    codes: None, // Not supported for gRPC
+                });
             }
         }
     }

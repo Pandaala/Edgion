@@ -37,7 +37,6 @@ spec:
       defaultConnectTimeout: 5s
       defaultRequestTimeout: 60s
       defaultIdleTimeout: 300s
-      defaultMaxRetries: 3
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway

@@ -18,8 +18,6 @@ kind: HTTPRoute
 metadata:
   name: my-route
   namespace: default
-  annotations:
-    edgion.io/max-retries: "3"                    # Edgion 扩展：最大重试次数
 spec:
   parentRefs:                                      # 挂载到 Gateway（见 00-common-concepts.md）
     - name: my-gateway
@@ -217,15 +215,11 @@ spec:
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `attempts` | `i32` | — | 最大重试次数 |
-| `backoff` | `Duration` | — | 重试最小间隔 |
-| `codes` | `Vec<i32>` | — | 触发重试的 HTTP 状态码 |
+| `attempts` | `i32` | `EdgionGatewayConfig.spec.maxRetries`（默认 3） | 最大重试次数（`0` 禁用重试） |
+| `backoff` | `Duration` | — | 重试最小间隔（指数退避基数，上限 30s） |
+| `codes` | `Vec<i32>` | — | 触发重试的 HTTP 状态码（100-599） |
 
-### Edgion 扩展注解
-
-| 注解 | 类型 | 说明 |
-|------|------|------|
-| `edgion.io/max-retries` | `u32` | 最大重试次数（与 retry.attempts 互补） |
+> **优先级**：`rule.retry.attempts` > `EdgionGatewayConfig.spec.maxRetries`（全局默认）。连接失败和状态码重试共享同一个 attempts 计数器。`backendRequest` timeout 同时作为 Pingora `connection_timeout` / `read_timeout` / `write_timeout` 的路由级覆盖。
 
 ## 会话保持 Schema
 

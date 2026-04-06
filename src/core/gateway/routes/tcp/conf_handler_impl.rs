@@ -127,10 +127,7 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
     }
 }
 
-/// Annotation key for referencing EdgionStreamPlugins from TCPRoute.
-/// Same annotation as Gateway-level: `edgion.io/edgion-stream-plugins`.
-/// Value format: "namespace/name" or just "name" (namespace inferred from TCPRoute).
-const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
+use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 
 impl GlobalTcpRouteManagers {
     /// Initialize a TCPRoute by setting up BackendSelector and stream plugin store key.
@@ -176,7 +173,7 @@ impl GlobalTcpRouteManagers {
     /// Resolve the stream plugin store key from the TCPRoute's annotation.
     fn resolve_stream_plugin_store_key(route: &TCPRoute) -> Option<String> {
         let annotations = route.metadata.annotations.as_ref()?;
-        let annotation_value = annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS)?;
+        let annotation_value = annotations.get(EDGION_STREAM_PLUGINS)?;
         let trimmed = annotation_value.trim();
         if trimmed.is_empty() {
             return None;

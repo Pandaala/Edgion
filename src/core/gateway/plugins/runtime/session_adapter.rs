@@ -51,6 +51,63 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
     }
 
+    /// Send a gRPC error response with user-specified grpc-status and grpc-message.
+    ///
+    /// Uses the same three-frame pattern as `send_grpc_error_three_frame`:
+    /// 1. HEADERS (HTTP 200 + content-type: application/grpc)
+    /// 2. DATA (empty)
+    /// 3. TRAILERS (grpc-status + grpc-message)
+    pub async fn send_grpc_error_direct(&mut self, grpc_status: u16, message: Option<&str>) -> PluginSessionResult<()> {
+        self.ctx.request_info.status = Some(200);
+        self.ctx.request_info.grpc_status = Some(grpc_status);
+        self.ctx.request_info.response_committed = true;
+        self.grpc_response_terminated = true;
+
+        let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
+        resp.insert_header("content-type", "application/grpc")
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.inner
+            .write_response_header(Box::new(resp), false)
+            .await
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.inner
+            .write_response_body(Some(Bytes::new()), false)
+            .await
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+
+        let mut trailers = HeaderMap::new();
+        trailers.insert(
+            http::header::HeaderName::from_static("grpc-status"),
+            HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+        );
+        if let Some(msg) = message {
+            // Per gRPC spec, grpc-message must be percent-encoded for non-ASCII chars
+            let encoded: String = msg
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_graphic() || c == ' ' {
+                        c.to_string()
+                    } else {
+                        let mut buf = [0u8; 4];
+                        c.encode_utf8(&mut buf)
+                            .as_bytes()
+                            .iter()
+                            .map(|b| format!("%{:02X}", b))
+                            .collect()
+                    }
+                })
+                .collect();
+            if let Ok(val) = HeaderValue::from_str(&encoded) {
+                trailers.insert(http::header::HeaderName::from_static("grpc-message"), val);
+            }
+        }
+        self.inner
+            .as_downstream_mut()
+            .write_response_trailers(trailers)
+            .await
+            .map_err(|e| Box::new(e) as PluginSessionError)
+    }
+
     /// Resolve a key value by calling an external webhook service.
     ///
     /// Looks up the WebhookRuntime from the global registry, performs health/rate-limit
@@ -323,6 +380,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
+    fn response_header_names(&self) -> Vec<String> {
+        match &self.response_header {
+            Some(resp) => resp.headers.keys().map(|k| k.as_str().to_string()).collect(),
+            None => Vec::new(),
+        }
+    }
+
     fn get_response_header(&self, name: &str) -> Option<String> {
         self.response_header
             .as_ref()
@@ -434,6 +498,24 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
+    }
+
+    fn discover_protocol(&self) -> String {
+        self.ctx.request_info.discover_protocol.clone().unwrap_or_else(|| {
+            if self.ctx.request_info.is_grpc_request {
+                "grpc".to_string()
+            } else {
+                "http".to_string()
+            }
+        })
+    }
+
+    fn grpc_service(&self) -> Option<String> {
+        self.ctx.request_info.grpc_service.clone()
+    }
+
+    fn grpc_method(&self) -> Option<String> {
+        self.ctx.request_info.grpc_method.clone()
     }
 
     fn push_plugin_ref(&mut self, key: String) {

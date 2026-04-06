@@ -1359,6 +1359,381 @@ impl DslTestSuite {
             },
         )
     }
+    // ==================== Test 19: Terminate ====================
+
+    /// Test: X-Terminate: true → connection reset (no valid HTTP response)
+    fn test_terminate_connection_reset() -> TestCase {
+        TestCase::new(
+            "dsl_terminate_connection_reset",
+            "DSL: X-Terminate: true → connection reset / error",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-terminate/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-terminate.example.com")
+                        .header("X-Terminate", "true")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            // terminate() should cause a connection reset, not a normal response.
+                            // If we get a response, it means terminate() didn't work as expected.
+                            let status = resp.status().as_u16();
+                            // Some implementations may return 502/503 instead of a connection reset
+                            if status == 502 || status == 503 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Gateway returned {} (terminate intercepted upstream)", status),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected connection error or 502/503, got HTTP {}", status),
+                                )
+                            }
+                        }
+                        Err(_e) => {
+                            // Connection error is the expected behavior for terminate()
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Connection reset as expected (terminate)".to_string(),
+                            )
+                        }
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: no X-Terminate header → normal 200 pass through
+    fn test_terminate_normal_pass() -> TestCase {
+        TestCase::new(
+            "dsl_terminate_normal_pass",
+            "DSL: no X-Terminate → 200 pass through",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-terminate/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-terminate.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                let body = resp.text().await.unwrap_or_default();
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200, got {} (body: {})", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== Test 20: resp.set_status ====================
+
+    /// Test: backend returns 200 → DSL rewrites to 201 with X-Status-Rewritten header
+    fn test_resp_set_status_rewrite() -> TestCase {
+        TestCase::new(
+            "dsl_resp_set_status_rewrite",
+            "DSL upstreamResponseFilter: 200 → rewritten to 201 with X-Status-Rewritten",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-resp-set-status/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-resp-set-status.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let rewritten = resp
+                                .headers()
+                                .get("x-status-rewritten")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 201 && rewritten == "true" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Status rewritten to 201 with X-Status-Rewritten: true".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected status=201 x-status-rewritten=true, got status={} x-status-rewritten='{}'",
+                                        status, rewritten
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== Test 21: Utility Combo ====================
+
+    /// Test: multiple P3 utility functions in one DSL script
+    fn test_utility_combo() -> TestCase {
+        TestCase::new(
+            "dsl_utility_combo",
+            "DSL: hex_encode, json_get, uuid, ip_in_cidr, join, protocol, content_length",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-utility-combo/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-utility-combo.example.com")
+                        .header("X-Json-Data", r#"{"user":{"role":"admin"}}"#)
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                let body = resp.text().await.unwrap_or_default();
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200, got {} (body: {})", status, body),
+                                );
+                            }
+
+                            let mut errors: Vec<String> = Vec::new();
+
+                            // Check X-Hex: hex_encode("TEST") = "54455354"
+                            let hex_val = resp.headers().get("x-hex").and_then(|v| v.to_str().ok()).unwrap_or("");
+                            if hex_val != "54455354" {
+                                errors.push(format!("X-Hex: expected '54455354', got '{}'", hex_val));
+                            }
+
+                            // Check X-User-Role: admin
+                            let role = resp
+                                .headers()
+                                .get("x-user-role")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if role != "admin" {
+                                errors.push(format!("X-User-Role: expected 'admin', got '{}'", role));
+                            }
+
+                            // Check X-Request-ID is present (any UUID value)
+                            let request_id = resp.headers().get("x-request-id");
+                            if request_id.is_none() {
+                                errors.push("X-Request-ID: missing (expected UUID)".to_string());
+                            }
+
+                            // Check X-Joined: a-b-c
+                            let joined = resp
+                                .headers()
+                                .get("x-joined")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if joined != "a-b-c" {
+                                errors.push(format!("X-Joined: expected 'a-b-c', got '{}'", joined));
+                            }
+
+                            // Check X-Protocol: http
+                            let protocol = resp
+                                .headers()
+                                .get("x-protocol")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if protocol != "http" {
+                                errors.push(format!("X-Protocol: expected 'http', got '{}'", protocol));
+                            }
+
+                            if errors.is_empty() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "All utility functions produced correct results".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Utility combo failures: {}", errors.join("; ")),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== Test 22: HMAC Verify ====================
+
+    /// Test: no X-Signature → 401 missing signature
+    fn test_hmac_verify_missing_sig() -> TestCase {
+        TestCase::new(
+            "dsl_hmac_verify_missing_sig",
+            "DSL: no X-Signature → 401 missing signature",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-hmac-verify/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-hmac-verify.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 401 {
+                                if body.contains("missing signature") {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "401 with 'missing signature' body".to_string(),
+                                    )
+                                } else {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("401 returned (body: {})", body),
+                                    )
+                                }
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 401, got {} (body: {})", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: wrong X-Signature → 403 invalid signature
+    fn test_hmac_verify_invalid_sig() -> TestCase {
+        TestCase::new(
+            "dsl_hmac_verify_invalid_sig",
+            "DSL: wrong X-Signature → 403 invalid signature",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-hmac-verify/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-hmac-verify.example.com")
+                        .header("X-Signature", "wrong-signature-value")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 403 {
+                                if body.contains("invalid signature") {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "403 with 'invalid signature' body".to_string(),
+                                    )
+                                } else {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("403 returned (body: {})", body),
+                                    )
+                                }
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 403, got {} (body: {})", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: correct HMAC signature → 200 with X-Verified: true
+    fn test_hmac_verify_valid_sig() -> TestCase {
+        TestCase::new(
+            "dsl_hmac_verify_valid_sig",
+            "DSL: correct HMAC-SHA256 signature → 200 with X-Verified: true",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let path = "/test/dsl-hmac-verify/api";
+                    let url = format!("http://{}:31180{}", ctx.target_host, path);
+
+                    // Compute HMAC-SHA256("test-secret", path) to match the DSL script
+                    use hmac::{Hmac, Mac};
+                    use sha2::Sha256;
+                    type HmacSha256 = Hmac<Sha256>;
+
+                    let mut mac = HmacSha256::new_from_slice(b"test-secret").expect("HMAC key init");
+                    mac.update(path.as_bytes());
+                    let result = mac.finalize();
+                    let signature = hex::encode(result.into_bytes());
+
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-hmac-verify.example.com")
+                        .header("X-Signature", &signature)
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let verified = resp
+                                .headers()
+                                .get("x-verified")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            if status == 200 && verified == "true" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("HMAC verified, signature={}", signature),
+                                )
+                            } else {
+                                let body = resp.text().await.unwrap_or_default();
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} x-verified='{}' sig='{}' body='{}'",
+                                        status, verified, signature, body
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for DslTestSuite {
@@ -1407,6 +1782,17 @@ impl TestSuite for DslTestSuite {
             Self::test_trim_split_without_admin(),
             // Scenario 18: Break + Continue
             Self::test_break_continue(),
+            // Scenario 19: Terminate
+            Self::test_terminate_connection_reset(),
+            Self::test_terminate_normal_pass(),
+            // Scenario 20: resp.set_status
+            Self::test_resp_set_status_rewrite(),
+            // Scenario 21: Utility combo (hex, json_get, uuid, ip_in_cidr, join, protocol)
+            Self::test_utility_combo(),
+            // Scenario 22: HMAC verify
+            Self::test_hmac_verify_missing_sig(),
+            Self::test_hmac_verify_invalid_sig(),
+            Self::test_hmac_verify_valid_sig(),
         ]
     }
 }

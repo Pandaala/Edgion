@@ -24,7 +24,7 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .metadata
         .annotations
         .as_ref()
-        .and_then(|annotations| annotations.get(listener_builder::ANNOTATION_ENABLE_HTTP2))
+        .and_then(|annotations| annotations.get(crate::types::constants::annotations::edgion::ENABLE_HTTP2))
         .map(|value| !matches!(value.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
         .unwrap_or(true) // Default to true if annotation is not present
 }

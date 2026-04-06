@@ -415,6 +415,35 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str,
         return Ok((&input[skip..], Stmt::new(StmtKind::ReturnNext)));
     }
 
+    if input.starts_with("terminate()") || input.starts_with("terminate ()") {
+        let skip = if input.starts_with("terminate()") { 11 } else { 12 };
+        return Ok((&input[skip..], Stmt::new(StmtKind::ReturnTerminate)));
+    }
+
+    if input.starts_with("grpc_error(") || input.starts_with("grpc_error (") {
+        let input = input
+            .strip_prefix("grpc_error(")
+            .or_else(|| input.strip_prefix("grpc_error ("))
+            .expect("guard ensures one of these matches");
+        let input = ws(input);
+        let (input, code) = parse_expr(input, ctx)?;
+        let input = ws(input);
+        if !input.starts_with(',') {
+            return Err(nom::Err::Failure(ParseError::new(
+                "expected ',' in grpc_error(code, message)",
+            )));
+        }
+        let input = ws(&input[1..]);
+        let (input, message) = parse_expr(input, ctx)?;
+        let input = ws(input);
+        if !input.starts_with(')') {
+            return Err(nom::Err::Failure(ParseError::new(
+                "expected ')' after grpc_error arguments",
+            )));
+        }
+        return Ok((&input[1..], Stmt::new(StmtKind::ReturnGrpcError { code, message })));
+    }
+
     if input.starts_with("deny(") || input.starts_with("deny (") {
         let input = input
             .strip_prefix("deny(")
@@ -436,7 +465,7 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str,
     }
 
     Err(nom::Err::Failure(ParseError::new(
-        "expected 'next()' or 'deny(status, body)' after 'return'",
+        "expected 'next()', 'deny(status, body)', 'terminate()', or 'grpc_error(code, message)' after 'return'",
     )))
 }
 

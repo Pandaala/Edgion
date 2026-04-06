@@ -793,7 +793,6 @@ mod tests {
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                     proxy_protocol_version: None,
-                    upstream_tls: false,
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
                 }]),

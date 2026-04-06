@@ -21,10 +21,6 @@ pub mod edgion {
     /// Value: "v2" to enable PP2.
     pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
 
-    /// Whether to use TLS when connecting to upstream.
-    /// Value: "true" or "false" (default: "false").
-    pub const UPSTREAM_TLS: &str = "edgion.io/upstream-tls";
-
     /// Max upstream connect retries for TLS/TCP routes.
     /// Value: unsigned integer string (default: 1, i.e. no retry).
     /// Gateway API TLSRoute has no retry spec, so this is Edgion-specific.
@@ -41,6 +37,10 @@ pub mod edgion {
     /// Test type for metrics collection (lb/retry/latency)
     /// Example: edgion.io/metrics-test-type: "lb"
     pub const METRICS_TEST_TYPE: &str = "edgion.io/metrics-test-type";
+
+    /// Reference an EdgionStreamPlugins resource for TCP-level connection filtering.
+    /// Value format: "namespace/name" pointing to an EdgionStreamPlugins resource.
+    pub const EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
 
     /// Per-Gateway override for SNI-Host mismatch detection (421 Misdirected Request).
     /// When global `requireSniHostMatch` is false, set this to "true" on a Gateway

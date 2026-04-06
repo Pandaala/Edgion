@@ -63,16 +63,15 @@ pub fn fail_to_connect(
         }
     }
 
-    // Determine max_retries: rule.retry.attempts > annotation > global
+    // Determine max_retries: rule.retry.attempts > global (HTTP or gRPC route)
     let max_retries = ctx
         .route_unit
         .as_ref()
-        .and_then(|unit| {
-            unit.rule
-                .parsed_retry
+        .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
+        .or_else(|| {
+            ctx.grpc_route_unit
                 .as_ref()
-                .and_then(|r| r.attempts)
-                .or(unit.rule.parsed_max_retries)
+                .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
         })
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 

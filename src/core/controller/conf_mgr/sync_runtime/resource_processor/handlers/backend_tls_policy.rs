@@ -141,7 +141,9 @@ impl BackendTlsPolicyHandler {
                     ctx.secret_ref_manager().add_ref(cm_key.clone(), resource_ref.clone());
 
                     if let Some(cm) = get_configmap(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
-                        let ca_pem = cm.data.as_ref()
+                        let ca_pem = cm
+                            .data
+                            .as_ref()
                             .and_then(|d| d.get(CA_CERT))
                             .filter(|v| !v.trim().is_empty());
 

@@ -1208,3 +1208,761 @@ mod range_and_string_ops {
         assert_eq!(result, good_next());
     }
 }
+
+// ---------------------------------------------------------------------------
+// P0: return terminate()
+// ---------------------------------------------------------------------------
+
+mod terminate_tests {
+    use super::*;
+
+    #[test]
+    fn test_return_terminate_basic() {
+        let source = r#"return terminate()"#;
+        let session = MockPluginSession::new();
+        let result = run(source, session);
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    }
+
+    #[test]
+    fn test_return_terminate_with_space() {
+        let source = "return terminate ()";
+        let session = MockPluginSession::new();
+        let result = run(source, session);
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    }
+
+    #[test]
+    fn test_return_terminate_conditional() {
+        let source = r#"
+            if req.header("X-Attack") != nil {
+                return terminate()
+            }
+            return next()
+        "#;
+        // Case 1: header present → terminate
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|n| n == "X-Attack")
+            .returning(|_| Some("true".to_string()));
+        let result = run(source, session);
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+
+        // Case 2: header absent → next
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|n| n == "X-Attack")
+            .returning(|_| None);
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_return_terminate_with_log() {
+        let source = r#"
+            log("terminating request")
+            return terminate()
+        "#;
+        let session = MockPluginSession::new();
+        let vm = make_vm(source);
+        let mut log = PluginLog::new("test");
+        let mut s = session;
+        let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.log.as_ref().unwrap().contains("terminating request"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P0: resp.set_status()
+// ---------------------------------------------------------------------------
+
+mod resp_set_status_tests {
+    use super::*;
+
+    #[test]
+    fn test_resp_set_status_basic() {
+        let source = r#"
+            resp.set_status(503)
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_response_status()
+            .withf(|s| *s == 503)
+            .times(1)
+            .returning(|_| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_resp_set_status_conditional() {
+        let source = r#"
+            if resp.status == 502 {
+                resp.set_status(503)
+                resp.set_header("Retry-After", "30")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session.expect_get_response_status().returning(|| Some(502));
+        session
+            .expect_set_response_status()
+            .withf(|s| *s == 503)
+            .times(1)
+            .returning(|_| Ok(()));
+        session
+            .expect_set_response_header()
+            .withf(|n, v| n == "Retry-After" && v == "30")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_resp_set_status_invalid_code() {
+        let source = r#"resp.set_status(999)"#;
+        let mut session = MockPluginSession::new();
+        // Should get a runtime error for invalid status code
+        session.expect_set_response_status().times(0);
+        let result = run(source, session);
+        // With Deny policy, runtime error → 500
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P2 (pre-implemented): return grpc_error()
+// ---------------------------------------------------------------------------
+
+mod grpc_error_tests {
+    use super::*;
+
+    #[test]
+    fn test_return_grpc_error_basic() {
+        let source = r#"return grpc_error(7, "permission denied")"#;
+        let session = MockPluginSession::new();
+        let result = run(source, session);
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrGrpcError {
+                grpc_status: 7,
+                message: Some("permission denied".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_return_grpc_error_out_of_range_code() {
+        let source = r#"return grpc_error(99, "bad code")"#;
+        let session = MockPluginSession::new();
+        let result = run(source, session);
+        // Out of range (0-16) → defaults to 13 (INTERNAL)
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrGrpcError {
+                grpc_status: 13,
+                message: Some("bad code".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_return_grpc_error_conditional() {
+        let source = r#"
+            if req.path.starts_with("/admin") {
+                return grpc_error(7, "PERMISSION_DENIED: admin access blocked")
+            }
+            return next()
+        "#;
+        let mut session = MockPluginSession::new();
+        session.expect_get_path().return_const("/admin/users".to_string());
+        let result = run(source, session);
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrGrpcError {
+                grpc_status: 7,
+                message: Some("PERMISSION_DENIED: admin access blocked".to_string()),
+            }
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P1: req.protocol, req.grpc_service, req.grpc_method, req.content_length,
+//     req.client_cert_cn, req.client_cert_fingerprint
+// ---------------------------------------------------------------------------
+
+mod req_metadata_tests {
+    use super::*;
+    use crate::types::ctx::ClientCertInfo;
+
+    #[test]
+    fn test_req_protocol_default() {
+        let source = r#"req.set_header("X-Proto", req.protocol)"#;
+        let mut session = MockPluginSession::new();
+        session.expect_discover_protocol().returning(|| "http".to_string());
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Proto" && v == "http")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_req_protocol_grpc() {
+        let source = r#"
+            if req.protocol == "grpc" {
+                req.set_header("X-Type", "grpc")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session.expect_discover_protocol().returning(|| "grpc".to_string());
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Type" && v == "grpc")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_req_grpc_service() {
+        let source = r#"
+            let svc = req.grpc_service
+            if svc != nil {
+                req.set_header("X-Service", svc)
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_grpc_service()
+            .returning(|| Some("mypackage.MyService".to_string()));
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Service" && v == "mypackage.MyService")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_req_grpc_method() {
+        let source = r#"
+            let m = req.grpc_method
+            if m == nil {
+                req.set_header("X-Has-Method", "no")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session.expect_grpc_method().returning(|| None);
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Has-Method" && v == "no")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_req_content_length() {
+        let source = r#"
+            if req.content_length > 1048576 {
+                return deny(413, "too large")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|n| n == "Content-Length")
+            .returning(|_| Some("2097152".to_string()));
+        let result = run(source, session);
+        assert_eq!(result, err_response_body(413, "too large"));
+    }
+
+    #[test]
+    fn test_req_content_length_missing() {
+        let source = r#"
+            if req.content_length == nil {
+                req.set_header("X-Has-CL", "no")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|n| n == "Content-Length")
+            .returning(|_| None);
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Has-CL" && v == "no")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_req_client_cert_cn() {
+        let source = r#"
+            let cn = req.client_cert_cn
+            if cn == "my-service" {
+                req.set_header("X-Auth", "cert-ok")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session.expect_client_cert_info().returning(|| {
+            Some(ClientCertInfo {
+                subject: "CN=my-service".to_string(),
+                sans: vec![],
+                cn: Some("my-service".to_string()),
+                fingerprint: "abc123".to_string(),
+            })
+        });
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Auth" && v == "cert-ok")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_req_client_cert_fingerprint() {
+        let source = r#"req.set_header("X-FP", req.client_cert_fingerprint)"#;
+        let mut session = MockPluginSession::new();
+        session.expect_client_cert_info().returning(|| {
+            Some(ClientCertInfo {
+                subject: "CN=svc".to_string(),
+                sans: vec![],
+                cn: Some("svc".to_string()),
+                fingerprint: "sha256:deadbeef".to_string(),
+            })
+        });
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-FP" && v == "sha256:deadbeef")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_req_client_cert_cn_no_cert() {
+        let source = r#"
+            if req.client_cert_cn == nil {
+                return deny(403, "cert required")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session.expect_client_cert_info().returning(|| None);
+        let result = run(source, session);
+        assert_eq!(result, err_response_body(403, "cert required"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P2: resp.header_names(), resp.content_type
+// ---------------------------------------------------------------------------
+
+mod resp_p2_tests {
+    use super::*;
+
+    #[test]
+    fn test_resp_content_type() {
+        let source = r#"
+            let ct = resp.content_type
+            if ct != nil {
+                req.set_header("X-CT", ct)
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_get_response_header()
+            .withf(|n| n == "Content-Type")
+            .returning(|_| Some("application/json".to_string()));
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-CT" && v == "application/json")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_resp_header_names() {
+        let source = r#"
+            let names = resp.header_names()
+            req.set_header("X-Count", to_str(len(names)))
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_response_header_names()
+            .returning(|| vec!["content-type".to_string(), "x-custom".to_string()]);
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Count" && v == "2")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_resp_header_names_empty() {
+        let source = r#"
+            let names = resp.header_names()
+            if len(names) == 0 {
+                req.set_header("X-Empty", "true")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session.expect_response_header_names().returning(|| vec![]);
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Empty" && v == "true")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P3: Utility functions
+// ---------------------------------------------------------------------------
+
+mod p3_utility_tests {
+    use super::*;
+
+    #[test]
+    fn test_hmac_sha256() {
+        let source = r#"
+            let sig = hmac_sha256("secret-key", "hello")
+            req.set_header("X-Sig", sig)
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| {
+                n == "X-Sig" && v.len() == 64 // SHA256 hex = 64 chars
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_json_get_string() {
+        let source = r#"
+            let val = json_get("{\"user\":{\"name\":\"alice\"}}", "user.name")
+            req.set_header("X-Name", val)
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Name" && v == "alice")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_json_get_number() {
+        let source = r#"
+            let age = json_get("{\"age\": 30}", "age")
+            if age == 30 {
+                req.set_header("X-Age", "thirty")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Age" && v == "thirty")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_json_get_missing_key() {
+        let source = r#"
+            let val = json_get("{\"a\": 1}", "b")
+            if val == nil {
+                req.set_header("X-Found", "no")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Found" && v == "no")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_json_get_invalid_json() {
+        let source = r#"
+            let val = json_get("not json", "key")
+            if val == nil {
+                req.set_header("X-Valid", "no")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Valid" && v == "no")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_json_get_array_index() {
+        let source = r#"
+            let val = json_get("[\"a\",\"b\",\"c\"]", "1")
+            req.set_header("X-Val", val)
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Val" && v == "b")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_uuid_format() {
+        let source = r#"
+            let id = uuid()
+            if len(id) == 36 {
+                req.set_header("X-Has-UUID", "yes")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Has-UUID" && v == "yes")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_hex_encode() {
+        let source = r#"req.set_header("X-Hex", hex_encode("AB"))"#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Hex" && v == "4142")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_hex_decode() {
+        let source = r#"req.set_header("X-Dec", hex_decode("4142"))"#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Dec" && v == "AB")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_hex_decode_invalid() {
+        let source = r#"
+            let val = hex_decode("not_hex!")
+            if val == nil {
+                req.set_header("X-Ok", "nil")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Ok" && v == "nil")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_time_format() {
+        let source = r#"
+            let ts = 1609459200
+            let formatted = time_format(ts, "%Y-%m-%d")
+            req.set_header("X-Date", formatted)
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Date" && v == "2021-01-01")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_ip_in_cidr_v4_match() {
+        let source = r#"
+            if ip_in_cidr("10.0.1.5", "10.0.0.0/8") {
+                req.set_header("X-Net", "internal")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Net" && v == "internal")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_ip_in_cidr_v4_no_match() {
+        let source = r#"
+            if ip_in_cidr("192.168.1.1", "10.0.0.0/8") {
+                req.set_header("X-Net", "internal")
+            } else {
+                req.set_header("X-Net", "external")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Net" && v == "external")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_ip_in_cidr_v6() {
+        let source = r#"
+            if ip_in_cidr("::1", "::1/128") {
+                req.set_header("X-Net", "loopback")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Net" && v == "loopback")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_ip_in_cidr_invalid_ip() {
+        let source = r#"
+            if ip_in_cidr("not-an-ip", "10.0.0.0/8") {
+                req.set_header("X-Match", "yes")
+            } else {
+                req.set_header("X-Match", "no")
+            }
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Match" && v == "no")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_join() {
+        let source = r#"
+            let parts = split("a,b,c", ",")
+            let joined = join(parts, "-")
+            req.set_header("X-Joined", joined)
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "X-Joined" && v == "a-b-c")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+
+    #[test]
+    fn test_log_warn() {
+        let source = r#"
+            log_warn("something suspicious")
+            return next()
+        "#;
+        let session = MockPluginSession::new();
+        let vm = make_vm(source);
+        let mut log = PluginLog::new("test");
+        let mut s = session;
+        let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(log.log.as_ref().unwrap().contains("warn:"));
+    }
+
+    #[test]
+    fn test_log_error() {
+        let source = r#"
+            log_error("critical failure")
+            return next()
+        "#;
+        let session = MockPluginSession::new();
+        let vm = make_vm(source);
+        let mut log = PluginLog::new("test");
+        let mut s = session;
+        let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(log.log.as_ref().unwrap().contains("error:"));
+    }
+
+    #[test]
+    fn test_hmac_sha256_verify() {
+        // Verify a known HMAC value
+        let source = r#"
+            let sig = hmac_sha256("key", "data")
+            req.set_header("X-Sig", sig)
+        "#;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|n, v| {
+                // Known HMAC-SHA256("key", "data") value
+                n == "X-Sig" && v == "5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0"
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let result = run(source, session);
+        assert_eq!(result, good_next());
+    }
+}

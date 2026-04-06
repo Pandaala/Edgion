@@ -5,8 +5,6 @@ kind: HTTPRoute
 metadata:
   name: lb-ch-cookie
   namespace: edgion-default
-  annotations:
-    edgion.io/max-retries: "0"
 spec:
   parentRefs:
     - name: lb-ch-gateway
@@ -18,6 +16,8 @@ spec:
         - path:
             type: PathPrefix
             value: /test
+      retry:
+        attempts: 0
       timeouts:
         request: 2s
         backendRequest: 1s

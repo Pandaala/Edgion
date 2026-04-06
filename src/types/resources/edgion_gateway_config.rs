@@ -168,10 +168,6 @@ pub struct BackendTimeout {
     /// Without unit defaults to seconds (e.g., "300" = "300s")
     #[serde(default = "default_backend_idle_timeout")]
     pub default_idle_timeout: String,
-
-    /// Maximum number of retries
-    #[serde(default = "default_backend_max_retries")]
-    pub default_max_retries: u32,
 }
 
 // ClientTimeout defaults
@@ -198,10 +194,6 @@ fn default_backend_request_timeout() -> String {
 
 fn default_backend_idle_timeout() -> String {
     "300s".to_string()
-}
-
-fn default_backend_max_retries() -> u32 {
-    3
 }
 
 // Global configuration defaults
@@ -240,7 +232,6 @@ impl Default for BackendTimeout {
             default_connect_timeout: default_backend_connect_timeout(),
             default_request_timeout: default_backend_request_timeout(),
             default_idle_timeout: default_backend_idle_timeout(),
-            default_max_retries: default_backend_max_retries(),
         }
     }
 }

@@ -338,7 +338,7 @@ impl Workqueue {
                                     let item = heap.pop().unwrap();
                                     scheduled.remove(&item.key);
 
-                                    if pending.contains(&item.key) {
+                                    if !pending.insert(item.key.clone()) {
                                         tracing::trace!(
                                             queue = %name,
                                             key = %item.key,
@@ -346,8 +346,6 @@ impl Workqueue {
                                         );
                                         continue;
                                     }
-
-                                    pending.insert(item.key.clone());
                                     metrics.inc_depth();
                                     metrics.inc_adds();
 
@@ -375,8 +373,7 @@ impl Workqueue {
                                     while let Some(item) = heap.pop() {
                                         if item.ready_at <= now {
                                             scheduled.remove(&item.key);
-                                            if !pending.contains(&item.key) {
-                                                pending.insert(item.key.clone());
+                                            if pending.insert(item.key.clone()) {
                                                 metrics.inc_depth();
                                                 metrics.inc_adds();
                                                 let work_item = WorkItem::with_chain(item.key.clone(), item.chain);
@@ -416,7 +413,7 @@ impl Workqueue {
     /// which enables dirty requeue - if an update arrives while processing, it will be queued
     /// and processed again after the current processing completes.
     pub async fn enqueue(&self, key: String) -> bool {
-        if self.pending.contains(&key) {
+        if !self.pending.insert(key.clone()) {
             tracing::trace!(
                 queue = %self.name,
                 key = %key,
@@ -424,8 +421,6 @@ impl Workqueue {
             );
             return false;
         }
-
-        self.pending.insert(key.clone());
         self.metrics.inc_depth();
         let depth = self.metrics.get_depth();
         let capacity = self.config.capacity as u64;
@@ -473,16 +468,23 @@ impl Workqueue {
     ///
     /// Returns true if the key was scheduled, false if skipped due to dedup.
     pub async fn enqueue_after(&self, key: String, delay: Duration, chain: TriggerChain) -> bool {
-        if self.pending.contains(&key) || self.scheduled.contains(&key) {
+        if self.pending.contains(&key) {
             tracing::trace!(
                 queue = %self.name,
                 key = %key,
-                "Key already pending or scheduled, skipping enqueue_after"
+                "Key already pending, skipping enqueue_after"
             );
             return false;
         }
 
-        self.scheduled.insert(key.clone());
+        if !self.scheduled.insert(key.clone()) {
+            tracing::trace!(
+                queue = %self.name,
+                key = %key,
+                "Key already scheduled, skipping enqueue_after"
+            );
+            return false;
+        }
         self.metrics.inc_delayed();
         let outstanding = (self.pending.len() + self.scheduled.len()) as u64;
         let capacity = self.config.capacity as u64;

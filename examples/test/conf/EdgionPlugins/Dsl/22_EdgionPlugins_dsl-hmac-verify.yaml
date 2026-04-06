@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-hmac-verify
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "hmac-verify"
+        source: |
+          let sig = req.header("X-Signature")
+          if sig == nil {
+            return deny(401, "missing signature")
+          }
+          let expected = hmac_sha256("test-secret", req.path)
+          if sig != expected {
+            return deny(403, "invalid signature")
+          }
+          resp.set_header("X-Verified", "true")
+        errorPolicy: deny
