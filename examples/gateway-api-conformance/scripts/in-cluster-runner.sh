@@ -208,7 +208,7 @@ spec:
         memory: 128Mi
       limits:
         cpu: 2000m
-        memory: 2Gi
+        memory: 6Gi
     volumeMounts:
     - name: test-workspace
       mountPath: ${TEST_DIR}

@@ -1453,9 +1453,7 @@ pub async fn serve_with_shutdown(
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
 
     tracing::info!(component = "admin_api_gateway", "Admin API server stopped");
     Ok(())

@@ -609,7 +609,14 @@ mod tests {
         let mut update = HashMap::new();
         update.insert(
             "default/route-ghost".to_string(),
-            create_test_tls_route("default", "route-ghost", "gw1", "ghost.example.com", 443, key443.clone()),
+            create_test_tls_route(
+                "default",
+                "route-ghost",
+                "gw1",
+                "ghost.example.com",
+                443,
+                key443.clone(),
+            ),
         );
         managers.partial_update(HashMap::new(), update, HashSet::new());
 

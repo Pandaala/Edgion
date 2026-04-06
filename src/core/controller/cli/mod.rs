@@ -204,12 +204,7 @@ impl EdgionControllerCli {
         match tokio::time::timeout(std::time::Duration::from_secs(25), async {
             tokio::join!(
                 grpc_server.serve_with_shutdown(grpc_addr, tls_ref, grpc_shutdown),
-                serve_admin_api_with_shutdown(
-                    conf_mgr.clone(),
-                    schema_validator,
-                    admin_addr,
-                    admin_shutdown
-                )
+                serve_admin_api_with_shutdown(conf_mgr.clone(), schema_validator, admin_addr, admin_shutdown)
             )
         })
         .await

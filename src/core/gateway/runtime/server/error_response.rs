@@ -18,6 +18,22 @@ use http::{HeaderMap, HeaderValue};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
+/// Conditionally shut down the session after sending an error response.
+///
+/// For HTTP/2: skip shutdown. The preceding `write_response_body(_, true)` already
+/// sent END_STREAM on the H2 stream, which is the correct way to terminate an
+/// HTTP/2 stream. Calling `session.shutdown()` would trigger an abrupt TCP-level
+/// close via the Pingora framework, causing transient EOF errors for subsequent
+/// connections being accepted on the same listener port.
+///
+/// For HTTP/1.x: proceed with shutdown to close the TCP connection, since there is
+/// no stream-level termination mechanism in HTTP/1.
+async fn shutdown_after_error_response(session: &mut Session) {
+    if !session.is_http2() {
+        session.shutdown().await;
+    }
+}
+
 // ─── gRPC trailers-only response ─────────────────────────────────────────────
 
 /// Send a gRPC trailers-only error response, converting an HTTP status code to the
@@ -123,7 +139,7 @@ pub async fn end_response_400(
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await?;
-    session.shutdown().await;
+    shutdown_after_error_response(session).await;
 
     Ok(())
 }
@@ -162,7 +178,7 @@ pub async fn end_response_403(
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await?;
-    session.shutdown().await;
+    shutdown_after_error_response(session).await;
 
     Ok(())
 }
@@ -201,7 +217,7 @@ pub async fn end_response_421(
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await?;
-    session.shutdown().await;
+    shutdown_after_error_response(session).await;
 
     Ok(())
 }
@@ -238,7 +254,7 @@ pub async fn end_response_404(
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await?;
-    session.shutdown().await;
+    shutdown_after_error_response(session).await;
 
     Ok(())
 }
@@ -299,7 +315,7 @@ pub async fn end_response_500(
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await?;
-    session.shutdown().await;
+    shutdown_after_error_response(session).await;
 
     Ok(())
 }
@@ -336,7 +352,7 @@ pub async fn end_response_503(
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await?;
-    session.shutdown().await;
+    shutdown_after_error_response(session).await;
 
     Ok(())
 }

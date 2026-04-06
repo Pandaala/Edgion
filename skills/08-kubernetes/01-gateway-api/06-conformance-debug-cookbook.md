@@ -147,6 +147,39 @@ during TLS handshake on port 8443.
   dynamically; if the namespace was cleaned up, the Secret is gone.
 - Gateway restarted after manifest apply but before the Secret was re-created.
 
+### 2.3.1 TLS-only run still conflicts with base HTTPS listeners on port 443
+
+**Symptom:** `TLSRoute*` 数据面测试命中了错误 listener、直接超时，或
+`tls_access.log` 一直看不到期望的 Passthrough/Terminate 行为。
+
+**Root cause:** `cleanup-base-resources=false` 时，base manifest 里的 HTTPS
+Gateways 会一直留在 `gateway-conformance-infra`。如果你只想跑 TLS profile，
+这些已经存在的 443 HTTPS listeners 会和 TLS Passthrough 场景互相打架。
+
+**Fix:** 先删掉冲突的 base Gateways，再 apply TLS pre-bind manifest，然后重启
+gateway 进程重新绑端口：
+
+```bash
+kubectl delete gateway same-namespace \
+  same-namespace-with-https-listener \
+  all-namespaces \
+  backend-namespaces \
+  -n gateway-conformance-infra --ignore-not-found
+
+kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
+
+GW_POD=$(kubectl get pods -n edgion-system -l app=edgion-gateway \
+  -o jsonpath='{.items[0].metadata.name}')
+PID=$(kubectl exec -n edgion-system "$GW_POD" -- \
+  pgrep -f "/usr/local/edgion/edgion-gateway" | grep -v '^1$' | head -1)
+kubectl exec -n edgion-system "$GW_POD" -- kill -9 "$PID"
+sleep 5
+```
+
+重启后先确认：
+- `kubectl get gateways -n gateway-conformance-infra`
+- `kubectl exec -n edgion-system "$GW_POD" -- ss -tlnp | grep -E '(:443|:8443|:8883)'`
+
 ### 2.4 Stale conformance-test processes on runner pod
 
 **Symptom:** New test run hangs immediately or produces no output. `ps aux`
@@ -287,3 +320,31 @@ kubectl get gateways -n gateway-conformance-infra \
 
 **Both files must be applied** for a full run. Gateway pod must be restarted
 after applying new manifests that add ports (Edgion binds ports at startup only).
+
+---
+
+## 5. TLS Data Plane Quick Checklist
+
+当 `TLSRoute` / TLS listener 相关用例失败时，按这个顺序排：
+
+1. **看 Gateway / listener status**：是否 `Accepted=True`、`Programmed=True`，是否有 `ProtocolConflict` / `UnsupportedValue`
+2. **看端口是否真的绑定**：在 gateway Pod 里检查 `443` / `8443` / `8883`
+3. **看 `tls_access.log`**：连接有没有真的进代理，`err_log` 是 `no match`、`no listener accepts SNI` 还是 `no backend`
+4. **看 gateway 结构化日志**：listener 初始化、证书加载、TLS callback 有没有报错
+5. **看 `kubectl logs`**：有没有 crash-loop、`anyhow::bail!`、shell loop 的 `[restart]`
+6. **看 `TLSRoute` status**：父引用、`Accepted`、`ResolvedRefs` 是否正确
+7. **看 backend 健康度**：Service / EndpointSlice / Secret 是否齐全
+8. **看 pre-bind manifest**：端口、hostname、TLS mode 是否和测试预期完全一致
+
+常用命令：
+
+```bash
+GW_POD=$(kubectl get pods -n edgion-system -l app=edgion-gateway \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl get gateway -n gateway-conformance-infra
+kubectl get tlsroute -n gateway-conformance-infra
+kubectl exec -n edgion-system "$GW_POD" -- tail -20 /usr/local/edgion/logs/tls_access.log
+kubectl exec -n edgion-system "$GW_POD" -- tail -50 /usr/local/edgion/logs/edgion-gateway.log
+kubectl logs -n edgion-system "$GW_POD" --tail=50
+```

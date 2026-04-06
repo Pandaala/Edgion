@@ -235,6 +235,99 @@ curl -s http://127.0.0.1:5901/metrics
 - `integration_testing/<timestamp>/test_logs/`
 - `integration_testing/<timestamp>/report.log`
 
+## 第七步：远程 K8s 集群现场（不重建镜像）
+
+适合这种场景：
+- 问题只在远程集群复现
+- 不想每次都 rebuild 镜像 + rollout
+- 需要把本地刚编译的 `edgion-gateway` / `edgion-controller` 快速塞进现有 Pod 验证
+
+### 7.1 先记住两个前提
+
+- **binary target 必须和节点架构一致**。例如远程集群是 `linux/amd64`，就用 `x86_64-unknown-linux-gnu`；如果是别的架构，替换成对应 target。
+- **PID 1 往往不是业务进程，而是 shell loop**。不要 kill PID 1，否则容器会用镜像里的旧 binary 重新起来，热替换结果会丢。
+
+### 7.2 热替换 Pod 里的 binary
+
+两个常见事实：
+- `/usr/local/bin/` 通常是镜像内 root 拥有的原始 binary，不适合覆盖
+- `/usr/local/edgion/` 是运行时覆盖位；如果这里有同名 binary，entrypoint loop 会优先执行它
+
+```bash
+NS="edgion-system"
+POD="edgion-gateway-xxxxx"
+BIN="edgion-gateway"   # 或 edgion-controller
+LOCAL="target/x86_64-unknown-linux-gnu/release/$BIN"
+
+# 1. 先把 binary 拷进 Pod 临时目录
+kubectl cp "$LOCAL" "$NS/$POD:/tmp/$BIN" -c "$BIN"
+
+# 2. 挪到运行时覆盖路径
+kubectl exec -n "$NS" "$POD" -c "$BIN" -- sh -c \
+  "rm -f /usr/local/edgion/$BIN && \
+   cp /tmp/$BIN /usr/local/edgion/$BIN && \
+   chmod +x /usr/local/edgion/$BIN"
+
+# 3. 杀掉业务子进程，让 shell loop 用新 binary 拉起
+PID=$(kubectl exec -n "$NS" "$POD" -c "$BIN" -- \
+  pgrep -f "/usr/local/edgion/$BIN" | grep -v '^1$' | head -1)
+kubectl exec -n "$NS" "$POD" -c "$BIN" -- kill -9 "$PID"
+```
+
+常见坑：
+- `Text file busy`：先 `rm -f` 再 `cp`
+- `Permission denied`：说明你写到了 `/usr/local/bin/`，应该改写 `/usr/local/edgion/`
+- 日志还是旧报错：多半是旧子进程没杀掉，或在 `cp` 和 `kill` 之间又跑了一次旧 binary
+
+### 7.3 快速确认新 binary 确实生效
+
+```bash
+kubectl exec -n "$NS" "$POD" -c "$BIN" -- /usr/local/edgion/$BIN --version
+kubectl exec -n "$NS" "$POD" -c "$BIN" -- md5sum /usr/local/edgion/$BIN
+```
+
+如果只是确认某段旧错误字符串已经消失，也可以在本地先查：
+
+```bash
+strings "$LOCAL" | rg "expected error text"
+```
+
+### 7.4 在 Pod 里看端口和日志
+
+先查现在到底绑定了哪些端口：
+
+```bash
+kubectl exec -n "$NS" "$POD" -c edgion-gateway -- \
+  cat /proc/$(pgrep -f edgion-gateway | grep -v '^1$' | head -1)/net/tcp
+```
+
+集群内日志路径通常在：
+
+```text
+/usr/local/edgion/logs/
+├── edgion-gateway.log
+├── edgion_access.log
+├── tls_access.log
+└── ssl.log
+```
+
+```bash
+kubectl exec -n "$NS" "$POD" -c edgion-gateway -- \
+  tail -50 /usr/local/edgion/logs/edgion-gateway.log
+kubectl exec -n "$NS" "$POD" -c edgion-gateway -- \
+  tail -20 /usr/local/edgion/logs/tls_access.log
+kubectl logs -n "$NS" "$POD" -c edgion-gateway --since=120s
+```
+
+这里要区分：
+- `kubectl logs` 看的主要是 PID 1 shell loop 的 stdout/stderr，适合看启动报错、`anyhow::bail!`、`[restart]`
+- 结构化 tracing、TLS access、证书错误，优先看 `/usr/local/edgion/logs/*`
+
+### 7.5 如果是在排 Gateway API conformance
+
+- in-cluster runner 用法看 [../08-kubernetes/01-gateway-api/02-conformance-testing.md](../08-kubernetes/01-gateway-api/02-conformance-testing.md)
+- TLS conformance / 预绑定 listener / 失败模式看 [../08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md](../08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md)
+
 ## 常见症状速查
 
 | 症状 | 先看哪里 |

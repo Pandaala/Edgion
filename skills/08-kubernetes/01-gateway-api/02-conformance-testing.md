@@ -189,61 +189,52 @@ Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 socket-address+ho
 
 ## In-Cluster 运行方式（推荐）
 
-OrbStack 路由不稳定时用 in-cluster 方式跑，避免 port-forward 和网络问题：
+远程集群、Pod IP 不稳定、或 gRPC 经过 `kubectl port-forward` 不可靠时，优先用仓库自带脚本：
+
+`examples/gateway-api-conformance/scripts/in-cluster-runner.sh`
+
+这个脚本会统一处理：
+- 交叉编译 conformance test binary（当前脚本固定为 `linux/amd64`）
+- 创建/复用 `conformance-runner` Pod 和 RBAC
+- 把测试 binary 拷进 Pod
+- 在 Pod 内执行 conformance，并把 report 拉回项目目录
+
+### 最常用命令
 
 ```bash
-# 1. 编译 linux/arm64 binary
 cd examples/gateway-api-conformance
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -o /tmp/conformance-test-linux .
 
-# 2. 创建 runner pod（用已有镜像避免 Docker Hub 限流）
-kubectl apply -f - <<'EOF'
-apiVersion: v1
-kind: Pod
-metadata:
-  name: conformance-runner
-  namespace: edgion-system
-spec:
-  containers:
-  - name: runner
-    image: pandaala/edgion-controller:conformance-dev
-    imagePullPolicy: IfNotPresent
-    command: ["sh", "-c", "sleep infinity"]
-  restartPolicy: Never
-  serviceAccountName: edgion-controller
-EOF
+# 全量：编译 + 部署/复用 runner + 执行
+./scripts/in-cluster-runner.sh \
+  --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS" \
+  --timeout 30m
 
-# 3. 授权 cluster-admin（conformance suite 需要操作 CRD/namespace）
-kubectl apply -f - <<'EOF'
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: conformance-runner-admin
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cluster-admin
-subjects:
-- kind: ServiceAccount
-  name: edgion-controller
-  namespace: edgion-system
-EOF
+# 只重跑，不重新编译
+./scripts/in-cluster-runner.sh \
+  --run-only \
+  --conformance-profiles "GATEWAY-TLS" \
+  --timeout 20m
 
-# 4. 拷贝 binary 并启动（nohup 防止 kubectl exec 断开杀进程）
-kubectl cp /tmp/conformance-test-linux edgion-system/conformance-runner:/tmp/conformance-test
-kubectl exec -n edgion-system conformance-runner -- chmod +x /tmp/conformance-test
-kubectl exec -n edgion-system conformance-runner -- sh -c '
-nohup /tmp/conformance-test \
-  -test.run=TestConformance -test.v -test.timeout=30m -test.count=1 \
-  -gateway-class=edgion -cleanup-base-resources=false -debug=true \
-  -allow-crds-mismatch -conformance-profiles=GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS \
-  > /tmp/conformance.log 2>&1 &
-echo "PID=$!"'
+# 强制重新拷贝 binary
+./scripts/in-cluster-runner.sh \
+  --force-copy \
+  --conformance-profiles "GATEWAY-TLS" \
+  --timeout 20m
 
-# 5. 监控
-kubectl exec -n edgion-system conformance-runner -- sh -c \
-  'wc -l /tmp/conformance.log; tail -3 /tmp/conformance.log; ls /proc/$(pgrep conformance)/stat 2>/dev/null && echo alive || echo done'
+# 单个测试
+./scripts/in-cluster-runner.sh \
+  --run-only \
+  --conformance-profiles "GATEWAY-TLS" \
+  --run-test "TLSRouteHostnameIntersection" \
+  --timeout 10m
 
-# 6. 取回日志
-kubectl cp edgion-system/conformance-runner:/tmp/conformance.log /tmp/conformance-final.log
+# 清理 runner Pod + RBAC
+./scripts/in-cluster-runner.sh --cleanup
 ```
+
+### 输出与注意事项
+
+- report 默认回收到 `examples/gateway-api-conformance/conformance-report.yaml`
+- 脚本内部固定传 `-cleanup-base-resources=false`，避免 conformance 框架把 base Gateway 清掉后导致后续用例端口未绑定
+- 如果你的集群节点不是 `linux/amd64`，不要直接照搬，先调整脚本里的 `GOARCH`
+- 更底层的失败模式、TLS pre-bind、TLS-only profile 排障，转去 [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md)

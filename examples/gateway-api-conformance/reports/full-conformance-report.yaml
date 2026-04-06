@@ -1,5 +1,5 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-04-05T11:06:26Z"
+date: "2026-04-06T07:59:12Z"
 gatewayAPIChannel: UNDEFINED
 gatewayAPIVersion: UNDEFINED
 implementation:
@@ -19,10 +19,13 @@ profiles:
       Passed: 33
       Skipped: 0
   extended:
-    result: success
+    failedTests:
+    - BackendTLSPolicy
+    - HTTPRouteHTTPSListenerDetectMisdirectedRequests
+    result: failure
     statistics:
-      Failed: 0
-      Passed: 32
+      Failed: 2
+      Passed: 30
       Skipped: 0
     supportedFeatures:
     - BackendTLSPolicy
@@ -62,7 +65,7 @@ profiles:
     - HTTPRouteParentRefPort
     - ListenerSet
   name: GATEWAY-HTTP
-  summary: Core tests succeeded. Extended tests succeeded.
+  summary: Core tests succeeded. Extended tests failed with 2 test failures.
 - core:
     result: success
     statistics:
@@ -72,23 +75,16 @@ profiles:
   name: GATEWAY-GRPC
   summary: Core tests succeeded.
 - core:
-    failedTests:
-    - TLSRouteHostnameIntersection
-    - TLSRouteInvalidBackendRefNonexistent
-    - TLSRouteInvalidBackendRefUnknownKind
-    - TLSRouteSimpleSameNamespace
-    result: failure
+    result: success
     statistics:
-      Failed: 4
-      Passed: 14
+      Failed: 0
+      Passed: 18
       Skipped: 0
   extended:
-    failedTests:
-    - TLSRouteTerminateSimpleSameNamespace
-    result: failure
+    result: success
     statistics:
-      Failed: 1
-      Passed: 2
+      Failed: 0
+      Passed: 3
       Skipped: 0
     supportedFeatures:
     - GatewayHTTPListenerIsolation
@@ -105,11 +101,11 @@ profiles:
     - ListenerSet
     - TLSRouteModeMixed
   name: GATEWAY-TLS
-  summary: Core tests failed with 4 test failures. Extended tests failed with 1 test
-    failures.
+  summary: Core tests succeeded. Extended tests succeeded.
 succeededProvisionalTests:
 - HTTPRoute303Redirect
 - HTTPRoute307Redirect
 - HTTPRoute308Redirect
 - HTTPRouteNamedRule
 - HTTPRouteRequestPercentageMirror
+- TLSRouteTerminateSimpleSameNamespace

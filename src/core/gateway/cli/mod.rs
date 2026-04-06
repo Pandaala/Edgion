@@ -263,7 +263,11 @@ impl EdgionGatewayCli {
         // 6. Start auxiliary services
         // Create shutdown channel for auxiliary services
         let (aux_shutdown_tx, aux_shutdown_rx) = tokio::sync::watch::channel(false);
-        runtime.block_on(Self::start_auxiliary_services(config_client.clone(), &config, aux_shutdown_rx.clone()));
+        runtime.block_on(Self::start_auxiliary_services(
+            config_client.clone(),
+            &config,
+            aux_shutdown_rx.clone(),
+        ));
 
         // 7. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
@@ -306,7 +310,10 @@ impl EdgionGatewayCli {
         run_server(pingora_server);
 
         // 13. Signal auxiliary services to shut down
-        tracing::info!(component = "gateway", "Pingora stopped, shutting down auxiliary services");
+        tracing::info!(
+            component = "gateway",
+            "Pingora stopped, shutting down auxiliary services"
+        );
         let _ = aux_shutdown_tx.send(true);
 
         // 14. Wait for background runtime to complete (services drain + 5s grace)

@@ -1,6 +1,6 @@
 use crate::core::gateway::lb::runtime_state;
-use pingora_load_balancing::Backend;
 use pingora_core::protocols::l4::socket::SocketAddr;
+use pingora_load_balancing::Backend;
 use std::collections::HashSet;
 
 /// Common trait for round-robin stores used by endpoint and endpoint_slice handlers.
@@ -20,8 +20,7 @@ pub(super) trait RoundRobinStoreOps {
     fn get_backends_for_service(&self, service_key: &str) -> Vec<Backend>;
 }
 
-impl<S> RoundRobinStoreOps
-    for crate::core::gateway::backends::discovery::endpoint::EndpointStore<S>
+impl<S> RoundRobinStoreOps for crate::core::gateway::backends::discovery::endpoint::EndpointStore<S>
 where
     S: pingora_load_balancing::selection::BackendSelection + 'static,
     S::Iter: pingora_load_balancing::selection::BackendIter,
@@ -43,8 +42,7 @@ where
     }
 }
 
-impl<S> RoundRobinStoreOps
-    for crate::core::gateway::backends::discovery::endpoint_slice::EpSliceStore<S>
+impl<S> RoundRobinStoreOps for crate::core::gateway::backends::discovery::endpoint_slice::EpSliceStore<S>
 where
     S: pingora_load_balancing::selection::BackendSelection + 'static,
     S::Iter: pingora_load_balancing::selection::BackendIter,
@@ -76,11 +74,7 @@ where
 /// The `added` variable that appeared in both original handlers was a dead
 /// variable and has been removed; the cache is invalidated whenever the two
 /// sets differ.
-pub(super) fn cleanup_removed_backends(
-    service_key: &str,
-    old: &HashSet<SocketAddr>,
-    new: &HashSet<SocketAddr>,
-) {
+pub(super) fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &HashSet<SocketAddr>) {
     let removed: Vec<SocketAddr> = old.difference(new).cloned().collect();
 
     if old != new {
@@ -113,10 +107,7 @@ pub(super) fn update_all_existing_lbs<S: RoundRobinStoreOps>(store: &S) {
 }
 
 /// Refresh LBs for `affected_services` and clean up any removed backends.
-pub(super) fn update_affected_lbs<S: RoundRobinStoreOps>(
-    store: &S,
-    affected_services: &HashSet<String>,
-) {
+pub(super) fn update_affected_lbs<S: RoundRobinStoreOps>(store: &S, affected_services: &HashSet<String>) {
     for service_key in affected_services {
         let old_addrs: HashSet<SocketAddr> = store
             .get_backends_from_lb(service_key)
@@ -132,4 +123,3 @@ pub(super) fn update_affected_lbs<S: RoundRobinStoreOps>(
         cleanup_removed_backends(service_key, &old_addrs, &new_addrs);
     }
 }
-

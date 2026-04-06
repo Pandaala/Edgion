@@ -1,8 +1,6 @@
 use super::get_endpoint_roundrobin_store;
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::core::gateway::backends::discovery::conf_handler_common::{
-    update_affected_lbs, update_all_existing_lbs,
-};
+use crate::core::gateway::backends::discovery::conf_handler_common::{update_affected_lbs, update_all_existing_lbs};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
