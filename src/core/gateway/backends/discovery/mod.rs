@@ -1,4 +1,4 @@
-pub mod conf_handler_common;
+mod conf_handler_common;
 pub mod endpoint;
 pub mod endpoint_slice;
 pub mod services;

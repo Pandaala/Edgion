@@ -21,18 +21,6 @@ impl EpSliceHandler {
         Self
     }
 
-    /// Update all existing RoundRobin LBs (used after full_set/relist).
-    /// LeastConn/EWMA/ConsistentHash read from the RR backend list at selection
-    /// time, so they don't need separate LB instances to update.
-    fn update_all_existing_lbs(&self) {
-        update_all_existing_lbs(&*get_roundrobin_store());
-    }
-
-    /// Update affected RoundRobin LBs and clean stale runtime state.
-    fn update_affected_lbs(&self, affected_services: &HashSet<String>) {
-        update_affected_lbs(&*get_roundrobin_store(), affected_services);
-    }
-
     fn resolve_endpoint_slice_config_for_service(&self, service_key: &str) -> Option<ActiveHealthCheckConfig> {
         let roundrobin_store = get_roundrobin_store();
         let slices = roundrobin_store.get_slices_for_service(service_key)?;
@@ -102,7 +90,7 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
 
         // 2. Update all existing LBs in ALL stores
         // This handles relist scenario where data might have changed
-        self.update_all_existing_lbs();
+        update_all_existing_lbs(&*roundrobin_store);
 
         // 3. Sync EndpointSlice-level health check config
         self.sync_health_check_configs_for_services(&all_services);
@@ -147,7 +135,7 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         let affected_services = roundrobin_store.update_data_only(add, update, &remove);
 
         // 2. Update affected LBs in ALL stores
-        self.update_affected_lbs(&affected_services);
+        update_affected_lbs(&*roundrobin_store, &affected_services);
 
         // 3. Sync EndpointSlice-level health check config
         self.sync_health_check_configs_for_services(&affected_services);

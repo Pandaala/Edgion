@@ -20,16 +20,6 @@ impl EndpointHandler {
         Self
     }
 
-    /// Update all existing RoundRobin LBs (used after full_set/relist).
-    fn update_all_existing_lbs(&self) {
-        update_all_existing_lbs(&*get_endpoint_roundrobin_store());
-    }
-
-    /// Update affected RoundRobin LBs and clean stale runtime state.
-    fn update_affected_lbs(&self, affected_services: &HashSet<String>) {
-        update_affected_lbs(&*get_endpoint_roundrobin_store(), affected_services);
-    }
-
     fn resolve_endpoint_config_for_service(
         &self,
         service_key: &str,
@@ -79,7 +69,7 @@ impl ConfHandler<Endpoints> for EndpointHandler {
 
         // 2. Update all existing LBs in ALL stores
         // This handles relist scenario where data might have changed
-        self.update_all_existing_lbs();
+        update_all_existing_lbs(&*roundrobin_store);
 
         // 3. Sync Endpoints-level health check config
         self.sync_health_check_configs_for_services(&all_services);
@@ -124,7 +114,7 @@ impl ConfHandler<Endpoints> for EndpointHandler {
         let affected_services = roundrobin_store.update_data_only(add, update, &remove);
 
         // 2. Update affected LBs in ALL stores
-        self.update_affected_lbs(&affected_services);
+        update_affected_lbs(&*roundrobin_store, &affected_services);
 
         // 3. Sync Endpoints-level health check config
         self.sync_health_check_configs_for_services(&affected_services);

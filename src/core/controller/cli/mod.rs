@@ -201,15 +201,25 @@ impl EdgionControllerCli {
         // Run both services concurrently with shutdown support and global timeout.
         // In K8s, kubelet sends SIGKILL after terminationGracePeriodSeconds (default 30s).
         // We use 25s to leave headroom. The 2s gRPC delay is included in this budget.
-        match tokio::time::timeout(std::time::Duration::from_secs(25), async {
+        //
+        // IMPORTANT: the 25s timeout must start from when the shutdown SIGNAL fires,
+        // not from server startup. Using `tokio::select!` instead of a top-level
+        // `tokio::time::timeout` ensures the countdown only begins after SIGTERM/SIGINT.
+        let serve_fut = async {
             tokio::join!(
                 grpc_server.serve_with_shutdown(grpc_addr, tls_ref, grpc_shutdown),
                 serve_admin_api_with_shutdown(conf_mgr.clone(), schema_validator, admin_addr, admin_shutdown)
             )
-        })
-        .await
-        {
-            Ok((sync_result, admin_result)) => {
+        };
+        let drain_timeout_fut = {
+            let mut signal = shutdown_handle.signal();
+            async move {
+                signal.wait().await;
+                tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+            }
+        };
+        tokio::select! {
+            (sync_result, admin_result) = serve_fut => {
                 if let Err(e) = &sync_result {
                     tracing::error!(
                         component = COMPONENT_EDGION_CONTROLLER,
@@ -229,7 +239,7 @@ impl EdgionControllerCli {
                 sync_result?;
                 admin_result?;
             }
-            Err(_) => {
+            _ = drain_timeout_fut => {
                 tracing::warn!(
                     component = COMPONENT_EDGION_CONTROLLER,
                     "Graceful shutdown timed out after 25s, forcing exit"

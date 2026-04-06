@@ -8,7 +8,7 @@ use std::collections::HashSet;
 /// Both `EndpointStore<RoundRobin>` and `EpSliceStore<RoundRobin>` expose these
 /// four methods with identical signatures, so we can share `update_all_existing_lbs`
 /// and `update_affected_lbs` generically.
-pub(super) trait RoundRobinStoreOps {
+pub(in crate::core::gateway::backends::discovery) trait RoundRobinStoreOps {
     /// Return all service keys that currently have an active LoadBalancer.
     fn get_existing_service_keys(&self) -> Vec<String>;
     /// Update the LoadBalancer for `service_key` if one exists; remove it when
@@ -20,7 +20,7 @@ pub(super) trait RoundRobinStoreOps {
     fn get_backends_for_service(&self, service_key: &str) -> Vec<Backend>;
 }
 
-impl<S> RoundRobinStoreOps for crate::core::gateway::backends::discovery::endpoint::EndpointStore<S>
+impl<S> RoundRobinStoreOps for super::endpoint::EndpointStore<S>
 where
     S: pingora_load_balancing::selection::BackendSelection + 'static,
     S::Iter: pingora_load_balancing::selection::BackendIter,
@@ -42,7 +42,7 @@ where
     }
 }
 
-impl<S> RoundRobinStoreOps for crate::core::gateway::backends::discovery::endpoint_slice::EpSliceStore<S>
+impl<S> RoundRobinStoreOps for super::endpoint_slice::EpSliceStore<S>
 where
     S: pingora_load_balancing::selection::BackendSelection + 'static,
     S::Iter: pingora_load_balancing::selection::BackendIter,
@@ -74,7 +74,7 @@ where
 /// The `added` variable that appeared in both original handlers was a dead
 /// variable and has been removed; the cache is invalidated whenever the two
 /// sets differ.
-pub(super) fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &HashSet<SocketAddr>) {
+pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &HashSet<SocketAddr>) {
     let removed: Vec<SocketAddr> = old.difference(new).cloned().collect();
 
     if old != new {
@@ -100,14 +100,14 @@ pub(super) fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAd
 }
 
 /// Refresh every LB that already exists in `store` from its data layer.
-pub(super) fn update_all_existing_lbs<S: RoundRobinStoreOps>(store: &S) {
+pub(in crate::core::gateway::backends::discovery) fn update_all_existing_lbs<S: RoundRobinStoreOps>(store: &S) {
     for service_key in store.get_existing_service_keys() {
         store.update_lb_if_exists(&service_key);
     }
 }
 
 /// Refresh LBs for `affected_services` and clean up any removed backends.
-pub(super) fn update_affected_lbs<S: RoundRobinStoreOps>(store: &S, affected_services: &HashSet<String>) {
+pub(in crate::core::gateway::backends::discovery) fn update_affected_lbs<S: RoundRobinStoreOps>(store: &S, affected_services: &HashSet<String>) {
     for service_key in affected_services {
         let old_addrs: HashSet<SocketAddr> = store
             .get_backends_from_lb(service_key)
