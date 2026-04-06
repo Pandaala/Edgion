@@ -1,40 +1,15 @@
 use super::get_roundrobin_store;
 use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::gateway::backends::discovery::conf_handler_common::{
+    update_affected_lbs, update_all_existing_lbs,
+};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
 use crate::core::gateway::lb::runtime_state;
 use crate::types::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use pingora_core::protocols::l4::socket::SocketAddr;
 use std::collections::{HashMap, HashSet};
-
-/// Diff old vs new backend sets, remove stale entries, and invalidate selector caches.
-fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &HashSet<SocketAddr>) {
-    let removed: Vec<SocketAddr> = old.difference(new).cloned().collect();
-    let added: Vec<SocketAddr> = new.difference(old).cloned().collect();
-
-    if !removed.is_empty() || !added.is_empty() {
-        runtime_state::invalidate_selector_cache(service_key);
-    }
-
-    if !removed.is_empty() {
-        tracing::debug!(
-            service_key = %service_key,
-            removed_count = removed.len(),
-            "Cleaning stale backend runtime state"
-        );
-        let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
-        for addr in &removed {
-            if runtime_state::get_count(service_key, addr) > 0 {
-                runtime_state::mark_backend_draining(service_key, addr);
-            } else {
-                runtime_state::remove_backend(service_key, addr);
-            }
-            cb_store.remove_backend(service_key, addr);
-        }
-    }
-}
 
 /// Handler for EndpointSlice configuration updates
 ///
@@ -52,32 +27,12 @@ impl EpSliceHandler {
     /// LeastConn/EWMA/ConsistentHash read from the RR backend list at selection
     /// time, so they don't need separate LB instances to update.
     fn update_all_existing_lbs(&self) {
-        let roundrobin_store = get_roundrobin_store();
-        for service_key in roundrobin_store.get_existing_service_keys() {
-            roundrobin_store.update_lb_if_exists(&service_key);
-        }
+        update_all_existing_lbs(&*get_roundrobin_store());
     }
 
     /// Update affected RoundRobin LBs and clean stale runtime state.
     fn update_affected_lbs(&self, affected_services: &HashSet<String>) {
-        let roundrobin_store = get_roundrobin_store();
-
-        for service_key in affected_services {
-            let old_addrs: HashSet<SocketAddr> = roundrobin_store
-                .get_backends_from_lb(service_key)
-                .into_iter()
-                .map(|b| b.addr)
-                .collect();
-
-            roundrobin_store.update_lb_if_exists(service_key);
-
-            let new_addrs: HashSet<SocketAddr> = roundrobin_store
-                .get_backends_for_service(service_key)
-                .into_iter()
-                .map(|b| b.addr)
-                .collect();
-            cleanup_removed_backends(service_key, &old_addrs, &new_addrs);
-        }
+        update_affected_lbs(&*get_roundrobin_store(), affected_services);
     }
 
     fn resolve_endpoint_slice_config_for_service(&self, service_key: &str) -> Option<ActiveHealthCheckConfig> {
