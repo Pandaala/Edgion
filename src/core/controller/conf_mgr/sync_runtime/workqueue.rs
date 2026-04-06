@@ -463,8 +463,9 @@ impl Workqueue {
     /// Enqueue a key with a delay (for cross-resource requeue coalescing).
     ///
     /// The key is held in a background delay heap and moved to the ready queue after
-    /// `delay` elapses. Deduplication checks both `pending` (ready queue) and
-    /// `scheduled` (delay queue) to avoid redundant work.
+    /// `delay` elapses. Deduplication is via `scheduled` at schedule time; if the
+    /// key is already in `pending` when the delay fires, the promotion is silently
+    /// dropped by the delay loop.
     ///
     /// Returns true if the key was scheduled, false if skipped due to dedup.
     pub async fn enqueue_after(&self, key: String, delay: Duration, chain: TriggerChain) -> bool {
@@ -670,5 +671,89 @@ mod tests {
         queue.done(&item2.key);
 
         assert_eq!(queue.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_enqueue_dedup() {
+        let queue = Arc::new(Workqueue::with_defaults("test"));
+        let num_tasks = 20;
+        let mut handles = vec![];
+
+        for _ in 0..num_tasks {
+            let q = queue.clone();
+            let handle = tokio::spawn(async move { q.enqueue("ns/hotkey".to_string()).await });
+            handles.push(handle);
+        }
+
+        let mut success_count = 0usize;
+        for handle in handles {
+            if handle.await.unwrap() {
+                success_count += 1;
+            }
+        }
+        assert_eq!(success_count, 1, "Exactly one enqueue should win the race");
+
+        assert_eq!(
+            queue.len(),
+            1,
+            "Queue should contain exactly one item after concurrent enqueues"
+        );
+        assert_eq!(queue.metrics().get_depth(), 1, "Metrics depth should be 1");
+        assert_eq!(queue.metrics().get_adds_total(), 1, "Only 1 add should be counted");
+
+        let item = queue.dequeue().await.unwrap();
+        assert_eq!(item.key, "ns/hotkey");
+        assert_eq!(queue.len(), 0);
+        assert_eq!(queue.metrics().get_depth(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_enqueue_after_and_enqueue() {
+        let queue = Arc::new(Workqueue::with_defaults("test"));
+        let queue_clone1 = queue.clone();
+        let queue_clone2 = queue.clone();
+
+        // Concurrently call enqueue_after (with 100ms delay) and enqueue (immediate)
+        // on the same key. This tests that:
+        // 1. Both calls succeed in queueing the key (once in scheduled, once in pending)
+        // 2. When we dequeue the immediate item, the pending is clear
+        // 3. When the delay fires, it will add the key to pending again (since pending is empty)
+        let enqueue_after_handle = tokio::spawn(async move {
+            queue_clone1
+                .enqueue_after("ns/key".to_string(), Duration::from_millis(100), TriggerChain::new())
+                .await
+        });
+
+        let enqueue_handle = tokio::spawn(async move { queue_clone2.enqueue("ns/key".to_string()).await });
+
+        let scheduled = enqueue_after_handle.await.unwrap();
+        let enqueued = enqueue_handle.await.unwrap();
+
+        // Both succeed independently — enqueue writes to pending, enqueue_after writes to scheduled.
+        // Since they target independent DashSets, both operations always succeed.
+        assert!(enqueued, "immediate enqueue should succeed");
+        assert!(scheduled, "enqueue_after should succeed");
+
+        // Dequeue the immediate item from the successful enqueue path
+        let item = queue.dequeue().await.expect("Should have an item");
+        assert_eq!(item.key, "ns/key");
+
+        // Now pending is empty. Wait for the delay to fire.
+        sleep(Duration::from_millis(150)).await;
+
+        // The delay loop will attempt to promote the scheduled item.
+        // Since pending is now empty (we dequeued it above), the pending.insert succeeds
+        // and the delayed item is promoted to the ready queue.
+        let item2 = tokio::time::timeout(
+            Duration::from_millis(500),
+            queue.dequeue(),
+        )
+        .await
+        .expect("Timeout waiting for delayed item")
+        .expect("Queue should not be closed");
+        assert_eq!(item2.key, "ns/key", "Delayed item should be the same key");
+
+        // Now all should be processed
+        assert_eq!(queue.len(), 0, "Pending queue should be empty after draining");
     }
 }
