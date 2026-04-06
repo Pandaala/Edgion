@@ -74,7 +74,11 @@ where
 /// The `added` variable that appeared in both original handlers was a dead
 /// variable and has been removed; the cache is invalidated whenever the two
 /// sets differ.
-pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &HashSet<SocketAddr>) {
+pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(
+    service_key: &str,
+    old: &HashSet<SocketAddr>,
+    new: &HashSet<SocketAddr>,
+) {
     let removed: Vec<SocketAddr> = old.difference(new).cloned().collect();
 
     if old != new {
@@ -107,7 +111,10 @@ pub(in crate::core::gateway::backends::discovery) fn update_all_existing_lbs<S: 
 }
 
 /// Refresh LBs for `affected_services` and clean up any removed backends.
-pub(in crate::core::gateway::backends::discovery) fn update_affected_lbs<S: RoundRobinStoreOps>(store: &S, affected_services: &HashSet<String>) {
+pub(in crate::core::gateway::backends::discovery) fn update_affected_lbs<S: RoundRobinStoreOps>(
+    store: &S,
+    affected_services: &HashSet<String>,
+) {
     for service_key in affected_services {
         let old_addrs: HashSet<SocketAddr> = store
             .get_backends_from_lb(service_key)
