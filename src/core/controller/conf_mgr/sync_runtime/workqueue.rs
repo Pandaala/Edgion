@@ -468,15 +468,6 @@ impl Workqueue {
     ///
     /// Returns true if the key was scheduled, false if skipped due to dedup.
     pub async fn enqueue_after(&self, key: String, delay: Duration, chain: TriggerChain) -> bool {
-        if self.pending.contains(&key) {
-            tracing::trace!(
-                queue = %self.name,
-                key = %key,
-                "Key already pending, skipping enqueue_after"
-            );
-            return false;
-        }
-
         if !self.scheduled.insert(key.clone()) {
             tracing::trace!(
                 queue = %self.name,
@@ -537,8 +528,9 @@ impl Workqueue {
         let mut rx = self.rx.lock().await;
         let item = rx.recv().await?;
 
-        self.pending.remove(&item.key);
-        self.metrics.dec_depth();
+        if self.pending.remove(&item.key).is_some() {
+            self.metrics.dec_depth();
+        }
 
         tracing::debug!(
             queue = %self.name,
