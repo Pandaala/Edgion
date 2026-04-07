@@ -22,7 +22,8 @@ description: 如何运行、调试和逐步验证 Gateway API conformance tests
 
 ## 超时配置
 
-`conformance_test.go` 统一配置了短超时（适用于快速响应的本地集群）：
+`conformance_test.go` 统一配置超时。`MaxTimeToConsistency` 设为 120s 以容纳
+TLS Passthrough 数据面测试的证书传播延迟：
 
 | 参数 | 配置值 | 库默认值 |
 |------|--------|---------|
@@ -30,13 +31,14 @@ description: 如何运行、调试和逐步验证 Gateway API conformance tests
 | `GatewayMustHaveCondition` | 10s | 180s |
 | `GatewayStatusMustHaveListeners` | 10s | 60s |
 | `HTTPRouteMustHaveCondition` | 10s | 60s |
+| `TLSRouteMustHaveCondition` | 10s | 60s |
 | `RouteMustHaveParents` | 10s | 60s |
-| `MaxTimeToConsistency` | 15s | 30s |
+| `MaxTimeToConsistency` | 120s | 30s |
 | `LatestObservedGenerationSet` | 10s | 60s |
 | `DefaultTestTimeout` | 15s | 60s |
 | `RequiredConsecutiveSuccesses` | 3 | 3 |
 
-**重要**：如果测试等待超时（10s 后 context deadline exceeded），根因几乎总是 status condition 设置错误，而非超时太短。控制器正常时状态在 1s 内更新。
+**重要**：如果 status 类测试等待超时（10s 后 context deadline exceeded），根因几乎总是 status condition 设置错误，而非超时太短。控制器正常时状态在 1s 内更新。
 
 ## 运行粒度
 
@@ -67,6 +69,37 @@ GO_RUN_FILTER="TestConformance/HTTPRoute" bash scripts/run.sh
 | Core only | `--core` | 强制只跑 Gateway+HTTPRoute+ReferenceGrant |
 | Extended | `--extended` | 扩展 feature 集合（含 redirect、mirror 等） |
 | All features | `--all-features` | 所有 feature（含未实现的，会有 FAIL） |
+
+### Split-Profile Run (mandatory)
+
+Edgion does not support HTTPS Terminate and TLS Passthrough on the same port.
+Conformance test manifests hardcode port 443 for both modes, so **GATEWAY-HTTP
+and GATEWAY-TLS profiles must be run separately**. Running all three in one
+invocation causes TLSRoute data-plane tests to time out.
+
+`in-cluster-runner.sh` handles this automatically with `--clean-slate`:
+
+- Detects which profiles are active and applies only the matching manifests
+- For TLS-only runs, sets `EDGION_BASE_MANIFESTS` to
+  `base-manifests-tls-only.yaml` (upstream base manifest with HTTP Gateways
+  stripped), preventing the framework from recreating port-443 HTTPS listeners
+- Restarts both controller and gateway processes to ensure clean state
+- Saves reports to `reports/` with profile-derived filenames
+
+```bash
+# Run 1: HTTP + gRPC
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC" --timeout 30m
+# → reports/gateway-http-grpc-conformance-report.yaml
+
+# Run 2: TLS only (separate gateway startup config)
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-TLS" --timeout 30m
+# → reports/gateway-tls-conformance-report.yaml
+```
+
+See cookbook 2.3.1 for technical details and affected tests.
+See `reports/README.md` for current results and known failures.
 
 ### 单独指定 features（覆盖 conformance_test.go）
 
@@ -181,11 +214,15 @@ Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 socket-address+ho
 
 错误地将"相交"视为"冲突"会导致多个测试失败（`GatewayHTTPListenerIsolation` 等）。
 
-## Conformance 最新结果（feature-03-29, 2026-04-01）
+## Conformance 最新结果（feature-04-06, 2026-04-07）
 
-**381 PASS / 7 FAIL / 56 SKIP**（in-cluster 模式）
+**ALL PASS**（in-cluster 模式，split-profile 运行）
 
-详见 `SKILL.md` 中的 FAIL 列表和 profile 状态。
+- GATEWAY-HTTP: Core 33/33, Extended 32/32
+- GATEWAY-GRPC: Core 13/13
+- GATEWAY-TLS: Core 18/18, Extended 3/3
+
+详见 `SKILL.md` 中的 profile 状态表和 `reports/README.md`。
 
 ## In-Cluster 运行方式（推荐）
 
@@ -234,7 +271,10 @@ cd examples/gateway-api-conformance
 
 ### 输出与注意事项
 
-- report 默认回收到 `examples/gateway-api-conformance/conformance-report.yaml`
+- Reports 回收到 `examples/gateway-api-conformance/reports/` 下，文件名按 profile 自动派生：
+  - `gateway-http-grpc-conformance-report.yaml`
+  - `gateway-tls-conformance-report.yaml`
 - 脚本内部固定传 `-cleanup-base-resources=false`，避免 conformance 框架把 base Gateway 清掉后导致后续用例端口未绑定
+- `--clean-slate` 会自动 rollout restart TLS backend pods，确保 cert Secret 重建后 pod 加载新证书
 - 如果你的集群节点不是 `linux/amd64`，不要直接照搬，先调整脚本里的 `GOARCH`
 - 更底层的失败模式、TLS pre-bind、TLS-only profile 排障，转去 [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md)

@@ -1,60 +1,72 @@
 # Gateway API Conformance Test Reports
 
-Reports generated on **2026-04-05** against Edgion `dev` build.
+Reports generated on **2026-04-07** against Edgion `dev` build.
+
+## Why Split-Profile Runs
+
+Edgion does **not** support HTTPS Terminate and TLS Passthrough on the same port.
+The upstream conformance tests hardcode port 443 for both modes. Running all
+profiles together causes TLS Passthrough requests to be intercepted by the HTTPS
+Terminate listener, producing certificate mismatches and test failures.
+
+Therefore GATEWAY-HTTP/GRPC and GATEWAY-TLS **must be run separately**, each
+with its own base manifest set and gateway startup configuration:
+
+- **HTTP/GRPC run**: uses upstream `base/manifests.yaml` (HTTP Gateways on 80/443)
+- **TLS run**: uses `base-manifests-tls-only.yaml` (HTTP Gateways removed) +
+  `conformance-gateway-tls.yaml` (TLS pre-bind Gateways on 443/8443/8883)
 
 ## Report Files
 
 | File | Profiles | Date | Notes |
 |------|----------|------|-------|
-| `full-conformance-report.yaml` | GATEWAY-HTTP, GATEWAY-GRPC, GATEWAY-TLS | 2026-04-05T11:06:26Z | Full run (all profiles together) |
-| `gateway-tls-conformance-report.yaml` | GATEWAY-TLS | 2026-04-05T11:19:55Z | TLS only, but with HTTPS listeners still bound on port 443 |
-| `gateway-tls-standalone-report.yaml` | GATEWAY-TLS | 2026-04-05T12:46:27Z | TLS standalone: gateway restarted with TLS pre-bind only, no HTTPS on 443 |
+| `gateway-http-grpc-conformance-report.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-04-07 | Split-profile run |
+| `gateway-tls-conformance-report.yaml` | GATEWAY-TLS | 2026-04-07 | Split-profile run with TLS-only base manifest |
+
+## How to Reproduce
+
+```bash
+# Step 1: HTTP + gRPC
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC" --timeout 30m
+
+# Step 2: TLS (requires separate run — port 443 conflict)
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-TLS" --timeout 30m
+```
+
+Reports are automatically saved to this directory with profile-derived names.
 
 ## Results Summary
 
-### GATEWAY-HTTP — PASS
+### GATEWAY-HTTP — FULL PASS
 
 - **Core**: 33/33 passed
-- **Extended**: 32/32 passed
+- **Extended**: 32/32 passed (including `BackendTLSPolicyConflictResolution`)
 
-### GATEWAY-GRPC — PASS
+### GATEWAY-GRPC — FULL PASS
 
 - **Core**: 13/13 passed
 
-### GATEWAY-TLS — Standalone Run
+### GATEWAY-TLS — FULL PASS
 
-- **Core**: 17/18 passed, 1 failed
-- **Extended**: 2/3 passed, 1 failed
+- **Core**: 18/18 passed
+- **Extended**: 3/3 passed (`TLSRouteModeTerminate`, `GatewayHTTPListenerIsolation`, `GatewayHTTPSListenerDetectMisdirectedRequests`)
 
-## GATEWAY-TLS Failure Analysis
+## Known Quirks
 
-### Root Cause: Port 443 Listener Conflict (in full run)
+### Upstream conformance cert CA:FALSE (Go 1.24+)
 
-When running GATEWAY-TLS together with GATEWAY-HTTP, the base manifest creates
-`same-namespace-with-https-listener` Gateway on port 443 with HTTPS (Terminate)
-protocol. Since Edgion binds physical listeners at startup, this HTTPS listener
-occupies port 443 before TLS Passthrough test Gateways are created. TLS Passthrough
-requests then hit the HTTPS listener, receiving incorrect certificates (`*.org`,
-`*.wildcard.org` instead of `abc.example.com`).
+The upstream conformance suite (`sigs.k8s.io/gateway-api/conformance v1.5.1`)
+generates self-signed certificates with `BasicConstraints CA:FALSE`. Go 1.24+
+rejects these when used as root CAs. Edgion patches this locally via a `replace`
+directive in `go.mod` pointing to `patches/conformance-v1.5.1/`, which sets
+`IsCA=true` and adds `KeyUsageCertSign` for self-signed certs.
 
-**Fix**: Run TLS tests with a dedicated startup sequence:
-1. Apply `manifests/conformance-gateway-tls.yaml` (pre-binds port 443 as TLS Passthrough)
-2. Restart gateway deployment
-3. Run GATEWAY-TLS conformance
+### TLS backend pods must restart after cert regeneration
 
-This reduced failures from **5 (full run)** to **2 (standalone)**.
-
-### Remaining Failures
-
-| Test | Tier | Root Cause |
-|------|------|------------|
-| `TLSRouteHostnameIntersection` | Core | Backend port mapping bug: `tls-backend` Service has `port:443 → targetPort:8443`, but TLS Passthrough proxy connects to Pod IP on port 443 (which is not listening). The `resolve_target_port` function skips port mapping for single-port Services, but the roundrobin backend store appears to use the Service port (443) instead of the EndpointSlice targetPort (8443). |
-| `TLSRouteTerminateSimpleSameNamespace` | Extended | Configuration sync latency: the dynamically-created `gateway-tlsroute-terminate` Gateway's TLS certificate takes >30s to propagate through controller → gateway sync, exceeding the test's 30s timeout. The test log shows "Request passed" at the 30s mark, confirming the request succeeds eventually. |
-
-### Tests Fixed by Standalone TLS Run
-
-| Test | Before | After | Fix |
-|------|--------|-------|-----|
-| `TLSRouteSimpleSameNamespace` | FAIL | PASS | Port 443 now bound as TLS Passthrough instead of HTTPS |
-| `TLSRouteInvalidBackendRefNonexistent` | FAIL | PASS | Same — connection correctly rejected instead of hitting HTTPS listener |
-| `TLSRouteInvalidBackendRefUnknownKind` | FAIL | PASS | Same |
+TLS backend pods (`tls-backend`, `tls-backend-2`, `tcp-backend`) mount certificate
+Secrets as volumes and load them once at startup. When the conformance framework
+regenerates Secrets with new key pairs, running pods still serve old certificates.
+`--clean-slate` handles this automatically by rolling-restarting all TLS backend
+deployments before running tests.

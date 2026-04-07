@@ -18,30 +18,42 @@ Use this note when changing Gateway API behavior in Edgion and you need to under
 | [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md) | Conformance 排障手册：Pre-flight 检查、常见失败模式（namespace 被删、端口未绑定、进程残留等）、高效运行技巧 |
 
 
-## Conformance 最新结果（feature-03-29, 2026-04-01）
+## Conformance 最新结果（feature-04-06, 2026-04-07）
 
-**381 PASS / 7 FAIL / 56 SKIP**（in-cluster 模式，OrbStack K8s）
+**ALL PASS**（in-cluster 模式，split-profile 运行）
 
 ### Profile 声明状态
 
 | Profile | 声明 | 结果 |
 |---------|------|------|
-| `GATEWAY-HTTP` | ✅ | Core 全部通过；2 个 HTTPS listener 数据面 FAIL |
-| `GATEWAY-GRPC` | ✅ | Core 全部通过（含 weight/header/hostname matching） |
-| `GATEWAY-TLS` | ✅ | Status tests 大部分通过；5 个 FAIL（数据面 + 2 个 status reason） |
-| `MESH-*` | ❌ | 不适用（Edgion 不是 service mesh），56 个 SKIP 中 21 个是 Mesh |
+| `GATEWAY-HTTP` | ✅ | Core 33/33, Extended 32/32 — FULL PASS |
+| `GATEWAY-GRPC` | ✅ | Core 13/13 — FULL PASS |
+| `GATEWAY-TLS` | ✅ | Core 18/18, Extended 3/3 — FULL PASS |
+| `MESH-*` | ❌ | 不适用（Edgion 不是 service mesh） |
 
-### 7 个 FAIL
+### 运行方式
 
-| 测试 | 类别 | 原因 |
+HTTP/GRPC 和 TLS **必须分开跑**（port 443 冲突，详见 cookbook 2.3.1）：
+
+```bash
+# Step 1: HTTP + gRPC
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC" --timeout 30m
+
+# Step 2: TLS only
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-TLS" --timeout 30m
+```
+
+Reports: `examples/gateway-api-conformance/reports/`
+
+### 已修复的问题（本轮）
+
+| 问题 | 根因 | 修复 |
 |------|------|------|
-| `HTTPRouteHTTPSListener` | HTTPS 数据面 | HTTPS 请求 15s 超时 |
-| `HTTPRouteHTTPSListenerDetectMisdirectedRequests` | HTTPS 数据面 | 421 检测超时 |
-| `TLSRouteSimpleSameNamespace` | TLS Passthrough 数据面 | client EOF |
-| `TLSRouteTerminateSimpleSameNamespace` | TLS Terminate 数据面 | 15s 超时 |
-| `TLSRouteHostnameIntersection` | TLS 数据面 | hostname 交集匹配不生效 |
-| `TLSRouteListenerMixedTerminationNotSupported` | Controller Status | 返回 `UnsupportedValue`，预期 `ProtocolConflict` |
-| `TLSRouteListenerTerminateSupportedKinds` | Controller Status | Terminate listener SupportedKinds 超时 |
+| Controller 周期性重启 (~27s) | `tokio::time::timeout(25s)` 从启动计时 | `tokio::select!` — 信号后才开始计时 |
+| TLS cert x509 CA:FALSE | upstream conformance suite 自签名证书缺 `IsCA:true` | `patches/certificate.go` + `scripts/patch-upstream.sh`（编译前自动 patch module cache） |
+| TLS backend 旧证书缓存 | Secret 重建后 pod 不 reload | `--clean-slate` 自动 rollout restart TLS backend |
 
 配置位置：`examples/gateway-api-conformance/conformance_test.go`（`opts.ConformanceProfiles`）
 

@@ -300,6 +300,9 @@ check_gatewayclass_accepted
 
 cd "$CONFORMANCE_ROOT"
 
+# Patch upstream conformance library (Go 1.24+ IsCA fix)
+source "$SCRIPT_DIR/patch-upstream.sh"
+
 ARGS=(
   "-gateway-class=${GATEWAY_CLASS}"
   "-cleanup-base-resources=${CLEANUP}"

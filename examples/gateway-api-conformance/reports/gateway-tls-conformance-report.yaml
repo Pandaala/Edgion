@@ -1,5 +1,5 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-04-05T12:46:27Z"
+date: "2026-04-07T10:24:26Z"
 gatewayAPIChannel: UNDEFINED
 gatewayAPIVersion: UNDEFINED
 implementation:
@@ -13,20 +13,16 @@ kind: ConformanceReport
 mode: default
 profiles:
 - core:
-    failedTests:
-    - TLSRouteHostnameIntersection
-    result: failure
+    result: success
     statistics:
-      Failed: 1
-      Passed: 17
+      Failed: 0
+      Passed: 18
       Skipped: 0
   extended:
-    failedTests:
-    - TLSRouteTerminateSimpleSameNamespace
-    result: failure
+    result: success
     statistics:
-      Failed: 1
-      Passed: 2
+      Failed: 0
+      Passed: 3
       Skipped: 0
     supportedFeatures:
     - GatewayHTTPListenerIsolation
@@ -43,5 +39,6 @@ profiles:
     - ListenerSet
     - TLSRouteModeMixed
   name: GATEWAY-TLS
-  summary: Core tests failed with 1 test failures. Extended tests failed with 1 test
-    failures.
+  summary: Core tests succeeded. Extended tests succeeded.
+succeededProvisionalTests:
+- TLSRouteTerminateSimpleSameNamespace

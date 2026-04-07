@@ -243,7 +243,7 @@ impl EdgionControllerCli {
             _ = drain_timeout_fut => {
                 tracing::warn!(
                     component = COMPONENT_EDGION_CONTROLLER,
-                    "Graceful shutdown timed out after 25s, forcing exit"
+                    "Graceful shutdown timed out 25s after signal, forcing exit"
                 );
             }
         }
