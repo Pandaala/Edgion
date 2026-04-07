@@ -353,11 +353,17 @@ where
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // NOTE: Unlike Kubernetes mode (which triggers a full relink on 410 Gone),
+                    // FileSystem mode has no automatic recovery for lagged events. If the
+                    // broadcast channel drops messages, the in-memory cache may permanently
+                    // diverge from the filesystem until the controller restarts.
+                    // FileSystem mode is intended for static/low-churn configs, so this risk
+                    // is acceptable in practice, but monitor the warn log for anomalies.
                     tracing::warn!(
                         component = "fs_resource_controller",
                         kind = kind,
                         lagged = n,
-                        "Event receiver lagged, some events may be missed"
+                        "Event receiver lagged, some events may be missed — cache may diverge until restart"
                     );
                 }
                 Err(broadcast::error::RecvError::Closed) => {

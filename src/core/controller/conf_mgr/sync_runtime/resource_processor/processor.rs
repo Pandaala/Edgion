@@ -9,7 +9,6 @@
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
 
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -142,9 +141,6 @@ pub trait ProcessorObj: Send + Sync {
 
     /// Enqueue a key for immediate processing (original events, init revalidation)
     async fn requeue(&self, key: String);
-
-    /// Enqueue a key with delay (unused legacy; prefer requeue_with_chain)
-    async fn requeue_after(&self, key: String, duration: Duration);
 
     /// Cross-resource requeue with trigger chain (goes through delay subsystem)
     async fn requeue_with_chain(&self, key: String, chain: TriggerChain);
@@ -674,12 +670,6 @@ where
         self.workqueue.enqueue(key).await;
     }
 
-    async fn requeue_after(&self, key: String, duration: Duration) {
-        self.workqueue
-            .enqueue_after(key, duration, TriggerChain::default())
-            .await;
-    }
-
     async fn requeue_with_chain(&self, key: String, chain: TriggerChain) {
         let delay = self.workqueue.config().default_requeue_delay;
         self.workqueue.enqueue_after(key, delay, chain).await;
@@ -691,6 +681,7 @@ where
 
     fn set_ready(&self) {
         WatchObj::set_ready(self.cache.as_ref());
+        self.runtime.processor_registry.notify_ready();
     }
 
     fn set_not_ready(&self) {

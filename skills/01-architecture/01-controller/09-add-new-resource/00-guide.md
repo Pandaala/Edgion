@@ -102,11 +102,18 @@ What the handler usually owns:
 - status updates
 - dependency registration and requeue behavior
 
-Important rule:
+Important rules:
 
 - If `parse()` looks up Gateway relationships, register with `gateway_route_index` in `on_change()` / `on_delete()`
 - If it tracks Service refs, Secret refs, or cross-namespace refs, follow the matching helper pattern used by similar handlers
 - If the resource needs no special logic, still add a minimal `ProcessorHandler<T>` so it participates in the normal processor lifecycle
+
+> **`on_change` 在 `save_to_cache` 之前执行**（这是有意的设计，见 `processor.rs` Step 10/11 注释）。
+> 在 `on_change` 内部查找"当前正在处理的资源本身"时，**必须使用 `RawStore`（`get_raw_any`）**，
+> 而不是 `ServerCache`——因为此时当前资源还没有写入缓存。
+> 在 `on_change` 里查其他资源（如 Gateway 查自己挂载的 Route）可以正常使用 `ServerCache`。
+> 错误地在 `on_change` 里用 `ServerCache` 查自身会在编译期通过但在运行时返回旧值，
+> 是一种**隐蔽的正确性问题**。
 
 ### 4. Decide Whether It Syncs To Gateway
 

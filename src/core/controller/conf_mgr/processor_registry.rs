@@ -7,6 +7,9 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use tokio::sync::Notify;
 
 use super::sync_runtime::resource_processor::ProcessorObj;
 use super::sync_runtime::workqueue::TriggerChain;
@@ -22,6 +25,10 @@ use crate::core::controller::conf_sync::conf_server::WatchObj;
 pub struct ProcessorRegistry {
     /// All processors indexed by kind name
     processors: RwLock<HashMap<&'static str, Arc<dyn ProcessorObj>>>,
+
+    /// Notified whenever any processor transitions to ready.
+    /// Used by `wait_kinds_ready` to avoid busy-polling.
+    ready_notify: Arc<Notify>,
 }
 
 impl ProcessorRegistry {
@@ -29,7 +36,16 @@ impl ProcessorRegistry {
     pub fn new() -> Self {
         Self {
             processors: RwLock::new(HashMap::new()),
+            ready_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Notify waiters that a processor became ready.
+    ///
+    /// Called by `ResourceProcessor::set_ready()` immediately after the cache
+    /// is marked ready. Wakes all tasks waiting in `wait_kinds_ready`.
+    pub fn notify_ready(&self) {
+        self.ready_notify.notify_waiters();
     }
 
     /// Register a processor
@@ -150,10 +166,17 @@ impl ProcessorRegistry {
     /// Used by phased init to gate Phase 2 resource startup until Phase 1
     /// foundation resources (Gateway, Secret, etc.) are fully loaded.
     ///
+    /// Wakes immediately when any processor calls `notify_ready()`. A 1-second
+    /// fallback timeout guards against missed notifications (e.g. a processor
+    /// that became ready between the condition check and the wait call).
+    ///
     /// Returns `true` if all specified kinds became ready within the timeout,
     /// `false` if the timeout was reached (Phase 2 will still start as a fallback).
-    pub async fn wait_kinds_ready(&self, kinds: &[&str], timeout: std::time::Duration) -> bool {
+    pub async fn wait_kinds_ready(&self, kinds: &[&str], timeout: Duration) -> bool {
         let start = std::time::Instant::now();
+        // Clone the Notify Arc so we can move it into each notified() call
+        // without holding a borrow on self.
+        let notify = self.ready_notify.clone();
 
         loop {
             let pending: Vec<&str> = kinds
@@ -172,17 +195,22 @@ impl ProcessorRegistry {
                 return true;
             }
 
-            if start.elapsed() >= timeout {
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
                 tracing::warn!(
                     component = "processor_registry",
-                    elapsed_ms = start.elapsed().as_millis(),
+                    elapsed_ms = elapsed.as_millis(),
                     not_ready = ?pending,
                     "Timeout waiting for specified resource kinds, proceeding anyway"
                 );
                 return false;
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Wait for the next ready notification, or at most 1 s as a safety net
+            // against the race where notify_waiters() fires between the condition
+            // check above and the notified() future being registered.
+            let remaining = timeout - elapsed;
+            let _ = tokio::time::timeout(remaining.min(Duration::from_secs(1)), notify.notified()).await;
         }
     }
 

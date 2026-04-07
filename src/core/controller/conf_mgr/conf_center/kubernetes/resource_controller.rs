@@ -338,6 +338,11 @@ where
                         }
                         Event::Apply(obj) => {
                             if !init_done {
+                                metrics::counter!(
+                                    crate::core::controller::conf_mgr::sync_runtime::metrics::names::UNEXPECTED_APPLY_DURING_INIT_TOTAL,
+                                    "kind" => kind
+                                )
+                                .increment(1);
                                 tracing::warn!(
                                     component = "resource_controller",
                                     kind = kind,

@@ -30,6 +30,13 @@ pub mod names {
     pub const STATUS_WRITES_TOTAL: &str = "edgion_controller_status_writes_total";
     /// Total status writes skipped by semantic diff (with labels: kind)
     pub const STATUS_WRITES_SKIPPED_TOTAL: &str = "edgion_controller_status_writes_skipped_total";
+    /// Total Apply events received during init phase (unexpected; with labels: kind)
+    ///
+    /// In normal operation this counter should stay at zero. A non-zero value
+    /// indicates the kube-rs watcher stream sent an Apply before InitDone, which
+    /// is treated as an InitApply with a warning log. Monitor this in production
+    /// to detect watcher stream ordering anomalies.
+    pub const UNEXPECTED_APPLY_DURING_INIT_TOTAL: &str = "edgion_controller_unexpected_apply_during_init_total";
 }
 
 /// Global controller metrics singleton
