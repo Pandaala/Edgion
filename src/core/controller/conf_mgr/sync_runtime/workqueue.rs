@@ -744,13 +744,10 @@ mod tests {
         // The delay loop will attempt to promote the scheduled item.
         // Since pending is now empty (we dequeued it above), the pending.insert succeeds
         // and the delayed item is promoted to the ready queue.
-        let item2 = tokio::time::timeout(
-            Duration::from_millis(500),
-            queue.dequeue(),
-        )
-        .await
-        .expect("Timeout waiting for delayed item")
-        .expect("Queue should not be closed");
+        let item2 = tokio::time::timeout(Duration::from_millis(500), queue.dequeue())
+            .await
+            .expect("Timeout waiting for delayed item")
+            .expect("Queue should not be closed");
         assert_eq!(item2.key, "ns/key", "Delayed item should be the same key");
 
         // Now all should be processed

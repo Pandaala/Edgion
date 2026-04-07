@@ -2,17 +2,17 @@
 //!
 //! Listens for ReferenceGrant changes and triggers revalidation of affected resources.
 
-use super::cross_ns_ref_manager::get_global_cross_ns_ref_manager;
 use super::events::{ReferenceGrantChangedEvent, RevalidationListener};
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
+use std::sync::Arc;
 
 /// Trigger revalidation for all resources with cross-namespace references
 ///
 /// This should be called after all processors are ready during Init phase.
 /// It ensures that any Route resources that were processed before their
 /// corresponding ReferenceGrant resources are revalidated.
-pub async fn trigger_full_cross_ns_revalidation() {
-    let manager = get_global_cross_ns_ref_manager();
+pub async fn trigger_full_cross_ns_revalidation(runtime: Arc<ControllerRuntime>) {
+    let manager = &runtime.cross_ns_ref_mgr;
     let stats = manager.stats();
 
     if stats.value_count == 0 {
@@ -38,7 +38,8 @@ pub async fn trigger_full_cross_ns_revalidation() {
         for resource_ref in manager.get_refs(&ns) {
             let ref_key = resource_ref.key();
             if !requeued.contains(&ref_key) {
-                PROCESSOR_REGISTRY
+                runtime
+                    .processor_registry
                     .requeue(resource_ref.kind_str(), resource_ref.resource_key())
                     .await;
                 requeued.insert(ref_key);
@@ -63,9 +64,8 @@ pub async fn trigger_full_cross_ns_revalidation() {
 /// Gateway's hostname/port change detection fires when no routes are registered
 /// yet. This one-time requeue ensures all such routes get reprocessed with
 /// the Gateway already in cache, so lookup_gateway() in parse() succeeds.
-pub async fn trigger_gateway_route_revalidation() {
-    let index = crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index();
-    let routes = index.all_routes();
+pub async fn trigger_gateway_route_revalidation(runtime: Arc<ControllerRuntime>) {
+    let routes = runtime.gateway_route_index.all_routes();
     if routes.is_empty() {
         return;
     }
@@ -77,7 +77,7 @@ pub async fn trigger_gateway_route_revalidation() {
     );
 
     for (kind, key) in routes {
-        PROCESSOR_REGISTRY.requeue(kind.as_str(), key).await;
+        runtime.processor_registry.requeue(kind.as_str(), key).await;
     }
 }
 
@@ -86,8 +86,8 @@ pub async fn trigger_gateway_route_revalidation() {
 /// During init, Gateways may be processed before Secrets are loaded into the
 /// SecretStore (each resource type initializes independently). This function
 /// requeues all Gateways so they re-evaluate ResolvedRefs with fully populated stores.
-pub async fn trigger_gateway_secret_revalidation() {
-    let Some(gateway_proc) = PROCESSOR_REGISTRY.get("Gateway") else {
+pub async fn trigger_gateway_secret_revalidation(runtime: Arc<ControllerRuntime>) {
+    let Some(gateway_proc) = runtime.processor_registry.get("Gateway") else {
         return;
     };
 
@@ -103,7 +103,7 @@ pub async fn trigger_gateway_secret_revalidation() {
     );
 
     for key in keys {
-        PROCESSOR_REGISTRY.requeue("Gateway", key).await;
+        runtime.processor_registry.requeue("Gateway", key).await;
     }
 }
 
@@ -111,24 +111,20 @@ pub async fn trigger_gateway_secret_revalidation() {
 ///
 /// When ReferenceGrant changes, finds all resources that have cross-namespace
 /// references to the affected namespaces and requeues them for revalidation.
-pub struct CrossNsRevalidationListener;
-
-impl CrossNsRevalidationListener {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct CrossNsRevalidationListener {
+    runtime: Arc<ControllerRuntime>,
 }
 
-impl Default for CrossNsRevalidationListener {
-    fn default() -> Self {
-        Self::new()
+impl CrossNsRevalidationListener {
+    pub fn new(runtime: Arc<ControllerRuntime>) -> Self {
+        Self { runtime }
     }
 }
 
 #[async_trait::async_trait]
 impl RevalidationListener for CrossNsRevalidationListener {
     async fn on_reference_grant_changed(&self, event: &ReferenceGrantChangedEvent) {
-        let manager = get_global_cross_ns_ref_manager();
+        let manager = &self.runtime.cross_ns_ref_mgr;
 
         let namespaces_to_check: Vec<String> = if event.affected_namespaces.is_empty() {
             tracing::info!(
@@ -167,7 +163,7 @@ impl RevalidationListener for CrossNsRevalidationListener {
                     "Requeuing resource due to ReferenceGrant change"
                 );
 
-                PROCESSOR_REGISTRY.requeue(kind, key).await;
+                self.runtime.processor_registry.requeue(kind, key).await;
                 requeued.insert(ref_key);
                 requeued_count += 1;
             }
@@ -193,7 +189,8 @@ mod tests {
 
     #[test]
     fn test_listener_finds_affected_resources() {
-        let manager = get_global_cross_ns_ref_manager();
+        let runtime = Arc::new(ControllerRuntime::new());
+        let manager = &runtime.cross_ns_ref_mgr;
 
         manager.clear();
 

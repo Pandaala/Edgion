@@ -57,7 +57,7 @@ use crate::core::controller::conf_mgr::conf_center::{EndpointMode, MetadataFilte
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ProcessorHandler, ResourceProcessor, SecretRefManager,
 };
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceMeta;
 
@@ -78,6 +78,7 @@ struct SpawnContext {
     secret_ref_manager: Arc<SecretRefManager>,
     metadata_filter: Option<MetadataFilterConfig>,
     leader_handle: Option<super::leader_election::LeaderHandle>,
+    runtime: Arc<ControllerRuntime>,
 }
 
 /// Spawn a namespaced ResourceController with the given handler
@@ -107,6 +108,7 @@ where
         capacity,
         Arc::new(handler),
         ctx.secret_ref_manager.clone(),
+        ctx.runtime.clone(),
     ));
 
     // 2. Set metadata filter if configured
@@ -114,8 +116,8 @@ where
         processor.set_metadata_filter(filter.clone());
     }
 
-    // 3. Register to PROCESSOR_REGISTRY
-    PROCESSOR_REGISTRY.register(processor.clone());
+    // 3. Register to processor_registry via runtime
+    ctx.runtime.processor_registry.register(processor.clone());
 
     // 4. Create and run ResourceController
     let mut rc = ResourceController::new(
@@ -162,6 +164,7 @@ where
         capacity,
         Arc::new(handler),
         ctx.secret_ref_manager.clone(),
+        ctx.runtime.clone(),
     ));
 
     // 2. Set metadata filter if configured
@@ -169,8 +172,8 @@ where
         processor.set_metadata_filter(filter.clone());
     }
 
-    // 3. Register to PROCESSOR_REGISTRY
-    PROCESSOR_REGISTRY.register(processor.clone());
+    // 3. Register to processor_registry via runtime
+    ctx.runtime.processor_registry.register(processor.clone());
 
     // 4. Create and run ResourceController
     let mut rc = ResourceController::new(
@@ -193,19 +196,19 @@ where
 /// Spawn a lightweight Namespace label watcher.
 ///
 /// Unlike other resources, Namespace does not go through the ResourceProcessor
-/// pipeline. It only populates the global NamespaceStore for Selector
+/// pipeline. It only populates the NamespaceStore in ControllerRuntime for Selector
 /// namespace policy evaluation.
 fn spawn_namespace_watcher(
     client: Client,
     watcher_config: watcher::Config,
     shutdown: ShutdownSignal,
+    runtime: Arc<ControllerRuntime>,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         use kube::runtime::watcher::Event;
 
         let api: kube::Api<Namespace> = kube::Api::all(client);
-        let store =
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store();
+        let store = &runtime.namespace_store;
 
         tracing::info!(component = "namespace_watcher", "Starting Namespace label watcher");
 
@@ -256,7 +259,7 @@ fn spawn_namespace_watcher(
                                         namespace = %name,
                                         "Namespace labels changed, requeuing Selector Gateways"
                                     );
-                                    requeue_selector_gateways().await;
+                                    requeue_selector_gateways(runtime.clone()).await;
                                 }
                             }
                             Event::Delete(ns) => {
@@ -267,7 +270,7 @@ fn spawn_namespace_watcher(
                                         namespace = %name,
                                         "Namespace deleted, requeuing Selector Gateways"
                                     );
-                                    requeue_selector_gateways().await;
+                                    requeue_selector_gateways(runtime.clone()).await;
                                 }
                             }
                         }
@@ -288,8 +291,8 @@ fn spawn_namespace_watcher(
 
 /// Requeue all Gateways that use Selector namespace policy so they
 /// re-evaluate listener namespace constraints.
-async fn requeue_selector_gateways() {
-    let Some(processor) = PROCESSOR_REGISTRY.get("Gateway") else {
+async fn requeue_selector_gateways(runtime: Arc<ControllerRuntime>) {
+    let Some(processor) = runtime.processor_registry.get("Gateway") else {
         return;
     };
     let Ok((json, _)) = processor.as_watch_obj().list_json() else {
@@ -313,7 +316,7 @@ async fn requeue_selector_gateways() {
                 gw.metadata.namespace.as_deref().unwrap_or("default"),
                 gw.metadata.name.as_deref().unwrap_or("")
             );
-            PROCESSOR_REGISTRY.requeue("Gateway", key).await;
+            runtime.processor_registry.requeue("Gateway", key).await;
         }
     }
 }
@@ -434,8 +437,12 @@ impl KubernetesController {
     /// Also handles:
     /// - Graceful shutdown via provided ShutdownSignal
     /// - 410 Gone detection and relink signaling
-    pub async fn run(&self, shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
-        self.run_controllers(shutdown_signal).await
+    pub async fn run(
+        &self,
+        shutdown_signal: ShutdownSignal,
+        runtime: Arc<ControllerRuntime>,
+    ) -> Result<ControllerExitReason> {
+        self.run_controllers(shutdown_signal, runtime).await
     }
 
     /// Phase 1 foundation resource kinds that must be ready before Phase 2 starts.
@@ -513,7 +520,11 @@ impl KubernetesController {
     ///
     /// Returns when shutdown is triggered or a relink signal is received.
     #[allow(clippy::vec_init_then_push)]
-    async fn run_controllers(&self, mut shutdown_signal: ShutdownSignal) -> Result<ControllerExitReason> {
+    async fn run_controllers(
+        &self,
+        mut shutdown_signal: ShutdownSignal,
+        runtime: Arc<ControllerRuntime>,
+    ) -> Result<ControllerExitReason> {
         tracing::info!(
             component = "k8s_controller",
             "Starting Kubernetes controller - spawning ResourceControllers with phased init"
@@ -533,6 +544,7 @@ impl KubernetesController {
             secret_ref_manager: secret_ref_manager.clone(),
             metadata_filter: self.metadata_filter.clone(),
             leader_handle: self.leader_handle.clone(),
+            runtime: runtime.clone(),
         };
 
         let mut h = Vec::new();
@@ -639,6 +651,7 @@ impl KubernetesController {
             self.client.clone(),
             watcher::Config::default(),
             ctx.shutdown.clone(),
+            ctx.runtime.clone(),
         ));
 
         let phase1_count = h.len();
@@ -650,7 +663,8 @@ impl KubernetesController {
 
         // Wait for Phase 1 resources to complete their init phase
         const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
-        let phase1_ready = PROCESSOR_REGISTRY
+        let phase1_ready = runtime
+            .processor_registry
             .wait_kinds_ready(&self.phase1_kinds(), PHASE1_TIMEOUT)
             .await;
 

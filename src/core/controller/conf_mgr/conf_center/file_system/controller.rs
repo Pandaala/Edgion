@@ -27,7 +27,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ProcessorHandler, ResourceProcessor, SecretRefManager,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceMeta;
 use anyhow::Result;
@@ -75,7 +75,7 @@ impl FileSystemController {
     }
 
     /// Run the controller
-    pub async fn run(&self, shutdown_signal: ShutdownSignal) -> Result<()> {
+    pub async fn run(&self, shutdown_signal: ShutdownSignal, runtime: Arc<ControllerRuntime>) -> Result<()> {
         tracing::info!(
             component = "fs_controller",
             conf_dir = %self.conf_dir.display(),
@@ -108,7 +108,7 @@ impl FileSystemController {
 
         // Spawn all resource controllers
         let handles = self
-            .spawn_all_controllers(&watcher, &secret_ref_manager, shutdown_signal.clone())
+            .spawn_all_controllers(&watcher, &secret_ref_manager, shutdown_signal.clone(), runtime)
             .await?;
 
         tracing::info!(
@@ -161,6 +161,7 @@ impl FileSystemController {
         watcher: &Arc<FileSystemWatcher>,
         secret_ref_manager: &Arc<SecretRefManager>,
         shutdown_signal: ShutdownSignal,
+        runtime: Arc<ControllerRuntime>,
     ) -> Result<Vec<JoinHandle<Result<()>>>> {
         let mut handles = Vec::new();
 
@@ -178,6 +179,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -190,6 +192,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -202,6 +205,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -214,6 +218,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -226,6 +231,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -238,6 +244,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -256,6 +263,7 @@ impl FileSystemController {
                     watcher,
                     secret_ref_manager,
                     shutdown_signal.clone(),
+                    runtime.clone(),
                 )
                 .await,
             );
@@ -274,6 +282,7 @@ impl FileSystemController {
                     watcher,
                     secret_ref_manager,
                     shutdown_signal.clone(),
+                    runtime.clone(),
                 )
                 .await,
             );
@@ -288,7 +297,8 @@ impl FileSystemController {
 
         // Wait for Phase 1 resources to complete their init phase
         const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
-        let phase1_ready = PROCESSOR_REGISTRY
+        let phase1_ready = runtime
+            .processor_registry
             .wait_kinds_ready(&self.phase1_kinds(), PHASE1_TIMEOUT)
             .await;
 
@@ -318,6 +328,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -328,6 +339,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -338,6 +350,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -348,6 +361,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -358,6 +372,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -370,6 +385,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -380,6 +396,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -392,6 +409,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -402,6 +420,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -412,6 +431,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -422,6 +442,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -434,6 +455,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -446,6 +468,7 @@ impl FileSystemController {
                 watcher,
                 secret_ref_manager,
                 shutdown_signal.clone(),
+                runtime.clone(),
             )
             .await,
         );
@@ -469,6 +492,7 @@ async fn spawn<K, H>(
     watcher: &Arc<FileSystemWatcher>,
     secret_ref_manager: &Arc<SecretRefManager>,
     shutdown_signal: ShutdownSignal,
+    runtime: Arc<ControllerRuntime>,
 ) -> JoinHandle<Result<()>>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -481,10 +505,11 @@ where
         capacity,
         Arc::new(handler),
         secret_ref_manager.clone(),
+        runtime.clone(),
     ));
 
-    // 2. Register to PROCESSOR_REGISTRY
-    PROCESSOR_REGISTRY.register(processor.clone());
+    // 2. Register to processor_registry via runtime
+    runtime.processor_registry.register(processor.clone());
 
     // 3. Subscribe to watcher events for this kind
     let event_rx = watcher.subscribe(kind).await;

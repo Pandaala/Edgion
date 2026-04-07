@@ -73,9 +73,6 @@ pub use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ProcessorHandler, ResourceProcessor, SecretRefManager,
 };
 
-// Re-export registry
-pub use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
-
 // Re-export metrics from local sync_runtime
 pub use crate::core::controller::conf_mgr::sync_runtime::metrics::{
     controller_metrics, ControllerMetrics, InitSyncTimer, ResourceMetrics,

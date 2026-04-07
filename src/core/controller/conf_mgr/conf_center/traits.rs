@@ -18,6 +18,7 @@
 //! then they automatically implement `ConfCenter` via blanket impl.
 
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -217,6 +218,9 @@ pub trait CenterLifeCycle: Send + Sync {
     /// Returns Ok(()) if the reload request was accepted (reload happens asynchronously).
     /// Returns Err if the center is not started or not ready.
     fn request_reload(&self) -> Result<(), String>;
+
+    /// Get the ControllerRuntime for this center
+    fn runtime(&self) -> Arc<ControllerRuntime>;
 }
 
 // ============================================================================

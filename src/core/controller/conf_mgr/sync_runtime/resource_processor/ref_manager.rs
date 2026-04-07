@@ -9,6 +9,15 @@
 //! - Forward index: `source_key → Set<V>` (which values reference this source)
 //! - Reverse index: `value_key → Set<source_key>` (which sources a value depends on)
 //!
+//! ## Concurrency design
+//!
+//! Both indices are protected by a **single** `RwLock<RefMaps<V>>`.  An earlier
+//! design used two separate locks — one per index — which introduced an AB-BA
+//! deadlock: `add_ref` acquired `refs` then `dependencies`, while
+//! `clear_value_refs` acquired them in the opposite order.  The single-lock
+//! design eliminates that hazard: every mutation is one atomic critical section,
+//! so the indices are always consistent with each other.
+//!
 //! ## Usage
 //!
 //! Concrete managers are type aliases:
@@ -122,6 +131,31 @@ pub struct RefManagerStats {
 }
 
 // ---------------------------------------------------------------------------
+// RefMaps — inner state protected by a single lock
+// ---------------------------------------------------------------------------
+
+/// Inner state of a [`BidirectionalRefManager`], protected by one `RwLock`.
+///
+/// Keeping both maps under the same lock ensures every mutation is atomic:
+/// readers always see a consistent view and there is no possibility of
+/// AB-BA lock-order deadlocks.
+struct RefMaps<V: RefValue> {
+    /// Forward index: `source_key → Set<V>`
+    refs: HashMap<String, HashSet<V>>,
+    /// Reverse index: `value_key → Set<source_key>`
+    dependencies: HashMap<String, HashSet<String>>,
+}
+
+impl<V: RefValue> RefMaps<V> {
+    fn new() -> Self {
+        Self {
+            refs: HashMap::new(),
+            dependencies: HashMap::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // BidirectionalRefManager<V>
 // ---------------------------------------------------------------------------
 
@@ -130,10 +164,10 @@ pub struct RefManagerStats {
 /// - **Forward**: `source_key → HashSet<V>` — which values reference the source
 /// - **Reverse**: `value_key → HashSet<source_key>` — which sources a value depends on
 ///
-/// All mutating operations maintain both indices in sync.
+/// All mutating operations maintain both indices in sync within a single
+/// critical section, eliminating split-state windows and lock-order deadlocks.
 pub struct BidirectionalRefManager<V: RefValue> {
-    refs: RwLock<HashMap<String, HashSet<V>>>,
-    dependencies: RwLock<HashMap<String, HashSet<String>>>,
+    inner: RwLock<RefMaps<V>>,
     component: &'static str,
 }
 
@@ -146,8 +180,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     /// Create a new manager with the given component name (used in tracing).
     pub fn with_component(component: &'static str) -> Self {
         Self {
-            refs: RwLock::new(HashMap::new()),
-            dependencies: RwLock::new(HashMap::new()),
+            inner: RwLock::new(RefMaps::new()),
             component,
         }
     }
@@ -157,17 +190,14 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     /// Idempotent — adding the same pair multiple times is safe.
     pub fn add_ref(&self, source_key: String, value: V) {
         let value_key = value.ref_key();
-
         {
-            let mut refs = self.refs.write().unwrap();
-            refs.entry(source_key.clone()).or_default().insert(value.clone());
+            let mut maps = self.inner.write().unwrap();
+            maps.refs.entry(source_key.clone()).or_default().insert(value.clone());
+            maps.dependencies
+                .entry(value_key.clone())
+                .or_default()
+                .insert(source_key.clone());
         }
-
-        {
-            let mut deps = self.dependencies.write().unwrap();
-            deps.entry(value_key.clone()).or_default().insert(source_key.clone());
-        }
-
         tracing::debug!(
             component = self.component,
             source_key = %source_key,
@@ -179,27 +209,21 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     /// Remove a specific reference pair.
     pub fn remove_ref(&self, source_key: &str, value: &V) {
         let value_key = value.ref_key();
-
         {
-            let mut refs = self.refs.write().unwrap();
-            if let Some(value_set) = refs.get_mut(source_key) {
+            let mut maps = self.inner.write().unwrap();
+            if let Some(value_set) = maps.refs.get_mut(source_key) {
                 value_set.remove(value);
                 if value_set.is_empty() {
-                    refs.remove(source_key);
+                    maps.refs.remove(source_key);
                 }
             }
-        }
-
-        {
-            let mut deps = self.dependencies.write().unwrap();
-            if let Some(source_set) = deps.get_mut(&value_key) {
+            if let Some(source_set) = maps.dependencies.get_mut(&value_key) {
                 source_set.remove(source_key);
                 if source_set.is_empty() {
-                    deps.remove(&value_key);
+                    maps.dependencies.remove(&value_key);
                 }
             }
         }
-
         tracing::debug!(
             component = self.component,
             source_key = %source_key,
@@ -210,17 +234,19 @@ impl<V: RefValue> BidirectionalRefManager<V> {
 
     /// Get all values that reference a given source.
     pub fn get_refs(&self, source_key: &str) -> Vec<V> {
-        let refs = self.refs.read().unwrap();
-        refs.get(source_key)
-            .map(|set| set.iter().cloned().collect())
+        let maps = self.inner.read().unwrap();
+        maps.refs
+            .get(source_key)
+            .map(|s| s.iter().cloned().collect())
             .unwrap_or_default()
     }
 
     /// Get all source keys that a value depends on.
     pub fn get_dependencies(&self, value_key: &str) -> Vec<String> {
-        let deps = self.dependencies.read().unwrap();
-        deps.get(value_key)
-            .map(|set| set.iter().cloned().collect())
+        let maps = self.inner.read().unwrap();
+        maps.dependencies
+            .get(value_key)
+            .map(|s| s.iter().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -230,24 +256,23 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     /// Returns the list of source keys that were referenced.
     pub fn clear_value_refs(&self, value: &V) -> Vec<String> {
         let value_key = value.ref_key();
-
-        let source_keys = {
-            let mut deps = self.dependencies.write().unwrap();
-            deps.remove(&value_key).unwrap_or_default()
-        };
-
-        {
-            let mut refs = self.refs.write().unwrap();
+        let source_keys: Vec<String> = {
+            let mut maps = self.inner.write().unwrap();
+            let source_keys: Vec<String> = maps
+                .dependencies
+                .remove(&value_key)
+                .map(|s| s.into_iter().collect())
+                .unwrap_or_default();
             for source_key in &source_keys {
-                if let Some(value_set) = refs.get_mut(source_key) {
+                if let Some(value_set) = maps.refs.get_mut(source_key) {
                     value_set.remove(value);
                     if value_set.is_empty() {
-                        refs.remove(source_key);
+                        maps.refs.remove(source_key);
                     }
                 }
             }
-        }
-
+            source_keys
+        };
         if !source_keys.is_empty() {
             tracing::info!(
                 component = self.component,
@@ -256,8 +281,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
                 "Cleared all references for value"
             );
         }
-
-        source_keys.into_iter().collect()
+        source_keys
     }
 
     /// Backward-compatible alias for [`clear_value_refs`](Self::clear_value_refs).
@@ -267,31 +291,30 @@ impl<V: RefValue> BidirectionalRefManager<V> {
 
     /// Return all source keys present in the forward index.
     pub fn all_source_keys(&self) -> Vec<String> {
-        let refs = self.refs.read().unwrap();
-        refs.keys().cloned().collect()
+        let maps = self.inner.read().unwrap();
+        maps.refs.keys().cloned().collect()
     }
 
     /// Get a statistics snapshot.
+    ///
+    /// Because both maps are read under the same lock, `source_count`,
+    /// `value_count`, and `total_references` are guaranteed to be mutually
+    /// consistent.
     pub fn stats(&self) -> RefManagerStats {
-        let refs = self.refs.read().unwrap();
-        let deps = self.dependencies.read().unwrap();
-
+        let maps = self.inner.read().unwrap();
         RefManagerStats {
-            source_count: refs.len(),
-            value_count: deps.len(),
-            total_references: refs.values().map(|set| set.len()).sum(),
+            source_count: maps.refs.len(),
+            value_count: maps.dependencies.len(),
+            total_references: maps.refs.values().map(|s| s.len()).sum(),
         }
     }
 
     /// Clear all references. Used during reload / re-election to reset state.
     pub fn clear(&self) {
         {
-            let mut refs = self.refs.write().unwrap();
-            refs.clear();
-        }
-        {
-            let mut deps = self.dependencies.write().unwrap();
-            deps.clear();
+            let mut maps = self.inner.write().unwrap();
+            maps.refs.clear();
+            maps.dependencies.clear();
         }
         tracing::info!(component = self.component, "Cleared all references");
     }
@@ -454,5 +477,60 @@ mod tests {
         mgr.clear();
         assert_eq!(mgr.stats().source_count, 0);
         assert_eq!(mgr.stats().value_count, 0);
+    }
+
+    /// Concurrent stress test: simulates multiple ResourceController workers doing
+    /// the standard handler pattern (clear_value_refs → add_ref) concurrently.
+    ///
+    /// With two separate RwLocks and reversed acquisition order between
+    /// `add_ref` (refs→deps) and `clear_value_refs` (deps→refs), this test
+    /// will deadlock. After merging into a single lock it must complete promptly.
+    #[test]
+    fn test_concurrent_clear_and_readd_no_deadlock() {
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        let mgr = Arc::new(BidirectionalRefManager::<ResourceRef>::new());
+
+        // Pre-populate so there is something to clear immediately
+        for i in 0..5u32 {
+            let r = make_ref(ResourceKind::HTTPRoute, "ns", &format!("r{i}"));
+            mgr.add_ref(format!("s{}", i % 3), r);
+        }
+
+        let (tx, rx) = mpsc::channel::<()>();
+
+        // 4 threads each simulating a handler reconcile loop:
+        //   clear old refs → add new refs   (high-contention, small key space)
+        for t in 0..4u32 {
+            let mgr = mgr.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                for i in 0..500u32 {
+                    let resource = make_ref(ResourceKind::HTTPRoute, "ns", &format!("r{}", (t + i) % 5));
+                    mgr.clear_value_refs(&resource);
+                    mgr.add_ref(format!("s{}", i % 3), resource);
+                }
+                let _ = tx.send(());
+            });
+        }
+        drop(tx); // drop sender so recv_timeout can detect all done
+
+        // All 4 threads must finish within 5 seconds total.
+        // With the buggy dual-lock ordering this test deadlocks here.
+        let deadline = Duration::from_secs(5);
+        let start = std::time::Instant::now();
+        let mut finished = 0;
+        while finished < 4 {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            match rx.recv_timeout(remaining) {
+                Ok(()) => finished += 1,
+                Err(_) => panic!(
+                    "Deadlock detected: concurrent add_ref / clear_value_refs \
+                     did not complete within {:?}",
+                    deadline
+                ),
+            }
+        }
     }
 }

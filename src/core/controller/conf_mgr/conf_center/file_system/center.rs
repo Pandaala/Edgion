@@ -23,7 +23,7 @@ use crate::core::controller::conf_mgr::conf_center::traits::{
 };
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -51,6 +51,8 @@ pub struct FileSystemCenter {
     controller_handle: Mutex<Option<JoinHandle<()>>>,
     /// Reload signal sender (for triggering reload via Admin API)
     reload_tx: Mutex<Option<mpsc::Sender<()>>>,
+    /// Aggregated controller runtime (stores, registries)
+    runtime: Arc<ControllerRuntime>,
 }
 
 impl FileSystemCenter {
@@ -72,6 +74,7 @@ impl FileSystemCenter {
             shutdown_handle: Mutex::new(None),
             controller_handle: Mutex::new(None),
             reload_tx: Mutex::new(None),
+            runtime: Arc::new(ControllerRuntime::new()),
         })
     }
 
@@ -124,13 +127,14 @@ impl FileSystemCenter {
         *self.reload_tx.lock().unwrap() = tx;
     }
 
-    /// Wait for PROCESSOR_REGISTRY to be ready
+    /// Wait for processor_registry to be ready
     async fn wait_registry_ready(&self, timeout_secs: u64) {
         let start = Instant::now();
         let timeout = Duration::from_secs(timeout_secs);
+        let registry = &self.runtime.processor_registry;
 
         loop {
-            if PROCESSOR_REGISTRY.is_all_ready() {
+            if registry.is_all_ready() {
                 tracing::info!(
                     component = "file_system_center",
                     event = "all_processors_ready",
@@ -141,10 +145,10 @@ impl FileSystemCenter {
             }
 
             if start.elapsed() > timeout {
-                let not_ready = PROCESSOR_REGISTRY
+                let not_ready = registry
                     .all_kinds()
                     .into_iter()
-                    .filter(|kind| PROCESSOR_REGISTRY.get(kind).map(|p| !p.is_ready()).unwrap_or(false))
+                    .filter(|kind| registry.get(kind).map(|p| !p.is_ready()).unwrap_or(false))
                     .collect::<Vec<_>>();
 
                 tracing::warn!(
@@ -322,9 +326,10 @@ impl CenterLifeCycle for FileSystemCenter {
             // 4. Create and spawn FileSystemController (using iteration_shutdown)
             let controller = FileSystemController::new(conf_dir.clone(), endpoint_mode);
             let controller_shutdown = iteration_shutdown.signal();
+            let runtime_for_controller = self.runtime.clone();
 
             let handle = tokio::spawn(async move {
-                if let Err(e) = controller.run(controller_shutdown).await {
+                if let Err(e) = controller.run(controller_shutdown, runtime_for_controller).await {
                     let error_msg = e.to_string();
                     tracing::error!(
                         component = "file_system_center",
@@ -342,19 +347,25 @@ impl CenterLifeCycle for FileSystemCenter {
             self.wait_registry_ready(30).await;
 
             // 5.5. Trigger full cross-namespace revalidation
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation()
-                .await;
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation()
-                .await;
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation()
-                .await;
+            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
+                self.runtime.clone(),
+            )
+            .await;
+            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation(
+                self.runtime.clone(),
+            )
+            .await;
+            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+                self.runtime.clone(),
+            )
+            .await;
 
             // 6. Create ConfigSyncServer and register all WatchObjs
             let config_sync_server = Arc::new(ConfigSyncServer::new());
             config_sync_server.set_endpoint_mode(endpoint_mode);
             let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
-            config_sync_server.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
+            config_sync_server.register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
 
             // 7. Set config_sync_server = Some (services become available)
             self.set_config_sync_server(Some(config_sync_server));
@@ -402,7 +413,8 @@ impl CenterLifeCycle for FileSystemCenter {
             // 10. Cleanup
             self.set_config_sync_server(None);
             self.abort_controller();
-            PROCESSOR_REGISTRY.clear_registry();
+            tracing::info!(component = "file_system_center", "ControllerRuntime reset");
+            self.runtime.reset();
             self.set_reload_tx(None);
 
             // 11. Handle action
@@ -449,7 +461,7 @@ impl CenterLifeCycle for FileSystemCenter {
 
     /// Check if the system is ready
     fn is_ready(&self) -> bool {
-        PROCESSOR_REGISTRY.is_all_ready() && self.config_sync_server.read().unwrap().is_some()
+        self.runtime.processor_registry.is_all_ready() && self.config_sync_server.read().unwrap().is_some()
     }
 
     /// Get the ConfigSyncServer (may be None if not ready)
@@ -470,6 +482,10 @@ impl CenterLifeCycle for FileSystemCenter {
         } else {
             Err("Center not started or not ready for reload".to_string())
         }
+    }
+
+    fn runtime(&self) -> Arc<ControllerRuntime> {
+        self.runtime.clone()
     }
 }
 

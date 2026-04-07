@@ -7,9 +7,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::{ParentReference, RefDenied};
@@ -37,6 +36,7 @@ pub fn listener_allows_route_namespace(
     allowed_routes: &Option<AllowedRoutes>,
     route_ns: &str,
     gateway_ns: &str,
+    runtime: &ControllerRuntime,
 ) -> bool {
     let Some(allowed) = allowed_routes else {
         return route_ns == gateway_ns;
@@ -52,7 +52,7 @@ pub fn listener_allows_route_namespace(
                 // Selector mode but no selector specified: per spec, empty selector matches all
                 return true;
             };
-            let store = super::super::namespace_store::get_namespace_store();
+            let store = &runtime.namespace_store;
             let Some(ns_labels) = store.get_labels(route_ns) else {
                 // Namespace not found in store (not yet synced or non-K8s mode).
                 // Fall back to Same policy: same-ns is safe, cross-ns is denied.
@@ -104,8 +104,8 @@ pub fn hostnames_intersect(listener_hn: &str, route_hn: &str) -> bool {
 }
 
 /// Check if a Service resource exists in the processor registry.
-pub fn service_exists(namespace: &str, name: &str) -> bool {
-    let Some(processor) = PROCESSOR_REGISTRY.get("Service") else {
+pub fn service_exists(namespace: &str, name: &str, runtime: &ControllerRuntime) -> bool {
+    let Some(processor) = runtime.processor_registry.get("Service") else {
         return true;
     };
     processor.contains_key(&format!("{}/{}", namespace, name))
@@ -118,6 +118,7 @@ pub fn service_exists(namespace: &str, name: &str) -> bool {
 pub fn validate_backend_refs(
     route_ns: &str,
     backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)],
+    runtime: &ControllerRuntime,
 ) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
     for &(group, kind, namespace, name) in backend_refs {
@@ -138,7 +139,7 @@ pub fn validate_backend_refs(
             continue;
         }
         let backend_ns = namespace.unwrap_or(route_ns);
-        if !service_exists(backend_ns, name) {
+        if !service_exists(backend_ns, name, runtime) {
             errors.push(ResolvedRefsError::BackendNotFound {
                 namespace: backend_ns.to_string(),
                 name: name.to_string(),
@@ -210,6 +211,7 @@ pub fn validate_parent_ref_accepted(
     parent_ref: &ParentReference,
     route_hostnames: Option<&Vec<String>>,
     route_kind: &str,
+    runtime: &ControllerRuntime,
 ) -> AcceptedResult {
     let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
     if parent_group != "gateway.networking.k8s.io" {
@@ -231,7 +233,7 @@ pub fn validate_parent_ref_accepted(
     let parent_ns = parent_ref.namespace.as_deref().unwrap_or(route_ns);
     let parent_name = &parent_ref.name;
 
-    let Some(gateway) = lookup_gateway(parent_ns, parent_name) else {
+    let Some(gateway) = lookup_gateway(parent_ns, parent_name, runtime) else {
         return AcceptedResult {
             errors: Vec::new(),
             matched_listeners: Vec::new(),
@@ -278,7 +280,7 @@ pub fn validate_parent_ref_accepted(
 
     let ns_hostname_accepted: Vec<_> = matching_listeners
         .iter()
-        .filter(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns))
+        .filter(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns, runtime))
         .filter(|l| match route_hostnames {
             None => true,
             Some(route_hs) if route_hs.is_empty() => true,
@@ -301,7 +303,7 @@ pub fn validate_parent_ref_accepted(
     if accepted_listener_names.is_empty() {
         let ns_allowed = matching_listeners
             .iter()
-            .any(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns));
+            .any(|l| listener_allows_route_namespace(&l.allowed_routes, route_ns, parent_ns, runtime));
         let errors = if !ns_allowed {
             vec![AcceptedError::NotAllowedByListeners {
                 resource_ns: route_ns.to_string(),
@@ -355,10 +357,11 @@ pub fn update_tracker_accepted_only(
     route_name: &str,
     parent_refs: Option<&Vec<ParentReference>>,
     route_hostnames: Option<&Vec<String>>,
+    runtime: &ControllerRuntime,
 ) -> bool {
     let route_key = format!("{}/{}", route_ns, route_name);
     let Some(parent_refs) = parent_refs else {
-        return get_attached_route_tracker().remove_route(route_kind, &route_key);
+        return runtime.attached_route_tracker.remove_route(route_kind, &route_key);
     };
 
     let mut attachments = HashSet::new();
@@ -370,7 +373,7 @@ pub fn update_tracker_accepted_only(
             continue;
         }
 
-        let result = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames, route_kind.as_str());
+        let result = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames, route_kind.as_str(), runtime);
         if !result.errors.is_empty() {
             continue;
         }
@@ -385,7 +388,9 @@ pub fn update_tracker_accepted_only(
         }
     }
 
-    get_attached_route_tracker().update_route(route_kind, &route_key, attachments)
+    runtime
+        .attached_route_tracker
+        .update_route(route_kind, &route_key, attachments)
 }
 
 /// Register Service backend references for a route.
@@ -397,13 +402,13 @@ pub fn register_service_backend_refs(
     route_ns: &str,
     route_name: &str,
     backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)], // (group, kind, namespace, name)
+    runtime: &ControllerRuntime,
 ) {
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceRef;
 
     let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
 
-    let manager = get_service_ref_manager();
+    let manager = &runtime.service_ref_mgr;
     manager.clear_resource_refs(&resource_ref);
 
     for &(group, kind, namespace, name) in backend_refs {
@@ -422,12 +427,16 @@ pub fn register_service_backend_refs(
 }
 
 /// Clear Service backend references for a deleted route.
-pub fn clear_service_backend_refs(route_kind: crate::types::ResourceKind, route_ns: &str, route_name: &str) {
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
+pub fn clear_service_backend_refs(
+    route_kind: crate::types::ResourceKind,
+    route_ns: &str,
+    route_name: &str,
+    runtime: &ControllerRuntime,
+) {
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceRef;
 
     let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
-    get_service_ref_manager().clear_resource_refs(&resource_ref);
+    runtime.service_ref_mgr.clear_resource_refs(&resource_ref);
 }
 
 /// Look up a Gateway resource from the processor registry.
@@ -436,8 +445,8 @@ pub fn clear_service_backend_refs(route_kind: crate::types::ResourceKind, route_
 /// this controller's `gatewayClassName` (which are excluded from `ServerCache`
 /// by the handler filter) are still found. This fixes incorrect Route status
 /// calculation when a Route's parentRef points to a foreign Gateway.
-pub fn lookup_gateway(namespace: &str, name: &str) -> Option<Arc<Gateway>> {
-    let processor = PROCESSOR_REGISTRY.get("Gateway")?;
+pub fn lookup_gateway(namespace: &str, name: &str, runtime: &ControllerRuntime) -> Option<Arc<Gateway>> {
+    let processor = runtime.processor_registry.get("Gateway")?;
     let key = format!("{}/{}", namespace, name);
     processor.get_raw_any(&key)?.downcast::<Gateway>().ok()
 }
@@ -463,8 +472,9 @@ pub fn resolve_listener_keys(
     parent_refs: &[ParentReference],
     route_namespace: &str,
     fallback_namespace: Option<&str>,
+    runtime: &ControllerRuntime,
 ) -> Vec<ListenerKey> {
-    let (mut keys, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace);
+    let (mut keys, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime);
     keys.sort_unstable();
     keys.dedup();
     keys
@@ -476,14 +486,16 @@ pub fn resolve_listener_keys_with_hostnames(
     parent_refs: &[ParentReference],
     route_namespace: &str,
     fallback_namespace: Option<&str>,
+    runtime: &ControllerRuntime,
 ) -> (Vec<ListenerKey>, Vec<Option<String>>) {
-    resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace)
+    resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime)
 }
 
 fn resolve_listeners_inner(
     parent_refs: &[ParentReference],
     route_namespace: &str,
     fallback_namespace: Option<&str>,
+    runtime: &ControllerRuntime,
 ) -> (Vec<ListenerKey>, Vec<Option<String>>) {
     let mut listener_keys = Vec::new();
     let mut listener_hostnames: Vec<Option<String>> = Vec::new();
@@ -495,7 +507,7 @@ fn resolve_listeners_inner(
             .or(fallback_namespace)
             .unwrap_or("default");
 
-        let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name) else {
+        let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name, runtime) else {
             continue;
         };
         let gw_addresses = gateway.spec.addresses.as_ref();
@@ -504,7 +516,7 @@ fn resolve_listeners_inner(
         };
 
         let mut collect = |l: &crate::types::resources::gateway::Listener| {
-            if listener_allows_route_namespace(&l.allowed_routes, route_namespace, gw_ns) {
+            if listener_allows_route_namespace(&l.allowed_routes, route_namespace, gw_ns, runtime) {
                 let addr = resolve_listener_addr(gw_addresses, l.port);
                 listener_keys.push(ListenerKey::new(addr, &l.protocol));
                 listener_hostnames.push(l.hostname.clone());
@@ -636,12 +648,14 @@ mod tests {
 
     #[test]
     fn test_ns_policy_none_defaults_to_same() {
-        assert!(listener_allows_route_namespace(&None, "ns1", "ns1"));
-        assert!(!listener_allows_route_namespace(&None, "ns1", "ns2"));
+        let runtime = crate::core::controller::conf_mgr::ControllerRuntime::default();
+        assert!(listener_allows_route_namespace(&None, "ns1", "ns1", &runtime));
+        assert!(!listener_allows_route_namespace(&None, "ns1", "ns2", &runtime));
     }
 
     #[test]
     fn test_ns_policy_all() {
+        let runtime = crate::core::controller::conf_mgr::ControllerRuntime::default();
         let allowed = Some(AllowedRoutes {
             namespaces: Some(RouteNamespaces {
                 from: Some("All".into()),
@@ -649,11 +663,12 @@ mod tests {
             }),
             kinds: None,
         });
-        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns"));
+        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns", &runtime));
     }
 
     #[test]
     fn test_ns_policy_same() {
+        let runtime = crate::core::controller::conf_mgr::ControllerRuntime::default();
         let allowed = Some(AllowedRoutes {
             namespaces: Some(RouteNamespaces {
                 from: Some("Same".into()),
@@ -661,12 +676,13 @@ mod tests {
             }),
             kinds: None,
         });
-        assert!(listener_allows_route_namespace(&allowed, "ns1", "ns1"));
-        assert!(!listener_allows_route_namespace(&allowed, "ns1", "ns2"));
+        assert!(listener_allows_route_namespace(&allowed, "ns1", "ns1", &runtime));
+        assert!(!listener_allows_route_namespace(&allowed, "ns1", "ns2", &runtime));
     }
 
     #[test]
     fn test_ns_policy_selector_no_selector_field() {
+        let runtime = crate::core::controller::conf_mgr::ControllerRuntime::default();
         let allowed = Some(AllowedRoutes {
             namespaces: Some(RouteNamespaces {
                 from: Some("Selector".into()),
@@ -674,11 +690,12 @@ mod tests {
             }),
             kinds: None,
         });
-        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns"));
+        assert!(listener_allows_route_namespace(&allowed, "any-ns", "gw-ns", &runtime));
     }
 
     #[test]
     fn test_ns_policy_selector_falls_back_to_same_when_labels_missing() {
+        let runtime = crate::core::controller::conf_mgr::ControllerRuntime::default();
         let allowed = Some(AllowedRoutes {
             namespaces: Some(RouteNamespaces {
                 from: Some("Selector".into()),
@@ -686,17 +703,18 @@ mod tests {
             }),
             kinds: None,
         });
-        assert!(listener_allows_route_namespace(&allowed, "gw-ns", "gw-ns"));
-        assert!(!listener_allows_route_namespace(&allowed, "other-ns", "gw-ns"));
+        assert!(listener_allows_route_namespace(&allowed, "gw-ns", "gw-ns", &runtime));
+        assert!(!listener_allows_route_namespace(
+            &allowed, "other-ns", "gw-ns", &runtime
+        ));
     }
 
     #[test]
     fn test_ns_policy_selector_with_store() {
-        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::namespace_store::get_namespace_store;
         use std::collections::BTreeMap;
 
-        let store = get_namespace_store();
-        store.upsert(k8s_openapi::api::core::v1::Namespace {
+        let runtime = crate::core::controller::conf_mgr::ControllerRuntime::default();
+        runtime.namespace_store.upsert(k8s_openapi::api::core::v1::Namespace {
             metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
                 name: Some("allowed-ns".into()),
                 labels: Some(BTreeMap::from([("env".into(), "prod".into())])),
@@ -704,7 +722,7 @@ mod tests {
             },
             ..Default::default()
         });
-        store.upsert(k8s_openapi::api::core::v1::Namespace {
+        runtime.namespace_store.upsert(k8s_openapi::api::core::v1::Namespace {
             metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
                 name: Some("denied-ns".into()),
                 labels: Some(BTreeMap::from([("env".into(), "dev".into())])),
@@ -721,11 +739,26 @@ mod tests {
             kinds: None,
         });
 
-        assert!(listener_allows_route_namespace(&allowed, "allowed-ns", "gw-ns"));
-        assert!(!listener_allows_route_namespace(&allowed, "denied-ns", "gw-ns"));
-        assert!(!listener_allows_route_namespace(&allowed, "unknown-ns", "gw-ns"));
+        assert!(listener_allows_route_namespace(
+            &allowed,
+            "allowed-ns",
+            "gw-ns",
+            &runtime
+        ));
+        assert!(!listener_allows_route_namespace(
+            &allowed,
+            "denied-ns",
+            "gw-ns",
+            &runtime
+        ));
+        assert!(!listener_allows_route_namespace(
+            &allowed,
+            "unknown-ns",
+            "gw-ns",
+            &runtime
+        ));
 
-        store.remove("allowed-ns");
-        store.remove("denied-ns");
+        runtime.namespace_store.remove("allowed-ns");
+        runtime.namespace_store.remove("denied-ns");
     }
 }

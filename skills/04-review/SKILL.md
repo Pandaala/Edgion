@@ -14,6 +14,7 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
 按需读取：
 
 - 判定内存问题时，先看 [memory-leak/not-a-memory-leak.md](memory-leak/not-a-memory-leak.md)
+- 审查 `RwLock`/`Mutex` `.unwrap()` 时，先看 [rwlock-unwrap/rwlock-unwrap-rule.md](rwlock-unwrap/rwlock-unwrap-rule.md)
 - 审查 handler 时，先看 [handler-requeue/handler-requeue-rule.md](handler-requeue/handler-requeue-rule.md)
 - 审查可观测性（日志/metrics/access log）时，先看 [observability/observability-review-rule.md](observability/observability-review-rule.md)
 

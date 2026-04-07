@@ -92,7 +92,7 @@ pub fn start_acme_service(client: Client) {
 
 /// Stop the global ACME service.
 ///
-/// Called alongside `PROCESSOR_REGISTRY.clear_registry()` when the controller
+/// Called alongside `ControllerRuntime::reset()` when the controller
 /// shuts down or loses leadership. Dropping the `Sender` causes the worker's
 /// `recv()` to return `None`, making it exit its event loop cleanly.
 ///

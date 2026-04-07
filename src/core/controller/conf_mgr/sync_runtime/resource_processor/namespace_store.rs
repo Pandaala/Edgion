@@ -8,23 +8,17 @@
 //! controller-only (never synced to Gateway).
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{LazyLock, RwLock};
+use std::sync::RwLock;
 
 use k8s_openapi::api::core::v1::Namespace;
 use kube::ResourceExt;
-
-static NAMESPACE_STORE: LazyLock<NamespaceStore> = LazyLock::new(NamespaceStore::new);
-
-pub fn get_namespace_store() -> &'static NamespaceStore {
-    &NAMESPACE_STORE
-}
 
 pub struct NamespaceStore {
     store: RwLock<HashMap<String, Namespace>>,
 }
 
 impl NamespaceStore {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             store: RwLock::new(HashMap::new()),
         }

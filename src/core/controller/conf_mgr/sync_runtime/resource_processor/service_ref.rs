@@ -6,15 +6,11 @@
 //!
 //! Uses the same `BidirectionalRefManager` as SecretRefManager.
 
-use std::sync::LazyLock;
-
 use super::secret_utils::SecretRefManager;
 
-type ServiceRefManager = SecretRefManager;
+pub type ServiceRefManager = SecretRefManager;
 
-static GLOBAL_SERVICE_REF_MANAGER: LazyLock<ServiceRefManager> = LazyLock::new(ServiceRefManager::new);
-
-/// Get the global ServiceRefManager instance
-pub fn get_service_ref_manager() -> &'static ServiceRefManager {
-    &GLOBAL_SERVICE_REF_MANAGER
+/// Create a new `ServiceRefManager` with the canonical component name.
+pub fn new_service_ref_manager() -> ServiceRefManager {
+    ServiceRefManager::new()
 }

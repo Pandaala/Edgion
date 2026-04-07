@@ -53,43 +53,36 @@ pub use handlers::{
 pub use ref_manager::{BidirectionalRefManager, RefManagerStats, RefValue, ResourceRef};
 
 // Re-export secret utilities from local module
-pub use secret_utils::{
-    get_global_secret_store, get_secret, get_secret_by_name, replace_all_secrets, update_secrets, SecretRefManager,
-    SecretStore,
-};
+// Note: get_secret / get_global_secret_store are kept for Gateway-side fallback use.
+// Controller code should use runtime.secret_store instead.
+pub use secret_utils::{get_global_secret_store, get_secret, get_secret_by_name, SecretRefManager, SecretStore};
 
 // Re-export ref_grant utilities
 pub use ref_grant::{
-    get_global_cross_ns_ref_manager, get_global_dispatcher, get_global_reference_grant_store, is_cross_ns_ref_allowed,
-    trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation, trigger_gateway_secret_revalidation,
-    validate_grpc_route_if_enabled, validate_http_route_if_enabled, validate_tcp_route_if_enabled,
-    validate_tls_route_if_enabled, validate_udp_route_if_enabled, CrossNamespaceRefManager, CrossNamespaceValidator,
-    CrossNsResourceRef, CrossNsRevalidationListener, ReferenceGrantChangedEvent, ReferenceGrantStore,
-    RevalidationListener,
+    is_cross_ns_ref_allowed, trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation,
+    trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
+    validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,
+    CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsResourceRef, CrossNsRevalidationListener,
+    ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
 };
 
 // Re-export listener_port_manager utilities
-pub use listener_port_manager::{
-    get_listener_port_manager, make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey,
-};
+pub use listener_port_manager::{make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey};
 
 // Re-export attached_route_tracker utilities
-pub use attached_route_tracker::{get_attached_route_tracker, AttachedRouteTracker, Attachment, RouteRef};
+pub use attached_route_tracker::{AttachedRouteTracker, Attachment, RouteRef};
 
 // Re-export gateway_route_index utilities
-pub use gateway_route_index::get_gateway_route_index;
+pub use gateway_route_index::GatewayRouteIndex;
 
 // Re-export service_ref utilities
-pub use service_ref::get_service_ref_manager;
+pub use service_ref::{new_service_ref_manager, ServiceRefManager};
 
 // Re-export backend_tls_policy_ref utilities
-pub use backend_tls_policy_ref::{
-    get_backend_tls_policy_target_manager, get_sibling_policies, is_policy_winner, make_target_conflict_key,
-    remove_policy_timestamp, set_policy_timestamp,
-};
+pub use backend_tls_policy_ref::{make_target_conflict_key, BackendTLSPolicyState};
 
 // Re-export namespace_store utilities
-pub use namespace_store::get_namespace_store;
+pub use namespace_store::NamespaceStore;
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

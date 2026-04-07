@@ -5,22 +5,10 @@
 //! sub-module managers (Webhook, Redis, Etcd, etc.).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use super::store::{get_global_link_sys_store, LinkSysStore};
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::link_sys::LinkSys;
-
-/// Implement ConfHandler for Arc<LinkSysStore>
-impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
-    fn full_set(&self, data: &HashMap<String, LinkSys>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(&self, add: HashMap<String, LinkSys>, update: HashMap<String, LinkSys>, remove: HashSet<String>) {
-        (**self).partial_update(add, update, remove)
-    }
-}
 
 /// Create a LinkSysStore handler for registration with ConfigClient
 pub fn create_link_sys_handler() -> Box<dyn ConfHandler<LinkSys> + Send + Sync> {

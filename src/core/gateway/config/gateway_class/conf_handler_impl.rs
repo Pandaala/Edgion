@@ -104,7 +104,7 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
 }
 
 /// Create GatewayClass handler
-pub fn create_gateway_class_handler() -> Box<dyn ConfHandler<GatewayClass>> {
+pub fn create_gateway_class_handler() -> Box<dyn ConfHandler<GatewayClass> + Send + Sync> {
     Box::new(GatewayClassHandler::new())
 }
 

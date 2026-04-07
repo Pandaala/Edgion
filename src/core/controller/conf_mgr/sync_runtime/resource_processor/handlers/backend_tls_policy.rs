@@ -6,14 +6,10 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::ByteString;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::{
-    get_backend_tls_policy_target_manager, get_sibling_policies, is_policy_winner, make_target_conflict_key,
-    remove_policy_timestamp, set_policy_timestamp,
-};
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::get_configmap;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::make_target_conflict_key;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    condition_false, condition_reasons, condition_true, condition_types, format_secret_key, get_secret,
-    update_condition, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_false, condition_reasons, condition_true, condition_types, format_secret_key, update_condition,
+    HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
@@ -83,11 +79,11 @@ impl BackendTlsPolicyHandler {
         }
 
         // --- Conflict detection: register target refs ---
-        let target_manager = get_backend_tls_policy_target_manager();
+        let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
 
         // Find old siblings BEFORE clearing (they may need status re-evaluation
         // if this policy's targetRef changed).
-        let old_siblings = get_sibling_policies(&resource_ref);
+        let old_siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
 
         // Clear old target registrations and re-register with current targetRefs.
         target_manager.clear_resource_refs(&resource_ref);
@@ -102,7 +98,7 @@ impl BackendTlsPolicyHandler {
         // Store creation timestamp for conflict precedence sorting.
         let policy_resource_key = resource_ref.resource_key();
         let ts_string = btp.metadata.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339());
-        set_policy_timestamp(&policy_resource_key, ts_string.as_deref());
+        ctx.runtime().backend_tls_policy.set_timestamp(&policy_resource_key, ts_string.as_deref());
 
         // Requeue old siblings whose conflict status may have changed.
         for sibling in old_siblings {
@@ -127,7 +123,11 @@ impl BackendTlsPolicyHandler {
                     ctx.secret_ref_manager()
                         .add_ref(secret_key.clone(), resource_ref.clone());
 
-                    if let Some(secret) = get_secret(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
+                    if let Some(secret) = ctx
+                        .runtime()
+                        .secret_store
+                        .get(policy_ns.map(|s| s.as_str()), &ca_ref.name)
+                    {
                         resolved_ca_secrets.push(secret);
                     } else {
                         tracing::info!(
@@ -140,7 +140,7 @@ impl BackendTlsPolicyHandler {
                     let cm_key = format_secret_key(policy_ns, &ca_ref.name);
                     ctx.secret_ref_manager().add_ref(cm_key.clone(), resource_ref.clone());
 
-                    if let Some(cm) = get_configmap(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
+                    if let Some(cm) = ctx.runtime().configmap_store.get(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
                         let ca_pem = cm
                             .data
                             .as_ref()
@@ -183,7 +183,11 @@ impl BackendTlsPolicyHandler {
                 ctx.secret_ref_manager()
                     .add_ref(secret_key.clone(), resource_ref.clone());
 
-                if let Some(secret) = get_secret(client_ns.map(|s| s.as_str()), &client_ref.name) {
+                if let Some(secret) = ctx
+                    .runtime()
+                    .secret_store
+                    .get(client_ns.map(|s| s.as_str()), &client_ref.name)
+                {
                     btp.spec.resolved_client_certificate = Some(secret);
                 } else {
                     tracing::info!(
@@ -214,11 +218,11 @@ impl BackendTlsPolicyHandler {
         );
 
         // Find siblings BEFORE clearing (they may become Accepted after this delete).
-        let siblings = get_sibling_policies(&resource_ref);
+        let siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
 
         // Clear target ref registrations and timestamp.
-        get_backend_tls_policy_target_manager().clear_resource_refs(&resource_ref);
-        remove_policy_timestamp(&resource_ref.resource_key());
+        ctx.runtime().backend_tls_policy.target_mgr().clear_resource_refs(&resource_ref);
+        ctx.runtime().backend_tls_policy.remove_timestamp(&resource_ref.resource_key());
 
         // Clear secret refs.
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
@@ -302,14 +306,14 @@ impl BackendTlsPolicyHandler {
             btp.spec.target_refs.iter().any(|target_ref| {
                 let target_key =
                     make_target_conflict_key(policy_ns, &target_ref.name, target_ref.section_name.as_deref());
-                !is_policy_winner(&policy_key, &target_key)
+                !_ctx.runtime().backend_tls_policy.is_winner(&policy_key, &target_key)
             })
         } else {
             false
         };
 
         // --- Resolve ancestor Gateways ---
-        let ancestor_gateways = Self::resolve_ancestor_gateways(btp);
+        let ancestor_gateways = Self::resolve_ancestor_gateways(btp, _ctx);
 
         let status = btp
             .status
@@ -431,7 +435,7 @@ impl BackendTlsPolicyHandler {
         );
 
         // Requeue sibling policies so their conflict status gets re-evaluated.
-        let siblings = get_sibling_policies(&resource_ref);
+        let siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
         if !siblings.is_empty() {
             tracing::debug!(
                 policy = %resource_ref.key(),
@@ -449,13 +453,10 @@ impl BackendTlsPolicyHandler {
     /// Chain: BTP.targetRef(Service) -> ServiceRefManager(service->routes) -> GatewayRouteIndex(route->gateways)
     ///
     /// Returns deduplicated list of (gateway_ns, gateway_name).
-    fn resolve_ancestor_gateways(btp: &BackendTLSPolicy) -> Vec<(String, String)> {
-        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index;
-        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
-
+    fn resolve_ancestor_gateways(btp: &BackendTLSPolicy, ctx: &HandlerContext) -> Vec<(String, String)> {
         let policy_ns = btp.metadata.namespace.as_deref().unwrap_or("default");
-        let service_ref_manager = get_service_ref_manager();
-        let route_index = get_gateway_route_index();
+        let service_ref_manager = &ctx.runtime().service_ref_mgr;
+        let route_index = &ctx.runtime().gateway_route_index;
 
         let mut gateways = Vec::new();
         let mut seen = std::collections::HashSet::new();

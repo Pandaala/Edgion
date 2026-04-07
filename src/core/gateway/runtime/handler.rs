@@ -217,6 +217,6 @@ fn listeners_changed(before: &[ListenerKey], after: &[ListenerKey]) -> bool {
 }
 
 /// Create Gateway handler
-pub fn create_gateway_handler() -> Box<dyn ConfHandler<Gateway>> {
+pub fn create_gateway_handler() -> Box<dyn ConfHandler<Gateway> + Send + Sync> {
     Box::new(GatewayHandler::new())
 }

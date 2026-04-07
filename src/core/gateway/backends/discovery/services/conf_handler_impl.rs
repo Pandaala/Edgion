@@ -9,18 +9,6 @@ use crate::core::gateway::backends::health::check::{
 use crate::core::gateway::lb::runtime_state;
 use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-/// Implement ConfHandler for Arc<ServiceStore>
-impl ConfHandler<Service> for Arc<ServiceStore> {
-    fn full_set(&self, data: &HashMap<String, Service>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(&self, add: HashMap<String, Service>, update: HashMap<String, Service>, remove: HashSet<String>) {
-        (**self).partial_update(add, update, remove)
-    }
-}
 
 /// Create a ServiceStore handler for registration with ConfigClient
 pub fn create_service_handler() -> Box<dyn ConfHandler<Service> + Send + Sync> {

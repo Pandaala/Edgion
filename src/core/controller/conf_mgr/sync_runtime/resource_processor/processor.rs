@@ -39,6 +39,7 @@ pub enum WorkItemResult<K> {
 
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
 use crate::core::controller::conf_sync::ServerCache;
 use crate::types::ResourceMeta;
@@ -215,6 +216,9 @@ where
     /// K8s mode: injected as KubeRawStore after reflector::store() call.
     /// FS mode: injected as FsRawStore on controller construction.
     raw_store: RwLock<Option<Arc<dyn RawStore<K>>>>,
+
+    /// Shared controller runtime (stores, registries, etc.)
+    runtime: Arc<ControllerRuntime>,
 }
 
 impl<K> ResourceProcessor<K>
@@ -227,6 +231,7 @@ where
         capacity: usize,
         handler: Arc<dyn ProcessorHandler<K>>,
         secret_ref_manager: Arc<SecretRefManager>,
+        runtime: Arc<ControllerRuntime>,
     ) -> Self {
         let cache = Arc::new(ServerCache::new(capacity as u32));
         let workqueue = Arc::new(Workqueue::with_defaults(kind));
@@ -247,6 +252,7 @@ where
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
+            runtime,
         }
     }
 
@@ -257,6 +263,7 @@ where
         handler: Arc<dyn ProcessorHandler<K>>,
         secret_ref_manager: Arc<SecretRefManager>,
         workqueue_config: WorkqueueConfig,
+        runtime: Arc<ControllerRuntime>,
     ) -> Self {
         let cache = Arc::new(ServerCache::new(capacity as u32));
         let workqueue = Arc::new(Workqueue::new(kind, workqueue_config));
@@ -270,6 +277,7 @@ where
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
+            runtime,
         }
     }
 
@@ -437,6 +445,7 @@ where
             trigger_chain,
             self.workqueue.config().max_trigger_cycles,
             self.workqueue.config().max_trigger_depth,
+            self.runtime.clone(),
         )
     }
 
@@ -788,7 +797,13 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(DefaultHandler);
 
-        let processor = ResourceProcessor::<TestResource>::new("TestResource", 100, handler, secret_ref_manager);
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            secret_ref_manager,
+            Arc::new(ControllerRuntime::default()),
+        );
 
         assert_eq!(processor.kind(), "TestResource");
         assert!(!processor.is_ready());
@@ -802,7 +817,13 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(DefaultHandler);
 
-        let processor = ResourceProcessor::<TestResource>::new("TestResource", 100, handler, secret_ref_manager);
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            secret_ref_manager,
+            Arc::new(ControllerRuntime::default()),
+        );
 
         let resource = TestResource {
             metadata: ObjectMeta {

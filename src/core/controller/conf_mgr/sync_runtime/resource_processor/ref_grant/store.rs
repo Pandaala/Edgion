@@ -4,18 +4,9 @@
 //! efficient lookup by to_namespace for permission checking.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::sync::{Arc, RwLock};
 
 use crate::types::resources::ReferenceGrant;
-
-static GLOBAL_REFERENCE_GRANT_STORE: OnceLock<Arc<ReferenceGrantStore>> = OnceLock::new();
-
-pub fn get_global_reference_grant_store() -> Arc<ReferenceGrantStore> {
-    GLOBAL_REFERENCE_GRANT_STORE
-        .get_or_init(|| Arc::new(ReferenceGrantStore::new()))
-        .clone()
-}
 
 /// Type alias for the raw grant map (key: namespace/name)
 type RawGrantMap = HashMap<String, Arc<ReferenceGrant>>;

@@ -75,15 +75,24 @@ impl Default for SecretStore {
     }
 }
 
-/// Global Secret Store instance
+/// Global Secret Store instance (used by Gateway-side code for fallback access).
+///
+/// NOTE: Controller-side code uses `ControllerRuntime::secret_store` instead.
+/// This global is kept for Gateway binary compatibility where plugins may fall
+/// back to reading secrets directly (e.g., BasicAuth fallback when resolved_users
+/// is absent).
 static GLOBAL_SECRET_STORE: LazyLock<Arc<SecretStore>> = LazyLock::new(|| Arc::new(SecretStore::new()));
 
 /// Get the global Secret Store
+///
+/// Gateway-side use only. Controller code should use `runtime.secret_store`.
 pub fn get_global_secret_store() -> Arc<SecretStore> {
     GLOBAL_SECRET_STORE.clone()
 }
 
 /// Get a Secret by namespace and name from the global store
+///
+/// Gateway-side use only. Controller code should use `runtime.secret_store.get(...)`.
 pub fn get_secret(namespace: Option<&str>, name: &str) -> Option<Secret> {
     get_global_secret_store().get(namespace, name)
 }
@@ -91,19 +100,6 @@ pub fn get_secret(namespace: Option<&str>, name: &str) -> Option<Secret> {
 /// Backward compatibility alias for get_secret
 pub fn get_secret_by_name(namespace: Option<&str>, name: &str) -> Option<Secret> {
     get_secret(namespace, name)
-}
-
-/// Replace all secrets in the global store
-pub fn replace_all_secrets(secrets: HashMap<String, Secret>) {
-    get_global_secret_store().replace_all(secrets);
-}
-
-/// Update secrets in the global store
-///
-/// - `upsert`: Secrets to add or update
-/// - `remove`: Keys of secrets to remove
-pub fn update_secrets(upsert: HashMap<String, Secret>, remove: &HashSet<String>) {
-    get_global_secret_store().update(upsert, remove);
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ use std::sync::RwLock;
 use k8s_openapi::api::core::v1::Secret;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, replace_all_secrets, update_secrets, HandlerContext, ProcessResult, ProcessorHandler,
+    format_secret_key, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use crate::types::ResourceKind;
 
@@ -130,7 +130,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
 
         let mut upsert = HashMap::new();
         upsert.insert(secret_key.clone(), secret.clone());
-        update_secrets(upsert, &HashSet::new());
+        ctx.runtime().secret_store.update(upsert, &HashSet::new());
 
         tracing::debug!(
             secret_key = %secret_key,
@@ -145,7 +145,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
         let accumulated = self.init_accumulator.write().unwrap().take();
         if let Some(secrets) = accumulated {
             let count = secrets.len();
-            replace_all_secrets(secrets);
+            _ctx.runtime().secret_store.replace_all(secrets);
             tracing::info!(count = count, "SecretStore authoritative replace_all on init_done");
         }
     }
@@ -172,7 +172,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
         // 1. Update global SecretStore (delete)
         let mut remove = HashSet::new();
         remove.insert(secret_key.clone());
-        update_secrets(HashMap::new(), &remove);
+        ctx.runtime().secret_store.update(HashMap::new(), &remove);
 
         // 2. Trigger cascading requeue (so dependent resources know Secret is deleted)
         self.trigger_cascading_requeue(&secret_key, "deleted", ctx).await;

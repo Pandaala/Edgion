@@ -7,22 +7,6 @@ use crate::types::{ResourceMeta, UDPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Implement ConfHandler for &'static GlobalUdpRouteManagers
-impl ConfHandler<UDPRoute> for &'static GlobalUdpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, UDPRoute>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, UDPRoute>,
-        update: HashMap<String, UDPRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
-
 /// Create a handler for registration with ConfigClient.
 pub fn create_udp_route_handler() -> Box<dyn ConfHandler<UDPRoute> + Send + Sync> {
     Box::new(get_global_udp_route_managers())

@@ -112,22 +112,6 @@ fn get_effective_hostnames(route: &HTTPRoute) -> Vec<String> {
     vec![CATCH_ALL_HOSTNAME.to_string()]
 }
 
-/// Implement ConfHandler for &'static GlobalHttpRouteManagers
-impl ConfHandler<HTTPRoute> for &'static GlobalHttpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
-        (**self).full_set(data);
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, HTTPRoute>,
-        update: HashMap<String, HTTPRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove);
-    }
-}
-
 impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
     fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
         sync_lb_policies_for_routes(data);

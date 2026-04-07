@@ -1,27 +1,10 @@
 //! ConfHandler implementation for EdgionPlugins
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use super::{get_global_plugin_store, PluginStore};
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::EdgionPlugins;
-
-/// Implement ConfHandler for Arc<PluginStore>
-impl ConfHandler<EdgionPlugins> for Arc<PluginStore> {
-    fn full_set(&self, data: &HashMap<String, EdgionPlugins>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, EdgionPlugins>,
-        update: HashMap<String, EdgionPlugins>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
 
 /// Create a PluginStore handler for registration with ConfigClient
 pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sync> {

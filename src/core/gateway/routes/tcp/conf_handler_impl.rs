@@ -7,22 +7,6 @@ use crate::types::{ResourceMeta, TCPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Implement ConfHandler for &'static GlobalTcpRouteManagers
-impl ConfHandler<TCPRoute> for &'static GlobalTcpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, TCPRoute>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, TCPRoute>,
-        update: HashMap<String, TCPRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
-
 /// Create a handler for registration with ConfigClient.
 pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync> {
     Box::new(get_global_tcp_route_managers())

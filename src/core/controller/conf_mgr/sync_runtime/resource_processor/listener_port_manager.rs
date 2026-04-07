@@ -19,15 +19,7 @@
 //! Within each conflict key group, hostname intersection determines actual conflicts.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, RwLock};
-
-/// Global ListenerPortManager instance
-pub static LISTENER_PORT_MANAGER: LazyLock<ListenerPortManager> = LazyLock::new(ListenerPortManager::new);
-
-/// Get the global ListenerPortManager
-pub fn get_listener_port_manager() -> &'static ListenerPortManager {
-    &LISTENER_PORT_MANAGER
-}
+use std::sync::RwLock;
 
 /// Listener reference (gateway + listener name + hostname for conflict checking)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

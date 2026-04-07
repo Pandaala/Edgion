@@ -28,15 +28,9 @@
 //! routes targeting `""` (meaning "all listeners on this gateway").
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, RwLock};
+use std::sync::RwLock;
 
 use crate::types::ResourceKind;
-
-static ATTACHED_ROUTE_TRACKER: LazyLock<AttachedRouteTracker> = LazyLock::new(AttachedRouteTracker::new);
-
-pub fn get_attached_route_tracker() -> &'static AttachedRouteTracker {
-    &ATTACHED_ROUTE_TRACKER
-}
 
 /// Identifies a specific route resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -66,7 +60,7 @@ pub struct AttachedRouteTracker {
 }
 
 impl AttachedRouteTracker {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             forward: RwLock::new(HashMap::new()),
             reverse: RwLock::new(HashMap::new()),

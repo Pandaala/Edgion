@@ -39,13 +39,13 @@ conf_mgr/
 | 01 | 🔴 高 | 全局可变单例过度使用（9+ 个 LazyLock/OnceLock 全局状态） | [01-global-singletons.md](./01-global-singletons.md) |
 | 02 | 🟡 中 | CenterApi 委托代码大量重复（3 处 ~200 行 boilerplate） | [02-center-api-delegation-boilerplate.md](./02-center-api-delegation-boilerplate.md) |
 | 03 | 🟡 中 | KubernetesCenter 双模式事件监控代码 80% 重复 | [03-event-watcher-duplication.md](./03-event-watcher-duplication.md) |
-| 04 | 🔴 高 | std::sync Mutex/RwLock 在 async 上下文中使用 + 潜在死锁 | [04-sync-locks-in-async-context.md](./04-sync-locks-in-async-context.md) |
-| 05 | 🔴 高 | ProcessorRegistry 全部 .unwrap() 的 poison 级联恐慌风险 | [05-unwrap-panic-propagation.md](./05-unwrap-panic-propagation.md) |
+| 04 | ✅ 误报 | std::sync Mutex/RwLock 在 async 上下文中使用 + 潜在死锁 → 核查无 guard 跨 await，写临界区不可能 panic，poison 不触发，无需修复 | — |
+| 05 | ✅ 误报 | ProcessorRegistry 全部 .unwrap() 的 poison 级联恐慌风险 → 写临界区仅 insert/clear，不可能 panic，poison 不触发 | — |
 | 06 | 🟡 中 | SchemaValidator 硬编码路径/版本 + YAML 分割不健壮 | [06-schema-validator-issues.md](./06-schema-validator-issues.md) |
-| 07 | 🟡 中 | Workqueue enqueue TOCTOU 竞态条件 | [07-workqueue-toctou-race.md](./07-workqueue-toctou-race.md) |
+| 07 | ✅ 已修复 | Workqueue enqueue TOCTOU 竞态条件 → `DashSet::insert` 原子 check-and-insert，直接返回布尔值 | — |
 | 08 | 🟢 低 | resource_controller InitApply/Apply 状态写入逻辑重复 | [08-init-apply-duplication.md](./08-init-apply-duplication.md) |
 | 09 | 🟡 中 | HandlerContext 紧耦合全局 PROCESSOR_REGISTRY 影响可测试性 | [09-handler-context-testability.md](./09-handler-context-testability.md) |
-| 10 | 🔴 高 | BidirectionalRefManager 双锁 AB-BA 死锁风险 | [10-ref-manager-dual-lock.md](./10-ref-manager-dual-lock.md) |
+| 10 | ✅ 已修复 | BidirectionalRefManager 双锁 AB-BA 死锁风险 → 合并为单 `RwLock<RefMaps<V>>` | — |
 | 11 | 🟡 中 | ConfWriterError 缺少 From 实现，错误上下文丢失 | [11-conf-writer-error-design.md](./11-conf-writer-error-design.md) |
 | 12 | 🟢 低 | Caches Ready 逻辑三处重复 + 超时硬编码 | [12-caches-ready-duplication.md](./12-caches-ready-duplication.md) |
 
@@ -55,9 +55,9 @@ conf_mgr/
 
 | 问题 | 修复建议 | 预估工时 |
 |------|----------|----------|
-| #10 RefManager AB-BA 死锁 | 合并 `refs` 和 `dependencies` 为单一 `RwLock<RefMaps>` | 0.5-1 天 |
-| #05 .unwrap() 级联恐慌 | 迁移至 `parking_lot`（已在 Cargo.toml 中）或 `PoisonError::into_inner` | 1 天 |
-| #07 Workqueue TOCTOU | 使用 `DashSet::insert` 返回值做原子化 check-and-insert | 0.5 天 |
+| ~~#10 RefManager AB-BA 死锁~~ | ✅ 已修复：合并为单一 `RwLock<RefMaps<V>>` | — |
+| ~~#05 .unwrap() 级联恐慌~~ | ✅ 误报，写临界区不可能 panic | — |
+| ~~#07 Workqueue TOCTOU~~ | ✅ 已修复：`DashSet::insert` 原子操作 | — |
 
 ### P1 - 高优先级（影响可维护性和架构健康度）
 
@@ -65,7 +65,7 @@ conf_mgr/
 |------|----------|----------|
 | #01 全局单例 | 引入 `ConfControllerRuntime` 聚合容器 + 依赖注入 | 3-5 天 |
 | #09 HandlerContext 可测试性 | 引入 `Arc<dyn RequeueDispatcher>` 注入 | 1-2 天 |
-| #04 async 中的 sync 锁 | 审计并统一锁策略（parking_lot / tokio::sync） | 2-3 天 |
+| ~~#04 async 中的 sync 锁~~ | ✅ 误报，无需修复 | — |
 
 ### P2 - 中优先级（代码质量提升）
 
@@ -87,8 +87,6 @@ conf_mgr/
 
 ```
 #01 全局单例 ←→ #09 HandlerContext 可测试性（同一根因）
-#04 sync 锁    ←→ #05 .unwrap() 恐慌（poison 是二者交汇点）
-#04 sync 锁    ←→ #10 RefManager 死锁（锁策略子问题）
 #03 事件监控   ←→ #12 Caches Ready（相同代码的不同维度重复）
 ```
 

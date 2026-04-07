@@ -6,8 +6,6 @@
 //! When a ReferenceGrant changes, the manager is queried to find all
 //! resources that reference the affected namespace so they can be requeued.
 
-use std::sync::{Arc, OnceLock};
-
 use super::super::ref_manager::{BidirectionalRefManager, ResourceRef};
 
 // Re-export ResourceRef as CrossNsResourceRef for backward compatibility
@@ -23,16 +21,6 @@ pub type CrossNamespaceRefManager = BidirectionalRefManager<ResourceRef>;
 /// Create a `CrossNamespaceRefManager` with the canonical component name.
 pub fn new_cross_ns_ref_manager() -> CrossNamespaceRefManager {
     CrossNamespaceRefManager::with_component("cross_ns_ref_manager")
-}
-
-/// Global cross-namespace reference manager singleton.
-static GLOBAL_CROSS_NS_REF_MANAGER: OnceLock<Arc<CrossNamespaceRefManager>> = OnceLock::new();
-
-/// Get the global CrossNamespaceRefManager instance.
-pub fn get_global_cross_ns_ref_manager() -> Arc<CrossNamespaceRefManager> {
-    GLOBAL_CROSS_NS_REF_MANAGER
-        .get_or_init(|| Arc::new(new_cross_ns_ref_manager()))
-        .clone()
 }
 
 #[cfg(test)]

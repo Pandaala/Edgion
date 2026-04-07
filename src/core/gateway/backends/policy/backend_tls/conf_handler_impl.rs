@@ -4,22 +4,6 @@ use crate::types::resources::BackendTLSPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Implement ConfHandler for Arc<BackendTLSPolicyStore>
-impl ConfHandler<BackendTLSPolicy> for Arc<BackendTLSPolicyStore> {
-    fn full_set(&self, data: &HashMap<String, BackendTLSPolicy>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, BackendTLSPolicy>,
-        update: HashMap<String, BackendTLSPolicy>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
-
 /// Implement ConfHandler directly for BackendTLSPolicyStore
 impl ConfHandler<BackendTLSPolicy> for BackendTLSPolicyStore {
     fn full_set(&self, data: &HashMap<String, BackendTLSPolicy>) {

@@ -30,9 +30,8 @@ use super::conf_center::kubernetes::KubernetesCenter;
 use super::conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult};
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_grant::{
-    get_global_dispatcher, CrossNsRevalidationListener,
-};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_grant::CrossNsRevalidationListener;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -76,8 +75,9 @@ impl ConfMgr {
 
         // Register cross-namespace revalidation listener
         // This ensures that when ReferenceGrant changes, affected routes are requeued
-        let listener = Arc::new(CrossNsRevalidationListener::new());
-        get_global_dispatcher().register_listener(listener);
+        let runtime = conf_center.runtime();
+        let listener = Arc::new(CrossNsRevalidationListener::new(runtime.clone()));
+        runtime.ref_grant_dispatcher.register_listener(listener);
         tracing::debug!(component = "conf_mgr", "Registered CrossNsRevalidationListener");
 
         Ok(Self { conf_center })
@@ -238,6 +238,10 @@ impl CenterLifeCycle for ConfMgr {
 
     fn request_reload(&self) -> Result<(), String> {
         self.conf_center.request_reload()
+    }
+
+    fn runtime(&self) -> Arc<ControllerRuntime> {
+        self.conf_center.runtime()
     }
 }
 

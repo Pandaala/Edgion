@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::super::ref_grant::{get_global_dispatcher, get_global_reference_grant_store, ReferenceGrantChangedEvent};
+use super::super::ref_grant::ReferenceGrantChangedEvent;
 use super::super::{HandlerContext, ProcessResult, ProcessorHandler};
 use crate::types::prelude_resources::{ReferenceGrant, ReferenceGrantBeta};
 
@@ -47,14 +47,13 @@ impl ReferenceGrantHandler {
     }
 
     /// Dispatch change event to listeners
-    pub(crate) async fn dispatch_change_event(affected_namespaces: HashSet<String>) {
+    pub(crate) async fn dispatch_change_event(affected_namespaces: HashSet<String>, ctx: &HandlerContext) {
         if affected_namespaces.is_empty() {
             return;
         }
 
-        let dispatcher = get_global_dispatcher();
         let event = ReferenceGrantChangedEvent { affected_namespaces };
-        dispatcher.dispatch(&event).await;
+        ctx.runtime().ref_grant_dispatcher.dispatch(&event).await;
     }
 }
 
@@ -70,7 +69,7 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         // Parse is called during both add and update
         // We update the store here
         let key = Self::build_key(&rg);
-        let store = get_global_reference_grant_store();
+        let store = &_ctx.runtime().ref_grant_store;
 
         // Update the store
         store.upsert(key.clone(), Arc::new(rg.clone()));
@@ -97,12 +96,12 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         );
 
         // Dispatch change event to trigger revalidation of affected resources
-        Self::dispatch_change_event(affected_namespaces).await;
+        Self::dispatch_change_event(affected_namespaces, _ctx).await;
     }
 
     async fn on_delete(&self, rg: &ReferenceGrant, _ctx: &HandlerContext) {
         let key = Self::build_key(rg);
-        let store = get_global_reference_grant_store();
+        let store = &_ctx.runtime().ref_grant_store;
 
         // Collect affected namespaces before removing
         let affected_namespaces = Self::identify_affected_namespaces(rg);
@@ -118,7 +117,7 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         );
 
         // Dispatch change event to trigger revalidation
-        Self::dispatch_change_event(affected_namespaces).await;
+        Self::dispatch_change_event(affected_namespaces, _ctx).await;
     }
 }
 
@@ -149,7 +148,7 @@ impl ProcessorHandler<ReferenceGrantBeta> for ReferenceGrantBetaHandler {
     async fn parse(&self, rg: ReferenceGrantBeta, _ctx: &HandlerContext) -> ProcessResult<ReferenceGrantBeta> {
         let v1: ReferenceGrant = rg.clone().into();
         let key = ReferenceGrantHandler::build_key(&v1);
-        let store = get_global_reference_grant_store();
+        let store = &_ctx.runtime().ref_grant_store;
 
         store.upsert(key.clone(), Arc::new(v1));
 
@@ -176,13 +175,13 @@ impl ProcessorHandler<ReferenceGrantBeta> for ReferenceGrantBetaHandler {
             "ReferenceGrant (v1beta1) changed, dispatching event"
         );
 
-        ReferenceGrantHandler::dispatch_change_event(affected_namespaces).await;
+        ReferenceGrantHandler::dispatch_change_event(affected_namespaces, _ctx).await;
     }
 
     async fn on_delete(&self, rg: &ReferenceGrantBeta, _ctx: &HandlerContext) {
         let v1: ReferenceGrant = rg.clone().into();
         let key = ReferenceGrantHandler::build_key(&v1);
-        let store = get_global_reference_grant_store();
+        let store = &_ctx.runtime().ref_grant_store;
 
         let affected_namespaces = ReferenceGrantHandler::identify_affected_namespaces(&v1);
 
@@ -196,6 +195,6 @@ impl ProcessorHandler<ReferenceGrantBeta> for ReferenceGrantBetaHandler {
             "ReferenceGrant (v1beta1) deleted, dispatching event"
         );
 
-        ReferenceGrantHandler::dispatch_change_event(affected_namespaces).await;
+        ReferenceGrantHandler::dispatch_change_event(affected_namespaces, _ctx).await;
     }
 }

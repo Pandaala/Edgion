@@ -25,7 +25,7 @@ use crate::core::controller::conf_mgr::conf_center::traits::{
 };
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -107,6 +107,8 @@ pub struct KubernetesCenter {
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
     /// Reload signal sender (for triggering reload via Admin API)
     reload_tx: Mutex<Option<mpsc::Sender<()>>>,
+    /// Aggregated controller runtime (stores, registries)
+    runtime: Arc<ControllerRuntime>,
 }
 
 impl KubernetesCenter {
@@ -127,6 +129,7 @@ impl KubernetesCenter {
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
             reload_tx: Mutex::new(None),
+            runtime: Arc::new(ControllerRuntime::new()),
         })
     }
 
@@ -360,9 +363,10 @@ impl KubernetesCenter {
                 self.set_config_sync_server(None);
             }
 
-            // Stop ACME service and clear PROCESSOR_REGISTRY for retry
+            // Stop ACME service and reset ControllerRuntime for retry
             crate::core::controller::services::acme::stop_acme_service();
-            PROCESSOR_REGISTRY.clear_registry();
+            tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
+            self.runtime.reset();
 
             // Handle exit reason
             match exit_reason {
@@ -490,23 +494,28 @@ impl KubernetesCenter {
         // 4. Spawn controller.run task
         let shutdown_signal = shutdown_handle.signal();
         let tx = event_tx.clone();
+        let runtime_for_controller = self.runtime.clone();
         let controller_handle = tokio::spawn(async move {
-            let reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
-                tracing::error!(
-                    component = "kubernetes_center",
-                    mode = "kubernetes",
-                    error = %e,
-                    "Controller run error"
-                );
-                ControllerExitReason::AllControllersStopped
-            });
+            let reason = controller
+                .run(shutdown_signal, runtime_for_controller)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(
+                        component = "kubernetes_center",
+                        mode = "kubernetes",
+                        error = %e,
+                        "Controller run error"
+                    );
+                    ControllerExitReason::AllControllersStopped
+                });
             let _ = tx.send(LifecycleEvent::ControllerExit(reason)).await;
         });
 
-        // 5. Spawn caches ready watcher task (monitors PROCESSOR_REGISTRY)
+        // 5. Spawn caches ready watcher task (monitors processor_registry via runtime)
         let css = config_sync_server.clone();
         let tx = event_tx.clone();
         let acme_client = client.clone();
+        let runtime_for_caches = self.runtime.clone();
         // Get no_sync_kinds from global config (or use default)
         let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
         let expected_sync_kinds: Vec<&'static str> = expected_processor_kinds
@@ -519,12 +528,13 @@ impl KubernetesCenter {
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
             let start = Instant::now();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+            let registry = &runtime_for_caches.processor_registry;
 
             let pending_sync_kinds = || -> Vec<&'static str> {
                 let missing_registration: Vec<&'static str> = expected_processor_kinds
                     .iter()
                     .copied()
-                    .filter(|k| PROCESSOR_REGISTRY.get(k).is_none())
+                    .filter(|k| registry.get(k).is_none())
                     .collect();
                 if !missing_registration.is_empty() {
                     return missing_registration;
@@ -533,7 +543,7 @@ impl KubernetesCenter {
                 expected_sync_kinds
                     .iter()
                     .copied()
-                    .filter(|k| PROCESSOR_REGISTRY.get(k).map(|p| !p.is_ready()).unwrap_or(true))
+                    .filter(|k| registry.get(k).map(|p| !p.is_ready()).unwrap_or(true))
                     .collect()
             };
 
@@ -546,22 +556,26 @@ impl KubernetesCenter {
             if pending_sync_kinds().is_empty() {
                 // Register all WatchObjs to ConfigSyncServer
                 // Filter out resources configured in no_sync_kinds
-                css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
+                css.register_all(registry.all_watch_objs(&no_sync_refs));
 
                 // Trigger full cross-namespace revalidation
                 // This ensures Routes processed before ReferenceGrants are revalidated
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
+                    runtime_for_caches.clone(),
                 )
                 .await;
 
                 // Requeue Gateways with TLS cert refs so they re-check SecretStore
                 // (Secrets may have been processed after Gateways during init)
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation()
-                    .await;
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation(
+                    runtime_for_caches.clone(),
+                )
+                .await;
 
                 // Requeue all routes in gateway_route_index to pick up Gateways
                 // that were processed before routes registered their parentRefs
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+                    runtime_for_caches.clone(),
                 )
                 .await;
 
@@ -658,7 +672,8 @@ impl KubernetesCenter {
                         "Normal shutdown"
                     );
                     crate::core::controller::services::acme::stop_acme_service();
-                    PROCESSOR_REGISTRY.clear_registry();
+                    tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
+                    self.runtime.reset();
                     return Ok(());
                 }
                 MainFlowExit::LostLeadership => {
@@ -668,7 +683,8 @@ impl KubernetesCenter {
                         "Lost leadership, will wait for re-election"
                     );
                     crate::core::controller::services::acme::stop_acme_service();
-                    PROCESSOR_REGISTRY.clear_registry();
+                    tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
+                    self.runtime.reset();
                     continue;
                 }
             }
@@ -695,7 +711,8 @@ impl KubernetesCenter {
             match exit {
                 ServingFlowExit::Shutdown => return Ok(()),
                 ServingFlowExit::RelinkRequested => {
-                    PROCESSOR_REGISTRY.clear_registry();
+                    tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
+                    self.runtime.reset();
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
@@ -796,7 +813,8 @@ impl KubernetesCenter {
         if leader_services_running {
             self.stop_leader_services().await;
         }
-        PROCESSOR_REGISTRY.clear_registry();
+        tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
+        self.runtime.reset();
 
         match exit_reason {
             ControllerExitReason::Shutdown => ServingFlowExit::Shutdown,
@@ -836,21 +854,26 @@ impl KubernetesCenter {
 
         let shutdown_signal = shutdown_handle.signal();
         let tx = event_tx.clone();
+        let runtime_for_controller = self.runtime.clone();
         let controller_handle = tokio::spawn(async move {
-            let reason = controller.run(shutdown_signal).await.unwrap_or_else(|e| {
-                tracing::error!(
-                    component = "kubernetes_center",
-                    error = %e,
-                    "Controller run error (all-serve)"
-                );
-                ControllerExitReason::AllControllersStopped
-            });
+            let reason = controller
+                .run(shutdown_signal, runtime_for_controller)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(
+                        component = "kubernetes_center",
+                        error = %e,
+                        "Controller run error (all-serve)"
+                    );
+                    ControllerExitReason::AllControllersStopped
+                });
             let _ = tx.send(LifecycleEvent::ControllerExit(reason)).await;
         });
 
         // Caches ready watcher — no ACME start here (moved to start_leader_services)
         let css = config_sync_server.clone();
         let tx = event_tx.clone();
+        let runtime_for_caches = self.runtime.clone();
         let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
         let expected_sync_kinds: Vec<&'static str> = expected_processor_kinds
             .iter()
@@ -862,12 +885,13 @@ impl KubernetesCenter {
             let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
             let start = Instant::now();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
+            let registry = &runtime_for_caches.processor_registry;
 
             let pending_sync_kinds = || -> Vec<&'static str> {
                 let missing_registration: Vec<&'static str> = expected_processor_kinds
                     .iter()
                     .copied()
-                    .filter(|k| PROCESSOR_REGISTRY.get(k).is_none())
+                    .filter(|k| registry.get(k).is_none())
                     .collect();
                 if !missing_registration.is_empty() {
                     return missing_registration;
@@ -876,7 +900,7 @@ impl KubernetesCenter {
                 expected_sync_kinds
                     .iter()
                     .copied()
-                    .filter(|k| PROCESSOR_REGISTRY.get(k).map(|p| !p.is_ready()).unwrap_or(true))
+                    .filter(|k| registry.get(k).map(|p| !p.is_ready()).unwrap_or(true))
                     .collect()
             };
 
@@ -885,13 +909,17 @@ impl KubernetesCenter {
             }
 
             if pending_sync_kinds().is_empty() {
-                css.register_all(PROCESSOR_REGISTRY.all_watch_objs(&no_sync_refs));
+                css.register_all(registry.all_watch_objs(&no_sync_refs));
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
+                    runtime_for_caches.clone(),
                 )
                 .await;
-                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation()
-                    .await;
+                crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation(
+                    runtime_for_caches.clone(),
+                )
+                .await;
                 crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+                    runtime_for_caches.clone(),
                 )
                 .await;
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
@@ -958,7 +986,7 @@ impl KubernetesCenter {
     async fn start_leader_services(&self, client: &Client) {
         tracing::info!(component = "kubernetes_center", "Starting leader-only services");
         crate::core::controller::services::acme::start_acme_service(client.clone());
-        PROCESSOR_REGISTRY.requeue_all().await;
+        self.runtime.processor_registry.requeue_all().await;
     }
 
     /// Stop leader-only services
@@ -1096,7 +1124,7 @@ impl CenterLifeCycle for KubernetesCenter {
 
     /// Check if the system is ready
     fn is_ready(&self) -> bool {
-        PROCESSOR_REGISTRY.is_all_ready() && self.config_sync_server.read().unwrap().is_some()
+        self.runtime.processor_registry.is_all_ready() && self.config_sync_server.read().unwrap().is_some()
     }
 
     /// Get the ConfigSyncServer (may be None if not ready)
@@ -1117,6 +1145,10 @@ impl CenterLifeCycle for KubernetesCenter {
         } else {
             Err("Center not started or not ready for reload".to_string())
         }
+    }
+
+    fn runtime(&self) -> Arc<ControllerRuntime> {
+        self.runtime.clone()
     }
 }
 

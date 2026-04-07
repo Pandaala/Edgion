@@ -2,9 +2,7 @@
 //!
 //! Handles TLSRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{
-    get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_tls_route_if_enabled,
-};
+use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_tls_route_if_enabled};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
     requeue_parent_gateways, update_gateway_route_index,
@@ -37,7 +35,7 @@ impl TlsRouteHandler {
     }
 
     /// Register Service backend references for cross-resource requeue
-    fn register_service_refs(route: &TLSRoute) {
+    fn register_service_refs(route: &TLSRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -62,14 +60,15 @@ impl TlsRouteHandler {
             route_ns,
             route_name,
             &backend_refs_list,
+            ctx.runtime(),
         );
     }
 
     /// Record cross-namespace references from backend_refs
-    fn record_cross_ns_refs(route: &TLSRoute) {
+    fn record_cross_ns_refs(route: &TLSRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = Self::create_resource_ref(route);
-        let manager = get_global_cross_ns_ref_manager();
+        let manager = &ctx.runtime().cross_ns_ref_mgr;
 
         // Clear old references first (handles updates)
         manager.clear_resource_refs(&resource_ref);
@@ -102,7 +101,7 @@ impl TlsRouteHandler {
         validate_tls_route_if_enabled(route)
     }
 
-    fn preparse_route(&self, route: &mut TLSRoute) -> Vec<String> {
+    fn preparse_route(&self, route: &mut TLSRoute, ctx: &HandlerContext) -> Vec<String> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         update_gateway_route_index(
@@ -110,13 +109,14 @@ impl TlsRouteHandler {
             route_ns,
             route_name,
             route.spec.parent_refs.as_ref(),
+            ctx.runtime(),
         );
         Vec::new()
     }
 
-    async fn parse_route(&self, mut route: TLSRoute) -> ProcessResult<TLSRoute> {
-        Self::record_cross_ns_refs(&route);
-        Self::register_service_refs(&route);
+    async fn parse_route(&self, mut route: TLSRoute, ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
+        Self::record_cross_ns_refs(&route, ctx);
+        Self::register_service_refs(&route, ctx);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         if let Some(rules) = &mut route.spec.rules {
@@ -132,6 +132,7 @@ impl TlsRouteHandler {
                                     backend_ref.group.as_ref(),
                                     backend_ref.kind.as_ref(),
                                     &backend_ref.name,
+                                    ctx.runtime(),
                                 );
                                 if !allowed {
                                     backend_ref.ref_denied = Some(RefDenied {
@@ -161,6 +162,7 @@ impl TlsRouteHandler {
                 parent_refs,
                 route_ns,
                 route.metadata.namespace.as_deref(),
+                ctx.runtime(),
             );
             if !listener_keys.is_empty() {
                 route.spec.resolved_listeners = Some(listener_keys);
@@ -195,6 +197,7 @@ impl TlsRouteHandler {
             route_ns,
             route_name,
             route.spec.parent_refs.as_ref(),
+            ctx.runtime(),
         );
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
@@ -203,29 +206,31 @@ impl TlsRouteHandler {
 
     async fn on_delete_route(&self, route: &TLSRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
-        get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         requeue_backend_tls_policies_for_route(ResourceKind::TLSRoute, route_ns, route_name, ctx).await;
-        super::route_utils::clear_service_backend_refs(ResourceKind::TLSRoute, route_ns, route_name);
+        super::route_utils::clear_service_backend_refs(ResourceKind::TLSRoute, route_ns, route_name, ctx.runtime());
 
-        remove_from_gateway_route_index(ResourceKind::TLSRoute, route_ns, route_name);
+        remove_from_gateway_route_index(ResourceKind::TLSRoute, route_ns, route_name, ctx.runtime());
 
-        let tracker_changed = remove_from_attached_route_tracker(ResourceKind::TLSRoute, route_ns, route_name);
+        let tracker_changed =
+            remove_from_attached_route_tracker(ResourceKind::TLSRoute, route_ns, route_name, ctx.runtime());
         if tracker_changed {
             requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
     }
 
-    fn update_route_status(&self, route: &mut TLSRoute, validation_errors: &[String]) {
+    fn update_route_status(&self, route: &mut TLSRoute, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
         let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
         let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let mut resolved_refs_errors = super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples);
+        let mut resolved_refs_errors =
+            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, ctx.runtime());
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(&ref_denied_list));
 
@@ -234,8 +239,13 @@ impl TlsRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_result =
-                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames, "TLSRoute");
+                let accepted_result = super::route_utils::validate_parent_ref_accepted(
+                    route_ns,
+                    parent_ref,
+                    route_hostnames,
+                    "TLSRoute",
+                    ctx.runtime(),
+                );
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
@@ -270,6 +280,7 @@ impl TlsRouteHandler {
             route.metadata.name.as_deref().unwrap_or(""),
             route.spec.parent_refs.as_ref(),
             route.spec.hostnames.as_ref(),
+            ctx.runtime(),
         );
     }
 }
@@ -281,11 +292,11 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
     }
 
     fn preparse(&self, route: &mut TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
-        self.preparse_route(route)
+        self.preparse_route(route, _ctx)
     }
 
     async fn parse(&self, route: TLSRoute, _ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
-        self.parse_route(route).await
+        self.parse_route(route, _ctx).await
     }
 
     async fn on_change(&self, route: &TLSRoute, ctx: &HandlerContext) {
@@ -297,7 +308,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
     }
 
     fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
-        self.update_route_status(route, validation_errors);
+        self.update_route_status(route, _ctx, validation_errors);
     }
 }
 
@@ -335,13 +346,13 @@ impl ProcessorHandler<TLSRouteAlpha3> for TlsRouteAlpha3Handler {
 
     fn preparse(&self, route: &mut TLSRouteAlpha3, _ctx: &HandlerContext) -> Vec<String> {
         let mut v1: TLSRoute = route.clone().into();
-        let errors = self.inner.preparse_route(&mut v1);
+        let errors = self.inner.preparse_route(&mut v1, _ctx);
         *route = v1.into();
         errors
     }
 
     async fn parse(&self, route: TLSRouteAlpha3, _ctx: &HandlerContext) -> ProcessResult<TLSRouteAlpha3> {
-        match self.inner.parse_route(route.into()).await {
+        match self.inner.parse_route(route.into(), _ctx).await {
             ProcessResult::Continue(v1) => ProcessResult::Continue(v1.into()),
             ProcessResult::Skip { reason } => ProcessResult::Skip { reason },
         }
@@ -359,7 +370,7 @@ impl ProcessorHandler<TLSRouteAlpha3> for TlsRouteAlpha3Handler {
 
     fn update_status(&self, route: &mut TLSRouteAlpha3, _ctx: &HandlerContext, validation_errors: &[String]) {
         let mut v1: TLSRoute = route.clone().into();
-        self.inner.update_route_status(&mut v1, validation_errors);
+        self.inner.update_route_status(&mut v1, _ctx, validation_errors);
         *route = v1.into();
     }
 }

@@ -6,21 +6,6 @@ use crate::types::{ResourceMeta, TLSRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-impl ConfHandler<TLSRoute> for &'static GlobalTlsRouteManagers {
-    fn full_set(&self, data: &HashMap<String, TLSRoute>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, TLSRoute>,
-        update: HashMap<String, TLSRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
-
 /// Create a TLS route handler for registration with ConfigClient.
 pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync> {
     Box::new(get_global_tls_route_managers())

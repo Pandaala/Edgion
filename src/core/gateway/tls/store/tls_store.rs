@@ -29,7 +29,7 @@ impl TlsStore {
     /// # Panics
     /// This method will NOT panic on lock poisoning. Instead, it will log an error
     /// and attempt to recover the lock state.
-    pub fn full_set(&self, data: HashMap<String, EdgionTls>) {
+    pub fn replace_all_tls(&self, data: HashMap<String, EdgionTls>) {
         // Capture count before moving
         let cert_count = data.len();
 
@@ -93,7 +93,7 @@ impl TlsStore {
     }
 
     /// Partially update TLS certificates
-    pub fn partial_update(
+    pub fn apply_partial_update(
         &self,
         add: HashMap<String, EdgionTls>,
         update: HashMap<String, EdgionTls>,

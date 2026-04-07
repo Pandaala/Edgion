@@ -44,6 +44,20 @@ pub trait ConfHandler<T>: Send + Sync {
     fn partial_update(&self, add: HashMap<String, T>, update: HashMap<String, T>, remove: HashSet<String>);
 }
 
+impl<T, U, D> ConfHandler<T> for D
+where
+    D: std::ops::Deref<Target = U> + Send + Sync,
+    U: ConfHandler<T> + ?Sized,
+{
+    fn full_set(&self, data: &HashMap<String, T>) {
+        self.deref().full_set(data)
+    }
+
+    fn partial_update(&self, add: HashMap<String, T>, update: HashMap<String, T>, remove: HashSet<String>) {
+        self.deref().partial_update(add, update, remove)
+    }
+}
+
 pub trait ConfigClientEventDispatcher: Send + Sync {
     fn apply_resource_change(
         &self,

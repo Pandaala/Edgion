@@ -17,16 +17,10 @@
 //! routes need to be re-resolved when a Gateway changes.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, RwLock};
+use std::sync::RwLock;
 
 use crate::types::resources::common::ParentReference;
 use crate::types::ResourceKind;
-
-static GATEWAY_ROUTE_INDEX: LazyLock<GatewayRouteIndex> = LazyLock::new(GatewayRouteIndex::new);
-
-pub fn get_gateway_route_index() -> &'static GatewayRouteIndex {
-    &GATEWAY_ROUTE_INDEX
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RouteEntry {
@@ -46,7 +40,7 @@ pub struct GatewayRouteIndex {
 }
 
 impl GatewayRouteIndex {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             forward: RwLock::new(HashMap::new()),
             reverse: RwLock::new(HashMap::new()),

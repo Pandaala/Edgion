@@ -6,17 +6,11 @@
 //! - WatchObj collection for ConfigSyncServer
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, RwLock};
 
-use super::sync_runtime::resource_processor::{
-    get_attached_route_tracker, get_gateway_route_index, get_global_cross_ns_ref_manager,
-    get_global_reference_grant_store, get_service_ref_manager, replace_all_secrets, ProcessorObj,
-};
+use super::sync_runtime::resource_processor::ProcessorObj;
 use super::sync_runtime::workqueue::TriggerChain;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
-
-/// Global processor registry instance
-pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(ProcessorRegistry::new);
 
 /// Registry that manages all ResourceProcessor instances
 ///
@@ -227,41 +221,13 @@ impl ProcessorRegistry {
         }
     }
 
-    /// Clear all registered processors and related global state
-    ///
-    /// Used when:
-    /// - Restarting controller after failure
-    /// - Losing leadership and re-election
-    /// - Testing cleanup
-    ///
-    /// This also clears:
-    /// (ListenerPortManager removed — conflict detection is now intra-gateway only)
-    ///
-    /// Note: This does NOT immediately notify watch clients. The gRPC layer detects
-    /// server_id changes after the new ConfigSyncServer is ready, ensuring clients
-    /// only relist when the new server is available.
-    pub fn clear_registry(&self) {
-        tracing::info!(component = "processor_registry", "Clearing all registered processors");
+    /// Clear only the processors map.
+    /// Used by `ControllerRuntime::reset()` during leader-change or controller restart.
+    /// Callers will re-register all processors after reset, so the entire map is cleared
+    /// rather than merely marking processors as not-ready.
+    pub fn clear_processors(&self) {
+        tracing::info!(component = "processor_registry", "Clearing processors map");
         self.processors.write().unwrap().clear();
-
-        // Clear ServiceRefManager to avoid stale Service→Route references
-        get_service_ref_manager().clear();
-        tracing::info!(component = "processor_registry", "Cleared ServiceRefManager");
-
-        get_global_reference_grant_store().replace_all(std::collections::HashMap::new());
-        tracing::info!(component = "processor_registry", "Cleared ReferenceGrantStore");
-
-        get_global_cross_ns_ref_manager().clear();
-        tracing::info!(component = "processor_registry", "Cleared CrossNamespaceRefManager");
-
-        get_gateway_route_index().clear();
-        tracing::info!(component = "processor_registry", "Cleared GatewayRouteIndex");
-
-        get_attached_route_tracker().clear();
-        tracing::info!(component = "processor_registry", "Cleared AttachedRouteTracker");
-
-        replace_all_secrets(HashMap::new());
-        tracing::info!(component = "processor_registry", "Cleared GlobalSecretStore");
     }
 }
 

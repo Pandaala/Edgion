@@ -23,22 +23,6 @@ fn get_effective_hostnames(route: &GRPCRoute) -> Vec<String> {
     vec![CATCH_ALL_HOSTNAME.to_string()]
 }
 
-/// Implement ConfHandler for &'static GlobalGrpcRouteManagers
-impl ConfHandler<GRPCRoute> for &'static GlobalGrpcRouteManagers {
-    fn full_set(&self, data: &HashMap<String, GRPCRoute>) {
-        (**self).full_set(data);
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, GRPCRoute>,
-        update: HashMap<String, GRPCRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove);
-    }
-}
-
 impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
     fn full_set(&self, data: &HashMap<String, GRPCRoute>) {
         tracing::info!(

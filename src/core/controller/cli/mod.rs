@@ -1,6 +1,7 @@
 use crate::core::common::config::ConfSyncTlsConfig;
 use crate::core::common::{config::EdgionControllerConfig, utils};
 use crate::core::controller::api::serve_with_shutdown as serve_admin_api_with_shutdown;
+use crate::core::controller::conf_mgr::conf_center::traits::CenterLifeCycle;
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
 use crate::core::controller::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 use crate::core::controller::observe::init_logging;
@@ -315,14 +316,16 @@ impl EdgionControllerCli {
         });
 
         // 6. Start federation client if center config is present.
-        // Must be after conf_mgr.start() so PROCESSOR_REGISTRY is populated.
+        // Must be after conf_mgr.start() so processor_registry is populated.
         let _fed_shutdown_tx = if let Some(center_config) = config.center.clone() {
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
             let center_api: Arc<dyn crate::core::controller::conf_mgr::conf_center::traits::CenterApi> =
                 conf_mgr.clone();
 
-            let kinds: Vec<String> = crate::core::controller::conf_mgr::processor_registry::PROCESSOR_REGISTRY
+            let kinds: Vec<String> = conf_mgr
+                .runtime()
+                .processor_registry
                 .all_kinds()
                 .iter()
                 .map(|s| s.to_string())

@@ -10,8 +10,8 @@
 
 use super::{remove_from_gateway_route_index, update_gateway_route_index};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, get_secret, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult,
-    ProcessorHandler, ResolvedRefsError, ResourceRef,
+    format_secret_key, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler,
+    ResolvedRefsError, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionTls;
 use crate::types::resources::edgion_tls::EdgionTlsStatus;
@@ -45,7 +45,7 @@ impl Default for EdgionTlsHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
-    fn validate(&self, tls: &EdgionTls, _ctx: &HandlerContext) -> Vec<String> {
+    fn validate(&self, tls: &EdgionTls, ctx: &HandlerContext) -> Vec<String> {
         let mut warnings = Vec::new();
 
         // Check parent_refs
@@ -61,7 +61,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .as_ref()
             .or(tls.metadata.namespace.as_ref());
 
-        if get_secret(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name).is_none() {
+        if ctx
+            .runtime()
+            .secret_store
+            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+            .is_none()
+        {
             let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
             warnings.push(format!("Secret '{}' not found (may arrive later)", secret_key));
         }
@@ -69,10 +74,16 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         warnings
     }
 
-    fn preparse(&self, tls: &mut EdgionTls, _ctx: &HandlerContext) -> Vec<String> {
+    fn preparse(&self, tls: &mut EdgionTls, ctx: &HandlerContext) -> Vec<String> {
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");
-        update_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name, tls.spec.parent_refs.as_ref());
+        update_gateway_route_index(
+            ResourceKind::EdgionTls,
+            tls_ns,
+            tls_name,
+            tls.spec.parent_refs.as_ref(),
+            ctx.runtime(),
+        );
         Vec::new()
     }
 
@@ -100,8 +111,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         ctx.secret_ref_manager()
             .add_ref(secret_key.clone(), resource_ref.clone());
 
-        // Try to resolve Secret from global store
-        if let Some(secret) = get_secret(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name) {
+        // Try to resolve Secret from runtime store
+        if let Some(secret) = ctx
+            .runtime()
+            .secret_store
+            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+        {
             tls.spec.secret = Some(secret);
             tracing::debug!(
                 edgion_tls = %resource_ref.key(),
@@ -128,8 +143,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 ctx.secret_ref_manager()
                     .add_ref(ca_secret_key.clone(), resource_ref.clone());
 
-                // Try to resolve CA Secret from global store
-                if let Some(ca_secret) = get_secret(ca_ns.map(|s| s.as_str()), &ca_secret_ref.name) {
+                // Try to resolve CA Secret from runtime store
+                if let Some(ca_secret) = ctx
+                    .runtime()
+                    .secret_store
+                    .get(ca_ns.map(|s| s.as_str()), &ca_secret_ref.name)
+                {
                     client_auth.ca_secret = Some(ca_secret);
                     tracing::debug!(
                         edgion_tls = %resource_ref.key(),
@@ -150,8 +169,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         tls.spec.resolved_listeners = None;
         if let Some(parent_refs) = &tls.spec.parent_refs {
-            let listener_keys =
-                super::route_utils::resolve_listener_keys(parent_refs, resource_ns, tls.metadata.namespace.as_deref());
+            let listener_keys = super::route_utils::resolve_listener_keys(
+                parent_refs,
+                resource_ns,
+                tls.metadata.namespace.as_deref(),
+                ctx.runtime(),
+            );
             if !listener_keys.is_empty() {
                 tracing::debug!(
                     edgion_tls = %resource_ref.key(),
@@ -165,7 +188,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         ProcessResult::Continue(tls)
     }
 
-    async fn on_change(&self, tls: &EdgionTls, _ctx: &HandlerContext) {
+    async fn on_change(&self, tls: &EdgionTls, ctx: &HandlerContext) {
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");
 
@@ -173,7 +196,13 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // this EdgionTls when listener hostnames or ports change. Without this,
         // an EdgionTls processed before its Gateway would permanently have
         // resolved_listeners = None with no mechanism to trigger re-resolution.
-        update_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name, tls.spec.parent_refs.as_ref());
+        update_gateway_route_index(
+            ResourceKind::EdgionTls,
+            tls_ns,
+            tls_name,
+            tls.spec.parent_refs.as_ref(),
+            ctx.runtime(),
+        );
     }
 
     async fn on_delete(&self, tls: &EdgionTls, ctx: &HandlerContext) {
@@ -186,7 +215,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");
-        remove_from_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name);
+        remove_from_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name, ctx.runtime());
 
         tracing::debug!(
             edgion_tls = %resource_ref.key(),
@@ -194,7 +223,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         );
     }
 
-    fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, tls: &mut EdgionTls, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = tls.metadata.generation;
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
 
@@ -207,7 +236,11 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .namespace
             .as_ref()
             .or(tls.metadata.namespace.as_ref());
-        let secret_resolved = get_secret(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name).is_some();
+        let secret_resolved = ctx
+            .runtime()
+            .secret_store
+            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+            .is_some();
 
         let resolved_refs_errors: Vec<ResolvedRefsError> = if secret_resolved {
             vec![]
@@ -222,8 +255,13 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         if let Some(parent_refs) = &tls.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_result =
-                    super::route_utils::validate_parent_ref_accepted(resource_ns, parent_ref, None, "EdgionTls");
+                let accepted_result = super::route_utils::validate_parent_ref_accepted(
+                    resource_ns,
+                    parent_ref,
+                    None,
+                    "EdgionTls",
+                    ctx.runtime(),
+                );
                 let mut accepted_errors = accepted_result.errors;
 
                 // EdgionTls only makes sense on HTTPS/TLS listeners — reject non-TLS ones.
@@ -279,6 +317,7 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> HandlerContext {
+        use crate::core::controller::conf_mgr::ControllerRuntime;
         HandlerContext::new(
             Arc::new(SecretRefManager::new()),
             None,
@@ -286,6 +325,7 @@ mod tests {
             TriggerChain::default(),
             3,
             20,
+            Arc::new(ControllerRuntime::default()),
         )
     }
 

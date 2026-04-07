@@ -104,7 +104,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
 }
 
 /// Create EdgionGatewayConfig handler
-pub fn create_edgion_gateway_config_handler() -> Box<dyn ConfHandler<EdgionGatewayConfig>> {
+pub fn create_edgion_gateway_config_handler() -> Box<dyn ConfHandler<EdgionGatewayConfig> + Send + Sync> {
     Box::new(EdgionGatewayConfigHandler::new())
 }
 
