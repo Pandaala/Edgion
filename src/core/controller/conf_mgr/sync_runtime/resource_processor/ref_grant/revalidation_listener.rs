@@ -107,6 +107,17 @@ pub async fn trigger_gateway_secret_revalidation(runtime: Arc<ControllerRuntime>
     }
 }
 
+/// Run the standard post-cache-ready revalidation sequence.
+///
+/// Called once all processors are ready (or after timeout) to ensure
+/// cross-namespace refs, TLS secrets, and parentRef routes are consistent.
+/// Order matters: cross-ns grants first, then secrets, then routes.
+pub async fn run_post_cache_ready_revalidations(runtime: Arc<ControllerRuntime>) {
+    trigger_full_cross_ns_revalidation(runtime.clone()).await;
+    trigger_gateway_secret_revalidation(runtime.clone()).await;
+    trigger_gateway_route_revalidation(runtime).await;
+}
+
 /// Cross-namespace revalidation listener
 ///
 /// When ReferenceGrant changes, finds all resources that have cross-namespace

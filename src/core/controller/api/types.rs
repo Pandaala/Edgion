@@ -1,3 +1,4 @@
+use crate::core::controller::api::common::map_writer_error;
 use crate::core::controller::conf_mgr::{ConfCenter, ConfMgr, ConfWriterError, SchemaValidator};
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use crate::types::ResourceKind;
@@ -53,7 +54,7 @@ impl AdminState {
                 error = %e,
                 "Failed to list resources from storage"
             );
-            map_center_api_error(e)
+            map_writer_error(e)
         })?;
 
         // Parse YAML/JSON content to Vec<Value>
@@ -87,7 +88,7 @@ impl AdminState {
                 error = %e,
                 "Failed to list namespaced resources from storage"
             );
-            map_center_api_error(e)
+            map_writer_error(e)
         })?;
 
         // Parse YAML/JSON content to Vec<Value>
@@ -141,7 +142,7 @@ impl AdminState {
                     error = %e,
                     "Failed to get resource from storage"
                 );
-                Err(map_center_api_error(e))
+                Err(map_writer_error(e))
             }
         }
     }
@@ -181,7 +182,7 @@ impl AdminState {
                     error = %e,
                     "Failed to get cluster resource from storage"
                 );
-                Err(map_center_api_error(e))
+                Err(map_writer_error(e))
             }
         }
     }
@@ -250,21 +251,6 @@ impl AdminState {
             .find(|v| v.get("metadata").and_then(|m| m.get("name")).and_then(|n| n.as_str()) == Some(name));
 
         Ok(found)
-    }
-}
-
-/// Map ConfCenter errors to HTTP status codes
-fn map_center_api_error(e: ConfWriterError) -> StatusCode {
-    match e {
-        ConfWriterError::NotFound(_) => StatusCode::NOT_FOUND,
-        ConfWriterError::AlreadyExists(_) => StatusCode::CONFLICT,
-        ConfWriterError::ValidationError(_) => StatusCode::BAD_REQUEST,
-        ConfWriterError::PermissionDenied(_) => StatusCode::FORBIDDEN,
-        ConfWriterError::Conflict(_) => StatusCode::CONFLICT,
-        ConfWriterError::ParseError(_) => StatusCode::BAD_REQUEST,
-        ConfWriterError::IOError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        ConfWriterError::KubeError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        ConfWriterError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 

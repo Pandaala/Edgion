@@ -19,7 +19,7 @@ use super::config::FileSystemConfig;
 use super::controller::FileSystemController;
 use super::storage::FileSystemStorage;
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
+    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
@@ -172,75 +172,8 @@ impl FileSystemCenter {
     }
 }
 
-// ============================================================================
-// CenterApi implementation - delegates to FileSystemStorage
-// ============================================================================
-
-#[async_trait]
-impl CenterApi for FileSystemCenter {
-    async fn set_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-        content: String,
-    ) -> Result<(), ConfWriterError> {
-        self.writer.set_one(kind, namespace, name, content).await
-    }
-
-    async fn create_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-        content: String,
-    ) -> Result<(), ConfWriterError> {
-        self.writer.create_one(kind, namespace, name, content).await
-    }
-
-    async fn update_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-        content: String,
-    ) -> Result<(), ConfWriterError> {
-        self.writer.update_one(kind, namespace, name, content).await
-    }
-
-    async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
-        self.writer.get_one(kind, namespace, name).await
-    }
-
-    async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        self.writer.get_list_by_kind(kind, opts).await
-    }
-
-    async fn get_list_by_kind_ns(
-        &self,
-        kind: &str,
-        namespace: &str,
-        opts: Option<ListOptions>,
-    ) -> Result<ListResult, ConfWriterError> {
-        self.writer.get_list_by_kind_ns(kind, namespace, opts).await
-    }
-
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
-        self.writer.cnt_by_kind(kind).await
-    }
-
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
-        self.writer.cnt_by_kind_ns(kind, namespace).await
-    }
-
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
-        self.writer.delete_one(kind, namespace, name).await
-    }
-
-    async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        self.writer.list_all(opts).await
-    }
-}
+// CenterApi implementation - delegates to `writer` via macro
+impl_center_api_delegate!(FileSystemCenter, writer);
 
 // ============================================================================
 // CenterLifeCycle implementation - FileSystem lifecycle logic
@@ -346,16 +279,8 @@ impl CenterLifeCycle for FileSystemCenter {
             // 5. Wait for PROCESSOR_REGISTRY to be ready (with timeout)
             self.wait_registry_ready(30).await;
 
-            // 5.5. Trigger full cross-namespace revalidation
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_full_cross_ns_revalidation(
-                self.runtime.clone(),
-            )
-            .await;
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_secret_revalidation(
-                self.runtime.clone(),
-            )
-            .await;
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::trigger_gateway_route_revalidation(
+            // 5.5. Trigger post-cache-ready revalidations (cross-ns refs, TLS secrets, parentRef routes)
+            crate::core::controller::conf_mgr::sync_runtime::resource_processor::run_post_cache_ready_revalidations(
                 self.runtime.clone(),
             )
             .await;

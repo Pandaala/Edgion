@@ -27,7 +27,9 @@
 
 use super::conf_center::file_system::FileSystemCenter;
 use super::conf_center::kubernetes::KubernetesCenter;
-use super::conf_center::traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult};
+use super::conf_center::traits::{
+    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult,
+};
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_grant::CrossNsRevalidationListener;
@@ -144,75 +146,8 @@ impl ConfMgr {
     }
 }
 
-// ============================================================================
-// CenterApi implementation - delegates to conf_center
-// ============================================================================
-
-#[async_trait]
-impl CenterApi for ConfMgr {
-    async fn set_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-        content: String,
-    ) -> Result<(), ConfWriterError> {
-        self.conf_center.set_one(kind, namespace, name, content).await
-    }
-
-    async fn create_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-        content: String,
-    ) -> Result<(), ConfWriterError> {
-        self.conf_center.create_one(kind, namespace, name, content).await
-    }
-
-    async fn update_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-        content: String,
-    ) -> Result<(), ConfWriterError> {
-        self.conf_center.update_one(kind, namespace, name, content).await
-    }
-
-    async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
-        self.conf_center.get_one(kind, namespace, name).await
-    }
-
-    async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        self.conf_center.get_list_by_kind(kind, opts).await
-    }
-
-    async fn get_list_by_kind_ns(
-        &self,
-        kind: &str,
-        namespace: &str,
-        opts: Option<ListOptions>,
-    ) -> Result<ListResult, ConfWriterError> {
-        self.conf_center.get_list_by_kind_ns(kind, namespace, opts).await
-    }
-
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
-        self.conf_center.cnt_by_kind(kind).await
-    }
-
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
-        self.conf_center.cnt_by_kind_ns(kind, namespace).await
-    }
-
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
-        self.conf_center.delete_one(kind, namespace, name).await
-    }
-
-    async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        self.conf_center.list_all(opts).await
-    }
-}
+// CenterApi implementation - delegates to `conf_center` via macro
+impl_center_api_delegate!(ConfMgr, conf_center);
 
 // ============================================================================
 // CenterLifeCycle implementation - delegates to conf_center

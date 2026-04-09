@@ -59,8 +59,8 @@ pub use secret_utils::{get_global_secret_store, get_secret, get_secret_by_name, 
 
 // Re-export ref_grant utilities
 pub use ref_grant::{
-    is_cross_ns_ref_allowed, trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation,
-    trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
+    is_cross_ns_ref_allowed, run_post_cache_ready_revalidations, trigger_full_cross_ns_revalidation,
+    trigger_gateway_route_revalidation, trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
     validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,
     CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsResourceRef, CrossNsRevalidationListener,
     ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,

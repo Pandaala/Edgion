@@ -1,6 +1,7 @@
 use crate::types::ResourceKind;
 use anyhow::{Context, Result};
 use jsonschema::Validator;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fs;
@@ -48,10 +49,11 @@ impl SchemaValidator {
             Self::load_crd_files(&edgion_crd_dir, &mut validators)?;
         }
 
-        // Load Gateway API CRDs
-        let gateway_api_file = crd_dir.join("gateway-api/gateway-api-standard-v1.5.0.yaml");
-        if gateway_api_file.exists() {
-            Self::load_gateway_api_crds(&gateway_api_file, &mut validators)?;
+        // Load Gateway API CRDs — scan all *.yaml in the directory so version upgrades
+        // only require replacing files, not changing source code.
+        let gateway_api_dir = crd_dir.join("gateway-api");
+        if gateway_api_dir.exists() {
+            Self::load_multi_doc_yaml_dir(&gateway_api_dir, &mut validators)?;
         }
 
         tracing::info!(
@@ -70,8 +72,7 @@ impl SchemaValidator {
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
-
-            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("yaml") {
+            if entry.file_type()?.is_file() && path.extension().and_then(|s| s.to_str()) == Some("yaml") {
                 Self::load_single_crd(&path, validators)?;
             }
         }
@@ -82,149 +83,137 @@ impl SchemaValidator {
     /// Load a single CRD file
     fn load_single_crd(path: &Path, validators: &mut HashMap<ResourceKind, Validator>) -> Result<()> {
         let content = fs::read_to_string(path).with_context(|| format!("Failed to read CRD file: {:?}", path))?;
-
         let crd: JsonValue =
             serde_yaml::from_str(&content).with_context(|| format!("Failed to parse CRD YAML: {:?}", path))?;
+        Self::try_register_crd(&crd, path, validators);
+        Ok(())
+    }
 
-        // Extract kind from CRD
-        if let Some(kind_str) = crd
+    /// Extract CRD schema from a parsed document and register a validator if the kind is known.
+    fn try_register_crd(crd: &JsonValue, path: &Path, validators: &mut HashMap<ResourceKind, Validator>) {
+        let Some(kind_str) = crd
             .get("spec")
             .and_then(|s| s.get("names"))
             .and_then(|n| n.get("kind"))
             .and_then(|k| k.as_str())
-        {
-            if let Some(resource_kind) = ResourceKind::from_kind_name(kind_str) {
-                // Extract schema
-                if let Some(schema) = crd
-                    .get("spec")
-                    .and_then(|s| s.get("versions"))
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|ver| ver.get("schema"))
-                    .and_then(|s| s.get("openAPIV3Schema"))
-                {
-                    match Validator::new(schema) {
-                        Ok(validator) => {
-                            tracing::debug!(
-                                component = "schema_validator",
-                                kind = ?resource_kind,
-                                file = ?path,
-                                "Loaded schema"
-                            );
-                            validators.insert(resource_kind, validator);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                component = "schema_validator",
-                                kind = ?resource_kind,
-                                file = ?path,
-                                error = %e,
-                                "Failed to compile schema"
-                            );
-                        }
-                    }
-                }
+        else {
+            return;
+        };
+
+        let Some(resource_kind) = ResourceKind::from_kind_name(kind_str) else {
+            return;
+        };
+
+        let Some(schema) = crd
+            .get("spec")
+            .and_then(|s| s.get("versions"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|ver| ver.get("schema"))
+            .and_then(|s| s.get("openAPIV3Schema"))
+        else {
+            return;
+        };
+
+        match Validator::new(schema) {
+            Ok(validator) => {
+                tracing::debug!(
+                    component = "schema_validator",
+                    kind = ?resource_kind,
+                    file = ?path,
+                    "Loaded schema"
+                );
+                validators.insert(resource_kind, validator);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    component = "schema_validator",
+                    kind = ?resource_kind,
+                    file = ?path,
+                    error = %e,
+                    "Failed to compile schema"
+                );
+            }
+        }
+    }
+
+    /// Load all *.yaml files in a directory as multi-document YAML bundles.
+    fn load_multi_doc_yaml_dir(dir: &Path, validators: &mut HashMap<ResourceKind, Validator>) -> Result<()> {
+        let entries = fs::read_dir(dir).with_context(|| format!("Failed to read directory: {:?}", dir))?;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_file() && path.extension().and_then(|s| s.to_str()) == Some("yaml") {
+                Self::load_multi_doc_yaml(&path, validators);
             }
         }
 
         Ok(())
     }
 
-    /// Load Gateway API CRDs from a single file containing multiple CRD definitions
-    fn load_gateway_api_crds(path: &Path, validators: &mut HashMap<ResourceKind, Validator>) -> Result<()> {
-        let content =
-            fs::read_to_string(path).with_context(|| format!("Failed to read Gateway API CRD file: {:?}", path))?;
+    /// Load a YAML file that may contain multiple documents separated by `---`.
+    /// Uses `serde_yaml::Deserializer` to iterate documents natively, avoiding
+    /// fragile string-splitting that breaks on leading comments or `\r\n` line endings.
+    fn load_multi_doc_yaml(path: &Path, validators: &mut HashMap<ResourceKind, Validator>) {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    component = "schema_validator",
+                    file = ?path,
+                    error = %e,
+                    "Failed to read CRD file"
+                );
+                return;
+            }
+        };
 
-        // Split by document separator
-        for doc in content.split("\n---\n") {
-            let doc = doc.trim();
-            if doc.is_empty() || doc.starts_with('#') {
+        for doc in serde_yaml::Deserializer::from_str(&content) {
+            let crd = match JsonValue::deserialize(doc) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::debug!(
+                        component = "schema_validator",
+                        file = ?path,
+                        error = %e,
+                        "Skipping malformed YAML document"
+                    );
+                    continue;
+                }
+            };
+
+            if crd.get("kind").and_then(|k| k.as_str()) != Some("CustomResourceDefinition") {
                 continue;
             }
 
-            if let Ok(crd) = serde_yaml::from_str::<JsonValue>(doc) {
-                // Check if this is a CRD
-                if crd.get("kind").and_then(|k| k.as_str()) != Some("CustomResourceDefinition") {
-                    continue;
-                }
-
-                // Extract kind from CRD
-                if let Some(kind_str) = crd
-                    .get("spec")
-                    .and_then(|s| s.get("names"))
-                    .and_then(|n| n.get("kind"))
-                    .and_then(|k| k.as_str())
-                {
-                    if let Some(resource_kind) = ResourceKind::from_kind_name(kind_str) {
-                        // Extract schema
-                        if let Some(schema) = crd
-                            .get("spec")
-                            .and_then(|s| s.get("versions"))
-                            .and_then(|v| v.as_array())
-                            .and_then(|arr| arr.first())
-                            .and_then(|ver| ver.get("schema"))
-                            .and_then(|s| s.get("openAPIV3Schema"))
-                        {
-                            match Validator::new(schema) {
-                                Ok(validator) => {
-                                    tracing::debug!(
-                                        component = "schema_validator",
-                                        kind = ?resource_kind,
-                                        "Loaded Gateway API schema"
-                                    );
-                                    validators.insert(resource_kind, validator);
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        component = "schema_validator",
-                                        kind = ?resource_kind,
-                                        error = %e,
-                                        "Failed to compile Gateway API schema"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            Self::try_register_crd(&crd, path, validators);
         }
-
-        Ok(())
     }
 
     /// Validate a resource against its schema
     pub fn validate(&self, kind: ResourceKind, value: &JsonValue) -> Result<(), ValidationError> {
         match self.validators.get(&kind) {
             Some(validator) => {
-                if validator.is_valid(value) {
+                let mut error_messages = Vec::new();
+                for error in validator.iter_errors(value) {
+                    tracing::debug!(
+                        component = "schema_validator",
+                        kind = ?kind,
+                        path = %error.instance_path(),
+                        error = %error,
+                        "Schema validation error"
+                    );
+                    error_messages.push(format!("Path: {}, Error: {}", error.instance_path(), error));
+                }
+                if error_messages.is_empty() {
                     Ok(())
                 } else {
-                    // Collect validation errors for logging
-                    let error_iter = validator.iter_errors(value);
-                    let mut error_messages = Vec::new();
-
-                    for error in error_iter {
-                        let msg = format!("Path: {}, Error: {}", error.instance_path(), error);
-                        error_messages.push(msg);
-                        tracing::debug!(
-                            component = "schema_validator",
-                            kind = ?kind,
-                            path = %error.instance_path(),
-                            error = %error,
-                            "Schema validation error"
-                        );
-                    }
-
-                    Err(ValidationError::SchemaViolation(if error_messages.is_empty() {
-                        "Schema validation failed".to_string()
-                    } else {
-                        error_messages.join("; ")
-                    }))
+                    Err(ValidationError::SchemaViolation(error_messages.join("; ")))
                 }
             }
             None => {
-                // No schema available for this resource kind
-                // Log a warning but don't fail validation
+                // No schema: warn but continue (fail-open by design)
                 tracing::warn!(
                     component = "schema_validator",
                     kind = ?kind,
