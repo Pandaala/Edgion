@@ -111,10 +111,7 @@ impl<T> RadixHost<T> {
             return String::new();
         }
 
-        // Split by dots, reverse the parts, then join
-        let parts: Vec<&str> = host.split('.').collect();
-        let reversed_parts: Vec<&str> = parts.into_iter().rev().collect();
-        reversed_parts.join(".")
+        host.split('.').rev().collect::<Vec<_>>().join(".")
     }
 
     /// Check if a pre-normalized (lowercased) hostname matches this pattern.
@@ -129,13 +126,15 @@ impl<T> RadixHost<T> {
     /// `true` if the hostname matches this pattern
     pub fn matches(&self, request_host: &str) -> bool {
         let reversed_request = Self::reverse_hostname(request_host);
+        self.matches_reversed(&reversed_request)
+    }
 
+    /// Like `matches()`, but accepts a hostname already reversed by `reverse_hostname()`.
+    /// Use this when the caller has already reversed the hostname to avoid a second allocation.
+    pub fn matches_reversed(&self, reversed_request: &str) -> bool {
         if self.is_wildcard {
-            // For wildcard patterns, check if reversed request starts with the radix_key
-            // and has the correct number of additional segments
-            self.wildcard_matches(&reversed_request)
+            self.wildcard_matches(reversed_request)
         } else {
-            // Exact match_engine
             reversed_request == self.radix_key
         }
     }

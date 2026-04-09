@@ -1,6 +1,7 @@
 use super::types::{EventType, WatcherEvent};
 use crate::types::{WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Result type for get_events_from_sync_version: (current_version, optional_events)
@@ -121,6 +122,17 @@ impl<T> EventStore<T> {
     {
         let data = self.data.values().cloned().collect();
         (data, self.sync_version)
+    }
+
+    /// Serialize data to JSON, collecting references rather than cloning values.
+    /// Avoids the full `T`-clone that `snapshot_owned` performs.
+    pub fn serialize_snapshot_json(&self) -> Result<(String, u64), String>
+    where
+        T: Serialize,
+    {
+        let values: Vec<&T> = self.data.values().collect();
+        let json = serde_json::to_string(&values).map_err(|e| e.to_string())?;
+        Ok((json, self.sync_version))
     }
 
     pub fn keys(&self) -> Vec<String> {

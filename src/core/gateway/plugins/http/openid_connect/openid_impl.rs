@@ -1577,7 +1577,7 @@ impl OpenidConnect {
     pub(super) async fn get_or_create_refresh_lock(&self, lock_key: &str) -> Arc<Mutex<()>> {
         let mut locks = self.refresh_singleflight_locks.lock().await;
         if locks.len() > 4096 {
-            locks.clear();
+            locks.retain(|_, v| Arc::strong_count(v) > 1);
         }
         locks
             .entry(lock_key.to_string())
@@ -1598,7 +1598,7 @@ impl OpenidConnect {
     pub(super) async fn put_refresh_result(&self, lock_key: &str, payload: OidcSessionCookie) {
         let mut results = self.refresh_singleflight_results.lock().await;
         if results.len() > 4096 {
-            results.clear();
+            results.retain(|_, v| v.at.elapsed() <= Duration::from_secs(10));
         }
         results.insert(
             lock_key.to_string(),

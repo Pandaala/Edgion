@@ -123,6 +123,20 @@ impl ConfHandler<Endpoints> for EndpointHandler {
         // 3. Sync Endpoints-level health check config
         self.sync_health_check_configs_for_services(&affected_services);
 
+        // 4. Clean up stale services whose Endpoints resource was removed
+        if remove_count > 0 {
+            let config_store = get_hc_config_store();
+            let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
+            for service_key in &affected_services {
+                if roundrobin_store.get_endpoint_for_service(service_key).is_none() {
+                    config_store.set_endpoint_config(service_key, None);
+                    get_health_check_manager().reconcile_service(service_key);
+                    runtime_state::remove_service(service_key);
+                    cb_store.remove_service(service_key);
+                }
+            }
+        }
+
         tracing::info!(
             component = "endpoint_handler",
             add_count,

@@ -2,7 +2,12 @@ use crate::core::common::conf_sync::traits::{ConfHandler, ResourceChange};
 use crate::types::ResourceMeta;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use tokio::time::{interval, Duration};
+use tokio::sync::Notify;
+use tokio::time::Duration;
+
+/// Debounce window for batching compressed events before dispatching to ConfHandler.
+/// Prevents rapid config changes (e.g. rolling updates) from triggering excessive ArcSwap rebuilds.
+const BATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// Internal cache data structure combining data and version under single lock.
 ///
@@ -99,18 +104,17 @@ impl<T: ResourceMeta> CacheData<T> {
     ) where
         T: Clone + ResourceMeta,
     {
-        // Create handler with processor (processor is required, so no Option needed)
-        self.handler = Some(ConfHandlerData::new(processor));
+        let handler_data = ConfHandlerData::new(processor);
+        let notify = handler_data.notify.clone();
+        self.handler = Some(handler_data);
 
-        // Start a background task to process compressed events every 100ms
         let cache_data_clone = cache_data.clone();
 
         tokio::spawn(async move {
-            let mut interval = interval(Duration::from_millis(100));
             loop {
-                interval.tick().await;
+                notify.notified().await;
+                tokio::time::sleep(BATCH_DEBOUNCE).await;
 
-                // Process compressed events, return false if should stop
                 if !Self::process_compressed_events(&cache_data_clone) {
                     break;
                 }
@@ -219,6 +223,7 @@ impl<T: ResourceMeta> CacheData<T> {
         // as the processor will do a full_set on reset anyway
         if let Some(ref mut handler) = self.handler {
             handler.compressed_events.add_event(key, change);
+            handler.notify.notify_one();
         }
     }
 }
@@ -248,6 +253,7 @@ impl CompressEvent {
 pub struct ConfHandlerData<T> {
     processor: Box<dyn ConfHandler<T> + Send + Sync>,
     compressed_events: CompressEvent,
+    notify: Arc<Notify>,
 }
 
 impl<T> ConfHandlerData<T> {
@@ -255,6 +261,7 @@ impl<T> ConfHandlerData<T> {
         Self {
             processor,
             compressed_events: CompressEvent::new(),
+            notify: Arc::new(Notify::new()),
         }
     }
 }

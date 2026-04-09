@@ -62,6 +62,9 @@ impl Commander {
                 self.pending.lock().unwrap().remove(&request_id);
                 anyhow!("Command timed out after {}s", self.timeout.as_secs())
             })?
-            .map_err(|_| anyhow!("Command response channel dropped"))
+            .map_err(|_| {
+                self.pending.lock().unwrap().remove(&request_id);
+                anyhow!("Command response channel dropped")
+            })
     }
 }

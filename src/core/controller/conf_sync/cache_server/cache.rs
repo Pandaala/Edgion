@@ -318,9 +318,9 @@ where
     }
 
     fn list_json(&self) -> Result<(String, u64), String> {
-        let list_data = self.list_owned();
-        serde_json::to_string(&list_data.data)
-            .map(|json| (json, list_data.sync_version))
+        let store_guard = self.store.read().unwrap();
+        store_guard
+            .serialize_snapshot_json()
             .map_err(|e| format!("Failed to serialize {} data: {}", T::kind_name(), e))
     }
 
