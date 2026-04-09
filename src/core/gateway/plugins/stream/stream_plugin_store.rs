@@ -102,17 +102,17 @@ impl Default for StreamPluginStore {
 }
 
 impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
-    fn full_set(&self, data: &HashMap<String, EdgionStreamPlugins>) {
+    fn full_set(&self, data: &HashMap<String, Arc<EdgionStreamPlugins>>) {
         tracing::info!(component = "stream_plugin_store", cnt = data.len(), "full set");
         let plugins: HashMap<String, Arc<EdgionStreamPlugins>> =
-            data.iter().map(|(k, v)| (k.clone(), Arc::new(v.clone()))).collect();
+            data.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect();
         self.replace_all(plugins);
     }
 
     fn partial_update(
         &self,
-        add: HashMap<String, EdgionStreamPlugins>,
-        update: HashMap<String, EdgionStreamPlugins>,
+        add: HashMap<String, Arc<EdgionStreamPlugins>>,
+        update: HashMap<String, Arc<EdgionStreamPlugins>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -122,13 +122,8 @@ impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
             rm = remove.len(),
             "partial update"
         );
-        let mut add_or_update = HashMap::new();
-        for (k, v) in add {
-            add_or_update.insert(k, Arc::new(v));
-        }
-        for (k, v) in update {
-            add_or_update.insert(k, Arc::new(v));
-        }
+        let mut add_or_update: HashMap<String, Arc<EdgionStreamPlugins>> = add;
+        add_or_update.extend(update);
         for key in &remove {
             tracing::debug!(key = %key, "Removing EdgionStreamPlugins");
         }

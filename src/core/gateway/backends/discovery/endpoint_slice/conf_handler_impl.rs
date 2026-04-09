@@ -1,5 +1,5 @@
 use super::get_roundrobin_store;
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::gateway::backends::discovery::conf_handler_common::{update_affected_lbs, update_all_existing_lbs};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
@@ -8,6 +8,7 @@ use crate::core::gateway::lb::runtime_state;
 use crate::types::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Handler for EndpointSlice configuration updates
 ///
@@ -74,7 +75,7 @@ pub fn create_ep_slice_handler() -> Box<dyn ConfHandler<EndpointSlice> + Send + 
 }
 
 impl ConfHandler<EndpointSlice> for EpSliceHandler {
-    fn full_set(&self, data: &HashMap<String, EndpointSlice>) {
+    fn full_set(&self, data: &HashMap<String, Arc<EndpointSlice>>) {
         tracing::info!(
             component = "ep_slice_handler",
             cnt = data.len(),
@@ -86,7 +87,8 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_roundrobin_store();
-        let all_services = roundrobin_store.replace_data_only(data.clone());
+        let data_owned = arc_map_to_owned(data);
+        let all_services = roundrobin_store.replace_data_only(data_owned);
 
         // 2. Update all existing LBs in ALL stores
         // This handles relist scenario where data might have changed
@@ -122,8 +124,8 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
 
     fn partial_update(
         &self,
-        add: HashMap<String, EndpointSlice>,
-        update: HashMap<String, EndpointSlice>,
+        add: HashMap<String, Arc<EndpointSlice>>,
+        update: HashMap<String, Arc<EndpointSlice>>,
         remove: HashSet<String>,
     ) {
         let add_count = add.len();
@@ -132,7 +134,9 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_roundrobin_store();
-        let affected_services = roundrobin_store.update_data_only(add, update, &remove);
+        let add_owned = arc_map_into_owned(add);
+        let update_owned = arc_map_into_owned(update);
+        let affected_services = roundrobin_store.update_data_only(add_owned, update_owned, &remove);
 
         // 2. Update affected LBs in ALL stores
         update_affected_lbs(&*roundrobin_store, &affected_services);

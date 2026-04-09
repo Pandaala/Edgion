@@ -114,10 +114,9 @@ impl KubernetesStorage {
                 )),
                 Scope::Namespaced,
             ),
-            "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client)
-                .await
-                .map_err(|e| ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e)))?
-            {
+            "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client).await.map_err(|e| {
+                ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e))
+            })? {
                 Some(BackendTLSPolicyVersion::V1) => (
                     ApiResource::from_gvk(&GroupVersionKind::gvk(
                         "gateway.networking.k8s.io",
@@ -236,8 +235,10 @@ impl KubernetesStorage {
     }
 
     async fn parse_dynamic_object(&self, kind: &str, content: &str) -> Result<DynamicObject, ConfWriterError> {
-        let mut value: serde_json::Value = serde_yaml::from_str(content)
-            .map_err(|e| ConfWriterError::ParseError { context: "Failed to parse YAML", source: e.into() })?;
+        let mut value: serde_json::Value = serde_yaml::from_str(content).map_err(|e| ConfWriterError::ParseError {
+            context: "Failed to parse YAML",
+            source: e.into(),
+        })?;
 
         if kind == "BackendTLSPolicy" {
             let Some(api_version) = self.backend_tls_policy_api_version().await? else {
@@ -265,7 +266,10 @@ impl KubernetesStorage {
             }
         }
 
-        serde_json::from_value(value).map_err(|e| ConfWriterError::ParseError { context: "Failed to deserialize JSON", source: e.into() })
+        serde_json::from_value(value).map_err(|e| ConfWriterError::ParseError {
+            context: "Failed to deserialize JSON",
+            source: e.into(),
+        })
     }
 
     /// Create a dynamic API that lists resources across ALL namespaces (no Discovery call)
@@ -399,8 +403,10 @@ impl CenterApi for KubernetesStorage {
 
         let obj = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
 
-        let content = serde_yaml::to_string(&obj)
-            .map_err(|e| ConfWriterError::ParseError { context: "Failed to serialize to YAML", source: e.into() })?;
+        let content = serde_yaml::to_string(&obj).map_err(|e| ConfWriterError::ParseError {
+            context: "Failed to serialize to YAML",
+            source: e.into(),
+        })?;
 
         Ok(content)
     }
@@ -518,10 +524,7 @@ impl CenterApi for KubernetesStorage {
             }
         }
 
-        let list = api
-            .list(&lp)
-            .await
-            .map_err(|e| self.map_kube_error(e))?;
+        let list = api.list(&lp).await.map_err(|e| self.map_kube_error(e))?;
 
         let items = list
             .items
@@ -579,10 +582,7 @@ impl CenterApi for KubernetesStorage {
             }
         }
 
-        let list = api
-            .list(&lp)
-            .await
-            .map_err(|e| self.map_kube_error(e))?;
+        let list = api.list(&lp).await.map_err(|e| self.map_kube_error(e))?;
 
         let items = list
             .items

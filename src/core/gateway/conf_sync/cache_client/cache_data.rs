@@ -4,10 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use tokio::time::{interval, Duration};
 
-/// Internal cache data structure combining data and version under single lock
+/// Internal cache data structure combining data and version under single lock.
+///
+/// Resources are stored as `Arc<T>` to enable zero-copy sharing with handler stores.
+/// This eliminates expensive deep clones on the full_set and partial_update paths.
 pub struct CacheData<T> {
     ready: bool,
-    data: HashMap<String, T>,
+    data: HashMap<String, Arc<T>>,
     sync_version: u64,
 
     // Register handlers to CacheData for processing specific configurations
@@ -27,14 +30,13 @@ impl<T: ResourceMeta> CacheData<T> {
     /// Reset cache with a complete set of resources
     /// Uses resource.key_name() (namespace/name) as the key for each resource
     pub(crate) fn reset(&mut self, resources: Vec<T>, sync_version: u64) {
-        // Build new HashMap directly from resources
+        // Build new HashMap directly from resources, wrapping each in Arc
         self.data = resources
             .into_iter()
-            .map(|resource| (resource.key_name(), resource))
+            .map(|resource| (resource.key_name(), Arc::new(resource)))
             .collect();
         self.sync_version = sync_version;
         if let Some(ref handler) = self.handler {
-            // Pass reference to full_set, no need to clone or move data
             handler.processor.full_set(&self.data);
         }
         if let Some(ref mut handler) = self.handler {
@@ -52,19 +54,19 @@ impl<T: ResourceMeta> CacheData<T> {
     }
 
     // Data methods
-    pub(crate) fn get(&self, key: &str) -> Option<&T> {
+    pub(crate) fn get(&self, key: &str) -> Option<&Arc<T>> {
         self.data.get(key)
     }
 
     pub(crate) fn insert(&mut self, key: String, value: T) {
-        self.data.insert(key, value);
+        self.data.insert(key, Arc::new(value));
     }
 
-    pub(crate) fn remove(&mut self, key: &str) -> Option<T> {
+    pub(crate) fn remove(&mut self, key: &str) -> Option<Arc<T>> {
         self.data.remove(key)
     }
 
-    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Arc<T>> {
         self.data.values()
     }
 

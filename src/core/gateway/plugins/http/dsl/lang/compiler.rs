@@ -773,6 +773,24 @@ impl Compiler {
     }
 
     fn compile_fn_call(&mut self, name: &str, args: &[Expr]) -> Result<(), CompileError> {
+        // Literal pattern: emit pre-compiled opcode; dynamic patterns fall through to CallBuiltin.
+        if name == "regex_find" && args.len() == 2 {
+            if let ExprKind::StringLit(pattern) = &args[1].kind {
+                let idx = self.add_regex_const(pattern)?;
+                self.compile_expr(&args[0])?;
+                self.emit(OpCode::RegexFind(idx));
+                return Ok(());
+            }
+        } else if name == "regex_replace" && args.len() == 3 {
+            if let ExprKind::StringLit(pattern) = &args[1].kind {
+                let idx = self.add_regex_const(pattern)?;
+                self.compile_expr(&args[0])?;
+                self.compile_expr(&args[2])?;
+                self.emit(OpCode::RegexReplace(idx));
+                return Ok(());
+            }
+        }
+
         // (builtin_id, expected_argc) — None means variadic / no check
         let (builtin_id, expected_argc): (BuiltinId, Option<usize>) = match name {
             "log" => (BuiltinId::Log, Some(1)),

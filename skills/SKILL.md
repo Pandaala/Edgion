@@ -41,6 +41,15 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 | **全局 Review** — 安全/正确性/可观测性检查清单 + 已关闭误报条目 | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
 
+## 关键约束（必读，违反会引入运行时 bug）
+
+> 这里只列"非显而易见、代码本身看不出来、犯过错"的约束。
+
+| 约束 | 位置 | 详情 |
+|------|------|------|
+| **PluginConditions regex 必须在 preparse compile** | `conditions/types.rs`, `edgion_plugins/mod.rs` | `compiled_regex` 是 `#[serde(skip)]`，反序列化后为 None。必须在 `EdgionPlugins::preparse()` 阶段调用 `compile_conditions()` 完成编译，否则每请求触发 `Regex::new()`。新增带 regex 的条件类型时，同步在 `Condition::compile()` 加 match 臂。详见 [05-plugin-system.md §条件执行](01-architecture/02-gateway/05-plugin-system.md) |
+| **gRPC H2 grpc-status 必须放 trailers** | Pingora H2 响应路径 | 放在 response headers 里 tonic 会返回 Internal(13)，必须放 trailers |
+
 ## 目录总览
 
 | # | 目录 | 用途 |

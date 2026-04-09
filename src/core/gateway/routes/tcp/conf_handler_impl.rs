@@ -1,4 +1,4 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
@@ -13,13 +13,13 @@ pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync
 }
 
 impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, TCPRoute>) {
+    fn full_set(&self, data: &HashMap<String, Arc<TCPRoute>>) {
         tracing::info!(component = "tcp_route_manager", cnt = data.len(), "full set");
 
         self.clear_route_cache();
 
         for (key, route) in data {
-            match self.initialize_route(route.clone()) {
+            match self.initialize_route((**route).clone()) {
                 Ok(initialized) => {
                     self.insert_route(initialized);
                 }
@@ -38,8 +38,8 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
 
     fn partial_update(
         &self,
-        add: HashMap<String, TCPRoute>,
-        update: HashMap<String, TCPRoute>,
+        add: HashMap<String, Arc<TCPRoute>>,
+        update: HashMap<String, Arc<TCPRoute>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -50,10 +50,13 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             "partial update"
         );
 
+        let add_owned = arc_map_into_owned(add);
+        let update_owned = arc_map_into_owned(update);
+
         apply_l4_partial_update(
             "TCPRoute",
-            add,
-            update,
+            add_owned,
+            update_owned,
             remove,
             |key| self.get_route(key),
             |r| resolved_listeners_for_route(r).to_vec(),
@@ -215,8 +218,8 @@ mod tests {
         let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000, key9000.clone());
         let route2 = create_test_tcp_route("default", "route2", "gateway1", "tcp-9001", 9001, key9001.clone());
 
-        data.insert("default/route1".to_string(), route1);
-        data.insert("default/route2".to_string(), route2);
+        data.insert("default/route1".to_string(), Arc::new(route1));
+        data.insert("default/route2".to_string(), Arc::new(route2));
 
         managers.full_set(&data);
 
@@ -273,7 +276,14 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(
             "default/route-x".to_string(),
-            create_test_tcp_route("default", "route-x", "gw1", "tcp-9000", 9000, key9000.clone()),
+            Arc::new(create_test_tcp_route(
+                "default",
+                "route-x",
+                "gw1",
+                "tcp-9000",
+                9000,
+                key9000.clone(),
+            )),
         );
         managers.partial_update(add, HashMap::new(), HashSet::new());
         let mgr9000 = managers.get_or_create_listener_manager(&key9000);
@@ -286,7 +296,14 @@ mod tests {
         let mut misclassified_add = HashMap::new();
         misclassified_add.insert(
             "default/route-x".to_string(),
-            create_test_tcp_route("default", "route-x", "gw1", "tcp-9001", 9001, key9001.clone()),
+            Arc::new(create_test_tcp_route(
+                "default",
+                "route-x",
+                "gw1",
+                "tcp-9001",
+                9001,
+                key9001.clone(),
+            )),
         );
         managers.partial_update(misclassified_add, HashMap::new(), HashSet::new());
 

@@ -118,13 +118,13 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         self.list_owned()
     }
 
-    /// List all data as owned values (cloned)
+    /// List all data as owned values (cloned from internal Arc storage)
     pub fn list_owned(&self) -> ListData<T>
     where
         T: Clone,
     {
         let cache = self.cache_data.read().unwrap();
-        let data = cache.values().cloned().collect();
+        let data = cache.values().map(|arc| (**arc).clone()).collect();
         let sync_version = cache.sync_version();
         ListData::new(data, sync_version)
     }
@@ -135,7 +135,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         T: Clone,
     {
         let cache = self.cache_data.read().unwrap();
-        cache.get(key).cloned()
+        cache.get(key).map(|arc| (**arc).clone())
     }
 
     /// Get all keys

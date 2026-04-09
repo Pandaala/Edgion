@@ -5,9 +5,10 @@
 //! sub-module managers (Webhook, Redis, Etcd, etc.).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::store::{get_global_link_sys_store, LinkSysStore};
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::types::resources::link_sys::LinkSys;
 
 /// Create a LinkSysStore handler for registration with ConfigClient
@@ -16,19 +17,18 @@ pub fn create_link_sys_handler() -> Box<dyn ConfHandler<LinkSys> + Send + Sync> 
 }
 
 impl ConfHandler<LinkSys> for LinkSysStore {
-    fn full_set(&self, data: &HashMap<String, LinkSys>) {
+    fn full_set(&self, data: &HashMap<String, Arc<LinkSys>>) {
         tracing::info!(component = "link_sys_store", cnt = data.len(), "full set");
 
-        // Validate each resource before storing
-        let mut prepared_data = data.clone();
-        for ls in prepared_data.values_mut() {
-            ls.validate_config();
-        }
-
-        self.replace_all(prepared_data);
+        self.replace_all(arc_map_to_owned(data));
     }
 
-    fn partial_update(&self, add: HashMap<String, LinkSys>, update: HashMap<String, LinkSys>, remove: HashSet<String>) {
+    fn partial_update(
+        &self,
+        add: HashMap<String, Arc<LinkSys>>,
+        update: HashMap<String, Arc<LinkSys>>,
+        remove: HashSet<String>,
+    ) {
         tracing::info!(
             component = "link_sys_store",
             add = add.len(),
@@ -37,13 +37,8 @@ impl ConfHandler<LinkSys> for LinkSysStore {
             "partial update"
         );
 
-        let mut add_or_update = add;
-        add_or_update.extend(update);
-
-        // Validate each resource
-        for ls in add_or_update.values_mut() {
-            ls.validate_config();
-        }
+        let mut add_or_update = arc_map_into_owned(add);
+        add_or_update.extend(arc_map_into_owned(update));
 
         self.update(add_or_update, &remove);
     }
@@ -77,8 +72,14 @@ mod tests {
         let store = LinkSysStore::new();
 
         let mut data = HashMap::new();
-        data.insert("default/wh1".to_string(), create_test_linksys("default", "wh1"));
-        data.insert("default/wh2".to_string(), create_test_linksys("default", "wh2"));
+        data.insert(
+            "default/wh1".to_string(),
+            Arc::new(create_test_linksys("default", "wh1")),
+        );
+        data.insert(
+            "default/wh2".to_string(),
+            Arc::new(create_test_linksys("default", "wh2")),
+        );
 
         ConfHandler::full_set(&store, &data);
 
@@ -92,12 +93,18 @@ mod tests {
 
         // Add initial data
         let mut data = HashMap::new();
-        data.insert("default/wh1".to_string(), create_test_linksys("default", "wh1"));
+        data.insert(
+            "default/wh1".to_string(),
+            Arc::new(create_test_linksys("default", "wh1")),
+        );
         ConfHandler::full_set(&store, &data);
 
         // Partial update: add wh2, remove wh1
         let mut add = HashMap::new();
-        add.insert("default/wh2".to_string(), create_test_linksys("default", "wh2"));
+        add.insert(
+            "default/wh2".to_string(),
+            Arc::new(create_test_linksys("default", "wh2")),
+        );
 
         let mut remove = HashSet::new();
         remove.insert("default/wh1".to_string());

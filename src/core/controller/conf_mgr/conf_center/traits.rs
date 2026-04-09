@@ -79,7 +79,6 @@ pub enum ConfWriterError {
     InternalError(String),
 
     // ---- infrastructure variants: preserve #[source] for error chain ----
-
     /// IO error. `context` names the operation; `std::io::ErrorKind` is
     /// accessible via `Error::source()` for retry / observability logic.
     #[error("IO error: {context}")]
@@ -107,7 +106,10 @@ pub enum ConfWriterError {
 impl ConfWriterError {
     /// Convenience constructor for `IOError`.
     pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
-        Self::IOError { context: context.into(), source }
+        Self::IOError {
+            context: context.into(),
+            source,
+        }
     }
 }
 
@@ -355,12 +357,7 @@ macro_rules! impl_center_api_delegate {
                 self.$field.cnt_by_kind_ns(kind, namespace).await
             }
 
-            async fn delete_one(
-                &self,
-                kind: &str,
-                namespace: Option<&str>,
-                name: &str,
-            ) -> Result<(), ConfWriterError> {
+            async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
                 self.$field.delete_one(kind, namespace, name).await
             }
 

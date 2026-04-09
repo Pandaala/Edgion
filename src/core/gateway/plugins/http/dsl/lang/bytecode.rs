@@ -66,6 +66,12 @@ pub enum OpCode {
     Contains,
     /// Pop str, match regex at constant pool index, push Bool
     Matches(u16),
+    /// regex_find(s, literal_pattern) — pattern pre-compiled in regex_cache[idx]
+    /// Stack: [s] → [match_str | Nil]
+    RegexFind(u16),
+    /// regex_replace(s, literal_pattern, replacement) — pattern pre-compiled
+    /// Stack: [s, replacement] → [result_str]
+    RegexReplace(u16),
 
     // ===== Control Flow =====
     /// Unconditional jump (relative offset from NEXT instruction)

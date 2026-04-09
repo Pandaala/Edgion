@@ -2,6 +2,8 @@
 //!
 //! This filter handles references to EdgionPlugins resources.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::core::gateway::plugins::http::get_global_plugin_store;
@@ -10,8 +12,8 @@ use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{
     PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
+use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::types::filters::{PluginRunningResult, PluginRunningStage};
-use crate::types::resources::edgion_plugins::EdgionPlugins;
 use crate::types::resources::LocalObjectReference;
 
 /// Default maximum allowed nested plugin references to avoid infinite loops
@@ -62,7 +64,7 @@ impl ExtensionRefFilter {
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
-    ) -> Result<Option<(EdgionPlugins, EdgionPluginsLogToken)>, ()> {
+    ) -> Result<Option<(Arc<PluginRuntime>, EdgionPluginsLogToken)>, ()> {
         if !self.is_edgion_plugins() {
             log.push(&format!(
                 "ExtensionRef kind '{}' not supported, skipping",
@@ -89,16 +91,14 @@ impl ExtensionRefFilter {
 
         session.push_plugin_ref(key.clone());
 
-        // Use global store
-        let store = get_global_plugin_store();
-        let Some(edgion_plugins) = store.get(&key) else {
+        let Some(plugin_runtime) = get_global_plugin_store().get_plugin_runtime(&key) else {
             log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
             session.pop_plugin_ref();
             return Err(());
         };
 
         let token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
-        Ok(Some((edgion_plugins, token)))
+        Ok(Some((plugin_runtime, token)))
     }
 
     /// Execute the referenced EdgionPlugins's plugin runtime
@@ -108,16 +108,12 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        let (edgion_plugins, log_token) = match self.prepare_execution(session, log) {
+        let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
             Ok(Some(res)) => res,
             Ok(None) => return PluginRunningResult::GoodNext,
             Err(_) => return PluginRunningResult::ErrTerminateRequest,
         };
 
-        // Get the pre-compiled plugin runtime
-        let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
-
-        // Run edgion_plugins based on stage
         match stage {
             PluginRunningStage::Request => {
                 log.push("Warning: Request stage should use async path");
@@ -149,13 +145,11 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        let (edgion_plugins, log_token) = match self.prepare_execution(session, log) {
+        let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
             Ok(Some(res)) => res,
             Ok(None) => return PluginRunningResult::GoodNext,
             Err(_) => return PluginRunningResult::ErrTerminateRequest,
         };
-
-        let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
         match stage {
             PluginRunningStage::Request => {
@@ -205,13 +199,11 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Option<std::time::Duration> {
-        let (edgion_plugins, log_token) = match self.prepare_execution(session, log) {
+        let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
             Ok(Some(res)) => res,
             Ok(None) => return None,
             Err(_) => return None,
         };
-
-        let plugin_runtime = &edgion_plugins.spec.plugin_runtime;
 
         let mut max_delay: Option<std::time::Duration> = None;
 

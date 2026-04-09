@@ -95,10 +95,15 @@ pub struct CtxSetConfig {
     #[schemars(skip)]
     pub validation_error: Option<String>,
 
-    /// Compiled regex patterns (populated during validation)
+    /// Compiled regex patterns for extract (populated during validation)
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_patterns: HashMap<usize, Regex>,
+
+    /// Compiled regex patterns for transform.replace (populated during validation)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_transform_patterns: HashMap<usize, Regex>,
 }
 
 /// Rule for setting a single context variable
@@ -319,6 +324,7 @@ impl CtxSetConfig {
     pub fn validate(&mut self) {
         self.validation_error = None;
         self.compiled_patterns.clear();
+        self.compiled_transform_patterns.clear();
 
         if self.vars.is_empty() {
             self.validation_error = Some("vars list is empty".to_string());
@@ -360,12 +366,17 @@ impl CtxSetConfig {
             // Validate transform regex if present
             if let Some(ref transform) = rule.transform {
                 if let Some(TransformType::Replace { ref pattern, .. }) = transform.get_transform_type() {
-                    if let Err(e) = Regex::new(pattern) {
-                        self.validation_error = Some(format!(
-                            "vars[{}] '{}': invalid transform.replace pattern '{}': {}",
-                            idx, rule.name, pattern, e
-                        ));
-                        return;
+                    match Regex::new(pattern) {
+                        Ok(re) => {
+                            self.compiled_transform_patterns.insert(idx, re);
+                        }
+                        Err(e) => {
+                            self.validation_error = Some(format!(
+                                "vars[{}] '{}': invalid transform.replace pattern '{}': {}",
+                                idx, rule.name, pattern, e
+                            ));
+                            return;
+                        }
                     }
                 }
 
@@ -393,9 +404,14 @@ impl CtxSetConfig {
         self.validation_error.as_deref()
     }
 
-    /// Get compiled regex for a rule by index
+    /// Get compiled extract regex for a rule by index
     pub fn get_compiled_regex(&self, idx: usize) -> Option<&Regex> {
         self.compiled_patterns.get(&idx)
+    }
+
+    /// Get compiled transform.replace regex for a rule by index
+    pub fn get_compiled_transform_regex(&self, idx: usize) -> Option<&Regex> {
+        self.compiled_transform_patterns.get(&idx)
     }
 }
 

@@ -98,7 +98,9 @@ impl BackendTlsPolicyHandler {
         // Store creation timestamp for conflict precedence sorting.
         let policy_resource_key = resource_ref.resource_key();
         let ts_string = btp.metadata.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339());
-        ctx.runtime().backend_tls_policy.set_timestamp(&policy_resource_key, ts_string.as_deref());
+        ctx.runtime()
+            .backend_tls_policy
+            .set_timestamp(&policy_resource_key, ts_string.as_deref());
 
         // Requeue old siblings whose conflict status may have changed.
         for sibling in old_siblings {
@@ -140,7 +142,11 @@ impl BackendTlsPolicyHandler {
                     let cm_key = format_secret_key(policy_ns, &ca_ref.name);
                     ctx.secret_ref_manager().add_ref(cm_key.clone(), resource_ref.clone());
 
-                    if let Some(cm) = ctx.runtime().configmap_store.get(policy_ns.map(|s| s.as_str()), &ca_ref.name) {
+                    if let Some(cm) = ctx
+                        .runtime()
+                        .configmap_store
+                        .get(policy_ns.map(|s| s.as_str()), &ca_ref.name)
+                    {
                         let ca_pem = cm
                             .data
                             .as_ref()
@@ -221,8 +227,13 @@ impl BackendTlsPolicyHandler {
         let siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
 
         // Clear target ref registrations and timestamp.
-        ctx.runtime().backend_tls_policy.target_mgr().clear_resource_refs(&resource_ref);
-        ctx.runtime().backend_tls_policy.remove_timestamp(&resource_ref.resource_key());
+        ctx.runtime()
+            .backend_tls_policy
+            .target_mgr()
+            .clear_resource_refs(&resource_ref);
+        ctx.runtime()
+            .backend_tls_policy
+            .remove_timestamp(&resource_ref.resource_key());
 
         // Clear secret refs.
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);

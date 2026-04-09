@@ -192,31 +192,56 @@ impl EdgionPlugins {
     pub fn preparse(&mut self) {
         let mut runtime = PluginRuntime::new();
         let mut errors = Vec::new();
-        let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
+        let namespace = self.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
+
+        // Compile regex conditions on all plugin entries once, before building PluginRuntime.
+        // This avoids per-request Regex::new() in the fallback path of condition evaluators.
+        self.compile_conditions(&mut errors);
 
         if let Some(request_plugins) = &self.spec.request_plugins {
-            let request_errors = runtime.add_from_request_filters(request_plugins, namespace);
+            let request_errors = runtime.add_from_request_filters(request_plugins, &namespace);
             errors.extend(request_errors);
         }
 
         if let Some(upstream_response_filter_plugins) = &self.spec.upstream_response_filter_plugins {
-            let filter_errors = runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, namespace);
+            let filter_errors = runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, &namespace);
             errors.extend(filter_errors);
         }
 
         if let Some(upstream_response_body_filter_plugins) = &self.spec.upstream_response_body_filter_plugins {
             let body_filter_errors =
-                runtime.add_from_upstream_response_body_filters(upstream_response_body_filter_plugins, namespace);
+                runtime.add_from_upstream_response_body_filters(upstream_response_body_filter_plugins, &namespace);
             errors.extend(body_filter_errors);
         }
 
         if let Some(upstream_response_plugins) = &self.spec.upstream_response_plugins {
-            let response_errors = runtime.add_from_upstream_responses(upstream_response_plugins, namespace);
+            let response_errors = runtime.add_from_upstream_responses(upstream_response_plugins, &namespace);
             errors.extend(response_errors);
         }
 
         self.spec.plugin_runtime = Arc::new(runtime);
         self.spec.preparse_errors = errors;
+    }
+
+    /// Compile regex patterns in conditions for all plugin entries.
+    fn compile_conditions(&mut self, errors: &mut Vec<String>) {
+        macro_rules! compile_entries {
+            ($entries:expr, $label:expr) => {
+                if let Some(entries) = &mut $entries {
+                    for (i, entry) in entries.iter_mut().enumerate() {
+                        if let Some(conds) = entry.conditions.as_mut() {
+                            if let Err(e) = conds.compile() {
+                                errors.push(format!("{}[{}] conditions regex: {}", $label, i, e));
+                            }
+                        }
+                    }
+                }
+            };
+        }
+        compile_entries!(self.spec.request_plugins, "requestPlugins");
+        compile_entries!(self.spec.upstream_response_filter_plugins, "upstreamResponseFilterPlugins");
+        compile_entries!(self.spec.upstream_response_body_filter_plugins, "upstreamResponseBodyFilterPlugins");
+        compile_entries!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
     }
 
     /// Get preparse validation errors

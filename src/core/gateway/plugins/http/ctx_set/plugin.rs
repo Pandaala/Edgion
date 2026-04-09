@@ -171,7 +171,8 @@ impl CtxSet {
 
         // Apply transform
         if let Some(ref transform) = rule.transform {
-            value = match self.apply_transform(&value, transform) {
+            let compiled_replace = self.config.get_compiled_transform_regex(rule_idx);
+            value = match self.apply_transform(&value, transform, compiled_replace) {
                 Some(transformed) => transformed,
                 None => {
                     debug!("CtxSet: transform failed for var '{}', using default", rule.name);
@@ -204,16 +205,17 @@ impl CtxSet {
     }
 
     /// Apply transformation
-    fn apply_transform(&self, value: &str, transform: &TransformConfig) -> Option<String> {
+    fn apply_transform(&self, value: &str, transform: &TransformConfig, compiled_replace: Option<&Regex>) -> Option<String> {
         // Get the transform type from the config struct
         let transform_type = transform.get_transform_type()?;
 
         match transform_type {
             TransformType::Replace { pattern, with } => {
-                // Compile regex for replacement
-                match Regex::new(&pattern) {
-                    Ok(re) => Some(re.replace_all(value, with.as_str()).to_string()),
-                    Err(_) => None, // Should be caught by validation
+                if let Some(re) = compiled_replace {
+                    Some(re.replace_all(value, with.as_str()).to_string())
+                } else {
+                    // Fallback: should not happen after validate(), pattern already validated
+                    Regex::new(&pattern).ok().map(|re| re.replace_all(value, with.as_str()).to_string())
                 }
             }
             TransformType::Substring(start, end) => {

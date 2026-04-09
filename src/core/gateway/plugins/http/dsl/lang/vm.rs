@@ -8,6 +8,8 @@
 //!   - String length limit
 //!   - catch_unwind for fault isolation
 
+use std::borrow::Cow;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -517,6 +519,52 @@ impl Vm {
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
+                }
+                OpCode::RegexFind(regex_idx) => {
+                    let s = state.pop()?;
+                    // Nil-friendly: non-Str input returns Nil, consistent with Matches.
+                    let result = match s {
+                        Value::Str(s) => {
+                            if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
+                                if let Some(m) = re.find(&s) {
+                                    let found = m.as_str();
+                                    if found.len() > self.limits.max_string_len {
+                                        return Err(RuntimeError::StringTooLong {
+                                            len: found.len(),
+                                            limit: self.limits.max_string_len,
+                                        });
+                                    }
+                                    Value::Str(found.to_string())
+                                } else {
+                                    Value::Nil
+                                }
+                            } else {
+                                Value::Nil
+                            }
+                        }
+                        _ => Value::Nil,
+                    };
+                    state.push(result, self.limits.max_stack_depth)?;
+                }
+                OpCode::RegexReplace(regex_idx) => {
+                    let replacement = state.pop()?.into_string();
+                    let s = state.pop()?.into_string();
+                    let result = if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
+                        // Cow::Borrowed means nothing matched — reuse the already-owned String.
+                        match re.replace_all(&s, replacement.as_str()) {
+                            Cow::Borrowed(_) => s,
+                            Cow::Owned(o) => o,
+                        }
+                    } else {
+                        s
+                    };
+                    if result.len() > self.limits.max_string_len {
+                        return Err(RuntimeError::StringTooLong {
+                            len: result.len(),
+                            limit: self.limits.max_string_len,
+                        });
+                    }
+                    state.push(Value::Str(result), self.limits.max_stack_depth)?;
                 }
 
                 // ===== Control Flow =====

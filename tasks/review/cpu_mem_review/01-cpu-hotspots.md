@@ -20,7 +20,11 @@
 
 ---
 
-**[深度复核结论] ✅ 确认为 Critical Bug，必须修复**
+**[深度复核结论] ✅ 确认为 Critical Bug，已修复**
+
+**修复说明**（2026-04-09）：
+- `conditions/types.rs`：新增 `Condition::compile()`（转发给 KeyMatch/Include/Exclude）、`PluginConditions::compile()`（遍历 skip/run 所有条件）
+- `edgion_plugins/mod.rs`：`preparse()` 开头调 `compile_conditions()`，在 `add_from_*` 之前一次性编译所有 entry 的 conditions regex；`add_from_*` clone 到的 conditions 已是编译后状态，fallback 路径不再触发
 
 **代码确认**：
 ```rust
@@ -95,11 +99,15 @@ impl Condition {
 
 ---
 
-**[深度复核结论] ✅ 确认为 High，建议修复**
+**[深度复核结论] ✅ 确认为 High，已修复**
+
+**修复说明**（2026-04-09）：
+- `ctx_set.rs`：`CtxSetConfig` 新增 `compiled_transform_patterns: HashMap<usize, Regex>`（`#[serde(skip)]`）；`validate()` 对 transform.replace 由只验证改为验证并存入该 map；新增 `get_compiled_transform_regex(idx)` getter
+- `plugin.rs`：`apply_transform` 加 `compiled_replace: Option<&Regex>` 参数，优先用缓存；`process_rule` 调用前取 `self.config.get_compiled_transform_regex(rule_idx)` 传入
 
 **代码确认**：
 ```rust
-// plugin.rs 212-217
+// plugin.rs 212-217（修复前）
 TransformType::Replace { pattern, with } => {
     match Regex::new(&pattern) {  // ← 每请求编译
         Ok(re) => Some(re.replace_all(value, with.as_str()).to_string()),
@@ -152,7 +160,19 @@ Some(re.replace_all(value, with.as_str()).to_string())
 
 ---
 
-**[深度复核结论] ✅ 确认存在，降级为 Medium**
+**[深度复核结论] ✅ 确认存在，降级为 Medium，已修复**
+
+**进展说明**（2026-04-09）：
+- `matches` 操作符已正确预编译（`Vm::new()` 时从 `Constant::Regex` 建 `regex_cache`），报告描述不够精准
+- 真正的问题仅限 `regex_find`/`regex_replace` 两个 builtin，pattern 为运行时动态值，无法 load 时预编译
+- **不采用 LRU 方案**（需 Mutex，pattern 多样时适得其反）；正确方案为编译器识别字面量 pattern 提升为 `Constant::Regex` + 新 `OpCode::RegexFind/RegexReplace(u16)`，与 `matches` 路径完全一致
+- 设计文档：`tasks/todo/dsl-regex-literal-precompile.md`
+
+**修复说明**（2026-04-09）：
+- `bytecode.rs`：新增 `OpCode::RegexFind(u16)` / `OpCode::RegexReplace(u16)`，`u16` 为 constants 池索引
+- `compiler.rs`：`regex_find`/`regex_replace` 调用时，若 pattern 参数为字面量 String，调用 `add_regex_const()` 存入 `Constant::Regex` 并 emit 专用 OpCode；动态 pattern 仍 emit `CallBuiltin(RegexFind, ...)`
+- `vm.rs`：`Vm::new()` 已有 `Constant::Regex` 预编译逻辑，`OpCode::RegexFind`/`OpCode::RegexReplace` 分支直接从 `regex_cache` 取用，零运行时编译开销
+- `validator.rs`：新增对 `OpCode::RegexFind`/`OpCode::RegexReplace` 的 constant 索引合法性检查
 
 **代码确认**：
 ```rust
@@ -322,102 +342,50 @@ if is_init {
 
 ---
 
-### CPU-09: 每请求 Metrics 标签 String 分配
+### ~~CPU-09: 每请求 Metrics 标签 String 分配~~
 
 **文件**: `src/core/gateway/observe/metrics/registry.rs`
 **行号**: 259-284 (`record_backend_request`), 338-364 (`record_request_duration`)
 
-**问题**: 每请求调用 `record_backend_request()` 时构造 10 个 label 维度，每个 `.to_string()` 堆分配。`record_request_duration()` 同样创建 `Vec::with_capacity(8)` 并 push 8 个 `(str, String)` 元组。
+~~**问题**: 每请求调用 `record_backend_request()` 时构造 10 个 label 维度，每个 `.to_string()` 堆分配。`record_request_duration()` 同样创建 `Vec::with_capacity(8)` 并 push 8 个 `(str, String)` 元组。~~
 
-**修复建议**: 预分配 label buffer 复用，或使用 `&str` 引用替代 `String`。
-
----
-
-**[深度复核结论] ✅ 确认为 High（与原评估一致），强烈建议修复**
-
-**实际代码**：
-```rust
-// registry.rs 271-284
-counter!(
-    names::BACKEND_REQUESTS_TOTAL,
-    "gateway_namespace" => gateway_ns.to_string(),
-    "gateway_name" => gateway_name.to_string(),
-    "route_namespace" => route_ns.to_string(),
-    "route_name" => route_name.to_string(),
-    "backend_namespace" => backend_ns.to_string(),
-    "backend_name" => backend_name.to_string(),
-    "protocol" => protocol.to_string(),
-    "status" => status.to_string(),
-    "test_key" => test_key.to_string(),
-    "test_data" => test_data.to_string(),  // 见 MEM-03
-).increment(1);
-```
-
-每请求 10 次堆分配（String），`record_request_duration` 再加 8 次。这是真正的热路径，在高 QPS 下是显著的内存/CPU 压力。
-
-**修复方案（推荐）**：将请求上下文中的 gateway_name、route_name 等预先存储为 `Arc<str>` 或 `SharedString`，metrics crate 宏支持 `impl Into<SharedString>`，对 `&'static str` 和 `Arc<str>` 均可零拷贝。
-
-```rust
-// 请求上下文中改用 Arc<str>
-pub struct MatchInfo {
-    pub gateway_ns: Arc<str>,
-    pub gateway_name: Arc<str>,
-    // ...
-}
-// 调用时
-counter!(
-    names::BACKEND_REQUESTS_TOTAL,
-    "gateway_namespace" => Arc::clone(&info.gateway_ns),
-    // ...
-)
-```
-
-**修复副作用**：需修改 `MatchInfo` 等上下文类型，改造面较大但可分阶段。先把 `status`、`protocol` 等返回 `&'static str` 的标签去掉 `.to_string()`，收益立竿见影。
+~~**修复建议**: 预分配 label buffer 复用，或使用 `&str` 引用替代 `String`。~~
 
 ---
 
-### CPU-10: 全局插件每请求 `format!()` + DashMap lookup
+**[深度复核结论] ❌ 误判，关闭**
+
+**根本原因**：`metrics` 0.24 的 `SharedString = Cow<'static, str>`。动态 label 值（gateway name、namespace、route 等均非 `'static`）**必须**是 `Cow::Owned(String)`，`.to_string()` 是 API 要求的最小转换，不可避免。
+
+原复核建议的 `Arc<str>` 方案不可行：`Arc<str>` 没有 `'static` lifetime，无法转换为 `Cow<'static, str>`。`&str` 方案同样不可行：非 `'static` 的 `&str` 无法绕过 owned 要求。
+
+metrics 调用的真正开销主要来自**注册表 lookup**（hash + atomic），而非 string alloc 本身。无需修复。
+
+---
+
+### CPU-10: 全局插件每请求 `format!()` + 不必要的 clone
 
 **文件**: `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs`
 **行号**: 164-185
 
-**问题**: 每请求循环 `global_plugins_ref`，为每个全局插件 `format!("{}/{}", ns, name)` 构造 key，再做 DashMap lookup。N 个全局插件 = N 次 `format!()` + N 次 DashMap 查找。
+**问题**: 每请求循环 `global_plugins_ref`，为每个全局插件 `format!("{}/{}", ns, name)` 构造 key，再通过 `PluginStore.get()` 查找。`get()` 内部 clone 整个 `EdgionPlugins` 结构体（含多个 `Option<Vec<...>>`），实际只用到其中的 `Arc<PluginRuntime>`。
 
-**修复建议**: 在配置重载时预解析全局插件为直接 `Arc<EdgionPlugins>` 引用。
+**修复建议**: 用已有的 `with_plugin()` 替换 `get()`，避免不必要的 clone。
 
 ---
 
-**[深度复核结论] ✅ 确认存在，评级 Medium**
+**[深度复核结论] ✅ 确认存在，已修复**
 
-**实际代码**：
-```rust
-// pg_request_filter.rs 164-184
-if let Some(ref plugin_refs) = edgion_http.edgion_gateway_config.spec.global_plugins_ref {
-    for plugin_ref in plugin_refs {
-        let plugin_key = format!(
-            "{}/{}",
-            plugin_ref.namespace.as_deref().unwrap_or("default"),
-            plugin_ref.name
-        );
-        if let Some(edgion_plugin) = get_global_plugin_store().get(&plugin_key) {
-            // ...run plugin
-        }
-    }
-}
-```
+**Store 实现澄清**：原描述"DashMap lookup"有误。实际实现是 `ArcSwap<HashMap<String, EdgionPlugins>>`（`plugin_store.rs`），读路径无锁（atomic load + HashMap O(1) 查找），远比 DashMap 轻量。
 
-同样 pattern 在 `pg_upstream_response_body_filter.rs:50-54` 重复出现（body filter 中每个 chunk 执行一次）。
+**真正的开销**：
+1. `format!()` per plugin per request — 小字符串 heap alloc，minor
+2. `get()` 返回 `Option<EdgionPlugins>`（cloned），但调用方只用 `spec.plugin_runtime`（一个 `Arc`） — 这是多余 clone
 
-**修复方案**：在 `EdgionGatewayConfig` 解析/更新时，预先查找并存储 `Arc<EdgionPlugin>` 引用：
-
-```rust
-pub struct ParsedGlobalPlugins {
-    pub plugins: Vec<Arc<EdgionPlugin>>,
-}
-// 热路径中直接遍历 plugins Vec，无需 format!() 和 DashMap lookup
-```
-
-**修复副作用**：需在 EdgionPlugin 更新时同步更新 `ParsedGlobalPlugins`，增加配置同步逻辑复杂度。全局插件一般数量很少（1-3个），当前实现在大多数场景下影响可接受。
+**修复说明**（2026-04-09）：
+- `plugin_store.rs`：新增 `PluginStore::get_plugin_runtime(key)` 方法，内部借用访问 `Arc<PluginRuntime>`，只 clone Arc（O(1)），不 clone 整个 `EdgionPlugins`
+- `pg_request_filter.rs`：`store.get()` → `get_plugin_runtime()`，消除每请求 `EdgionPlugins` 深拷贝
+- 同步修复 `extension_ref.rs`、`pg_upstream_response_body_filter.rs` 中相同模式
 
 ---
 

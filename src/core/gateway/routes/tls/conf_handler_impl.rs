@@ -1,4 +1,4 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
@@ -12,13 +12,13 @@ pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync
 }
 
 impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
-    fn full_set(&self, data: &HashMap<String, TLSRoute>) {
+    fn full_set(&self, data: &HashMap<String, Arc<TLSRoute>>) {
         tracing::info!(component = "global_tls_route_managers", cnt = data.len(), "full set");
 
         self.clear_route_cache();
 
         for (key, route) in data {
-            match self.initialize_route(route.clone()) {
+            match self.initialize_route((**route).clone()) {
                 Ok(initialized) => {
                     self.insert_route(initialized);
                 }
@@ -37,8 +37,8 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
 
     fn partial_update(
         &self,
-        add: HashMap<String, TLSRoute>,
-        update: HashMap<String, TLSRoute>,
+        add: HashMap<String, Arc<TLSRoute>>,
+        update: HashMap<String, Arc<TLSRoute>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -49,10 +49,13 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             "partial update"
         );
 
+        let add_owned = arc_map_into_owned(add);
+        let update_owned = arc_map_into_owned(update);
+
         apply_l4_partial_update(
             "TLSRoute",
-            add,
-            update,
+            add_owned,
+            update_owned,
             remove,
             |key| self.get_route(key),
             |r| resolved_listeners_for_route(r).to_vec(),
@@ -298,8 +301,8 @@ mod tests {
         let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com", 443, key443.clone());
         let route2 = create_test_tls_route("default", "route2", "gateway1", "api.example.com", 443, key443.clone());
 
-        data.insert("default/route1".to_string(), route1);
-        data.insert("default/route2".to_string(), route2);
+        data.insert("default/route1".to_string(), Arc::new(route1));
+        data.insert("default/route2".to_string(), Arc::new(route2));
 
         managers.full_set(&data);
 
@@ -317,7 +320,7 @@ mod tests {
 
         let mut add = HashMap::new();
         let route1 = create_test_tls_route("default", "route1", "gateway1", "test.example.com", 443, key443.clone());
-        add.insert("default/route1".to_string(), route1);
+        add.insert("default/route1".to_string(), Arc::new(route1));
 
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
@@ -478,7 +481,14 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(
             "default/route-x".to_string(),
-            create_test_tls_route("default", "route-x", "gw1", "v1.example.com", 443, key443.clone()),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-x",
+                "gw1",
+                "v1.example.com",
+                443,
+                key443.clone(),
+            )),
         );
         managers.partial_update(add, HashMap::new(), HashSet::new());
         let mgr443 = managers.get_or_create_listener_manager(&key443);
@@ -492,7 +502,14 @@ mod tests {
         let mut misclassified_add = HashMap::new();
         misclassified_add.insert(
             "default/route-x".to_string(),
-            create_test_tls_route("default", "route-x", "gw1", "v2.example.com", 8443, key8443.clone()),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-x",
+                "gw1",
+                "v2.example.com",
+                8443,
+                key8443.clone(),
+            )),
         );
         managers.partial_update(misclassified_add, HashMap::new(), HashSet::new());
 
@@ -520,7 +537,14 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(
             "default/route-a".to_string(),
-            create_test_tls_route("default", "route-a", "gw1", "old.example.com", 443, key443.clone()),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-a",
+                "gw1",
+                "old.example.com",
+                443,
+                key443.clone(),
+            )),
         );
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
@@ -528,7 +552,14 @@ mod tests {
         let mut add2 = HashMap::new();
         add2.insert(
             "default/route-b".to_string(),
-            create_test_tls_route("default", "route-b", "gw1", "new.example.com", 443, key443.clone()),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-b",
+                "gw1",
+                "new.example.com",
+                443,
+                key443.clone(),
+            )),
         );
         let mut remove = HashSet::new();
         remove.insert("default/route-a".to_string());
@@ -558,7 +589,14 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(
             "default/route-y".to_string(),
-            create_test_tls_route("default", "route-y", "gw1", "svc.example.com", 443, key443.clone()),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-y",
+                "gw1",
+                "svc.example.com",
+                443,
+                key443.clone(),
+            )),
         );
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
@@ -566,7 +604,14 @@ mod tests {
         let mut update = HashMap::new();
         update.insert(
             "default/route-y".to_string(),
-            create_test_tls_route("default", "route-y", "gw1", "svc.example.com", 9443, key9443.clone()),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-y",
+                "gw1",
+                "svc.example.com",
+                9443,
+                key9443.clone(),
+            )),
         );
         managers.partial_update(HashMap::new(), update, HashSet::new());
 
@@ -594,14 +639,14 @@ mod tests {
         let mut update = HashMap::new();
         update.insert(
             "default/route-ghost".to_string(),
-            create_test_tls_route(
+            Arc::new(create_test_tls_route(
                 "default",
                 "route-ghost",
                 "gw1",
                 "ghost.example.com",
                 443,
                 key443.clone(),
-            ),
+            )),
         );
         managers.partial_update(HashMap::new(), update, HashSet::new());
 

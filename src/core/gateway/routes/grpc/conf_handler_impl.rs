@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
-    fn full_set(&self, data: &HashMap<String, GRPCRoute>) {
+    fn full_set(&self, data: &HashMap<String, Arc<GRPCRoute>>) {
         tracing::info!(
             component = "grpc_route_manager",
             count = data.len(),
@@ -20,11 +20,9 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         let mut new_units_cache: HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>> = HashMap::new();
 
         for (key, route) in data {
-            let mut route = route.clone();
-            route.preparse();
-            let units = parse_route_to_units(key, &route);
+            let units = parse_route_to_units(key, route);
             new_units_cache.insert(key.clone(), units);
-            self.route_cache.insert(key.clone(), route);
+            self.route_cache.insert(key.clone(), (**route).clone());
         }
 
         *self.route_units_cache.lock().unwrap() = new_units_cache;
@@ -37,8 +35,8 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
 
     fn partial_update(
         &self,
-        add: HashMap<String, GRPCRoute>,
-        update: HashMap<String, GRPCRoute>,
+        add: HashMap<String, Arc<GRPCRoute>>,
+        update: HashMap<String, Arc<GRPCRoute>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -49,11 +47,8 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             "partial update start"
         );
 
-        let mut add_or_update = HashMap::new();
-        for (key, mut route) in add.into_iter().chain(update.into_iter()) {
-            route.preparse();
-            add_or_update.insert(key, route);
-        }
+        let mut add_or_update = add;
+        add_or_update.extend(update);
 
         // Compute affected listeners BEFORE updating cache
         let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
@@ -87,7 +82,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             for (key, route) in &add_or_update {
                 let units = parse_route_to_units(key, route);
                 units_cache.insert(key.clone(), units);
-                self.route_cache.insert(key.clone(), route.clone());
+                self.route_cache.insert(key.clone(), (**route).clone());
             }
             for key in &remove {
                 self.route_cache.remove(key);
@@ -130,7 +125,10 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
         .unwrap_or(0);
     let route_info = Arc::new(GrpcRouteInfo {
         parent_refs: Some(accepted_refs),
-        effective_hostnames: effective_hostnames(route.spec.resolved_hostnames.as_deref(), route.spec.hostnames.as_deref()),
+        effective_hostnames: effective_hostnames(
+            route.spec.resolved_hostnames.as_deref(),
+            route.spec.hostnames.as_deref(),
+        ),
     });
 
     let mut units = Vec::new();

@@ -1,4 +1,4 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::udp::routes_mgr::{
     get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
@@ -13,13 +13,13 @@ pub fn create_udp_route_handler() -> Box<dyn ConfHandler<UDPRoute> + Send + Sync
 }
 
 impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, UDPRoute>) {
+    fn full_set(&self, data: &HashMap<String, Arc<UDPRoute>>) {
         tracing::info!(component = "udp_route_manager", cnt = data.len(), "full set");
 
         self.clear_route_cache();
 
         for (key, route) in data {
-            match self.initialize_route(route.clone()) {
+            match self.initialize_route((**route).clone()) {
                 Ok(initialized) => {
                     self.insert_route(initialized);
                 }
@@ -38,8 +38,8 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
 
     fn partial_update(
         &self,
-        add: HashMap<String, UDPRoute>,
-        update: HashMap<String, UDPRoute>,
+        add: HashMap<String, Arc<UDPRoute>>,
+        update: HashMap<String, Arc<UDPRoute>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -50,10 +50,13 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             "partial update"
         );
 
+        let add_owned = arc_map_into_owned(add);
+        let update_owned = arc_map_into_owned(update);
+
         apply_l4_partial_update(
             "UDPRoute",
-            add,
-            update,
+            add_owned,
+            update_owned,
             remove,
             |key| self.get_route(key),
             |r| resolved_listeners_for_route(r).to_vec(),
@@ -184,8 +187,8 @@ mod tests {
         let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
         let route2 = create_test_udp_route("default", "route2", "gateway1", "udp-9001", 9001, key9001.clone());
 
-        data.insert("default/route1".to_string(), route1);
-        data.insert("default/route2".to_string(), route2);
+        data.insert("default/route1".to_string(), Arc::new(route1));
+        data.insert("default/route2".to_string(), Arc::new(route2));
 
         managers.full_set(&data);
 
@@ -209,7 +212,7 @@ mod tests {
         // Add a route
         let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
         let mut add = HashMap::new();
-        add.insert("default/route1".to_string(), route1);
+        add.insert("default/route1".to_string(), Arc::new(route1));
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
         let mgr = managers.get_or_create_listener_manager(&key9000);
@@ -234,7 +237,7 @@ mod tests {
         // Add initial route on listener 9000
         let route = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
         let mut add = HashMap::new();
-        add.insert("default/route1".to_string(), route);
+        add.insert("default/route1".to_string(), Arc::new(route));
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
         assert!(managers
@@ -246,7 +249,7 @@ mod tests {
         // Update route to listener 9001
         let updated_route = create_test_udp_route("default", "route1", "gateway1", "udp-9001", 9001, key9001.clone());
         let mut update = HashMap::new();
-        update.insert("default/route1".to_string(), updated_route);
+        update.insert("default/route1".to_string(), Arc::new(updated_route));
         managers.partial_update(HashMap::new(), update, HashSet::new());
 
         // Listener 9000 should be empty, listener 9001 should have the route
@@ -272,7 +275,14 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "default/route1".to_string(),
-            create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone()),
+            Arc::new(create_test_udp_route(
+                "default",
+                "route1",
+                "gateway1",
+                "udp-9000",
+                9000,
+                key9000.clone(),
+            )),
         );
         managers.full_set(&data);
         assert!(managers
@@ -302,7 +312,7 @@ mod tests {
         route.spec.resolved_listeners = None;
 
         let mut data = HashMap::new();
-        data.insert("default/route1".to_string(), route);
+        data.insert("default/route1".to_string(), Arc::new(route));
         managers.full_set(&data);
 
         // Route is in cache but not assigned to any listener
@@ -327,7 +337,7 @@ mod tests {
         route.spec.resolved_listeners = Some(vec![key9000.clone(), key9001.clone()]);
 
         let mut data = HashMap::new();
-        data.insert("default/route1".to_string(), route);
+        data.insert("default/route1".to_string(), Arc::new(route));
         managers.full_set(&data);
 
         assert!(managers
@@ -353,13 +363,13 @@ mod tests {
         // Add initial route
         let route1 = create_test_udp_route("default", "route1", "gateway1", "udp-9000", 9000, key9000.clone());
         let mut add = HashMap::new();
-        add.insert("default/route1".to_string(), route1);
+        add.insert("default/route1".to_string(), Arc::new(route1));
         managers.partial_update(add, HashMap::new(), HashSet::new());
 
         // Simultaneously add route2 on 9001 and remove route1 on 9000
         let route2 = create_test_udp_route("default", "route2", "gateway1", "udp-9001", 9001, key9001.clone());
         let mut add = HashMap::new();
-        add.insert("default/route2".to_string(), route2);
+        add.insert("default/route2".to_string(), Arc::new(route2));
         let mut remove = HashSet::new();
         remove.insert("default/route1".to_string());
 

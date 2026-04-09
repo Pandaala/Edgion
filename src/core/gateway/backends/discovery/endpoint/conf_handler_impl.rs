@@ -1,5 +1,5 @@
 use super::get_endpoint_roundrobin_store;
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::gateway::backends::discovery::conf_handler_common::{update_affected_lbs, update_all_existing_lbs};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
@@ -7,6 +7,7 @@ use crate::core::gateway::backends::health::check::{
 use crate::core::gateway::lb::runtime_state;
 use k8s_openapi::api::core::v1::Endpoints;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Handler for Endpoints configuration updates
 ///
@@ -53,7 +54,7 @@ pub fn create_endpoint_handler() -> Box<dyn ConfHandler<Endpoints> + Send + Sync
 }
 
 impl ConfHandler<Endpoints> for EndpointHandler {
-    fn full_set(&self, data: &HashMap<String, Endpoints>) {
+    fn full_set(&self, data: &HashMap<String, Arc<Endpoints>>) {
         tracing::info!(
             component = "endpoint_handler",
             cnt = data.len(),
@@ -65,7 +66,8 @@ impl ConfHandler<Endpoints> for EndpointHandler {
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_endpoint_roundrobin_store();
-        let all_services = roundrobin_store.replace_data_only(data.clone());
+        let data_owned = arc_map_to_owned(data);
+        let all_services = roundrobin_store.replace_data_only(data_owned);
 
         // 2. Update all existing LBs in ALL stores
         // This handles relist scenario where data might have changed
@@ -101,8 +103,8 @@ impl ConfHandler<Endpoints> for EndpointHandler {
 
     fn partial_update(
         &self,
-        add: HashMap<String, Endpoints>,
-        update: HashMap<String, Endpoints>,
+        add: HashMap<String, Arc<Endpoints>>,
+        update: HashMap<String, Arc<Endpoints>>,
         remove: HashSet<String>,
     ) {
         let add_count = add.len();
@@ -111,7 +113,9 @@ impl ConfHandler<Endpoints> for EndpointHandler {
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_endpoint_roundrobin_store();
-        let affected_services = roundrobin_store.update_data_only(add, update, &remove);
+        let add_owned = arc_map_into_owned(add);
+        let update_owned = arc_map_into_owned(update);
+        let affected_services = roundrobin_store.update_data_only(add_owned, update_owned, &remove);
 
         // 2. Update affected LBs in ALL stores
         update_affected_lbs(&*roundrobin_store, &affected_services);

@@ -1,4 +1,4 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::common::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
 use crate::core::gateway::routes::common::{effective_hostnames, filter_accepted_parent_refs};
 use crate::core::gateway::routes::http::lb_policy_sync::{cleanup_lb_policies_for_routes, sync_lb_policies_for_routes};
@@ -41,16 +41,17 @@ fn get_effective_hostnames(route: &HTTPRoute) -> Vec<String> {
 }
 
 impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, HTTPRoute>) {
-        sync_lb_policies_for_routes(data);
+    fn full_set(&self, data: &HashMap<String, Arc<HTTPRoute>>) {
+        let data_owned = arc_map_to_owned(data);
+        sync_lb_policies_for_routes(&data_owned);
 
         let start_time = Instant::now();
         tracing::info!(component = "http_route_manager", cnt = data.len(), "full set start");
 
-        // Step 1: Replace route cache
+        // Step 1: Replace route cache (reuse data_owned to avoid double clone)
         self.route_cache.clear();
-        for (key, route) in data {
-            self.route_cache.insert(key.clone(), route.clone());
+        for (key, route) in data_owned {
+            self.route_cache.insert(key, route);
         }
 
         // Step 2: Rebuild all per-listener managers
@@ -66,19 +67,18 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
     fn partial_update(
         &self,
-        add: HashMap<String, HTTPRoute>,
-        update: HashMap<String, HTTPRoute>,
+        add: HashMap<String, Arc<HTTPRoute>>,
+        update: HashMap<String, Arc<HTTPRoute>>,
         remove: HashSet<String>,
     ) {
-        let mut add_or_update = add;
-        add_or_update.extend(update);
-
-        sync_lb_policies_for_routes(&add_or_update);
+        let mut add_or_update_owned = arc_map_into_owned(add);
+        add_or_update_owned.extend(arc_map_into_owned(update));
+        sync_lb_policies_for_routes(&add_or_update_owned);
         cleanup_lb_policies_for_routes(&remove);
 
         tracing::info!(
             component = "http_route_manager",
-            add = add_or_update.len(),
+            add = add_or_update_owned.len(),
             rm = remove.len(),
             "partial update start"
         );
@@ -86,18 +86,15 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         // Compute affected listeners BEFORE updating cache.
         let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
-        for (key, route) in &add_or_update {
+        for (key, route) in &add_or_update_owned {
             let listeners = resolved_listeners_for_route(route);
             if listeners.is_empty() {
-                // Route has no resolved_listeners — it won't appear in any bucket.
-                // Do NOT mark needs_all_listeners; just warn and skip new-side listeners.
                 tracing::warn!(route = %key, "HTTPRoute has no resolved_listeners during partial_update");
             } else {
                 for lk in listeners {
                     affected_listeners.insert(lk.clone());
                 }
             }
-            // Still collect old version's listeners so they get rebuilt
             if let Some(old) = self.route_cache.get(key) {
                 for lk in resolved_listeners_for_route(old.value()) {
                     affected_listeners.insert(lk.clone());
@@ -107,9 +104,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         for key in &remove {
             if let Some(old) = self.route_cache.get(key) {
                 let listeners = resolved_listeners_for_route(old.value());
-                if listeners.is_empty() {
-                    // Old route also had no listeners — nothing to rebuild
-                } else {
+                if !listeners.is_empty() {
                     for lk in listeners {
                         affected_listeners.insert(lk.clone());
                     }
@@ -117,8 +112,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             }
         }
 
-        // Update route cache
-        for (key, route) in add_or_update {
+        // Update route cache (reuse add_or_update_owned to avoid double clone)
+        for (key, route) in add_or_update_owned {
             self.route_cache.insert(key, route);
         }
         for key in &remove {
@@ -206,11 +201,24 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
     let regex = Regex::new(path_value).map_err(|e| format!("Invalid regex '{}': {}", path_value, e))?;
     let (compiled_header_regexes, compiled_query_regexes) = HttpRouteRuleUnit::compile_match_regexes(ctx.match_item);
     let has_query_matchers = ctx.match_item.query_params.as_ref().is_some_and(|qp| !qp.is_empty());
-    let specificity = build_specificity(ctx.match_item, ctx.resource_key, ctx.creation_ts_ms, ctx.rule_id, ctx.match_id);
+    let specificity = build_specificity(
+        ctx.match_item,
+        ctx.resource_key,
+        ctx.creation_ts_ms,
+        ctx.rule_id,
+        ctx.match_id,
+    );
 
     Ok(HttpRouteRuleUnit {
         resource_key: ctx.resource_key.to_string(),
-        matched_info: MatchInfo::new(ctx.namespace.to_string(), ctx.name.to_string(), ctx.rule_id, ctx.match_id, ctx.match_item.clone(), ctx.route_sv),
+        matched_info: MatchInfo::new(
+            ctx.namespace.to_string(),
+            ctx.name.to_string(),
+            ctx.rule_id,
+            ctx.match_id,
+            ctx.match_item.clone(),
+            ctx.route_sv,
+        ),
         rule: ctx.rule,
         path_regex: Some(regex),
         parent_refs: ctx.parent_refs,
@@ -224,10 +232,23 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
 fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
     let (compiled_header_regexes, compiled_query_regexes) = HttpRouteRuleUnit::compile_match_regexes(ctx.match_item);
     let has_query_matchers = ctx.match_item.query_params.as_ref().is_some_and(|qp| !qp.is_empty());
-    let specificity = build_specificity(ctx.match_item, ctx.resource_key, ctx.creation_ts_ms, ctx.rule_id, ctx.match_id);
+    let specificity = build_specificity(
+        ctx.match_item,
+        ctx.resource_key,
+        ctx.creation_ts_ms,
+        ctx.rule_id,
+        ctx.match_id,
+    );
     HttpRouteRuleUnit {
         resource_key: ctx.resource_key.to_string(),
-        matched_info: MatchInfo::new(ctx.namespace.to_string(), ctx.name.to_string(), ctx.rule_id, ctx.match_id, ctx.match_item.clone(), ctx.route_sv),
+        matched_info: MatchInfo::new(
+            ctx.namespace.to_string(),
+            ctx.name.to_string(),
+            ctx.rule_id,
+            ctx.match_id,
+            ctx.match_item.clone(),
+            ctx.route_sv,
+        ),
         rule: ctx.rule,
         path_regex: None,
         parent_refs: ctx.parent_refs,
@@ -241,7 +262,9 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
 /// Push one match item into the normal or regex bucket for `hostname`.
 fn append_match_to_domain(domain_rules: &mut DomainRouteRulesMap, hostname: &str, ctx: RouteUnitCtx<'_>) {
     let resource_key = ctx.resource_key;
-    let split = domain_rules.entry(hostname.to_string()).or_insert_with(|| (Vec::new(), Vec::new()));
+    let split = domain_rules
+        .entry(hostname.to_string())
+        .or_insert_with(|| (Vec::new(), Vec::new()));
     if is_regex_path(ctx.match_item) {
         match create_regex_route_unit(ctx) {
             Ok(unit) => split.1.push(Arc::new(unit)),
@@ -283,18 +306,22 @@ fn append_route_to_hostname(
             _ => &default_matches,
         };
         for (match_id, match_item) in matches.iter().enumerate() {
-            append_match_to_domain(domain_rules, hostname, RouteUnitCtx {
-                namespace: &validated.namespace,
-                name: &validated.name,
-                rule_id,
-                match_id,
-                resource_key,
-                match_item,
-                rule: rule_arc.clone(),
-                parent_refs: Some(parent_refs.to_vec()),
-                creation_ts_ms,
-                route_sv,
-            });
+            append_match_to_domain(
+                domain_rules,
+                hostname,
+                RouteUnitCtx {
+                    namespace: &validated.namespace,
+                    name: &validated.name,
+                    rule_id,
+                    match_id,
+                    resource_key,
+                    match_item,
+                    rule: rule_arc.clone(),
+                    parent_refs: Some(parent_refs.to_vec()),
+                    creation_ts_ms,
+                    route_sv,
+                },
+            );
         }
     }
 }

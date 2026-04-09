@@ -6,19 +6,21 @@
 
 ## 统计总览（深度复核后）
 
-| 分类 | Critical | High | Medium | Low | 虚报/无需修复 | 合计 |
-|------|----------|------|--------|-----|-------------|------|
-| CPU 热点 | 1 | 3→**1** | 13→**10** | 7→**6** | **5** | 25 |
-| 内存爆炸 | 0 | 3→**1** | 7→**5** | 6→**5** | **4** | 16 |
-| 死循环 | 0 | 0 | 0 | 0 | — | 0 |
-| **合计** | **1** | **2** | **15** | **11** | **9** | **41** |
+| 分类 | Critical | High | Medium | Low | 虚报/无需修复 | **已修复** | 合计 |
+|------|----------|------|--------|-----|-------------|-----------|------|
+| CPU 热点 | ~~1~~→**0** | 3→~~1~~→**0** | 13→~~10~~→~~9~~→**7** | 7→**6** | **6** | **4** | 25 |
+| 内存爆炸 | 0 | 3→**1** | 7→**5** | 6→**5** | **4** | **0** | 16 |
+| 死循环 | 0 | 0 | 0 | 0 | — | — | 0 |
+| **合计** | **0** | **1** | **12** | **11** | **10** | **4** | **41** |
 
-> **虚报/无需修复**：CPU-04、CPU-05（原 High，代码正确高效）；CPU-13（原 Medium，预编译机制完善）；MEM-02（原 High，有 16KB 硬上限保护）；MEM-15（OnceLock 是刻意设计）等 9 项经查实为误判或优先级明显偏高。
+> **虚报/无需修复**：CPU-04、CPU-05（原 High，代码正确高效）；CPU-09/metrics（`SharedString = Cow<'static, str>`，`.to_string()` 是 API 要求不可避免）；CPU-13（原 Medium，预编译机制完善）；MEM-02（原 High，有 16KB 硬上限保护）；MEM-15（OnceLock 是刻意设计）等 10 项经查实为误判或优先级明显偏高。
+> **已修复**（2026-04-09）：CPU-01（条件 regex 从不预编译，Critical）、CPU-02/ctx_set（transform regex 未缓存，High）、CPU-03/DSL（regex_find/replace 字面量 pattern → `Constant::Regex` + `OpCode::RegexFind/RegexReplace`，Medium）、CPU-10/pg_request_filter（`store.get()` → `get_plugin_runtime()` 新封装，同步修复 `extension_ref.rs`、`pg_upstream_response_body_filter.rs`，Medium）。
 
 ## 结论（更新）
 
 - **未发现死循环风险**：TriggerChain 有环检测 (max_depth=20, max_cycles=5)，所有 loop 都有明确退出条件，DSL VM 有 step/call/loop budget。
-- **CPU-01 是唯一 Critical Bug**：`compiled_regex` 字段被 `#[serde(skip)]` 标记，整个生产代码路径从未调用 `.compile()`，所有含 regex 条件的插件**每请求重新编译正则**，必须立即修复。
+- **CPU-01 已修复**（2026-04-09）：`conditions/types.rs` 新增 `Condition::compile()` / `PluginConditions::compile()`，`EdgionPlugins::preparse()` 的 `compile_conditions()` 一次性编译所有条件 regex，每请求重编 fallback 路径不再触发。
+- **CPU-02/ctx_set 已修复**（2026-04-09）：`CtxSetConfig` 新增 `compiled_transform_patterns`，`validate()` 填充，`apply_transform` 从缓存取用，transform.replace 路径不再每请求 `Regex::new()`。
 - **CPU-04 / CPU-05 原分析错误**：`get_raw_any` 实际走 DashMap O(1) 查找 + Arc downcast（仅 TypeId 比较），没有 JSON 序列化，没有线性扫描，代码正确高效，**无需修复**。
 - **MEM-11 是高优先级内存 Bug**：OIDC singleflight 使用 `clear()` 全量清空，破坏互斥语义，可引发对 OIDC Provider 的 thundering herd，需要修复。
 - **内存爆炸集中在两类模式**：(1) 无界读取（MEM-01）；(2) GC 任务缺失（MEM-05 partial_update 未清理、MEM-08 evict_stale 从未调用）。
@@ -37,16 +39,16 @@
 
 | # | 严重度 | 分类 | 位置 | 问题 | 复核结论 |
 |---|--------|------|------|------|---------|
-| 1 | **Critical** | CPU | `plugins/runtime/conditions/evaluator.rs` | `#[serde(skip)]` 导致 regex 从不预编译，每请求 `Regex::new()` | **代码已确认，生产路径从未调用 `.compile()`** |
+| 1 | **Critical** | CPU | `plugins/runtime/conditions/evaluator.rs` | `#[serde(skip)]` 导致 regex 从不预编译，每请求 `Regex::new()` | ✅ **已修复**：`Condition::compile()` + `PluginConditions::compile()`，在 `EdgionPlugins::preparse()` 的 `compile_conditions()` 中调用 |
 | 2 | **High** | Memory | `plugins/http/openid_connect/openid_impl.rs` | `locks.clear()` 破坏 singleflight 语义，引发 thundering herd | **代码已确认，`clear()` 丢弃正在飞行中的锁** |
 
 ### 强烈建议修复（High/Medium + 代码确认）
 
 | # | 严重度 | 分类 | 位置 | 问题 | 复核结论 |
 |---|--------|------|------|------|---------|
-| 3 | **High** | CPU | `plugins/http/ctx_set/plugin.rs:214` | transform.replace 路径每请求编译 Regex（extract 路径已预编译） | **代码已确认，transform regex 未缓存** |
-| 4 | **Medium** | CPU | `gateway/observe/metrics/registry.rs` | 每请求 10-18 次 `.to_string()` 堆分配 | **代码已确认，真正热路径** |
-| 5 | **Medium** | CPU | `gateway/routes/http/proxy_http/pg_request_filter.rs` | 全局插件每请求 `format!()` + DashMap lookup | **代码已确认** |
+| 3 | **High** | CPU | `plugins/http/ctx_set/plugin.rs:214` | transform.replace 路径每请求编译 Regex（extract 路径已预编译） | ✅ **已修复**：`CtxSetConfig` 新增 `compiled_transform_patterns`，`validate()` 存入，`apply_transform` 传入 `compiled_replace` 参数 |
+| ~~4~~ | ~~Medium~~ | ~~CPU~~ | ~~`gateway/observe/metrics/registry.rs`~~ | ~~每请求 10-18 次 `.to_string()` 堆分配~~ | ❌ **误判，关闭**：`SharedString = Cow<'static, str>`，动态 label 值必须 owned，`.to_string()` 不可避免；`Arc<str>` 方案不可行 |
+| 5 | **Medium** | CPU | `gateway/routes/http/proxy_http/pg_request_filter.rs` | 全局插件每请求 `format!()` + 不必要的 `EdgionPlugins` clone | ✅ **已修复**（2026-04-09）：`store.get()` → `get_plugin_runtime()`（新增 `PluginStore::get_plugin_runtime()` 封装），同步修复 `extension_ref.rs`、`pg_upstream_response_body_filter.rs` |
 | 6 | **Medium** | Memory | `plugins/http/forward_auth/plugin.rs:345` | ForwardAuth 无界读取错误响应 Body（降级，有 timeout 保护） | **代码已确认，无 byte 上限** |
 | 7 | **Medium** | Memory | `lb/runtime_state/mod.rs` | partial_update remove 路径未调用 `remove_service`，Service 删除后 SERVICES 等 DashMap 条目永久残留 | **代码已确认，真实泄漏路径** |
 | 8 | **Medium** | Memory | `controller/conf_sync/cache_server/store.rs` | List 全量 Clone 无并发/大小限制（原描述的 64MB 保护不存在） | **代码已确认** |
@@ -56,7 +58,7 @@
 
 | # | 严重度 | 分类 | 位置 | 问题 |
 |---|--------|------|------|------|
-| 10 | Medium | CPU | `plugins/http/dsl/lang/builtins.rs` | DSL regex 每次调用编译（需 LRU 缓存）|
+| 10 | Medium | CPU | `plugins/http/dsl/lang/builtins.rs` | DSL regex 每次调用编译（字面量 pattern 编译期提升方案）| ✅ **已修复**：编译器识别字面量 pattern → `Constant::Regex` + `OpCode::RegexFind/RegexReplace(u16)`，VM 初始化时统一预编译；动态 pattern 仍走 `CallBuiltin` 路径（正确设计） |
 | 11 | Medium | CPU | `gateway/observe/access_log/entry.rs` | 每请求 JSON 序列化 + 不必要的 `.clone()` |
 | 12 | Medium | Memory | `center/fed_sync/server/mod.rs` | pending_commands channel-dropped 路径缺少 remove（一行修复）|
 | 13 | Low | CPU | `gateway/conf_sync/cache_client/cache_data.rs` | 100ms 轮询循环可改为 Notify 唤醒 |

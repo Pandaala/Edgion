@@ -1,7 +1,8 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use crate::types::prelude_resources::EdgionGatewayConfig;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::RwLock;
 
 /// Global store for EdgionGatewayConfig resources (keyed by key_name())
@@ -43,20 +44,20 @@ impl Default for EdgionGatewayConfigHandler {
 }
 
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
-    fn full_set(&self, data: &HashMap<String, EdgionGatewayConfig>) {
+    fn full_set(&self, data: &HashMap<String, Arc<EdgionGatewayConfig>>) {
         tracing::info!(
             count = data.len(),
             "EdgionGatewayConfig full_set: received {} EdgionGatewayConfig resources",
             data.len()
         );
         let mut store = EDGION_GATEWAY_CONFIG_STORE.write().unwrap();
-        *store = data.clone();
+        *store = arc_map_to_owned(data);
     }
 
     fn partial_update(
         &self,
-        add: HashMap<String, EdgionGatewayConfig>,
-        update: HashMap<String, EdgionGatewayConfig>,
+        add: HashMap<String, Arc<EdgionGatewayConfig>>,
+        update: HashMap<String, Arc<EdgionGatewayConfig>>,
         remove: HashSet<String>,
     ) {
         let mut store = EDGION_GATEWAY_CONFIG_STORE.write().unwrap();
@@ -69,7 +70,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in add {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig added");
-                store.insert(key, config);
+                store.insert(key, (*config).clone());
             }
         }
 
@@ -81,7 +82,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in update {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig updated");
-                if store.insert(key.clone(), config).is_none() {
+                if store.insert(key.clone(), (*config).clone()).is_none() {
                     tracing::warn!(key = %key, "EdgionGatewayConfig update: key not found in store, inserting");
                 }
             }
@@ -144,14 +145,14 @@ mod tests {
         let handler = EdgionGatewayConfigHandler::new();
 
         let mut data = HashMap::new();
-        data.insert("foo".to_string(), make_config("foo"));
-        data.insert("bar".to_string(), make_config("bar"));
+        data.insert("foo".to_string(), Arc::new(make_config("foo")));
+        data.insert("bar".to_string(), Arc::new(make_config("bar")));
         handler.full_set(&data);
         assert_eq!(count_edgion_gateway_configs(), 2);
 
         // full_set again with only one item — old entries must be gone
         let mut data2 = HashMap::new();
-        data2.insert("baz".to_string(), make_config("baz"));
+        data2.insert("baz".to_string(), Arc::new(make_config("baz")));
         handler.full_set(&data2);
         assert_eq!(count_edgion_gateway_configs(), 1);
     }
@@ -163,7 +164,7 @@ mod tests {
         let handler = EdgionGatewayConfigHandler::new();
 
         let mut add = HashMap::new();
-        add.insert("foo".to_string(), make_config("foo"));
+        add.insert("foo".to_string(), Arc::new(make_config("foo")));
         handler.partial_update(add.clone(), HashMap::new(), std::collections::HashSet::new());
         // add same key again
         handler.partial_update(add, HashMap::new(), std::collections::HashSet::new());
@@ -182,13 +183,13 @@ mod tests {
         let handler = EdgionGatewayConfigHandler::new();
 
         let mut add = HashMap::new();
-        add.insert("foo".to_string(), make_config("foo"));
+        add.insert("foo".to_string(), Arc::new(make_config("foo")));
         handler.partial_update(add, HashMap::new(), std::collections::HashSet::new());
 
         let mut updated = make_config("foo");
         updated.spec.max_retries = 99;
         let mut upd = HashMap::new();
-        upd.insert("foo".to_string(), updated);
+        upd.insert("foo".to_string(), Arc::new(updated));
         handler.partial_update(HashMap::new(), upd, std::collections::HashSet::new());
 
         let result = get_edgion_gateway_config_by_name("foo").expect("must exist after update");
@@ -204,7 +205,7 @@ mod tests {
 
         // update on empty store must insert (not silently discard)
         let mut upd = HashMap::new();
-        upd.insert("ghost".to_string(), make_config("ghost"));
+        upd.insert("ghost".to_string(), Arc::new(make_config("ghost")));
         handler.partial_update(HashMap::new(), upd, std::collections::HashSet::new());
 
         assert_eq!(count_edgion_gateway_configs(), 1, "update miss must insert");
@@ -217,8 +218,8 @@ mod tests {
         let handler = EdgionGatewayConfigHandler::new();
 
         let mut add = HashMap::new();
-        add.insert("foo".to_string(), make_config("foo"));
-        add.insert("bar".to_string(), make_config("bar"));
+        add.insert("foo".to_string(), Arc::new(make_config("foo")));
+        add.insert("bar".to_string(), Arc::new(make_config("bar")));
         handler.partial_update(add, HashMap::new(), std::collections::HashSet::new());
 
         let mut remove = std::collections::HashSet::new();
@@ -250,9 +251,9 @@ mod tests {
         let handler = EdgionGatewayConfigHandler::new();
 
         let mut add = HashMap::new();
-        add.insert("a".to_string(), make_config("a"));
-        add.insert("b".to_string(), make_config("b"));
-        add.insert("c".to_string(), make_config("c"));
+        add.insert("a".to_string(), Arc::new(make_config("a")));
+        add.insert("b".to_string(), Arc::new(make_config("b")));
+        add.insert("c".to_string(), Arc::new(make_config("c")));
         handler.partial_update(add, HashMap::new(), std::collections::HashSet::new());
 
         assert_eq!(count_edgion_gateway_configs(), 3);

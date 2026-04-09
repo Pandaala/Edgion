@@ -29,7 +29,7 @@ impl GatewayHandler {
 }
 
 impl ConfHandler<Gateway> for GatewayHandler {
-    fn full_set(&self, data: &HashMap<String, Gateway>) {
+    fn full_set(&self, data: &HashMap<String, Arc<Gateway>>) {
         tracing::info!(
             count = data.len(),
             "Gateway full_set: received {} Gateway resources",
@@ -52,9 +52,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
                     "Gateway stored"
                 );
 
-                update_gateway_backend_tls_store(&key, &gateway);
+                update_gateway_backend_tls_store(key, gateway);
 
-                if let Err(e) = store.add_gateway(gateway.clone()) {
+                if let Err(e) = store.add_gateway((**gateway).clone()) {
                     tracing::warn!(key = %key, error = %e, "Failed to add gateway to store");
                 }
             }
@@ -83,7 +83,12 @@ impl ConfHandler<Gateway> for GatewayHandler {
         }
     }
 
-    fn partial_update(&self, add: HashMap<String, Gateway>, update: HashMap<String, Gateway>, remove: HashSet<String>) {
+    fn partial_update(
+        &self,
+        add: HashMap<String, Arc<Gateway>>,
+        update: HashMap<String, Arc<Gateway>>,
+        remove: HashSet<String>,
+    ) {
         let global_store = get_global_gateway_store();
         let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
         let config_store = get_global_gateway_config_store();
@@ -109,7 +114,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 config_store.update_gateway(&gateway);
                 update_gateway_backend_tls_store(&key, &gateway);
 
-                if let Err(e) = store.add_gateway(gateway) {
+                if let Err(e) = store.add_gateway((*gateway).clone()) {
                     tracing::warn!(key = %key, error = %e, "Failed to add gateway");
                 }
             }
@@ -136,7 +141,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 config_store.update_gateway(&gateway);
                 update_gateway_backend_tls_store(&key, &gateway);
 
-                store.update_gateway(gateway);
+                store.update_gateway((*gateway).clone());
             }
             needs_rebuild = true;
         }

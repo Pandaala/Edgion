@@ -6,19 +6,19 @@ use std::sync::Arc;
 
 /// Implement ConfHandler directly for BackendTLSPolicyStore
 impl ConfHandler<BackendTLSPolicy> for BackendTLSPolicyStore {
-    fn full_set(&self, data: &HashMap<String, BackendTLSPolicy>) {
+    fn full_set(&self, data: &HashMap<String, Arc<BackendTLSPolicy>>) {
         tracing::info!(component = "backend_tls_policy_store", cnt = data.len(), "full set");
 
         let policies: HashMap<String, Arc<BackendTLSPolicy>> =
-            data.iter().map(|(k, v)| (k.clone(), Arc::new(v.clone()))).collect();
+            data.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect();
 
         self.replace_all(policies);
     }
 
     fn partial_update(
         &self,
-        add: HashMap<String, BackendTLSPolicy>,
-        update: HashMap<String, BackendTLSPolicy>,
+        add: HashMap<String, Arc<BackendTLSPolicy>>,
+        update: HashMap<String, Arc<BackendTLSPolicy>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -29,10 +29,9 @@ impl ConfHandler<BackendTLSPolicy> for BackendTLSPolicyStore {
             "partial update"
         );
 
-        let mut combined: HashMap<String, Arc<BackendTLSPolicy>> =
-            add.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
+        let mut combined: HashMap<String, Arc<BackendTLSPolicy>> = add;
 
-        combined.extend(update.into_iter().map(|(k, v)| (k, Arc::new(v))));
+        combined.extend(update);
 
         self.update(combined, &remove);
     }
@@ -86,11 +85,11 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "default/policy1".to_string(),
-            create_test_policy("default", "policy1", "svc1"),
+            Arc::new(create_test_policy("default", "policy1", "svc1")),
         );
         data.insert(
             "default/policy2".to_string(),
-            create_test_policy("default", "policy2", "svc2"),
+            Arc::new(create_test_policy("default", "policy2", "svc2")),
         );
 
         store.full_set(&data);
@@ -107,7 +106,7 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(
             "default/policy1".to_string(),
-            create_test_policy("default", "policy1", "svc1"),
+            Arc::new(create_test_policy("default", "policy1", "svc1")),
         );
 
         store.partial_update(add, HashMap::new(), HashSet::new());
@@ -123,7 +122,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "default/policy1".to_string(),
-            create_test_policy("default", "policy1", "svc1"),
+            Arc::new(create_test_policy("default", "policy1", "svc1")),
         );
         store.full_set(&data);
 
@@ -131,7 +130,7 @@ mod tests {
         let mut update = HashMap::new();
         update.insert(
             "default/policy1".to_string(),
-            create_test_policy("default", "policy1", "svc1"),
+            Arc::new(create_test_policy("default", "policy1", "svc1")),
         );
 
         store.partial_update(HashMap::new(), update, HashSet::new());
@@ -147,7 +146,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "default/policy1".to_string(),
-            create_test_policy("default", "policy1", "svc1"),
+            Arc::new(create_test_policy("default", "policy1", "svc1")),
         );
         store.full_set(&data);
 
@@ -166,11 +165,11 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "default/policy1".to_string(),
-            create_test_policy("default", "policy1", "svc1"),
+            Arc::new(create_test_policy("default", "policy1", "svc1")),
         );
         data.insert(
             "default/policy2".to_string(),
-            create_test_policy("default", "policy2", "svc1"),
+            Arc::new(create_test_policy("default", "policy2", "svc1")),
         );
 
         store.full_set(&data);
@@ -187,7 +186,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "default/policy1".to_string(),
-            create_test_policy("default", "policy1", "svc1"),
+            Arc::new(create_test_policy("default", "policy1", "svc1")),
         );
 
         handler.full_set(&data);

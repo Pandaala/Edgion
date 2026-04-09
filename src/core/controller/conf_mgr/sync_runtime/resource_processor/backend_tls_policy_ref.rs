@@ -116,7 +116,10 @@ impl BackendTLSPolicyState {
     pub fn reset(&self) {
         self.target_mgr.clear();
         self.timestamps.write().unwrap().clear();
-        tracing::info!(component = "backend_tls_policy_ref", "Cleared BackendTLSPolicy target manager and timestamps");
+        tracing::info!(
+            component = "backend_tls_policy_ref",
+            "Cleared BackendTLSPolicy target manager and timestamps"
+        );
     }
 }
 
