@@ -1,27 +1,11 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::core::gateway::routes::grpc::match_unit::{
-    GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo, CATCH_ALL_HOSTNAME,
-};
+use crate::core::gateway::routes::common::{effective_hostnames, filter_accepted_parent_refs};
+use crate::core::gateway::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo};
 use crate::core::gateway::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
-use crate::core::gateway::routes::http::conf_handler_impl::filter_accepted_parent_refs;
 use crate::types::{GRPCRoute, ListenerKey, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-fn get_effective_hostnames(route: &GRPCRoute) -> Vec<String> {
-    if let Some(resolved) = &route.spec.resolved_hostnames {
-        if !resolved.is_empty() {
-            return resolved.clone();
-        }
-    }
-    if let Some(hostnames) = &route.spec.hostnames {
-        if !hostnames.is_empty() {
-            return hostnames.clone();
-        }
-    }
-    vec![CATCH_ALL_HOSTNAME.to_string()]
-}
 
 impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
     fn full_set(&self, data: &HashMap<String, GRPCRoute>) {
@@ -129,7 +113,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
     let route_name = route.metadata.name.as_deref().unwrap_or("");
 
     let accepted_refs = match filter_accepted_parent_refs(
-        route.spec.parent_refs.as_ref(),
+        route.spec.parent_refs.as_deref(),
         route.status.as_ref().map(|s| s.parents.as_slice()),
         Some(route_namespace),
     ) {
@@ -146,7 +130,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
         .unwrap_or(0);
     let route_info = Arc::new(GrpcRouteInfo {
         parent_refs: Some(accepted_refs),
-        effective_hostnames: get_effective_hostnames(route),
+        effective_hostnames: effective_hostnames(route.spec.resolved_hostnames.as_deref(), route.spec.hostnames.as_deref()),
     });
 
     let mut units = Vec::new();
