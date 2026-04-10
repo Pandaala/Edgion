@@ -8,7 +8,8 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -283,17 +284,17 @@ where
     /// - K8s mode: immediately after `reflector::store()`, before any events arrive.
     /// - FS mode: in `FileSystemResourceController::new()`.
     pub fn set_raw_store(&self, store: Arc<dyn RawStore<K>>) {
-        *self.raw_store.write().unwrap() = Some(store);
+        *self.raw_store.write() = Some(store);
     }
 
     /// Set metadata filter configuration
     pub fn set_metadata_filter(&self, filter: MetadataFilterConfig) {
-        *self.metadata_filter.write().unwrap() = Some(Arc::new(filter));
+        *self.metadata_filter.write() = Some(Arc::new(filter));
     }
 
     /// Set namespace filter
     pub fn set_namespace_filter(&self, namespaces: Vec<String>) {
-        *self.namespace_filter.write().unwrap() = Some(Arc::new(namespaces));
+        *self.namespace_filter.write() = Some(Arc::new(namespaces));
     }
 
     /// Get workqueue reference (for external use like worker spawning)
@@ -436,8 +437,8 @@ where
     fn create_context(&self, trigger_chain: TriggerChain) -> HandlerContext {
         HandlerContext::new(
             self.secret_ref_manager.clone(),
-            self.metadata_filter.read().unwrap().clone(),
-            self.namespace_filter.read().unwrap().clone(),
+            self.metadata_filter.read().clone(),
+            self.namespace_filter.read().clone(),
             trigger_chain,
             self.workqueue.config().max_trigger_cycles,
             self.workqueue.config().max_trigger_depth,
@@ -693,11 +694,11 @@ where
     }
 
     fn set_namespace_filter_vec(&self, filter: Option<Vec<String>>) {
-        *self.namespace_filter.write().unwrap() = filter.map(Arc::new);
+        *self.namespace_filter.write() = filter.map(Arc::new);
     }
 
     fn set_metadata_filter_config(&self, filter: Option<MetadataFilterConfig>) {
-        *self.metadata_filter.write().unwrap() = filter.map(Arc::new);
+        *self.metadata_filter.write() = filter.map(Arc::new);
     }
 
     fn workqueue(&self) -> Arc<Workqueue> {
@@ -722,7 +723,7 @@ where
     }
 
     fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
-        let raw_store = self.raw_store.read().unwrap();
+        let raw_store = self.raw_store.read();
         let arc_k = raw_store.as_ref()?.get(key)?;
         Some(arc_k as Arc<dyn Any + Send + Sync>)
     }

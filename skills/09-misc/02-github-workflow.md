@@ -75,7 +75,7 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
    - 构建三个二进制：
      - `edgion-gateway`
      - `edgion-controller`
-     - `edgion-ctl`
+     - `edgion-cli`
    - 上传产物 `edgion-binaries-<arch>`
 
 3. `build-and-push-images`
@@ -114,12 +114,12 @@ cargo test --all
 
 ```bash
 # amd64
-cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-ctl \
+cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target x86_64-unknown-linux-gnu
 
 # arm64
 rustup target add aarch64-unknown-linux-gnu
-cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-ctl \
+cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target aarch64-unknown-linux-gnu
 ```
 

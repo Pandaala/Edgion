@@ -264,7 +264,7 @@ compile_binaries() {
             --target \"${target}\" \
             --bin edgion-gateway \
             --bin edgion-controller \
-            --bin edgion-ctl \
+            --bin edgion-cli \
             --features \"${FEATURES}\""
 
     if [[ "${force_rebuild}" == "true" ]]; then

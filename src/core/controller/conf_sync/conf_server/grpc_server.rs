@@ -528,7 +528,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
     use tokio_stream::StreamExt;
 
     // A mock provider that allows us to simulate a server reload
@@ -544,13 +544,13 @@ mod tests {
         }
 
         fn set_server(&self, server: Arc<ConfigSyncServer>) {
-            *self.server.lock().unwrap() = server;
+            *self.server.lock() = server;
         }
     }
 
     impl ConfigSyncServerProvider for MockConfigSyncProvider {
         fn config_sync_server(&self) -> Option<Arc<ConfigSyncServer>> {
-            Some(self.server.lock().unwrap().clone())
+            Some(self.server.lock().clone())
         }
     }
 
@@ -652,16 +652,16 @@ mod tests {
 
     /// A minimal mock WatchObj that keeps a sender so we can push events or close the channel.
     struct MockWatchObj {
-        tx: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<super::super::traits::WatchResponseSimple>>>,
-        rx: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<super::super::traits::WatchResponseSimple>>>,
+        tx: parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<super::super::traits::WatchResponseSimple>>>,
+        rx: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<super::super::traits::WatchResponseSimple>>>,
     }
 
     impl MockWatchObj {
         fn new() -> Self {
             let (tx, rx) = tokio::sync::mpsc::channel(16);
             Self {
-                tx: std::sync::Mutex::new(Some(tx)),
-                rx: std::sync::Mutex::new(Some(rx)),
+                tx: parking_lot::Mutex::new(Some(tx)),
+                rx: parking_lot::Mutex::new(Some(rx)),
             }
         }
     }
@@ -684,7 +684,6 @@ mod tests {
             // Return the pre-created receiver (consumed once)
             self.rx
                 .lock()
-                .unwrap()
                 .take()
                 .expect("watch_json called more than once")
         }
@@ -709,7 +708,7 @@ mod tests {
         let mock_obj = Arc::new(MockWatchObj::new());
 
         // Hold a sender clone so we can push events through the mock watch channel
-        let mock_tx = mock_obj.tx.lock().unwrap().clone().unwrap();
+        let mock_tx = mock_obj.tx.lock().clone().unwrap();
 
         server.register_watch_obj("MockKind", mock_obj);
 

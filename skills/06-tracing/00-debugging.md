@@ -1,6 +1,6 @@
 ---
 name: debugging-and-troubleshooting
-description: Day-to-day development debugging guide for Edgion. Use when local code changes break routing, plugins, sync, readiness, or runtime behavior and you need a fast workflow using keep-alive integration runs, Admin API, edgion-ctl, access-log store, metrics, and resource_diff.
+description: Day-to-day development debugging guide for Edgion. Use when local code changes break routing, plugins, sync, readiness, or runtime behavior and you need a fast workflow using keep-alive integration runs, Admin API, edgion-cli, access-log store, metrics, and resource_diff.
 ---
 # 调试与排障
 
@@ -12,13 +12,13 @@ description: Day-to-day development debugging guide for Edgion. Use when local c
 ### 1. 配置 / 同步链路问题
 
 症状：
-- `edgion-ctl apply` 成功，但 Gateway 没生效
+- `edgion-cli apply` 成功，但 Gateway 没生效
 - Controller `ready` 一直不通过
 - Gateway `ready` 一直不通过
 - 改了 YAML，但 `server` / `client` 视图不一致
 
 优先使用：
-- `edgion-ctl --target center/server/client`
+- `edgion-cli --target center/server/client`
 - `examples/resource_diff`
 - Controller/Gateway Admin API
 
@@ -57,7 +57,7 @@ description: Day-to-day development debugging guide for Edgion. Use when local c
 适合：
 - 先用仓库现成测试配置把现场拉起来
 - 测完后保留 controller / gateway / test_server 进程和日志目录
-- 再手工 `curl`、`edgion-ctl`、查日志
+- 再手工 `curl`、`edgion-cli`、查日志
 
 ### 跳过编译快速迭代
 
@@ -106,12 +106,12 @@ curl -sf http://127.0.0.1:5901/health
 
 ## 第二步：用 center / server / client 三视图定位问题层次
 
-`edgion-ctl` 的三种 target 非常适合快速定位：
+`edgion-cli` 的三种 target 非常适合快速定位：
 
 ```bash
-./target/debug/edgion-ctl get httproute -n default
-./target/debug/edgion-ctl -t server get httproute -n default
-./target/debug/edgion-ctl -t client get httproute -n default
+./target/debug/edgion-cli get httproute -n default
+./target/debug/edgion-cli -t server get httproute -n default
+./target/debug/edgion-cli -t client get httproute -n default
 ```
 
 判断规则：
@@ -332,7 +332,7 @@ kubectl logs -n "$NS" "$POD" -c edgion-gateway --since=120s
 
 | 症状 | 先看哪里 |
 |------|---------|
-| `edgion-ctl apply` 成功但 Gateway 没变化 | 三视图对比 + `resource_diff` |
+| `edgion-cli apply` 成功但 Gateway 没变化 | 三视图对比 + `resource_diff` |
 | Controller `ready` 不通过 | `gatewayclass` / `gateway` / `processor` 日志，必要时看 `/api/v1/server-info` |
 | Gateway `ready` 不通过 | `client` 侧缓存、`supported_kinds`、`server_id`、watch/list 日志 |
 | 404 / no match | `configclient` 资源、`store-stats`、Access Log `matched_route` |
@@ -351,7 +351,7 @@ kubectl logs -n "$NS" "$POD" -c edgion-gateway --since=120s
 
 - Controller Admin API：`src/core/controller/api/`
 - Gateway Admin API：`src/core/gateway/api/mod.rs`
-- `edgion-ctl`：`src/core/ctl/cli/`
+- `edgion-cli`：`src/core/ctl/cli/`
 - Gateway 启动入口：`src/core/gateway/cli/mod.rs`
 - Controller 启动入口：`src/core/controller/cli/mod.rs`
 - 资源同步核对工具：`examples/code/validator/resource_diff.rs`

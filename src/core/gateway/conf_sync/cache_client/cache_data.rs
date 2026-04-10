@@ -1,7 +1,8 @@
 use crate::core::common::conf_sync::traits::{ConfHandler, ResourceChange};
 use crate::types::ResourceMeta;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use tokio::sync::Notify;
 use tokio::time::Duration;
 
@@ -128,7 +129,7 @@ impl<T: ResourceMeta> CacheData<T> {
     where
         T: Clone + ResourceMeta,
     {
-        let mut cache = cache_data.write().unwrap();
+        let mut cache = cache_data.write();
 
         // Get handler reference at the beginning
         let handler = match cache.handler.as_mut() {

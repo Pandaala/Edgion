@@ -237,6 +237,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DirectEndpoint" => "EdgionPlugins",
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
+        "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
@@ -763,6 +764,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::DynamicExternalUpstreamTestSuite));
+        }
+        "EdgionPlugins/RegionRoute" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RegionRoute tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RegionRouteTestSuite));
         }
         "EdgionPlugins/AllEndpointStatus" => {
             if !gateway {

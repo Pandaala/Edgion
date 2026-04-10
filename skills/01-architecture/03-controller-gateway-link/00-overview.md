@@ -151,7 +151,7 @@ pub struct ConfSyncTlsConfig {
 
 ### 证书生成
 
-`edgion-ctl gen-certs` 子命令使用 rcgen 生成完整证书束：
+`edgion-cli gen-certs` 子命令使用 rcgen 生成完整证书束：
 
 - **CA**：自签 ECDSA P-256，CN=edgion-grpc-ca
 - **Server cert**：CN=edgion-controller，SAN 含 localhost/127.0.0.1/::1 + K8s FQDN，EKU=ServerAuth

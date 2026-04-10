@@ -83,7 +83,7 @@ Edgion follows a **Controller–Gateway** separation architecture connected via 
 
 - **Controller** (`edgion-controller`) — Watches configuration sources (Kubernetes CRDs or local YAML), validates and pre-parses resources, then streams them to gateways via gRPC. Handles ACME certificates and status updates.
 - **Gateway** (`edgion-gateway`) — Stateless data plane built on Pingora. Receives configuration from the controller, executes routing, plugin chains, load balancing, TLS termination, and access logging.
-- **CLI** (`edgion-ctl`) — Management tool for inspecting and operating both controller and gateway.
+- **CLI** (`edgion-cli`) — Management tool for inspecting and operating both controller and gateway.
 
 ```
                 ┌──────────────┐

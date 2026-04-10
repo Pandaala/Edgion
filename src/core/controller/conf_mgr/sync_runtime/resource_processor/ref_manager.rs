@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use crate::types::ResourceKind;
 
@@ -191,7 +191,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     pub fn add_ref(&self, source_key: String, value: V) {
         let value_key = value.ref_key();
         {
-            let mut maps = self.inner.write().unwrap();
+            let mut maps = self.inner.write();
             maps.refs.entry(source_key.clone()).or_default().insert(value.clone());
             maps.dependencies
                 .entry(value_key.clone())
@@ -210,7 +210,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     pub fn remove_ref(&self, source_key: &str, value: &V) {
         let value_key = value.ref_key();
         {
-            let mut maps = self.inner.write().unwrap();
+            let mut maps = self.inner.write();
             if let Some(value_set) = maps.refs.get_mut(source_key) {
                 value_set.remove(value);
                 if value_set.is_empty() {
@@ -234,7 +234,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
 
     /// Get all values that reference a given source.
     pub fn get_refs(&self, source_key: &str) -> Vec<V> {
-        let maps = self.inner.read().unwrap();
+        let maps = self.inner.read();
         maps.refs
             .get(source_key)
             .map(|s| s.iter().cloned().collect())
@@ -243,7 +243,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
 
     /// Get all source keys that a value depends on.
     pub fn get_dependencies(&self, value_key: &str) -> Vec<String> {
-        let maps = self.inner.read().unwrap();
+        let maps = self.inner.read();
         maps.dependencies
             .get(value_key)
             .map(|s| s.iter().cloned().collect())
@@ -257,7 +257,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     pub fn clear_value_refs(&self, value: &V) -> Vec<String> {
         let value_key = value.ref_key();
         let source_keys: Vec<String> = {
-            let mut maps = self.inner.write().unwrap();
+            let mut maps = self.inner.write();
             let source_keys: Vec<String> = maps
                 .dependencies
                 .remove(&value_key)
@@ -291,7 +291,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
 
     /// Return all source keys present in the forward index.
     pub fn all_source_keys(&self) -> Vec<String> {
-        let maps = self.inner.read().unwrap();
+        let maps = self.inner.read();
         maps.refs.keys().cloned().collect()
     }
 
@@ -301,7 +301,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     /// `value_count`, and `total_references` are guaranteed to be mutually
     /// consistent.
     pub fn stats(&self) -> RefManagerStats {
-        let maps = self.inner.read().unwrap();
+        let maps = self.inner.read();
         RefManagerStats {
             source_count: maps.refs.len(),
             value_count: maps.dependencies.len(),
@@ -312,7 +312,7 @@ impl<V: RefValue> BidirectionalRefManager<V> {
     /// Clear all references. Used during reload / re-election to reset state.
     pub fn clear(&self) {
         {
-            let mut maps = self.inner.write().unwrap();
+            let mut maps = self.inner.write();
             maps.refs.clear();
             maps.dependencies.clear();
         }

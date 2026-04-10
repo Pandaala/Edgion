@@ -36,4 +36,4 @@
 
 ### 运维工具
 
-- [edgion-ctl](./edgion-ctl.md)：资源管理与调试 CLI。
+- [edgion-cli](./edgion-cli.md)：资源管理与调试 CLI。

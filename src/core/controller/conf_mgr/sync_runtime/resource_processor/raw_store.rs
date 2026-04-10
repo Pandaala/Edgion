@@ -13,7 +13,8 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 use kube::runtime::reflector::Store;
 use kube::Resource;
@@ -102,16 +103,16 @@ impl<K> FsRawStore<K> {
     }
 
     pub fn upsert(&self, key: String, obj: Arc<K>) {
-        self.data.write().unwrap().insert(key, obj);
+        self.data.write().insert(key, obj);
     }
 
     pub fn remove(&self, key: &str) {
-        self.data.write().unwrap().remove(key);
+        self.data.write().remove(key);
     }
 }
 
 impl<K: Send + Sync + 'static> RawStore<K> for FsRawStore<K> {
     fn get(&self, key: &str) -> Option<Arc<K>> {
-        self.data.read().unwrap().get(key).cloned()
+        self.data.read().get(key).cloned()
     }
 }

@@ -37,4 +37,4 @@ spec:
 ## Related Documentation
 
 - [Access Log](./access-log.md)
-- [edgion-ctl](../edgion-ctl.md)
+- [edgion-cli](../edgion-cli.md)

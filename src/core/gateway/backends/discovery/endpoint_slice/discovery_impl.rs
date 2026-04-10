@@ -12,7 +12,8 @@ use pingora_load_balancing::selection::BackendSelection;
 use pingora_load_balancing::Backend;
 use pingora_load_balancing::{Backends, LoadBalancer};
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointSliceExt {
@@ -115,7 +116,7 @@ impl MultiEndpointSliceDiscovery {
     /// This updates the internal HashMap without rebuilding the discovery
     fn update_slices(&self, slices: Vec<EndpointSlice>) {
         let slice_count = slices.len();
-        let mut slice_map = self.endpoint_slices.write().unwrap();
+        let mut slice_map = self.endpoint_slices.write();
         slice_map.clear();
         for slice in slices {
             if let Some(name) = slice.metadata.name.clone() {
@@ -136,7 +137,7 @@ impl MultiEndpointSliceDiscovery {
     /// Get the port dynamically from the first slice
     /// This ensures port changes are reflected after update_slices()
     fn get_port(&self) -> u16 {
-        let slices = self.endpoint_slices.read().unwrap();
+        let slices = self.endpoint_slices.read();
         slices
             .values()
             .next()
@@ -150,7 +151,7 @@ impl MultiEndpointSliceDiscovery {
 impl ServiceDiscovery for MultiEndpointSliceDiscovery {
     async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
         let port = self.get_port(); // Dynamic port lookup
-        let ep_slices = self.endpoint_slices.read().unwrap();
+        let ep_slices = self.endpoint_slices.read();
         let mut all_backends = BTreeSet::new();
 
         // Aggregate backends from all EndpointSlices
@@ -277,7 +278,7 @@ where
     /// Used to capture old backends before LB is refreshed.
     pub fn get_current_backends(&self) -> Vec<Backend> {
         let port = self.discovery.get_port();
-        let slices = self.discovery.endpoint_slices.read().unwrap();
+        let slices = self.discovery.endpoint_slices.read();
         let mut backends = std::collections::BTreeSet::new();
         for slice in slices.values() {
             backends.extend(slice.build_backends(port));

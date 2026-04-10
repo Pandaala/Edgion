@@ -537,15 +537,15 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 mod tests {
     use super::*;
     use crate::core::gateway::cli::config::set_gateway_instance_count;
-    use std::sync::{Mutex, OnceLock};
+    use parking_lot::Mutex;
+    use std::sync::OnceLock;
 
     static GATEWAY_INSTANCE_COUNT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn with_gateway_instance_count_lock<T>(f: impl FnOnce() -> T) -> T {
         let _guard = GATEWAY_INSTANCE_COUNT_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("gateway instance count test lock poisoned");
+            .lock();
         let result = f();
         set_gateway_instance_count(1);
         result

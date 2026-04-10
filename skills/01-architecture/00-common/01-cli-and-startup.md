@@ -13,7 +13,7 @@ description: 三个 bin 共同遵守的命令行约定、工作目录结构、�
 |-----|---------|
 | edgion-controller | 安装 rustls 加密提供程序 → `parse_args()` → `run()` |
 | edgion-gateway | 安装 rustls 加密提供程序 → `parse_args()` → `run()`（普通 `fn main()`，自管理 Tokio 运行时） |
-| edgion-ctl | `Cli::parse()` → `cli.run().await`（单线程 Tokio） |
+| edgion-cli | `Cli::parse()` → `cli.run().await`（单线程 Tokio） |
 
 ## 命令行参数
 

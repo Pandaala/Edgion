@@ -13,7 +13,8 @@ use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, RwLock};
+use std::sync::LazyLock;
+use parking_lot::RwLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
@@ -67,23 +68,19 @@ static ALL_ENDPOINT_STATUS_GLOBAL_CONFIG: LazyLock<RwLock<AllEndpointStatusGloba
     LazyLock::new(|| RwLock::new(AllEndpointStatusGlobalConfig::default()));
 
 pub fn get_all_endpoint_status_global_config() -> AllEndpointStatusGlobalConfig {
-    ALL_ENDPOINT_STATUS_GLOBAL_CONFIG
-        .read()
-        .map(|c| c.clone())
-        .unwrap_or_default()
+    ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.read().clone()
 }
 
 /// Initialize the global AllEndpointStatus configuration.
 /// Called once during gateway startup with the loaded TOML config.
 pub fn init_all_endpoint_status_global_config(config: &AllEndpointStatusGlobalConfig) {
-    if let Ok(mut c) = ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.write() {
-        *c = config.clone();
-        tracing::info!(
-            max_endpoints = config.max_endpoints,
-            min_interval_ms = config.min_interval_ms,
-            "AllEndpointStatus global config initialized"
-        );
-    }
+    let mut c = ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.write();
+    *c = config.clone();
+    tracing::info!(
+        max_endpoints = config.max_endpoints,
+        min_interval_ms = config.min_interval_ms,
+        "AllEndpointStatus global config initialized"
+    );
 }
 
 // ============================================================

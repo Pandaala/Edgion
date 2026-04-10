@@ -1,0 +1,20 @@
+# RegionRoute - empty region_key → plugin is a no-op, passes through to normal backend
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: region-route-nokey
+  namespace: default
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        regions:
+          - name: virginia
+            hashRange: [0, 600]
+            backendEndpoint: "127.0.0.1:30001"
+            tls: false
+          - name: ohio
+            hashRange: [601, 1000]
+            backendEndpoint: "127.0.0.1:30002"
+            tls: false
+        # regionKey intentionally omitted → plugin no-op

@@ -1,0 +1,25 @@
+# HTTPRoute for RegionRoute hash-routing test
+# Normal backend test-http:30001 used as fallback (when plugin passes through)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: region-route-hash-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "region-route-hash.example.com"
+  rules:
+    - backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: region-route-hash

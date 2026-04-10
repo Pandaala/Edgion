@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UTILS_DIR="${SCRIPT_DIR}/../utils"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf/conf-sync-leak-test"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5900}"
@@ -87,8 +87,8 @@ cleanup() {
 # Prerequisite checks
 # =============================================================================
 check_prerequisites() {
-    if [ ! -f "$EDGION_CTL" ]; then
-        log_error "edgion-ctl not found at $EDGION_CTL — run prepare.sh first"
+    if [ ! -f "$EDGION_CLI" ]; then
+        log_error "edgion-cli not found at $EDGION_CLI — run prepare.sh first"
         exit 1
     fi
     if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
@@ -116,7 +116,7 @@ inject_configs() {
     log_info "Injecting configs from ${label}..."
     for file in "${dir}"/*.yaml; do
         [ -f "$file" ] || continue
-        if ! "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" > /dev/null 2>&1; then
+        if ! "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$file" > /dev/null 2>&1; then
             log_error "  Failed to apply $(basename "$file")"
             fail=true
         fi
@@ -152,7 +152,7 @@ delete_injected_configs() {
         local kind name
         kind=$(echo "$entry" | awk '{print $1}')
         name=$(echo "$entry" | awk '{print $2}')
-        "$EDGION_CTL" --server "$CONTROLLER_URL" delete "$kind" "$name" -n "$ns" > /dev/null 2>&1 || true
+        "$EDGION_CLI" --server "$CONTROLLER_URL" delete "$kind" "$name" -n "$ns" > /dev/null 2>&1 || true
     done
     if $fail; then return 1; fi
     log_success "Deleted injected configs"
@@ -410,7 +410,7 @@ main() {
     done
 
     log_section "Cleaning up base configs"
-    "$EDGION_CTL" --server "$CONTROLLER_URL" delete Gateway leak-test-gateway -n edgion-test > /dev/null 2>&1 || true
+    "$EDGION_CLI" --server "$CONTROLLER_URL" delete Gateway leak-test-gateway -n edgion-test > /dev/null 2>&1 || true
 
     log_section "Results"
     echo "  Cycles:  ${CYCLES}"

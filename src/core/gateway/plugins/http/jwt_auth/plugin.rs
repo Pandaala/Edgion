@@ -67,7 +67,7 @@ pub struct JwtAuth {
     /// EdgionPlugins namespace (fallback for secret_ref without namespace)
     plugin_namespace: String,
     /// Loaded credentials (lazily populated on first request)
-    credentials: Arc<std::sync::RwLock<Option<Credentials>>>,
+    credentials: Arc<parking_lot::RwLock<Option<Credentials>>>,
 }
 
 impl JwtAuth {
@@ -77,7 +77,7 @@ impl JwtAuth {
             name: "JwtAuth".to_string(),
             config: config.clone(),
             plugin_namespace,
-            credentials: Arc::new(std::sync::RwLock::new(None)),
+            credentials: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
 
@@ -132,10 +132,7 @@ impl JwtAuth {
     fn load_credentials(&self) -> JwtAuthResult<Credentials> {
         // Check if already loaded
         {
-            let guard = self
-                .credentials
-                .read()
-                .map_err(|_| "JWT credential cache lock poisoned")?;
+            let guard = self.credentials.read();
             if let Some(ref creds) = *guard {
                 return Ok(creds.clone());
             }
@@ -146,10 +143,7 @@ impl JwtAuth {
 
         // Cache
         {
-            let mut guard = self
-                .credentials
-                .write()
-                .map_err(|_| "JWT credential cache lock poisoned")?;
+            let mut guard = self.credentials.write();
             *guard = Some(creds.clone());
         }
 
@@ -570,7 +564,8 @@ mod tests {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde_json::json;
     use std::collections::HashMap as StdHashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use parking_lot::Mutex;
 
     const TEST_SECRET: &str = "test-secret-key-for-jwt-auth-testing-min-32-bytes";
 
@@ -806,7 +801,6 @@ mod tests {
             if let Some(val) = resp.headers.get("WWW-Authenticate") {
                 headers_clone
                     .lock()
-                    .unwrap()
                     .push(("WWW-Authenticate".to_string(), val.to_str().unwrap_or("").to_string()));
             }
             Ok(())
@@ -817,7 +811,7 @@ mod tests {
         let r = auth.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
 
-        let headers = headers_captured.lock().unwrap();
+        let headers = headers_captured.lock();
         assert!(
             headers
                 .iter()
@@ -901,7 +895,7 @@ mod tests {
         let ctx_clone = ctx_var_captured.clone();
         mock.expect_set_ctx_var().returning(move |key, value| {
             if key == "jwt_claims" {
-                *ctx_clone.lock().unwrap() = Some(value.to_string());
+                *ctx_clone.lock() = Some(value.to_string());
             }
             Ok(())
         });
@@ -909,7 +903,7 @@ mod tests {
         let r = auth.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::GoodNext);
 
-        let ctx_val = ctx_var_captured.lock().unwrap();
+        let ctx_val = ctx_var_captured.lock();
         assert!(ctx_val.is_some(), "jwt_claims should be set in context");
         let claims_json = ctx_val.as_ref().unwrap();
         assert!(claims_json.contains("user123"));
@@ -1262,7 +1256,6 @@ mod tests {
         mock.expect_set_request_header().returning(move |name, value| {
             headers_clone
                 .lock()
-                .unwrap()
                 .insert(name.to_string(), value.to_string());
             Ok(())
         });
@@ -1270,7 +1263,7 @@ mod tests {
         let r = auth.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::GoodNext);
 
-        let headers = headers_set.lock().unwrap();
+        let headers = headers_set.lock();
         assert_eq!(headers.get("X-User-ID"), Some(&"user123".to_string()));
         assert_eq!(headers.get("X-User-Email"), Some(&"user@example.com".to_string()));
         assert_eq!(headers.get("X-User-Roles"), Some(&"admin,user".to_string()));

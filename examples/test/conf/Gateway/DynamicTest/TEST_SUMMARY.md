@@ -48,7 +48,7 @@ DynamicTest/
 3. Run the initial checks:
    `other.example.com -> 404` because the hostname restriction is active.
    `GET /api/v1 -> 200/502` because the original method rule matches.
-4. Apply `updates/` with `edgion-ctl apply`.
+4. Apply `updates/` with `edgion-cli apply`.
 5. Wait 2 seconds.
 6. Run the update-phase checks:
    `other.example.com -> 200/502` after removing the hostname restriction.

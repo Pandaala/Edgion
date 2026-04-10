@@ -87,7 +87,7 @@ jobs:
             target-${{ matrix.target }}-
 
       - name: Build binaries
-        run: cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-ctl --target ${{ matrix.target }}
+        run: cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli --target ${{ matrix.target }}
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
@@ -96,7 +96,7 @@ jobs:
           path: |
             target/${{ matrix.target }}/release/edgion-gateway
             target/${{ matrix.target }}/release/edgion-controller
-            target/${{ matrix.target }}/release/edgion-ctl
+            target/${{ matrix.target }}/release/edgion-cli
 
   build-and-push-images:
     needs: build-binaries
@@ -125,7 +125,7 @@ jobs:
         run: |
           chmod +x target/${{ matrix.target }}/release/edgion-gateway
           chmod +x target/${{ matrix.target }}/release/edgion-controller
-          chmod +x target/${{ matrix.target }}/release/edgion-ctl
+          chmod +x target/${{ matrix.target }}/release/edgion-cli
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

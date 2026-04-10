@@ -28,7 +28,7 @@
 //! routes targeting `""` (meaning "all listeners on this gateway").
 
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use crate::types::ResourceKind;
 
@@ -77,8 +77,8 @@ impl AttachedRouteTracker {
             key: route_key.to_string(),
         };
 
-        let mut fwd = self.forward.write().unwrap();
-        let mut rev = self.reverse.write().unwrap();
+        let mut fwd = self.forward.write();
+        let mut rev = self.reverse.write();
 
         let old = rev.get(&route_ref);
         if old.map(|o| o == &attachments).unwrap_or(attachments.is_empty()) {
@@ -113,8 +113,8 @@ impl AttachedRouteTracker {
             key: route_key.to_string(),
         };
 
-        let mut fwd = self.forward.write().unwrap();
-        let mut rev = self.reverse.write().unwrap();
+        let mut fwd = self.forward.write();
+        let mut rev = self.reverse.write();
 
         let had_entries = rev.contains_key(&route_ref);
         Self::remove_from_maps(&mut fwd, &mut rev, &route_ref);
@@ -126,7 +126,7 @@ impl AttachedRouteTracker {
     /// Returns: routes explicitly targeting `listener_name` + routes with no
     /// sectionName (targeting all listeners).
     pub fn count_for_listener(&self, gateway_key: &str, listener_name: &str) -> i32 {
-        let fwd = self.forward.read().unwrap();
+        let fwd = self.forward.read();
         let Some(listener_map) = fwd.get(gateway_key) else {
             return 0;
         };
@@ -180,8 +180,8 @@ impl AttachedRouteTracker {
     }
 
     pub fn clear(&self) {
-        self.forward.write().unwrap().clear();
-        self.reverse.write().unwrap().clear();
+        self.forward.write().clear();
+        self.reverse.write().clear();
     }
 }
 

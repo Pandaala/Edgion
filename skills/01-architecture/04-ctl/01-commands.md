@@ -1,11 +1,11 @@
 ---
 name: ctl-commands
-description: edgion-ctl 子命令详解：apply、get、delete、reload 的参数、实现逻辑、示例。
+description: edgion-cli 子命令详解：apply、get、delete、reload 的参数、实现逻辑、示例。
 ---
 
-# edgion-ctl 子命令
+# edgion-cli 子命令
 
-edgion-ctl 提供 5 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）、gen-certs（生成 mTLS 证书）。其中 apply、delete、reload 仅在 center target 下可用，gen-certs 不依赖 target。
+edgion-cli 提供 5 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）、gen-certs（生成 mTLS 证书）。其中 apply、delete、reload 仅在 center target 下可用，gen-certs 不依赖 target。
 
 ## apply
 
@@ -14,7 +14,7 @@ edgion-ctl 提供 5 个子命令：apply（应用配置）、get（查询资源�
 ### 语法
 
 ```bash
-edgion-ctl apply -f <file|directory> [--dry-run]
+edgion-cli apply -f <file|directory> [--dry-run]
 ```
 
 ### 参数
@@ -37,13 +37,13 @@ edgion-ctl apply -f <file|directory> [--dry-run]
 
 ```bash
 # 应用单个文件
-edgion-ctl apply -f gateway.yaml
+edgion-cli apply -f gateway.yaml
 
 # 应用目录下所有 YAML
-edgion-ctl apply -f manifests/
+edgion-cli apply -f manifests/
 
 # Dry run 验证
-edgion-ctl apply -f gateway.yaml --dry-run
+edgion-cli apply -f gateway.yaml --dry-run
 ```
 
 ## get
@@ -53,7 +53,7 @@ edgion-ctl apply -f gateway.yaml --dry-run
 ### 语法
 
 ```bash
-edgion-ctl [-t <target>] get <kind> [name] [-n <namespace>] [-o <format>]
+edgion-cli [-t <target>] get <kind> [name] [-n <namespace>] [-o <format>]
 ```
 
 ### 参数
@@ -81,19 +81,19 @@ server/client 模式下的命名空间过滤是客户端侧完成的：先获取
 
 ```bash
 # 列出所有 HTTPRoute（center 模式）
-edgion-ctl get httproute
+edgion-cli get httproute
 
 # 按命名空间过滤
-edgion-ctl get httproute -n production
+edgion-cli get httproute -n production
 
 # 获取指定资源的 YAML
-edgion-ctl get httproute my-route -n default -o yaml
+edgion-cli get httproute my-route -n default -o yaml
 
 # 查看 Gateway 缓存中的资源（JSON 格式）
-edgion-ctl -t client get httproute -o json
+edgion-cli -t client get httproute -o json
 
 # 宽表格显示更多信息
-edgion-ctl get gateway -o wide
+edgion-cli get gateway -o wide
 ```
 
 ## delete
@@ -104,10 +104,10 @@ edgion-ctl get gateway -o wide
 
 ```bash
 # 方式 1：按 kind/name 删除
-edgion-ctl delete <kind> <name> [-n <namespace>]
+edgion-cli delete <kind> <name> [-n <namespace>]
 
 # 方式 2：从文件删除
-edgion-ctl delete -f <file>
+edgion-cli delete -f <file>
 ```
 
 ### 参数
@@ -128,10 +128,10 @@ edgion-ctl delete -f <file>
 
 ```bash
 # 按 kind/name 删除
-edgion-ctl delete httproute my-route -n default
+edgion-cli delete httproute my-route -n default
 
 # 从文件删除
-edgion-ctl delete -f gateway.yaml
+edgion-cli delete -f gateway.yaml
 ```
 
 ## reload
@@ -141,7 +141,7 @@ edgion-ctl delete -f gateway.yaml
 ### 语法
 
 ```bash
-edgion-ctl reload
+edgion-cli reload
 ```
 
 ### 实现逻辑
@@ -164,10 +164,10 @@ edgion-ctl reload
 
 ```bash
 # 重载所有资源
-edgion-ctl reload
+edgion-cli reload
 
 # 连接指定地址的 Controller
-edgion-ctl --server http://10.0.0.1:5800 reload
+edgion-cli --server http://10.0.0.1:5800 reload
 ```
 
 ## gen-certs
@@ -177,7 +177,7 @@ edgion-ctl --server http://10.0.0.1:5800 reload
 ### 语法
 
 ```bash
-edgion-ctl gen-certs [OPTIONS]
+edgion-cli gen-certs [OPTIONS]
 ```
 
 ### 参数
@@ -229,17 +229,17 @@ edgion-ctl gen-certs [OPTIONS]
 
 ```bash
 # 生成到默认目录 certs/grpc/
-edgion-ctl gen-certs --output file
+edgion-cli gen-certs --output file
 
 # 指定输出目录，强制覆盖
-edgion-ctl gen-certs --output file --output-dir /etc/edgion/certs --force
+edgion-cli gen-certs --output file --output-dir /etc/edgion/certs --force
 
 # 添加 K8s Service FQDN 作为额外 SAN
-edgion-ctl gen-certs --output file \
+edgion-cli gen-certs --output file \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 
 # 写入 K8s Secret
-edgion-ctl gen-certs --output k8s
+edgion-cli gen-certs --output k8s
 ```
 
 ### 模块结构

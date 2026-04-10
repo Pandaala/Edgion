@@ -7,7 +7,8 @@
 //! 4. Loop: forward incoming messages to aggregator/commander; forward outgoing to stream
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tonic::{Request, Response, Status, Streaming};
@@ -195,13 +196,13 @@ impl FederationSync for FederationGrpcServer {
                             match msg.payload {
                                 Some(CtrlPayload::Pong(_)) => {}
                                 Some(CtrlPayload::ListResponse(resp)) => {
-                                    if let Some(entry) = pending_lists.lock().unwrap().remove(&resp.request_id) {
+                                    if let Some(entry) = pending_lists.lock().remove(&resp.request_id) {
                                         let _ = entry.sender.send(resp.keys.clone());
                                     }
                                     aggregator.update_snapshot(&cid, resp.keys);
                                 }
                                 Some(CtrlPayload::CommandResponse(resp)) => {
-                                    if let Some(sender) = pending_commands.lock().unwrap().remove(&resp.request_id) {
+                                    if let Some(sender) = pending_commands.lock().remove(&resp.request_id) {
                                         let _ = sender.send(resp);
                                     }
                                 }

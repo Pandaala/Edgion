@@ -86,9 +86,9 @@ main() {
         exit 1
     fi
     
-    # Build edgion-ctl
-    log_section "Build edgion-ctl"
-    if ! build_binary "edgion-ctl" "--bin edgion-ctl"; then
+    # Build edgion-cli
+    log_section "Build edgion-cli"
+    if ! build_binary "edgion-cli" "--bin edgion-cli"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi

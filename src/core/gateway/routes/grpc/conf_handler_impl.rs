@@ -25,7 +25,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             self.route_cache.insert(key.clone(), (**route).clone());
         }
 
-        *self.route_units_cache.lock().unwrap() = new_units_cache;
+        *self.route_units_cache.lock() = new_units_cache;
 
         // Step 2: Rebuild all per-listener managers
         self.rebuild_all_listener_managers();
@@ -78,7 +78,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
 
         // Update route cache and units cache
         {
-            let mut units_cache = self.route_units_cache.lock().unwrap();
+            let mut units_cache = self.route_units_cache.lock();
             for (key, route) in &add_or_update {
                 let units = parse_route_to_units(key, route);
                 units_cache.insert(key.clone(), units);

@@ -4,7 +4,8 @@ use k8s_openapi::api::core::v1::Endpoints;
 use pingora_load_balancing::selection::{BackendSelection, RoundRobin};
 use pingora_load_balancing::Backend;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock};
+use parking_lot::{Mutex, RwLock};
 
 /// Store for RoundRobin LoadBalancers (primary data layer + LB)
 static ROUNDROBIN_STORE: LazyLock<Arc<EndpointStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));
@@ -114,7 +115,7 @@ where
         }
 
         // 2. Slow path: acquire creation_lock
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // 3. Double-check
         if let Some(lb) = self.endpoints.load().get(service_key).cloned() {
@@ -122,7 +123,7 @@ where
         }
 
         // 4. Get endpoint from data layer
-        let ep_data = self.ep_data.read().unwrap();
+        let ep_data = self.ep_data.read();
         let endpoint = ep_data.get(service_key)?.clone();
         drop(ep_data);
 
@@ -145,8 +146,8 @@ where
     /// Get endpoint for a service from data layer (public, acquires lock)
     /// Used by other algorithm stores to fetch data from RoundRobin store
     pub fn get_endpoint_for_service(&self, service_key: &str) -> Option<Endpoints> {
-        let _lock = self.creation_lock.lock().unwrap();
-        self.ep_data.read().unwrap().get(service_key).cloned()
+        let _lock = self.creation_lock.lock();
+        self.ep_data.read().get(service_key).cloned()
     }
 
     /// DCL pattern: Get existing LB or create new one using external data source.
@@ -164,7 +165,7 @@ where
         }
 
         // 2. Slow path
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // 3. Double-check
         if let Some(lb) = self.endpoints.load().get(service_key).cloned() {
@@ -195,10 +196,10 @@ where
     /// Replace all data in data layer (full_set), does NOT create LBs
     /// Returns all service_keys in the new data
     pub fn replace_data_only(&self, data: HashMap<String, Endpoints>) -> HashSet<String> {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         let keys: HashSet<String> = data.keys().cloned().collect();
-        *self.ep_data.write().unwrap() = data;
+        *self.ep_data.write() = data;
 
         tracing::debug!(services = keys.len(), "Replaced Endpoint data layer (data only)");
 
@@ -213,10 +214,10 @@ where
         update: HashMap<String, Endpoints>,
         remove: &HashSet<String>,
     ) -> HashSet<String> {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         let mut affected_services: HashSet<String> = HashSet::new();
-        let mut ep_data = self.ep_data.write().unwrap();
+        let mut ep_data = self.ep_data.write();
 
         // Process remove
         for key in remove {
@@ -242,7 +243,7 @@ where
     /// Update LB if it exists, using latest data from data layer
     /// If data layer has no data for this service, removes the LB
     pub fn update_lb_if_exists(&self, service_key: &str) {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // Check if LB exists
         let current = self.endpoints.load();
@@ -252,7 +253,7 @@ where
         };
 
         // Get latest endpoint from data layer
-        let ep_data = self.ep_data.read().unwrap();
+        let ep_data = self.ep_data.read();
         let endpoint = match ep_data.get(service_key) {
             Some(ep) => ep.clone(),
             None => {
@@ -337,7 +338,7 @@ where
     where
         F: FnOnce(&str) -> Option<Endpoints>,
     {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // Check if LB exists
         let current = self.endpoints.load();

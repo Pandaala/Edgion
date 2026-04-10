@@ -122,7 +122,7 @@ ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "cred
 
 > 不配置此 section 时，gRPC 以明文连接，与历史版本完全兼容。
 > 启用 mTLS 时，`[gateway].server_addr` 的 URI scheme 会自动切换为 `https://`。
-> 证书通过 `edgion-ctl gen-certs --output file --output-dir <dir>` 生成。
+> 证书通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
 ### [server]
 

@@ -6,7 +6,8 @@
 //! - WatchObj collection for ConfigSyncServer
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Notify;
@@ -53,7 +54,7 @@ impl ProcessorRegistry {
     /// Called during ResourceProcessor initialization
     pub fn register(&self, processor: Arc<dyn ProcessorObj>) {
         let kind = processor.kind();
-        let mut map = self.processors.write().unwrap();
+        let mut map = self.processors.write();
 
         tracing::info!(component = "processor_registry", kind = kind, "Registering processor");
 
@@ -62,24 +63,24 @@ impl ProcessorRegistry {
 
     /// Get a processor by kind name (dynamic)
     pub fn get(&self, kind: &str) -> Option<Arc<dyn ProcessorObj>> {
-        self.processors.read().unwrap().get(kind).cloned()
+        self.processors.read().get(kind).cloned()
     }
 
     /// Get all registered kind names
     pub fn all_kinds(&self) -> Vec<&'static str> {
-        self.processors.read().unwrap().keys().copied().collect()
+        self.processors.read().keys().copied().collect()
     }
 
     /// Get count of registered processors
     pub fn count(&self) -> usize {
-        self.processors.read().unwrap().len()
+        self.processors.read().len()
     }
 
     /// Check if all registered processors are ready
     ///
     /// Returns `false` if registry is empty (must have at least one processor)
     pub fn is_all_ready(&self) -> bool {
-        let processors = self.processors.read().unwrap();
+        let processors = self.processors.read();
         !processors.is_empty() && processors.values().all(|p| p.is_ready())
     }
 
@@ -87,7 +88,6 @@ impl ProcessorRegistry {
     pub fn not_ready_kinds(&self) -> Vec<&'static str> {
         self.processors
             .read()
-            .unwrap()
             .iter()
             .filter(|(_, p)| !p.is_ready())
             .map(|(k, _)| *k)
@@ -104,7 +104,6 @@ impl ProcessorRegistry {
     pub fn all_watch_objs(&self, no_sync_kinds: &[&str]) -> HashMap<String, Arc<dyn WatchObj>> {
         self.processors
             .read()
-            .unwrap()
             .iter()
             .filter(|(k, _)| !no_sync_kinds.contains(k))
             .map(|(k, v)| (k.to_string(), v.as_watch_obj()))
@@ -216,14 +215,14 @@ impl ProcessorRegistry {
 
     /// Set all processors to not ready state
     pub fn set_all_not_ready(&self) {
-        for processor in self.processors.read().unwrap().values() {
+        for processor in self.processors.read().values() {
             processor.set_not_ready();
         }
     }
 
     /// Clear all processors' caches
     pub fn clear_all(&self) {
-        for processor in self.processors.read().unwrap().values() {
+        for processor in self.processors.read().values() {
             processor.clear();
         }
     }
@@ -234,7 +233,6 @@ impl ProcessorRegistry {
         let processors: Vec<_> = self
             .processors
             .read()
-            .unwrap()
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
@@ -255,7 +253,7 @@ impl ProcessorRegistry {
     /// rather than merely marking processors as not-ready.
     pub fn clear_processors(&self) {
         tracing::info!(component = "processor_registry", "Clearing processors map");
-        self.processors.write().unwrap().clear();
+        self.processors.write().clear();
     }
 }
 

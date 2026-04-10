@@ -3,7 +3,7 @@
 # Startall Edgion TestserviceLoadconfig
 # Start: test_server -> controller ->  ->  -> gateway -> verify
 # 
-#  Admin API (edgion-ctl apply) ，FileSystemWriter 
+#  Admin API (edgion-cli apply) ，FileSystemWriter
 # Kind_namespace_name.yaml ，
 # =============================================================================
 
@@ -451,25 +451,25 @@ start_gateway() {
 
 # =============================================================================
 # 
-#  edgion-ctl apply  Admin API ，FileSystemWriter 
+#  edgion-cli apply  Admin API ，FileSystemWriter 
 #  Kind_namespace_name.yaml  config 
 # =============================================================================
 load_base_config() {
     log_section ""
     
     local conf_src="${PROJECT_ROOT}/examples/test/conf/base"
-    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
-    
+    local edgion_cli="${PROJECT_ROOT}/target/debug/edgion-cli"
+
     if [ ! -d "$conf_src" ]; then
         log_warning "configdirectory: $conf_src"
         return 0
     fi
-    
+
     for file in "$conf_src"/*.yaml; do
         if [ -f "$file" ]; then
             local filename=$(basename "$file")
             log_info "Load $filename via API..."
-            if "$edgion_ctl" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
+            if "$edgion_cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
                 log_success "$filename Loadsuccess"
             else
                 log_warning "$filename Loadfailed"
@@ -526,7 +526,7 @@ generate_certs() {
 load_generated_secrets() {
     log_section "LoadGeneratedSecrets"
 
-    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
+    local edgion_cli="${PROJECT_ROOT}/target/debug/edgion-cli"
     if [ ! -d "$GENERATED_SECRET_DIR" ]; then
         log_warning "Generated Secret directory not found: $GENERATED_SECRET_DIR"
         return 0
@@ -544,7 +544,7 @@ load_generated_secrets() {
     for file in $files; do
         local relative_file="${file#${GENERATED_SECRET_DIR}/}"
         log_info "Load generated Secret $relative_file via API..."
-        if "$edgion_ctl" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
+        if "$edgion_cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
             log_success "$relative_file Loadsuccess"
         else
             log_warning "$relative_file Loadfailed"

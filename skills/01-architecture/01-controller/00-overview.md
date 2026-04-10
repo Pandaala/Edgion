@@ -119,7 +119,7 @@ src/core/controller/
 │   ├── common.rs               # parse_kind、validate_resource、错误映射
 │   ├── namespaced_handlers.rs  # 命名空间级资源 CRUD
 │   ├── cluster_handlers.rs     # 集群级资源 CRUD
-│   └── configserver_handlers.rs # ConfigServer 缓存查询（供 edgion-ctl）
+│   └── configserver_handlers.rs # ConfigServer 缓存查询（供 edgion-cli）
 ├── cli/                        # 启动入口、命令行参数解析、初始化流程
 ├── conf_mgr/                   # 配置管理器核心
 │   ├── manager.rs              # ConfMgr 门面

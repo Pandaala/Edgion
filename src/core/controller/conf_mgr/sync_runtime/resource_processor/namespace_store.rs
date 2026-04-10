@@ -8,7 +8,7 @@
 //! controller-only (never synced to Gateway).
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use k8s_openapi::api::core::v1::Namespace;
 use kube::ResourceExt;
@@ -29,7 +29,7 @@ impl NamespaceStore {
     pub fn upsert(&self, ns: Namespace) -> bool {
         let name = ns.name_any();
         let new_labels = ns.labels().clone();
-        let mut map = self.store.write().unwrap();
+        let mut map = self.store.write();
         let changed = map.get(&name).is_none_or(|old| old.labels() != &new_labels);
         map.insert(name, ns);
         changed
@@ -37,27 +37,26 @@ impl NamespaceStore {
 
     /// Remove a namespace from the store.
     pub fn remove(&self, name: &str) -> bool {
-        self.store.write().unwrap().remove(name).is_some()
+        self.store.write().remove(name).is_some()
     }
 
     /// Get labels for a namespace (extracted on demand from stored object).
     pub fn get_labels(&self, name: &str) -> Option<BTreeMap<String, String>> {
         self.store
             .read()
-            .unwrap()
             .get(name)
             .map(|ns| ns.labels().iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
     /// Get the full namespace object.
     pub fn get(&self, name: &str) -> Option<Namespace> {
-        self.store.read().unwrap().get(name).cloned()
+        self.store.read().get(name).cloned()
     }
 
     /// Replace all entries atomically (used during init/full-sync).
     pub fn replace_all(&self, namespaces: Vec<Namespace>) {
         let new_map: HashMap<String, Namespace> = namespaces.into_iter().map(|ns| (ns.name_any(), ns)).collect();
-        *self.store.write().unwrap() = new_map;
+        *self.store.write() = new_map;
     }
 }
 

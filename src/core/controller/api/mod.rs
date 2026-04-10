@@ -199,7 +199,7 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .route("/api/v1/reload", post(reload_all_resources))
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
-        // ConfigServer endpoints (for edgion-ctl --target server)
+        // ConfigServer endpoints (for edgion-cli --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))
         .with_state(admin_state)

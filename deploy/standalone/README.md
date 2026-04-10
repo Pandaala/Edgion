@@ -7,7 +7,7 @@ In standalone mode, the controller uses a **file-system config center** — it w
 ## Prerequisites
 
 - Linux (x86_64 or aarch64) — tested on Ubuntu 22.04+, Debian 12+, CentOS 9+
-- Edgion binaries: `edgion-controller`, `edgion-gateway`, `edgion-ctl`
+- Edgion binaries: `edgion-controller`, `edgion-gateway`, `edgion-cli`
 
 ## Quick Start
 
@@ -56,7 +56,7 @@ ls target/release/edgion-{controller,gateway,ctl}
 ├── bin/                        # (optional) binaries
 │   ├── edgion-controller
 │   ├── edgion-gateway
-│   └── edgion-ctl
+│   └── edgion-cli
 ├── config/                     # TOML configuration
 │   ├── edgion-controller.toml
 │   └── edgion-gateway.toml
@@ -190,11 +190,11 @@ deploy/standalone/stop.sh --work-dir /usr/local/edgion
 
 ## Managing Routes
 
-Use `edgion-ctl` to apply configuration changes without restarting:
+Use `edgion-cli` to apply configuration changes without restarting:
 
 ```bash
 # Apply a new route
-edgion-ctl --server http://127.0.0.1:5800 apply -f my-route.yaml
+edgion-cli --server http://127.0.0.1:5800 apply -f my-route.yaml
 
 # Or simply place YAML files in the conf/ directory — the controller watches for changes
 cp my-route.yaml /usr/local/edgion/conf/
@@ -274,6 +274,6 @@ tail -f /usr/local/edgion/logs/edgion-controller.*.log
 # View gateway access logs
 tail -f /usr/local/edgion/logs/edgion_access.log
 
-# Inspect current config via edgion-ctl
-edgion-ctl --server http://127.0.0.1:5800 get routes
+# Inspect current config via edgion-cli
+edgion-cli --server http://127.0.0.1:5800 get routes
 ```

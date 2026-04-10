@@ -3,7 +3,8 @@
 //! Provides event-driven revalidation when ReferenceGrants are modified
 
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 /// ReferenceGrant changed event
 #[derive(Debug, Clone)]
@@ -34,7 +35,7 @@ impl ReferenceGrantEventDispatcher {
 
     /// Register a listener
     pub fn register_listener(&self, listener: Arc<dyn RevalidationListener>) {
-        let mut listeners = self.listeners.write().unwrap();
+        let mut listeners = self.listeners.write();
         listeners.push(listener);
         tracing::debug!(component = "ref_grant_events", "Registered revalidation listener");
     }
@@ -47,13 +48,13 @@ impl ReferenceGrantEventDispatcher {
     ///
     /// 仅供测试使用。
     pub fn clear_listeners(&self) {
-        self.listeners.write().unwrap().clear();
+        self.listeners.write().clear();
         tracing::debug!(component = "ref_grant_events", "Cleared all revalidation listeners");
     }
 
     /// Dispatch event to all listeners
     pub async fn dispatch(&self, event: &ReferenceGrantChangedEvent) {
-        let listeners: Vec<_> = self.listeners.read().unwrap().clone();
+        let listeners: Vec<_> = self.listeners.read().clone();
         tracing::info!(
             component = "ref_grant_events",
             affected_ns_count = event.affected_namespaces.len(),

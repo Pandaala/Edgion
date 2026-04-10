@@ -129,10 +129,10 @@ In addition to data plane mTLS (client ↔ Gateway), Edgion supports mTLS for th
 
 ### Generate Certificates
 
-Use `edgion-ctl gen-certs` to generate a self-signed certificate bundle:
+Use `edgion-cli gen-certs` to generate a self-signed certificate bundle:
 
 ```bash
-edgion-ctl gen-certs --output file --output-dir certs/grpc/
+edgion-cli gen-certs --output file --output-dir certs/grpc/
 ```
 
 This creates:
@@ -147,7 +147,7 @@ This creates:
 The server certificate includes `localhost`, `127.0.0.1`, `::1` as default SANs. Add custom SANs for production:
 
 ```bash
-edgion-ctl gen-certs --output file \
+edgion-cli gen-certs --output file \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 ```
 
@@ -200,7 +200,7 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addr` conne
 For K8s deployments, generate certificates as K8s Secrets:
 
 ```bash
-edgion-ctl gen-certs --output k8s
+edgion-cli gen-certs --output k8s
 ```
 
 Mount the secrets into Controller and Gateway pods, and reference the mount paths in the TOML configuration.
@@ -223,4 +223,4 @@ You can also confirm by attempting a plaintext gRPC connection to the Controller
 
 - [TLS Termination](../gateway/tls/tls-termination.md)
 - [Backend TLS](../../user-guide/http-route/backends/backend-tls.md)
-- [edgion-ctl gen-certs](../edgion-ctl.md)
+- [edgion-cli gen-certs](../edgion-cli.md)

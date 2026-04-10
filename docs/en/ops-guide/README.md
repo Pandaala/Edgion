@@ -36,4 +36,4 @@ This section is intended for operators, covering Gateway deployment, configurati
 
 ### Operations Tools
 
-- [edgion-ctl](./edgion-ctl.md): Resource management and debugging CLI.
+- [edgion-cli](./edgion-cli.md): Resource management and debugging CLI.

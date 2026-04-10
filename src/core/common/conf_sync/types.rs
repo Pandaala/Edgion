@@ -78,5 +78,5 @@ pub struct WatchClient<T> {
     pub sender: mpsc::Sender<WatchResponse<T>>,
     pub watch_start_time: SystemTime,
     pub send_count: Arc<std::sync::atomic::AtomicU64>,
-    pub last_send_time: Arc<std::sync::RwLock<Option<SystemTime>>>,
+    pub last_send_time: Arc<parking_lot::RwLock<Option<SystemTime>>>,
 }

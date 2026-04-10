@@ -23,7 +23,8 @@ pub use edgion_udp::EdgionUdpProxy;
 
 use crate::types::ListenerKey;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
+use parking_lot::RwLock;
 use tokio_util::sync::CancellationToken;
 
 /// Registry that holds CancellationTokens for active UDP listeners,
@@ -42,7 +43,7 @@ impl UdpListenerRegistry {
     /// Register a cancel token for a UDP listener key.
     /// If a previous listener exists for this key, cancel it first.
     pub fn register(&self, key: &ListenerKey, token: CancellationToken) {
-        let mut map = self.tokens.write().expect("lock udp listener registry");
+        let mut map = self.tokens.write();
         if let Some(old) = map.insert(key.clone(), token) {
             old.cancel();
         }
@@ -51,7 +52,7 @@ impl UdpListenerRegistry {
     /// Cancel and remove the listener for the given key.
     /// Returns true if a listener was found and cancelled.
     pub fn cancel(&self, key: &ListenerKey) -> bool {
-        let removed = self.tokens.write().expect("lock udp listener registry").remove(key);
+        let removed = self.tokens.write().remove(key);
         if let Some(token) = removed {
             token.cancel();
             true
@@ -62,7 +63,7 @@ impl UdpListenerRegistry {
 
     /// Cancel all registered listeners (for graceful shutdown).
     pub fn cancel_all(&self) {
-        let mut map = self.tokens.write().expect("lock udp listener registry");
+        let mut map = self.tokens.write();
         for (_, token) in map.drain() {
             token.cancel();
         }

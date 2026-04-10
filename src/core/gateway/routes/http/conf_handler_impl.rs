@@ -13,7 +13,8 @@ use crate::types::resources::common::ParentReference;
 use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, MatchInfo, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use std::time::Instant;
 
 type DomainStr = String;

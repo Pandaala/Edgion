@@ -5,7 +5,7 @@ description: edgion-controller Admin HTTP API（Axum :5800）：全部端点、A
 
 # Admin API (:5800)
 
-Controller 通过 Axum 提供 HTTP Admin API，监听端口 5800，供 edgion-ctl 命令行工具和运维操作使用。路由在 `create_admin_router()` 中统一注册。
+Controller 通过 Axum 提供 HTTP Admin API，监听端口 5800，供 edgion-cli 命令行工具和运维操作使用。路由在 `create_admin_router()` 中统一注册。
 
 ## AdminState 共享状态
 
@@ -80,7 +80,7 @@ pub struct AdminState {
 
 ### ConfigServer 端点
 
-供 `edgion-ctl --target server` 使用，从 **ConfigSyncServer 缓存层**（ServerCache）读取数据。返回的是经过 ResourceProcessor 处理后的资源快照，格式与 Gateway 的 `/configclient/` API 兼容。
+供 `edgion-cli --target server` 使用，从 **ConfigSyncServer 缓存层**（ServerCache）读取数据。返回的是经过 ResourceProcessor 处理后的资源快照，格式与 Gateway 的 `/configclient/` API 兼容。
 
 | 方法 | 路径 | 查询参数 | 说明 |
 |------|------|----------|------|
@@ -115,9 +115,9 @@ pub struct AdminState {
 
 Readiness 的判定通过 `AdminState::is_ready()` -> `ConfMgr::is_ready()` -> `ConfCenter::is_ready()`，最终检查 ConfigSyncServer 是否已创建。
 
-## 与 edgion-ctl 的交互
+## 与 edgion-cli 的交互
 
-edgion-ctl 支持三种 `--target` 模式，对应不同端点：
+edgion-cli 支持三种 `--target` 模式，对应不同端点：
 
 | target 模式 | 访问端点 | 数据源 | 说明 |
 |-------------|----------|--------|------|

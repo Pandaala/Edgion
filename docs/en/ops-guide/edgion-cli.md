@@ -1,15 +1,15 @@
-# edgion-ctl Command Line Tool
+# edgion-cli Command Line Tool
 
-`edgion-ctl` is Edgion's command line management tool for viewing and managing gateway resource configurations.
+`edgion-cli` is Edgion's command line management tool for viewing and managing gateway resource configurations.
 
 ## Installation
 
-The compiled binary is located at `target/release/edgion-ctl` or `target/debug/edgion-ctl`.
+The compiled binary is located at `target/release/edgion-cli` or `target/debug/edgion-cli`.
 
 ## Basic Usage
 
 ```bash
-edgion-ctl [OPTIONS] <COMMAND>
+edgion-cli [OPTIONS] <COMMAND>
 ```
 
 ### Global Options
@@ -24,7 +24,7 @@ edgion-ctl [OPTIONS] <COMMAND>
 
 ## Target Types
 
-`edgion-ctl` supports three target types for connecting to different data sources:
+`edgion-cli` supports three target types for connecting to different data sources:
 
 | Target | Component | Default Port | Supported Commands | Description |
 |--------|----------|-------------|-------------------|-------------|
@@ -36,17 +36,17 @@ edgion-ctl [OPTIONS] <COMMAND>
 
 ```bash
 # center (default) - full functionality
-edgion-ctl get httproute
-edgion-ctl apply -f route.yaml
-edgion-ctl delete httproute my-route -n default
+edgion-cli get httproute
+edgion-cli apply -f route.yaml
+edgion-cli delete httproute my-route -n default
 
 # server - view Controller's ConfigServer cache
-edgion-ctl -t server get httproute
-edgion-ctl -t server get httproute -n prod
+edgion-cli -t server get httproute
+edgion-cli -t server get httproute -n prod
 
 # client - view Gateway's ConfigClient cache
-edgion-ctl -t client get httproute
-edgion-ctl -t client --server http://gateway:5900 get service -n default
+edgion-cli -t client get httproute
+edgion-cli -t client --server http://gateway:5900 get service -n default
 ```
 
 ## Command Reference
@@ -56,7 +56,7 @@ edgion-ctl -t client --server http://gateway:5900 get service -n default
 Get a single resource or list resources.
 
 ```bash
-edgion-ctl get <KIND> [NAME] [OPTIONS]
+edgion-cli get <KIND> [NAME] [OPTIONS]
 ```
 
 **Parameters:**
@@ -71,16 +71,16 @@ edgion-ctl get <KIND> [NAME] [OPTIONS]
 
 ```bash
 # List all HTTPRoutes
-edgion-ctl get httproute
+edgion-cli get httproute
 
 # List HTTPRoutes in a specific namespace
-edgion-ctl get httproute -n production
+edgion-cli get httproute -n production
 
 # Get a specific resource in YAML format
-edgion-ctl get httproute my-route -n default -o yaml
+edgion-cli get httproute my-route -n default -o yaml
 
 # Get a specific resource in JSON format
-edgion-ctl get service backend-svc -n default -o json
+edgion-cli get service backend-svc -n default -o json
 ```
 
 **Supported resource types:**
@@ -111,7 +111,7 @@ edgion-ctl get service backend-svc -n default -o json
 Create or update resources from a YAML file. **Only supported with the center target.**
 
 ```bash
-edgion-ctl apply -f <FILE|DIR> [OPTIONS]
+edgion-cli apply -f <FILE|DIR> [OPTIONS]
 ```
 
 **Options:**
@@ -122,13 +122,13 @@ edgion-ctl apply -f <FILE|DIR> [OPTIONS]
 
 ```bash
 # Apply a single file
-edgion-ctl apply -f route.yaml
+edgion-cli apply -f route.yaml
 
 # Apply all YAML files in a directory
-edgion-ctl apply -f ./configs/
+edgion-cli apply -f ./configs/
 
 # Dry run
-edgion-ctl apply -f route.yaml --dry-run
+edgion-cli apply -f route.yaml --dry-run
 ```
 
 ### delete - Delete Resources
@@ -136,8 +136,8 @@ edgion-ctl apply -f route.yaml --dry-run
 Delete a specified resource. **Only supported with the center target.**
 
 ```bash
-edgion-ctl delete <KIND> <NAME> [OPTIONS]
-edgion-ctl delete -f <FILE>
+edgion-cli delete <KIND> <NAME> [OPTIONS]
+edgion-cli delete -f <FILE>
 ```
 
 **Options:**
@@ -148,10 +148,10 @@ edgion-ctl delete -f <FILE>
 
 ```bash
 # Delete a specific resource
-edgion-ctl delete httproute my-route -n default
+edgion-cli delete httproute my-route -n default
 
 # Delete from file
-edgion-ctl delete -f route.yaml
+edgion-cli delete -f route.yaml
 ```
 
 ### reload - Reload
@@ -159,7 +159,7 @@ edgion-ctl delete -f route.yaml
 Reload all resources from storage. **Only supported with the center target.**
 
 ```bash
-edgion-ctl reload
+edgion-cli reload
 ```
 
 ### gen-certs - Generate mTLS Certificates
@@ -167,7 +167,7 @@ edgion-ctl reload
 Generate a self-signed certificate bundle for securing the conf_sync gRPC channel with mTLS. This command does not require a running Controller or Gateway.
 
 ```bash
-edgion-ctl gen-certs [OPTIONS]
+edgion-cli gen-certs [OPTIONS]
 ```
 
 **Options:**
@@ -197,17 +197,17 @@ edgion-ctl gen-certs [OPTIONS]
 
 ```bash
 # Generate to default directory
-edgion-ctl gen-certs --output file
+edgion-cli gen-certs --output file
 
 # Custom output directory with force overwrite
-edgion-ctl gen-certs --output file --output-dir /etc/edgion/certs --force
+edgion-cli gen-certs --output file --output-dir /etc/edgion/certs --force
 
 # Add K8s service FQDN as SAN
-edgion-ctl gen-certs --output file \
+edgion-cli gen-certs --output file \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 
 # Generate as K8s Secrets
-edgion-ctl gen-certs --output k8s
+edgion-cli gen-certs --output k8s
 ```
 
 After generating certificates, configure mTLS in your TOML files. See [Control Plane mTLS](infrastructure/mtls.md#control-plane-mtls-conf_sync-grpc) for details.
@@ -216,7 +216,7 @@ After generating certificates, configure mTLS in your TOML files. See [Control P
 
 ### Default Connections
 
-Based on the target type, `edgion-ctl` uses the following default connections:
+Based on the target type, `edgion-cli` uses the following default connections:
 
 | Target | Default Address |
 |--------|----------------|
@@ -230,10 +230,10 @@ Use the `--server` option to specify a server address:
 
 ```bash
 # Connect to a remote Controller
-edgion-ctl --server http://controller.example.com:5800 get httproute
+edgion-cli --server http://controller.example.com:5800 get httproute
 
 # Connect to a remote Gateway
-edgion-ctl -t client --server http://gateway.example.com:5900 get service
+edgion-cli -t client --server http://gateway.example.com:5900 get service
 ```
 
 ## Output Formats
@@ -267,7 +267,7 @@ Extended table display with additional fields.
 
 ### Connection Failure
 
-If the connection fails, `edgion-ctl` displays detailed error information and hints:
+If the connection fails, `edgion-cli` displays detailed error information and hints:
 
 ```
 Error: Request to http://localhost:5800/api/v1/namespaced/httproute failed
@@ -277,7 +277,7 @@ Connection failed:
   - Check if the server address is correct
   - Try: curl -v http://localhost:5800/api/v1/namespaced/httproute
 
-Hint: edgion-ctl is trying to connect to: http://localhost:5800
+Hint: edgion-cli is trying to connect to: http://localhost:5800
       Target: Center (controller)
       Use --server to specify a different address
 ```
@@ -298,12 +298,12 @@ Hint: edgion-ctl is trying to connect to: http://localhost:5800
 
 ## Comparison with kubectl
 
-| Operation | kubectl | edgion-ctl |
+| Operation | kubectl | edgion-cli |
 |-----------|---------|------------|
-| Get resources | `kubectl get httproute` | `edgion-ctl get httproute` |
-| Specify namespace | `kubectl -n prod get httproute` | `edgion-ctl get httproute -n prod` |
-| Apply config | `kubectl apply -f route.yaml` | `edgion-ctl apply -f route.yaml` |
-| Delete resource | `kubectl delete httproute my-route` | `edgion-ctl delete httproute my-route` |
-| Output YAML | `kubectl get httproute -o yaml` | `edgion-ctl get httproute -o yaml` |
+| Get resources | `kubectl get httproute` | `edgion-cli get httproute` |
+| Specify namespace | `kubectl -n prod get httproute` | `edgion-cli get httproute -n prod` |
+| Apply config | `kubectl apply -f route.yaml` | `edgion-cli apply -f route.yaml` |
+| Delete resource | `kubectl delete httproute my-route` | `edgion-cli delete httproute my-route` |
+| Output YAML | `kubectl get httproute -o yaml` | `edgion-cli get httproute -o yaml` |
 
-**Difference:** `edgion-ctl` can connect directly to Edgion's Admin API without requiring a Kubernetes cluster, making it suitable for file-system mode deployments.
+**Difference:** `edgion-cli` can connect directly to Edgion's Admin API without requiring a Kubernetes cluster, making it suitable for file-system mode deployments.

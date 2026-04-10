@@ -31,13 +31,13 @@ FEATURES ?= default
 # Derived variables
 GATEWAY_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-gateway:$(VERSION)
 CONTROLLER_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-controller:$(VERSION)
-CTL_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-ctl:$(VERSION)
+CLI_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-cli:$(VERSION)
 TEST_SERVER_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-server:$(VERSION)
 TEST_CLIENT_IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-client:$(VERSION)
 
 GATEWAY_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-gateway:latest
 CONTROLLER_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-controller:latest
-CTL_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-ctl:latest
+CLI_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-cli:latest
 TEST_SERVER_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-server:latest
 TEST_CLIENT_IMAGE_LATEST := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/edgion-test-client:latest
 
@@ -102,12 +102,12 @@ build-controller: check-docker ## Build Controller image
 build-ctl: check-docker ## Build CLI tool image
 	@echo "$(BLUE)Building CLI tool image...$(NC)"
 	docker build $(DOCKER_BUILD_FLAGS) \
-		--build-arg BINARY=edgion-ctl \
+		--build-arg BINARY=edgion-cli \
 		--build-arg BUILD_TYPE=bin \
-		-t $(CTL_IMAGE) \
-		-t $(CTL_IMAGE_LATEST) \
+		-t $(CLI_IMAGE) \
+		-t $(CLI_IMAGE_LATEST) \
 		-f docker/Dockerfile .
-	@echo "$(GREEN)✓ CLI tool image built: $(CTL_IMAGE)$(NC)"
+	@echo "$(GREEN)✓ CLI tool image built: $(CLI_IMAGE)$(NC)"
 
 .PHONY: build-test-server
 build-test-server: check-docker ## Build test server image
@@ -152,8 +152,8 @@ push-controller: ## Push Controller image to registry
 .PHONY: push-ctl
 push-ctl: ## Push CLI tool image to registry
 	@echo "$(BLUE)Pushing CLI tool image...$(NC)"
-	docker push $(CTL_IMAGE)
-	docker push $(CTL_IMAGE_LATEST)
+	docker push $(CLI_IMAGE)
+	docker push $(CLI_IMAGE_LATEST)
 	@echo "$(GREEN)✓ CLI tool image pushed$(NC)"
 
 .PHONY: push-test-server

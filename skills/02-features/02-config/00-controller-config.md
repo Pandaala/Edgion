@@ -139,7 +139,7 @@ endpoint_mode = "EndpointSlice"            # EndpointSlice | Endpoints | Both
 | `skip_tls` | `bool` | `false` | 紧急降级开关：`true` 跳过 TLS，以明文启动（输出 ERROR 日志） |
 
 > 不配置此 section 时，gRPC 以明文运行，与历史版本完全兼容。
-> 证书通过 `edgion-ctl gen-certs --output file --output-dir <dir>` 生成。
+> 证书通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
 ### [conf_center] — FileSystem
 

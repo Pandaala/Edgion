@@ -9,7 +9,7 @@
 //! and ServiceRefManager.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use super::ref_manager::{BidirectionalRefManager, RefValue, ResourceRef};
 use super::secret_utils::SecretRefManager;
@@ -45,19 +45,18 @@ impl BackendTLSPolicyState {
         if let Some(ts) = timestamp {
             self.timestamps
                 .write()
-                .unwrap()
                 .insert(policy_key.to_string(), ts.to_string());
         }
     }
 
     /// Remove the stored timestamp when a policy is deleted.
     pub fn remove_timestamp(&self, policy_key: &str) {
-        self.timestamps.write().unwrap().remove(policy_key);
+        self.timestamps.write().remove(policy_key);
     }
 
     /// Get the stored creation timestamp for a policy.
     fn get_timestamp(&self, policy_key: &str) -> Option<String> {
-        self.timestamps.read().unwrap().get(policy_key).cloned()
+        self.timestamps.read().get(policy_key).cloned()
     }
 
     /// Determine if a policy is the winner among all policies targeting the same target.
@@ -115,7 +114,7 @@ impl BackendTLSPolicyState {
     /// watch-stream reconnects.
     pub fn reset(&self) {
         self.target_mgr.clear();
-        self.timestamps.write().unwrap().clear();
+        self.timestamps.write().clear();
         tracing::info!(
             component = "backend_tls_policy_ref",
             "Cleared BackendTLSPolicy target manager and timestamps"

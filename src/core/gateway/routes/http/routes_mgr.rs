@@ -13,7 +13,8 @@ use crate::types::{HTTPBackendRef, HTTPRouteRule};
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock, RwLock};
+use parking_lot::RwLock;
+use std::sync::{Arc, OnceLock};
 
 type DomainStr = String;
 
@@ -40,10 +41,10 @@ pub struct RouteRules {
 impl Clone for RouteRules {
     fn clone(&self) -> Self {
         Self {
-            resource_keys: RwLock::new(self.resource_keys.read().unwrap().clone()),
-            route_rules_list: RwLock::new(self.route_rules_list.read().unwrap().clone()),
+            resource_keys: RwLock::new(self.resource_keys.read().clone()),
+            route_rules_list: RwLock::new(self.route_rules_list.read().clone()),
             match_engine: self.match_engine.clone(),
-            regex_routes: RwLock::new(self.regex_routes.read().unwrap().clone()),
+            regex_routes: RwLock::new(self.regex_routes.read().clone()),
             regex_routes_engine: self.regex_routes_engine.clone(),
         }
     }

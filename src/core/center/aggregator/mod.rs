@@ -5,7 +5,8 @@
 
 use crate::core::common::fed_sync::proto::{RegisterRequest, ResourceKey};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -41,7 +42,7 @@ impl ResourceAggregator {
 
     /// Called when controller registers (or reconnects)
     pub fn set_controller_info(&self, controller_id: &str, info: RegisterRequest) {
-        let mut map = self.inner.write().unwrap();
+        let mut map = self.inner.write();
         let snap = map
             .entry(controller_id.to_string())
             .or_insert_with(|| ControllerSnapshot::new(info.clone()));
@@ -51,7 +52,7 @@ impl ResourceAggregator {
 
     /// Full-replace snapshot for a controller. Called on each ListResponse.
     pub fn update_snapshot(&self, controller_id: &str, keys: Vec<ResourceKey>) {
-        let mut map = self.inner.write().unwrap();
+        let mut map = self.inner.write();
         if let Some(snap) = map.get_mut(controller_id) {
             snap.keys = keys;
             snap.last_list_at = Some(Instant::now());
@@ -68,7 +69,7 @@ impl ResourceAggregator {
     }
 
     pub fn mark_offline(&self, controller_id: &str) {
-        if let Some(snap) = self.inner.write().unwrap().get_mut(controller_id) {
+        if let Some(snap) = self.inner.write().get_mut(controller_id) {
             if snap.offline_since.is_none() {
                 snap.offline_since = Some(Instant::now());
             }
@@ -80,7 +81,6 @@ impl ResourceAggregator {
         let threshold = Duration::from_secs(hours * 3600);
         self.inner
             .write()
-            .unwrap()
             .retain(|_, snap| snap.offline_since.map(|s| s.elapsed() <= threshold).unwrap_or(true));
     }
 
@@ -88,7 +88,6 @@ impl ResourceAggregator {
     pub fn list_all_keys(&self) -> Vec<ResourceKey> {
         self.inner
             .read()
-            .unwrap()
             .values()
             .flat_map(|s| s.keys.clone())
             .collect()
@@ -98,7 +97,6 @@ impl ResourceAggregator {
     pub fn list_keys_by_cluster(&self, cluster: &str) -> Vec<ResourceKey> {
         self.inner
             .read()
-            .unwrap()
             .values()
             .filter(|s| s.info.cluster == cluster)
             .flat_map(|s| s.keys.clone())
@@ -109,7 +107,6 @@ impl ResourceAggregator {
     pub fn controller_summaries(&self) -> Vec<ControllerSummary> {
         self.inner
             .read()
-            .unwrap()
             .values()
             .map(|s| ControllerSummary {
                 controller_id: s.info.controller_id.clone(),

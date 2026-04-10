@@ -6,7 +6,7 @@ description: Miscellaneous skill for Edgion. Includes CI/CD (compiling binaries,
 # 09 杂项
 
 > Edgion 构建与发布流程。Rust 1.75+ 单 Crate 项目，默认 features: `allocator-jemalloc` + `boringssl`。
-> 三个二进制：`edgion-gateway`（数据面）、`edgion-controller`（控制面）、`edgion-ctl`（CLI）。
+> 三个二进制：`edgion-gateway`（数据面）、`edgion-controller`（控制面）、`edgion-cli`（CLI）。
 
 ## 文件清单
 

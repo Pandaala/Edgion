@@ -1,4 +1,4 @@
-//! ConfigServer handlers for edgion-ctl `--target server` support
+//! ConfigServer handlers for edgion-cli `--target server` support
 //!
 //! These handlers provide read-only access to ConfigSyncServer cache data,
 //! with response format compatible with Gateway's `/configclient/` API.

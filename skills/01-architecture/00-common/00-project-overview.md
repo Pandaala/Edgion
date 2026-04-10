@@ -14,7 +14,7 @@ description: Edgion 项目高层架构图、Crate 结构、三个 bin 定义、�
   YAML/K8s CRD ──► │  ConfCenter ──► Workqueue ──► ResourceProcessor          │
                     │  (File/K8s)     (per-kind)    (validate/preparse/parse)  │
                     │                                                          │
-  edgion-ctl ────► │  Admin API (:5800)   ConfigSyncServer (gRPC :50051)      │
+  edgion-cli ────► │  Admin API (:5800)   ConfigSyncServer (gRPC :50051)      │
                     └─────────────────────────────┬────────────────────────────┘
                                                   │ gRPC Watch/List
                                                   ▼
@@ -44,7 +44,7 @@ description: Edgion 项目高层架构图、Crate 结构、三个 bin 定义、�
 |--------|---------|-----------|------|
 | `edgion-gateway` | `src/bin/edgion_gateway.rs` | 同步入口，内部自管理 Tokio + Pingora 主循环 | 数据面 |
 | `edgion-controller` | `src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | 控制面 |
-| `edgion-ctl` | `src/bin/edgion_ctl.rs` | `#[tokio::main]` 单线程 | CLI 工具 |
+| `edgion-cli` | `src/bin/edgion_cli.rs` | `#[tokio::main]` 单线程 | CLI 工具 |
 
 示例二进制（测试用）：`test_server`、`test_client`、`test_client_direct`、`resource_diff`、`config_load_validator`。
 
@@ -57,7 +57,7 @@ src/
 ├── bin/                         # 薄入口包装（thin wrappers）
 │   ├── edgion_gateway.rs        #   → EdgionGatewayCli::run()
 │   ├── edgion_controller.rs     #   → EdgionControllerCli::run()
-│   └── edgion_ctl.rs            #   → Cli::run()
+│   └── edgion_cli.rs            #   → Cli::run()
 ├── lib.rs                       # Crate root: pub mod core, pub mod types
 ├── core/                        # 所有业务逻辑
 │   ├── controller/              # edgion-controller 归属代码
@@ -81,7 +81,7 @@ src/
 │   │   ├── runtime/             #   Pingora 运行时（server / matching / store）
 │   │   ├── services/            #   ACME challenge 服务
 │   │   └── tls/                 #   TLS 运行时 / 证书存储 / 验证
-│   ├── ctl/                     # edgion-ctl 归属代码
+│   ├── ctl/                     # edgion-cli 归属代码
 │   │   └── cli/                 #   commands / output / client
 │   └── common/                  # 跨 bin 共享模块
 │       ├── config/              #   共享启动配置（test mode, cache config）

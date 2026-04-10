@@ -1,7 +1,8 @@
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
+use parking_lot::{Mutex, RwLock};
 
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
@@ -98,8 +99,8 @@ impl GrpcRouteRules {
 impl Clone for GrpcRouteRules {
     fn clone(&self) -> Self {
         Self {
-            resource_keys: RwLock::new(self.resource_keys.read().unwrap().clone()),
-            route_rules_list: RwLock::new(self.route_rules_list.read().unwrap().clone()),
+            resource_keys: RwLock::new(self.resource_keys.read().clone()),
+            route_rules_list: RwLock::new(self.route_rules_list.read().clone()),
             match_engine: self.match_engine.clone(),
         }
     }
@@ -264,7 +265,7 @@ impl GlobalGrpcRouteManagers {
             return;
         }
 
-        let units_cache = self.route_units_cache.lock().unwrap();
+        let units_cache = self.route_units_cache.lock();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
         for key in affected_listeners {
             listener_buckets.insert(key.clone(), HashMap::new());
@@ -308,7 +309,7 @@ impl GlobalGrpcRouteManagers {
     ///
     /// When a route has no `resolved_listeners`, it is skipped with a warning.
     fn bucket_units_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> {
-        let units_cache = self.route_units_cache.lock().unwrap();
+        let units_cache = self.route_units_cache.lock();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
 
         for entry in self.route_cache.iter() {
@@ -338,7 +339,7 @@ impl GlobalGrpcRouteManagers {
     pub fn stats(&self) -> GrpcRouteManagerStats {
         let grpc_routes = self.route_cache.len();
         let listener_count = self.by_listener.len();
-        let route_units_cache = self.route_units_cache.lock().unwrap().len();
+        let route_units_cache = self.route_units_cache.lock().len();
 
         GrpcRouteManagerStats {
             grpc_routes,

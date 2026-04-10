@@ -2,7 +2,7 @@
 # =============================================================================
 # conf_sync gRPC mTLS certificate generator for integration tests.
 #
-# Uses `edgion-ctl gen-certs --output file` to produce:
+# Uses `edgion-cli gen-certs --output file` to produce:
 #   ca.crt, server.crt, server.key, client.crt, client.key
 #
 # Output directory:
@@ -28,7 +28,7 @@ log_error()   { echo -e "${RED}[ERR]${NC} $1"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CERTS_DIR="${EDGION_CONF_SYNC_CERTS_DIR:-$PROJECT_ROOT/examples/test/certs/conf-sync-grpc}"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 FORCE=false
 for arg in "$@"; do
@@ -55,16 +55,16 @@ if ! $FORCE && all_certs_exist; then
     exit 0
 fi
 
-if [ ! -f "$EDGION_CTL" ]; then
-    log_error "edgion-ctl not found at $EDGION_CTL — run prepare.sh first"
+if [ ! -f "$EDGION_CLI" ]; then
+    log_error "edgion-cli not found at $EDGION_CLI — run prepare.sh first"
     exit 1
 fi
 
 mkdir -p "$CERTS_DIR"
 
-log_info "Generating conf_sync mTLS certificates via edgion-ctl gen-certs..."
+log_info "Generating conf_sync mTLS certificates via edgion-cli gen-certs..."
 # localhost, 127.0.0.1, ::1 are already included by default in gen-certs
-"$EDGION_CTL" gen-certs \
+"$EDGION_CLI" gen-certs \
     --output file \
     --output-dir "$CERTS_DIR" \
     --ca-days 3650 \

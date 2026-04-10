@@ -564,7 +564,8 @@ mod response_builtins {
 
 mod utility_functions {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     fn assert_output(source: &str, expected: &str) {
         let expected = expected.to_string();
@@ -819,12 +820,12 @@ if v != nil { req.set_header("X-Out", "matched") }"#,
             .withf(|h, _| h == "X-T")
             .times(1)
             .returning(move |_, v| {
-                *captured_clone.lock().unwrap() = Some(v.to_string());
+                *captured_clone.lock() = Some(v.to_string());
                 Ok(())
             });
         let result = run(r#"req.set_header("X-T", to_str(time_now()))"#, session);
         assert_eq!(result, good_next());
-        let val = captured.lock().unwrap().clone().unwrap();
+        let val = captured.lock().clone().unwrap();
         let ts: i64 = val.parse().expect("time_now should produce a parseable integer");
         assert!(ts > 0, "time_now() should return a positive timestamp, got {}", ts);
     }

@@ -2,8 +2,8 @@ use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use crate::types::prelude_resources::EdgionGatewayConfig;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
+use parking_lot::RwLock;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 /// Global store for EdgionGatewayConfig resources (keyed by key_name())
 static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<RwLock<HashMap<String, EdgionGatewayConfig>>> =
@@ -11,19 +11,19 @@ static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<RwLock<HashMap<String, E
 
 /// Count EdgionGatewayConfig resources in the store
 pub fn count_edgion_gateway_configs() -> usize {
-    EDGION_GATEWAY_CONFIG_STORE.read().unwrap().len()
+    EDGION_GATEWAY_CONFIG_STORE.read().len()
 }
 
 /// Query EdgionGatewayConfig by name (cluster-scoped: key == name)
 #[allow(dead_code)]
 pub fn get_edgion_gateway_config_by_name(name: &str) -> Option<EdgionGatewayConfig> {
-    EDGION_GATEWAY_CONFIG_STORE.read().unwrap().get(name).cloned()
+    EDGION_GATEWAY_CONFIG_STORE.read().get(name).cloned()
 }
 
 /// List all EdgionGatewayConfig resources
 #[allow(dead_code)]
 pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
-    let mut items: Vec<EdgionGatewayConfig> = EDGION_GATEWAY_CONFIG_STORE.read().unwrap().values().cloned().collect();
+    let mut items: Vec<EdgionGatewayConfig> = EDGION_GATEWAY_CONFIG_STORE.read().values().cloned().collect();
     items.sort_by(|a, b| a.name_any().cmp(&b.name_any()));
     items
 }
@@ -50,7 +50,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             "EdgionGatewayConfig full_set: received {} EdgionGatewayConfig resources",
             data.len()
         );
-        let mut store = EDGION_GATEWAY_CONFIG_STORE.write().unwrap();
+        let mut store = EDGION_GATEWAY_CONFIG_STORE.write();
         *store = arc_map_to_owned(data);
     }
 
@@ -60,7 +60,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         update: HashMap<String, Arc<EdgionGatewayConfig>>,
         remove: HashSet<String>,
     ) {
-        let mut store = EDGION_GATEWAY_CONFIG_STORE.write().unwrap();
+        let mut store = EDGION_GATEWAY_CONFIG_STORE.write();
 
         if !add.is_empty() {
             tracing::info!(
@@ -116,7 +116,7 @@ mod tests {
     use std::collections::HashMap;
 
     // Serialize tests to avoid global-store interference
-    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     fn make_config(name: &str) -> EdgionGatewayConfig {
         EdgionGatewayConfig::new(
@@ -135,12 +135,12 @@ mod tests {
     }
 
     fn clear_store() {
-        EDGION_GATEWAY_CONFIG_STORE.write().unwrap().clear();
+        EDGION_GATEWAY_CONFIG_STORE.write().clear();
     }
 
     #[test]
     fn test_full_set_replaces_existing() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_add_deduplicates() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_update_overwrites_existing() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_update_miss_inserts() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_remove_works() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_remove_miss_does_not_panic() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_list_and_count() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 

@@ -4,7 +4,8 @@
 //! efficient lookup by to_namespace for permission checking.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 use crate::types::resources::ReferenceGrant;
 
@@ -40,7 +41,7 @@ impl ReferenceGrantStore {
 
     /// Get a reference grant by key (namespace/name)
     pub fn get(&self, key: &str) -> Option<Arc<ReferenceGrant>> {
-        let grants = self.grants.read().unwrap();
+        let grants = self.grants.read();
         grants.get(key).cloned()
     }
 
@@ -55,7 +56,7 @@ impl ReferenceGrantStore {
     /// This is the primary query method for permission checking.
     /// Returns all ReferenceGrants defined in the target namespace.
     pub fn get_by_to_namespace(&self, to_namespace: &str) -> Vec<Arc<ReferenceGrant>> {
-        let index = self.grants_by_to_namespace.read().unwrap();
+        let index = self.grants_by_to_namespace.read();
         index.get(to_namespace).cloned().unwrap_or_default()
     }
 
@@ -106,7 +107,7 @@ impl ReferenceGrantStore {
 
         // Update raw storage
         {
-            let mut grants = self.grants.write().unwrap();
+            let mut grants = self.grants.write();
             grants.insert(key, grant.clone());
         }
 
@@ -120,7 +121,7 @@ impl ReferenceGrantStore {
     pub fn remove(&self, key: &str) -> Option<Arc<ReferenceGrant>> {
         // Get the grant first to know which namespace to rebuild
         let grant = {
-            let mut grants = self.grants.write().unwrap();
+            let mut grants = self.grants.write();
             grants.remove(key)
         };
 
@@ -136,8 +137,8 @@ impl ReferenceGrantStore {
 
     /// Rebuild the index for a specific namespace
     fn rebuild_namespace_index(&self, namespace: &str) {
-        let grants = self.grants.read().unwrap();
-        let mut index = self.grants_by_to_namespace.write().unwrap();
+        let grants = self.grants.read();
+        let mut index = self.grants_by_to_namespace.write();
 
         let grants_in_ns: Vec<Arc<ReferenceGrant>> = grants
             .values()
@@ -159,11 +160,11 @@ impl ReferenceGrantStore {
 
         // Update both storages
         {
-            let mut grants = self.grants.write().unwrap();
+            let mut grants = self.grants.write();
             *grants = new_grants;
         }
         {
-            let mut index = self.grants_by_to_namespace.write().unwrap();
+            let mut index = self.grants_by_to_namespace.write();
             *index = new_index;
         }
     }
@@ -176,13 +177,13 @@ impl ReferenceGrantStore {
     ) {
         // Identify affected namespaces before updating
         let affected_namespaces = {
-            let grants = self.grants.read().unwrap();
+            let grants = self.grants.read();
             Self::build_affected_namespaces(&add_or_update, remove, &grants)
         };
 
         // Update raw storage
         {
-            let mut grants = self.grants.write().unwrap();
+            let mut grants = self.grants.write();
 
             // Add or update
             for (key, grant) in add_or_update {
@@ -245,8 +246,8 @@ impl ReferenceGrantStore {
             return;
         }
 
-        let grants = self.grants.read().unwrap();
-        let mut index = self.grants_by_to_namespace.write().unwrap();
+        let grants = self.grants.read();
+        let mut index = self.grants_by_to_namespace.write();
 
         // Rebuild only affected namespaces
         for ns in affected_namespaces {
@@ -273,7 +274,7 @@ impl ReferenceGrantStore {
         update: &HashMap<String, ReferenceGrant>,
         remove: &std::collections::HashSet<String>,
     ) -> std::collections::HashSet<String> {
-        let grants = self.grants.read().unwrap();
+        let grants = self.grants.read();
         let mut affected = std::collections::HashSet::new();
 
         // Extract from new/updated grants
@@ -304,7 +305,7 @@ impl ReferenceGrantStore {
     /// Get all grants (for testing/debugging)
     #[cfg(test)]
     pub fn get_all(&self) -> HashMap<String, Arc<ReferenceGrant>> {
-        let grants = self.grants.read().unwrap();
+        let grants = self.grants.read();
         grants.clone()
     }
 }

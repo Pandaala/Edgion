@@ -12,7 +12,7 @@ use axum::{
 };
 use clap::Parser;
 use std::net::SocketAddr;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
@@ -494,7 +494,8 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     };
 
     // Store under trace_id
-    if let Ok(mut store) = MIRROR_STORE.lock() {
+    {
+        let mut store = MIRROR_STORE.lock();
         store.entry(trace_id.clone()).or_default().push(capture);
         info!("mirror/capture: stored request for trace_id={}", trace_id);
     }
@@ -511,7 +512,8 @@ async fn mirror_query_handler(Path(trace_id): Path<String>) -> impl IntoResponse
     use axum::response::Json;
     use serde_json::json;
 
-    let (found, count, captures) = if let Ok(store) = MIRROR_STORE.lock() {
+    let (found, count, captures) = {
+        let store = MIRROR_STORE.lock();
         if let Some(entries) = store.get(&trace_id) {
             let data: Vec<_> = entries
                 .iter()
@@ -521,8 +523,6 @@ async fn mirror_query_handler(Path(trace_id): Path<String>) -> impl IntoResponse
         } else {
             (false, 0, vec![])
         }
-    } else {
-        (false, 0, vec![])
     };
 
     (
@@ -567,7 +567,8 @@ async fn mirror_slow_handler(Path(ms): Path<u64>, req: AxumRequest<Body>) -> imp
         headers,
         body,
     };
-    if let Ok(mut store) = MIRROR_STORE.lock() {
+    {
+        let mut store = MIRROR_STORE.lock();
         store.entry(trace_id.clone()).or_default().push(capture);
     }
 
@@ -583,7 +584,8 @@ async fn mirror_slow_handler(Path(ms): Path<u64>, req: AxumRequest<Body>) -> imp
 /// Call between test cases to avoid stale data from previous runs.
 async fn mirror_reset_handler() -> impl IntoResponse {
     use axum::http::StatusCode;
-    if let Ok(mut store) = MIRROR_STORE.lock() {
+    {
+        let mut store = MIRROR_STORE.lock();
         let count = store.len();
         store.clear();
         info!("mirror/reset: cleared {} trace entries", count);
@@ -617,7 +619,7 @@ async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, Stri
     }
 
     let (attempt, current_status) = {
-        let mut store = RETRY_SEQUENCE_COUNTER.lock().unwrap();
+        let mut store = RETRY_SEQUENCE_COUNTER.lock();
         let history = store.entry(test_id.clone()).or_default();
         let idx = history.len();
         // Use last status code for out-of-range attempts
@@ -627,7 +629,7 @@ async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, Stri
     };
 
     let history_str = {
-        let store = RETRY_SEQUENCE_COUNTER.lock().unwrap();
+        let store = RETRY_SEQUENCE_COUNTER.lock();
         store
             .get(&test_id)
             .map(|h| h.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(","))
@@ -650,7 +652,7 @@ async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, Stri
 
 /// /retry-sequence-reset — clear all retry sequence state
 async fn retry_sequence_reset_handler() -> impl IntoResponse {
-    let mut store = RETRY_SEQUENCE_COUNTER.lock().unwrap();
+    let mut store = RETRY_SEQUENCE_COUNTER.lock();
     let count = store.len();
     store.clear();
     info!("retry-sequence/reset: cleared {} test entries", count);
@@ -663,7 +665,7 @@ async fn cb_fail_handler(Path((test_id, fail_count)): Path<(String, u32)>) -> im
     use axum::http::StatusCode;
 
     let attempt = {
-        let mut store = CB_COUNTER.lock().unwrap();
+        let mut store = CB_COUNTER.lock();
         let count = store.entry(test_id.clone()).or_insert(0);
         *count += 1;
         *count
@@ -686,7 +688,7 @@ async fn cb_fail_handler(Path((test_id, fail_count)): Path<(String, u32)>) -> im
 async fn cb_reset_handler() -> impl IntoResponse {
     use axum::http::StatusCode;
 
-    let mut store = CB_COUNTER.lock().unwrap();
+    let mut store = CB_COUNTER.lock();
     store.clear();
     (StatusCode::OK, "cb-reset-ok")
 }

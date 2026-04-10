@@ -109,9 +109,9 @@ The current gateway-side processing model is:
   - `src/core/gateway/conf_sync/conf_client/config_client.rs`
   - `src/core/common/conf_sync/traits.rs`
 - CLI inspection:
-  - `edgion-ctl --target center`
-  - `edgion-ctl --target server`
-  - `edgion-ctl --target client`
+  - `edgion-cli --target center`
+  - `edgion-cli --target server`
+  - `edgion-cli --target client`
 
 Comparing `server` and `client` views is often the fastest way to tell whether a problem lives in controller parsing, sync, or gateway runtime.
 

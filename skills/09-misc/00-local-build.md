@@ -36,7 +36,7 @@ cargo build
 cargo build --release
 
 # 常用二进制
-cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-ctl
+cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli
 
 # 常用 examples
 cargo build --release --example test_server --example test_client
@@ -77,7 +77,7 @@ cargo build --release --no-default-features --features "allocator-system,borings
 
 - `target/debug/edgion-gateway`
 - `target/release/edgion-controller`
-- `target/release/edgion-ctl`
+- `target/release/edgion-cli`
 - `target/release/examples/test_server`
 
 ## 交叉编译
@@ -87,7 +87,7 @@ CI 当前对 ARM64 Linux 的做法：
 ```bash
 rustup target add aarch64-unknown-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu \
-  --bin edgion-gateway --bin edgion-controller --bin edgion-ctl
+  --bin edgion-gateway --bin edgion-controller --bin edgion-cli
 ```
 
 如果是 Debian/Ubuntu 风格环境，通常还需要：

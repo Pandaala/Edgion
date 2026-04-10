@@ -11,7 +11,7 @@ description: Cargo Feature Flags 完整参考：allocator、TLS backend、互斥
 - `src/lib.rs`（allocator 全局安装）
 - `src/core/gateway/runtime/server/listener_builder.rs`（TLS listener 守卫）
 - `src/core/gateway/tls/runtime/`（TLS 运行时守卫）
-- `src/bin/edgion_gateway.rs`、`src/bin/edgion_controller.rs`、`src/bin/edgion_ctl.rs`（rustls crypto provider 初始化）
+- `src/bin/edgion_gateway.rs`、`src/bin/edgion_controller.rs`、`src/bin/edgion_cli.rs`（rustls crypto provider 初始化）
 
 ## 默认构建
 
@@ -66,7 +66,7 @@ Windows/MSVC 环境下即使指定了 `allocator-jemalloc` feature，实际也�
 
 - `src/bin/edgion_gateway.rs`
 - `src/bin/edgion_controller.rs`
-- `src/bin/edgion_ctl.rs`
+- `src/bin/edgion_cli.rs`
 
 这是为了支持 repo 中依赖 rustls 的库，**不会**覆盖 Cargo feature 矩阵对 Gateway 数据面 TLS 后端的选择。
 

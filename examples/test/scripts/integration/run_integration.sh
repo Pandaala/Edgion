@@ -216,36 +216,36 @@ finalize_report() {
 # =============================================================================
 run_dynamic_tests() {
     local stage=${1:-0}  # 0=，1=，2=
-    local edgion_ctl="${PROJECT_ROOT}/target/debug/edgion-ctl"
+    local edgion_cli="${PROJECT_ROOT}/target/debug/edgion-cli"
     local conf_dir="${PROJECT_ROOT}/examples/test/conf"
     local controller_url="http://127.0.0.1:5800"
     local gateway_url="http://127.0.0.1:5900"
-    
+
     log_section "🔄 Gateway "
-    
+
     if [ $stage -eq 0 ] || [ $stage -eq 1 ]; then
         log_info ">>>  1/2: "
-        
+
         # （）
         run_test "Dynamic_Initial_Phase" \
             "${PROJECT_ROOT}/target/debug/examples/test_client \
              -g -r Gateway -i Dynamic --phase initial" || test_failed=true
-        
+
         log_success ""
     fi
-    
+
     if [ $stage -eq 0 ]; then
         log_section "📦 "
-        
-        # 1. 
+
+        # 1.
         log_info "Applying updates from DynamicTest/updates/..."
-        "${edgion_ctl}" --server "${controller_url}" \
+        "${edgion_cli}" --server "${controller_url}" \
             apply -f "${conf_dir}/Gateway/DynamicTest/updates/" || {
             log_error "Failed to apply dynamic updates"
             return 1
         }
-        
-        # 2. 
+
+        # 2.
         if [ -f "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt" ]; then
             log_info "Deleting resources..."
             while IFS= read -r resource; do
@@ -254,7 +254,7 @@ run_dynamic_tests() {
                 IFS='/' read -r kind namespace name <<< "$resource"
                 if [ -n "$kind" ] && [ -n "$namespace" ] && [ -n "$name" ]; then
                     log_info "Deleting: $kind/$namespace/$name"
-                    "${edgion_ctl}" --server "${controller_url}" delete "$kind" "$name" -n "$namespace" || true
+                    "${edgion_cli}" --server "${controller_url}" delete "$kind" "$name" -n "$namespace" || true
                 fi
             done < "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt"
         fi
@@ -639,6 +639,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
                     run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
+                    run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
                     run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
                     run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
@@ -784,6 +785,7 @@ run_all_tests() {
         run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
         run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
         run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
+        run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
         run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
         run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
         run_test "EdgionPlugins_DslGrpcError" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
@@ -914,7 +916,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth"
                 fi

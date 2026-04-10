@@ -19,7 +19,7 @@
 //! Within each conflict key group, hostname intersection determines actual conflicts.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 /// Listener reference (gateway + listener name + hostname for conflict checking)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -104,8 +104,8 @@ impl ListenerPortManager {
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
     pub fn register_gateway(&self, gateway_key: &str, listeners: &[(String, ConflictKey, Option<String>)]) {
-        let mut gw_map = self.gateway_to_ports.write().unwrap();
-        let mut port_map = self.port_to_listeners.write().unwrap();
+        let mut gw_map = self.gateway_to_ports.write();
+        let mut port_map = self.port_to_listeners.write();
 
         // Clear old registrations
         if let Some(old_conflict_keys) = gw_map.remove(gateway_key) {
@@ -146,8 +146,8 @@ impl ListenerPortManager {
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
     pub fn unregister_gateway(&self, gateway_key: &str) {
-        let mut gw_map = self.gateway_to_ports.write().unwrap();
-        let mut port_map = self.port_to_listeners.write().unwrap();
+        let mut gw_map = self.gateway_to_ports.write();
+        let mut port_map = self.port_to_listeners.write();
 
         let conflict_keys = gw_map.remove(gateway_key).unwrap_or_default();
 
@@ -181,8 +181,8 @@ impl ListenerPortManager {
     pub fn detect_conflicts(&self, gateway_key: &str) -> HashMap<String, String> {
         let mut conflicts = HashMap::new();
 
-        let gw_map = self.gateway_to_ports.read().unwrap();
-        let port_map = self.port_to_listeners.read().unwrap();
+        let gw_map = self.gateway_to_ports.read();
+        let port_map = self.port_to_listeners.read();
 
         let port_keys = match gw_map.get(gateway_key) {
             Some(keys) => keys,
@@ -228,8 +228,8 @@ impl ListenerPortManager {
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
     pub fn clear(&self) {
-        let mut gw_map = self.gateway_to_ports.write().unwrap();
-        let mut port_map = self.port_to_listeners.write().unwrap();
+        let mut gw_map = self.gateway_to_ports.write();
+        let mut port_map = self.port_to_listeners.write();
         gw_map.clear();
         port_map.clear();
         tracing::info!("ListenerPortManager cleared");
@@ -240,8 +240,8 @@ impl ListenerPortManager {
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
     pub fn stats(&self) -> (usize, usize) {
-        let gw_map = self.gateway_to_ports.read().unwrap();
-        let port_map = self.port_to_listeners.read().unwrap();
+        let gw_map = self.gateway_to_ports.read();
+        let port_map = self.port_to_listeners.read();
         (port_map.len(), gw_map.len())
     }
 }

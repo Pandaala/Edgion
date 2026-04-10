@@ -209,8 +209,8 @@ mod route_matching_tests {
         };
 
         if let Some(route_rules) = route_rules {
-            let normal_count = route_rules.route_rules_list.read().unwrap().len();
-            let regex_count = route_rules.regex_routes.read().unwrap().len();
+            let normal_count = route_rules.route_rules_list.read().len();
+            let regex_count = route_rules.regex_routes.read().len();
             assert_eq!(
                 normal_count, expected_normal_routes,
                 "Expected {} normal routes for hostname '{}', got {}",
@@ -260,7 +260,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -301,7 +301,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -334,7 +334,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -375,7 +375,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -409,7 +409,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -445,7 +445,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -490,7 +490,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -537,7 +537,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -586,7 +586,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -628,7 +628,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -664,7 +664,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -709,7 +709,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -754,7 +754,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -795,7 +795,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -836,7 +836,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -877,7 +877,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -918,7 +918,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -967,7 +967,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -998,7 +998,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1029,7 +1029,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1068,7 +1068,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1113,7 +1113,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1158,7 +1158,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1200,7 +1200,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1242,7 +1242,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1284,7 +1284,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1326,7 +1326,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1380,7 +1380,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1422,7 +1422,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 

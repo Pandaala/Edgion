@@ -5,7 +5,7 @@
 
 use k8s_openapi::api::core::v1::ConfigMap;
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 type ConfigMapMap = HashMap<String, ConfigMap>;
 
@@ -22,13 +22,13 @@ impl ConfigMapStore {
 
     pub fn get(&self, namespace: Option<&str>, name: &str) -> Option<ConfigMap> {
         let key = Self::make_key(namespace, name);
-        let map = self.configmaps.read().unwrap();
+        let map = self.configmaps.read();
         map.get(&key).cloned()
     }
 
     pub fn replace_all(&self, configmaps: HashMap<String, ConfigMap>) {
         let count = configmaps.len();
-        let mut map = self.configmaps.write().unwrap();
+        let mut map = self.configmaps.write();
         *map = configmaps;
         tracing::info!(component = "configmap_store", count = count, "Replaced all configmaps");
     }
@@ -39,12 +39,12 @@ impl ConfigMapStore {
     /// delta-only `update()` calls (no full `replace_all` on reconnect), so
     /// an explicit clear is required.
     pub fn clear(&self) {
-        self.configmaps.write().unwrap().clear();
+        self.configmaps.write().clear();
         tracing::info!(component = "configmap_store", "Cleared all configmaps");
     }
 
     pub fn update(&self, upsert: HashMap<String, ConfigMap>, remove: &HashSet<String>) {
-        let mut map = self.configmaps.write().unwrap();
+        let mut map = self.configmaps.write();
         for key in remove {
             map.remove(key);
         }

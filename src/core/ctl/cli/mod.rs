@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use client::EdgionClient;
 use output::OutputFormat;
 
-/// Target type for edgion-ctl commands
+/// Target type for edgion-cli commands
 ///
 /// - `center`: ConfCenter API (default, full CRUD operations)
 /// - `server`: ConfigServer cache (read-only, Controller side)
@@ -36,7 +36,7 @@ impl std::fmt::Display for TargetType {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "edgion-ctl")]
+#[command(name = "edgion-cli")]
 #[command(about = "Edgion control tool for managing gateway resources", long_about = None)]
 #[command(version)]
 pub struct Cli {

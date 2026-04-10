@@ -9,7 +9,7 @@
 2. Load base configs (Gateway resource for leak-test listeners)
 3. Capture baseline (store counts before any test injection)
 4. For each cycle/scenario:
-   a. Inject test YAML configs via edgion-ctl → Controller API
+   a. Inject test YAML configs via edgion-cli → Controller API
    b. Wait for gRPC sync → Gateway
    c. Verify configs arrived (ConfigClient cache counts > baseline)
    d. Delete injected configs
@@ -129,14 +129,14 @@ examples/test/scripts/conf-sync/
 └── run_conf_sync_mtls_test.sh            # mTLS end-to-end test
 
 examples/test/scripts/gen_certs/
-└── generate_conf_sync_certs.sh           # Uses edgion-ctl gen-certs for conf_sync mTLS certs
+└── generate_conf_sync_certs.sh           # Uses edgion-cli gen-certs for conf_sync mTLS certs
 ```
 
 ## mTLS Channel Test
 
 `run_conf_sync_mtls_test.sh` tests the conf_sync gRPC mTLS feature end-to-end:
 
-1. Generates mTLS certificates via `edgion-ctl gen-certs --output file`
+1. Generates mTLS certificates via `edgion-cli gen-certs --output file`
 2. Creates TOML configs with `[conf_sync_security.tls]` section
 3. Starts Controller with server TLS + client CA verification
 4. Starts Gateway with client cert + server CA trust

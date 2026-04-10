@@ -38,7 +38,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
         let gateways = {
             let global_store = get_global_gateway_store();
-            let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
+            let mut store = global_store.write();
             store.clear();
 
             for (key, gateway) in data {
@@ -90,7 +90,7 @@ impl ConfHandler<Gateway> for GatewayHandler {
         remove: HashSet<String>,
     ) {
         let global_store = get_global_gateway_store();
-        let mut store = global_store.write().unwrap_or_else(|e| e.into_inner());
+        let mut store = global_store.write();
         let config_store = get_global_gateway_config_store();
         let mut needs_rebuild = false;
 

@@ -55,7 +55,8 @@ pub use edgion_plugins::{
     DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
     JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
     PluginConditionTestSuite, PluginLogsTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
-    RequestMirrorTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite,
+    WebhookKeyGetTestSuite,
 };
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)

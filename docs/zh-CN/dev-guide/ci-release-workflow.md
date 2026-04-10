@@ -103,7 +103,7 @@ CI 和 release 现在都依赖同一个本地 action：
 - 产出三个二进制：
   - `edgion-gateway`
   - `edgion-controller`
-  - `edgion-ctl`
+  - `edgion-cli`
 - arm64 额外安装交叉编译器
 
 ### 3. `build-and-push-images`

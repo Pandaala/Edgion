@@ -11,7 +11,7 @@ description: 三个 bin 的入口点、CLI 参数完整参考、work_dir 优先�
 |--------|------|---------|------|
 | `edgion-controller` | 控制面：资源接收/校验/处理/分发 | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
 | `edgion-gateway` | 数据面：高性能代理（基于 Pingora） | Admin `:5900`, Metrics `:5901` | `src/bin/edgion_gateway.rs` |
-| `edgion-ctl` | CLI 工具：资源 CRUD 和运维 | — | `src/bin/edgion_ctl.rs` |
+| `edgion-cli` | CLI 工具：资源 CRUD 和运维 | — | `src/bin/edgion_cli.rs` |
 
 三个 bin 都采用**薄入口点**模式 — `src/bin/*.rs` 只做最少的工作：安装 rustls 加密提供程序 → 解析参数 → `run()`。
 
@@ -96,10 +96,10 @@ edgion-gateway -c config/edgion-gateway.toml --server-addr http://controller:500
 
 ---
 
-## edgion-ctl CLI
+## edgion-cli CLI
 
 ```
-edgion-ctl [OPTIONS] <COMMAND>
+edgion-cli [OPTIONS] <COMMAND>
 ```
 
 ### 全局参数
@@ -122,22 +122,22 @@ edgion-ctl [OPTIONS] <COMMAND>
 
 ```bash
 # 应用资源
-edgion-ctl apply -f route.yaml
-edgion-ctl apply -f config/resources/    # 目录
+edgion-cli apply -f route.yaml
+edgion-cli apply -f config/resources/    # 目录
 
 # 查询资源
-edgion-ctl get httproute                 # 列出所有
-edgion-ctl get httproute my-route -n default -o yaml
+edgion-cli get httproute                 # 列出所有
+edgion-cli get httproute my-route -n default -o yaml
 
 # 删除资源
-edgion-ctl delete httproute my-route -n default
-edgion-ctl delete -f route.yaml
+edgion-cli delete httproute my-route -n default
+edgion-cli delete -f route.yaml
 
 # 重载
-edgion-ctl reload
+edgion-cli reload
 
 # 查看 Gateway 侧缓存
-edgion-ctl -t client --server http://localhost:5900 get httproute
+edgion-cli -t client --server http://localhost:5900 get httproute
 ```
 
 ### 子命令参数 Schema

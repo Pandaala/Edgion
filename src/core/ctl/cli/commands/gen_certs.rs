@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use crate::core::ctl::certs::{self, GenCertsOptions};
 
+const FIELD_MANAGER: &str = "edgion-cli";
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum OutputMode {
     /// Write certificates to local files
@@ -169,7 +171,7 @@ async fn write_to_k8s_secrets(bundle: &certs::CertBundle, namespace: &str, prefi
             namespace: Some(namespace.to_string()),
             labels: Some(BTreeMap::from([(
                 "app.kubernetes.io/managed-by".to_string(),
-                "edgion-ctl".to_string(),
+                FIELD_MANAGER.to_string(),
             )])),
             ..Default::default()
         },
@@ -194,7 +196,7 @@ async fn write_to_k8s_secrets(bundle: &certs::CertBundle, namespace: &str, prefi
             namespace: Some(namespace.to_string()),
             labels: Some(BTreeMap::from([(
                 "app.kubernetes.io/managed-by".to_string(),
-                "edgion-ctl".to_string(),
+                FIELD_MANAGER.to_string(),
             )])),
             ..Default::default()
         },
@@ -213,7 +215,7 @@ async fn write_to_k8s_secrets(bundle: &certs::CertBundle, namespace: &str, prefi
     };
 
     // Write secrets using server-side apply (idempotent create-or-update)
-    let pp = PatchParams::apply("edgion-ctl").force();
+    let pp = PatchParams::apply(FIELD_MANAGER).force();
     api.patch(&controller_secret_name, &pp, &Patch::Apply(controller_secret))
         .await
         .with_context(|| format!("Failed to write Secret {}/{}", namespace, controller_secret_name))?;

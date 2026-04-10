@@ -48,6 +48,7 @@ use crate::core::gateway::plugins::http::proxy_rewrite::ProxyRewrite;
 use crate::core::gateway::plugins::http::rate_limit::RateLimit;
 use crate::core::gateway::plugins::http::rate_limit_redis::RateLimitRedis;
 use crate::core::gateway::plugins::http::real_ip::RealIp;
+use crate::core::gateway::plugins::http::region_route::RegionRoute;
 use crate::core::gateway::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::core::gateway::plugins::http::request_restriction::RequestRestriction;
 use crate::core::gateway::plugins::http::response_rewrite::ResponseRewrite;
@@ -390,6 +391,7 @@ impl PluginRuntime {
                 Some(Box::new(ext_filter))
             }
             EdgionPlugin::Dsl(config) => DslPlugin::from_config(config),
+            EdgionPlugin::RegionRoute(config) => Some(RegionRoute::create(config)),
             // Response-stage only — not applicable to request filters
             EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
@@ -443,7 +445,8 @@ impl PluginRuntime {
             | EdgionPlugin::DirectEndpoint(_)
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::DynamicInternalUpstream(_)
-            | EdgionPlugin::DynamicExternalUpstream(_) => None,
+            | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::RegionRoute(_) => None,
         }
     }
 
@@ -499,6 +502,7 @@ impl PluginRuntime {
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::Dsl(_) => None,
         }
     }
@@ -538,6 +542,7 @@ impl PluginRuntime {
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::Dsl(config) => config.get_validation_error_owned(),
+            EdgionPlugin::RegionRoute(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::Mock(config) => config.validate().err(),
             // These plugins have no preparse validation
             EdgionPlugin::RequestHeaderModifier(_)
@@ -591,6 +596,7 @@ impl PluginRuntime {
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::Dsl(_) => "Dsl",
+            EdgionPlugin::RegionRoute(_) => "RegionRoute",
         }
     }
 

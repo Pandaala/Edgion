@@ -8,7 +8,8 @@ use crate::types::{
 };
 use kube::{Resource, ResourceExt};
 use rand::Rng;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use tonic::transport::Channel;
 
 use super::cache::ClientCache;
@@ -34,7 +35,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> 
         // process_compressed_events cannot observe an event whose data is not yet present.
         let resource_key = resource.key_name();
         {
-            let mut cache = self.cache_data.write().unwrap();
+            let mut cache = self.cache_data.write();
             cache.add_compress_event(resource_key.clone(), change);
             match change {
                 ResourceChange::InitAdd | ResourceChange::EventAdd | ResourceChange::EventUpdate => {
@@ -53,7 +54,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> 
     }
 
     fn set_ready(&self) {
-        let mut cache = self.cache_data.write().unwrap();
+        let mut cache = self.cache_data.write();
         cache.set_ready();
     }
 }
@@ -114,7 +115,7 @@ where
 
         // Use reset method to rebuild cache with fresh data
         {
-            let mut cache = cache_data.write().unwrap();
+            let mut cache = cache_data.write();
             cache.reset(resources, list_data.sync_version);
         }
 
@@ -184,7 +185,7 @@ where
                             global_metrics().config_relist();
 
                             let count = {
-                                let cache = cache_data.read().unwrap();
+                                let cache = cache_data.read();
                                 cache.len()
                             };
                             tracing::info!(
@@ -202,7 +203,7 @@ where
 
                             // Set ready after first successful list
                             if !is_ready {
-                                let mut cache = cache_data.write().unwrap();
+                                let mut cache = cache_data.write();
                                 cache.set_ready();
                                 is_ready = true;
                                 tracing::info!(kind = T::kind_name(), "Cache is ready");
@@ -330,7 +331,7 @@ where
 
                                                     // Apply change using single lock
                                                     let resource_key = resource.key_name(); // Use namespace/name as key
-                                                    let mut cache = cache_data.write().unwrap();
+                                                    let mut cache = cache_data.write();
                                                     match change {
                                                         ResourceChange::InitAdd
                                                         | ResourceChange::EventAdd

@@ -8,7 +8,8 @@
 
 use k8s_openapi::api::core::v1::Secret;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
+use parking_lot::RwLock;
 
 /// Type alias for the secret map: "namespace/name" -> Secret
 type SecretMap = HashMap<String, Secret>;
@@ -28,14 +29,14 @@ impl SecretStore {
     /// Get a Secret by namespace and name
     pub fn get(&self, namespace: Option<&str>, name: &str) -> Option<Secret> {
         let key = Self::make_key(namespace, name);
-        let map = self.secrets.read().unwrap();
+        let map = self.secrets.read();
         map.get(&key).cloned()
     }
 
     /// Replace all secrets
     pub fn replace_all(&self, secrets: HashMap<String, Secret>) {
         let count = secrets.len();
-        let mut map = self.secrets.write().unwrap();
+        let mut map = self.secrets.write();
         *map = secrets;
         tracing::info!(component = "secret_store", count = count, "Replaced all secrets");
     }
@@ -45,7 +46,7 @@ impl SecretStore {
     /// - `upsert`: Secrets to add or update (insert if not exists, update if exists)
     /// - `remove`: Keys of secrets to remove
     pub fn update(&self, upsert: HashMap<String, Secret>, remove: &HashSet<String>) {
-        let mut map = self.secrets.write().unwrap();
+        let mut map = self.secrets.write();
 
         // Remove secrets first
         for key in remove {

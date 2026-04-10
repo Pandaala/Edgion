@@ -6,13 +6,13 @@ description: Debugging and troubleshooting skill for Edgion. Use when local code
 # 06 调试与排障
 
 > 面向日常开发排障：代码改完后快速定位问题层次。
-> 工具链：Admin API、edgion-ctl 三视图、Access Log Store、Metrics、resource_diff。
+> 工具链：Admin API、edgion-cli 三视图、Access Log Store、Metrics、resource_diff。
 
 ## 文件清单
 
 | 文件 | 主题 | 状态 |
 |------|------|------|
-| [00-debugging.md](00-debugging.md) | 日常开发调试、Admin API、edgion-ctl、Access Log Store、Metrics、问题速查 | ✅ 已重构 |
+| [00-debugging.md](00-debugging.md) | 日常开发调试、Admin API、edgion-cli、Access Log Store、Metrics、问题速查 | ✅ 已重构 |
 
 ## 快速入口
 
@@ -25,9 +25,9 @@ description: Debugging and troubleshooting skill for Edgion. Use when local code
 ### 三视图定位问题层次
 
 ```bash
-./target/debug/edgion-ctl get httproute -n default
-./target/debug/edgion-ctl -t server get httproute -n default
-./target/debug/edgion-ctl -t client get httproute -n default
+./target/debug/edgion-cli get httproute -n default
+./target/debug/edgion-cli -t server get httproute -n default
+./target/debug/edgion-cli -t client get httproute -n default
 ```
 
 ### 相关知识

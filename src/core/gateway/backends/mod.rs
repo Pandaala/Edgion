@@ -506,7 +506,7 @@ fn select_from_backends(
                     .ok_or(not_found_rr)
             } else {
                 let ring_lock = runtime_state::get_ch_ring(service_key, &backends);
-                let ring = ring_lock.read().unwrap_or_else(|e| e.into_inner());
+                let ring = ring_lock.read();
                 ring.select(&hash_key, 256, |b| is_backend_healthy(service_key, b, &health_store))
                     .ok_or(not_found_ch)
             }

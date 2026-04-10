@@ -1,15 +1,15 @@
-# edgion-ctl 命令行工具
+# edgion-cli 命令行工具
 
-`edgion-ctl` 是 Edgion 的命令行管理工具，用于查看和管理网关资源配置。
+`edgion-cli` 是 Edgion 的命令行管理工具，用于查看和管理网关资源配置。
 
 ## 安装
 
-编译后的二进制文件位于 `target/release/edgion-ctl` 或 `target/debug/edgion-ctl`。
+编译后的二进制文件位于 `target/release/edgion-cli` 或 `target/debug/edgion-cli`。
 
 ## 基本用法
 
 ```bash
-edgion-ctl [OPTIONS] <COMMAND>
+edgion-cli [OPTIONS] <COMMAND>
 ```
 
 ### 全局选项
@@ -24,7 +24,7 @@ edgion-ctl [OPTIONS] <COMMAND>
 
 ## Target 类型
 
-`edgion-ctl` 支持三种 target 类型，用于连接不同的数据源：
+`edgion-cli` 支持三种 target 类型，用于连接不同的数据源：
 
 | Target | 组件 | 默认端口 | 支持的命令 | 说明 |
 |--------|------|----------|------------|------|
@@ -36,17 +36,17 @@ edgion-ctl [OPTIONS] <COMMAND>
 
 ```bash
 # center (默认) - 完整功能
-edgion-ctl get httproute
-edgion-ctl apply -f route.yaml
-edgion-ctl delete httproute my-route -n default
+edgion-cli get httproute
+edgion-cli apply -f route.yaml
+edgion-cli delete httproute my-route -n default
 
 # server - 查看 Controller 的 ConfigServer 缓存
-edgion-ctl -t server get httproute
-edgion-ctl -t server get httproute -n prod
+edgion-cli -t server get httproute
+edgion-cli -t server get httproute -n prod
 
 # client - 查看 Gateway 的 ConfigClient 缓存
-edgion-ctl -t client get httproute
-edgion-ctl -t client --server http://gateway:5900 get service -n default
+edgion-cli -t client get httproute
+edgion-cli -t client --server http://gateway:5900 get service -n default
 ```
 
 ## 命令详解
@@ -56,7 +56,7 @@ edgion-ctl -t client --server http://gateway:5900 get service -n default
 获取单个资源或列出资源列表。
 
 ```bash
-edgion-ctl get <KIND> [NAME] [OPTIONS]
+edgion-cli get <KIND> [NAME] [OPTIONS]
 ```
 
 **参数:**
@@ -71,16 +71,16 @@ edgion-ctl get <KIND> [NAME] [OPTIONS]
 
 ```bash
 # 列出所有 HTTPRoute
-edgion-ctl get httproute
+edgion-cli get httproute
 
 # 列出指定命名空间的 HTTPRoute
-edgion-ctl get httproute -n production
+edgion-cli get httproute -n production
 
 # 获取指定资源，输出 YAML 格式
-edgion-ctl get httproute my-route -n default -o yaml
+edgion-cli get httproute my-route -n default -o yaml
 
 # 获取指定资源，输出 JSON 格式
-edgion-ctl get service backend-svc -n default -o json
+edgion-cli get service backend-svc -n default -o json
 ```
 
 **支持的资源类型:**
@@ -111,7 +111,7 @@ edgion-ctl get service backend-svc -n default -o json
 从 YAML 文件创建或更新资源。**仅 center target 支持此命令。**
 
 ```bash
-edgion-ctl apply -f <FILE|DIR> [OPTIONS]
+edgion-cli apply -f <FILE|DIR> [OPTIONS]
 ```
 
 **选项:**
@@ -122,13 +122,13 @@ edgion-ctl apply -f <FILE|DIR> [OPTIONS]
 
 ```bash
 # 应用单个文件
-edgion-ctl apply -f route.yaml
+edgion-cli apply -f route.yaml
 
 # 应用目录下所有 YAML 文件
-edgion-ctl apply -f ./configs/
+edgion-cli apply -f ./configs/
 
 # 试运行
-edgion-ctl apply -f route.yaml --dry-run
+edgion-cli apply -f route.yaml --dry-run
 ```
 
 ### delete - 删除资源
@@ -136,8 +136,8 @@ edgion-ctl apply -f route.yaml --dry-run
 删除指定资源。**仅 center target 支持此命令。**
 
 ```bash
-edgion-ctl delete <KIND> <NAME> [OPTIONS]
-edgion-ctl delete -f <FILE>
+edgion-cli delete <KIND> <NAME> [OPTIONS]
+edgion-cli delete -f <FILE>
 ```
 
 **选项:**
@@ -148,10 +148,10 @@ edgion-ctl delete -f <FILE>
 
 ```bash
 # 删除指定资源
-edgion-ctl delete httproute my-route -n default
+edgion-cli delete httproute my-route -n default
 
 # 从文件删除
-edgion-ctl delete -f route.yaml
+edgion-cli delete -f route.yaml
 ```
 
 ### reload - 重新加载
@@ -159,7 +159,7 @@ edgion-ctl delete -f route.yaml
 从存储重新加载所有资源。**仅 center target 支持此命令。**
 
 ```bash
-edgion-ctl reload
+edgion-cli reload
 ```
 
 ### gen-certs - 生成 mTLS 证书
@@ -167,7 +167,7 @@ edgion-ctl reload
 生成 conf_sync gRPC 通道 mTLS 所需的自签证书束。此命令不依赖运行中的 Controller 或 Gateway。
 
 ```bash
-edgion-ctl gen-certs [OPTIONS]
+edgion-cli gen-certs [OPTIONS]
 ```
 
 **选项:**
@@ -197,17 +197,17 @@ edgion-ctl gen-certs [OPTIONS]
 
 ```bash
 # 生成到默认目录
-edgion-ctl gen-certs --output file
+edgion-cli gen-certs --output file
 
 # 指定输出目录，强制覆盖
-edgion-ctl gen-certs --output file --output-dir /etc/edgion/certs --force
+edgion-cli gen-certs --output file --output-dir /etc/edgion/certs --force
 
 # 添加 K8s Service FQDN 作为 SAN
-edgion-ctl gen-certs --output file \
+edgion-cli gen-certs --output file \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 
 # 写入 K8s Secret
-edgion-ctl gen-certs --output k8s
+edgion-cli gen-certs --output k8s
 ```
 
 生成证书后，在 TOML 文件中配置 mTLS。详见[控制面 mTLS](infrastructure/mtls.md#控制面-mtlsconf_sync-grpc)。
@@ -216,7 +216,7 @@ edgion-ctl gen-certs --output k8s
 
 ### 默认连接
 
-根据 target 类型，`edgion-ctl` 使用以下默认连接：
+根据 target 类型，`edgion-cli` 使用以下默认连接：
 
 | Target | 默认地址 |
 |--------|----------|
@@ -230,10 +230,10 @@ edgion-ctl gen-certs --output k8s
 
 ```bash
 # 连接到远程 Controller
-edgion-ctl --server http://controller.example.com:5800 get httproute
+edgion-cli --server http://controller.example.com:5800 get httproute
 
 # 连接到远程 Gateway
-edgion-ctl -t client --server http://gateway.example.com:5900 get service
+edgion-cli -t client --server http://gateway.example.com:5900 get service
 ```
 
 ## 输出格式
@@ -267,7 +267,7 @@ edgion-ctl -t client --server http://gateway.example.com:5900 get service
 
 ### 连接失败
 
-如果连接失败，`edgion-ctl` 会显示详细的错误信息和提示：
+如果连接失败，`edgion-cli` 会显示详细的错误信息和提示：
 
 ```
 Error: Request to http://localhost:5800/api/v1/namespaced/httproute failed
@@ -277,7 +277,7 @@ Connection failed:
   - Check if the server address is correct
   - Try: curl -v http://localhost:5800/api/v1/namespaced/httproute
 
-Hint: edgion-ctl is trying to connect to: http://localhost:5800
+Hint: edgion-cli is trying to connect to: http://localhost:5800
       Target: Center (controller)
       Use --server to specify a different address
 ```
@@ -298,12 +298,12 @@ Hint: edgion-ctl is trying to connect to: http://localhost:5800
 
 ## 与 kubectl 的对比
 
-| 操作 | kubectl | edgion-ctl |
+| 操作 | kubectl | edgion-cli |
 |------|---------|------------|
-| 获取资源 | `kubectl get httproute` | `edgion-ctl get httproute` |
-| 指定命名空间 | `kubectl -n prod get httproute` | `edgion-ctl get httproute -n prod` |
-| 应用配置 | `kubectl apply -f route.yaml` | `edgion-ctl apply -f route.yaml` |
-| 删除资源 | `kubectl delete httproute my-route` | `edgion-ctl delete httproute my-route` |
-| 输出 YAML | `kubectl get httproute -o yaml` | `edgion-ctl get httproute -o yaml` |
+| 获取资源 | `kubectl get httproute` | `edgion-cli get httproute` |
+| 指定命名空间 | `kubectl -n prod get httproute` | `edgion-cli get httproute -n prod` |
+| 应用配置 | `kubectl apply -f route.yaml` | `edgion-cli apply -f route.yaml` |
+| 删除资源 | `kubectl delete httproute my-route` | `edgion-cli delete httproute my-route` |
+| 输出 YAML | `kubectl get httproute -o yaml` | `edgion-cli get httproute -o yaml` |
 
-**区别:** `edgion-ctl` 可以直接连接 Edgion 的 Admin API，无需 Kubernetes 集群，适用于文件系统模式部署。
+**区别:** `edgion-cli` 可以直接连接 Edgion 的 Admin API，无需 Kubernetes 集群，适用于文件系统模式部署。

@@ -5,7 +5,7 @@
 //! - Cascading requeue for dependent resources (EdgionTls, Gateway)
 
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use k8s_openapi::api::core::v1::Secret;
 
@@ -122,7 +122,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
 
         // During init phase, accumulate for authoritative replace_all at init_done.
         {
-            let mut acc = self.init_accumulator.write().unwrap();
+            let mut acc = self.init_accumulator.write();
             if let Some(ref mut map) = *acc {
                 map.insert(secret_key.clone(), secret.clone());
             }
@@ -142,7 +142,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
     }
 
     fn on_init_done(&self, _ctx: &HandlerContext) {
-        let accumulated = self.init_accumulator.write().unwrap().take();
+        let accumulated = self.init_accumulator.write().take();
         if let Some(secrets) = accumulated {
             let count = secrets.len();
             _ctx.runtime().secret_store.replace_all(secrets);

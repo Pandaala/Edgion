@@ -1,6 +1,6 @@
 # Edgion Multi-stage Dockerfile
 # Supports building: edgion-gateway, edgion-controller, test_server, test_client
-# Each image includes edgion-ctl for debugging (bin only)
+# Each image includes edgion-cli for debugging (bin only)
 #
 # Build arguments:
 #   BINARY: Target binary name (default: edgion-gateway)
@@ -103,12 +103,12 @@ RUN PROFILE_FLAG=$([ "${PROFILE}" = "release" ] && echo "--release" || echo "");
       echo "Building example: ${BINARY} (${PROFILE})"; \
       cargo build ${PROFILE_FLAG} --features "${FEATURES}" --example "${BINARY}"; \
       cp /app/target/${OUT_DIR}/examples/${BINARY} /app/edgion-binary; \
-      touch /app/edgion-ctl-binary; \
+      touch /app/edgion-cli-binary; \
     else \
       echo "Building bin: ${BINARY} (${PROFILE})"; \
-      cargo build ${PROFILE_FLAG} --features "${FEATURES}" --bin "${BINARY}" --bin edgion-ctl; \
+      cargo build ${PROFILE_FLAG} --features "${FEATURES}" --bin "${BINARY}" --bin edgion-cli; \
       cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
-      cp /app/target/${OUT_DIR}/edgion-ctl /app/edgion-ctl-binary; \
+      cp /app/target/${OUT_DIR}/edgion-cli /app/edgion-cli-binary; \
     fi
 
 # =============================================================================
@@ -141,13 +141,13 @@ COPY --from=builder --chown=edgion:edgion /app/edgion-binary /usr/local/edgion/$
 RUN chmod +x /usr/local/edgion/${BINARY} && \
     ln -sf /usr/local/edgion/${BINARY} /usr/local/bin/${BINARY}
 
-# Copy ctl for bin builds only (example builds have empty file)
-COPY --from=builder /app/edgion-ctl-binary /tmp/edgion-ctl-binary
+# Copy cli for bin builds only (example builds have empty file)
+COPY --from=builder /app/edgion-cli-binary /tmp/edgion-cli-binary
 RUN if [ "$BUILD_TYPE" != "example" ]; then \
-      mv /tmp/edgion-ctl-binary /usr/local/bin/edgion-ctl && \
-      chmod +x /usr/local/bin/edgion-ctl; \
+      mv /tmp/edgion-cli-binary /usr/local/bin/edgion-cli && \
+      chmod +x /usr/local/bin/edgion-cli; \
     else \
-      rm -f /tmp/edgion-ctl-binary; \
+      rm -f /tmp/edgion-cli-binary; \
     fi
 
 # Copy default config files from builder (if any exist)

@@ -15,7 +15,7 @@ description: Core 模块分层规范：顶级分组、各 bin 布局、放置规
 src/core/
 ├── controller/   # edgion-controller 归属逻辑
 ├── gateway/      # edgion-gateway 归属逻辑
-├── ctl/          # edgion-ctl 归属逻辑
+├── ctl/          # edgion-cli 归属逻辑
 └── common/       # 跨 bin 共享代码
 ```
 

@@ -12,7 +12,8 @@ use pingora_load_balancing::Backend;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
+use parking_lot::RwLock;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -89,7 +90,7 @@ impl HealthCheckManager {
             health_check_loop(task_service_key, config, health_store).await;
         });
 
-        self.tasks.write().expect("lock tasks").insert(service_key, handle);
+        self.tasks.write().insert(service_key, handle);
     }
 
     fn remove_task(&self, service_key: &str) {
@@ -97,7 +98,7 @@ impl HealthCheckManager {
     }
 
     fn cancel_task(&self, service_key: &str) {
-        if let Some(handle) = self.tasks.write().expect("lock tasks").remove(service_key) {
+        if let Some(handle) = self.tasks.write().remove(service_key) {
             handle.abort();
         }
     }

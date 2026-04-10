@@ -129,10 +129,10 @@ curl --cert client.crt --key client.key \
 
 ### 生成证书
 
-使用 `edgion-ctl gen-certs` 生成自签证书束：
+使用 `edgion-cli gen-certs` 生成自签证书束：
 
 ```bash
-edgion-ctl gen-certs --output file --output-dir certs/grpc/
+edgion-cli gen-certs --output file --output-dir certs/grpc/
 ```
 
 生成的文件：
@@ -147,7 +147,7 @@ edgion-ctl gen-certs --output file --output-dir certs/grpc/
 服务端证书默认包含 `localhost`、`127.0.0.1`、`::1` 作为 SAN。生产环境可添加自定义 SAN：
 
 ```bash
-edgion-ctl gen-certs --output file \
+edgion-cli gen-certs --output file \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 ```
 
@@ -200,7 +200,7 @@ ca   = "certs/grpc/ca.crt"
 K8s 部署时，可将证书生成为 K8s Secret：
 
 ```bash
-edgion-ctl gen-certs --output k8s
+edgion-cli gen-certs --output k8s
 ```
 
 将 Secret 挂载到 Controller 和 Gateway Pod，并在 TOML 配置中引用挂载路径。
@@ -223,4 +223,4 @@ conf_sync mTLS enabled for gRPC client
 
 - [TLS 终结](../gateway/tls/tls-termination.md)
 - [后端 TLS](../../user-guide/http-route/backends/backend-tls.md)
-- [edgion-ctl gen-certs](../edgion-ctl.md)
+- [edgion-cli gen-certs](../edgion-cli.md)

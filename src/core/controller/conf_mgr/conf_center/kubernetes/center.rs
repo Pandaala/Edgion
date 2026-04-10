@@ -30,7 +30,8 @@ use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;
 use async_trait::async_trait;
 use kube::Client;
-use std::sync::{Arc, Mutex, RwLock};
+use parking_lot::{Mutex, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -142,7 +143,7 @@ impl KubernetesCenter {
 
     /// Set the ConfigSyncServer (Some = ready, None = not ready)
     fn set_config_sync_server(&self, server: Option<Arc<ConfigSyncServer>>) {
-        let mut sync_server = self.config_sync_server.write().unwrap();
+        let mut sync_server = self.config_sync_server.write();
         let was_ready = sync_server.is_some();
         let is_ready = server.is_some();
         *sync_server = server;
@@ -160,13 +161,13 @@ impl KubernetesCenter {
 
     /// Store shutdown handle for lifecycle management
     fn set_shutdown_handle(&self, handle: ShutdownHandle) {
-        let mut shutdown_handle = self.shutdown_handle.lock().unwrap();
+        let mut shutdown_handle = self.shutdown_handle.lock();
         *shutdown_handle = Some(handle);
     }
 
     /// Set reload signal sender
     fn set_reload_tx(&self, tx: Option<mpsc::Sender<()>>) {
-        *self.reload_tx.lock().unwrap() = tx;
+        *self.reload_tx.lock() = tx;
     }
 
     /// Create internal LeaderElectionConfig from KubernetesConfig
@@ -1005,12 +1006,12 @@ impl CenterLifeCycle for KubernetesCenter {
 
     /// Check if the system is ready
     fn is_ready(&self) -> bool {
-        self.runtime.processor_registry.is_all_ready() && self.config_sync_server.read().unwrap().is_some()
+        self.runtime.processor_registry.is_all_ready() && self.config_sync_server.read().is_some()
     }
 
     /// Get the ConfigSyncServer (may be None if not ready)
     fn config_sync_server(&self) -> Option<Arc<ConfigSyncServer>> {
-        self.config_sync_server.read().unwrap().clone()
+        self.config_sync_server.read().clone()
     }
 
     /// Check if running in Kubernetes mode
@@ -1020,7 +1021,7 @@ impl CenterLifeCycle for KubernetesCenter {
 
     /// Request a reload (re-initialize all processors and stores)
     fn request_reload(&self) -> Result<(), String> {
-        if let Some(tx) = self.reload_tx.lock().unwrap().as_ref() {
+        if let Some(tx) = self.reload_tx.lock().as_ref() {
             tx.try_send(())
                 .map_err(|e| format!("Failed to send reload signal: {}", e))
         } else {

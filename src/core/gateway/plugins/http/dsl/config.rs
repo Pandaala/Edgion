@@ -1,6 +1,6 @@
 //! Configuration for EdgionDSL plugin
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -190,9 +190,8 @@ impl DslConfig {
                 }
                 Ok(bytecode_b64) => {
                     // Cache compiled bytecode to avoid double compilation
-                    if let Ok(mut cache) = self.compiled_bytecode_cache.lock() {
-                        *cache = Some(bytecode_b64);
-                    }
+                    let mut cache = self.compiled_bytecode_cache.lock();
+                    *cache = Some(bytecode_b64);
                 }
             }
         }
@@ -201,6 +200,6 @@ impl DslConfig {
 
     /// Read the cached compiled bytecode (if any) without consuming it.
     pub(crate) fn get_compiled_bytecode(&self) -> Option<String> {
-        self.compiled_bytecode_cache.lock().ok()?.clone()
+        self.compiled_bytecode_cache.lock().clone()
     }
 }

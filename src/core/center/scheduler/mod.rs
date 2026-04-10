@@ -16,7 +16,7 @@ pub async fn send_list_requests(registry: &ControllerRegistry, pending: &Pending
         let request_id = Uuid::new_v4().to_string();
         let (resp_tx, _resp_rx) = oneshot::channel();
 
-        pending.lock().unwrap().insert(
+        pending.lock().insert(
             request_id.clone(),
             PendingListEntry {
                 sender: resp_tx,
@@ -37,7 +37,7 @@ pub async fn send_list_requests(registry: &ControllerRegistry, pending: &Pending
                 controller_id = %controller_id,
                 "Failed to send ListRequest (stream closed)"
             );
-            pending.lock().unwrap().remove(&request_id);
+            pending.lock().remove(&request_id);
         } else {
             tracing::debug!(
                 component = "scheduler",
@@ -69,7 +69,7 @@ pub async fn run(
             gc_interval.tick().await; // skip first
             loop {
                 gc_interval.tick().await;
-                pending.lock().unwrap().retain(|request_id, entry| {
+                pending.lock().retain(|request_id, entry| {
                     let timed_out = entry.created_at.elapsed() >= list_timeout;
                     if timed_out {
                         tracing::warn!(
@@ -103,7 +103,8 @@ mod tests {
     use super::*;
     use crate::core::common::fed_sync::proto::RegisterRequest;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_send_list_request_registers_pending() {
@@ -126,7 +127,7 @@ mod tests {
         };
 
         // Verify entry is in pending map with a recent timestamp
-        let map = pending.lock().unwrap();
+        let map = pending.lock();
         let entry = map.get(&request_id).expect("request_id should be in pending map");
         assert!(entry.created_at.elapsed().as_secs() < 5);
     }

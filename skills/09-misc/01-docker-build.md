@@ -159,7 +159,7 @@ docker run --rm --platform linux/arm64 -v "$(pwd)":/project edgion-builder \
 | `cargo-chef` 会缓存所有源码编译 | 它主要缓存“依赖层”，源码改动后的最终 build 仍会执行 |
 | `FEATURES` 只影响最终 `cargo build` | 它同样影响 `cargo chef cook` 依赖缓存层 |
 | `Dockerfile.runtime` 可以直接从源码编译 | 不能，它依赖预编译产物目录 |
-| example 构建也会自动带 `edgion-ctl` | `BUILD_TYPE=example` 时不会打包 `edgion-ctl` |
+| example 构建也会自动带 `edgion-cli` | `BUILD_TYPE=example` 时不会打包 `edgion-cli` |
 
 ## 相关
 

@@ -3,7 +3,7 @@
 # conf_sync gRPC mTLS Integration Test
 #
 # Self-contained end-to-end test that verifies:
-#   1. edgion-ctl gen-certs produces valid mTLS certificates
+#   1. edgion-cli gen-certs produces valid mTLS certificates
 #   2. Controller starts gRPC listener with server TLS + client CA verification
 #   3. Gateway connects to Controller via mTLS client cert
 #   4. Configuration synchronisation works correctly over the mTLS channel
@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UTILS_DIR="${SCRIPT_DIR}/../utils"
 CERTS_DIR_SCRIPT="${SCRIPT_DIR}/../gen_certs"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 # Ports — use different gRPC port to avoid conflict with plain-text tests
 CONTROLLER_GRPC_PORT="${EDGION_TEST_MTLS_GRPC_PORT:-50061}"
@@ -191,7 +191,7 @@ start_mtls_environment() {
 
     # ── 1. Check binaries ──
     log_section "Checking binaries"
-    for bin in edgion-controller edgion-gateway edgion-ctl; do
+    for bin in edgion-controller edgion-gateway edgion-cli; do
         if [ ! -f "${PROJECT_ROOT}/target/debug/${bin}" ]; then
             log_error "${bin} not found — run prepare.sh first"
             exit 1
@@ -370,7 +370,7 @@ EOF
     if [ -d "$conf_src" ]; then
         for file in "$conf_src"/*.yaml; do
             [ -f "$file" ] || continue
-            "$EDGION_CTL" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
+            "$EDGION_CLI" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
         done
         log_success "Base config loaded"
     fi
@@ -387,7 +387,7 @@ EOF
         local secret_files
         secret_files=$(find "$generated_secret_dir" -type f \( -name "*.yaml" -o -name "*.yml" \) 2>/dev/null | sort)
         for file in $secret_files; do
-            "$EDGION_CTL" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
+            "$EDGION_CLI" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
         done
         log_success "Generated secrets loaded"
     fi

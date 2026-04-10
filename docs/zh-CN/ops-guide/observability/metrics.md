@@ -37,4 +37,4 @@ spec:
 ## 相关文档
 
 - [访问日志](./access-log.md)
-- [edgion-ctl](../edgion-ctl.md)
+- [edgion-cli](../edgion-cli.md)

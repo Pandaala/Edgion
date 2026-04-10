@@ -92,6 +92,7 @@ en/
 │   └── edgion-plugins/
 │       ├── real-ip.md
 │       ├── rate-limit.md
+│       ├── region-route.md
 │       ├── openid-connect.md
 │       ├── ldap-auth.md
 │       ├── jwe-decrypt.md
@@ -99,7 +100,7 @@ en/
 │       └── ctx-setter.md
 ├── ops-guide/
 │   ├── README.md
-│   ├── edgion-ctl.md
+│   ├── edgion-cli.md
 │   ├── gateway/
 │   │   ├── overview.md
 │   │   ├── gateway-class.md
@@ -169,7 +170,7 @@ zh-CN/
 │   ├── tcp-route/  (same structure as en/)
 │   ├── udp-route/  (same structure as en/)
 │   └── edgion-plugins/
-│       ├── real-ip.md, rate-limit.md, openid-connect.md
+│       ├── real-ip.md, rate-limit.md, region-route.md, openid-connect.md
 │       ├── openid-connect-review-card.md
 │       ├── ldap-auth.md, jwe-decrypt.md, forward-auth.md, ctx-setter.md
 ├── ops-guide/  (same structure as en/)

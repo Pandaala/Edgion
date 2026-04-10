@@ -2,8 +2,8 @@ use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use crate::types::prelude_resources::GatewayClass;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
+use parking_lot::RwLock;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 /// Global store for GatewayClass resources (keyed by key_name())
 static GATEWAY_CLASS_STORE: std::sync::LazyLock<RwLock<HashMap<String, GatewayClass>>> =
@@ -11,19 +11,19 @@ static GATEWAY_CLASS_STORE: std::sync::LazyLock<RwLock<HashMap<String, GatewayCl
 
 /// Count GatewayClass resources in the store
 pub fn count_gateway_classes() -> usize {
-    GATEWAY_CLASS_STORE.read().unwrap().len()
+    GATEWAY_CLASS_STORE.read().len()
 }
 
 /// Query GatewayClass by name (cluster-scoped: key == name)
 #[allow(dead_code)]
 pub fn get_gateway_class_by_name(name: &str) -> Option<GatewayClass> {
-    GATEWAY_CLASS_STORE.read().unwrap().get(name).cloned()
+    GATEWAY_CLASS_STORE.read().get(name).cloned()
 }
 
 /// List all GatewayClass resources
 #[allow(dead_code)]
 pub fn list_gateway_classes() -> Vec<GatewayClass> {
-    let mut items: Vec<GatewayClass> = GATEWAY_CLASS_STORE.read().unwrap().values().cloned().collect();
+    let mut items: Vec<GatewayClass> = GATEWAY_CLASS_STORE.read().values().cloned().collect();
     items.sort_by(|a, b| a.name_any().cmp(&b.name_any()));
     items
 }
@@ -50,7 +50,7 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
             "GatewayClass full_set: received {} GatewayClass resources",
             data.len()
         );
-        let mut store = GATEWAY_CLASS_STORE.write().unwrap();
+        let mut store = GATEWAY_CLASS_STORE.write();
         *store = arc_map_to_owned(data);
     }
 
@@ -60,7 +60,7 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
         update: HashMap<String, Arc<GatewayClass>>,
         remove: HashSet<String>,
     ) {
-        let mut store = GATEWAY_CLASS_STORE.write().unwrap();
+        let mut store = GATEWAY_CLASS_STORE.write();
 
         if !add.is_empty() {
             tracing::info!(
@@ -116,7 +116,7 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::HashMap;
 
-    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     fn make_gateway_class(name: &str) -> GatewayClass {
         GatewayClass {
@@ -134,12 +134,12 @@ mod tests {
     }
 
     fn clear_store() {
-        GATEWAY_CLASS_STORE.write().unwrap().clear();
+        GATEWAY_CLASS_STORE.write().clear();
     }
 
     #[test]
     fn test_full_set_replaces_existing() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = GatewayClassHandler::new();
 
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_add_deduplicates() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = GatewayClassHandler::new();
 
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_update_overwrites_existing() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = GatewayClassHandler::new();
 
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_update_miss_inserts() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = GatewayClassHandler::new();
 
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_remove_works() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = GatewayClassHandler::new();
 
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_remove_miss_does_not_panic() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = GatewayClassHandler::new();
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_list_and_count() {
-        let _g = TEST_MUTEX.lock().unwrap();
+        let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = GatewayClassHandler::new();
 

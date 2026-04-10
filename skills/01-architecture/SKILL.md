@@ -38,7 +38,7 @@ Edgion 是单 Crate、三 bin 的项目。**Controller 决策，Gateway 执行�
        ▲                                             │  Metrics  (:5901)                      │
        │ HTTP API                                    └───────────────────────────────────────┘
 ┌──────┴───────┐
-│ edgion-ctl   │
+│ edgion-cli   │
 │ (CLI 工具)   │
 │              │
 │ apply/delete │
@@ -52,7 +52,7 @@ Edgion 是单 Crate、三 bin 的项目。**Controller 决策，Gateway 执行�
 
 - **edgion-controller**（控制面）：从 K8s API 或本地文件接收资源，经校验/预解析/处理后通过 gRPC 推送给 Gateway。负责状态回写、跨资源依赖管理、ACME 证书签发。
 - **edgion-gateway**（数据面）：基于 Pingora 的高性能代理，从 Controller 接收配置后处理实际流量。支持 HTTP/gRPC/TCP/TLS/UDP，具备插件系统和多种负载均衡策略。
-- **edgion-ctl**（CLI 工具）：通过 HTTP API 与 Controller/Gateway 交互，提供资源 CRUD、状态查询和运维操作。
+- **edgion-cli**（CLI 工具）：通过 HTTP API 与 Controller/Gateway 交互，提供资源 CRUD、状态查询和运维操作。
 
 ## 阅读指引
 
@@ -62,7 +62,7 @@ Edgion 是单 Crate、三 bin 的项目。**Controller 决策，Gateway 执行�
 | Controller 内部如何处理资源 | [01-controller/](01-controller/SKILL.md) |
 | Gateway 如何处理请求 | [02-gateway/](02-gateway/SKILL.md) |
 | Controller 和 Gateway 如何同步 | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
-| edgion-ctl 命令和 target 模式 | [04-ctl/](04-ctl/SKILL.md) |
+| edgion-cli 命令和 target 模式 | [04-ctl/](04-ctl/SKILL.md) |
 | 某种具体资源的完整处理链路 | [05-resources/](05-resources/SKILL.md) |
 | 排查路由不匹配 | [02-gateway/03-routes/00-route-matching.md](02-gateway/03-routes/00-route-matching.md) |
 | 排查 TLS 证书问题 | [02-gateway/04-tls/](02-gateway/04-tls/) |
@@ -126,7 +126,7 @@ Edgion 是单 Crate、三 bin 的项目。**Controller 决策，Gateway 执行�
 
 ConfigSync 协议（GetServerInfo / List / Watch / WatchServerMeta），Controller 侧 ConfigSyncServer + Gateway 侧 ConfigSyncClient 的实现。
 
-### [04-ctl/](04-ctl/SKILL.md) — edgion-ctl 架构
+### [04-ctl/](04-ctl/SKILL.md) — edgion-cli 架构
 
 CLI 工具：3 种 target 模式（center/server/client）、apply/delete/get/reload 子命令。
 

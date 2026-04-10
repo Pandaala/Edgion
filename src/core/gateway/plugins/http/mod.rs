@@ -27,6 +27,7 @@ pub mod proxy_rewrite;
 pub mod rate_limit;
 pub mod rate_limit_redis;
 pub mod real_ip;
+pub mod region_route;
 pub mod request_mirror;
 pub mod request_restriction;
 pub mod response_rewrite;
@@ -53,6 +54,7 @@ pub use proxy_rewrite::ProxyRewrite;
 pub use rate_limit::RateLimit;
 pub use rate_limit_redis::RateLimitRedis;
 pub use real_ip::RealIp;
+pub use region_route::RegionRoute;
 pub use request_mirror::RequestMirrorPlugin;
 pub use request_restriction::RequestRestriction;
 pub use response_rewrite::ResponseRewrite;
@@ -62,6 +64,6 @@ pub use crate::types::resources::edgion_plugins::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
-    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
     RequestRestrictionConfig, ResponseRewriteConfig,
 };
