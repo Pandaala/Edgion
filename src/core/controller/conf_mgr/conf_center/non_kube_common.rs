@@ -108,9 +108,32 @@ impl CenterBase {
 
     async fn wait_registry_ready(&self, timeout_secs: u64, component: &str) {
         let registry = &self.runtime.processor_registry;
+        let timeout = Duration::from_secs(timeout_secs);
+        let start = std::time::Instant::now();
+        let notify = registry.ready_notify.clone();
+
+        // Phase A: wait for all processors to be registered (Phase 1 + Phase 2).
+        while !registry.is_registration_complete() {
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
+                tracing::warn!(
+                    component = component,
+                    timeout_secs = timeout_secs,
+                    "Timeout waiting for processor registration to complete, proceeding anyway"
+                );
+                return;
+            }
+            let remaining = timeout - elapsed;
+            let _ =
+                tokio::time::timeout(remaining.min(Duration::from_secs(1)), notify.notified())
+                    .await;
+        }
+
+        // Phase B: wait for all registered processors to become ready.
+        let remaining = timeout.saturating_sub(start.elapsed());
         let all_kinds = registry.all_kinds();
         let ready = registry
-            .wait_kinds_ready(&all_kinds, Duration::from_secs(timeout_secs))
+            .wait_kinds_ready(&all_kinds, remaining)
             .await;
         if !ready {
             tracing::warn!(
@@ -469,6 +492,8 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
         total = handles.len(),
         "All resource controllers spawned"
     );
+
+    runtime.processor_registry.mark_registration_complete();
 
     Ok(handles)
 }

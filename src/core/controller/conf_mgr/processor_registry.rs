@@ -7,6 +7,7 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,9 +28,13 @@ pub struct ProcessorRegistry {
     /// All processors indexed by kind name
     processors: RwLock<HashMap<&'static str, Arc<dyn ProcessorObj>>>,
 
-    /// Notified whenever any processor transitions to ready.
-    /// Used by `wait_kinds_ready` to avoid busy-polling.
-    ready_notify: Arc<Notify>,
+    /// Notified whenever any processor transitions to ready or registration completes.
+    /// Used by `wait_kinds_ready` and `wait_registry_ready` to avoid busy-polling.
+    pub(crate) ready_notify: Arc<Notify>,
+
+    /// Set to `true` after all processors have been registered (Phase 1 + Phase 2).
+    /// Prevents the lifecycle from reading `all_kinds()` before registration is complete.
+    registration_complete: AtomicBool,
 }
 
 impl ProcessorRegistry {
@@ -38,6 +43,7 @@ impl ProcessorRegistry {
         Self {
             processors: RwLock::new(HashMap::new()),
             ready_notify: Arc::new(Notify::new()),
+            registration_complete: AtomicBool::new(false),
         }
     }
 
@@ -47,6 +53,20 @@ impl ProcessorRegistry {
     /// is marked ready. Wakes all tasks waiting in `wait_kinds_ready`.
     pub fn notify_ready(&self) {
         self.ready_notify.notify_waiters();
+    }
+
+    /// Mark that all processors have been registered (Phase 1 + Phase 2 complete).
+    ///
+    /// Called by `spawn_all_controllers` after both phases finish spawning.
+    /// Wakes any task waiting in `wait_registry_ready`.
+    pub fn mark_registration_complete(&self) {
+        self.registration_complete.store(true, Ordering::Release);
+        self.ready_notify.notify_waiters();
+    }
+
+    /// Check whether processor registration is complete.
+    pub fn is_registration_complete(&self) -> bool {
+        self.registration_complete.load(Ordering::Acquire)
     }
 
     /// Register a processor
@@ -249,6 +269,7 @@ impl ProcessorRegistry {
     pub fn clear_processors(&self) {
         tracing::info!(component = "processor_registry", "Clearing processors map");
         self.processors.write().clear();
+        self.registration_complete.store(false, Ordering::Release);
     }
 }
 

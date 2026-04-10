@@ -272,8 +272,7 @@ mod tests {
             .header("Authorization", "Bearer ")
             .body(Body::empty())
             .unwrap();
-        // "Bearer " has length 7, token part is empty string
-        let token = extract_bearer_token(&request);
-        assert_eq!(token, Some(String::new()));
+        // "Bearer " with no actual token should return None
+        assert!(extract_bearer_token(&request).is_none());
     }
 }

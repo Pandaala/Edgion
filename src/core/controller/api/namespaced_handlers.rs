@@ -44,7 +44,9 @@ pub async fn list_all_namespaces(
     Query(pagination): Query<PaginationQuery>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let (data, continue_token) = state.center_list_resources(kind, pagination.into_list_options()).await?;
+    let (data, continue_token) = state
+        .center_list_resources(kind, pagination.into_list_options())
+        .await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
 
