@@ -54,12 +54,7 @@ pub fn upstream_response_body_filter(
             );
             if let Some(runtime) = get_global_plugin_store().get_plugin_runtime(&plugin_key) {
                 if runtime.upstream_response_body_plugins_count() > 0 {
-                    if let Some(delay) = runtime.run_upstream_response_body_plugins(
-                        session,
-                        ctx,
-                        body,
-                        end_of_stream,
-                    ) {
+                    if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
                         max_delay = Some(match max_delay {
                             Some(current) => current.max(delay),
                             None => delay,

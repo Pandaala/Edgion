@@ -65,11 +65,6 @@ boringssl = [
     "dep:boring",
 ]
 
-openssl = [
-    "pingora-core/openssl",
-    "pingora-proxy/openssl",
-]
-
 rustls = [
     "pingora-core/rustls",
     "pingora-proxy/rustls",
@@ -119,9 +114,6 @@ futures = "0.3.31"
 # HTTP server
 axum = { version = "0.8.8", features = ["macros", "ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
-tower-http = { version = "0.6", features = ["fs"] }  # Only for static files
-rust-embed = { version = "8.11" }  # For embedding frontend
-mime_guess = "2.0"
 
 # Utilities
 bytes = "1.11.1"

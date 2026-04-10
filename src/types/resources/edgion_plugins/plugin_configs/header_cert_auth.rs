@@ -84,11 +84,11 @@ pub struct HeaderCertAuthConfig {
 
     // === Header mode CA verification ===
     /// CA Secret references for Header mode certificate verification.
+    ///
+    /// All certs in the referenced secrets are loaded as direct trust anchors.
+    /// Include both root and intermediate CA certs if the leaf is signed by an intermediate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ca_secret_refs: Vec<SecretObjectReference>,
-    /// Certificate verify depth.
-    #[serde(default = "default_verify_depth")]
-    pub verify_depth: u8,
 
     // === Identity mapping ===
     /// Skip consumer mapping and pass cert DN/SAN directly.
@@ -133,9 +133,6 @@ fn default_true() -> bool {
 fn default_cert_header_name() -> String {
     "X-Client-Cert".to_string()
 }
-fn default_verify_depth() -> u8 {
-    1
-}
 fn default_error_status() -> u16 {
     401
 }
@@ -174,7 +171,6 @@ impl Default for HeaderCertAuthConfig {
             certificate_header_format: CertHeaderFormat::Base64Encoded,
             hide_credentials: default_true(),
             ca_secret_refs: Vec::new(),
-            verify_depth: default_verify_depth(),
             skip_consumer_lookup: false,
             consumer_by: ConsumerBy::SanOrCn,
             upstream_headers: UpstreamHeaderConfig::default(),
@@ -198,9 +194,6 @@ impl HeaderCertAuthConfig {
             s.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
         }
 
-        if self.verify_depth == 0 {
-            return Some("verifyDepth must be >= 1".to_string());
-        }
         if !(400..=599).contains(&self.error_status) {
             return Some("errorStatus must be within 400..=599".to_string());
         }

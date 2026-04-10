@@ -100,8 +100,8 @@ docker build \
 ```bash
 docker build \
   --build-arg BINARY=edgion-gateway \
-  --build-arg FEATURES="allocator-jemalloc,openssl" \
-  -t edgion/edgion-gateway:openssl \
+  --build-arg FEATURES="allocator-jemalloc,rustls" \
+  -t edgion/edgion-gateway:rustls \
   -f docker/Dockerfile .
 ```
 

@@ -61,12 +61,25 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .as_ref()
             .or(tls.metadata.namespace.as_ref());
 
-        if ctx
+        if let Some(secret) = ctx
             .runtime()
             .secret_store
             .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
-            .is_none()
         {
+            // Secret found — check cert/key matching
+            if let Some(data) = secret.data.as_ref() {
+                use crate::types::constants::secret_keys::tls::{CERT, KEY};
+
+                let cert_pem = data.get(CERT).and_then(|b| std::str::from_utf8(&b.0).ok());
+                let key_pem = data.get(KEY).and_then(|b| std::str::from_utf8(&b.0).ok());
+
+                if let (Some(cert_str), Some(key_str)) = (cert_pem, key_pem) {
+                    if let Err(e) = crate::core::gateway::tls::validation::check_key_matches_cert(cert_str, key_str) {
+                        warnings.push(e.to_string());
+                    }
+                }
+            }
+        } else {
             let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
             warnings.push(format!("Secret '{}' not found (may arrive later)", secret_key));
         }
@@ -534,6 +547,89 @@ mod tests {
         assert!(
             !conditions.iter().any(|c| c.type_ == "Ready"),
             "Ready should not be set"
+        );
+    }
+
+    /// Build a HandlerContext with a Secret (cert_pem + key_pem) populated in the secret store.
+    fn make_ctx_with_cert_secret(cert_pem: &str, key_pem: &str) -> HandlerContext {
+        use crate::core::controller::conf_mgr::ControllerRuntime;
+        use crate::types::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::{BTreeMap, HashMap};
+
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(cert_pem.as_bytes().to_vec()));
+        data.insert(KEY.to_string(), ByteString(key_pem.as_bytes().to_vec()));
+
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("test-secret".to_string()),
+                namespace: Some("test-ns".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let mut secrets = HashMap::new();
+        secrets.insert("test-ns/test-secret".to_string(), secret);
+        runtime.secret_store.replace_all(secrets);
+
+        HandlerContext::new(
+            Arc::new(SecretRefManager::new()),
+            None,
+            None,
+            TriggerChain::default(),
+            3,
+            20,
+            runtime,
+        )
+    }
+
+    #[test]
+    fn test_validate_detects_cert_key_mismatch() {
+        use rcgen::{CertificateParams, KeyPair};
+
+        let key_a = KeyPair::generate().unwrap();
+        let cert_a = CertificateParams::new(vec!["example.com".to_string()])
+            .unwrap()
+            .self_signed(&key_a)
+            .unwrap();
+        let key_b = KeyPair::generate().unwrap();
+
+        let ctx = make_ctx_with_cert_secret(&cert_a.pem(), &key_b.serialize_pem());
+        let handler = EdgionTlsHandler::default();
+        let tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+
+        let warnings = handler.validate(&tls, &ctx);
+        assert!(
+            warnings.iter().any(|w| w.contains("does not match")),
+            "should detect cert/key mismatch, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_validate_passes_matching_cert_key() {
+        use rcgen::{CertificateParams, KeyPair};
+
+        let key = KeyPair::generate().unwrap();
+        let cert = CertificateParams::new(vec!["example.com".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+
+        let ctx = make_ctx_with_cert_secret(&cert.pem(), &key.serialize_pem());
+        let handler = EdgionTlsHandler::default();
+        let tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+
+        let warnings = handler.validate(&tls, &ctx);
+        assert!(
+            !warnings.iter().any(|w| w.contains("does not match")),
+            "matching cert/key should not produce mismatch warning, got: {:?}",
+            warnings
         );
     }
 }

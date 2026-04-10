@@ -28,8 +28,8 @@ cargo build
 # 发布模式
 cargo build --release
 
-# 指定 TLS 后端
-cargo build --release --no-default-features --features "allocator-jemalloc,openssl"
+# 指定 TLS 后端（rustls 实验构建）
+cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
 
 # 代码检查
 cargo check && cargo clippy && cargo fmt --check
@@ -58,10 +58,9 @@ git tag v0.x.x → push → build-image.yml → Docker Hub pandaala/edgion-*
 |---------|------|------|
 | `allocator-jemalloc` | 使用 jemalloc 内存分配器 | ✅ |
 | `boringssl` | 使用 BoringSSL 作为 TLS 后端 | ✅ |
-| `openssl` | 使用 OpenSSL 作为 TLS 后端 | |
 | `rustls` | 使用 rustls 作为 TLS 后端 | |
 | `allocator-mimalloc` | 使用 mimalloc 内存分配器 | |
 | `allocator-system` | 使用系统默认分配器 | |
 | `legacy_route_tests` | 启用旧版路由测试 | |
 
-> ⚠️ `boringssl`、`openssl`、`rustls` 三选一，不可同时启用。
+> ⚠️ `boringssl`、`rustls` 二选一，不可同时启用。

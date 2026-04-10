@@ -49,6 +49,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 |------|------|------|
 | **PluginConditions regex 必须在 preparse compile** | `conditions/types.rs`, `edgion_plugins/mod.rs` | `compiled_regex` 是 `#[serde(skip)]`，反序列化后为 None。必须在 `EdgionPlugins::preparse()` 阶段调用 `compile_conditions()` 完成编译，否则每请求触发 `Regex::new()`。新增带 regex 的条件类型时，同步在 `Condition::compile()` 加 match 臂。详见 [05-plugin-system.md §条件执行](01-architecture/02-gateway/05-plugin-system.md) |
 | **gRPC H2 grpc-status 必须放 trailers** | Pingora H2 响应路径 | 放在 response headers 里 tonic 会返回 Internal(13)，必须放 trailers |
+| **数据面请求/连接热路径禁止 tracing** | `skills/03-coding/01-log-safety.md` 铁律 3 | 请求/连接处理路径只能用 access log / `PluginLog` / `ctx.err_log` / Metrics，任何 `tracing::` 宏（含 `debug!`）都禁止。例外：配置加载路径、进程启动/关闭、`pg_logging.rs` access log 发送失败。插件 `run_request` / `run_upstream_response` / TLS proxy / stream proxy 全部适用。 |
 
 ## 目录总览
 

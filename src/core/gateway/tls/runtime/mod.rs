@@ -1,8 +1,8 @@
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 pub mod backend;
 
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 pub mod gateway;
 
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 pub use backend::set_mtls_verify_callback;

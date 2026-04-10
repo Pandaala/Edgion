@@ -54,6 +54,29 @@ impl ProxyRewrite {
         utf8_percent_encode(value, QUERY_VALUE_ENCODE_SET).to_string()
     }
 
+    /// Escape `$` signs in a runtime value so that subsequent variable-substitution
+    /// steps do not interpret the value as a variable reference.
+    ///
+    /// We use the NUL byte (`\x00`) as an internal sentinel because it cannot appear
+    /// in well-formed HTTP paths or query parameters.  All escaped `\x00$` sequences
+    /// are restored to `$` in the final step of `resolve_variables`.
+    #[inline]
+    fn escape_dollar(value: &str) -> String {
+        if !value.contains('$') {
+            return value.to_string();
+        }
+        value.replace('$', "\x00$")
+    }
+
+    /// Restore sentinel sequences produced by `escape_dollar`.
+    #[inline]
+    fn unescape_dollar(value: &str) -> String {
+        if !value.contains('\x00') {
+            return value.to_string();
+        }
+        value.replace("\x00$", "$")
+    }
+
     /// Resolve variable substitution in a template string
     ///
     /// Supports:
@@ -61,6 +84,10 @@ impl ProxyRewrite {
     /// - `$arg_<name>` - query parameter value (URL encoded in URI context)
     /// - `$1-$9` - regex capture group references (only when captures is provided)
     /// - `$<name>` - path parameter from route pattern (e.g., `$uid` for route `/api/:uid`)
+    ///
+    /// Each injected value has its `$` signs escaped before insertion so that it cannot
+    /// be re-interpreted as a variable reference by a later substitution step (cross-
+    /// contamination prevention).
     fn resolve_variables(
         &self,
         template: &str,
@@ -71,40 +98,41 @@ impl ProxyRewrite {
     ) -> String {
         let mut result = template.to_string();
 
-        // 1. Replace $uri (not encoded - it's already a valid path)
-        result = result.replace("$uri", original_path);
+        // 1. Replace $uri (not encoded - it's already a valid path).
+        //    Escape $ in the injected path so later steps cannot treat it as a variable.
+        result = result.replace("$uri", &Self::escape_dollar(original_path));
 
-        // 2. Replace $arg_<name> (optionally URL encoded)
+        // 2. Replace $arg_<name> (optionally URL encoded).
+        //    Escape $ in each query param value for the same reason.
         result = ARG_PATTERN
             .replace_all(&result, |caps: &regex::Captures| {
                 let param_name = &caps[1];
                 let value = session.get_query_param(param_name).unwrap_or_default();
-                if encode_values {
-                    Self::url_encode(&value)
-                } else {
-                    value
-                }
+                let encoded = if encode_values { Self::url_encode(&value) } else { value };
+                Self::escape_dollar(&encoded)
             })
             .to_string();
 
-        // 3. Replace capture groups $1-$9
+        // 3. Replace capture groups $1-$9.
+        //    Escape $ in each capture value so step 4 cannot treat it as $<name>.
         if let Some(caps) = captures {
             result = CAPTURE_PATTERN
                 .replace_all(&result, |c: &regex::Captures| {
                     let idx: usize = c[1].parse().unwrap_or(0);
                     let value = caps.get(idx).map(|m| m.as_str()).unwrap_or("");
-                    if encode_values {
+                    let encoded = if encode_values {
                         Self::url_encode(value)
                     } else {
                         value.to_string()
-                    }
+                    };
+                    Self::escape_dollar(&encoded)
                 })
                 .to_string();
         }
 
-        // 4. Replace path parameters $<name> (lazy extraction from route pattern)
-        // This must be done last, after $uri, $arg_xxx, and $1-$9 are replaced
-        // Skip if the matched name is "uri" (already handled) or starts with "arg_"
+        // 4. Replace path parameters $<name> (lazy extraction from route pattern).
+        // This must be done last, after $uri, $arg_xxx, and $1-$9 are replaced.
+        // Skip if the matched name is "uri" (already handled) or starts with "arg_".
         if result.contains('$') {
             // Collect all matches first to avoid borrowing issues
             let matches: Vec<(String, String)> = PATH_PARAM_PATTERN
@@ -123,12 +151,14 @@ impl ProxyRewrite {
             for (full_match, param_name) in matches {
                 if let Some(value) = session.get_path_param(&param_name) {
                     let replacement = if encode_values { Self::url_encode(&value) } else { value };
+                    // Path params are the last substitution step; no need to escape.
                     result = result.replace(&full_match, &replacement);
                 }
             }
         }
 
-        result
+        // Restore any escaped $ signs that were produced by earlier substitution steps.
+        Self::unescape_dollar(&result)
     }
 
     /// Build final URI with original query string preserved
@@ -169,11 +199,13 @@ impl ProxyRewrite {
             }
         } else if let Some(ref regex_uri) = self.config.regex_uri {
             if let Some(caps) = captures {
-                // Replace capture groups $1-$9 directly (path-safe: no encoding of '/')
+                // Replace capture groups $1-$9 directly (path-safe: no encoding of '/').
+                // Escape $ in each capture value so that resolve_variables below does not
+                // re-interpret the captured text as a variable reference.
                 let mut result = regex_uri.replacement.clone();
                 for (i, cap) in caps.iter().enumerate().skip(1) {
                     if let Some(m) = cap {
-                        result = result.replace(&format!("${}", i), m.as_str());
+                        result = result.replace(&format!("${}", i), &Self::escape_dollar(m.as_str()));
                     }
                 }
                 // Resolve remaining variables ($uri, $arg_name, etc.) with proper encoding

@@ -44,14 +44,12 @@ impl StreamPluginRuntime {
             }
 
             // Create plugin based on type
-            let plugin: Option<Arc<dyn StreamPlugin>> = match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(config) => Some(Arc::new(StreamIpRestriction::new(config))),
+            let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
+                EdgionStreamPlugin::IpRestriction(config) => Arc::new(StreamIpRestriction::new(config)),
             };
 
-            if let Some(p) = plugin {
-                tracing::debug!(plugin_name = p.name(), "Added stream plugin to runtime");
-                plugins.push(p);
-            }
+            tracing::debug!(plugin_name = plugin.name(), "Added stream plugin to runtime");
+            plugins.push(plugin);
         }
 
         Self { plugins }

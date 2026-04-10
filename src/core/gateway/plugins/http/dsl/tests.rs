@@ -669,7 +669,10 @@ let b = regex_find("bar-456", "\\d+")
     fn test_regex_find_nil_input_returns_nil() {
         let mut session = MockPluginSession::new();
         // req.header("Missing") returns None → nil; regex_find on nil must return nil, not match "nil"
-        session.expect_header_value().withf(|h| h == "Missing").returning(|_| None);
+        session
+            .expect_header_value()
+            .withf(|h| h == "Missing")
+            .returning(|_| None);
         let result = run(
             r#"let v = regex_find(req.header("Missing"), "nil")
 if v != nil { req.set_header("X-Out", "matched") }"#,
@@ -681,31 +684,31 @@ if v != nil { req.set_header("X-Out", "matched") }"#,
     // Invalid literal pattern → CompileError at compile time
     #[test]
     fn test_regex_find_invalid_literal_pattern_compile_error() {
-        let result = compile_dsl_source(
-            r#"let v = regex_find("foo", "[")"#,
-            &ValidationLimits::default(),
-        );
+        let result = compile_dsl_source(r#"let v = regex_find("foo", "[")"#, &ValidationLimits::default());
         assert!(result.is_err(), "invalid regex literal should fail at compile time");
         let errs = result.unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("invalid regex")), "error should mention invalid regex");
+        assert!(
+            errs.iter().any(|e| e.contains("invalid regex")),
+            "error should mention invalid regex"
+        );
     }
 
     // Literal pattern emits dedicated OpCode::RegexFind / RegexReplace, not CallBuiltin
     #[test]
     fn test_regex_find_literal_emits_dedicated_opcode() {
         use super::super::lang::bytecode::{BuiltinId, CompiledScript, OpCode};
-        let b64 = compile_dsl_source(
-            r#"let v = regex_find("foo-123", "\\d+")"#,
-            &ValidationLimits::default(),
-        )
-        .expect("compile ok");
+        let b64 = compile_dsl_source(r#"let v = regex_find("foo-123", "\\d+")"#, &ValidationLimits::default())
+            .expect("compile ok");
         let script = CompiledScript::deserialize_base64(&b64).expect("deserialize ok");
         assert!(
             script.code.iter().any(|op| matches!(op, OpCode::RegexFind(_))),
             "literal pattern should emit OpCode::RegexFind"
         );
         assert!(
-            !script.code.iter().any(|op| matches!(op, OpCode::CallBuiltin(BuiltinId::RegexFind, _))),
+            !script
+                .code
+                .iter()
+                .any(|op| matches!(op, OpCode::CallBuiltin(BuiltinId::RegexFind, _))),
             "literal pattern should NOT emit CallBuiltin(RegexFind)"
         );
     }
@@ -724,7 +727,10 @@ if v != nil { req.set_header("X-Out", "matched") }"#,
             "literal pattern should emit OpCode::RegexReplace"
         );
         assert!(
-            !script.code.iter().any(|op| matches!(op, OpCode::CallBuiltin(BuiltinId::RegexReplace, _))),
+            !script
+                .code
+                .iter()
+                .any(|op| matches!(op, OpCode::CallBuiltin(BuiltinId::RegexReplace, _))),
             "literal pattern should NOT emit CallBuiltin(RegexReplace)"
         );
     }
@@ -742,7 +748,10 @@ if v != nil { req.set_header("X-Out", "matched") }"#,
     #[test]
     fn test_regex_find_result_too_long() {
         let session = MockPluginSession::new();
-        let limits = VmLimits { max_string_len: 3, ..Default::default() };
+        let limits = VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        };
         // "abcd" matches [a-z]+ fully; result length 4 > limit 3
         let result = run_with_limits(r#"let v = regex_find("abcd", "[a-z]+")"#, session, limits);
         assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
@@ -751,7 +760,10 @@ if v != nil { req.set_header("X-Out", "matched") }"#,
     #[test]
     fn test_regex_replace_result_too_long() {
         let session = MockPluginSession::new();
-        let limits = VmLimits { max_string_len: 3, ..Default::default() };
+        let limits = VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        };
         // "a-b" → "aXXb" (length 4) > limit 3
         let result = run_with_limits(r#"let v = regex_replace("a-b", "-", "XX")"#, session, limits);
         assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));

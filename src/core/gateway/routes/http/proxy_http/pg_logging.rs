@@ -66,7 +66,11 @@ pub async fn logging(
             .and_then(|v| v.to_str().ok())
             .map(|v| v == "test_store")
             .unwrap_or(false);
-        if should_store { Some(entry_json.clone()) } else { None }
+        if should_store {
+            Some(entry_json.clone())
+        } else {
+            None
+        }
     } else {
         None
     };

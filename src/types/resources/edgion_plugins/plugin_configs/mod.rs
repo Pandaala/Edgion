@@ -33,7 +33,8 @@ pub use basic_auth::BasicAuthConfig;
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
 pub use ctx_set::{
-    CaseType, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TransformConfig, TransformType,
+    CaseType, CompiledTemplate, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TemplateSegment,
+    TemplateVarType, TransformConfig, TransformType,
 };
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
 pub use direct_endpoint::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, EndpointExtract};

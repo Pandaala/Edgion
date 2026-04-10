@@ -104,6 +104,11 @@ pub struct CtxSetConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_transform_patterns: HashMap<usize, Regex>,
+
+    /// Compiled templates for variable interpolation (populated during validation)
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub compiled_templates: HashMap<usize, CompiledTemplate>,
 }
 
 /// Rule for setting a single context variable
@@ -316,6 +321,123 @@ pub struct MappingConfig {
 }
 
 // ============================================================================
+// Pre-compiled Template
+// ============================================================================
+
+/// Known template variable types
+#[derive(Debug, Clone)]
+pub enum TemplateVarType {
+    Header,
+    Query,
+    Cookie,
+    Ctx,
+    Path,
+    Method,
+    ClientIp,
+}
+
+impl TemplateVarType {
+    fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "header" => Ok(Self::Header),
+            "query" => Ok(Self::Query),
+            "cookie" => Ok(Self::Cookie),
+            "ctx" => Ok(Self::Ctx),
+            "path" => Ok(Self::Path),
+            "method" => Ok(Self::Method),
+            "clientIp" => Ok(Self::ClientIp),
+            _ => Err(format!("unknown variable type: {}", s)),
+        }
+    }
+}
+
+/// Pre-compiled template segment
+#[derive(Debug, Clone)]
+pub enum TemplateSegment {
+    /// Literal text, output as-is
+    Literal(String),
+    /// Variable reference, resolved at runtime
+    Variable {
+        var_type: TemplateVarType,
+        var_name: Option<String>,
+    },
+}
+
+/// Pre-compiled template for safe evaluation.
+///
+/// By compiling the template at config-load time, runtime evaluation only
+/// iterates over fixed segments and never re-parses `${…}` markers.
+/// This prevents template injection: user-controlled values that contain
+/// `${…}` are emitted as literal text instead of being expanded.
+#[derive(Debug, Clone)]
+pub struct CompiledTemplate {
+    segments: Vec<TemplateSegment>,
+    /// Estimated result length for pre-allocating the output buffer
+    hint_len: usize,
+}
+
+const VAR_HINT_BYTES: usize = 32;
+
+impl CompiledTemplate {
+    /// Compile a template string into segments.
+    /// Returns Err if the template has unclosed `${` or an unknown variable type.
+    pub fn compile(template: &str) -> Result<Self, String> {
+        let mut segments = Vec::new();
+        let mut hint_len: usize = 0;
+        let mut remaining = template;
+
+        while let Some(start) = remaining.find("${") {
+            // Push literal before the `${`
+            if start > 0 {
+                let lit = remaining[..start].to_string();
+                hint_len += lit.len();
+                segments.push(TemplateSegment::Literal(lit));
+            }
+
+            let after_start = &remaining[start + 2..];
+            match after_start.find('}') {
+                Some(end) => {
+                    let var_expr = &after_start[..end];
+                    if var_expr.is_empty() {
+                        return Err("empty variable expression: ${}".to_string());
+                    }
+                    let (var_type_str, var_name) = if let Some(colon_pos) = var_expr.find(':') {
+                        (&var_expr[..colon_pos], Some(var_expr[colon_pos + 1..].to_string()))
+                    } else {
+                        (var_expr, None)
+                    };
+                    let var_type = TemplateVarType::parse(var_type_str)?;
+                    hint_len += VAR_HINT_BYTES;
+                    segments.push(TemplateSegment::Variable { var_type, var_name });
+                    remaining = &after_start[end + 1..];
+                }
+                None => {
+                    return Err(format!("unclosed template variable at: ${{{}", after_start));
+                }
+            }
+        }
+
+        // Push trailing literal
+        if !remaining.is_empty() {
+            hint_len += remaining.len();
+            segments.push(TemplateSegment::Literal(remaining.to_string()));
+        }
+
+        Ok(CompiledTemplate { segments, hint_len })
+    }
+
+    /// Iterate over the compiled segments
+    pub fn segments(&self) -> &[TemplateSegment] {
+        &self.segments
+    }
+
+    /// Estimated output length for pre-allocating buffers
+    pub fn hint_len(&self) -> usize {
+        self.hint_len
+    }
+}
+
+// ============================================================================
 // Validation
 // ============================================================================
 
@@ -325,6 +447,7 @@ impl CtxSetConfig {
         self.validation_error = None;
         self.compiled_patterns.clear();
         self.compiled_transform_patterns.clear();
+        self.compiled_templates.clear();
 
         if self.vars.is_empty() {
             self.validation_error = Some("vars list is empty".to_string());
@@ -391,6 +514,19 @@ impl CtxSetConfig {
                     }
                 }
             }
+
+            // Compile template if present
+            if let Some(ref template) = rule.template {
+                match CompiledTemplate::compile(template) {
+                    Ok(compiled) => {
+                        self.compiled_templates.insert(idx, compiled);
+                    }
+                    Err(e) => {
+                        self.validation_error = Some(format!("vars[{}] '{}': invalid template: {}", idx, rule.name, e));
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -412,6 +548,11 @@ impl CtxSetConfig {
     /// Get compiled transform.replace regex for a rule by index
     pub fn get_compiled_transform_regex(&self, idx: usize) -> Option<&Regex> {
         self.compiled_transform_patterns.get(&idx)
+    }
+
+    /// Get compiled template for a rule by index
+    pub fn get_compiled_template(&self, idx: usize) -> Option<&CompiledTemplate> {
+        self.compiled_templates.get(&idx)
     }
 }
 
@@ -701,5 +842,54 @@ vars:
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("substring start"));
+    }
+
+    #[test]
+    fn test_template_compilation() {
+        let compiled = CompiledTemplate::compile("hello ${header:X-User} from ${clientIp}").unwrap();
+        let segs = compiled.segments();
+        assert_eq!(segs.len(), 4);
+        assert!(matches!(&segs[0], TemplateSegment::Literal(s) if s == "hello "));
+        assert!(
+            matches!(&segs[1], TemplateSegment::Variable { var_type, var_name } if matches!(var_type, TemplateVarType::Header) && var_name.as_deref() == Some("X-User"))
+        );
+        assert!(matches!(&segs[2], TemplateSegment::Literal(s) if s == " from "));
+        assert!(
+            matches!(&segs[3], TemplateSegment::Variable { var_type, var_name } if matches!(var_type, TemplateVarType::ClientIp) && var_name.is_none())
+        );
+        assert!(compiled.hint_len() > 0);
+    }
+
+    #[test]
+    fn test_template_compilation_unclosed() {
+        let result = CompiledTemplate::compile("hello ${header:X-User");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_template_compilation_unknown_var_type() {
+        let result = CompiledTemplate::compile("${unknown:foo}");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown variable type"));
+    }
+
+    #[test]
+    fn test_template_compilation_no_variables() {
+        let compiled = CompiledTemplate::compile("just a literal string").unwrap();
+        assert_eq!(compiled.segments().len(), 1);
+        assert!(matches!(&compiled.segments()[0], TemplateSegment::Literal(s) if s == "just a literal string"));
+    }
+
+    #[test]
+    fn test_template_validation_catches_unclosed() {
+        let yaml = r#"
+vars:
+  - name: bad_template
+    template: "hello ${header:oops"
+"#;
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+        config.validate();
+        assert!(!config.is_valid());
+        assert!(config.get_validation_error().unwrap().contains("invalid template"));
     }
 }

@@ -406,16 +406,18 @@ fn extract_cors_config_from_route_filters(
         }
 
         let key = format!("{}/{}", namespace, ext_ref.name);
-        let cors = get_global_plugin_store().with_plugin(&key, |p| {
-            p.spec.request_plugins.as_ref()?.iter().find_map(|entry| {
-                if let EdgionPlugin::Cors(cfg) = &entry.plugin {
-                    if entry.is_enabled() {
-                        return Some(Arc::new(cfg.clone()));
+        let cors = get_global_plugin_store()
+            .with_plugin(&key, |p| {
+                p.spec.request_plugins.as_ref()?.iter().find_map(|entry| {
+                    if let EdgionPlugin::Cors(cfg) = &entry.plugin {
+                        if entry.is_enabled() {
+                            return Some(Arc::new(cfg.clone()));
+                        }
                     }
-                }
-                None
+                    None
+                })
             })
-        }).flatten();
+            .flatten();
         if cors.is_some() {
             return cors;
         }

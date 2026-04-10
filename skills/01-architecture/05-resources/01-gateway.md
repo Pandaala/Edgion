@@ -47,7 +47,7 @@ Gateway 是 Edgion 的核心资源，定义网关的 Listener（监听端口、�
 - **Listener 级别**（每个 Listener 独立）：
   - `Accepted`：无 validation_errors 时为 True
   - `Conflicted`：同一 Gateway 内 Listener 端口冲突时为 True（不跨 Gateway 检测）
-  - `ResolvedRefs`：检查 certificateRef 的 kind（必须为 Secret）、Secret 是否存在、Secret 数据是否合法（包含 tls.crt/tls.key、非空、有效 PEM）、跨命名空间引用是否被 ReferenceGrant 允许
+  - `ResolvedRefs`：检查 certificateRef 的 kind（必须为 Secret）、Secret 是否存在、Secret 数据是否合法（包含 tls.crt/tls.key、非空、有效 PEM、**cert/key 公钥匹配**）、跨命名空间引用是否被 ReferenceGrant 允许
   - `supportedKinds`：基于协议计算支持的路由类型（HTTP/HTTPS → HTTPRoute+GRPCRoute，TCP → TCPRoute，UDP → UDPRoute，TLS → TLSRoute），如果 `allowedRoutes.kinds` 中有不匹配的类型则报 InvalidRouteKind
   - `attachedRoutes`：从 AttachedRouteTracker 获取挂载的路由数量
 - **Addresses**：按优先级派生：spec.addresses > 同名 Service 的 ClusterIP > 默认地址配置 > "0.0.0.0"

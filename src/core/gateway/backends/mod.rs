@@ -29,13 +29,13 @@ use crate::types::resources::BackendTLSPolicy;
 use crate::types::{ConsistentHashOn, EdgionHttpContext, HTTPBackendRef, ParsedLBPolicy};
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 use pingora_core::protocols::tls::CaType;
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 use pingora_core::tls::pkey::PKey;
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 use pingora_core::tls::x509::X509;
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 use pingora_core::utils::tls::CertKey;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
@@ -573,7 +573,7 @@ fn extract_tls_config(policy: &Option<Arc<BackendTLSPolicy>>) -> (bool, String) 
         .unwrap_or((false, String::new()))
 }
 
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey>>, EdgionStatus> {
     let Some(secret) = &policy.spec.resolved_client_certificate else {
         return Ok(None);
@@ -589,7 +589,7 @@ fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey
     Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
 }
 
-#[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+#[cfg(not(feature = "boringssl"))]
 fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, EdgionStatus> {
     if policy.spec.resolved_client_certificate.is_some() {
         tracing::warn!(
@@ -600,7 +600,7 @@ fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, E
     Ok(None)
 }
 
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 fn build_client_cert_key_from_secret(
     secret: &k8s_openapi::api::core::v1::Secret,
 ) -> Result<Option<Arc<CertKey>>, EdgionStatus> {
@@ -614,7 +614,7 @@ fn build_client_cert_key_from_secret(
     Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
 }
 
-#[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+#[cfg(not(feature = "boringssl"))]
 fn build_client_cert_key_from_secret(
     _secret: &k8s_openapi::api::core::v1::Secret,
 ) -> Result<Option<Arc<()>>, EdgionStatus> {
@@ -622,7 +622,7 @@ fn build_client_cert_key_from_secret(
     Ok(None)
 }
 
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 fn build_ca_chain(policy: &BackendTLSPolicy) -> Option<Arc<CaType>> {
     let mut ca_chain = Vec::new();
     for secret in policy.spec.resolved_ca_certificates.as_ref()? {
@@ -644,7 +644,7 @@ fn build_ca_chain(policy: &BackendTLSPolicy) -> Option<Arc<CaType>> {
     }
 }
 
-#[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+#[cfg(not(feature = "boringssl"))]
 fn build_ca_chain(_policy: &BackendTLSPolicy) -> Option<Arc<()>> {
     None
 }
@@ -658,13 +658,13 @@ fn create_tls_peer(
         // No BackendTLSPolicy — check Gateway-level default client cert
         if let Some(gw_key) = gateway_key {
             if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
-                #[cfg(any(feature = "boringssl", feature = "openssl"))]
+                #[cfg(feature = "boringssl")]
                 if let Some(cert_key) = build_client_cert_key_from_secret(&gw_secret)? {
                     let peer = HttpPeer::new_mtls(addr, String::new(), cert_key);
                     return Ok(Box::new(peer));
                 }
 
-                #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+                #[cfg(not(feature = "boringssl"))]
                 let _ = gw_secret;
             }
         }
@@ -673,7 +673,7 @@ fn create_tls_peer(
 
     let sni = policy.spec.validation.hostname.clone();
 
-    #[cfg(any(feature = "boringssl", feature = "openssl"))]
+    #[cfg(feature = "boringssl")]
     let mut peer = if let Some(cert_key) = build_client_cert_key(policy)? {
         HttpPeer::new_mtls(addr, sni.clone(), cert_key)
     } else if let Some(gw_key) = gateway_key {
@@ -691,10 +691,10 @@ fn create_tls_peer(
         HttpPeer::new(addr, true, sni)
     };
 
-    #[cfg(not(any(feature = "boringssl", feature = "openssl")))]
+    #[cfg(not(feature = "boringssl"))]
     let mut peer = HttpPeer::new(addr, true, sni);
 
-    #[cfg(any(feature = "boringssl", feature = "openssl"))]
+    #[cfg(feature = "boringssl")]
     if !policy.spec.use_system_ca {
         if let Some(ca_chain) = build_ca_chain(policy) {
             peer.options.ca = Some(ca_chain);
@@ -706,7 +706,7 @@ fn create_tls_peer(
     // Set upstream TLS handshake complete hook for SAN validation
     // Also set group_key to isolate connection pools per policy, preventing
     // connections with different SAN requirements from being reused.
-    #[cfg(any(feature = "boringssl", feature = "openssl"))]
+    #[cfg(feature = "boringssl")]
     if let Some(ref policy_sans) = policy.spec.validation.subject_alt_names {
         if !policy_sans.is_empty() {
             use std::hash::{Hash, Hasher};

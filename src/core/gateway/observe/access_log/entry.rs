@@ -82,9 +82,7 @@ impl<'a> AccessLogEntry<'a> {
                 let denylist = get_ctx_log_denylist();
                 ctx.ctx_map
                     .iter()
-                    .filter(|(k, _)| {
-                        !k.starts_with('_') && !denylist.iter().any(|d| contains_ignore_ascii_case(k, d))
-                    })
+                    .filter(|(k, _)| !k.starts_with('_') && !denylist.iter().any(|d| contains_ignore_ascii_case(k, d)))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect()
             },

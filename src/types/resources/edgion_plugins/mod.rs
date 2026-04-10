@@ -28,8 +28,8 @@ pub use entry::{
 };
 pub use plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CaseType, CertHeaderFormat, CertSourceMode,
-    ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction,
-    DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, DomainTarget, DslConfig,
+    CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig,
+    DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, DomainTarget, DslConfig,
     DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicExternalUpstreamConfig,
     DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtUpstreamExtract, ExtUpstreamOnMissing,
     ExtUpstreamOnNoMatch, ExtractConfig, ForwardAuthConfig, HeaderActions, HeaderCertAuthConfig, HeaderEntry,
@@ -39,7 +39,8 @@ pub use plugin_configs::{
     OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
     RateLimitRedisConfig, RealIpConfig, RegexUri, ReplaceConfig, RequestRestrictionConfig, ResolvedJweCredential,
     ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource,
-    RuleMatchMode, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
+    RuleMatchMode, TemplateSegment, TemplateVarType, TransformConfig, TransformType, UnauthAction,
+    UpstreamHeaderConfig, VerificationMode,
 };
 
 /// API group for EdgionPlugins
@@ -204,7 +205,8 @@ impl EdgionPlugins {
         }
 
         if let Some(upstream_response_filter_plugins) = &self.spec.upstream_response_filter_plugins {
-            let filter_errors = runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, &namespace);
+            let filter_errors =
+                runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, &namespace);
             errors.extend(filter_errors);
         }
 
@@ -239,8 +241,14 @@ impl EdgionPlugins {
             };
         }
         compile_entries!(self.spec.request_plugins, "requestPlugins");
-        compile_entries!(self.spec.upstream_response_filter_plugins, "upstreamResponseFilterPlugins");
-        compile_entries!(self.spec.upstream_response_body_filter_plugins, "upstreamResponseBodyFilterPlugins");
+        compile_entries!(
+            self.spec.upstream_response_filter_plugins,
+            "upstreamResponseFilterPlugins"
+        );
+        compile_entries!(
+            self.spec.upstream_response_body_filter_plugins,
+            "upstreamResponseBodyFilterPlugins"
+        );
         compile_entries!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
     }
 

@@ -72,7 +72,6 @@ src/core/gateway/
 ├── services/     # Gateway 侧服务（ACME challenge）
 └── tls/          # TLS 管理
     ├── boringssl/    # BoringSSL 后端（feature）
-    ├── openssl/      # OpenSSL 后端（feature）
     ├── runtime/      # 下游/上游 TLS 回调
     ├── store/        # 证书存储 + SNI 匹配
     └── validation/   # 证书验证

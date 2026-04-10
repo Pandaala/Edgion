@@ -8,7 +8,7 @@ Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller�
 **四个二进制**：Controller（K8s 资源处理）、Gateway（数据面代理）、edgion-ctl（CLI 调试工具）、Center（联邦中心）。
 
 **Feature Flags**（互斥，构建时注意）：
-- TLS 后端：`boringssl`（默认）| `openssl` | `rustls`
+- TLS 后端：`boringssl`（默认）| `rustls`
 - 内存分配器：`allocator-jemalloc`（默认）| `allocator-mimalloc` | `allocator-system`
 
 ## 知识体系

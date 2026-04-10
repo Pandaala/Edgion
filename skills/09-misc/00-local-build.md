@@ -50,9 +50,6 @@ cargo build --release --example test_server --example test_client
 # 默认：jemalloc + boringssl
 cargo build
 
-# OpenSSL
-cargo build --release --no-default-features --features "allocator-jemalloc,openssl"
-
 # rustls 实验构建
 cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
 

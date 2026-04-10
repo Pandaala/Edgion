@@ -9,7 +9,7 @@ use pingora_core::apps::ServerApp;
 use pingora_core::connectors::TransportConnector;
 use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
-#[cfg(any(feature = "boringssl", feature = "openssl"))]
+#[cfg(feature = "boringssl")]
 use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
@@ -18,8 +18,6 @@ use crate::core::gateway::backends::{resolve_target_port, select_roundrobin_back
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::observe::AccessLogger;
-use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
-use crate::core::gateway::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
 use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::{ListenerKey, MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
@@ -180,7 +178,7 @@ impl ServerApp for EdgionTlsTcpProxy {
 impl EdgionTlsTcpProxy {
     /// Extract SNI hostname from TLS stream
     fn extract_sni(#[allow(unused_variables)] stream: &mut Stream) -> Option<String> {
-        #[cfg(any(feature = "boringssl", feature = "openssl"))]
+        #[cfg(feature = "boringssl")]
         {
             if let Some(ssl_ref) = stream.get_ssl() {
                 if let Some(sni) = ssl_ref.servername(NameType::HOST_NAME) {
@@ -381,80 +379,13 @@ impl EdgionTlsTcpProxy {
     }
 
     /// Execute TLS route plugins (Stage 2).
-    ///
-    /// Tries `tls_route_plugin_runtime` first (new stage-aware path).
-    /// Falls back to `stream_plugin_runtime` for backward compatibility
-    /// when `tls_route_plugins` is absent but `plugins` is present on the resource.
-    ///
-    /// Returns `true` to proceed, `false` to reject the connection.
     async fn run_tls_route_plugins(
         &self,
         rule: &crate::types::resources::tls_route::TLSRouteRule,
         ctx: &mut TlsContext,
         sni: &str,
     ) -> bool {
-        let Some(store_key) = &rule.stream_plugin_store_key else {
-            return true;
-        };
-        let Ok(client_ip) = ctx.client_addr.parse() else {
-            return true;
-        };
-
-        let store = get_global_stream_plugin_store();
-        let Some(resource) = store.get(store_key) else {
-            ctx.push_log("stream plugin resource not found, allowing");
-            return true;
-        };
-
-        // Prefer Stage 2 (TlsRoute) runtime
-        let tls_runtime = &resource.spec.tls_route_plugin_runtime;
-        if !tls_runtime.is_empty() {
-            let tls_ctx = TlsRouteContext {
-                client_ip,
-                listener_port: self.listener_port,
-                sni: sni.to_string(),
-                tls_id: ctx.tls_id.clone(),
-                rsc: ctx
-                    .matched
-                    .as_ref()
-                    .map(|m| m.rsc.clone())
-                    .unwrap_or_else(|| crate::types::Rsc {
-                        kind: "TLSRoute".to_string(),
-                        ns: String::new(),
-                        name: String::new(),
-                    }),
-                is_mtls: ctx.is_mtls,
-            };
-            return match tls_runtime.run(&tls_ctx).await {
-                StreamPluginResult::Allow => {
-                    ctx.push_log("tls route plugin allowed");
-                    true
-                }
-                StreamPluginResult::Deny(reason) => {
-                    ctx.err_log = Some(format!("tls route plugin denied: {reason}"));
-                    false
-                }
-            };
-        }
-
-        // Backward compat: fall back to Stage 1 (ConnectionFilter) runtime
-        // when the resource only has `plugins` but no `tlsRoutePlugins`.
-        let stream_runtime = &resource.spec.stream_plugin_runtime;
-        if !stream_runtime.is_empty() {
-            let stream_ctx = StreamContext::new(client_ip, self.listener_port);
-            return match stream_runtime.run(&stream_ctx).await {
-                StreamPluginResult::Allow => {
-                    ctx.push_log("stream plugin allowed (compat)");
-                    true
-                }
-                StreamPluginResult::Deny(reason) => {
-                    ctx.err_log = Some(format!("stream plugin denied (compat): {reason}"));
-                    false
-                }
-            };
-        }
-
-        true
+        super::run_tls_route_plugins(rule, ctx, sni, self.listener_port, ctx.tls_id.clone(), ctx.is_mtls).await
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)

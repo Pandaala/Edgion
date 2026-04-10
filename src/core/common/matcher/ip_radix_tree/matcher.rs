@@ -62,7 +62,12 @@ impl IpRadixMatcher {
     pub fn match_ip(&self, ip: &IpAddr) -> Option<bool> {
         match ip {
             IpAddr::V4(ipv4) => self.match_ipv4(ipv4),
-            IpAddr::V6(ipv6) => self.match_ipv6(ipv6),
+            IpAddr::V6(ipv6) => {
+                if let Some(v4) = ipv6.to_ipv4_mapped() {
+                    return self.match_ipv4(&v4);
+                }
+                self.match_ipv6(ipv6)
+            }
         }
     }
 
@@ -309,6 +314,28 @@ mod tests {
         let ipv6_specific: IpAddr = "2001:db8::1".parse().unwrap();
         assert_eq!(matcher.match_ip(&ipv6_general), Some(true));
         assert_eq!(matcher.match_ip(&ipv6_specific), Some(false));
+    }
+
+    #[test]
+    fn test_ipv4_mapped_ipv6() {
+        let mut builder = IpRadixMatcher::builder();
+        builder.insert("192.168.1.0/24", true).unwrap();
+        builder.insert("10.0.0.100/32", false).unwrap();
+
+        let matcher = builder.build().unwrap();
+
+        let v6_allow: Ipv6Addr = "::ffff:192.168.1.50".parse().unwrap();
+        let mapped_allow = IpAddr::V6(v6_allow);
+
+        let v6_deny: Ipv6Addr = "::ffff:10.0.0.100".parse().unwrap();
+        let mapped_deny = IpAddr::V6(v6_deny);
+
+        let v6_no_match: Ipv6Addr = "::ffff:8.8.8.8".parse().unwrap();
+        let mapped_no_match = IpAddr::V6(v6_no_match);
+
+        assert_eq!(matcher.match_ip(&mapped_allow), Some(true));
+        assert_eq!(matcher.match_ip(&mapped_deny), Some(false));
+        assert_eq!(matcher.match_ip(&mapped_no_match), None);
     }
 
     #[test]

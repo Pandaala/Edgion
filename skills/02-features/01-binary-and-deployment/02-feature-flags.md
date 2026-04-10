@@ -27,19 +27,18 @@ cargo build    # 等价于 --features allocator-jemalloc,boringssl
 | `allocator-mimalloc` | Allocator | 否 | 引入 `mimalloc` | 设为全局分配器 |
 | `allocator-system` | Allocator | 否 | 无额外依赖 | 使用系统分配器 |
 | `boringssl` | TLS Backend | 是 | 启用 Pingora BoringSSL + `boring-sys` | 解锁 Gateway TLS 完整运行时路径 |
-| `openssl` | TLS Backend | 否 | 启用 Pingora OpenSSL | 同样解锁 Gateway TLS 完整运行时路径 |
 | `rustls` | TLS Backend | 否 | 启用 Pingora rustls 后端 | **不完全对等**，见下方说明 |
 | `legacy_route_tests` | 独立 | 否 | 仅声明 | 保留/占位，当前无实际 `cfg` 调用点 |
 
 ## 互斥规则
 
 - **Allocator 组**：`jemalloc` / `mimalloc` / `system`，三选一。不要在同一次构建中叠加多个，除非你同时修改了 `src/lib.rs` 中的全局分配器接线。
-- **TLS Backend 组**：`boringssl` / `openssl` / `rustls`，三选一。
+- **TLS Backend 组**：`boringssl` / `rustls`，二选一。
 - 跨组可自由组合。
 
 ## rustls 注意事项
 
-Gateway TLS 运行时代码在多处使用 `#[cfg(any(feature = "boringssl", feature = "openssl"))]` 守卫：
+Gateway TLS 运行时代码在多处使用 `#[cfg(feature = "boringssl")]` 守卫：
 
 - `src/core/gateway/runtime/server/listener_builder.rs`
 - `src/core/gateway/tls/runtime/gateway/mod.rs`
@@ -49,7 +48,7 @@ Gateway TLS 运行时代码在多处使用 `#[cfg(any(feature = "boringssl", fea
 
 - `rustls` 仍用于 Controller / CLI / 客户端侧的 TLS 栈
 - `rustls` 构建 ≠ "所有 Gateway TLS listener 和 backend 运行时功能可用"
-- 如果任务涉及 HTTPS listener、TLSRoute 代理、数据面 TLS 运行时，优先使用 `boringssl` 或 `openssl`
+- 如果任务涉及 HTTPS listener、TLSRoute 代理、数据面 TLS 运行时，使用 `boringssl`
 
 ## Allocator 注意事项
 
@@ -77,6 +76,6 @@ Windows/MSVC 环境下即使指定了 `allocator-jemalloc` feature，实际也�
 |------|------|
 | 默认开发构建 | `cargo build` |
 | 默认 release | `cargo build --release` |
-| mimalloc + OpenSSL | `cargo build --release --no-default-features --features "allocator-mimalloc,openssl"` |
+| mimalloc + BoringSSL | `cargo build --release --no-default-features --features "allocator-mimalloc,boringssl"` |
 | 系统分配器 + BoringSSL | `cargo build --release --no-default-features --features "allocator-system,boringssl"` |
 | rustls 实验 | `cargo build --no-default-features --features "allocator-jemalloc,rustls"` |

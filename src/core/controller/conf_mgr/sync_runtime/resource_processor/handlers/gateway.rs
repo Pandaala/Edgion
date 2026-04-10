@@ -1098,19 +1098,41 @@ fn validate_listener_resolved_refs(
                                 reason: "empty certificate or key data".to_string(),
                             });
                         } else {
-                            if !is_valid_pem(cert_bytes.unwrap()) {
+                            let cert_data = cert_bytes.unwrap();
+                            let key_data = key_bytes.unwrap();
+                            let cert_pem_valid = is_valid_pem(cert_data);
+                            let key_pem_valid = is_valid_pem(key_data);
+
+                            if !cert_pem_valid {
                                 errors.push(GatewayResolvedRefsError::SecretInvalid {
                                     namespace: cert_ns.to_string(),
                                     name: cert_ref.name.clone(),
                                     reason: "invalid certificate PEM data".to_string(),
                                 });
                             }
-                            if !is_valid_pem(key_bytes.unwrap()) {
+                            if !key_pem_valid {
                                 errors.push(GatewayResolvedRefsError::SecretInvalid {
                                     namespace: cert_ns.to_string(),
                                     name: cert_ref.name.clone(),
                                     reason: "invalid private key PEM data".to_string(),
                                 });
+                            }
+
+                            // Check cert/key matching only when both PEMs are valid
+                            if cert_pem_valid && key_pem_valid {
+                                if let (Ok(cert_str), Ok(key_str)) =
+                                    (std::str::from_utf8(cert_data), std::str::from_utf8(key_data))
+                                {
+                                    if let Err(e) =
+                                        crate::core::gateway::tls::validation::check_key_matches_cert(cert_str, key_str)
+                                    {
+                                        errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                            namespace: cert_ns.to_string(),
+                                            name: cert_ref.name.clone(),
+                                            reason: e.to_string(),
+                                        });
+                                    }
+                                }
                             }
                         }
                     }

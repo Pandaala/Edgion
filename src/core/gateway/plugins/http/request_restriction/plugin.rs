@@ -202,7 +202,7 @@ impl RequestFilter for RequestRestriction {
             );
             resp.insert_header("Content-Type", "application/json").ok();
 
-            let body = Bytes::from(format!(r#"{{"message":"{}"}}"#, message));
+            let body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
             // Write response
             if let Err(_e) = session.write_response_header(resp, false).await {

@@ -66,6 +66,10 @@ pub enum CertValidationError {
     MtlsInvalidSanPattern(String),
     /// mTLS: allowed_cns contains invalid pattern
     MtlsInvalidCnPattern(String),
+    /// Chain certificate (intermediate CA) has expired or is not yet valid
+    ChainCertExpired { index: usize, subject: String },
+    /// Chain certificate parse/decode error
+    ChainCertError { index: usize, detail: String },
 }
 
 impl fmt::Display for CertValidationError {
@@ -101,6 +105,16 @@ impl fmt::Display for CertValidationError {
             }
             Self::MtlsInvalidSanPattern(pattern) => write!(f, "mTLS: invalid SAN pattern: {}", pattern),
             Self::MtlsInvalidCnPattern(pattern) => write!(f, "mTLS: invalid CN pattern: {}", pattern),
+            Self::ChainCertExpired { index, subject } => {
+                write!(
+                    f,
+                    "Chain certificate [{}] (subject: {}) is expired or not yet valid",
+                    index, subject
+                )
+            }
+            Self::ChainCertError { index, detail } => {
+                write!(f, "Chain certificate [{}] error: {}", index, detail)
+            }
         }
     }
 }
@@ -122,13 +136,11 @@ impl fmt::Display for CertValidationError {
 pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     let mut errors = Vec::new();
 
-    // 1. Check Secret exists
     if tls.spec.secret.is_none() {
         errors.push(CertValidationError::SecretNotFound);
         return CertValidationResult::invalid(errors);
     }
 
-    // 2. Check certificate exists
     let cert_pem = match tls.cert_pem() {
         Ok(pem) => pem,
         Err(_) => {
@@ -137,39 +149,45 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
         }
     };
 
-    // 3. Check private key exists
     if tls.key_pem().is_err() {
         errors.push(CertValidationError::KeyNotFound);
         // Continue validation even if key is missing
     }
 
-    // 4. Parse certificate and check expiration
-    let (der_data, not_before_ts, not_after_ts) = match parse_and_validate_cert(&cert_pem) {
+    let (der_data, not_before_ts, not_after_ts) = match parse_leaf_cert(&cert_pem) {
         Ok(data) => data,
         Err(e) => {
-            errors.push(CertValidationError::CertParseError(e.to_string()));
+            errors.push(CertValidationError::CertParseError(e));
             return CertValidationResult::invalid(errors);
         }
     };
 
-    // 5. Check expiration
     if let Err(e) = check_expiration(not_before_ts, not_after_ts) {
         errors.push(e);
     }
 
-    // 6. Check SAN matches hosts
-    if let Err(e) = check_san_matches_from_der(&der_data, &tls.spec.hosts) {
-        errors.push(e);
+    check_chain_expiration(&cert_pem, &mut errors);
+
+    // X509Certificate<'_> borrows from der_data, so we re-parse here rather than returning
+    // the cert from parse_leaf_cert (which would require a self-referential struct).
+    match X509Certificate::from_der(&der_data) {
+        Ok((_, leaf_cert)) => {
+            if let Err(e) = check_san_matches(&leaf_cert, &tls.spec.hosts) {
+                errors.push(e);
+            }
+        }
+        Err(e) => {
+            errors.push(CertValidationError::CertParseError(format!("unexpected re-parse failure: {}", e)));
+            return CertValidationResult::invalid(errors);
+        }
     }
 
-    // 7. Check key matches certificate (if key exists)
     if let Ok(key_pem) = tls.key_pem() {
-        if let Err(e) = check_key_valid(&key_pem) {
+        if let Err(e) = check_key_matches_cert(&cert_pem, &key_pem) {
             errors.push(e);
         }
     }
 
-    // 8. Validate mTLS configuration if present
     if let Some(client_auth) = &tls.spec.client_auth {
         validate_mtls_config(client_auth, &mut errors);
     }
@@ -181,24 +199,57 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     }
 }
 
-/// Parse X.509 certificate from PEM string and perform validation
-/// Returns (der_data, not_before_unix_ts, not_after_unix_ts)
-fn parse_and_validate_cert(pem_str: &str) -> Result<(Vec<u8>, i64, i64), String> {
-    // Parse PEM
+/// Parse leaf X.509 certificate from PEM string.
+/// Returns (leaf_der_data, not_before_unix_ts, not_after_unix_ts)
+fn parse_leaf_cert(pem_str: &str) -> Result<(Vec<u8>, i64, i64), String> {
     let pem = Pem::iter_from_buffer(pem_str.as_bytes())
         .next()
         .ok_or_else(|| "No PEM block found".to_string())?
         .map_err(|e| format!("PEM parse error: {}", e))?;
 
-    // Parse X.509
     let der_data = pem.contents.to_vec();
     let (_, cert) = X509Certificate::from_der(&der_data).map_err(|e| format!("X.509 parse error: {}", e))?;
 
-    // Extract validity as Unix timestamps (avoids string roundtrip)
     let not_before_ts = cert.validity().not_before.timestamp();
     let not_after_ts = cert.validity().not_after.timestamp();
 
     Ok((der_data, not_before_ts, not_after_ts))
+}
+
+/// Validate expiration of chain certificates (intermediate CAs) in a PEM bundle.
+fn check_chain_expiration(pem_str: &str, errors: &mut Vec<CertValidationError>) {
+    for (idx, pem_result) in Pem::iter_from_buffer(pem_str.as_bytes()).enumerate().skip(1) {
+        let chain_pem = match pem_result {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(CertValidationError::ChainCertError {
+                    index: idx,
+                    detail: format!("PEM parse error: {}", e),
+                });
+                continue;
+            }
+        };
+        let (_, chain_cert) = match X509Certificate::from_der(&chain_pem.contents) {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(CertValidationError::ChainCertError {
+                    index: idx,
+                    detail: format!("X.509 parse error: {}", e),
+                });
+                continue;
+            }
+        };
+
+        let not_before = chain_cert.validity().not_before.timestamp();
+        let not_after = chain_cert.validity().not_after.timestamp();
+
+        if check_expiration(not_before, not_after).is_err() {
+            errors.push(CertValidationError::ChainCertExpired {
+                index: idx,
+                subject: chain_cert.subject().to_string(),
+            });
+        }
+    }
 }
 
 /// Check if certificate validity period covers current time
@@ -234,22 +285,41 @@ fn check_expiration(not_before_ts: i64, not_after_ts: i64) -> Result<(), CertVal
     Ok(())
 }
 
-/// Check if certificate SAN matches declared hosts from DER data
-fn check_san_matches_from_der(der_data: &[u8], declared_hosts: &[String]) -> Result<(), CertValidationError> {
-    // Parse certificate again for SAN check
-    let (_, cert) = X509Certificate::from_der(der_data)
-        .map_err(|e| CertValidationError::CertParseError(format!("Failed to re-parse cert: {}", e)))?;
+/// Check if certificate SAN matches declared hosts
+fn check_san_matches(cert: &X509Certificate, declared_hosts: &[String]) -> Result<(), CertValidationError> {
+    let mut san_dns_list: Vec<String> = Vec::new();
+    let mut san_ip_list: Vec<std::net::IpAddr> = Vec::new();
+    let mut has_san_extension = false;
 
-    // Extract SAN from certificate
-    let mut san_list = Vec::new();
-
-    // Get Subject Alternative Name extension
     for ext in cert.extensions() {
         if ext.oid == x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME {
+            has_san_extension = true;
             if let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension() {
                 for name in &san.general_names {
-                    if let GeneralName::DNSName(dns) = name {
-                        san_list.push(dns.to_string());
+                    match name {
+                        GeneralName::DNSName(dns) => {
+                            san_dns_list.push(dns.to_string());
+                        }
+                        GeneralName::IPAddress(ip_bytes) => match ip_bytes.len() {
+                            4 => {
+                                san_ip_list.push(
+                                    std::net::Ipv4Addr::new(
+                                        ip_bytes[0],
+                                        ip_bytes[1],
+                                        ip_bytes[2],
+                                        ip_bytes[3],
+                                    )
+                                    .into(),
+                                );
+                            }
+                            16 => {
+                                if let Ok(octets) = <[u8; 16]>::try_from(*ip_bytes) {
+                                    san_ip_list.push(std::net::Ipv6Addr::from(octets).into());
+                                }
+                            }
+                            _ => {}
+                        },
+                        _ => {}
                     }
                 }
             }
@@ -257,11 +327,16 @@ fn check_san_matches_from_der(der_data: &[u8], declared_hosts: &[String]) -> Res
         }
     }
 
-    // If no SAN, try to get CN from subject
-    if san_list.is_empty() {
+    // CN fallback only when certificate has no SAN extension at all (legacy cert compat)
+    if !has_san_extension {
+        tracing::warn!(
+            "Certificate for hosts {:?} has no SAN extension, falling back to CN matching. \
+             This is deprecated per RFC 6125.",
+            declared_hosts
+        );
         if let Some(cn) = cert.subject().iter_common_name().next() {
             if let Ok(cn_str) = cn.as_str() {
-                san_list.push(cn_str.to_string());
+                san_dns_list.push(cn_str.to_string());
             }
         }
     }
@@ -269,15 +344,23 @@ fn check_san_matches_from_der(der_data: &[u8], declared_hosts: &[String]) -> Res
     // Check if all declared hosts are covered by certificate
     let mut missing_hosts = Vec::new();
     for declared_host in declared_hosts {
-        if !is_host_covered(declared_host, &san_list) {
+        let covered = if let Ok(declared_ip) = declared_host.parse::<std::net::IpAddr>() {
+            // RFC 6125 §1.7.2: IP addresses use exact match, no wildcards
+            san_ip_list.iter().any(|ip| *ip == declared_ip)
+        } else {
+            is_host_covered(declared_host, &san_dns_list)
+        };
+        if !covered {
             missing_hosts.push(declared_host.clone());
         }
     }
 
     if !missing_hosts.is_empty() {
+        let mut all_sans = san_dns_list;
+        all_sans.extend(san_ip_list.iter().map(|ip| format!("IP:{}", ip)));
         return Err(CertValidationError::SanMismatch {
             declared: declared_hosts.to_vec(),
-            actual: san_list,
+            actual: all_sans,
         });
     }
 
@@ -286,53 +369,29 @@ fn check_san_matches_from_der(der_data: &[u8], declared_hosts: &[String]) -> Res
 
 /// Check if a declared host is covered by certificate SAN list
 fn is_host_covered(declared: &str, san_list: &[String]) -> bool {
-    let declared_lower = declared.to_lowercase();
-
-    for san in san_list {
-        let san_lower = san.to_lowercase();
-
-        // Exact match
-        if san_lower == declared_lower {
-            return true;
-        }
-
-        // Wildcard match: *.example.com covers api.example.com
-        if let Some(san_suffix) = san_lower.strip_prefix("*.") {
-            // Remove "*."
-            if let Some(dot_pos) = declared_lower.find('.') {
-                let declared_suffix = &declared_lower[dot_pos + 1..];
-                if san_suffix == declared_suffix {
-                    return true;
-                }
-            }
-        }
-
-        // Reverse wildcard: declared *.example.com is covered by *.example.com
-        if declared_lower.starts_with("*.") && san_lower.starts_with("*.") && declared_lower == san_lower {
-            return true;
-        }
-    }
-
-    false
+    san_list.iter().any(|san| super::matches_host_pattern(declared, san))
 }
 
-/// Check if private key is valid
-fn check_key_valid(key_pem: &str) -> Result<(), CertValidationError> {
-    // Parse private key PEM
-    let key_pem_obj = Pem::iter_from_buffer(key_pem.as_bytes())
+/// Check if private key is valid and matches the certificate's public key
+pub(crate) fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), CertValidationError> {
+    let key_pair = rcgen::KeyPair::from_pem(key_pem)
+        .map_err(|e| CertValidationError::KeyParseError(format!("Failed to parse private key: {}", e)))?;
+
+    let pem = Pem::iter_from_buffer(cert_pem.as_bytes())
         .next()
-        .ok_or_else(|| CertValidationError::KeyParseError("No PEM block found".to_string()))?
-        .map_err(|e| CertValidationError::KeyParseError(format!("PEM parse error: {}", e)))?;
+        .ok_or_else(|| CertValidationError::CertParseError("No PEM block found in cert".to_string()))?
+        .map_err(|e| CertValidationError::CertParseError(format!("Cert PEM parse error: {}", e)))?;
 
-    // Basic validation: check if key PEM is valid
-    if key_pem_obj.contents.is_empty() {
-        return Err(CertValidationError::KeyParseError("Empty key content".to_string()));
+    let (_, cert) = X509Certificate::from_der(&pem.contents)
+        .map_err(|e| CertValidationError::CertParseError(format!("X.509 parse error: {}", e)))?;
+    let cert_pubkey_raw = &cert.public_key().subject_public_key.data;
+    let key_pubkey_raw = key_pair.public_key_raw();
+
+    if cert_pubkey_raw.as_ref() != key_pubkey_raw {
+        return Err(CertValidationError::KeyMismatch(
+            "Private key does not match certificate public key".to_string(),
+        ));
     }
-
-    // Note: Full key-certificate matching requires cryptographic operations
-    // which are complex and depend on the key type (RSA, ECDSA, etc.)
-    // For now, we just validate that the key can be parsed
-    // A more complete implementation would verify the public key matches
 
     Ok(())
 }
@@ -613,7 +672,6 @@ mod tests {
         assert!(errors.is_empty(), "Terminate mode should not require CA Secret");
     }
 
-    /// 生成指定有效期的自签名证书，返回 (cert_pem, key_pem)
     fn make_cert_with_validity(not_before_offset_days: i64, not_after_offset_days: i64) -> (String, String) {
         use rcgen::{CertificateParams, KeyPair};
 
@@ -628,6 +686,57 @@ mod tests {
         params.not_after = now + dur_after;
         let cert = params.self_signed(&key_pair).expect("rcgen self-sign failed");
         (cert.pem(), key_pair.serialize_pem())
+    }
+
+    fn make_cert_with_sans(dns_names: Vec<&str>, ip_addrs: Vec<std::net::IpAddr>) -> (String, String) {
+        use rcgen::{CertificateParams, KeyPair, SanType};
+
+        let mut san_types: Vec<SanType> = dns_names
+            .into_iter()
+            .map(|name| SanType::DnsName(name.try_into().unwrap()))
+            .collect();
+        san_types.extend(ip_addrs.into_iter().map(SanType::IpAddress));
+
+        let key_pair = KeyPair::generate().expect("key generation failed");
+        let mut params = CertificateParams::new(vec![]).expect("params failed");
+        params.subject_alt_names = san_types;
+        let cert = params.self_signed(&key_pair).expect("self-sign failed");
+        (cert.pem(), key_pair.serialize_pem())
+    }
+
+    fn make_cert_chain(
+        leaf_not_before_days: i64,
+        leaf_not_after_days: i64,
+        intermediate_not_before_days: i64,
+        intermediate_not_after_days: i64,
+    ) -> (String, String) {
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+
+        let now = ::time::OffsetDateTime::now_utc();
+
+        // Generate intermediate CA
+        let ca_key = KeyPair::generate().expect("CA key gen failed");
+        let mut ca_params =
+            CertificateParams::new(vec!["Edgion Test CA".to_string()]).expect("CA params failed");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.not_before = now + ::time::Duration::days(intermediate_not_before_days);
+        ca_params.not_after = now + ::time::Duration::days(intermediate_not_after_days);
+        let ca_cert = ca_params.self_signed(&ca_key).expect("CA self-sign failed");
+        let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
+
+        // Generate leaf certificate signed by CA
+        let leaf_key = KeyPair::generate().expect("leaf key gen failed");
+        let mut leaf_params =
+            CertificateParams::new(vec!["example.com".to_string()]).expect("leaf params failed");
+        leaf_params.not_before = now + ::time::Duration::days(leaf_not_before_days);
+        leaf_params.not_after = now + ::time::Duration::days(leaf_not_after_days);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &ca_issuer)
+            .expect("leaf sign failed");
+
+        // Chain: leaf + intermediate
+        let chain_pem = format!("{}{}", leaf_cert.pem(), ca_cert.pem());
+        (chain_pem, leaf_key.serialize_pem())
     }
 
     #[test]
@@ -680,6 +789,154 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CertValidationError::CertExpired { .. })),
             "valid cert should not report CertExpired, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_matching_key_cert_passes() {
+        let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
+        let result = check_key_matches_cert(&cert_pem, &key_pem);
+        assert!(result.is_ok(), "matching cert/key should pass, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_mismatched_key_cert_fails() {
+        let (cert_a, _key_a) = make_cert_with_validity(-1, 365);
+        let (_cert_b, key_b) = make_cert_with_validity(-1, 365);
+
+        let result = check_key_matches_cert(&cert_a, &key_b);
+        assert!(result.is_err(), "mismatched cert/key should fail");
+        assert!(
+            matches!(result, Err(CertValidationError::KeyMismatch(_))),
+            "should return KeyMismatch, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_cert_rejects_mismatched_key() {
+        let (cert_a, _key_a) = make_cert_with_validity(-1, 365);
+        let (_cert_b, key_b) = make_cert_with_validity(-1, 365);
+
+        let tls = create_test_tls(Some(&cert_a), Some(&key_b), vec!["example.com".to_string()]);
+        let result = validate_cert(&tls);
+
+        assert!(!result.is_valid, "mismatched cert/key should be invalid");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::KeyMismatch(_))),
+            "should report KeyMismatch, got: {:?}",
+            result.errors
+        );
+    }
+
+    // --- IP SAN tests ---
+
+    #[test]
+    fn test_ip_san_ipv4_match() {
+        let ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let (cert_pem, key_pem) = make_cert_with_sans(vec![], vec![ip]);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["10.0.0.1".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(
+            !result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            "IPv4 SAN should match, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_ip_san_ipv6_match() {
+        let ip: std::net::IpAddr = "fd00::1".parse().unwrap();
+        let (cert_pem, key_pem) = make_cert_with_sans(vec![], vec![ip]);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["fd00::1".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(
+            !result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            "IPv6 SAN should match, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_mixed_dns_and_ip_san() {
+        let ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let (cert_pem, key_pem) = make_cert_with_sans(vec!["example.com"], vec![ip]);
+        let tls = create_test_tls(
+            Some(&cert_pem),
+            Some(&key_pem),
+            vec!["example.com".to_string(), "10.0.0.1".to_string()],
+        );
+
+        let result = validate_cert(&tls);
+        assert!(
+            !result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            "mixed DNS+IP SAN should both match, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_ip_host_not_matched_by_dns_san() {
+        let (cert_pem, key_pem) = make_cert_with_sans(vec!["example.com"], vec![]);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["10.0.0.1".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(
+            result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            "IP host should not match DNS SAN, got: {:?}",
+            result.errors
+        );
+    }
+
+    // --- Certificate chain tests ---
+
+    #[test]
+    fn test_cert_chain_valid() {
+        let (chain_pem, key_pem) = make_cert_chain(-1, 365, -30, 3650);
+        let tls = create_test_tls(Some(&chain_pem), Some(&key_pem), vec!["example.com".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(
+            !result.errors.iter().any(|e| matches!(e, CertValidationError::CertParseError(_))),
+            "valid chain should pass, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_cert_chain_expired_intermediate() {
+        // Leaf valid, intermediate expired yesterday
+        let (chain_pem, key_pem) = make_cert_chain(-1, 365, -3650, -1);
+        let tls = create_test_tls(Some(&chain_pem), Some(&key_pem), vec!["example.com".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(!result.is_valid, "expired intermediate should be invalid");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::ChainCertExpired { .. })),
+            "should report ChainCertExpired, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_single_cert_still_works() {
+        // Single cert (no chain) should still work as before
+        let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(
+            !result.errors.iter().any(|e| matches!(e, CertValidationError::CertParseError(_))),
+            "single cert should still work, got: {:?}",
             result.errors
         );
     }
