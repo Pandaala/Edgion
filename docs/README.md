@@ -1,10 +1,9 @@
 # Edgion Documentation
 
-Choose your language / 选择语言 / 言語を選択:
+Choose your language / 选择语言:
 
 - 🇨🇳 [中文文档 (Chinese)](./zh-CN/README.md)
 - 🇬🇧 [English Documentation](./en/README.md)
-- 🇯🇵 [日本語ドキュメント (Japanese)](./ja/README.md)
 
 ---
 

@@ -23,6 +23,13 @@ spec:
   controllerName: edgion.io/gateway-controller
 ```
 
+> `GatewayClass` 是集群级资源，没有 `namespace` 字段。
+
+这一步确定了：
+
+- 由哪个控制器（`controllerName`）来管理后续创建的 Gateway
+- 后续的 Gateway 通过 `gatewayClassName` 引用这个 GatewayClass
+
 如果你需要 Edgion 的网关级高级配置，可以继续给它加 `parametersRef`，见：
 
 - [运维指南 / GatewayClass 配置](../ops-guide/gateway/gateway-class.md)

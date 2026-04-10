@@ -1,5 +1,9 @@
 # Request Restriction 插件
 
+> **🔌 Edgion 扩展**
+> 
+> RequestRestriction 是 `EdgionPlugins` CRD 提供的请求限制插件，不属于标准 Gateway API。
+
 ## 概述
 
 `RequestRestriction` 插件用于基于请求属性限制访问，支持多种数据源和匹配方式。与 `IpRestriction` 插件专注于 IP 地址不同，本插件支持基于 Header、Cookie、Query 参数、Path、Method 和 Referer 的访问控制。
@@ -312,8 +316,7 @@ Edgion 的 `RequestRestriction` 插件将多种限制功能统一到一个插件
 5. **HashSet 优化**：精确匹配列表超过 16 个值时自动使用 HashSet，实现 O(1) 查找
 6. **缺失值处理**：根据安全需求选择合适的 `onMissing` 行为，认证场景通常使用 `Deny`
 
-## 相关插件
+## 相关链接
 
-- [IpRestriction](./ip-restriction.md) - 基于 IP 地址的访问控制
-- [JwtAuth](./jwt-auth.md) - JWT 认证
-- [BasicAuth](./basic-auth.md) - 基本认证
+- [IpRestriction](./ip-restriction.md) — IP 访问控制
+- [RateLimit](./rate-limit.md) — 速率限制

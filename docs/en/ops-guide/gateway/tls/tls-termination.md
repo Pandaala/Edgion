@@ -19,6 +19,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: tls-gateway
+  namespace: production
 spec:
   gatewayClassName: edgion
   listeners:
@@ -62,8 +63,11 @@ spec:
 kubectl create secret tls my-tls-secret \
   --cert=path/to/cert.pem \
   --key=path/to/key.pem
+```
 
-# Or use YAML
+Or use YAML:
+
+```yaml
 apiVersion: v1
 kind: Secret
 metadata:

@@ -1,5 +1,9 @@
 # RateLimit Plugin
 
+> **🔌 Edgion Extension**
+> 
+> RateLimit is a request rate limiting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 The RateLimit plugin provides high-performance request rate limiting based on Pingora's Count-Min Sketch (CMS) algorithm.
@@ -38,20 +42,20 @@ spec:
 
 ### Configuration Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `rate` | integer | No | `100` | Rate limit threshold (max requests per interval) |
-| `interval` | string | No | `"1s"` | Time window, supports `ms`, `s`, `m`, `h`, `d` |
-| `key` | KeyGet[] | No | `[{type: clientIp}]` | Rate limiting key configuration (multiple keys joined with `_`) |
-| `scope` | enum | No | `Instance` | Rate limiting scope: `Instance` or `Cluster` |
-| `skewTolerance` | float | No | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
-| `onMissingKey` | enum | No | `Allow` | Behavior when key cannot be extracted: `Allow` or `Deny` |
-| `defaultKey` | string | No | - | Default key when extraction fails |
-| `rejectStatus` | integer | No | `429` | HTTP status code on rejection (100~599) |
-| `rejectMessage` | string | No | `"Rate limit exceeded"` | Response message on rejection |
-| `showLimitHeaders` | boolean | No | `true` | Whether to add rate limiting headers to the response |
-| `headerNames` | object | No | - | Custom rate limiting response header names |
-| `estimatorSlotsK` | integer | No | - | CMS precision (K units), uses global default if not set |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rate` | Integer | `100` | Rate limit threshold (max requests per interval) |
+| `interval` | String | `"1s"` | Time window, supports `ms`, `s`, `m`, `h`, `d` |
+| `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting key configuration (multiple keys joined with `_`) |
+| `scope` | Enum | `Instance` | Rate limiting scope. Values: `Instance` | `Cluster` |
+| `skewTolerance` | Float | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
+| `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` | `Deny` |
+| `defaultKey` | String | None | Default key when extraction fails |
+| `rejectStatus` | Integer | `429` | HTTP status code on rejection (100~599) |
+| `rejectMessage` | String | `"Rate limit exceeded"` | Response message on rejection |
+| `showLimitHeaders` | Boolean | `true` | Whether to add rate limiting headers to the response |
+| `headerNames` | Object | None | Custom rate limiting response header names |
+| `estimatorSlotsK` | Integer | None | CMS precision (K units), uses global default if not set |
 
 #### rate
 
@@ -511,3 +515,10 @@ requestPlugins:
         - type: clientIp
         - type: path
 ```
+
+## Related Documentation
+
+- [RateLimit Plugin (HTTPRoute-level)](../http-route/filters/edgion-plugins/rate-limit.md) - HTTPRoute-level rate limiting configuration
+- [IP Restriction Plugin](../http-route/filters/edgion-plugins/ip-restriction.md) - IP allow/deny lists
+- [CtxSet Plugin](ctx-setter.md) - Construct custom rate limiting keys
+- [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

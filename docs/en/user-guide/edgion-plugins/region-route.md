@@ -1,5 +1,9 @@
 # RegionRoute Plugin
 
+> **🔌 Edgion Extension**
+> 
+> RegionRoute is a multi-region traffic routing plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 RegionRoute routes traffic across multiple regions using ordered route rules. It is designed for multi-region active-active deployments where the same service runs in two or more regions and you need deterministic, sticky routing per account, user, or any other key.
@@ -22,7 +26,51 @@ Three rule types are available:
 - Auto failover (optional) probes each region's DNS health; if a region has no IPs, traffic falls over to the healthiest alternative.
 - Empty `routeRules` → plugin is a no-op.
 
-## Configuration
+## Configuration Parameters
+
+### Basic Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `regions` | Array\<Object\> | — (required) | Region definitions list, see `RegionDef` sub-fields below |
+| `myRegion` | String | `""` | This gateway's own region name; pass through when routing target equals this value |
+| `keyGet` | Array\<Object\> | `[]` | Shared key extraction config (used by RouteByKeyConfMatch and RouteByHashRange) |
+| `hashKeyGet` | Array\<Object\> | None | Pre-computed hash sources (read before computing in RouteByHashRange) |
+| `hashCalc` | Object | None | Hash computation config; if absent, RouteByHashRange is passthrough-only |
+| `routeRules` | Array\<Object\> | `[]` | Ordered route rules list; empty list makes the plugin a no-op |
+| `autoFailover` | Object | None | Auto failover configuration (DNS probe-based) |
+
+### `regions[]` (RegionDef) Sub-fields
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | — (required) | Region identifier name |
+| `hashRange` | Array\<Integer\> | — (required) | Hash range `[low, high]`, closed interval, must satisfy `high < modulo` |
+| `backendEndpoint` | String | — (required) | Backend endpoint, format `host` or `host:port` |
+| `tls` | Boolean | `true` | Whether the upstream connection uses TLS |
+| `failoverTo` | String | None | Static failover target region name |
+
+### `hashCalc` Sub-fields
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `algorithm` | Enum | `crc32` | Hash algorithm. Values: `crc32` | `sha256` |
+| `modulo` | Integer | `1000` | Hash value domain `[0, modulo-1]`, must be >= 2 |
+| `writeBack` | Array\<Object\> | `[]` | Targets to write the computed hash to |
+
+### `autoFailover` Sub-fields
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | Boolean | `true` | Whether to enable auto failover |
+| `healthyThreshold` | Float | `0.5` | Health threshold; failover triggers when DNS returns no IPs |
+| `probeIntervalMs` | Integer | `5000` | DNS probe interval (milliseconds) |
+| `notifyHeader` | String | None | Response header to write the failover region name to (for debugging) |
+| `onAllRegionsDown` | Enum | `pass` | Behavior when all regions are unhealthy. Values: `pass` (pass through) | `reject` (return 503) |
+
+---
+
+## Quick Start
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -184,3 +232,8 @@ Constraints:
 - The plugin does **not** change the `Host` header or SNI — if your upstream verifies SNI, ensure the backend certificate covers the original hostname.
 - Auto failover is based on DNS liveness only (does a DNS lookup return IPs?). It does not perform application-level health checks.
 - Setting `routeRules: []` (empty list, or omitting it) turns the plugin into a no-op — useful for staged rollout.
+
+## Related Documentation
+
+- [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview
+- [Load Balancing Algorithms](../http-route/lb-algorithms.md) - Load balancing strategy configuration

@@ -99,4 +99,6 @@ spec:
 
 - [GatewayClass 配置](./gateway-class.md)
 - [监听器配置](./listeners/)
-- [TLS 配置](./tls/)
+- [TLS 终结](./tls/tls-termination.md)
+- [HTTP to HTTPS 重定向](./http-to-https-redirect.md)
+- [EdgionTls 扩展](./tls/edgion-tls.md)

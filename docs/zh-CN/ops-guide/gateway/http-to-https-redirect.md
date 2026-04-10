@@ -128,8 +128,9 @@ A: 是的，完整的 URI（包括路径和查询参数）都会被保留。
 
 A: 重定向处理器非常轻量，不涉及任何上游连接或复杂的路由匹配，性能开销极低。
 
-## Related Features
+## 相关文档
 
-- [Gateway 概述](./overview.md)
+- [TLS 终结](./tls/tls-termination.md)
 - [HTTPS 监听器](./listeners/https.md)
-- [TLS 终止](./tls/tls-termination.md)
+- [Gateway 资源总览](./overview.md)
+- [EdgionTls 扩展](./tls/edgion-tls.md)

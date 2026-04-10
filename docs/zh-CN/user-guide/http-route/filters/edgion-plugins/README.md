@@ -1,0 +1,36 @@
+# Edgion 扩展过滤器
+
+Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
+
+## 内容
+
+| 文档 | 说明 |
+|------|------|
+| [bandwidth-limit.md](bandwidth-limit.md) | 带宽限制 |
+| [basic-auth.md](basic-auth.md) | HTTP Basic 认证 |
+| [cors.md](cors.md) | 跨域资源共享（CORS） |
+| [csrf.md](csrf.md) | CSRF 防护 |
+| [ctx-setter.md](ctx-setter.md) | 上下文变量提取 |
+| [direct-endpoint.md](direct-endpoint.md) | 直连指定 Endpoint |
+| [dsl.md](dsl.md) | DSL 脚本引擎 |
+| [dynamic-upstream.md](dynamic-upstream.md) | 动态上游选择 |
+| [forward-auth.md](forward-auth.md) | 外部认证委托 |
+| [header-cert-auth.md](header-cert-auth.md) | 请求头/证书认证 |
+| [hmac-auth.md](hmac-auth.md) | HMAC 签名验证 |
+| [ip-restriction.md](ip-restriction.md) | IP 黑白名单 |
+| [jwe-decrypt.md](jwe-decrypt.md) | JWE Token 解密 |
+| [jwt-auth.md](jwt-auth.md) | JWT 认证 |
+| [key-auth.md](key-auth.md) | API Key 认证 |
+| [ldap-auth.md](ldap-auth.md) | LDAP 认证 |
+| [mock.md](mock.md) | Mock 响应 |
+| [openid-connect.md](openid-connect.md) | OpenID Connect 认证 |
+| [proxy-rewrite.md](proxy-rewrite.md) | 代理重写 |
+| [rate-limit.md](rate-limit.md) | 限流（内存，近似） |
+| [rate-limit-redis.md](rate-limit-redis.md) | 限流（Redis，精确，集群级） |
+| [real-ip.md](real-ip.md) | 获取客户端真实 IP |
+| [region-route.md](region-route.md) | 区域路由 |
+| [request-mirror.md](request-mirror.md) | 请求镜像 |
+| [request-restriction.md](request-restriction.md) | 请求过滤 |
+| [response-rewrite.md](response-rewrite.md) | 响应重写 |
+| [all-endpoint-status.md](all-endpoint-status.md) | 查询所有后端 Endpoint 状态 |
+| [debug-access-log.md](debug-access-log.md) | 将 Access Log 注入响应头（仅开发用） |

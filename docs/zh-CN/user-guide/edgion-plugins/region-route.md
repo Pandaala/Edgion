@@ -1,5 +1,9 @@
 # RegionRoute 插件
 
+> **🔌 Edgion 扩展**
+> 
+> RegionRoute 是 `EdgionPlugins` CRD 提供的多区域流量路由插件，不属于标准 Gateway API。
+
 ## 概述
 
 RegionRoute 通过有序路由规则（routeRules）将流量路由到多个 region，适用于同一服务在多个 region 主主部署、需要按 account/user 等维度做确定性粘性路由的场景。
@@ -22,7 +26,51 @@ RegionRoute 通过有序路由规则（routeRules）将流量路由到多个 reg
 - 可选的 auto failover 通过 DNS 探测每个 region 的健康状态；若某 region DNS 无返回，流量自动切到最健康的其他 region。
 - `routeRules` 为空 → 插件 no-op。
 
-## 配置
+## 配置参数
+
+### 基础参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `regions` | Array\<Object\> | —（必填） | Region 定义列表，见下方 `RegionDef` 子字段 |
+| `myRegion` | String | `""` | 本网关所在 region 名称，路由目标等于此值时直接放行 |
+| `keyGet` | Array\<Object\> | `[]` | 共享的 key 提取配置（RouteByKeyConfMatch 和 RouteByHashRange 共用） |
+| `hashKeyGet` | Array\<Object\> | 无 | 预计算 hash 读取源（RouteByHashRange 计算前先尝试读取） |
+| `hashCalc` | Object | 无 | Hash 计算配置，缺省时 RouteByHashRange 仅做 passthrough |
+| `routeRules` | Array\<Object\> | `[]` | 有序路由规则列表，空列表时插件为 no-op |
+| `autoFailover` | Object | 无 | 自动 failover 配置（基于 DNS 探测） |
+
+### `regions[]`（RegionDef）子字段
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | String | —（必填） | Region 标识名称 |
+| `hashRange` | Array\<Integer\> | —（必填） | Hash 范围 `[low, high]`，闭区间，须满足 `high < modulo` |
+| `backendEndpoint` | String | —（必填） | 后端端点，格式 `host` 或 `host:port` |
+| `tls` | Boolean | `true` | 上游连接是否使用 TLS |
+| `failoverTo` | String | 无 | 静态 failover 目标 region 名称 |
+
+### `hashCalc` 子字段
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `algorithm` | Enum | `crc32` | Hash 算法。可选值：`crc32` | `sha256` |
+| `modulo` | Integer | `1000` | Hash 值域 `[0, modulo-1]`，须 >= 2 |
+| `writeBack` | Array\<Object\> | `[]` | 将计算得到的 hash 写入目标列表 |
+
+### `autoFailover` 子字段
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | Boolean | `true` | 是否启用自动 failover |
+| `healthyThreshold` | Float | `0.5` | 健康阈值，DNS 无返回时触发 failover |
+| `probeIntervalMs` | Integer | `5000` | DNS 探测间隔（毫秒） |
+| `notifyHeader` | String | 无 | 写入响应 header 的 failover region 名称（便于调试） |
+| `onAllRegionsDown` | Enum | `pass` | 所有 region 不可用时的行为。可选值：`pass`（放行） | `reject`（返回 503） |
+
+---
+
+## 快速开始
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -183,3 +231,8 @@ regions:
 - 插件**不修改** Host header 和 SNI。若上游校验 SNI，需确保后端证书覆盖原始 hostname。
 - Auto failover 仅基于 DNS 活性探测（DNS 是否返回 IP），不做应用层健康检查。
 - `routeRules: []`（空列表或省略）使插件变为 no-op，可用于分阶段上线。
+
+## 相关文档
+
+- [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览
+- [负载均衡算法](../http-route/lb-algorithms.md) - 负载均衡策略配置

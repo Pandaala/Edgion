@@ -198,3 +198,10 @@ curl -X POST "http://localhost:8080/api/v1/services/acme/default/example-acme/tr
 - **本地集成测试（Pebble）**：`examples/test/conf/Services/acme/pebble/` 下的 Docker Compose 与说明。
 
 与 EdgionTls 的配合使用见 [EdgionTls 用户指南](./edgion-tls.md)。
+
+## 相关文档
+
+- [TLS 终结](./tls-termination.md)
+- [EdgionTls 扩展](./edgion-tls.md)
+- [Gateway 资源总览](../overview.md)
+- [HTTPS 监听器](../listeners/https.md)

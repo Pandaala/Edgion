@@ -36,5 +36,6 @@ spec:
 
 ## 相关文档
 
-- [访问日志](./access-log.md)
-- [edgion-cli](../edgion-cli.md)
+- [Access Log 用户指南](./access-log.md)
+- [Gateway 资源总览](../gateway/overview.md)
+- [edgion-cli 命令行工具](../edgion-cli.md)

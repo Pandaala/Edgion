@@ -401,3 +401,10 @@ spec:
 - **Synchronous execution**: ResponseRewrite executes synchronously in the `upstream_response_filter` phase, no asynchronous operations involved
 - **Low latency**: Only modifies response header metadata, no response body processing
 - **Memory efficient**: Does not buffer the response body, directly streaming transmission
+
+---
+
+## Related Links
+
+- [ProxyRewrite](./proxy-rewrite.md) — Request rewriting
+- [RequestHeaderModifier](../gateway-api/request-header-modifier.md) — Gateway API standard request header modification

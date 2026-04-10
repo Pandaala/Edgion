@@ -128,8 +128,9 @@ A: Yes, the complete URI (including path and query parameters) is preserved.
 
 A: The redirect handler is very lightweight and does not involve any upstream connections or complex route matching, resulting in minimal performance overhead.
 
-## Related Features
+## Related Documentation
 
-- [Gateway Overview](./overview.md)
-- [HTTPS Listener](./listeners/https.md)
 - [TLS Termination](./tls/tls-termination.md)
+- [HTTPS Listener](./listeners/https.md)
+- [Gateway Resource Overview](./overview.md)
+- [EdgionTls Extension](./tls/edgion-tls.md)

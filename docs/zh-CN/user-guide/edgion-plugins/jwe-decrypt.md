@@ -1,5 +1,9 @@
 # JWE Decrypt 插件
 
+> **🔌 Edgion 扩展**
+> 
+> JweDecrypt 是 `EdgionPlugins` CRD 提供的 JWE 解密认证插件，不属于标准 Gateway API。
+
 ## 概述
 
 `JweDecrypt` 在请求阶段解密请求头中的 Compact JWE（当前支持 `alg=dir` + `enc=A256GCM`），
@@ -95,4 +99,10 @@ data:
 | 算法不支持或不匹配 | `400` | `jwe:bad-alg` |
 | 算法不在白名单 | `400` | `jwe:alg-denied` |
 | token 超过大小限制 | `400` | `jwe:too-large` |
+
+## 相关文档
+
+- [JwtAuth 插件](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT 令牌认证
+- [OpenID Connect 插件](openid-connect.md) - OIDC/OAuth2 认证
+- [ForwardAuth 插件](forward-auth.md) - 外部鉴权插件
 

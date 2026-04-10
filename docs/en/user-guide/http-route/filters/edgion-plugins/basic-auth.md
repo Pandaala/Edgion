@@ -490,3 +490,12 @@ curl -u developer:DevSecret456! https://api.example.com/api/data
 # No credentials - returns 401
 curl https://api.example.com/api/users
 ```
+
+---
+
+## Related Links
+
+- [JwtAuth](./jwt-auth.md) — JWT authentication
+- [KeyAuth](./key-auth.md) — API Key authentication
+- [HmacAuth](./hmac-auth.md) — HMAC authentication
+- [HeaderCertAuth](./header-cert-auth.md) — Header certificate authentication

@@ -401,3 +401,10 @@ spec:
 - **同步执行**：ResponseRewrite 在 `upstream_response_filter` 阶段同步执行，不涉及异步操作
 - **低延迟**：仅修改响应头元数据，不涉及响应体处理
 - **内存高效**：不缓冲响应体，直接流式传输
+
+---
+
+## 相关链接
+
+- [ProxyRewrite](./proxy-rewrite.md) — 请求重写
+- [RequestHeaderModifier](../gateway-api/request-header-modifier.md) — Gateway API 标准请求头修改

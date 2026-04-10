@@ -29,6 +29,7 @@ en/
 ├── user-guide/
 │   ├── README.md
 │   ├── http-route/
+│   │   ├── README.md
 │   │   ├── overview.md
 │   │   ├── lb-algorithms.md
 │   │   ├── matches/
@@ -48,48 +49,64 @@ en/
 │   │   │   │   ├── request-redirect.md
 │   │   │   │   └── url-rewrite.md
 │   │   │   └── edgion-plugins/
+│   │   │       ├── README.md
+│   │   │       ├── all-endpoint-status.md
+│   │   │       ├── bandwidth-limit.md
 │   │   │       ├── basic-auth.md
 │   │   │       ├── cors.md
 │   │   │       ├── csrf.md
+│   │   │       ├── ctx-setter.md
+│   │   │       ├── debug-access-log.md
+│   │   │       ├── direct-endpoint.md
+│   │   │       ├── dsl.md
+│   │   │       ├── dynamic-upstream.md
+│   │   │       ├── forward-auth.md
+│   │   │       ├── header-cert-auth.md
+│   │   │       ├── hmac-auth.md
 │   │   │       ├── ip-restriction.md
+│   │   │       ├── jwe-decrypt.md
 │   │   │       ├── jwt-auth.md
 │   │   │       ├── key-auth.md
-│   │   │       ├── hmac-auth.md
-│   │   │       ├── header-cert-auth.md
-│   │   │       ├── proxy-rewrite.md
-│   │   │       ├── request-restriction.md
-│   │   │       ├── request-mirror.md
-│   │   │       ├── rate-limit.md
-│   │   │       ├── response-rewrite.md
-│   │   │       ├── dynamic-upstream.md
-│   │   │       ├── dsl.md
-│   │   │       ├── direct-endpoint.md
+│   │   │       ├── ldap-auth.md
 │   │   │       ├── mock.md
-│   │   │       └── bandwidth-limit.md
+│   │   │       ├── openid-connect.md
+│   │   │       ├── proxy-rewrite.md
+│   │   │       ├── rate-limit.md
+│   │   │       ├── rate-limit-redis.md
+│   │   │       ├── real-ip.md
+│   │   │       ├── region-route.md
+│   │   │       ├── request-mirror.md
+│   │   │       ├── request-restriction.md
+│   │   │       └── response-rewrite.md
 │   │   ├── backends/
 │   │   │   ├── README.md
 │   │   │   ├── service-ref.md
 │   │   │   ├── weight.md
 │   │   │   ├── backend-tls.md
-│   │   │   └── health-check.md
+│   │   │   ├── health-check.md
+│   │   │   └── circuit-breaker.md   # zh-CN 已有，en 待翻译
 │   │   └── resilience/
 │   │       ├── README.md
 │   │       ├── timeouts.md
 │   │       ├── retry.md
 │   │       └── session-persistence.md
 │   ├── grpc-route/
+│   │   ├── README.md
 │   │   ├── overview.md
 │   │   ├── matches/overview.md
 │   │   ├── filters/overview.md
 │   │   └── backends/overview.md
 │   ├── tcp-route/
+│   │   ├── README.md
 │   │   ├── overview.md
 │   │   ├── stream-plugins.md
 │   │   └── backends/overview.md
 │   ├── udp-route/
+│   │   ├── README.md
 │   │   ├── overview.md
 │   │   └── backends/overview.md
 │   └── edgion-plugins/
+│       ├── README.md
 │       ├── real-ip.md
 │       ├── rate-limit.md
 │       ├── region-route.md
@@ -102,6 +119,7 @@ en/
 │   ├── README.md
 │   ├── edgion-cli.md
 │   ├── gateway/
+│   │   ├── README.md
 │   │   ├── overview.md
 │   │   ├── gateway-class.md
 │   │   ├── http-to-https-redirect.md
@@ -117,6 +135,11 @@ en/
 │   │       ├── tls-termination.md
 │   │       ├── edgion-tls.md
 │   │       └── acme.md
+│   ├── configuration/
+│   │   ├── README.md
+│   │   ├── controller-config.md
+│   │   ├── gateway-config.md
+│   │   └── edgion-gateway-config.md
 │   ├── infrastructure/
 │   │   ├── secret-management.md
 │   │   ├── reference-grant.md
@@ -154,6 +177,7 @@ zh-CN/
 ├── user-guide/
 │   ├── README.md
 │   ├── http-route/
+│   │   ├── README.md
 │   │   ├── overview.md
 │   │   ├── lb-algorithms.md
 │   │   ├── matches/
@@ -161,19 +185,24 @@ zh-CN/
 │   │   ├── filters/
 │   │   │   ├── README.md, overview.md, plugin-composition.md
 │   │   │   ├── gateway-api/  (5 files, same as en/)
-│   │   │   └── edgion-plugins/  (18 files, same as en/)
+│   │   │   └── edgion-plugins/  (README.md + 28 plugin files, same as en/)
 │   │   ├── backends/
-│   │   │   ├── README.md, service-ref.md, weight.md, backend-tls.md, health-check.md
+│   │   │   ├── README.md, service-ref.md, weight.md, backend-tls.md, health-check.md, circuit-breaker.md
 │   │   └── resilience/
 │   │       ├── README.md, timeouts.md, retry.md, session-persistence.md
-│   ├── grpc-route/  (same structure as en/)
-│   ├── tcp-route/  (same structure as en/)
-│   ├── udp-route/  (same structure as en/)
+│   ├── grpc-route/  (README.md + same structure as en/)
+│   ├── tcp-route/  (README.md + same structure as en/)
+│   ├── udp-route/  (README.md + same structure as en/)
 │   └── edgion-plugins/
+│       ├── README.md
 │       ├── real-ip.md, rate-limit.md, region-route.md, openid-connect.md
-│       ├── openid-connect-review-card.md
 │       ├── ldap-auth.md, jwe-decrypt.md, forward-auth.md, ctx-setter.md
-├── ops-guide/  (same structure as en/)
+├── ops-guide/  (same structure as en/, gateway/ and configuration/ included)
+├── promotion/                  # zh-CN 独有，推广材料
+│   ├── README.md
+│   ├── introduction.md
+│   ├── whitepaper.md
+│   └── .data-reference.md
 └── dev-guide/
     ├── README.md, architecture-overview.md
     ├── resource-architecture-overview.md, resource-registry-guide.md
@@ -205,5 +234,6 @@ refactoring/
 ```
 review/
 ├── hostname-refactor-review.md
-└── hostname-resolution-refactor-review.md
+├── hostname-resolution-refactor-review.md
+└── openid-connect-review-card.md
 ```

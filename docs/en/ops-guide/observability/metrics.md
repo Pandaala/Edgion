@@ -36,5 +36,6 @@ spec:
 
 ## Related Documentation
 
-- [Access Log](./access-log.md)
-- [edgion-cli](../edgion-cli.md)
+- [Access Log User Guide](./access-log.md)
+- [Gateway Resource Overview](../gateway/overview.md)
+- [edgion-cli Command Line Tool](../edgion-cli.md)

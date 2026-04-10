@@ -581,3 +581,9 @@ curl -X POST https://api.example.com/api/submit \
   -d '{"data":"value"}'
 ```
 
+---
+
+## 相关链接
+
+- [Cors](./cors.md) — 跨域资源共享
+- [BasicAuth](./basic-auth.md) — 基本认证

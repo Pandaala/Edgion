@@ -34,6 +34,12 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [Access Log](./observability/access-log.md): Access log fields and output.
 - [Metrics](./observability/metrics.md): Prometheus metrics collection and alerting recommendations.
 
+### Configuration Reference
+
+- [Controller Configuration](./configuration/controller-config.md): Controller TOML process configuration parameters.
+- [Gateway Configuration](./configuration/gateway-config.md): Gateway TOML process configuration parameters.
+- [EdgionGatewayConfig](./configuration/edgion-gateway-config.md): GatewayClass-level runtime configuration (timeouts, real IP, global plugins, etc.).
+
 ### Operations Tools
 
 - [edgion-cli](./edgion-cli.md): Resource management and debugging CLI.

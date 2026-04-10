@@ -99,4 +99,6 @@ spec:
 
 - [GatewayClass Configuration](./gateway-class.md)
 - [Listener Configuration](./listeners/)
-- [TLS Configuration](./tls/)
+- [TLS Termination](./tls/tls-termination.md)
+- [HTTP to HTTPS Redirect](./http-to-https-redirect.md)
+- [EdgionTls Extension](./tls/edgion-tls.md)

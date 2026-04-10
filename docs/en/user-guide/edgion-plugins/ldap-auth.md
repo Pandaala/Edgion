@@ -1,5 +1,9 @@
 # LDAP Auth Plugin
 
+> **🔌 Edgion Extension**
+> 
+> LdapAuth is an LDAP directory authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 The LDAP Auth plugin delegates gateway authentication to an enterprise LDAP/AD directory service. The plugin parses `username:password` from request headers, then validates credentials using LDAP Simple Bind.
@@ -138,3 +142,9 @@ When allowing anonymous access, the following headers are injected:
 - Enable `hideCredentials: true` to prevent credentials from being passed to upstream
 - Set a reasonable `cacheTtl` (e.g., 60–300 seconds) to balance performance and credential revocation latency
 - Enable account lockout and brute-force protection policies on the LDAP server
+
+## Related Documentation
+
+- [BasicAuth Plugin](../http-route/filters/edgion-plugins/basic-auth.md) - Basic username/password authentication
+- [ForwardAuth Plugin](forward-auth.md) - External authentication plugin
+- [JwtAuth Plugin](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT token authentication

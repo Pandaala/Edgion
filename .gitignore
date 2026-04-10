@@ -40,3 +40,8 @@ examples/test/k8s-conf/
 
 docs/superpowers/
 .worktrees/
+
+# VitePress
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/

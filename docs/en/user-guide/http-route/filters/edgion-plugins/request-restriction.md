@@ -1,5 +1,9 @@
 # Request Restriction Plugin
 
+> **🔌 Edgion Extension**
+> 
+> RequestRestriction is a request restriction plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
+
 ## Overview
 
 The `RequestRestriction` plugin restricts access based on request attributes, supporting multiple data sources and matching methods. Unlike the `IpRestriction` plugin which focuses on IP addresses, this plugin supports access control based on Header, Cookie, Query parameters, Path, Method, and Referer.
@@ -312,8 +316,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 5. **HashSet optimization**: Exact match lists exceeding 16 values automatically use HashSet for O(1) lookup
 6. **Missing value handling**: Choose the appropriate `onMissing` behavior based on security requirements — authentication scenarios typically use `Deny`
 
-## Related Plugins
+## Related Links
 
-- [IpRestriction](./ip-restriction.md) - IP-based access control
-- [JwtAuth](./jwt-auth.md) - JWT authentication
-- [BasicAuth](./basic-auth.md) - Basic authentication
+- [IpRestriction](./ip-restriction.md) — IP access control
+- [RateLimit](./rate-limit.md) — Rate limiting

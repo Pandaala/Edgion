@@ -434,7 +434,8 @@ cat logs/edgion_access.log | jq 'select(.plugin_logs[]?.logs[]? | select(.name =
 3. **集成日志系统**: 将 `edgion_access.log` 集成到 ELK、Loki 等日志分析平台
 4. **监控关键指标**: 根据 `edgion_access.log` 设置告警，如高延迟、高错误率等
 
-## Related Features
+## 相关文档
 
-- [Gateway 概述](../gateway/overview.md)
-- [Preflight 策略](../gateway/preflight-policy.md)
+- [监控指标](./metrics.md)
+- [Gateway 资源总览](../gateway/overview.md)
+- [edgion-cli 命令行工具](../edgion-cli.md)

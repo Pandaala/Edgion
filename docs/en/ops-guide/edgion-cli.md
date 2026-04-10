@@ -307,3 +307,10 @@ Hint: edgion-cli is trying to connect to: http://localhost:5800
 | Output YAML | `kubectl get httproute -o yaml` | `edgion-cli get httproute -o yaml` |
 
 **Difference:** `edgion-cli` can connect directly to Edgion's Admin API without requiring a Kubernetes cluster, making it suitable for file-system mode deployments.
+
+## Related Documentation
+
+- [Gateway Resource Overview](gateway/overview.md)
+- [Monitoring Metrics](observability/metrics.md)
+- [Access Log User Guide](observability/access-log.md)
+- [Control Plane mTLS](infrastructure/mtls.md)

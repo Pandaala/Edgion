@@ -24,12 +24,32 @@ Referenced through `ExtensionRef` to EdgionPlugins resources:
 
 | Plugin | Description | Documentation |
 |--------|-------------|---------------|
+| AllEndpointStatus | Query all backend endpoint statuses | [Details](./edgion-plugins/all-endpoint-status.md) |
+| BandwidthLimit | Bandwidth throttling | [Details](./edgion-plugins/bandwidth-limit.md) |
 | BasicAuth | HTTP basic authentication | [Details](./edgion-plugins/basic-auth.md) |
-| LdapAuth | LDAP directory authentication | [Details](../../edgion-plugins/ldap-auth.md) |
 | CORS | Cross-origin resource sharing | [Details](./edgion-plugins/cors.md) |
 | CSRF | CSRF protection | [Details](./edgion-plugins/csrf.md) |
+| CtxSet | Context variable extraction | [Details](./edgion-plugins/ctx-setter.md) |
+| DirectEndpoint | Direct connection to a specific endpoint | [Details](./edgion-plugins/direct-endpoint.md) |
+| DSL | DSL scripting engine | [Details](./edgion-plugins/dsl.md) |
+| DynamicUpstream | Dynamic upstream selection | [Details](./edgion-plugins/dynamic-upstream.md) |
+| ForwardAuth | External authentication delegation | [Details](./edgion-plugins/forward-auth.md) |
+| HeaderCertAuth | Header/certificate authentication | [Details](./edgion-plugins/header-cert-auth.md) |
+| HmacAuth | HMAC signature verification | [Details](./edgion-plugins/hmac-auth.md) |
 | IpRestriction | IP allowlist/denylist | [Details](./edgion-plugins/ip-restriction.md) |
+| JweDecrypt | JWE Token decryption | [Details](./edgion-plugins/jwe-decrypt.md) |
+| JwtAuth | JWT authentication | [Details](./edgion-plugins/jwt-auth.md) |
+| KeyAuth | API Key authentication | [Details](./edgion-plugins/key-auth.md) |
+| LdapAuth | LDAP directory authentication | [Details](./edgion-plugins/ldap-auth.md) |
+| Mock | Mock response | [Details](./edgion-plugins/mock.md) |
+| OpenidConnect | OpenID Connect authentication | [Details](./edgion-plugins/openid-connect.md) |
+| ProxyRewrite | Proxy rewrite | [Details](./edgion-plugins/proxy-rewrite.md) |
 | RateLimit | Rate limiting | [Details](./edgion-plugins/rate-limit.md) |
+| RealIp | Client real IP extraction | [Details](./edgion-plugins/real-ip.md) |
+| RegionRoute | Region-based routing | [Details](./edgion-plugins/region-route.md) |
+| RequestMirror | Request mirroring | [Details](./edgion-plugins/request-mirror.md) |
+| RequestRestriction | Request filtering | [Details](./edgion-plugins/request-restriction.md) |
+| ResponseRewrite | Response rewrite | [Details](./edgion-plugins/response-rewrite.md) |
 
 ## Filter Execution Order
 

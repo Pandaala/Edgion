@@ -23,6 +23,13 @@ spec:
   controllerName: edgion.io/gateway-controller
 ```
 
+> `GatewayClass` is a cluster-scoped resource and does not have a `namespace` field.
+
+This step establishes:
+
+- which controller (`controllerName`) will manage the gateways created later
+- subsequent `Gateway` resources reference this GatewayClass via `gatewayClassName`
+
 If you need Edgion-specific gateway-level configuration, you can later add `parametersRef`. See:
 
 - [Operations Guide / GatewayClass Configuration](../ops-guide/gateway/gateway-class.md)
