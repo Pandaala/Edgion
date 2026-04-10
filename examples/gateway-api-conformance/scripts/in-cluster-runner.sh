@@ -118,8 +118,6 @@ require_gateway_service
 if [[ "$RUN_ONLY" != "true" ]]; then
   echo "=== [1/4] Cross-compiling conformance test binary (linux/amd64) ==="
   cd "$CONFORMANCE_ROOT"
-  # Patch upstream conformance library (Go 1.24+ IsCA fix)
-  source "$SCRIPT_DIR/patch-upstream.sh"
   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o conformance-test.bin .
   echo "  Binary: $(ls -lh conformance-test.bin | awk '{print $5}')"
 

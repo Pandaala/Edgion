@@ -287,7 +287,7 @@ regardless of workload.
 **Fix (applied 2026-04-07):** Replaced with `tokio::select!` — the 25s drain
 deadline now starts only after `ShutdownHandle::signal().wait()` fires.
 
-### 2.13 TLS cert x509 CA:FALSE — Go 1.24+ rejection
+### 2.13 TLS cert x509 CA:FALSE — Go 1.24+ (not triggered in v1.5.1)
 
 **Symptom:** All TLS data-plane tests fail with `tls: failed to verify certificate:
 x509: certificate signed by unknown authority (possibly because of "x509: invalid
@@ -295,13 +295,13 @@ signature: parent certificate cannot sign this kind of certificate")`.
 
 **Root cause:** The upstream conformance suite (`sigs.k8s.io/gateway-api/conformance
 v1.5.1`) generates self-signed certificates with `BasicConstraints CA:FALSE`. Go
-1.24+ (our project uses go1.25.8) rejects these when used in a root CA pool.
+1.24+ rejects these when used in a root CA pool via `x509.Verify`.
 
-**Fix (applied 2026-04-07):** Single-file patch in
-`patches/certificate.go` — sets `IsCA: true` and adds `x509.KeyUsageCertSign`
-for self-signed certs. Applied to the Go module cache at build time via
-`scripts/patch-upstream.sh` (called automatically by `run.sh` and
-`in-cluster-runner.sh`).
+**Status (verified 2026-04-09):** Conformance v1.5.1 TLS tests use
+`InsecureSkipVerify` / do not call `x509.Verify` on client side, so this code
+path is never triggered. All 21 GATEWAY-TLS tests pass without any patch.
+No fix needed for now; revisit if a future conformance version adds strict
+client-side certificate verification.
 
 ### 2.14 TLS backend pods serve stale certificates after Secret regeneration
 

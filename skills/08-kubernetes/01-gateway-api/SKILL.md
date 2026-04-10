@@ -52,7 +52,7 @@ Reports: `examples/gateway-api-conformance/reports/`
 | 问题 | 根因 | 修复 |
 |------|------|------|
 | Controller 周期性重启 (~27s) | `tokio::time::timeout(25s)` 从启动计时 | `tokio::select!` — 信号后才开始计时 |
-| TLS cert x509 CA:FALSE | upstream conformance suite 自签名证书缺 `IsCA:true` | `patches/certificate.go` + `scripts/patch-upstream.sh`（编译前自动 patch module cache） |
+| TLS cert x509 CA:FALSE | upstream conformance suite 自签名证书缺 `IsCA:true` | 经验证 v1.5.1 测试未触发此路径，无需 patch |
 | TLS backend 旧证书缓存 | Secret 重建后 pod 不 reload | `--clean-slate` 自动 rollout restart TLS backend |
 
 配置位置：`examples/gateway-api-conformance/conformance_test.go`（`opts.ConformanceProfiles`）
