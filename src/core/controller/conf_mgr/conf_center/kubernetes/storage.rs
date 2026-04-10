@@ -622,17 +622,4 @@ impl CenterApi for KubernetesStorage {
         })
     }
 
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
-        // Note: K8s API doesn't have a count-only endpoint, so we fetch all items.
-        // This may be slow for large resource sets.
-        // Consider using Controller's Store for faster access if available.
-        let result = self.get_list_by_kind(kind, None).await?;
-        Ok(result.items.len())
-    }
-
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
-        // Note: K8s API doesn't have a count-only endpoint, so we fetch all items.
-        let result = self.get_list_by_kind_ns(kind, namespace, None).await?;
-        Ok(result.items.len())
-    }
 }

@@ -24,6 +24,12 @@ pub struct GenCertsArgs {
     #[arg(long, default_value = "certs/grpc")]
     pub output_dir: PathBuf,
 
+    /// Certificate set name — used as a subdirectory under output_dir (file mode)
+    /// and as a suffix on Kubernetes Secret names (k8s mode).
+    /// Enables managing multiple named cert sets for cert rotation.
+    #[arg(long, default_value = "primary")]
+    pub cert_name: String,
+
     /// Kubernetes namespace (k8s mode; auto-detected from ServiceAccount if omitted)
     #[arg(long, short = 'n')]
     pub namespace: Option<String>,
@@ -70,7 +76,10 @@ pub async fn execute(args: &GenCertsArgs) -> Result<()> {
     println!("  Client: CN=edgion-gateway (valid {} days)", args.cert_days);
 
     match args.output {
-        OutputMode::File => write_to_files(&bundle, &args.output_dir, args.force).await?,
+        OutputMode::File => {
+            let out_dir = args.output_dir.join(&args.cert_name);
+            write_to_files(&bundle, &out_dir, args.force).await?;
+        }
         OutputMode::K8s => {
             let ns = namespace.ok_or_else(|| {
                 anyhow::anyhow!(
@@ -78,7 +87,7 @@ pub async fn execute(args: &GenCertsArgs) -> Result<()> {
                      or run inside a Pod with a ServiceAccount."
                 )
             })?;
-            write_to_k8s_secrets(&bundle, &ns, &args.secret_prefix, args.force).await?;
+            write_to_k8s_secrets(&bundle, &ns, &args.secret_prefix, &args.cert_name, args.force).await?;
         }
     }
 
@@ -135,7 +144,13 @@ async fn write_to_files(bundle: &certs::CertBundle, dir: &PathBuf, force: bool) 
 }
 
 /// Write certificate bundle to Kubernetes Secrets.
-async fn write_to_k8s_secrets(bundle: &certs::CertBundle, namespace: &str, prefix: &str, force: bool) -> Result<()> {
+async fn write_to_k8s_secrets(
+    bundle: &certs::CertBundle,
+    namespace: &str,
+    prefix: &str,
+    cert_name: &str,
+    force: bool,
+) -> Result<()> {
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::{Api, Patch, PatchParams};
@@ -148,8 +163,8 @@ async fn write_to_k8s_secrets(bundle: &certs::CertBundle, namespace: &str, prefi
 
     let api: Api<Secret> = Api::namespaced(client, namespace);
 
-    let controller_secret_name = format!("{}-controller-tls", prefix);
-    let gateway_secret_name = format!("{}-gateway-tls", prefix);
+    let controller_secret_name = format!("{}-controller-tls-{}", prefix, cert_name);
+    let gateway_secret_name = format!("{}-gateway-tls-{}", prefix, cert_name);
 
     // Check existing secrets if not --force
     if !force {

@@ -73,17 +73,67 @@ impl EdgionCenterCli {
 
         tracing::info!(component = "center", grpc_addr = %grpc_addr, http_addr = %http_addr, "Starting edgion-center");
 
+        // Validate security config early
+        config
+            .grpc_security
+            .validate()
+            .map_err(|e| anyhow::anyhow!("Invalid grpc_security config: {}", e))?;
+
+        // Build gRPC server with optional TLS
+        let mut server_builder = tonic::transport::Server::builder();
+        if let Some(tls_cfg) = config.grpc_security.resolve_active_tls() {
+            if tls_cfg.skip_tls {
+                tracing::error!(
+                    component = "center",
+                    "grpc_security skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
+                );
+            } else {
+                let server_tls = crate::core::common::grpc_tls::load_server_tls(tls_cfg).await?;
+                server_builder = server_builder
+                    .tls_config(server_tls)
+                    .map_err(|e| anyhow::anyhow!("Failed to configure center gRPC TLS: {}", e))?;
+                tracing::info!(component = "center", "Federation gRPC mTLS enabled");
+            }
+        }
+
         // gRPC server
         let grpc_handle = tokio::spawn(
-            tonic::transport::Server::builder()
+            server_builder
                 .add_service(FederationSyncServer::new(grpc_server))
                 .serve(grpc_addr),
         );
 
         // HTTP Admin API
+        let auth_config = config.auth.clone();
         let http_handle = tokio::spawn(async move {
+            let base_router = router(api_state);
+            let app = if let Some(ref auth_cfg) = auth_config {
+                if auth_cfg.enabled {
+                    if let Some(err) = auth_cfg.validate() {
+                        tracing::error!(component = "center", error = err, "Invalid auth configuration");
+                        std::process::exit(1);
+                    }
+                    let auth_state =
+                        crate::core::common::auth::AuthMiddlewareState::from_config(auth_cfg);
+                    tracing::info!(
+                        component = "center",
+                        discovery = %auth_cfg.discovery,
+                        "Admin API authentication enabled"
+                    );
+                    base_router.layer(axum::middleware::from_fn_with_state(
+                        auth_state,
+                        crate::core::common::auth::jwt_auth_middleware,
+                    ))
+                } else {
+                    tracing::info!(component = "center", "Admin API authentication disabled by config");
+                    base_router
+                }
+            } else {
+                tracing::info!(component = "center", "Admin API authentication not configured (no [auth] section)");
+                base_router
+            };
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
-            axum::serve(listener, router(api_state)).await.unwrap();
+            axum::serve(listener, app).await.unwrap();
         });
 
         // Scheduler

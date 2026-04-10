@@ -37,6 +37,98 @@ pub mod common;
 mod config;
 pub mod traits;
 
+// These macros are defined here (rather than in non_kube_common.rs) so that
+// child modules (non_kube_common, etcd, file_system) inherit them via textual
+// scoping without needing explicit `use` imports.
+
+/// Invoke `$cb!(TypeIdent, handler_expr)` for each Phase-1 core resource.
+/// Excludes conditional `Endpoints`/`EndpointSlice`; callers handle those.
+macro_rules! for_each_phase1_core_resource {
+    ($cb:tt) => {
+        $cb!(
+            GatewayClass,
+            GatewayClassHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        $cb!(Gateway, GatewayHandler::new(None, None));
+        $cb!(Secret, SecretHandler::new());
+        $cb!(ConfigMap, ConfigMapHandler::new());
+        $cb!(ReferenceGrant, ReferenceGrantHandler::new());
+        $cb!(Service, ServiceHandler::new());
+    };
+}
+
+/// Invoke `$cb!(TypeIdent, handler_expr)` for each Phase-2 dependent resource.
+macro_rules! for_each_phase2_resource {
+    ($cb:tt) => {
+        // Routes
+        $cb!(
+            HTTPRoute,
+            HttpRouteHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        $cb!(
+            GRPCRoute,
+            GrpcRouteHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        $cb!(
+            TCPRoute,
+            TcpRouteHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        $cb!(
+            UDPRoute,
+            UdpRouteHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        $cb!(
+            TLSRoute,
+            TlsRouteHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        // TLS
+        $cb!(
+            EdgionTls,
+            EdgionTlsHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        $cb!(
+            BackendTLSPolicy,
+            BackendTlsPolicyHandler::new(
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
+                    .to_string()
+            )
+        );
+        // Plugins
+        $cb!(EdgionPlugins, EdgionPluginsHandler::new());
+        $cb!(EdgionStreamPlugins, EdgionStreamPluginsHandler::new());
+        $cb!(PluginMetaData, PluginMetadataHandler::new());
+        $cb!(LinkSys, LinkSysHandler::new());
+        // ACME
+        $cb!(EdgionAcme, EdgionAcmeHandler::new());
+        // Cluster-scoped dependent
+        $cb!(EdgionGatewayConfig, EdgionGatewayConfigHandler::new());
+    };
+}
+
+pub mod non_kube_common;
+
+pub mod etcd;
 pub mod file_system;
 pub mod kubernetes;
 
@@ -51,6 +143,9 @@ pub use kubernetes::{
     ControllerExitReason, KubernetesCenter, KubernetesConfig, KubernetesController, KubernetesStorage, LeaderElection,
     LeaderElectionConfig, LeaderHandle, MetadataFilterConfig, NamespaceWatchMode, RelinkReason,
 };
+
+// Re-export Etcd types
+pub use etcd::{EtcdCenter, EtcdConfig};
 
 // Re-export configuration types
 pub use common::EndpointMode;

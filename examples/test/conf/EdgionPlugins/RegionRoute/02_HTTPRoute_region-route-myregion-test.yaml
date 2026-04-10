@@ -1,16 +1,15 @@
-# HTTPRoute for RegionRoute no-key (pass-through) test
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: region-route-nokey-test
-  namespace: default
+  name: region-route-myregion-test
+  namespace: edgion-default
 spec:
   parentRefs:
     - name: edgion-plugins-gateway
       namespace: edgion-test
-      sectionName: http  # Port 31180
+      sectionName: http
   hostnames:
-    - "region-route-nokey.example.com"
+    - "region-route-myregion.example.com"
   rules:
     - backendRefs:
         - name: test-http
@@ -21,4 +20,4 @@ spec:
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
-            name: region-route-nokey
+            name: region-route-myregion

@@ -122,6 +122,14 @@ pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
             );
             StatusCode::INTERNAL_SERVER_ERROR
         }
+        ConfWriterError::EtcdError(msg) => {
+            tracing::error!(
+                component = "unified_api",
+                error = %msg,
+                "Etcd error"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }
 

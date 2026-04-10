@@ -33,7 +33,7 @@ pub mod status_utils;
 pub use context::HandlerContext;
 pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkItemResult};
-pub use raw_store::{FsRawStore, KubeRawStore, RawStore};
+pub use raw_store::{KubeRawStore, LocalRawStore, RawStore};
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
     resolved_refs_condition, set_parent_conditions, set_parent_conditions_full, update_condition, AcceptedError,

@@ -101,6 +101,10 @@ pub enum ConfWriterError {
     /// The original error is type-erased and accessible via `Error::source()`.
     #[error("Kubernetes API error")]
     KubeError(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// Etcd client error.
+    #[error("Etcd error: {0}")]
+    EtcdError(String),
 }
 
 impl ConfWriterError {
@@ -182,12 +186,6 @@ pub trait CenterApi: Send + Sync {
         namespace: &str,
         opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError>;
-
-    /// Count configurations by kind
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError>;
-
-    /// Count configurations by kind and namespace
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError>;
 
     /// Delete a single configuration
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError>;
@@ -347,14 +345,6 @@ macro_rules! impl_center_api_delegate {
                 opts: Option<ListOptions>,
             ) -> Result<ListResult, ConfWriterError> {
                 self.$field.get_list_by_kind_ns(kind, namespace, opts).await
-            }
-
-            async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
-                self.$field.cnt_by_kind(kind).await
-            }
-
-            async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
-                self.$field.cnt_by_kind_ns(kind, namespace).await
             }
 
             async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {

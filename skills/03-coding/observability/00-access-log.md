@@ -70,12 +70,22 @@
 ### 格式规范
 
 ```
-<结果> [<关键参数>]; 
+<结果前缀>[:<关键参数>]; 
 ```
 
 - 以 `; ` 结尾（方便 grep / 拼接）
-- 结果词首选大写缩写：`OK`、`Deny`、`Skip`、`Fail`、`Rate`
+- **结果前缀统一约定**：
+
+| 前缀 | 含义 | 示例 |
+|------|------|------|
+| `OK` | 正常放行 | `OK u=jack; ` |
+| `Deny` | 业务级拒绝（认证失败、限流等） | `Deny no-key; ` |
+| `Skip` | 条件不满足，跳过执行 | `Skip; ` |
+| `Rate` | 限流触发 | `Rate 429; ` |
+| `err:` | **配置类错误**，插件继续工作但该规则降级 | `err:failoverTo invalid; ` |
+
 - 关键参数用 `k=v` 格式，多个参数空格分隔
+- `err:` 前缀专用于**配置异常但不阻断插件**的场景：插件对该条规则做降级处理（如 skip redirect），同时通过 pluginLog 记录异常，便于 grep 排查
 
 ### 好的 PluginLog 示例
 
@@ -100,6 +110,9 @@ log.push(&format!("-> {} {}; ", code, location));
 
 // DirectEndpoint — 强制指定了 endpoint
 log.push(&format!("Direct {}:{}; ", ip, port));
+
+// RegionRoute — failoverTo 配置了无效目标（插件正常工作，该 region 跳过 redirect）
+log.push("err:failoverTo invalid; ");
 ```
 
 ### 不好的 PluginLog 示例

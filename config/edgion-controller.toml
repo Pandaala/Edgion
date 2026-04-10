@@ -138,8 +138,24 @@ default_capacity = 200
 # Omit this section entirely to keep plaintext gRPC (backward compatible).
 # When configured, Controller requires valid certificates to start gRPC listener.
 #
+# --- Option A: Legacy single-cert format (backward compatible) ---
 # [conf_sync_security.tls]
 # cert = "certs/grpc/server.crt"   # Controller server certificate
 # key  = "certs/grpc/server.key"   # Controller server private key
 # ca   = "certs/grpc/ca.crt"       # CA certificate (verifies Gateway client cert)
 # skip_tls = false                 # Emergency bypass: true = skip TLS (INSECURE)
+#
+# --- Option B: Multi-cert format (supports cert rotation / CA migration) ---
+# active = "primary"               # Name of the active cert set
+#
+# [[conf_sync_security.certs]]
+# name = "primary"
+# cert = "certs/grpc/primary/server.crt"
+# key  = "certs/grpc/primary/server.key"
+# ca   = "certs/grpc/primary/ca.crt"
+#
+# [[conf_sync_security.certs]]
+# name = "new-ca"
+# cert = "certs/grpc/new-ca/server.crt"
+# key  = "certs/grpc/new-ca/server.key"
+# ca   = "certs/grpc/new-ca/ca.crt"

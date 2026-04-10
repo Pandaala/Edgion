@@ -3,35 +3,24 @@
 //! Implements both CenterApi (CRUD) and CenterLifeCycle (lifecycle management),
 //! automatically getting ConfCenter via blanket impl.
 //!
-//! ## Architecture
-//!
-//! ```text
-//! FileSystemCenter
-//! ├── writer: FileSystemStorage (CRUD delegate)
-//! ├── config: FileSystemConfig
-//! ├── config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>
-//! ├── shutdown_handle: Mutex<Option<ShutdownHandle>>
-//! └── controller_handle: Mutex<Option<JoinHandle<()>>>
-//! ```
+//! Shared lifecycle logic is delegated to `CenterBase` (see `non_kube_common`).
+//! The only FileSystem-specific work is creating `FileSystemController` per iteration.
 
-use super::super::common::EndpointMode;
+use std::sync::Arc;
+
+use anyhow::Result;
+use async_trait::async_trait;
+
 use super::config::FileSystemConfig;
 use super::controller::FileSystemController;
 use super::storage::FileSystemStorage;
+use crate::core::controller::conf_mgr::conf_center::non_kube_common::{resolve_endpoint_mode, CenterBase};
 use crate::core::controller::conf_mgr::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
-use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
-use anyhow::Result;
-use async_trait::async_trait;
-use parking_lot::{Mutex, RwLock};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
 
 /// FileSystemCenter - Configuration center for FileSystem mode
 ///
@@ -42,18 +31,8 @@ pub struct FileSystemCenter {
     config: FileSystemConfig,
     /// Writer for CRUD operations (delegate)
     writer: FileSystemStorage,
-    /// ConfigSyncServer instance for gRPC list/watch
-    /// None: Not ready (startup, restart)
-    /// Some: Ready to serve requests
-    config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>,
-    /// Shutdown handle for stopping sync tasks
-    shutdown_handle: Mutex<Option<ShutdownHandle>>,
-    /// Handle to the running controller task
-    controller_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Reload signal sender (for triggering reload via Admin API)
-    reload_tx: Mutex<Option<mpsc::Sender<()>>>,
-    /// Aggregated controller runtime (stores, registries)
-    runtime: Arc<ControllerRuntime>,
+    /// Shared lifecycle base (handles, runtime)
+    base: CenterBase,
 }
 
 impl FileSystemCenter {
@@ -71,105 +50,13 @@ impl FileSystemCenter {
         Ok(Self {
             config,
             writer,
-            config_sync_server: RwLock::new(None),
-            shutdown_handle: Mutex::new(None),
-            controller_handle: Mutex::new(None),
-            reload_tx: Mutex::new(None),
-            runtime: Arc::new(ControllerRuntime::new()),
+            base: CenterBase::new(),
         })
     }
 
     /// Get the configuration
     pub fn config(&self) -> &FileSystemConfig {
         &self.config
-    }
-
-    // ==================== Helper Methods ====================
-
-    /// Set the ConfigSyncServer (Some = ready, None = not ready)
-    fn set_config_sync_server(&self, server: Option<Arc<ConfigSyncServer>>) {
-        let mut sync_server = self.config_sync_server.write();
-        let was_ready = sync_server.is_some();
-        let is_ready = server.is_some();
-        *sync_server = server;
-
-        if was_ready != is_ready {
-            tracing::info!(
-                component = "file_system_center",
-                event = "config_sync_server_state_changed",
-                was_ready = was_ready,
-                is_ready = is_ready,
-                "ConfigSyncServer state changed"
-            );
-        }
-    }
-
-    /// Store shutdown handle for lifecycle management
-    fn set_shutdown_handle(&self, handle: ShutdownHandle) {
-        let mut shutdown_handle = self.shutdown_handle.lock();
-        *shutdown_handle = Some(handle);
-    }
-
-    /// Store controller task handle for cleanup
-    fn set_controller_handle(&self, handle: JoinHandle<()>) {
-        let mut controller_handle = self.controller_handle.lock();
-        *controller_handle = Some(handle);
-    }
-
-    /// Abort and take controller handle
-    fn abort_controller(&self) {
-        if let Some(handle) = self.controller_handle.lock().take() {
-            handle.abort();
-        }
-    }
-
-    /// Set reload signal sender
-    fn set_reload_tx(&self, tx: Option<mpsc::Sender<()>>) {
-        *self.reload_tx.lock() = tx;
-    }
-
-    /// Wait for processor_registry to be ready
-    async fn wait_registry_ready(&self, timeout_secs: u64) {
-        let start = Instant::now();
-        let timeout = Duration::from_secs(timeout_secs);
-        let registry = &self.runtime.processor_registry;
-
-        loop {
-            if registry.is_all_ready() {
-                tracing::info!(
-                    component = "file_system_center",
-                    event = "all_processors_ready",
-                    elapsed_ms = start.elapsed().as_millis(),
-                    "All processors are ready"
-                );
-                return;
-            }
-
-            if start.elapsed() > timeout {
-                let not_ready = registry
-                    .all_kinds()
-                    .into_iter()
-                    .filter(|kind| registry.get(kind).map(|p| !p.is_ready()).unwrap_or(false))
-                    .collect::<Vec<_>>();
-
-                tracing::warn!(
-                    component = "file_system_center",
-                    event = "wait_registry_timeout",
-                    timeout_secs = timeout_secs,
-                    not_ready = ?not_ready,
-                    "Timeout waiting for processors, proceeding anyway"
-                );
-                return;
-            }
-
-            tracing::debug!(
-                component = "file_system_center",
-                event = "waiting_for_processors",
-                elapsed_ms = start.elapsed().as_millis(),
-                "Waiting for processors to be ready..."
-            );
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
     }
 }
 
@@ -201,198 +88,39 @@ impl CenterLifeCycle for FileSystemCenter {
             "Starting FileSystem lifecycle"
         );
 
-        // Store shutdown handle for external access
-        self.set_shutdown_handle(shutdown_handle.clone());
+        let endpoint_mode = resolve_endpoint_mode(self.config.endpoint_mode());
+        let conf_dir = self.config.conf_dir().clone();
 
-        // Get configuration
-        let conf_dir = self.config.conf_dir();
-
-        // Resolve endpoint mode:
-        // - test_mode: force Both (sync both Endpoints and EndpointSlice)
-        // - Auto: defaults to EndpointSlice in FileSystem mode
-        // - Others: use as configured
-        let endpoint_mode = if crate::core::common::config::is_test_mode() {
-            EndpointMode::Both
-        } else {
-            match self.config.endpoint_mode() {
-                EndpointMode::Auto => EndpointMode::EndpointSlice,
-                mode => mode,
-            }
-        };
-
-        crate::core::gateway::backends::init_global_endpoint_mode(endpoint_mode);
-
-        tracing::info!(
-            component = "file_system_center",
-            mode = "file_system",
-            endpoint_mode = ?endpoint_mode,
-            test_mode = crate::core::common::config::is_test_mode(),
-            conf_dir = %conf_dir.display(),
-            "Using endpoint mode"
-        );
-
-        // Track reload state for metrics
-        let mut reload_start_time: Option<Instant> = None;
-
-        // Outer loop to support reload
-        loop {
-            // Record reload completion time if this is a reload iteration
-            if let Some(start_time) = reload_start_time.take() {
-                let duration = start_time.elapsed().as_secs_f64();
-                reload_metrics().reload_completed(duration);
-                tracing::info!(
-                    component = "file_system_center",
-                    duration_secs = duration,
-                    "Reload completed"
-                );
-            }
-
-            // 1. Create iteration-specific shutdown handle for controller
-            let iteration_shutdown = ShutdownHandle::new();
-
-            // 2. Create reload channel
-            let (reload_tx, mut reload_rx) = mpsc::channel::<()>(1);
-            self.set_reload_tx(Some(reload_tx));
-
-            // 3. Create error channel for controller errors
-            let (error_tx, error_rx) = oneshot::channel::<String>();
-
-            // 4. Create and spawn FileSystemController (using iteration_shutdown)
-            let controller = FileSystemController::new(conf_dir.clone(), endpoint_mode);
-            let controller_shutdown = iteration_shutdown.signal();
-            let runtime_for_controller = self.runtime.clone();
-
-            let handle = tokio::spawn(async move {
-                if let Err(e) = controller.run(controller_shutdown, runtime_for_controller).await {
-                    let error_msg = e.to_string();
-                    tracing::error!(
-                        component = "file_system_center",
-                        mode = "file_system",
-                        error = %error_msg,
-                        "FileSystemController error"
-                    );
-                    let _ = error_tx.send(error_msg);
-                }
-            });
-
-            self.set_controller_handle(handle);
-
-            // 5. Wait for PROCESSOR_REGISTRY to be ready (with timeout)
-            self.wait_registry_ready(30).await;
-
-            // 5.5. Trigger post-cache-ready revalidations (cross-ns refs, TLS secrets, parentRef routes)
-            crate::core::controller::conf_mgr::sync_runtime::resource_processor::run_post_cache_ready_revalidations(
-                self.runtime.clone(),
-            )
-            .await;
-
-            // 6. Create ConfigSyncServer and register all WatchObjs
-            let config_sync_server = Arc::new(ConfigSyncServer::new());
-            config_sync_server.set_endpoint_mode(endpoint_mode);
-            let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
-            let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
-            config_sync_server.register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
-
-            // 7. Set config_sync_server = Some (services become available)
-            self.set_config_sync_server(Some(config_sync_server));
-
-            tracing::info!(
-                component = "file_system_center",
-                mode = "file_system",
-                "ConfigSyncServer is ready, gRPC services can process requests"
-            );
-
-            // 8. Wait for shutdown, reload, or error
-            tracing::info!(
-                component = "file_system_center",
-                mode = "file_system",
-                "FileSystem mode: running until shutdown or reload signal"
-            );
-
-            let mut global_shutdown = shutdown_handle.signal();
-            let mut error_rx = error_rx;
-
-            enum LoopAction {
-                Shutdown,
-                Reload,
-                Error(String),
-            }
-
-            let action = tokio::select! {
-                _ = global_shutdown.wait() => LoopAction::Shutdown,
-                _ = reload_rx.recv() => LoopAction::Reload,
-                result = &mut error_rx => {
-                    match result {
-                        Ok(msg) => LoopAction::Error(msg),
-                        Err(_) => {
-                            // Channel closed without error, wait for shutdown
-                            global_shutdown.wait().await;
-                            LoopAction::Shutdown
+        self.base
+            .run_lifecycle(
+                shutdown_handle,
+                endpoint_mode,
+                "file_system_center",
+                |shutdown, runtime, error_tx| {
+                    let ctrl = FileSystemController::new(conf_dir.clone(), endpoint_mode);
+                    tokio::spawn(async move {
+                        if let Err(e) = ctrl.run(shutdown, runtime).await {
+                            tracing::error!(
+                                component = "file_system_center",
+                                error = %e,
+                                "FileSystemController error"
+                            );
+                            let _ = error_tx.send(e.to_string());
                         }
-                    }
-                }
-            };
-
-            // 9. Stop controller gracefully via iteration_shutdown
-            iteration_shutdown.shutdown();
-
-            // 10. Cleanup
-            self.set_config_sync_server(None);
-            self.abort_controller();
-            tracing::info!(component = "file_system_center", "ControllerRuntime reset");
-            self.runtime.reset();
-            self.set_reload_tx(None);
-
-            // 11. Handle action
-            match action {
-                LoopAction::Shutdown => {
-                    tracing::info!(
-                        component = "file_system_center",
-                        mode = "file_system",
-                        "Normal shutdown, FileSystem lifecycle completed"
-                    );
-                    return Ok(());
-                }
-                LoopAction::Reload => {
-                    tracing::info!(
-                        component = "file_system_center",
-                        mode = "file_system",
-                        "Reload requested, restarting controller with new server_id"
-                    );
-                    // Record reload start metrics
-                    reload_metrics().reload_started();
-                    reload_start_time = Some(Instant::now());
-                    // Continue loop to restart
-                    continue;
-                }
-                LoopAction::Error(msg) => {
-                    tracing::error!(
-                        component = "file_system_center",
-                        mode = "file_system",
-                        error = %msg,
-                        "Controller stopped with error, waiting for shutdown"
-                    );
-                    // Wait for shutdown signal
-                    shutdown_handle.signal().wait().await;
-                    tracing::info!(
-                        component = "file_system_center",
-                        mode = "file_system",
-                        "FileSystem lifecycle completed after error"
-                    );
-                    return Ok(());
-                }
-            }
-        }
+                    })
+                },
+            )
+            .await
     }
 
     /// Check if the system is ready
     fn is_ready(&self) -> bool {
-        self.runtime.processor_registry.is_all_ready() && self.config_sync_server.read().is_some()
+        self.base.is_ready()
     }
 
     /// Get the ConfigSyncServer (may be None if not ready)
     fn config_sync_server(&self) -> Option<Arc<ConfigSyncServer>> {
-        self.config_sync_server.read().clone()
+        self.base.config_sync_server()
     }
 
     /// Check if running in Kubernetes mode
@@ -402,16 +130,11 @@ impl CenterLifeCycle for FileSystemCenter {
 
     /// Request a reload (re-initialize all processors and stores)
     fn request_reload(&self) -> Result<(), String> {
-        if let Some(tx) = self.reload_tx.lock().as_ref() {
-            tx.try_send(())
-                .map_err(|e| format!("Failed to send reload signal: {}", e))
-        } else {
-            Err("Center not started or not ready for reload".to_string())
-        }
+        self.base.request_reload()
     }
 
     fn runtime(&self) -> Arc<ControllerRuntime> {
-        self.runtime.clone()
+        self.base.runtime()
     }
 }
 

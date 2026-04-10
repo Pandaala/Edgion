@@ -1,10 +1,10 @@
 // RegionRoute Integration Test Suite
 //
 // Required conf files (examples/test/conf/EdgionPlugins/RegionRoute/):
-//   01_EdgionPlugins_region-route-hash.yaml   — hash routing, direct_region, region_key_hash
-//   01_EdgionPlugins_region-route-nokey.yaml  — empty region_key (no-op)
-//   02_HTTPRoute_region-route-hash-test.yaml
-//   02_HTTPRoute_region-route-nokey-test.yaml
+//   01_EdgionPlugins_region-route-main.yaml   — all three route rules + hashCalc + writeBack
+//   01_EdgionPlugins_region-route-norules.yaml — no routeRules (no-op)
+//   02_HTTPRoute_region-route-main-test.yaml
+//   02_HTTPRoute_region-route-norules-test.yaml
 //
 // Test strategy:
 //   Backend endpoints 127.0.0.1:30001 (virginia) and 127.0.0.1:30002 (ohio) are
@@ -17,8 +17,9 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
 
-const HASH_HOST: &str = "region-route-hash.example.com";
-const NOKEY_HOST: &str = "region-route-nokey.example.com";
+const MAIN_HOST: &str = "region-route-main.example.com";
+const NORULES_HOST: &str = "region-route-norules.example.com";
+const MYREGION_HOST: &str = "region-route-myregion.example.com";
 
 pub struct RegionRouteTestSuite;
 
@@ -39,16 +40,16 @@ impl RegionRouteTestSuite {
     // Pass-through tests (expect 200 from normal backend)
     // =========================================================================
 
-    /// Empty region_key config → plugin is a no-op → normal backend responds 200
-    fn no_region_key_passes_through() -> TestCase {
+    /// No routeRules config → plugin is a no-op → normal backend responds 200
+    fn no_route_rules_passes_through() -> TestCase {
         TestCase::new(
-            "no_region_key_passes_through",
-            "Empty region_key: plugin is no-op, normal backend returns 200",
+            "no_route_rules_passes_through",
+            "No routeRules: plugin is no-op, normal backend returns 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/echo", ctx.edgion_plugins_url());
-                    match ctx.http_client.get(&url).header("host", NOKEY_HOST).send().await {
+                    match ctx.http_client.get(&url).header("host", NORULES_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status == 200 {
@@ -64,11 +65,11 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// region_key configured but header absent → plugin passes through → normal backend 200
+    /// No keyGet value, no hashKeyGet value → plugin passes through → normal backend 200
     fn missing_key_passes_through() -> TestCase {
         TestCase::new(
             "missing_key_passes_through",
-            "region_key configured but header absent: plugin passes through, normal backend 200",
+            "No keyGet/hashKeyGet value: RouteByHashRange passes through, normal backend 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -76,8 +77,9 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
-                        // No X-Account-Id header, no account_id cookie
+                        .header("host", MAIN_HOST)
+                        // No X-Account-Id header, no account_id cookie, no x_region_hash
+                        // No X-Direct-Region, no matchMap key
                         .send()
                         .await
                     {
@@ -86,7 +88,10 @@ impl RegionRouteTestSuite {
                             if status == 200 {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 200 (pass-through), got {}", status))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200 (pass-through), got {}", status),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -100,12 +105,15 @@ impl RegionRouteTestSuite {
     // Hash routing via access log (expect 502 + access log entry)
     // =========================================================================
 
-    /// X-Account-Id header → plugin computes hash → routes to one of the two regions
-    /// Verify access log contains "key=hdr(X-Account-Id)(...) hash=N"
+    /// X-Account-Id header → plugin computes hash → routes to one of the two regions.
+    /// The jump log (→virginia/ohio) is truncated by the 100-byte LogBuffer when
+    /// match-miss(32B) + key(32B) + wb(28B) already fills 92 bytes.
+    /// We verify via "key=hdr:X-Account-Id" (hash computed) and "wb→" (write-back ran,
+    /// proving routing happened — write_back only runs when a hash is successfully computed).
     fn hash_routing_logged() -> TestCase {
         TestCase::new(
             "hash_routing_logged",
-            "X-Account-Id header → hash computed, region jump logged in access log",
+            "X-Account-Id header → hash computed and write-back triggered (access log)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -114,31 +122,28 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
-                        .header("X-Account-Id", "acct-test-001")
+                        .header("host", MAIN_HOST)
+                        .header("X-Account-Id", "acct-001")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store")
                         .send()
                         .await
                     {
                         Ok(_resp) => {
-                            // Response is 502 (loopback rejected), check access log instead
                             let al_client = ctx.access_log_client();
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    // Plugin log should contain hash computation
-                                    // and a region jump entry (→virginia or →ohio)
-                                    let has_hash = log_str.contains("key=hdr(X-Account-Id)");
-                                    let has_jump = log_str.contains("→virginia") || log_str.contains("→ohio");
-                                    if has_hash && has_jump {
+                                    let has_hash = log_str.contains("key=hdr:X-Account-Id");
+                                    let has_wb = log_str.contains("wb→res_hdr:X-Region-Hash");
+                                    if has_hash && has_wb {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Access log missing expected entries. has_hash={}, has_jump={}. log: {}",
-                                                has_hash, has_jump, log_str
+                                                "Access log missing expected entries. has_hash={}, has_wb={}. log: {}",
+                                                has_hash, has_wb, log_str
                                             ),
                                         )
                                     }
@@ -168,7 +173,7 @@ impl RegionRouteTestSuite {
                         let _ = ctx
                             .http_client
                             .get(&url)
-                            .header("host", HASH_HOST)
+                            .header("host", MAIN_HOST)
                             .header("X-Account-Id", account_id)
                             .header("x-trace-id", &trace_id)
                             .header("access_log", "test_store")
@@ -187,29 +192,28 @@ impl RegionRouteTestSuite {
                     let log1 = send_and_get_region(ctx.clone(), trace1).await;
                     let log2 = send_and_get_region(ctx.clone(), trace2).await;
 
+                    // Extract "hash=N" value from log entry like "key=hdr:X-Account-Id hash=N; "
+                    let extract_hash = |log: &str| -> Option<String> {
+                        let start = log.find("hash=")? + 5;
+                        let rest = &log[start..];
+                        let end = rest.find(';')?;
+                        Some(rest[..end].trim().to_string())
+                    };
+
                     match (log1, log2) {
                         (Ok(l1), Ok(l2)) => {
-                            let region1 = if l1.contains("→virginia") {
-                                "virginia"
-                            } else if l1.contains("→ohio") {
-                                "ohio"
-                            } else {
-                                "unknown"
-                            };
-                            let region2 = if l2.contains("→virginia") {
-                                "virginia"
-                            } else if l2.contains("→ohio") {
-                                "ohio"
-                            } else {
-                                "unknown"
-                            };
-                            if region1 == region2 && region1 != "unknown" {
-                                TestResult::passed(start.elapsed())
-                            } else {
-                                TestResult::failed(
+                            let h1 = extract_hash(&l1);
+                            let h2 = extract_hash(&l2);
+                            match (h1, h2) {
+                                (Some(v1), Some(v2)) if v1 == v2 => TestResult::passed(start.elapsed()),
+                                (Some(v1), Some(v2)) => TestResult::failed(
                                     start.elapsed(),
-                                    format!("Same key routed differently: {} vs {}", region1, region2),
-                                )
+                                    format!("Hash not deterministic: {} vs {} (different routes)", v1, v2),
+                                ),
+                                _ => TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Could not extract hash from logs: l1={} l2={}", l1, l2),
+                                ),
                             }
                         }
                         (Err(e), _) | (_, Err(e)) => {
@@ -222,10 +226,10 @@ impl RegionRouteTestSuite {
     }
 
     // =========================================================================
-    // direct_region override (expect 502 + access log entry)
+    // RouteByDirectRegion override (expect 502 + access log entry)
     // =========================================================================
 
-    /// X-Direct-Region: virginia → access log shows "direct=virginia"
+    /// X-Direct-Region: virginia → access log shows "direct=virginia" and "→virginia"
     fn direct_region_virginia() -> TestCase {
         TestCase::new(
             "direct_region_virginia",
@@ -238,7 +242,7 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
+                        .header("host", MAIN_HOST)
                         .header("X-Direct-Region", "virginia")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store")
@@ -255,7 +259,10 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Expected 'direct=virginia' and '→virginia' in log: {}", log_str),
+                                            format!(
+                                                "Expected 'direct=virginia' and '→virginia' in log: {}",
+                                                log_str
+                                            ),
                                         )
                                     }
                                 }
@@ -269,7 +276,7 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// X-Direct-Region: ohio → access log shows "direct=ohio"
+    /// X-Direct-Region: ohio → access log shows "direct=ohio" and "→ohio"
     fn direct_region_ohio() -> TestCase {
         TestCase::new(
             "direct_region_ohio",
@@ -282,7 +289,7 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
+                        .header("host", MAIN_HOST)
                         .header("X-Direct-Region", "ohio")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store")
@@ -299,7 +306,10 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Expected 'direct=ohio' and '→ohio' in log: {}", log_str),
+                                            format!(
+                                                "Expected 'direct=ohio' and '→ohio' in log: {}",
+                                                log_str
+                                            ),
                                         )
                                     }
                                 }
@@ -313,11 +323,12 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// X-Direct-Region: unknown-region → falls through to hash routing
+    /// X-Direct-Region: invalid → unknown region, falls through → RouteByKeyConfMatch misses
+    /// → RouteByHashRange computes hash from X-Account-Id
     fn direct_region_unknown_falls_through() -> TestCase {
         TestCase::new(
             "direct_region_unknown_falls_through",
-            "X-Direct-Region with unknown region name falls through to hash routing",
+            "X-Direct-Region with unknown region name falls through to subsequent rules",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -326,8 +337,8 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
-                        .header("X-Direct-Region", "not-a-region")
+                        .header("host", MAIN_HOST)
+                        .header("X-Direct-Region", "invalid")
                         .header("X-Account-Id", "acct-fallthrough")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store")
@@ -339,19 +350,26 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    // Should log "direct unknown 'not-a-region', fallthrough"
-                                    // then route by hash
+                                    // Verify: unknown direct region falls through, RouteByKeyConfMatch
+                                    // misses, then RouteByHashRange routes.
+                                    // "key=hdr:X-Account-Id" may be truncated by 100-byte LogBuffer
+                                    // (fallthrough=39B + match-miss=32B + key=31B > 100B), so we
+                                    // verify via the match-miss entry and the final jump instead.
+                                    // The jump log (→region) is truncated by the 100B LogBuffer
+                                    // after fallthrough(39B) + match-miss(32B) + wb(28B) = 99B.
+                                    // Verify: unknown direct falls through, match-miss runs,
+                                    // then RouteByHashRange computes and triggers write-back.
                                     let fell_through = log_str.contains("fallthrough");
-                                    let routed_by_hash =
-                                        log_str.contains("key=hdr(X-Account-Id)") && (log_str.contains("→virginia") || log_str.contains("→ohio"));
-                                    if fell_through && routed_by_hash {
+                                    let match_miss = log_str.contains("match=hdr:X-Account-Id no conf");
+                                    let hash_computed = log_str.contains("wb→res_hdr:X-Region-Hash");
+                                    if fell_through && match_miss && hash_computed {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Expected fallthrough then hash routing. fell_through={}, routed_by_hash={}. log: {}",
-                                                fell_through, routed_by_hash, log_str
+                                                "Expected fallthrough+match-miss+hash. fell_through={}, match_miss={}, hash_computed={}. log: {}",
+                                                fell_through, match_miss, hash_computed, log_str
                                             ),
                                         )
                                     }
@@ -367,13 +385,164 @@ impl RegionRouteTestSuite {
     }
 
     // =========================================================================
-    // region_key_hash passthrough
+    // RouteByKeyConfMatch (expect 502 + access log entry)
+    // =========================================================================
+
+    /// X-Account-Id: vip-va → matchMap hit → virginia
+    fn key_conf_match_virginia() -> TestCase {
+        TestCase::new(
+            "key_conf_match_virginia",
+            "X-Account-Id vip-va → matchMap routes to virginia",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("rr-match-va-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MAIN_HOST)
+                        .header("X-Account-Id", "vip-va")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(_) => {
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    let has_match = log_str.contains("match=hdr:X-Account-Id→virginia");
+                                    let has_jump = log_str.contains("→virginia");
+                                    if has_match && has_jump {
+                                        TestResult::passed(start.elapsed())
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!(
+                                                "Expected match→virginia and →virginia. has_match={}, has_jump={}. log: {}",
+                                                has_match, has_jump, log_str
+                                            ),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// X-Account-Id: vip-oh → matchMap hit → ohio
+    fn key_conf_match_ohio() -> TestCase {
+        TestCase::new(
+            "key_conf_match_ohio",
+            "X-Account-Id vip-oh → matchMap routes to ohio",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("rr-match-oh-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MAIN_HOST)
+                        .header("X-Account-Id", "vip-oh")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(_) => {
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    let has_match = log_str.contains("match=hdr:X-Account-Id→ohio");
+                                    let has_jump = log_str.contains("→ohio");
+                                    if has_match && has_jump {
+                                        TestResult::passed(start.elapsed())
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!(
+                                                "Expected match→ohio and →ohio. has_match={}, has_jump={}. log: {}",
+                                                has_match, has_jump, log_str
+                                            ),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// X-Account-Id value not in matchMap → "no conf" → falls to RouteByHashRange
+    fn key_conf_match_miss_falls_to_hash() -> TestCase {
+        TestCase::new(
+            "key_conf_match_miss_falls_to_hash",
+            "X-Account-Id not in matchMap → no conf, falls through to RouteByHashRange",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("rr-match-miss-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MAIN_HOST)
+                        .header("X-Account-Id", "not-in-map")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(_) => {
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    let has_no_conf = log_str.contains("match=hdr:X-Account-Id no conf");
+                                    let has_hash = log_str.contains("key=hdr:X-Account-Id hash=");
+                                    if has_no_conf && has_hash {
+                                        TestResult::passed(start.elapsed())
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!(
+                                                "Expected no-conf then hash. has_no_conf={}, has_hash={}. log: {}",
+                                                has_no_conf, has_hash, log_str
+                                            ),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // =========================================================================
+    // hashKeyGet passthrough (expect 502 + access log entry)
     // =========================================================================
 
     /// Cookie x_region_hash=100 → falls in virginia [0,600] → access log "hash_pass=100"
-    fn region_key_hash_passthrough_virginia() -> TestCase {
+    fn hash_passthrough_virginia() -> TestCase {
         TestCase::new(
-            "region_key_hash_passthrough_virginia",
+            "hash_passthrough_virginia",
             "Pre-computed hash cookie 100 → virginia range [0,600], access log shows hash_pass",
             |ctx: TestContext| {
                 Box::pin(async move {
@@ -383,7 +552,7 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
+                        .header("host", MAIN_HOST)
                         // x_region_hash=100 → falls in [0,600] → virginia
                         .header("Cookie", "x_region_hash=100")
                         .header("x-trace-id", &trace_id)
@@ -401,7 +570,10 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Expected 'hash_pass=100' and '→virginia': {}", log_str),
+                                            format!(
+                                                "Expected 'hash_pass=100' and '→virginia': {}",
+                                                log_str
+                                            ),
                                         )
                                     }
                                 }
@@ -416,9 +588,9 @@ impl RegionRouteTestSuite {
     }
 
     /// Cookie x_region_hash=800 → falls in ohio [601,1000] → access log "hash_pass=800"
-    fn region_key_hash_passthrough_ohio() -> TestCase {
+    fn hash_passthrough_ohio() -> TestCase {
         TestCase::new(
-            "region_key_hash_passthrough_ohio",
+            "hash_passthrough_ohio",
             "Pre-computed hash cookie 800 → ohio range [601,1000], access log shows hash_pass",
             |ctx: TestContext| {
                 Box::pin(async move {
@@ -428,7 +600,7 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
+                        .header("host", MAIN_HOST)
                         // x_region_hash=800 → falls in [601,1000] → ohio
                         .header("Cookie", "x_region_hash=800")
                         .header("x-trace-id", &trace_id)
@@ -446,7 +618,10 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Expected 'hash_pass=800' and '→ohio': {}", log_str),
+                                            format!(
+                                                "Expected 'hash_pass=800' and '→ohio': {}",
+                                                log_str
+                                            ),
                                         )
                                     }
                                 }
@@ -460,11 +635,11 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// Out-of-range passthrough (x_region_hash=1001) is ignored → falls back to region_key computation
-    fn region_key_hash_out_of_range_ignored() -> TestCase {
+    /// x_region_hash=1001 (>= modulo=1001) is out of range → ignored → falls back to hashCalc
+    fn hash_passthrough_out_of_range_falls_to_compute() -> TestCase {
         TestCase::new(
-            "region_key_hash_out_of_range_ignored",
-            "hash passthrough > 1000 is ignored, falls back to region_key computation",
+            "hash_passthrough_out_of_range_falls_to_compute",
+            "hash passthrough >= modulo is out-of-range, falls back to hashCalc computation",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -473,8 +648,8 @@ impl RegionRouteTestSuite {
                     match ctx
                         .http_client
                         .get(&url)
-                        .header("host", HASH_HOST)
-                        .header("Cookie", "x_region_hash=1001")  // invalid → ignored
+                        .header("host", MAIN_HOST)
+                        .header("Cookie", "x_region_hash=1001") // invalid: >= modulo → ignored
                         .header("X-Account-Id", "acct-oor")
                         .header("x-trace-id", &trace_id)
                         .header("access_log", "test_store")
@@ -488,16 +663,219 @@ impl RegionRouteTestSuite {
                                     let log_str = entry.data.to_string();
                                     // Should NOT use passthrough; should compute hash from X-Account-Id
                                     let used_passthrough = log_str.contains("hash_pass=1001");
-                                    let used_key = log_str.contains("key=hdr(X-Account-Id)");
+                                    let used_key = log_str.contains("key=hdr:X-Account-Id");
                                     if !used_passthrough && used_key {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Expected fallback to region_key. used_passthrough={}, used_key={}. log: {}",
+                                                "Expected fallback to hashCalc. used_passthrough={}, used_key={}. log: {}",
                                                 used_passthrough, used_key, log_str
                                             ),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // =========================================================================
+    // myRegion + failoverTo tests (MYREGION_HOST)
+    // =========================================================================
+
+    /// X-Direct-Region: virginia → myRegion match → local pass-through → 200
+    fn my_region_direct_local() -> TestCase {
+        TestCase::new(
+            "my_region_direct_local",
+            "X-Direct-Region: virginia (=myRegion) → local pass-through, backend returns 200",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MYREGION_HOST)
+                        .header("X-Direct-Region", "virginia")
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200 (local pass-through), got {}", status),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// X-Direct-Region: ohio (failoverTo=virginia=myRegion) → redirect ohio→virginia → local pass → 200
+    fn my_region_failover_to_local() -> TestCase {
+        TestCase::new(
+            "my_region_failover_to_local",
+            "X-Direct-Region: ohio (failoverTo=virginia=myRegion) → redirect→local pass, 200 + log check",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("rr-mr-ftlocal-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MYREGION_HOST)
+                        .header("X-Direct-Region", "ohio")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200, got {}", status),
+                                );
+                            }
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    let has_redirect = log_str.contains("redirect ohio→virginia");
+                                    let has_local = log_str.contains("local, pass");
+                                    if has_redirect && has_local {
+                                        TestResult::passed(start.elapsed())
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!(
+                                                "Expected 'redirect ohio→virginia' and 'local, pass'. has_redirect={}, has_local={}. log: {}",
+                                                has_redirect, has_local, log_str
+                                            ),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// X-Direct-Region: europe (failoverTo=ohio, ohio≠myRegion) → redirect europe→ohio → jump → 502
+    fn my_region_failover_to_nonlocal() -> TestCase {
+        TestCase::new(
+            "my_region_failover_to_nonlocal",
+            "X-Direct-Region: europe (failoverTo=ohio≠myRegion) → redirect→jump to loopback → 502 + log check",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("rr-mr-ftnl-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MYREGION_HOST)
+                        .header("X-Direct-Region", "europe")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            // Pingora returns 502 or 500 for loopback connection errors
+                            let status = resp.status().as_u16();
+                            if status != 502 && status != 500 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 502/500 (jump to loopback), got {}", status),
+                                );
+                            }
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    let has_redirect = log_str.contains("redirect europe→ohio");
+                                    let has_jump = log_str.contains("→ohio");
+                                    if has_redirect && has_jump {
+                                        TestResult::passed(start.elapsed())
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!(
+                                                "Expected 'redirect europe→ohio' and '→ohio'. has_redirect={}, has_jump={}. log: {}",
+                                                has_redirect, has_jump, log_str
+                                            ),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // =========================================================================
+    // hashCalc writeBack (check response header)
+    // =========================================================================
+
+    /// X-Account-Id: acct-wb → hash computed → write-back logged in access log.
+    /// Note: 502 (loopback backend) responses don't carry RequestFilter-phase response headers,
+    /// so we verify write-back via access log entry "wb→res_hdr:X-Region-Hash".
+    fn hash_writeback_logged() -> TestCase {
+        TestCase::new(
+            "hash_writeback_logged",
+            "hashCalc.writeBack: write-back target logged in access log (wb→res_hdr:X-Region-Hash)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("rr-wb-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MAIN_HOST)
+                        .header("X-Account-Id", "acct-wb")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(_) => {
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    // Plugin logs "wb→res_hdr:X-Region-Hash; " after computing hash
+                                    if log_str.contains("wb→res_hdr:X-Region-Hash") {
+                                        TestResult::passed(start.elapsed())
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Expected 'wb→res_hdr:X-Region-Hash' in log: {}", log_str),
                                         )
                                     }
                                 }
@@ -520,19 +898,29 @@ impl TestSuite for RegionRouteTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             // Pass-through (200)
-            Self::no_region_key_passes_through(),
+            Self::no_route_rules_passes_through(),
             Self::missing_key_passes_through(),
             // Hash routing (502 + access log)
             Self::hash_routing_logged(),
             Self::hash_routing_deterministic(),
-            // direct_region override (502 + access log)
+            // RouteByDirectRegion override (502 + access log)
             Self::direct_region_virginia(),
             Self::direct_region_ohio(),
             Self::direct_region_unknown_falls_through(),
-            // region_key_hash passthrough (502 + access log)
-            Self::region_key_hash_passthrough_virginia(),
-            Self::region_key_hash_passthrough_ohio(),
-            Self::region_key_hash_out_of_range_ignored(),
+            // RouteByKeyConfMatch (502 + access log)
+            Self::key_conf_match_virginia(),
+            Self::key_conf_match_ohio(),
+            Self::key_conf_match_miss_falls_to_hash(),
+            // hashKeyGet passthrough (502 + access log)
+            Self::hash_passthrough_virginia(),
+            Self::hash_passthrough_ohio(),
+            Self::hash_passthrough_out_of_range_falls_to_compute(),
+            // hashCalc writeBack (response header)
+            Self::hash_writeback_logged(),
+            // myRegion + failoverTo (MYREGION_HOST)
+            Self::my_region_direct_local(),
+            Self::my_region_failover_to_local(),
+            Self::my_region_failover_to_nonlocal(),
         ]
     }
 }

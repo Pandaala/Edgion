@@ -14,7 +14,8 @@ description: ConfCenter trait 架构：CenterApi、CenterLifeCycle、Workqueue �
 ConfMgr (facade, manager.rs)
 └── Arc<dyn ConfCenter>
     ├── FileSystemCenter   — 监听本地 YAML 目录
-    └── KubernetesCenter   — K8s API watchers + Leader Election
+    ├── KubernetesCenter   — K8s API watchers + Leader Election
+    └── EtcdCenter         — etcd KV 存储 + watch 事件（单 Controller 专用）
 ```
 
 Trait 组合关系：
@@ -25,7 +26,7 @@ Trait 组合关系：
 | `CenterLifeCycle` | 生命周期管理 | `start`, `is_ready`, `config_sync_server`, `is_k8s_mode`, `request_reload` |
 | `ConfCenter` | 完整接口 | `= CenterApi + CenterLifeCycle`（blanket impl：任何同时实现两者的类型自动获得 `ConfCenter`） |
 
-`CenterApi` 由存储层实现：`FileSystemStorage`（本地文件读写）和 `KubernetesStorage`（K8s API 调用）。
+`CenterApi` 由存储层实现：`FileSystemStorage`（本地文件读写）、`KubernetesStorage`（K8s API 调用）、`EtcdStorage`（etcd KV 读写）。
 `CenterLifeCycle` 由中心层实现：`FileSystemCenter` 和 `KubernetesCenter`。
 Center 层通过委托模式将 CRUD 操作转发给 Storage 层，自身专注于生命周期管理。
 
@@ -55,12 +56,13 @@ Center 层通过委托模式将 CRUD 操作转发给 Storage 层，自身专注�
 
 差异仅在两端：
 
-| 差异点 | FileSystemCenter | KubernetesCenter |
-|--------|-----------------|-----------------|
-| 事件源 | `notify` 库 inotify/kqueue 文件监听 | K8s API Reflector watch stream |
-| Status 持久化 | `.status` 文件（YAML 格式） | K8s API `PATCH /status`（JSON Merge Patch） |
-| Leader Election | 无（单实例） | Lease-based 分布式选举 |
-| 410 Gone 处理 | 不适用 | 检测到 watcher 重连，触发 KubernetesController 重建 |
+| 差异点 | FileSystemCenter | KubernetesCenter | EtcdCenter |
+|--------|-----------------|-----------------|------------|
+| 事件源 | `notify` 库 inotify/kqueue 文件监听 | K8s API Reflector watch stream | etcd watch stream |
+| Status 持久化 | `.status` 文件（YAML 格式） | K8s API `PATCH /status`（JSON Merge Patch） | 无（不持久化 status） |
+| Leader Election | 无（单实例） | Lease-based 分布式选举 | 无（单实例） |
+| 410 Gone 处理 | 不适用 | 检测到 watcher 重连，触发 KubernetesController 重建 | 不适用 |
+| 并发写约束 | 单进程，check-then-write 非原子 | K8s API Server 保证原子性 | **单 Controller 独占**，check-then-write 非原子，设计上不支持多 Controller 并发写同一 etcd |
 
 中间的 Workqueue、ResourceProcessor、ProcessorHandler、ServerCache、引用管理器等完全复用。
 

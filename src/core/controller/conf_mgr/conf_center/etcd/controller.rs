@@ -1,0 +1,156 @@
+//! EtcdController — top-level controller with 2-phase resource spawn.
+//!
+//! Mirrors `FileSystemController` exactly: same resource list, same phase1/phase2
+//! logic, but uses `EtcdWatcher` and `EtcdResourceController`.
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use kube::Resource;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use tokio::task::JoinHandle;
+
+use super::resource_controller::EtcdResourceController;
+use super::status::EtcdStatusHandler;
+use super::watcher::{EtcdWatcher, KindEventReceiver};
+use crate::core::controller::conf_mgr::conf_center::non_kube_common::{
+    spawn_all_controllers, LocalControllerBackend,
+};
+use crate::core::controller::conf_mgr::conf_center::EndpointMode;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    ResourceProcessor, SecretRefManager,
+};
+use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
+use crate::core::controller::conf_mgr::ControllerRuntime;
+use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
+use crate::types::ResourceMeta;
+
+/// Backend implementation that wires `EtcdWatcher` and `EtcdResourceController`
+/// into the shared [`LocalControllerBackend`] interface.
+struct EtcdControllerBackend {
+    watcher: Arc<EtcdWatcher>,
+    status_handler: Arc<EtcdStatusHandler>,
+}
+
+#[async_trait]
+impl LocalControllerBackend for EtcdControllerBackend {
+    type EventReceiver = KindEventReceiver;
+
+    async fn subscribe(&self, kind: &'static str) -> KindEventReceiver {
+        self.watcher.subscribe(kind).await
+    }
+
+    fn launch<K>(
+        &self,
+        kind: &'static str,
+        processor: Arc<ResourceProcessor<K>>,
+        event_rx: KindEventReceiver,
+        shutdown_signal: ShutdownSignal,
+    ) -> JoinHandle<Result<()>>
+    where
+        K: ResourceMeta
+            + Resource
+            + Clone
+            + Send
+            + Sync
+            + Debug
+            + Serialize
+            + DeserializeOwned
+            + 'static,
+    {
+        let ctrl =
+            EtcdResourceController::new(kind, processor, self.status_handler.clone(), event_rx)
+                .with_shutdown(shutdown_signal);
+        tokio::spawn(async move { ctrl.run().await })
+    }
+}
+
+/// EtcdController — top-level controller for etcd mode.
+pub struct EtcdController {
+    client: Arc<EtcdLinkClient>,
+    key_prefix: String,
+    endpoint_mode: EndpointMode,
+}
+
+impl EtcdController {
+    pub fn new(
+        client: Arc<EtcdLinkClient>,
+        key_prefix: String,
+        endpoint_mode: EndpointMode,
+    ) -> Self {
+        tracing::info!(
+            component = "etcd_controller",
+            key_prefix = %key_prefix,
+            endpoint_mode = ?endpoint_mode,
+            "Creating EtcdController"
+        );
+        Self {
+            client,
+            key_prefix,
+            endpoint_mode,
+        }
+    }
+
+    /// Run the controller.
+    pub async fn run(
+        &self,
+        shutdown_signal: ShutdownSignal,
+        runtime: Arc<ControllerRuntime>,
+    ) -> Result<()> {
+        tracing::info!(
+            component = "etcd_controller",
+            key_prefix = %self.key_prefix,
+            "Starting EtcdController"
+        );
+
+        // Create shared components
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let watcher = Arc::new(EtcdWatcher::new(self.client.clone(), &self.key_prefix));
+        let status_handler = Arc::new(EtcdStatusHandler::new(
+            self.client.clone(),
+            self.key_prefix.clone(),
+        ));
+
+        let backend = EtcdControllerBackend {
+            watcher: watcher.clone(),
+            status_handler,
+        };
+
+        // Spawn all resource controllers
+        let handles = spawn_all_controllers(
+            &backend,
+            self.endpoint_mode,
+            &secret_ref_manager,
+            shutdown_signal.clone(),
+            runtime,
+            "etcd_controller",
+        )
+        .await?;
+
+        tracing::info!(
+            component = "etcd_controller",
+            count = handles.len(),
+            "All ResourceControllers spawned"
+        );
+
+        // Run the watcher (init phase + runtime phase)
+        watcher.run(shutdown_signal).await?;
+
+        // Abort all controllers
+        for handle in handles {
+            handle.abort();
+        }
+
+        tracing::info!(component = "etcd_controller", "EtcdController stopped");
+        Ok(())
+    }
+}
+
+// NOTE: The following items have been extracted to shared modules:
+//   - `DEFAULT_CONTROLLER_NAME`  -> `common::DEFAULT_CONTROLLER_NAME`
+//   - `phase1_kinds()`           -> `common::phase1_kinds`
+//   - `spawn_all_controllers()`  -> `non_kube_common::spawn_all_controllers`
+//   - `spawn()`                  -> `non_kube_common::spawn`

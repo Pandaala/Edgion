@@ -142,7 +142,7 @@ resource.pre_parse()                        # event_dispatch.rs
 | DynamicExternalUpstream | `dynamic_external_upstream` | 动态外部上游（运行时指定外部地址） |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | 动态内部上游（运行时选择 K8s Service） |
 | DirectEndpoint | `direct_endpoint` | 直接指定后端端点地址 |
-| RegionRoute | `region_route` | 多 region 一致性哈希路由（0-1000 范围映射 + direct override + auto failover） |
+| RegionRoute | `region_route` | 多 region 流量路由：有序 routeRules（RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange）+ hashKeyGet passthrough + hashCalc writeBack + myRegion（本地 pass-through）+ failoverTo（静态重定向）+ auto failover |
 
 ### 其他类（8 个）
 

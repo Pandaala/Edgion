@@ -32,44 +32,13 @@
 //!     message: "error details..."
 //! ```
 
-use crate::types::resources::common::Condition;
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
+
+pub use super::super::common::ErrorStatus;
 
 /// Status file extension
 const STATUS_EXTENSION: &str = ".status";
-
-/// Simple error status structure (for parse errors, etc.)
-/// Used when the resource can't be fully parsed and we can't extract native status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ErrorStatus {
-    /// Standard K8s conditions
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conditions: Vec<Condition>,
-}
-
-impl ErrorStatus {
-    /// Create an Error status
-    pub fn error(reason: &str, message: &str) -> Self {
-        Self {
-            conditions: vec![Condition {
-                type_: "Ready".to_string(),
-                status: "False".to_string(),
-                reason: reason.to_string(),
-                message: message.to_string(),
-                last_transition_time: Utc::now().to_rfc3339(),
-                observed_generation: None,
-            }],
-        }
-    }
-
-    /// Create a status for YAML parse error
-    pub fn parse_error(error: &str) -> Self {
-        Self::error("ParseError", error)
-    }
-}
 
 /// FileSystem status handler
 pub struct FileSystemStatusHandler {

@@ -25,6 +25,7 @@
 //! let content = conf_mgr.get_one("HTTPRoute", Some("default"), "my-route").await?;
 //! ```
 
+use super::conf_center::etcd::EtcdCenter;
 use super::conf_center::file_system::FileSystemCenter;
 use super::conf_center::kubernetes::KubernetesCenter;
 use super::conf_center::traits::{
@@ -72,6 +73,16 @@ impl ConfMgr {
                     "Creating KubernetesCenter"
                 );
                 Arc::new(KubernetesCenter::new(k8s_config).await?)
+            }
+            ConfCenterConfig::Etcd(etcd_config) => {
+                tracing::info!(
+                    component = "conf_mgr",
+                    mode = "etcd",
+                    endpoints = ?etcd_config.endpoints,
+                    key_prefix = %etcd_config.key_prefix,
+                    "Creating EtcdCenter"
+                );
+                Arc::new(EtcdCenter::new(etcd_config).await?)
             }
         };
 

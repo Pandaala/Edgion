@@ -129,13 +129,13 @@ curl --cert client.crt --key client.key \
 
 ### 生成证书
 
-使用 `edgion-cli gen-certs` 生成自签证书束：
+使用 `edgion-cli gen-certs` 生成证书束。每套证书通过名称标识（`--cert-name`，默认 `primary`），输出到 `{name}/` 子目录：
 
 ```bash
-edgion-cli gen-certs --output file --output-dir certs/grpc/
+edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name primary
 ```
 
-生成的文件：
+这将在 `certs/grpc/primary/` 下生成：
 
 | 文件 | 用途 |
 |------|------|
@@ -147,7 +147,14 @@ edgion-cli gen-certs --output file --output-dir certs/grpc/
 服务端证书默认包含 `localhost`、`127.0.0.1`、`::1` 作为 SAN。生产环境可添加自定义 SAN：
 
 ```bash
-edgion-cli gen-certs --output file \
+edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name primary \
+    --server-san edgion-controller.edgion-system.svc.cluster.local
+```
+
+预置备用证书集（用于轮换）：
+
+```bash
+edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name secondary \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 ```
 
@@ -156,10 +163,21 @@ edgion-cli gen-certs --output file \
 在 `edgion-controller.toml` 中添加：
 
 ```toml
-[conf_sync_security.tls]
-cert = "certs/grpc/server.crt"
-key  = "certs/grpc/server.key"
-ca   = "certs/grpc/ca.crt"
+[conf_sync_security]
+active = "primary"              # 选择当前生效的证书集
+
+[[conf_sync_security.certs]]
+name = "primary"
+cert = "certs/grpc/primary/server.crt"
+key  = "certs/grpc/primary/server.key"
+ca   = "certs/grpc/primary/ca.crt"
+
+# 可选：预置备用证书集，用于证书轮换
+[[conf_sync_security.certs]]
+name = "secondary"
+cert = "certs/grpc/secondary/server.crt"
+key  = "certs/grpc/secondary/server.key"
+ca   = "certs/grpc/secondary/ca.crt"
 ```
 
 证书路径相对于 `work_dir` 解析。
@@ -169,38 +187,87 @@ ca   = "certs/grpc/ca.crt"
 在 `edgion-gateway.toml` 中添加：
 
 ```toml
-[conf_sync_security.tls]
-cert = "certs/grpc/client.crt"
-key  = "certs/grpc/client.key"
-ca   = "certs/grpc/ca.crt"
+[conf_sync_security]
+active = "primary"
+
+[[conf_sync_security.certs]]
+name = "primary"
+cert = "certs/grpc/primary/client.crt"
+key  = "certs/grpc/primary/client.key"
+ca   = "certs/grpc/primary/ca.crt"
+
+# 可选：预置备用证书集，用于证书轮换
+[[conf_sync_security.certs]]
+name = "secondary"
+cert = "certs/grpc/secondary/client.crt"
+key  = "certs/grpc/secondary/client.key"
+ca   = "certs/grpc/secondary/ca.crt"
 ```
 
 启用 mTLS 后，Gateway 会自动将 `server_addr` 连接从 `http://` 升级为 `https://`。
 
+> **向后兼容**：旧版单套证书格式仍受支持，无需迁移：
+> ```toml
+> [conf_sync_security.tls]
+> cert = "certs/grpc/server.crt"
+> key  = "certs/grpc/server.key"
+> ca   = "certs/grpc/ca.crt"
+> ```
+
 ### 配置参考
+
+**`[conf_sync_security]`** — 顶层配置段
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
+| `active` | string | — | 当前生效的证书集名称。存在多个 `[[certs]]` 时必填。 |
+
+**`[[conf_sync_security.certs]]`** — 证书集（表数组）
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | string | — | 证书集的唯一名称 |
 | `cert` | string | — | PEM 证书路径（相对 work_dir） |
 | `key` | string | — | PEM 私钥路径 |
 | `ca` | string | — | CA 证书路径（用于验证对端） |
 | `skip_tls` | bool | `false` | 紧急降级：跳过 TLS，以明文运行（输出 ERROR 日志） |
+
+### 证书选择规则
+
+| 配置状态 | 生效证书 |
+|---------|---------|
+| 单条 `[[certs]]` 且无 `active` | 自动选中唯一那条 |
+| 多条 `[[certs]]` + `active = "name"` | 与 `name` 匹配的那条 |
+| 多条 `[[certs]]` 且无 `active` | 启动报错 |
+| 无 `[[certs]]`，存在旧格式 `[tls]` | 使用 `[tls]` 配置 |
+| 无任何 mTLS 配置 | 明文 gRPC |
 
 ### 行为矩阵
 
 | 配置状态 | 结果 |
 |---------|------|
 | 无 `[conf_sync_security]` 段 | 明文 gRPC（向后兼容） |
-| TLS 配置 + 证书有效 | mTLS gRPC |
-| TLS 配置 + 证书缺失/无效 | Controller 启动失败 / Gateway 连接失败并重试 |
+| active 证书有效 | mTLS gRPC |
+| `active` 名称不匹配任何证书集 | 启动失败 |
+| 证书文件缺失或无效 | Controller 启动失败 / Gateway 连接失败并重试 |
 | `skip_tls = true` | 明文 + ERROR 级别警告日志 |
+
+### 证书轮换
+
+在保留回滚能力的前提下轮换证书：
+
+1. 生成新证书集：`edgion-cli gen-certs --cert-name secondary ...`
+2. 在 Controller 和 Gateway 的 TOML 中添加 `secondary` 条目，保持 `active = "primary"` 不变
+3. 重启两个进程，验证新证书文件可正常加载
+4. 切换：将两边配置改为 `active = "secondary"` 并重启
+5. 若发现异常，改回 `active = "primary"` 并重启，即可立即回滚
 
 ### Kubernetes 部署
 
 K8s 部署时，可将证书生成为 K8s Secret：
 
 ```bash
-edgion-cli gen-certs --output k8s
+edgion-cli gen-certs --output k8s --cert-name primary
 ```
 
 将 Secret 挂载到 Controller 和 Gateway Pod，并在 TOML 配置中引用挂载路径。

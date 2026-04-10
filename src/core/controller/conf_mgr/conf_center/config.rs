@@ -8,6 +8,7 @@
 //! - `kubernetes::KubernetesConfig`: Kubernetes-specific configuration
 
 use super::common::EndpointMode;
+use super::etcd::EtcdConfig;
 use super::file_system::FileSystemConfig;
 use super::kubernetes::KubernetesConfig;
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,9 @@ pub enum ConfCenterConfig {
 
     /// Kubernetes based configuration center
     Kubernetes(KubernetesConfig),
+
+    /// Etcd based configuration center
+    Etcd(EtcdConfig),
 }
 
 impl Default for ConfCenterConfig {
@@ -68,11 +72,17 @@ impl ConfCenterConfig {
         matches!(self, Self::Kubernetes(_))
     }
 
+    /// Check if running in Etcd mode
+    pub fn is_etcd_mode(&self) -> bool {
+        matches!(self, Self::Etcd(_))
+    }
+
     /// Get the endpoint mode
     pub fn endpoint_mode(&self) -> EndpointMode {
         match self {
             Self::FileSystem(config) => config.endpoint_mode(),
             Self::Kubernetes(config) => config.endpoint_mode(),
+            Self::Etcd(config) => config.endpoint_mode(),
         }
     }
 
@@ -80,15 +90,23 @@ impl ConfCenterConfig {
     pub fn as_file_system(&self) -> Option<&FileSystemConfig> {
         match self {
             Self::FileSystem(config) => Some(config),
-            Self::Kubernetes(_) => None,
+            _ => None,
         }
     }
 
     /// Get Kubernetes config (if in Kubernetes mode)
     pub fn as_kubernetes(&self) -> Option<&KubernetesConfig> {
         match self {
-            Self::FileSystem(_) => None,
             Self::Kubernetes(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get Etcd config (if in Etcd mode)
+    pub fn as_etcd(&self) -> Option<&EtcdConfig> {
+        match self {
+            Self::Etcd(config) => Some(config),
+            _ => None,
         }
     }
 

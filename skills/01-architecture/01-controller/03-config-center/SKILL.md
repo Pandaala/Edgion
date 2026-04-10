@@ -24,6 +24,7 @@ description: 配置中心子系统：ConfCenter trait 抽象、FileSystemCenter 
 | [00-overview.md](00-overview.md) | ConfCenter trait 架构 | 理解配置中心抽象设计 |
 | [01-file-system.md](01-file-system.md) | FileSystemCenter 实现 | 本地开发/调试模式 |
 | [02-kubernetes/](02-kubernetes/SKILL.md) | Kubernetes 配置中心 | 生产环境、HA、Leader 选举 |
+| （etcd 无独立文档） | EtcdCenter 实现 | 非 K8s 生产环境，单 Controller 部署 |
 
 ## 架构对比
 
@@ -32,10 +33,13 @@ ConfCenter trait
 ├── CenterApi     (CRUD: get_one, set_one, create_one, update_one, list)
 └── CenterLifeCycle (start, ready check, reload, shutdown)
 
-FileSystemCenter                    KubernetesCenter
-├── 本地 YAML 文件                   ├── K8s API Server
-├── inotify 文件监听                 ├── Reflector 监听
-├── .status 文件持久化               ├── Status Subresource 回写
-├── 无 Leader 选举                   ├── Lease-based Leader 选举
-└── 适用：开发/测试                  └── 适用：生产环境
+FileSystemCenter      KubernetesCenter         EtcdCenter
+├── 本地 YAML 文件     ├── K8s API Server        ├── etcd KV 存储
+├── inotify 文件监听   ├── Reflector 监听         ├── etcd watch 事件
+├── .status 文件       ├── Status Subresource    ├── 无状态持久化
+├── 无 Leader 选举     ├── Lease-based 选举       ├── 无 Leader 选举
+└── 适用：开发/测试    └── 适用：生产 K8s         └── 适用：非 K8s 生产
 ```
+
+**EtcdCenter 设计约束**：`EtcdStorage` 的 `create_one`/`update_one` 是非原子的 check-then-write，
+设计前提是**单 Controller 独占 etcd**，不支持多 Controller 并发写入同一 etcd 实例。

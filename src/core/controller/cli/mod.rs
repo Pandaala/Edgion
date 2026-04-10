@@ -1,4 +1,4 @@
-use crate::core::common::config::ConfSyncTlsConfig;
+use crate::core::common::config::ConfSyncSecurityConfig;
 use crate::core::common::{config::EdgionControllerConfig, utils};
 use crate::core::controller::api::serve_with_shutdown as serve_admin_api_with_shutdown;
 use crate::core::controller::conf_mgr::conf_center::traits::CenterLifeCycle;
@@ -148,7 +148,8 @@ impl EdgionControllerCli {
         schema_validator: Arc<SchemaValidator>,
         grpc_addr: SocketAddr,
         admin_addr: SocketAddr,
-        tls_config: Option<ConfSyncTlsConfig>,
+        security: ConfSyncSecurityConfig,
+        auth_config: Option<crate::core::common::auth::AdminAuthConfig>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
         tracing::info!(
@@ -197,8 +198,6 @@ impl EdgionControllerCli {
         // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
         let grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token);
 
-        let tls_ref = tls_config.as_ref();
-
         // Run both services concurrently with shutdown support and global timeout.
         // In K8s, kubelet sends SIGKILL after terminationGracePeriodSeconds (default 30s).
         // We use 25s to leave headroom. The 2s gRPC delay is included in this budget.
@@ -208,8 +207,14 @@ impl EdgionControllerCli {
         // `tokio::time::timeout` ensures the countdown only begins after SIGTERM/SIGINT.
         let serve_fut = async {
             tokio::join!(
-                grpc_server.serve_with_shutdown(grpc_addr, tls_ref, grpc_shutdown),
-                serve_admin_api_with_shutdown(conf_mgr.clone(), schema_validator, admin_addr, admin_shutdown)
+                grpc_server.serve_with_shutdown(grpc_addr, &security, grpc_shutdown),
+                serve_admin_api_with_shutdown(
+                    conf_mgr.clone(),
+                    schema_validator,
+                    admin_addr,
+                    auth_config.as_ref(),
+                    admin_shutdown
+                )
             )
         };
         let drain_timeout_fut = {
@@ -350,14 +355,17 @@ impl EdgionControllerCli {
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
         let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:8080")?;
-        let tls_config = config.conf_sync_security.tls.clone();
+        let security = config.conf_sync_security.clone();
+        security.validate()?;
+        let auth_config = config.auth.clone();
 
         Self::start_services(
             conf_mgr,
             schema_validator,
             grpc_addr,
             admin_addr,
-            tls_config,
+            security,
+            auth_config,
             shutdown_handle,
         )
         .await

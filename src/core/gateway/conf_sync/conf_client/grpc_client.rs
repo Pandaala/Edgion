@@ -1,6 +1,6 @@
 use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
-use crate::core::common::config::ConfSyncTlsConfig;
+use crate::core::common::config::ConfSyncSecurityConfig;
 use crate::core::gateway::cli::config::set_gateway_instance_count;
 use crate::core::gateway::conf_sync::conf_client::ConfigClient;
 use crate::types::ResourceKind;
@@ -34,12 +34,13 @@ impl ConfigSyncClient {
         grpc_server_addr: &str,
         client_name: String,
         timeout: Duration,
-        tls_config: Option<&ConfSyncTlsConfig>,
+        security: &ConfSyncSecurityConfig,
     ) -> anyhow::Result<Self> {
         let client_id = Uuid::new_v4().to_string();
         let config_client = Arc::new(ConfigClient::new(client_id.clone(), client_name.clone()));
 
-        let use_tls = tls_config.map_or(false, |t| !t.skip_tls);
+        let tls_config = security.resolve_active_tls();
+        let use_tls = tls_config.is_some_and(|t| !t.skip_tls);
         let uri = build_grpc_uri(grpc_server_addr, use_tls);
 
         tracing::info!(
@@ -63,7 +64,7 @@ impl ConfigSyncClient {
                     "conf_sync mTLS skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
                 );
             } else {
-                let client_tls = load_client_tls(tls).await?;
+                let client_tls = crate::core::common::grpc_tls::load_client_tls(tls).await?;
                 endpoint = endpoint
                     .tls_config(client_tls)
                     .map_err(|e| anyhow::anyhow!("Failed to configure client TLS: {}", e))?;
@@ -284,26 +285,4 @@ fn build_grpc_uri(addr: &str, tls: bool) -> String {
     } else {
         format!("http://{}", host)
     }
-}
-
-/// Load client TLS config from certificate files.
-async fn load_client_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::transport::ClientTlsConfig> {
-    cfg.validate()?;
-    let cert_path = cfg.cert_path();
-    let key_path = cfg.key_path();
-    let ca_path = cfg.ca_path();
-
-    let ca = tokio::fs::read(&ca_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read CA cert {:?}: {}", ca_path, e))?;
-    let cert = tokio::fs::read(&cert_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read client cert {:?}: {}", cert_path, e))?;
-    let key = tokio::fs::read(&key_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read client key {:?}: {}", key_path, e))?;
-
-    Ok(tonic::transport::ClientTlsConfig::new()
-        .ca_certificate(tonic::transport::Certificate::from_pem(ca))
-        .identity(tonic::transport::Identity::from_pem(cert, key)))
 }

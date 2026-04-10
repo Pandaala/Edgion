@@ -205,13 +205,60 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .with_state(admin_state)
 }
 
+/// Apply optional auth middleware to a router.
+///
+/// When `auth_config` is `Some` and `enabled`, wraps the router with
+/// JWT Bearer authentication. Otherwise returns the router unchanged.
+fn apply_auth_layer(
+    router: Router,
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+) -> Router {
+    let Some(auth_cfg) = auth_config else {
+        tracing::info!(
+            component = "admin_api",
+            "Admin API authentication not configured (no [auth] section)"
+        );
+        return router;
+    };
+
+    if !auth_cfg.enabled {
+        tracing::info!(
+            component = "admin_api",
+            "Admin API authentication disabled by config"
+        );
+        return router;
+    }
+
+    if let Some(err) = auth_cfg.validate() {
+        tracing::error!(
+            component = "admin_api",
+            error = err,
+            "Invalid auth configuration, starting without auth"
+        );
+        return router;
+    }
+
+    let auth_state = crate::core::common::auth::AuthMiddlewareState::from_config(auth_cfg);
+    tracing::info!(
+        component = "admin_api",
+        discovery = %auth_cfg.discovery,
+        "Admin API authentication enabled"
+    );
+    router.layer(axum::middleware::from_fn_with_state(
+        auth_state,
+        crate::core::common::auth::jwt_auth_middleware,
+    ))
+}
+
 /// Serve the admin API on the specified address
 pub async fn serve(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(conf_mgr, schema_validator);
+    let base_router = create_admin_router(conf_mgr, schema_validator);
+    let app = apply_auth_layer(base_router, auth_config);
 
     tracing::info!(
         component = "unified_api",
@@ -231,9 +278,11 @@ pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(conf_mgr, schema_validator);
+    let base_router = create_admin_router(conf_mgr, schema_validator);
+    let app = apply_auth_layer(base_router, auth_config);
 
     tracing::info!(
         component = "admin_api",

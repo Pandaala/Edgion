@@ -200,4 +200,5 @@ console = "0.16"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 proxy-header = "0.1.2"
 tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }

@@ -1357,6 +1357,7 @@ dependencies = [
  "tonic-build 0.12.3",
  "tonic-reflection",
  "tower 0.5.3",
+ "tower-http",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

@@ -186,6 +186,7 @@ edgion-cli gen-certs [OPTIONS]
 |------|------|------|
 | `--output` | 输出目标：`file`（写入文件）或 `k8s`（写入 K8s Secret） | `file` |
 | `--output-dir` | 文件输出目录（仅 `--output file` 时生效） | `certs/grpc/` |
+| `--cert-name` | 证书集名称；文件写入 `<output-dir>/<cert-name>/`，K8s Secret 名称含此后缀 | `primary` |
 | `--ca-days` | CA 证书有效天数 | `3650`（10 年） |
 | `--cert-days` | 服务端/客户端证书有效天数 | `365` |
 | `--server-san` | 额外 SAN（可多次指定） | 默认含 `localhost`、`127.0.0.1`、`::1` |
@@ -193,8 +194,10 @@ edgion-cli gen-certs [OPTIONS]
 
 ### 生成的文件
 
+每次调用写入 `<output-dir>/<cert-name>/` 子目录，不同 `--cert-name` 之间相互独立：
+
 ```
-<output-dir>/
+<output-dir>/<cert-name>/
 ├── ca.crt            # CA 证书（分发给双方校验对端）
 ├── ca.key            # CA 私钥（仅签发用，不部署到运行时）
 ├── server.crt        # Controller 服务端证书
@@ -216,30 +219,34 @@ edgion-cli gen-certs [OPTIONS]
 1. 使用 rcgen 创建自签 CA（ECDSA P-256）
 2. 用 CA 签发 Server 证书（含 SAN 和 ServerAuth EKU）
 3. 用 CA 签发 Client 证书（含 ClientAuth EKU）
-4. `--output file`：写入 PEM 文件到 `--output-dir`
-5. `--output k8s`：写入 K8s Secret（用于 Helm/Operator 部署）
+4. `--output file`：写入 PEM 文件到 `<output-dir>/<cert-name>/`
+5. `--output k8s`：写入 K8s Secret，名称格式 `{prefix}-controller-tls-{cert-name}` / `{prefix}-gateway-tls-{cert-name}`
 
 ### 使用场景
 
 - 本地开发/测试：快速生成自签证书启用 mTLS
 - CI/CD：集成测试自动生成证书
 - 生产环境初始化：一次性生成后交由证书管理系统轮转
+- 证书轮换预置：生成 secondary 套件并预先写入配置，切换时只需改 `active` 字段
 
 ### 示例
 
 ```bash
-# 生成到默认目录 certs/grpc/
-edgion-cli gen-certs --output file
+# 生成 primary 证书集（默认名称）
+edgion-cli gen-certs --output file --output-dir certs/grpc/
 
-# 指定输出目录，强制覆盖
-edgion-cli gen-certs --output file --output-dir /etc/edgion/certs --force
+# 显式指定名称，等价上条
+edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name primary
 
-# 添加 K8s Service FQDN 作为额外 SAN
-edgion-cli gen-certs --output file \
+# 预置 secondary 证书集（用于轮换）
+edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name secondary \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 
-# 写入 K8s Secret
-edgion-cli gen-certs --output k8s
+# 指定输出目录，强制覆盖
+edgion-cli gen-certs --output file --output-dir /etc/edgion/certs --cert-name primary --force
+
+# 写入 K8s Secret（名称：{prefix}-controller-tls-primary 等）
+edgion-cli gen-certs --output k8s --cert-name primary
 ```
 
 ### 模块结构

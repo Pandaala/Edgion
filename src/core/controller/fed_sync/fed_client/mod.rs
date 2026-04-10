@@ -54,6 +54,15 @@ pub async fn run(
     supported_kinds: Vec<String>,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    if let Err(e) = config.security.validate() {
+        tracing::error!(
+            component = "fed_client",
+            error = %e,
+            "Invalid federation security config, federation client will not start"
+        );
+        return;
+    }
+
     let mut backoff = ReconnectBackoff::new();
 
     loop {
@@ -98,7 +107,39 @@ async fn connect_and_run(
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
 ) -> Result<()> {
-    let channel = Channel::from_shared(config.address.clone())?.connect().await?;
+    let tls = config.security.resolve_active_tls();
+    let use_tls = tls.is_some_and(|t| !t.skip_tls);
+
+    // Strip existing scheme and re-add based on TLS setting
+    let addr = config
+        .address
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let uri = if use_tls {
+        format!("https://{}", addr)
+    } else {
+        format!("http://{}", addr)
+    };
+
+    let endpoint = Channel::from_shared(uri)?;
+    let endpoint = if let Some(tls_cfg) = tls {
+        if tls_cfg.skip_tls {
+            tracing::error!(
+                component = "fed_client",
+                "security skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
+            );
+            endpoint
+        } else {
+            let client_tls = crate::core::common::grpc_tls::load_client_tls(tls_cfg).await?;
+            endpoint
+                .tls_config(client_tls)
+                .map_err(|e| anyhow::anyhow!("Failed to configure federation client TLS: {}", e))?
+        }
+    } else {
+        endpoint
+    };
+
+    let channel = endpoint.connect().await?;
 
     let mut client = FederationSyncClient::new(channel);
 

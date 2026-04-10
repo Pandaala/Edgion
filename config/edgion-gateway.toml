@@ -221,8 +221,24 @@ path = "logs/udp.log"
 # Omit this section entirely to keep plaintext gRPC (backward compatible).
 # Must match Controller's mTLS config — mismatched configs cause handshake failure.
 #
+# --- Option A: Legacy single-cert format (backward compatible) ---
 # [conf_sync_security.tls]
 # cert = "certs/grpc/client.crt"   # Gateway client certificate
 # key  = "certs/grpc/client.key"   # Gateway client private key
 # ca   = "certs/grpc/ca.crt"       # CA certificate (verifies Controller server cert)
 # skip_tls = false                 # Emergency bypass: true = skip TLS (INSECURE)
+#
+# --- Option B: Multi-cert format (supports cert rotation / CA migration) ---
+# active = "primary"               # Name of the active cert set
+#
+# [[conf_sync_security.certs]]
+# name = "primary"
+# cert = "certs/grpc/primary/client.crt"
+# key  = "certs/grpc/primary/client.key"
+# ca   = "certs/grpc/primary/ca.crt"
+#
+# [[conf_sync_security.certs]]
+# name = "new-ca"
+# cert = "certs/grpc/new-ca/client.crt"
+# key  = "certs/grpc/new-ca/client.key"
+# ca   = "certs/grpc/new-ca/ca.crt"

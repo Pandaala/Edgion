@@ -17,7 +17,7 @@ use crate::core::common::conf_sync::proto::{
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest, WatchResponse,
     WatchServerMetaRequest,
 };
-use crate::core::common::config::ConfSyncTlsConfig;
+use crate::core::common::config::ConfSyncSecurityConfig;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::types::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
@@ -82,20 +82,20 @@ impl ConfigSyncGrpcServer {
     }
 
     /// Start the gRPC server on the given address
-    pub async fn serve(self, addr: std::net::SocketAddr, tls_config: Option<&ConfSyncTlsConfig>) -> anyhow::Result<()> {
+    pub async fn serve(self, addr: std::net::SocketAddr, security: &ConfSyncSecurityConfig) -> anyhow::Result<()> {
         let service = self.into_service();
         let mut builder = tonic::transport::Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
             .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
 
-        if let Some(tls) = tls_config {
+        if let Some(tls) = security.resolve_active_tls() {
             if tls.skip_tls {
                 tracing::error!(
                     component = "grpc_server",
                     "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
                 );
             } else {
-                let server_tls = load_server_tls(tls).await?;
+                let server_tls = crate::core::common::grpc_tls::load_server_tls(tls).await?;
                 builder = builder.tls_config(server_tls)?;
                 tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
             }
@@ -109,7 +109,7 @@ impl ConfigSyncGrpcServer {
     pub async fn serve_with_shutdown(
         self,
         addr: std::net::SocketAddr,
-        tls_config: Option<&ConfSyncTlsConfig>,
+        security: &ConfSyncSecurityConfig,
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
         let service = self.into_service();
@@ -117,14 +117,14 @@ impl ConfigSyncGrpcServer {
             .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
             .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
 
-        if let Some(tls) = tls_config {
+        if let Some(tls) = security.resolve_active_tls() {
             if tls.skip_tls {
                 tracing::error!(
                     component = "grpc_server",
                     "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
                 );
             } else {
-                let server_tls = load_server_tls(tls).await?;
+                let server_tls = crate::core::common::grpc_tls::load_server_tls(tls).await?;
                 builder = builder.tls_config(server_tls)?;
                 tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
             }
@@ -169,29 +169,6 @@ impl ConfigSyncGrpcServer {
 
         Ok(())
     }
-}
-
-/// Load server TLS config from certificate files.
-/// Returns error if any file is missing or invalid — caller must not start the listener.
-async fn load_server_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::transport::ServerTlsConfig> {
-    cfg.validate()?;
-    let cert_path = cfg.cert_path();
-    let key_path = cfg.key_path();
-    let ca_path = cfg.ca_path();
-
-    let cert = tokio::fs::read(&cert_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read server cert {:?}: {}", cert_path, e))?;
-    let key = tokio::fs::read(&key_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read server key {:?}: {}", key_path, e))?;
-    let ca = tokio::fs::read(&ca_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read CA cert {:?}: {}", ca_path, e))?;
-
-    Ok(tonic::transport::ServerTlsConfig::new()
-        .identity(tonic::transport::Identity::from_pem(cert, key))
-        .client_ca_root(tonic::transport::Certificate::from_pem(ca)))
 }
 
 #[tonic::async_trait]

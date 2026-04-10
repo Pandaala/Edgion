@@ -230,45 +230,97 @@ start_mtls_environment() {
     EDGION_CONF_SYNC_CERTS_DIR="$certs_dir" \
         bash "${CERTS_DIR_SCRIPT}/generate_conf_sync_certs.sh" --force
 
-    for f in ca.crt server.crt server.key client.crt client.key; do
-        if [ ! -f "$certs_dir/$f" ]; then
-            log_error "Missing expected cert file: $certs_dir/$f"
-            exit 1
-        fi
+    # New multi-cert layout: files are under primary/ and secondary/ subdirectories
+    for set_name in primary secondary; do
+        for f in ca.crt server.crt server.key client.crt client.key; do
+            if [ ! -f "$certs_dir/$set_name/$f" ]; then
+                log_error "Missing expected cert file: $certs_dir/$set_name/$f"
+                exit 1
+            fi
+        done
     done
-    log_success "All mTLS certificates present"
+    log_success "All mTLS certificates present (primary + secondary)"
 
-    # ── 4. Generate TOML configs with mTLS section ──
-    log_section "Creating mTLS-enabled TOML configs"
+    # ── 4. Generate TOML configs with multi-cert mTLS section ──
+    log_section "Creating mTLS-enabled TOML configs (multi-cert format)"
 
     local controller_toml="${WORK_DIR}/edgion-controller-mtls.toml"
     local gateway_toml="${WORK_DIR}/edgion-gateway-mtls.toml"
 
-    # Controller TOML: base + mTLS override
+    # Controller TOML: base + multi-cert mTLS override
+    # active = "primary" selects the primary cert; secondary is listed but inactive
     cp "${PROJECT_ROOT}/config/edgion-controller.toml" "$controller_toml"
     cat >> "$controller_toml" <<EOF
 
-# ── mTLS override for integration test ──
-[conf_sync_security.tls]
-cert = "certs/grpc/server.crt"
-key  = "certs/grpc/server.key"
-ca   = "certs/grpc/ca.crt"
-skip_tls = false
-EOF
-    log_success "Controller TOML: $controller_toml"
+# ── Multi-cert mTLS override for integration test ──
+[conf_sync_security]
+active = "primary"
 
-    # Gateway TOML: base + mTLS override
+[[conf_sync_security.certs]]
+name = "primary"
+cert = "certs/grpc/primary/server.crt"
+key  = "certs/grpc/primary/server.key"
+ca   = "certs/grpc/primary/ca.crt"
+
+[[conf_sync_security.certs]]
+name = "secondary"
+cert = "certs/grpc/secondary/server.crt"
+key  = "certs/grpc/secondary/server.key"
+ca   = "certs/grpc/secondary/ca.crt"
+EOF
+    log_success "Controller TOML (multi-cert): $controller_toml"
+
+    # Gateway TOML: base + multi-cert mTLS override
+    # active = "primary" selects the primary cert; secondary is listed but inactive
     cp "${PROJECT_ROOT}/config/edgion-gateway.toml" "$gateway_toml"
     cat >> "$gateway_toml" <<EOF
 
-# ── mTLS override for integration test ──
+# ── Multi-cert mTLS override for integration test ──
+[conf_sync_security]
+active = "primary"
+
+[[conf_sync_security.certs]]
+name = "primary"
+cert = "certs/grpc/primary/client.crt"
+key  = "certs/grpc/primary/client.key"
+ca   = "certs/grpc/primary/ca.crt"
+
+[[conf_sync_security.certs]]
+name = "secondary"
+cert = "certs/grpc/secondary/client.crt"
+key  = "certs/grpc/secondary/client.key"
+ca   = "certs/grpc/secondary/ca.crt"
+EOF
+    log_success "Gateway TOML (multi-cert): $gateway_toml"
+
+    # ── 4b. Also generate backward-compat TOML configs (old single-cert format) ──
+    # These are written out for reference / manual testing, but NOT used in the
+    # automated test run (which uses the multi-cert format above).
+    local controller_toml_compat="${WORK_DIR}/edgion-controller-mtls-compat.toml"
+    local gateway_toml_compat="${WORK_DIR}/edgion-gateway-mtls-compat.toml"
+
+    cp "${PROJECT_ROOT}/config/edgion-controller.toml" "$controller_toml_compat"
+    cat >> "$controller_toml_compat" <<EOF
+
+# ── Backward-compat single-cert mTLS (old format, still supported) ──
 [conf_sync_security.tls]
-cert = "certs/grpc/client.crt"
-key  = "certs/grpc/client.key"
-ca   = "certs/grpc/ca.crt"
+cert = "certs/grpc/primary/server.crt"
+key  = "certs/grpc/primary/server.key"
+ca   = "certs/grpc/primary/ca.crt"
 skip_tls = false
 EOF
-    log_success "Gateway TOML: $gateway_toml"
+
+    cp "${PROJECT_ROOT}/config/edgion-gateway.toml" "$gateway_toml_compat"
+    cat >> "$gateway_toml_compat" <<EOF
+
+# ── Backward-compat single-cert mTLS (old format, still supported) ──
+[conf_sync_security.tls]
+cert = "certs/grpc/primary/client.crt"
+key  = "certs/grpc/primary/client.key"
+ca   = "certs/grpc/primary/ca.crt"
+skip_tls = false
+EOF
+    log_success "Backward-compat TOML configs written (not used in this run)"
 
     # ── 5. Generate runtime TLS/mTLS certs for test suites ──
     log_section "Generating test suite certificates"
@@ -621,7 +673,8 @@ main() {
     echo ""
     if [ -n "$WORK_DIR" ]; then
         echo "  Logs:    ${WORK_DIR}/logs/"
-        echo "  Certs:   ${WORK_DIR}/certs/grpc/"
+        echo "  Certs:   ${WORK_DIR}/certs/grpc/primary/  (active)"
+        echo "           ${WORK_DIR}/certs/grpc/secondary/  (inactive, multi-cert test)"
     fi
     echo ""
 

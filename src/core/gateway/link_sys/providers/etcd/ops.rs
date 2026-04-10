@@ -114,6 +114,47 @@ impl EtcdLinkClient {
             .collect())
     }
 
+    /// GET with prefix → `(items, cluster_revision)`.
+    ///
+    /// Same as `get_prefix` but also returns the cluster-level revision from the
+    /// response header. This is needed for ConfCenter init-then-watch: after the
+    /// initial list, the watcher starts from `cluster_revision + 1`.
+    pub async fn get_prefix_with_revision(&self, prefix: &str) -> Result<(Vec<(String, Vec<u8>, i64)>, i64)> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full_prefix = self.full_key(prefix);
+
+        let options = GetOptions::new().with_prefix();
+        let resp = client
+            .get(full_prefix, Some(options))
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd GET prefix {}: {:?}", prefix, e))?;
+
+        let cluster_revision = resp
+            .header()
+            .map(|h| h.revision())
+            .unwrap_or(0);
+
+        let ns_len = self.namespace().map(|n| n.len()).unwrap_or(0);
+        let items = resp
+            .kvs()
+            .iter()
+            .map(|kv| {
+                let key = kv.key_str().unwrap_or("").to_string();
+                let stripped = if ns_len > 0 && key.len() > ns_len {
+                    key[ns_len..].to_string()
+                } else {
+                    key
+                };
+                (stripped, kv.value().to_vec(), kv.mod_revision())
+            })
+            .collect();
+
+        Ok((items, cluster_revision))
+    }
+
     /// DELETE with prefix → number of deleted keys
     pub async fn delete_prefix(&self, prefix: &str) -> Result<i64> {
         let mut client = self
@@ -248,6 +289,27 @@ impl EtcdLinkClient {
             .watch(full_prefix, Some(options))
             .await
             .map_err(|e| anyhow::anyhow!("Etcd WATCH prefix {}: {:?}", prefix, e))?;
+        Ok(stream)
+    }
+
+    /// Watch all keys with a given prefix, starting from a specific revision.
+    ///
+    /// Used by ConfCenter to resume watching after init-phase or reconnection.
+    /// Events with `mod_revision <= start_revision` are excluded by etcd.
+    pub async fn watch_prefix_from_revision(&self, prefix: &str, start_revision: i64) -> Result<WatchStream> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full_prefix = self.full_key(prefix);
+
+        let options = WatchOptions::new()
+            .with_prefix()
+            .with_start_revision(start_revision);
+        let stream = client
+            .watch(full_prefix, Some(options))
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd WATCH prefix (rev={}) {}: {:?}", start_revision, prefix, e))?;
         Ok(stream)
     }
 

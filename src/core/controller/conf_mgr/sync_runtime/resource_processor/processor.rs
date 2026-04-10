@@ -211,7 +211,7 @@ where
 
     /// Raw data source for cross-resource key lookups (bypasses handler filter).
     /// K8s mode: injected as KubeRawStore after reflector::store() call.
-    /// FS mode: injected as FsRawStore on controller construction.
+    /// FS/Etcd mode: injected as LocalRawStore on controller construction.
     raw_store: RwLock<Option<Arc<dyn RawStore<K>>>>,
 
     /// Shared controller runtime (stores, registries, etc.)
