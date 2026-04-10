@@ -659,10 +659,7 @@ mod tests {
             _from_version: u64,
         ) -> tokio::sync::mpsc::Receiver<super::super::traits::WatchResponseSimple> {
             // Return the pre-created receiver (consumed once)
-            self.rx
-                .lock()
-                .take()
-                .expect("watch_json called more than once")
+            self.rx.lock().take().expect("watch_json called more than once")
         }
 
         fn is_ready(&self) -> bool {

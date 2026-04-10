@@ -7,9 +7,9 @@ use crate::types::{
     WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
 };
 use kube::{Resource, ResourceExt};
+use parking_lot::RwLock;
 use rand::Rng;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use tonic::transport::Channel;
 
 use super::cache::ClientCache;

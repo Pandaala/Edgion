@@ -6,10 +6,10 @@
 //! - ProcessorHandler<T> for resource-specific logic
 //! - Configuration (metadata filter, namespace filter, etc.)
 
+use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 use kube::Resource;
 use serde::de::DeserializeOwned;

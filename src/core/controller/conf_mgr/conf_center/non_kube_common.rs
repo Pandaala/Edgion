@@ -18,16 +18,12 @@ use tokio::task::JoinHandle;
 
 use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
-use crate::for_each_phase1_core_resource;
-use crate::for_each_phase2_resource;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler,
-    EdgionAcmeHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
-    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, EndpointsHandler,
-    GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler,
-    PluginMetadataHandler, ProcessorHandler, ReferenceGrantHandler, ResourceProcessor,
-    SecretHandler, SecretRefManager, ServiceHandler, TcpRouteHandler, TlsRouteHandler,
-    UdpRouteHandler,
+    run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
+    EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
+    EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
+    LinkSysHandler, PluginMetadataHandler, ProcessorHandler, ReferenceGrantHandler, ResourceProcessor, SecretHandler,
+    SecretRefManager, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 use crate::core::controller::conf_mgr::sync_runtime::{ShutdownHandle, ShutdownSignal};
 use crate::core::controller::conf_mgr::ControllerRuntime;
@@ -59,7 +55,7 @@ pub struct CenterBase {
     shutdown_handle: Mutex<Option<ShutdownHandle>>,
     controller_handle: Mutex<Option<JoinHandle<()>>>,
     reload_tx: Mutex<Option<mpsc::Sender<()>>>,
-    pub runtime: Arc<ControllerRuntime>,
+    runtime: Arc<ControllerRuntime>,
 }
 
 impl CenterBase {
@@ -189,11 +185,7 @@ impl CenterBase {
             if let Some(start_time) = reload_start_time.take() {
                 let duration = start_time.elapsed().as_secs_f64();
                 reload_metrics().reload_completed(duration);
-                tracing::info!(
-                    component = component,
-                    duration_secs = duration,
-                    "Reload completed"
-                );
+                tracing::info!(component = component, duration_secs = duration, "Reload completed");
             }
 
             // 1. Iteration-specific shutdown handle.
@@ -221,8 +213,7 @@ impl CenterBase {
             config_sync_server.set_endpoint_mode(endpoint_mode);
             let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
-            config_sync_server
-                .register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
+            config_sync_server.register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
 
             // 7. Mark as ready.
             self.set_config_sync_server(Some(config_sync_server), component);
@@ -262,17 +253,11 @@ impl CenterBase {
             // 11. Handle the selected action.
             match action {
                 LoopAction::Shutdown => {
-                    tracing::info!(
-                        component = component,
-                        "Normal shutdown, lifecycle completed"
-                    );
+                    tracing::info!(component = component, "Normal shutdown, lifecycle completed");
                     return Ok(());
                 }
                 LoopAction::Reload => {
-                    tracing::info!(
-                        component = component,
-                        "Reload requested, restarting controller"
-                    );
+                    tracing::info!(component = component, "Reload requested, restarting controller");
                     reload_metrics().reload_started();
                     reload_start_time = Some(Instant::now());
                     continue;
@@ -340,15 +325,7 @@ pub trait LocalControllerBackend: Send + Sync {
         shutdown_signal: ShutdownSignal,
     ) -> JoinHandle<Result<()>>
     where
-        K: ResourceMeta
-            + Resource
-            + Clone
-            + Send
-            + Sync
-            + Debug
-            + Serialize
-            + DeserializeOwned
-            + 'static;
+        K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static;
 }
 
 /// Create a `ResourceProcessor`, register it, subscribe to the backend, and
@@ -366,15 +343,7 @@ pub async fn spawn<K, H, B>(
     runtime: Arc<ControllerRuntime>,
 ) -> JoinHandle<Result<()>>
 where
-    K: ResourceMeta
-        + Resource
-        + Clone
-        + Send
-        + Sync
-        + Debug
-        + Serialize
-        + DeserializeOwned
-        + 'static,
+    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     H: ProcessorHandler<K> + 'static,
     B: LocalControllerBackend,
 {
@@ -482,10 +451,7 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
             "Phase 1 complete: all foundation resources ready"
         );
     } else {
-        tracing::warn!(
-            component = component,
-            "Phase 1 timeout: starting Phase 2 anyway"
-        );
+        tracing::warn!(component = component, "Phase 1 timeout: starting Phase 2 anyway");
     }
 
     // ==================== Phase 2: Dependent Resources ====================

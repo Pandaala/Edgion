@@ -132,10 +132,7 @@ impl EtcdLinkClient {
             .await
             .map_err(|e| anyhow::anyhow!("Etcd GET prefix {}: {:?}", prefix, e))?;
 
-        let cluster_revision = resp
-            .header()
-            .map(|h| h.revision())
-            .unwrap_or(0);
+        let cluster_revision = resp.header().map(|h| h.revision()).unwrap_or(0);
 
         let ns_len = self.namespace().map(|n| n.len()).unwrap_or(0);
         let items = resp
@@ -303,9 +300,7 @@ impl EtcdLinkClient {
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
         let full_prefix = self.full_key(prefix);
 
-        let options = WatchOptions::new()
-            .with_prefix()
-            .with_start_revision(start_revision);
+        let options = WatchOptions::new().with_prefix().with_start_revision(start_revision);
         let stream = client
             .watch(full_prefix, Some(options))
             .await

@@ -98,10 +98,7 @@ impl EtcdWatcher {
             "Starting init phase"
         );
 
-        let (kvs, revision) = self
-            .client
-            .get_prefix_with_revision(&self.conf_prefix)
-            .await?;
+        let (kvs, revision) = self.client.get_prefix_with_revision(&self.conf_prefix).await?;
 
         tracing::info!(
             component = "etcd_watcher",
@@ -134,10 +131,12 @@ impl EtcdWatcher {
 
             if let Some(items) = by_kind.get(*kind) {
                 for (key, content) in items {
-                    let _ = tx.send(EtcdEvent::InitApply {
-                        key: key.clone(),
-                        content: content.clone(),
-                    }).await;
+                    let _ = tx
+                        .send(EtcdEvent::InitApply {
+                            key: key.clone(),
+                            content: content.clone(),
+                        })
+                        .await;
                 }
             }
 
@@ -168,10 +167,7 @@ impl EtcdWatcher {
             "Starting resync phase (compaction recovery)"
         );
 
-        let (kvs, revision) = self
-            .client
-            .get_prefix_with_revision(&self.conf_prefix)
-            .await?;
+        let (kvs, revision) = self.client.get_prefix_with_revision(&self.conf_prefix).await?;
 
         // Build current key set grouped by kind
         let mut current_by_kind: HashMap<&'static str, HashMap<String, String>> = HashMap::new();
@@ -198,23 +194,22 @@ impl EtcdWatcher {
             // Send Apply for all current keys (idempotent upsert)
             if let Some(items) = current {
                 for (key, content) in items {
-                    let _ = tx.send(EtcdEvent::Apply {
-                        key: key.clone(),
-                        content: content.clone(),
-                    }).await;
+                    let _ = tx
+                        .send(EtcdEvent::Apply {
+                            key: key.clone(),
+                            content: content.clone(),
+                        })
+                        .await;
                     new_known.entry(kind).or_default().insert(key.clone());
                 }
             }
 
             // Send Delete for keys that existed before but are now gone
             if let Some(old) = old_keys {
-                let current_keys: HashSet<&String> =
-                    current.map(|m| m.keys().collect()).unwrap_or_default();
+                let current_keys: HashSet<&String> = current.map(|m| m.keys().collect()).unwrap_or_default();
                 for old_key in old {
                     if !current_keys.contains(old_key) {
-                        let _ = tx.send(EtcdEvent::Delete {
-                            key: old_key.clone(),
-                        }).await;
+                        let _ = tx.send(EtcdEvent::Delete { key: old_key.clone() }).await;
                     }
                 }
             }
@@ -236,11 +231,7 @@ impl EtcdWatcher {
 
     /// Watch for real-time changes starting from `start_revision + 1`.
     /// Reconnects on error; resyncs on compaction.
-    async fn runtime_phase(
-        &self,
-        start_revision: i64,
-        shutdown_signal: &mut ShutdownSignal,
-    ) -> Result<()> {
+    async fn runtime_phase(&self, start_revision: i64, shutdown_signal: &mut ShutdownSignal) -> Result<()> {
         let mut revision = start_revision;
 
         // Snapshot senders once — they are registered before run() and never change.

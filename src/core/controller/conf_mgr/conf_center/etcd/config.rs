@@ -159,16 +159,15 @@ impl EtcdConfig {
         };
 
         // Keep-alive
-        let keep_alive =
-            if self.keep_alive_time_secs.is_some() || self.keep_alive_timeout_secs.is_some() {
-                Some(EtcdKeepAlive {
-                    time: self.keep_alive_time_secs,
-                    timeout: self.keep_alive_timeout_secs,
-                    permit_without_stream: Some(true),
-                })
-            } else {
-                None
-            };
+        let keep_alive = if self.keep_alive_time_secs.is_some() || self.keep_alive_timeout_secs.is_some() {
+            Some(EtcdKeepAlive {
+                time: self.keep_alive_time_secs,
+                timeout: self.keep_alive_timeout_secs,
+                permit_without_stream: Some(true),
+            })
+        } else {
+            None
+        };
 
         Ok(EtcdClientConfig {
             endpoints: self.endpoints.clone(),
@@ -191,8 +190,8 @@ impl EtcdConfig {
 fn read_optional_file(path: &Option<String>) -> anyhow::Result<Option<String>> {
     match path {
         Some(p) => {
-            let content = std::fs::read_to_string(p)
-                .map_err(|e| anyhow::anyhow!("Failed to read TLS file '{}': {}", p, e))?;
+            let content =
+                std::fs::read_to_string(p).map_err(|e| anyhow::anyhow!("Failed to read TLS file '{}': {}", p, e))?;
             Ok(Some(content))
         }
         None => Ok(None),

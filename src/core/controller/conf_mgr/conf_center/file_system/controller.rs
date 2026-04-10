@@ -1,22 +1,14 @@
-//! FileSystemController - Top-level controller for FileSystem mode
+//! FileSystemController - Backend-specific adapter for FileSystem mode.
 //!
-//! Spawns independent ResourceControllers for each resource type,
-//! similar to how KubernetesController works.
+//! Wires `FileSystemWatcher` and `FileSystemResourceController` into the shared
+//! `LocalControllerBackend` interface so that `spawn_all_controllers` can drive
+//! both FileSystem and Etcd modes from a single resource list.
 //!
-//! Architecture:
 //! ```text
-//! FileSystemController.run()
-//!     │
-//!     ├── Create FileSystemWatcher (shared)
-//!     │
-//!     ├── spawn::<HTTPRoute, _>(HttpRouteHandler)
-//!     │       ├── Create ResourceProcessor + register to PROCESSOR_REGISTRY
-//!     │       └── Create FileSystemResourceController
-//!     │
-//!     ├── spawn::<Gateway, _>(GatewayHandler)
-//!     │       └── ...
-//!     │
-//!     └── Run FileSystemWatcher (init phase + runtime phase)
+//! FileSystemController::run()
+//!     ├── FileSystemControllerBackend (implements LocalControllerBackend)
+//!     └── spawn_all_controllers(&backend, ...)
+//!             └── per resource: ResourceProcessor → register → subscribe → launch
 //! ```
 
 use std::fmt::Debug;
@@ -33,13 +25,9 @@ use tokio::task::JoinHandle;
 use super::file_watcher::{FileSystemWatcher, KindEventReceiver};
 use super::resource_controller::FileSystemResourceController;
 use super::status::FileSystemStatusHandler;
-use crate::core::controller::conf_mgr::conf_center::non_kube_common::{
-    spawn_all_controllers, LocalControllerBackend,
-};
+use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
 use crate::core::controller::conf_mgr::conf_center::EndpointMode;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    ResourceProcessor, SecretRefManager,
-};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ResourceProcessor, SecretRefManager};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::ResourceMeta;
@@ -67,19 +55,11 @@ impl LocalControllerBackend for FileSystemControllerBackend {
         shutdown_signal: ShutdownSignal,
     ) -> JoinHandle<Result<()>>
     where
-        K: ResourceMeta
-            + Resource
-            + Clone
-            + Send
-            + Sync
-            + Debug
-            + Serialize
-            + DeserializeOwned
-            + 'static,
+        K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     {
         let conf_dir = self.watcher.conf_dir().to_path_buf();
-        let ctrl = FileSystemResourceController::new(kind, processor, conf_dir, event_rx)
-            .with_shutdown(shutdown_signal);
+        let ctrl =
+            FileSystemResourceController::new(kind, processor, conf_dir, event_rx).with_shutdown(shutdown_signal);
         tokio::spawn(async move { ctrl.run().await })
     }
 }
@@ -172,9 +152,3 @@ impl FileSystemController {
         Ok(())
     }
 }
-
-// NOTE: The following items have been extracted to shared modules:
-//   - `DEFAULT_CONTROLLER_NAME`  -> `common::DEFAULT_CONTROLLER_NAME`
-//   - `phase1_kinds()`           -> `common::phase1_kinds`
-//   - `spawn_all_controllers()`  -> `non_kube_common::spawn_all_controllers`
-//   - `spawn()`                  -> `non_kube_common::spawn`

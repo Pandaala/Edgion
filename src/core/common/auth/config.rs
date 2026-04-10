@@ -190,7 +190,10 @@ mod tests {
             clock_skew_seconds = 60
         "#;
         let config: AdminAuthConfig = toml::from_str(toml).unwrap();
-        assert_eq!(config.discovery, "https://idp.example.com/.well-known/openid-configuration");
+        assert_eq!(
+            config.discovery,
+            "https://idp.example.com/.well-known/openid-configuration"
+        );
         assert_eq!(config.audiences, vec!["edgion-admin"]);
         assert_eq!(config.clock_skew_seconds, 60);
         assert_eq!(config.jwks_cache_ttl, 300); // default

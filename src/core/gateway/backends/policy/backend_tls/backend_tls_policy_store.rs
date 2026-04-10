@@ -26,9 +26,9 @@
 //! - **Incremental update** (`update`): Only rebuilds affected target entries
 
 use arc_swap::ArcSwap;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
-use parking_lot::RwLock;
 
 use crate::types::resources::BackendTLSPolicy;
 

@@ -2,8 +2,8 @@ pub mod backend_san;
 pub mod cert;
 pub mod mtls;
 
-pub use cert::{validate_cert, CertValidationError, CertValidationResult};
 pub(crate) use cert::check_key_matches_cert;
+pub use cert::{validate_cert, CertValidationError, CertValidationResult};
 pub use mtls::{validate_cn_whitelist, validate_san_whitelist};
 
 /// Match a value against a pattern, supporting exact match and single-level wildcard (`*.example.com`).

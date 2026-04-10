@@ -3,8 +3,8 @@
 //! Thread-safe: RwLock for client map, Notify for change signaling.
 //! Designed for low write frequency (only on gateway connect/disconnect).
 
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::time::SystemTime;
 use tokio::sync::Notify;
 

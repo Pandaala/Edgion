@@ -54,7 +54,9 @@ impl HeaderCertAuth {
         } else {
             for secret_ref in &config.ca_secret_refs {
                 let ns = secret_ref.namespace.as_deref().unwrap_or(plugin_namespace);
-                let Some(secret) = get_secret(Some(ns), &secret_ref.name) else { continue };
+                let Some(secret) = get_secret(Some(ns), &secret_ref.name) else {
+                    continue;
+                };
                 if let Some(raw) = Self::read_ca_pem_from_secret(&secret) {
                     out.extend(Self::parse_ca_bundle_to_der(&raw));
                 }
@@ -217,7 +219,9 @@ impl HeaderCertAuth {
         }
 
         for ca_der in &self.ca_certs_der {
-            let Ok((_, ca)) = parse_x509_certificate(ca_der) else { continue };
+            let Ok((_, ca)) = parse_x509_certificate(ca_der) else {
+                continue;
+            };
             if leaf.issuer() != ca.subject() {
                 continue;
             }

@@ -1,6 +1,6 @@
 use kube::{Resource, ResourceExt};
-use serde::Serialize;
 use parking_lot::RwLock;
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};

@@ -5,9 +5,9 @@ use crate::core::gateway::plugins::runtime::PluginLog;
 use crate::core::gateway::plugins::runtime::RequestFilter;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{OpenidConnectConfig, UnauthAction, VerificationMode};
+use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
-use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -513,10 +513,7 @@ async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it(
 
     plugin.maybe_set_session_cookie_header(&mut session, &payload).await;
 
-    let set_cookie = captured_cookie
-        .lock()
-        .clone()
-        .expect("set-cookie header");
+    let set_cookie = captured_cookie.lock().clone().expect("set-cookie header");
     let encoded = set_cookie
         .strip_prefix("edgion_oidc_session=")
         .and_then(|v| v.split(';').next())

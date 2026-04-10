@@ -25,9 +25,9 @@
 //! - `CrossNamespaceRefManager = BidirectionalRefManager<ResourceRef>`
 //! - `ServiceRefManager = BidirectionalRefManager<ResourceRef>`
 
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use parking_lot::RwLock;
 
 use crate::types::ResourceKind;
 

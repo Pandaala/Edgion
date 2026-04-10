@@ -1,8 +1,8 @@
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
-use parking_lot::{Mutex, RwLock};
 
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};

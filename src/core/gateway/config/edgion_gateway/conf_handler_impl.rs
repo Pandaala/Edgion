@@ -1,8 +1,8 @@
 use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use crate::types::prelude_resources::EdgionGatewayConfig;
 use kube::ResourceExt;
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Global store for EdgionGatewayConfig resources (keyed by key_name())

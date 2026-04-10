@@ -35,15 +35,10 @@ impl EtcdStatusHandler {
     }
 
     /// Write native status to etcd in YAML format.
-    pub async fn write_native_status<S: Serialize>(
-        &self,
-        kind: &str,
-        key: &str,
-        status: &S,
-    ) -> std::io::Result<()> {
+    pub async fn write_native_status<S: Serialize>(&self, kind: &str, key: &str, status: &S) -> std::io::Result<()> {
         let status_key = self.build_status_key(kind, key);
-        let yaml = serde_yaml::to_string(status)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let yaml =
+            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         self.client
             .put_string(&status_key, &yaml)
@@ -60,15 +55,10 @@ impl EtcdStatusHandler {
     }
 
     /// Write status from a serde_json::Value.
-    pub async fn write_status_value(
-        &self,
-        kind: &str,
-        key: &str,
-        status: &serde_json::Value,
-    ) -> std::io::Result<()> {
+    pub async fn write_status_value(&self, kind: &str, key: &str, status: &serde_json::Value) -> std::io::Result<()> {
         let status_key = self.build_status_key(kind, key);
-        let yaml = serde_yaml::to_string(status)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let yaml =
+            serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         self.client
             .put_string(&status_key, &yaml)
@@ -85,13 +75,7 @@ impl EtcdStatusHandler {
     }
 
     /// Write error status (for parse errors, etc.)
-    pub async fn write_error_status(
-        &self,
-        kind: &str,
-        key: &str,
-        reason: &str,
-        message: &str,
-    ) -> std::io::Result<()> {
+    pub async fn write_error_status(&self, kind: &str, key: &str, reason: &str, message: &str) -> std::io::Result<()> {
         let status = ErrorStatus::error(reason, message);
         self.write_native_status(kind, key, &status).await
     }

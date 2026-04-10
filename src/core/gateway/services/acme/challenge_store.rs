@@ -7,8 +7,8 @@
 //! with active_challenges are synced from the Controller.
 
 use crate::types::resources::edgion_acme::EdgionAcme;
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A single challenge entry in the store

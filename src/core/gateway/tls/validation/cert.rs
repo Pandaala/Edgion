@@ -177,7 +177,10 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
             }
         }
         Err(e) => {
-            errors.push(CertValidationError::CertParseError(format!("unexpected re-parse failure: {}", e)));
+            errors.push(CertValidationError::CertParseError(format!(
+                "unexpected re-parse failure: {}",
+                e
+            )));
             return CertValidationResult::invalid(errors);
         }
     }
@@ -303,13 +306,7 @@ fn check_san_matches(cert: &X509Certificate, declared_hosts: &[String]) -> Resul
                         GeneralName::IPAddress(ip_bytes) => match ip_bytes.len() {
                             4 => {
                                 san_ip_list.push(
-                                    std::net::Ipv4Addr::new(
-                                        ip_bytes[0],
-                                        ip_bytes[1],
-                                        ip_bytes[2],
-                                        ip_bytes[3],
-                                    )
-                                    .into(),
+                                    std::net::Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]).into(),
                                 );
                             }
                             16 => {
@@ -716,8 +713,7 @@ mod tests {
 
         // Generate intermediate CA
         let ca_key = KeyPair::generate().expect("CA key gen failed");
-        let mut ca_params =
-            CertificateParams::new(vec!["Edgion Test CA".to_string()]).expect("CA params failed");
+        let mut ca_params = CertificateParams::new(vec!["Edgion Test CA".to_string()]).expect("CA params failed");
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         ca_params.not_before = now + ::time::Duration::days(intermediate_not_before_days);
         ca_params.not_after = now + ::time::Duration::days(intermediate_not_after_days);
@@ -726,13 +722,10 @@ mod tests {
 
         // Generate leaf certificate signed by CA
         let leaf_key = KeyPair::generate().expect("leaf key gen failed");
-        let mut leaf_params =
-            CertificateParams::new(vec!["example.com".to_string()]).expect("leaf params failed");
+        let mut leaf_params = CertificateParams::new(vec!["example.com".to_string()]).expect("leaf params failed");
         leaf_params.not_before = now + ::time::Duration::days(leaf_not_before_days);
         leaf_params.not_after = now + ::time::Duration::days(leaf_not_after_days);
-        let leaf_cert = leaf_params
-            .signed_by(&leaf_key, &ca_issuer)
-            .expect("leaf sign failed");
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_issuer).expect("leaf sign failed");
 
         // Chain: leaf + intermediate
         let chain_pem = format!("{}{}", leaf_cert.pem(), ca_cert.pem());
@@ -843,7 +836,10 @@ mod tests {
 
         let result = validate_cert(&tls);
         assert!(
-            !result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
             "IPv4 SAN should match, got: {:?}",
             result.errors
         );
@@ -857,7 +853,10 @@ mod tests {
 
         let result = validate_cert(&tls);
         assert!(
-            !result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
             "IPv6 SAN should match, got: {:?}",
             result.errors
         );
@@ -875,7 +874,10 @@ mod tests {
 
         let result = validate_cert(&tls);
         assert!(
-            !result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
             "mixed DNS+IP SAN should both match, got: {:?}",
             result.errors
         );
@@ -888,7 +890,10 @@ mod tests {
 
         let result = validate_cert(&tls);
         assert!(
-            result.errors.iter().any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
             "IP host should not match DNS SAN, got: {:?}",
             result.errors
         );
@@ -903,7 +908,10 @@ mod tests {
 
         let result = validate_cert(&tls);
         assert!(
-            !result.errors.iter().any(|e| matches!(e, CertValidationError::CertParseError(_))),
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertParseError(_))),
             "valid chain should pass, got: {:?}",
             result.errors
         );
@@ -935,7 +943,10 @@ mod tests {
 
         let result = validate_cert(&tls);
         assert!(
-            !result.errors.iter().any(|e| matches!(e, CertValidationError::CertParseError(_))),
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::CertParseError(_))),
             "single cert should still work, got: {:?}",
             result.errors
         );

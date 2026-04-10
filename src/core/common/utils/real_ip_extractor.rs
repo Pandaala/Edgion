@@ -173,12 +173,7 @@ impl RealIpExtractor {
     /// - `recursive = false`: take rightmost IP; if trusted, use client_addr; if not, use it.
     /// - Fallback when all IPs trusted (recursive mode): return leftmost IP.
     fn resolve_from_header(&self, header_value: &str, client_ip: &IpAddr) -> String {
-        let iter = || {
-            header_value
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-        };
+        let iter = || header_value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
 
         if self.recursive {
             let mut leftmost: Option<IpAddr> = None;
@@ -197,9 +192,7 @@ impl RealIpExtractor {
                 .unwrap_or_else(|| client_ip.to_string())
         } else {
             // Non-recursive: take the rightmost IP directly
-            let rightmost = iter()
-                .rev()
-                .find_map(|s| s.parse::<IpAddr>().ok());
+            let rightmost = iter().rev().find_map(|s| s.parse::<IpAddr>().ok());
             match rightmost {
                 Some(ip) if self.is_trusted_proxy(&ip) => client_ip.to_string(),
                 Some(ip) => ip.to_string(),
@@ -251,8 +244,7 @@ mod tests {
 
     #[test]
     fn test_client_not_trusted() {
-        let extractor =
-            RealIpExtractor::new(&["10.0.0.0/8".to_string()], "X-Forwarded-For".to_string(), true).unwrap();
+        let extractor = RealIpExtractor::new(&["10.0.0.0/8".to_string()], "X-Forwarded-For".to_string(), true).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();

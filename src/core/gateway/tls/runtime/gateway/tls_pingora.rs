@@ -811,9 +811,8 @@ impl TlsCallback {
             use std::ffi::CString;
 
             let cipher_list = ciphers.join(":");
-            let cipher_cstr = CString::new(cipher_list.as_str()).map_err(|e| {
-                PingoraError::explain(ErrorType::InternalError, format!("cipher null byte: {e}"))
-            })?;
+            let cipher_cstr = CString::new(cipher_list.as_str())
+                .map_err(|e| PingoraError::explain(ErrorType::InternalError, format!("cipher null byte: {e}")))?;
 
             // SAFETY: SslRef -> SSL* conversion for FFI call
             // ssl is valid during this function, cipher_cstr lifetime extends past FFI call

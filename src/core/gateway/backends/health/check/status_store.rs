@@ -1,7 +1,7 @@
 use arc_swap::ArcSwap;
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
-use parking_lot::Mutex;
 use std::time::Instant;
 
 static HEALTH_STATUS_STORE: LazyLock<Arc<HealthStatusStore>> = LazyLock::new(|| Arc::new(HealthStatusStore::new()));

@@ -1,35 +1,64 @@
+use crate::core::controller::conf_mgr::ListOptions;
 use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
 use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use serde::Deserialize;
 use std::sync::Arc;
 
 use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
 use super::types::*;
 
+/// Pagination query parameters for list endpoints.
+#[derive(Deserialize, Default)]
+pub struct PaginationQuery {
+    /// Maximum number of items to return (0 or absent = no limit).
+    pub limit: Option<u32>,
+    /// Continue token from a previous list response.
+    #[serde(rename = "continue")]
+    pub continue_token: Option<String>,
+}
+
+impl PaginationQuery {
+    fn into_list_options(self) -> Option<ListOptions> {
+        if self.limit.is_some() || self.continue_token.is_some() {
+            Some(ListOptions {
+                limit: self.limit.unwrap_or(0),
+                continue_token: self.continue_token,
+            })
+        } else {
+            None
+        }
+    }
+}
+
 /// List all resources of a kind across all namespaces (from ConfCenter/storage)
 pub async fn list_all_namespaces(
     State(state): State<Arc<AdminState>>,
     Path(kind_str): Path<String>,
+    Query(pagination): Query<PaginationQuery>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let data = state.center_list_resources(kind).await?;
-    Ok(Json(ListResponse::success(data)))
+    let (data, continue_token) = state.center_list_resources(kind, pagination.into_list_options()).await?;
+    Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
 
 /// List namespace-scoped resources (from ConfCenter/storage)
 pub async fn list_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns)): Path<(String, String)>,
+    Query(pagination): Query<PaginationQuery>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let data = state.center_list_resources_namespaced(kind, &ns).await?;
-    Ok(Json(ListResponse::success(data)))
+    let (data, continue_token) = state
+        .center_list_resources_namespaced(kind, &ns, pagination.into_list_options())
+        .await?;
+    Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
 
 /// Get a namespace-scoped resource (from ConfCenter/storage)

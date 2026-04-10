@@ -8,5 +8,9 @@ pub fn set_mtls_verify_callback(
     verify_mode: SslVerifyMode,
     edgion_tls: &Arc<EdgionTls>,
 ) -> Result<(), String> {
-    crate::core::gateway::tls::boringssl::mtls_verify_callback::set_verify_callback_with_whitelist(ssl, verify_mode, edgion_tls)
+    crate::core::gateway::tls::boringssl::mtls_verify_callback::set_verify_callback_with_whitelist(
+        ssl,
+        verify_mode,
+        edgion_tls,
+    )
 }

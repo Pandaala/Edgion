@@ -11,10 +11,10 @@
 //! lookups (e.g. Route → Gateway) can find objects that were excluded from
 //! `ServerCache` by `gatewayClassName` or namespace filters.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 use kube::runtime::reflector::Store;
 use kube::Resource;

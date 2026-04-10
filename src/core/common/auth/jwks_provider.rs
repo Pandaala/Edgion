@@ -114,10 +114,7 @@ impl JwksProvider {
 
         let jwks_uri = {
             let doc = self.discovery_doc.read().await;
-            doc.as_ref()
-                .ok_or("Discovery document not available")?
-                .jwks_uri
-                .clone()
+            doc.as_ref().ok_or("Discovery document not available")?.jwks_uri.clone()
         };
 
         // Fetch JWKS.
@@ -132,10 +129,7 @@ impl JwksProvider {
             return Err(format!("JWKS endpoint returned status {}", resp.status()));
         }
 
-        let jwks: JwkSet = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse JWKS: {}", e))?;
+        let jwks: JwkSet = resp.json().await.map_err(|e| format!("Failed to parse JWKS: {}", e))?;
 
         tracing::info!(
             component = "admin_auth",
@@ -181,10 +175,7 @@ impl JwksProvider {
             .map_err(|e| format!("Failed to fetch discovery document: {}", e))?;
 
         if !resp.status().is_success() {
-            return Err(format!(
-                "Discovery endpoint returned status {}",
-                resp.status()
-            ));
+            return Err(format!("Discovery endpoint returned status {}", resp.status()));
         }
 
         let doc: DiscoveryDocument = resp

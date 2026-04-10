@@ -4,8 +4,8 @@
 //! - Global SecretStore updates for TLS callback access
 //! - Cascading requeue for dependent resources (EdgionTls, Gateway)
 
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 
 use k8s_openapi::api::core::v1::Secret;
 

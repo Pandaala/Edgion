@@ -3,9 +3,9 @@
 //! This module provides global storage for ReferenceGrant resources with
 //! efficient lookup by to_namespace for permission checking.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 use crate::types::resources::ReferenceGrant;
 

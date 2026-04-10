@@ -111,10 +111,7 @@ impl CenterApi for EtcdStorage {
         content: String,
     ) -> Result<(), ConfWriterError> {
         let key = self.build_key(kind, namespace, name);
-        self.client
-            .put_string(&key, &content)
-            .await
-            .map_err(Self::map_err)?;
+        self.client.put_string(&key, &content).await.map_err(Self::map_err)?;
 
         tracing::info!(
             component = "etcd_storage",
@@ -147,10 +144,7 @@ impl CenterApi for EtcdStorage {
             )));
         }
 
-        self.client
-            .put_string(&key, &content)
-            .await
-            .map_err(Self::map_err)?;
+        self.client.put_string(&key, &content).await.map_err(Self::map_err)?;
 
         tracing::info!(
             component = "etcd_storage",
@@ -183,10 +177,7 @@ impl CenterApi for EtcdStorage {
             )));
         }
 
-        self.client
-            .put_string(&key, &content)
-            .await
-            .map_err(Self::map_err)?;
+        self.client.put_string(&key, &content).await.map_err(Self::map_err)?;
 
         tracing::info!(
             component = "etcd_storage",
@@ -199,33 +190,16 @@ impl CenterApi for EtcdStorage {
         Ok(())
     }
 
-    async fn get_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-    ) -> Result<String, ConfWriterError> {
+    async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
         let key = self.build_key(kind, namespace, name);
         self.client
             .get_string(&key)
             .await
             .map_err(Self::map_err)?
-            .ok_or_else(|| {
-                ConfWriterError::NotFound(format!(
-                    "{}/{}/{}",
-                    kind,
-                    namespace.unwrap_or("_"),
-                    name
-                ))
-            })
+            .ok_or_else(|| ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name)))
     }
 
-    async fn delete_one(
-        &self,
-        kind: &str,
-        namespace: Option<&str>,
-        name: &str,
-    ) -> Result<(), ConfWriterError> {
+    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
         let key = self.build_key(kind, namespace, name);
         let deleted = self.client.delete(&key).await.map_err(Self::map_err)?;
 
@@ -249,17 +223,9 @@ impl CenterApi for EtcdStorage {
         Ok(())
     }
 
-    async fn get_list_by_kind(
-        &self,
-        kind: &str,
-        _opts: Option<ListOptions>,
-    ) -> Result<ListResult, ConfWriterError> {
+    async fn get_list_by_kind(&self, kind: &str, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
         let prefix = self.kind_prefix(kind);
-        let kvs = self
-            .client
-            .get_prefix(&prefix)
-            .await
-            .map_err(Self::map_err)?;
+        let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
     }
 
@@ -270,21 +236,13 @@ impl CenterApi for EtcdStorage {
         _opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError> {
         let prefix = self.kind_ns_prefix(kind, namespace);
-        let kvs = self
-            .client
-            .get_prefix(&prefix)
-            .await
-            .map_err(Self::map_err)?;
+        let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
     }
 
     async fn list_all(&self, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
         let prefix = self.conf_prefix();
-        let kvs = self
-            .client
-            .get_prefix(&prefix)
-            .await
-            .map_err(Self::map_err)?;
+        let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
     }
 }

@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use futures::FutureExt;
 use k8s_openapi::api::core::v1::Endpoints;
+use parking_lot::RwLock;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
 use pingora_load_balancing::selection::BackendSelection;
@@ -13,7 +14,6 @@ use pingora_load_balancing::Backend;
 use pingora_load_balancing::{Backends, LoadBalancer};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointExt {

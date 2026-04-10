@@ -12,8 +12,8 @@ use crate::types::ListenerKey;
 use crate::types::{HTTPBackendRef, HTTPRouteRule};
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 type DomainStr = String;

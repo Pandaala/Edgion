@@ -13,12 +13,12 @@
 use super::event::FileSystemEvent;
 use super::file_watcher::{build_path_from_key, KindEventReceiver};
 use super::status::FileSystemStatusHandler;
+use crate::core::controller::conf_mgr::conf_center::common::parse_resource_content;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, make_resource_key, LocalRawStore, ResourceProcessor, WorkItemResult,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::core::controller::conf_mgr::conf_center::common::parse_resource_content;
 use crate::types::ResourceMeta;
 use anyhow::Result;
 use kube::Resource;

@@ -7,8 +7,8 @@
 //! Design mirrors `SecretStore`: global `LazyLock`, `RwLock<HashMap>`,
 //! controller-only (never synced to Gateway).
 
-use std::collections::{BTreeMap, HashMap};
 use parking_lot::RwLock;
+use std::collections::{BTreeMap, HashMap};
 
 use k8s_openapi::api::core::v1::Namespace;
 use kube::ResourceExt;

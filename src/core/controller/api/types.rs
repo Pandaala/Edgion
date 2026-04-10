@@ -3,7 +3,6 @@ use crate::core::controller::conf_mgr::{ConfCenter, ConfMgr, ConfWriterError, Sc
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use crate::types::ResourceKind;
 use axum::http::StatusCode;
-use serde::Serialize;
 use std::sync::Arc;
 
 /// Admin state containing ConfMgr and SchemaValidator
@@ -43,11 +42,15 @@ impl AdminState {
     // Used by /api/v1/... endpoints - reads directly from storage
 
     /// List all resources of a kind from storage (via ConfCenter)
-    pub async fn center_list_resources(&self, kind: ResourceKind) -> Result<Vec<serde_json::Value>, StatusCode> {
+    pub async fn center_list_resources(
+        &self,
+        kind: ResourceKind,
+        opts: Option<crate::core::controller::conf_mgr::ListOptions>,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>), StatusCode> {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.get_list_by_kind(kind_str, None).await.map_err(|e| {
+        let result = api.get_list_by_kind(kind_str, opts).await.map_err(|e| {
             tracing::warn!(
                 component = "admin_state",
                 kind = kind_str,
@@ -56,6 +59,8 @@ impl AdminState {
             );
             map_writer_error(e)
         })?;
+
+        let continue_token = result.continue_token;
 
         // Parse YAML/JSON content to Vec<Value>
         let values: Vec<serde_json::Value> = result
@@ -68,7 +73,7 @@ impl AdminState {
             })
             .collect();
 
-        Ok(values)
+        Ok((values, continue_token))
     }
 
     /// List resources of a kind in a specific namespace from storage (via ConfCenter)
@@ -76,11 +81,12 @@ impl AdminState {
         &self,
         kind: ResourceKind,
         namespace: &str,
-    ) -> Result<Vec<serde_json::Value>, StatusCode> {
+        opts: Option<crate::core::controller::conf_mgr::ListOptions>,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>), StatusCode> {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.get_list_by_kind_ns(kind_str, namespace, None).await.map_err(|e| {
+        let result = api.get_list_by_kind_ns(kind_str, namespace, opts).await.map_err(|e| {
             tracing::warn!(
                 component = "admin_state",
                 kind = kind_str,
@@ -91,6 +97,8 @@ impl AdminState {
             map_writer_error(e)
         })?;
 
+        let continue_token = result.continue_token;
+
         // Parse YAML/JSON content to Vec<Value>
         let values: Vec<serde_json::Value> = result
             .items
@@ -102,7 +110,7 @@ impl AdminState {
             })
             .collect();
 
-        Ok(values)
+        Ok((values, continue_token))
     }
 
     /// Get a specific resource by namespace and name from storage (via ConfCenter)

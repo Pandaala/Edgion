@@ -22,9 +22,9 @@ pub use udp_route_table::UdpRouteTable;
 pub use edgion_udp::EdgionUdpProxy;
 
 use crate::types::ListenerKey;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use parking_lot::RwLock;
 use tokio_util::sync::CancellationToken;
 
 /// Registry that holds CancellationTokens for active UDP listeners,

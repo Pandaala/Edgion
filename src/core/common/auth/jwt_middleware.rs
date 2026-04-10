@@ -76,10 +76,7 @@ pub async fn jwt_auth_middleware(
     let token = match extract_bearer_token(&request) {
         Some(t) => t,
         None => {
-            return auth_error_response(
-                StatusCode::UNAUTHORIZED,
-                "Missing or invalid Authorization header",
-            );
+            return auth_error_response(StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header");
         }
     };
 
@@ -132,10 +129,7 @@ fn extract_bearer_token(request: &Request<Body>) -> Option<String> {
 }
 
 /// Validate a JWT token and return the claims.
-async fn validate_jwt(
-    state: &AuthMiddlewareState,
-    token: &str,
-) -> Result<AuthClaims, (StatusCode, String)> {
+async fn validate_jwt(state: &AuthMiddlewareState, token: &str) -> Result<AuthClaims, (StatusCode, String)> {
     // Decode header to get algorithm + kid.
     let header = decode_header(token).map_err(|e| {
         tracing::debug!(component = "admin_auth", error = %e, "Failed to decode JWT header");
@@ -155,21 +149,16 @@ async fn validate_jwt(
     .map_err(|(_, msg)| (StatusCode::UNAUTHORIZED, msg))?;
 
     // Validate token algorithm.
-    validate_token_alg(header.alg, expected_alg, &allowed_algs)
-        .map_err(|(_, msg)| (StatusCode::UNAUTHORIZED, msg))?;
+    validate_token_alg(header.alg, expected_alg, &allowed_algs).map_err(|(_, msg)| (StatusCode::UNAUTHORIZED, msg))?;
 
     // Fetch JWKS.
-    let jwks = state
-        .jwks_provider
-        .get_jwks()
-        .await
-        .map_err(|e| {
-            tracing::error!(component = "admin_auth", error = %e, "Failed to fetch JWKS");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Authentication service unavailable".to_string(),
-            )
-        })?;
+    let jwks = state.jwks_provider.get_jwks().await.map_err(|e| {
+        tracing::error!(component = "admin_auth", error = %e, "Failed to fetch JWKS");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Authentication service unavailable".to_string(),
+        )
+    })?;
 
     // Select matching JWK.
     let jwk = select_jwk(&header, &jwks, header.alg).map_err(|e| match e {
@@ -179,10 +168,7 @@ async fn validate_jwt(
         }
         JwkSelectError::NoSuitableKey => {
             tracing::debug!(component = "admin_auth", alg = ?header.alg, "No suitable JWK for algorithm");
-            (
-                StatusCode::UNAUTHORIZED,
-                "No suitable signing key".to_string(),
-            )
+            (StatusCode::UNAUTHORIZED, "No suitable signing key".to_string())
         }
     })?;
 
@@ -217,14 +203,21 @@ async fn validate_jwt(
     }
 
     // Decode and verify.
-    let token_data = decode::<Value>(token, &decoding_key, &validation)
-        .map_err(|e| {
-            let (_, msg) = map_jwt_decode_error(e);
-            (StatusCode::UNAUTHORIZED, msg)
-        })?;
+    let token_data = decode::<Value>(token, &decoding_key, &validation).map_err(|e| {
+        let (_, msg) = map_jwt_decode_error(e);
+        (StatusCode::UNAUTHORIZED, msg)
+    })?;
 
-    let sub = token_data.claims.get("sub").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let iss = token_data.claims.get("iss").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let sub = token_data
+        .claims
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let iss = token_data
+        .claims
+        .get("iss")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     Ok(AuthClaims {
         sub,

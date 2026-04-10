@@ -3,8 +3,8 @@ use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient 
 use crate::core::common::conf_sync::types::ListData;
 use crate::types::ResourceMeta;
 use kube::Resource;
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 use tokio::sync::RwLock as AsyncRwLock;
 use tonic::transport::Channel;
 

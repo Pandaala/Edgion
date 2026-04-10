@@ -18,13 +18,13 @@ use tokio::task::JoinHandle;
 use super::event::EtcdEvent;
 use super::status::EtcdStatusHandler;
 use super::watcher::KindEventReceiver;
+use crate::core::controller::conf_mgr::conf_center::common::parse_resource_content;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, make_resource_key, LocalRawStore, ResourceProcessor, WorkItemResult,
 };
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::core::controller::conf_mgr::conf_center::common::parse_resource_content;
 use crate::types::ResourceMeta;
 
 /// EtcdResourceController — handles events for a single resource type.
@@ -114,50 +114,41 @@ where
                             self.processor.on_init();
                         }
                     }
-                    EtcdEvent::InitApply { key, content } => {
-                        match parse_resource_content::<K>(&content) {
-                            Ok(obj) => {
-                                let rkey = make_resource_key(&obj);
-                                self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
+                    EtcdEvent::InitApply { key, content } => match parse_resource_content::<K>(&content) {
+                        Ok(obj) => {
+                            let rkey = make_resource_key(&obj);
+                            self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
 
-                                let existing_status_json =
-                                    self.status_handler.read_status_json(kind, &rkey).await;
+                            let existing_status_json = self.status_handler.read_status_json(kind, &rkey).await;
 
-                                let result =
-                                    self.processor.on_init_apply(obj, existing_status_json).await;
+                            let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
-                                if let WorkItemResult::Processed {
-                                    obj,
-                                    status_changed,
-                                } = result
-                                {
-                                    init_count += 1;
-                                    if status_changed {
-                                        self.persist_status(kind, &rkey, &obj).await;
-                                    }
+                            if let WorkItemResult::Processed { obj, status_changed } = result {
+                                init_count += 1;
+                                if status_changed {
+                                    self.persist_status(kind, &rkey, &obj).await;
                                 }
-                            }
-                            Err(e) => {
-                                let rkey = extract_key_from_etcd_key(&key);
-                                if let Some(rkey) = rkey {
-                                    let _ = self
-                                        .status_handler
-                                        .write_error_status(kind, &rkey, "ParseError", &e.to_string())
-                                        .await;
-                                }
-                                tracing::warn!(
-                                    component = "etcd_resource_controller",
-                                    kind = kind,
-                                    key = %key,
-                                    error = %e,
-                                    "Failed to parse resource during init"
-                                );
                             }
                         }
-                    }
+                        Err(e) => {
+                            let rkey = extract_key_from_etcd_key(&key);
+                            if let Some(rkey) = rkey {
+                                let _ = self
+                                    .status_handler
+                                    .write_error_status(kind, &rkey, "ParseError", &e.to_string())
+                                    .await;
+                            }
+                            tracing::warn!(
+                                component = "etcd_resource_controller",
+                                kind = kind,
+                                key = %key,
+                                error = %e,
+                                "Failed to parse resource during init"
+                            );
+                        }
+                    },
                     EtcdEvent::InitDone => {
-                        let init_duration =
-                            init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
+                        let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
                         tracing::info!(
                             component = "etcd_resource_controller",
                             kind = kind,
@@ -183,15 +174,9 @@ where
                             if let Ok(obj) = parse_resource_content::<K>(&content) {
                                 let rkey = make_resource_key(&obj);
                                 self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
-                                let existing_status_json =
-                                    self.status_handler.read_status_json(kind, &rkey).await;
-                                let result =
-                                    self.processor.on_init_apply(obj, existing_status_json).await;
-                                if let WorkItemResult::Processed {
-                                    obj,
-                                    status_changed,
-                                } = result
-                                {
+                                let existing_status_json = self.status_handler.read_status_json(kind, &rkey).await;
+                                let result = self.processor.on_init_apply(obj, existing_status_json).await;
+                                if let WorkItemResult::Processed { obj, status_changed } = result {
                                     init_count += 1;
                                     if status_changed {
                                         self.persist_status(kind, &rkey, &obj).await;
@@ -276,20 +261,12 @@ where
     /// Persist status to etcd.
     async fn persist_status(&self, kind: &str, key: &str, obj: &K) {
         if let Some(status_value) = extract_status_value(obj) {
-            match self
-                .status_handler
-                .write_status_value(kind, key, &status_value)
-                .await
-            {
+            match self.status_handler.write_status_value(kind, key, &status_value).await {
                 Ok(()) => {
-                    crate::core::controller::conf_mgr::sync_runtime::record_status_write(
-                        kind, "etcd",
-                    );
+                    crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "etcd");
                 }
                 Err(e) => {
-                    crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(
-                        kind, "etcd",
-                    );
+                    crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "etcd");
                     tracing::warn!(
                         component = "etcd_resource_controller",
                         kind = kind,
@@ -336,12 +313,9 @@ where
             match item {
                 Some(work_item) => {
                     // Get the latest object from raw_store (updated by event loop)
-                    let store_obj = fs_raw_store
-                        .get(&work_item.key)
-                        .map(|arc_obj| (*arc_obj).clone());
+                    let store_obj = fs_raw_store.get(&work_item.key).map(|arc_obj| (*arc_obj).clone());
 
-                    let existing_status_json =
-                        status_handler.read_status_json(kind, &work_item.key).await;
+                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key).await;
 
                     let result = processor
                         .process_work_item(
@@ -353,10 +327,7 @@ where
                         .await;
 
                     match result {
-                        WorkItemResult::Processed {
-                            obj,
-                            status_changed,
-                        } => {
+                        WorkItemResult::Processed { obj, status_changed } => {
                             if status_changed {
                                 if let Some(status_value) = extract_status_value(&obj) {
                                     match status_handler
@@ -364,10 +335,14 @@ where
                                         .await
                                     {
                                         Ok(()) => {
-                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "etcd");
+                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write(
+                                                kind, "etcd",
+                                            );
                                         }
                                         Err(e) => {
-                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(kind, "etcd");
+                                            crate::core::controller::conf_mgr::sync_runtime::record_status_write_error(
+                                                kind, "etcd",
+                                            );
                                             tracing::warn!(
                                                 component = "etcd_resource_controller",
                                                 kind = kind,
@@ -392,11 +367,7 @@ where
             }
         }
 
-        tracing::info!(
-            component = "etcd_resource_controller",
-            kind = kind,
-            "Worker task ended"
-        );
+        tracing::info!(component = "etcd_resource_controller", kind = kind, "Worker task ended");
     })
 }
 
@@ -409,7 +380,7 @@ fn extract_key_from_etcd_key(etcd_key: &str) -> Option<String> {
     // Find the /conf/{kind}/ part and extract namespace/name after it
     let conf_idx = etcd_key.find("/conf/")?;
     let after_conf = &etcd_key[conf_idx + 6..]; // skip "/conf/"
-    // after_conf = "{kind}/{namespace}/{name}"
+                                                // after_conf = "{kind}/{namespace}/{name}"
     let first_slash = after_conf.find('/')?;
     let ns_and_name = &after_conf[first_slash + 1..]; // "{namespace}/{name}"
     let parts: Vec<&str> = ns_and_name.splitn(2, '/').collect();
@@ -423,4 +394,3 @@ fn extract_key_from_etcd_key(etcd_key: &str) -> Option<String> {
         Some(format!("{}/{}", ns, name))
     }
 }
-

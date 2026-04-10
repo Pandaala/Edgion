@@ -11,10 +11,10 @@ use crate::core::gateway::routes::http::routes_mgr::{
 use crate::core::gateway::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::types::resources::common::ParentReference;
 use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, MatchInfo, ResourceMeta};
+use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use parking_lot::RwLock;
 use std::time::Instant;
 
 type DomainStr = String;

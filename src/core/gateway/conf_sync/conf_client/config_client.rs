@@ -10,8 +10,8 @@ use anyhow::Result;
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
-use std::collections::HashSet;
 use parking_lot::RwLock;
+use std::collections::HashSet;
 
 pub struct ConfigClient {
     pub base_conf: RwLock<Option<GatewayBaseConf>>,

@@ -543,9 +543,7 @@ mod tests {
     static GATEWAY_INSTANCE_COUNT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn with_gateway_instance_count_lock<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = GATEWAY_INSTANCE_COUNT_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock();
+        let _guard = GATEWAY_INSTANCE_COUNT_TEST_LOCK.get_or_init(|| Mutex::new(())).lock();
         let result = f();
         set_gateway_instance_count(1);
         result

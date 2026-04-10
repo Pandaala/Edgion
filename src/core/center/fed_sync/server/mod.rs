@@ -6,8 +6,8 @@
 //! 3. Spawn heartbeat task (Ping every ping_interval)
 //! 4. Loop: forward incoming messages to aggregator/commander; forward outgoing to stream
 
-use std::collections::HashMap;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};

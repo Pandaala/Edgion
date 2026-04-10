@@ -16,9 +16,7 @@ use tokio::task::JoinHandle;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{
-    HashAlgorithm, OnAllDown, RegionDef, RegionRouteConfig, RouteRule,
-};
+use crate::types::resources::edgion_plugins::{HashAlgorithm, OnAllDown, RegionDef, RegionRouteConfig, RouteRule};
 use crate::types::ExternalJumpPreset;
 
 // ── Hash function ─────────────────────────────────────────────────────────────
@@ -121,37 +119,44 @@ impl RegionRoute {
         // failoverTo: resolve each region's redirect target.
         // Invalid config (target not found, self-ref, cycle) → RegionRedirectState::Invalid.
         // Invalid state is surfaced per-request via pluginLog; plugin works normally otherwise.
-        let region_redirect: Vec<RegionRedirectState> = validated.regions.iter().enumerate().map(|(i, region)| {
-            let target = match region.failover_to.as_deref() {
-                Some(t) => t,
-                None => return RegionRedirectState::NoRedirect,
-            };
-            // Self-reference check
-            if target == region.name {
-                return RegionRedirectState::Invalid;
-            }
-            // Target must exist in regions
-            let target_idx = match validated.regions.iter().position(|r| r.name == target) {
-                Some(idx) => idx,
-                None => return RegionRedirectState::Invalid,
-            };
-            // Cycle detection (n≤5, simple walk)
-            let mut seen = vec![i];
-            let mut cur = target_idx;
-            for _ in 0..validated.regions.len() {
-                if seen.contains(&cur) {
+        let region_redirect: Vec<RegionRedirectState> = validated
+            .regions
+            .iter()
+            .enumerate()
+            .map(|(i, region)| {
+                let target = match region.failover_to.as_deref() {
+                    Some(t) => t,
+                    None => return RegionRedirectState::NoRedirect,
+                };
+                // Self-reference check
+                if target == region.name {
                     return RegionRedirectState::Invalid;
                 }
-                seen.push(cur);
-                match validated.regions[cur].failover_to.as_deref()
-                    .and_then(|t| validated.regions.iter().position(|r| r.name == t))
-                {
-                    Some(next) => cur = next,
-                    None => break,
+                // Target must exist in regions
+                let target_idx = match validated.regions.iter().position(|r| r.name == target) {
+                    Some(idx) => idx,
+                    None => return RegionRedirectState::Invalid,
+                };
+                // Cycle detection (n≤5, simple walk)
+                let mut seen = vec![i];
+                let mut cur = target_idx;
+                for _ in 0..validated.regions.len() {
+                    if seen.contains(&cur) {
+                        return RegionRedirectState::Invalid;
+                    }
+                    seen.push(cur);
+                    match validated.regions[cur]
+                        .failover_to
+                        .as_deref()
+                        .and_then(|t| validated.regions.iter().position(|r| r.name == t))
+                    {
+                        Some(next) => cur = next,
+                        None => break,
+                    }
                 }
-            }
-            RegionRedirectState::Valid(target_idx)
-        }).collect();
+                RegionRedirectState::Valid(target_idx)
+            })
+            .collect();
 
         let config = Arc::new(validated);
         let health = Arc::new(RegionHealthTable::new(n));
@@ -221,7 +226,12 @@ impl RegionRoute {
     /// Apply static failoverTo redirect for the given region index.
     /// Returns the final (idx, region) after at most one level of redirect.
     /// Logs the outcome so ops can diagnose misconfigured failoverTo from access log alone.
-    fn apply_static_redirect<'a>(&'a self, idx: usize, region: &'a RegionDef, log: &mut PluginLog) -> (usize, &'a RegionDef) {
+    fn apply_static_redirect<'a>(
+        &'a self,
+        idx: usize,
+        region: &'a RegionDef,
+        log: &mut PluginLog,
+    ) -> (usize, &'a RegionDef) {
         match self.region_redirect.get(idx) {
             Some(RegionRedirectState::Valid(target_idx)) => {
                 if let Some(target_region) = self.config.regions.get(*target_idx) {
@@ -394,7 +404,13 @@ impl RegionRoute {
     }
 
     /// Write the computed hash value to all configured write-back targets.
-    fn do_write_back(&self, session: &mut dyn PluginSession, write_back: &[KeySet], hash_val: u16, log: &mut PluginLog) {
+    fn do_write_back(
+        &self,
+        session: &mut dyn PluginSession,
+        write_back: &[KeySet],
+        hash_val: u16,
+        log: &mut PluginLog,
+    ) {
         if write_back.is_empty() {
             return;
         }
@@ -430,11 +446,7 @@ impl RequestFilter for RegionRoute {
         &self.name
     }
 
-    async fn run_request(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> PluginRunningResult {
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if self.config.get_validation_error().is_some() {
             log.push("config invalid, pass; ");
             return PluginRunningResult::GoodNext;
@@ -478,11 +490,7 @@ impl RequestFilter for RegionRoute {
                             match self.find_region(region_name) {
                                 Some((idx, region)) => {
                                     // Log source and region (not value — may be sensitive)
-                                    log.push(&format!(
-                                        "match={}→{}; ",
-                                        src.as_log_str(),
-                                        region.name
-                                    ));
+                                    log.push(&format!("match={}→{}; ", src.as_log_str(), region.name));
                                     let (idx, region) = self.apply_static_redirect(idx, region, log);
                                     if self.is_healthy(idx) {
                                         return self.route_to(session, region, log).await;
@@ -493,11 +501,7 @@ impl RequestFilter for RegionRoute {
                                 }
                                 None => {
                                     // Region name in matchMap is not defined → fall through
-                                    log.push(&format!(
-                                        "match={}→{} unknown; ",
-                                        src.as_log_str(),
-                                        region_name
-                                    ));
+                                    log.push(&format!("match={}→{} unknown; ", src.as_log_str(), region_name));
                                     continue;
                                 }
                             }
@@ -575,7 +579,11 @@ async fn probe_region(region: &RegionDef) -> f32 {
     let (host, port) = region.parse_endpoint();
     match tokio::net::lookup_host((host, port)).await {
         Ok(mut addrs) => {
-            if addrs.next().is_some() { 1.0 } else { 0.0 }
+            if addrs.next().is_some() {
+                1.0
+            } else {
+                0.0
+            }
         }
         Err(_) => 0.0,
     }

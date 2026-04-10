@@ -4,8 +4,8 @@
 //! Offline entries are retained for `offline_evict_hours` before being dropped.
 
 use crate::core::common::fed_sync::proto::{RegisterRequest, ResourceKey};
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -86,11 +86,7 @@ impl ResourceAggregator {
 
     /// All resource keys across all controllers (online + offline).
     pub fn list_all_keys(&self) -> Vec<ResourceKey> {
-        self.inner
-            .read()
-            .values()
-            .flat_map(|s| s.keys.clone())
-            .collect()
+        self.inner.read().values().flat_map(|s| s.keys.clone()).collect()
     }
 
     /// Resource keys from controllers in a specific cluster.

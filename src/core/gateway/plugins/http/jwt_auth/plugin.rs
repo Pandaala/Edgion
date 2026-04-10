@@ -562,10 +562,10 @@ mod tests {
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::types::plugin_configs::ResolvedJwtCredential;
     use jsonwebtoken::{encode, EncodingKey, Header};
+    use parking_lot::Mutex;
     use serde_json::json;
     use std::collections::HashMap as StdHashMap;
     use std::sync::Arc;
-    use parking_lot::Mutex;
 
     const TEST_SECRET: &str = "test-secret-key-for-jwt-auth-testing-min-32-bytes";
 
@@ -1254,9 +1254,7 @@ mod tests {
         let headers_set: Arc<Mutex<StdHashMap<String, String>>> = Arc::new(Mutex::new(StdHashMap::new()));
         let headers_clone = headers_set.clone();
         mock.expect_set_request_header().returning(move |name, value| {
-            headers_clone
-                .lock()
-                .insert(name.to_string(), value.to_string());
+            headers_clone.lock().insert(name.to_string(), value.to_string());
             Ok(())
         });
 

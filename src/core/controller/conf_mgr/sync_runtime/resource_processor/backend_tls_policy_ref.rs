@@ -8,8 +8,8 @@
 //! Uses the same `BidirectionalRefManager` pattern as SecretRefManager
 //! and ServiceRefManager.
 
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 
 use super::ref_manager::{BidirectionalRefManager, RefValue, ResourceRef};
 use super::secret_utils::SecretRefManager;
@@ -43,9 +43,7 @@ impl BackendTLSPolicyState {
     /// Store the creation timestamp for a policy (used for conflict precedence).
     pub fn set_timestamp(&self, policy_key: &str, timestamp: Option<&str>) {
         if let Some(ts) = timestamp {
-            self.timestamps
-                .write()
-                .insert(policy_key.to_string(), ts.to_string());
+            self.timestamps.write().insert(policy_key.to_string(), ts.to_string());
         }
     }
 

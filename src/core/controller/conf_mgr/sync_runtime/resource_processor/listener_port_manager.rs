@@ -18,8 +18,8 @@
 //!
 //! Within each conflict key group, hostname intersection determines actual conflicts.
 
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 
 /// Listener reference (gateway + listener name + hostname for conflict checking)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

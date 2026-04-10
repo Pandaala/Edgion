@@ -44,12 +44,11 @@ pub mod traits;
 /// Invoke `$cb!(TypeIdent, handler_expr)` for each Phase-1 core resource.
 /// Excludes conditional `Endpoints`/`EndpointSlice`; callers handle those.
 macro_rules! for_each_phase1_core_resource {
-    ($cb:tt) => {
+    ($cb:ident) => {
         $cb!(
             GatewayClass,
             GatewayClassHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         $cb!(Gateway, GatewayHandler::new(None, None));
@@ -62,56 +61,49 @@ macro_rules! for_each_phase1_core_resource {
 
 /// Invoke `$cb!(TypeIdent, handler_expr)` for each Phase-2 dependent resource.
 macro_rules! for_each_phase2_resource {
-    ($cb:tt) => {
+    ($cb:ident) => {
         // Routes
         $cb!(
             HTTPRoute,
             HttpRouteHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         $cb!(
             GRPCRoute,
             GrpcRouteHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         $cb!(
             TCPRoute,
             TcpRouteHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         $cb!(
             UDPRoute,
             UdpRouteHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         $cb!(
             TLSRoute,
             TlsRouteHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         // TLS
         $cb!(
             EdgionTls,
             EdgionTlsHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         $cb!(
             BackendTLSPolicy,
             BackendTlsPolicyHandler::new(
-                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME
-                    .to_string()
+                crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
             )
         );
         // Plugins

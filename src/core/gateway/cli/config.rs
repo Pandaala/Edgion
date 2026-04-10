@@ -431,9 +431,9 @@ impl Default for RateLimitGlobalConfig {
 // Global RateLimit Config Store
 // ============================================
 
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
-use parking_lot::RwLock;
 
 // ============================================
 // Gateway Instance Count (for Cluster scope)

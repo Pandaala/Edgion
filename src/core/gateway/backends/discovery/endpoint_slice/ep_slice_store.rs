@@ -3,11 +3,11 @@ use crate::types::constants::labels::k8s::SERVICE_NAME;
 use arc_swap::ArcSwap;
 use futures::FutureExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use parking_lot::{Mutex, RwLock};
 use pingora_load_balancing::selection::{BackendSelection, RoundRobin};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
-use parking_lot::{Mutex, RwLock};
 
 /// Store for RoundRobin LoadBalancers (primary data layer + LB)
 static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));

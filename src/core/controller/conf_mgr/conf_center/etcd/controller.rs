@@ -1,7 +1,8 @@
-//! EtcdController — top-level controller with 2-phase resource spawn.
+//! EtcdController — backend-specific adapter for etcd mode.
 //!
-//! Mirrors `FileSystemController` exactly: same resource list, same phase1/phase2
-//! logic, but uses `EtcdWatcher` and `EtcdResourceController`.
+//! Wires `EtcdWatcher` and `EtcdResourceController` into the shared
+//! `LocalControllerBackend` interface so that `spawn_all_controllers` can
+//! drive both etcd and FileSystem modes from a single resource list.
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -16,13 +17,9 @@ use tokio::task::JoinHandle;
 use super::resource_controller::EtcdResourceController;
 use super::status::EtcdStatusHandler;
 use super::watcher::{EtcdWatcher, KindEventReceiver};
-use crate::core::controller::conf_mgr::conf_center::non_kube_common::{
-    spawn_all_controllers, LocalControllerBackend,
-};
+use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
 use crate::core::controller::conf_mgr::conf_center::EndpointMode;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    ResourceProcessor, SecretRefManager,
-};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ResourceProcessor, SecretRefManager};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
@@ -51,19 +48,10 @@ impl LocalControllerBackend for EtcdControllerBackend {
         shutdown_signal: ShutdownSignal,
     ) -> JoinHandle<Result<()>>
     where
-        K: ResourceMeta
-            + Resource
-            + Clone
-            + Send
-            + Sync
-            + Debug
-            + Serialize
-            + DeserializeOwned
-            + 'static,
+        K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     {
-        let ctrl =
-            EtcdResourceController::new(kind, processor, self.status_handler.clone(), event_rx)
-                .with_shutdown(shutdown_signal);
+        let ctrl = EtcdResourceController::new(kind, processor, self.status_handler.clone(), event_rx)
+            .with_shutdown(shutdown_signal);
         tokio::spawn(async move { ctrl.run().await })
     }
 }
@@ -76,11 +64,7 @@ pub struct EtcdController {
 }
 
 impl EtcdController {
-    pub fn new(
-        client: Arc<EtcdLinkClient>,
-        key_prefix: String,
-        endpoint_mode: EndpointMode,
-    ) -> Self {
+    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String, endpoint_mode: EndpointMode) -> Self {
         tracing::info!(
             component = "etcd_controller",
             key_prefix = %key_prefix,
@@ -95,11 +79,7 @@ impl EtcdController {
     }
 
     /// Run the controller.
-    pub async fn run(
-        &self,
-        shutdown_signal: ShutdownSignal,
-        runtime: Arc<ControllerRuntime>,
-    ) -> Result<()> {
+    pub async fn run(&self, shutdown_signal: ShutdownSignal, runtime: Arc<ControllerRuntime>) -> Result<()> {
         tracing::info!(
             component = "etcd_controller",
             key_prefix = %self.key_prefix,
@@ -109,10 +89,7 @@ impl EtcdController {
         // Create shared components
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let watcher = Arc::new(EtcdWatcher::new(self.client.clone(), &self.key_prefix));
-        let status_handler = Arc::new(EtcdStatusHandler::new(
-            self.client.clone(),
-            self.key_prefix.clone(),
-        ));
+        let status_handler = Arc::new(EtcdStatusHandler::new(self.client.clone(), self.key_prefix.clone()));
 
         let backend = EtcdControllerBackend {
             watcher: watcher.clone(),
@@ -148,9 +125,3 @@ impl EtcdController {
         Ok(())
     }
 }
-
-// NOTE: The following items have been extracted to shared modules:
-//   - `DEFAULT_CONTROLLER_NAME`  -> `common::DEFAULT_CONTROLLER_NAME`
-//   - `phase1_kinds()`           -> `common::phase1_kinds`
-//   - `spawn_all_controllers()`  -> `non_kube_common::spawn_all_controllers`
-//   - `spawn()`                  -> `non_kube_common::spawn`

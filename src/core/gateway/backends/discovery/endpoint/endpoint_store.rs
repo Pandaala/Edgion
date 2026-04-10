@@ -1,11 +1,11 @@
 use super::discovery_impl::{EndpointExt, EndpointLoadBalancer};
 use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Endpoints;
+use parking_lot::{Mutex, RwLock};
 use pingora_load_balancing::selection::{BackendSelection, RoundRobin};
 use pingora_load_balancing::Backend;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
-use parking_lot::{Mutex, RwLock};
 
 /// Store for RoundRobin LoadBalancers (primary data layer + LB)
 static ROUNDROBIN_STORE: LazyLock<Arc<EndpointStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EndpointStore::new()));

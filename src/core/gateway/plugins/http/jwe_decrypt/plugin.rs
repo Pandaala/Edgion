@@ -4,8 +4,8 @@
 //! - alg=dir
 //! - enc=A256GCM
 
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aes_gcm::aead::{AeadInPlace, KeyInit};

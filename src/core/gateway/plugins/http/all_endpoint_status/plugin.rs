@@ -9,12 +9,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use parking_lot::RwLock;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
-use parking_lot::RwLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 

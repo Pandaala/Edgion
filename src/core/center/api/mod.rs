@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::commander::Commander;
+use crate::core::common::api::{ApiResponse, ListResponse};
 use crate::core::common::fed_sync::proto::command_request::Command;
 use crate::core::common::fed_sync::proto::ReloadCommand;
 
@@ -38,7 +39,7 @@ pub fn router(state: ApiState) -> Router {
 
 async fn list_controllers(State(state): State<ApiState>) -> impl IntoResponse {
     let summaries = state.aggregator.controller_summaries();
-    Json(summaries)
+    Json(ListResponse::success(summaries))
 }
 
 async fn list_clusters(State(state): State<ApiState>) -> impl IntoResponse {
@@ -46,7 +47,7 @@ async fn list_clusters(State(state): State<ApiState>) -> impl IntoResponse {
     let mut clusters: Vec<String> = summaries.iter().map(|s| s.cluster.clone()).collect();
     clusters.sort();
     clusters.dedup();
-    Json(clusters)
+    Json(ListResponse::success(clusters))
 }
 
 #[derive(Deserialize)]
@@ -92,7 +93,7 @@ async fn list_resources(State(state): State<ApiState>, Query(params): Query<Reso
             .collect(),
         None => keys.into_iter().map(ResourceKeyDto::from).collect(),
     };
-    Json(keys)
+    Json(ListResponse::success(keys))
 }
 
 async fn reload_controller(State(state): State<ApiState>, Path(id): Path<String>) -> impl IntoResponse {
@@ -101,23 +102,18 @@ async fn reload_controller(State(state): State<ApiState>, Path(id): Path<String>
         .send_command(&id, Command::Reload(ReloadCommand {}))
         .await
     {
-        Ok(resp) if resp.success => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(resp) if resp.success => (StatusCode::OK, Json(ApiResponse::success("ok".to_string()))),
         Ok(resp) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": resp.message})),
+            Json(ApiResponse::<String>::error(resp.message)),
         ),
         Err(e) => {
-            if e.to_string().contains("timed out") {
-                (
-                    StatusCode::GATEWAY_TIMEOUT,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
+            let status = if e.to_string().contains("timed out") {
+                StatusCode::GATEWAY_TIMEOUT
             } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            }
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(ApiResponse::<String>::error(e.to_string())))
         }
     }
 }

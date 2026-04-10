@@ -116,10 +116,7 @@ mod tests {
             RealIpExtractor::new(&config.trusted_ips, config.real_ip_header.clone(), config.recursive).unwrap();
 
         // Case 1: Right-to-left, find first non-trusted
-        let result = extractor.extract_from_header_value(
-            "192.168.1.254",
-            "203.0.113.1, 198.51.100.2, 192.168.1.1",
-        );
+        let result = extractor.extract_from_header_value("192.168.1.254", "203.0.113.1, 198.51.100.2, 192.168.1.1");
         assert_eq!(result, "203.0.113.1");
 
         // Case 2: All trusted, use leftmost (Nginx behavior)
@@ -142,10 +139,7 @@ mod tests {
 
         // Non-recursive: take rightmost IP directly
         // Rightmost 192.168.1.1 is trusted → use client_addr
-        let result = extractor.extract_from_header_value(
-            "192.168.1.254",
-            "203.0.113.1, 198.51.100.2, 192.168.1.1",
-        );
+        let result = extractor.extract_from_header_value("192.168.1.254", "203.0.113.1, 198.51.100.2, 192.168.1.1");
         assert_eq!(result, "192.168.1.254");
 
         // Rightmost 8.8.8.8 is NOT trusted → use it

@@ -7,9 +7,9 @@
 //! so a simple RwLock<HashMap> is sufficient.
 
 use k8s_openapi::api::core::v1::Secret;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
-use parking_lot::RwLock;
 
 /// Type alias for the secret map: "namespace/name" -> Secret
 type SecretMap = HashMap<String, Secret>;

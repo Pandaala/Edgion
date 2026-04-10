@@ -1,8 +1,8 @@
 use crate::core::common::conf_sync::traits::{ConfHandler, ResourceChange};
 use crate::types::ResourceMeta;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use parking_lot::RwLock;
 use tokio::sync::Notify;
 use tokio::time::Duration;
 

@@ -15,8 +15,8 @@
 //! - K8s CRD as the source of truth (challenge tokens, status, account)
 //! - Account credentials persisted in a dedicated K8s Secret
 
-use std::collections::{BTreeMap, HashMap, HashSet};
 use parking_lot::{Mutex, RwLock};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -234,9 +234,7 @@ impl AcmeServiceWorker {
             match cmd {
                 AcmeCommand::ResourceChanged { key } => {
                     // User or system changed the CRD: reset retry counter
-                    self.retry_tracker
-                        .write()
-                        .remove(&key);
+                    self.retry_tracker.write().remove(&key);
                     self.handle_resource_check(&key).await;
                 }
                 AcmeCommand::RenewalCheck { key } => {
@@ -281,9 +279,7 @@ impl AcmeServiceWorker {
                     "Failed to get EdgionAcme resource (may have been deleted)"
                 );
                 // Resource deleted — clean up retry tracker
-                self.retry_tracker
-                    .write()
-                    .remove(key);
+                self.retry_tracker.write().remove(key);
                 return;
             }
         };
@@ -309,11 +305,7 @@ impl AcmeServiceWorker {
             }
             AcmeCertPhase::Failed => {
                 // Check retry limit before attempting again
-                let attempt = *self
-                    .retry_tracker
-                    .read()
-                    .get(key)
-                    .unwrap_or(&0);
+                let attempt = *self.retry_tracker.read().get(key).unwrap_or(&0);
                 if attempt >= MAX_RETRY_ATTEMPTS {
                     tracing::warn!(
                         component = "acme_service",
@@ -347,9 +339,7 @@ impl AcmeServiceWorker {
         }
 
         // Mark as processing
-        self.processing
-            .write()
-            .insert(key.to_string());
+        self.processing.write().insert(key.to_string());
 
         // Spawn the ACME flow task
         let client = self.client.clone();
@@ -370,9 +360,7 @@ impl AcmeServiceWorker {
                         "ACME flow completed successfully"
                     );
                     // Success: clear retry counter
-                    retry_tracker
-                        .write()
-                        .remove(&key_owned);
+                    retry_tracker.write().remove(&key_owned);
                 }
                 Err(e) => {
                     // Increment retry counter

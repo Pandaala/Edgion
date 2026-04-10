@@ -102,8 +102,8 @@ pub async fn run(
 mod tests {
     use super::*;
     use crate::core::common::fed_sync::proto::RegisterRequest;
-    use std::collections::HashMap;
     use parking_lot::Mutex;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     #[tokio::test]

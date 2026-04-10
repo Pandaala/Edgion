@@ -107,31 +107,8 @@ impl EdgionCenterCli {
         let auth_config = config.auth.clone();
         let http_handle = tokio::spawn(async move {
             let base_router = router(api_state);
-            let app = if let Some(ref auth_cfg) = auth_config {
-                if auth_cfg.enabled {
-                    if let Some(err) = auth_cfg.validate() {
-                        tracing::error!(component = "center", error = err, "Invalid auth configuration");
-                        std::process::exit(1);
-                    }
-                    let auth_state =
-                        crate::core::common::auth::AuthMiddlewareState::from_config(auth_cfg);
-                    tracing::info!(
-                        component = "center",
-                        discovery = %auth_cfg.discovery,
-                        "Admin API authentication enabled"
-                    );
-                    base_router.layer(axum::middleware::from_fn_with_state(
-                        auth_state,
-                        crate::core::common::auth::jwt_auth_middleware,
-                    ))
-                } else {
-                    tracing::info!(component = "center", "Admin API authentication disabled by config");
-                    base_router
-                }
-            } else {
-                tracing::info!(component = "center", "Admin API authentication not configured (no [auth] section)");
-                base_router
-            };
+            let app = crate::core::common::api::apply_auth_layer(base_router, auth_config.as_ref(), "center");
+            let app = crate::core::common::api::apply_cors_layer(app);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();
         });

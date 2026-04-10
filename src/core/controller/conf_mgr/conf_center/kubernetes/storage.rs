@@ -621,5 +621,4 @@ impl CenterApi for KubernetesStorage {
             continue_token: list.metadata.continue_,
         })
     }
-
 }

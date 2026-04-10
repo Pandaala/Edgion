@@ -2,9 +2,9 @@
 //!
 //! Provides event-driven revalidation when ReferenceGrants are modified
 
+use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// ReferenceGrant changed event
 #[derive(Debug, Clone)]

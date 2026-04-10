@@ -16,8 +16,8 @@
 //! Built from ALL parentRefs (not just accepted ones), because even pending
 //! routes need to be re-resolved when a Gateway changes.
 
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 
 use crate::types::resources::common::ParentReference;
 use crate::types::ResourceKind;

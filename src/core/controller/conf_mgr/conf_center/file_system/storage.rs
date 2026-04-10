@@ -412,7 +412,6 @@ impl CenterApi for FileSystemStorage {
             continue_token: None, // FileSystem does not support pagination
         })
     }
-
 }
 
 /// Build resource file path: Kind_namespace_name.yaml or Kind__name.yaml

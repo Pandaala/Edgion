@@ -277,8 +277,7 @@ impl RegionRouteConfig {
             }
             let (host, _) = region.parse_endpoint();
             if host.is_empty() {
-                self.validation_error =
-                    Some(format!("region '{}': backend_endpoint host is empty", region.name));
+                self.validation_error = Some(format!("region '{}': backend_endpoint host is empty", region.name));
                 return;
             }
         }
@@ -336,8 +335,7 @@ impl RegionRouteConfig {
 
         if let Some(ref f) = self.auto_failover {
             if !(0.0..=1.0).contains(&f.healthy_threshold) {
-                self.validation_error =
-                    Some("auto_failover.healthy_threshold must be in [0.0, 1.0]".to_string());
+                self.validation_error = Some("auto_failover.healthy_threshold must be in [0.0, 1.0]".to_string());
             }
         }
     }

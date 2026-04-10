@@ -8,12 +8,12 @@ use crate::core::gateway::backends::discovery::endpoint::get_endpoint_roundrobin
 use crate::core::gateway::backends::discovery::endpoint_slice::get_roundrobin_store;
 use crate::core::gateway::backends::try_get_global_endpoint_mode;
 use crate::types::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
+use parking_lot::RwLock;
 use pingora_load_balancing::Backend;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
-use parking_lot::RwLock;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;

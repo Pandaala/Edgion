@@ -5,8 +5,8 @@
 //! - Cross-resource requeue: `requeue("Gateway", "default/my-gateway")`
 //! - WatchObj collection for ConfigSyncServer
 
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -230,12 +230,7 @@ impl ProcessorRegistry {
     /// Requeue all resources across all kinds.
     /// Used on leader transition to trigger full status reconciliation.
     pub async fn requeue_all(&self) {
-        let processors: Vec<_> = self
-            .processors
-            .read()
-            .iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
+        let processors: Vec<_> = self.processors.read().iter().map(|(k, v)| (*k, v.clone())).collect();
         for (kind, processor) in processors {
             let count = processor.requeue_all_keys().await;
             tracing::info!(

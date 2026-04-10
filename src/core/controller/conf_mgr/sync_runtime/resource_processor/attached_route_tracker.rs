@@ -27,8 +27,8 @@
 //! `count_for_listener(gw_key, "http")` = routes targeting listener `"http"` +
 //! routes targeting `""` (meaning "all listeners on this gateway").
 
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 
 use crate::types::ResourceKind;
 

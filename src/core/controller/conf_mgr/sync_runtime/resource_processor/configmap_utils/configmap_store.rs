@@ -4,8 +4,8 @@
 //! BackendTLSPolicy to resolve `caCertificateRefs` with `kind: ConfigMap`.
 
 use k8s_openapi::api::core::v1::ConfigMap;
-use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 
 type ConfigMapMap = HashMap<String, ConfigMap>;
 

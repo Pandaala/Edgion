@@ -63,11 +63,7 @@ impl_center_api_delegate!(EtcdCenter, writer);
 #[async_trait]
 impl CenterLifeCycle for EtcdCenter {
     async fn start(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
-        tracing::info!(
-            component = "etcd_center",
-            mode = "etcd",
-            "Starting Etcd lifecycle"
-        );
+        tracing::info!(component = "etcd_center", mode = "etcd", "Starting Etcd lifecycle");
 
         let endpoint_mode = resolve_endpoint_mode(self.config.endpoint_mode());
         let client = self.client.clone();

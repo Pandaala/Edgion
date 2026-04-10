@@ -259,10 +259,7 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Expected 'direct=virginia' and '→virginia' in log: {}",
-                                                log_str
-                                            ),
+                                            format!("Expected 'direct=virginia' and '→virginia' in log: {}", log_str),
                                         )
                                     }
                                 }
@@ -306,10 +303,7 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Expected 'direct=ohio' and '→ohio' in log: {}",
-                                                log_str
-                                            ),
+                                            format!("Expected 'direct=ohio' and '→ohio' in log: {}", log_str),
                                         )
                                     }
                                 }
@@ -570,10 +564,7 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Expected 'hash_pass=100' and '→virginia': {}",
-                                                log_str
-                                            ),
+                                            format!("Expected 'hash_pass=100' and '→virginia': {}", log_str),
                                         )
                                     }
                                 }
@@ -618,10 +609,7 @@ impl RegionRouteTestSuite {
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Expected 'hash_pass=800' and '→ohio': {}",
-                                                log_str
-                                            ),
+                                            format!("Expected 'hash_pass=800' and '→ohio': {}", log_str),
                                         )
                                     }
                                 }
@@ -748,10 +736,7 @@ impl RegionRouteTestSuite {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status != 200 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 200, got {}", status),
-                                );
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
                             let al_client = ctx.access_log_client();
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {

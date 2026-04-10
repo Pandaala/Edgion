@@ -2,8 +2,8 @@ use crate::core::common::matcher::HashHost;
 use crate::core::gateway::tls::validation::cert::{validate_cert, CertValidationResult};
 use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 /// Internal entry for TLS certificate with validation status

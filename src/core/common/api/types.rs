@@ -44,17 +44,10 @@ pub struct ListResponse<T> {
 
 impl<T> ListResponse<T> {
     pub fn success(data: Vec<T>) -> Self {
-        let count = data.len();
-        Self {
-            success: true,
-            data: Some(data),
-            count,
-            continue_token: None,
-            error: None,
-        }
+        Self::success_with_token(data, None)
     }
 
-    pub fn success_with_pagination(data: Vec<T>, continue_token: Option<String>) -> Self {
+    pub fn success_with_token(data: Vec<T>, continue_token: Option<String>) -> Self {
         let count = data.len();
         Self {
             success: true,

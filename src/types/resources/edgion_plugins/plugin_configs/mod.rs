@@ -62,6 +62,8 @@ pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, ProxyRewriteConf
 pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig, RateLimitScope};
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
-pub use region_route::{AutoFailoverConfig, HashAlgorithm, HashCalcConfig, OnAllDown, RegionDef, RegionRouteConfig, RouteRule};
+pub use region_route::{
+    AutoFailoverConfig, HashAlgorithm, HashCalcConfig, OnAllDown, RegionDef, RegionRouteConfig, RouteRule,
+};
 pub use request_restriction::{OnMissing, RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
