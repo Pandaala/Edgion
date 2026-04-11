@@ -139,12 +139,12 @@ ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "cred
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `enabled` | `bool` | — | 是否启用此类日志 |
+| `enabled` | `Boolean` | — | 是否启用此类日志 |
 | `output.localFile.path` | `String` | — | 日志文件路径（相对 work_dir），与 `[logging].log_dir` 无关 |
-| `output.localFile.queue_size` | `usize?` | CPU 核心数 × 10000 | 写入队列大小 |
+| `output.localFile.queue_size` | `Integer` | CPU 核心数 × 10000 | 写入队列大小，可选 |
 | `output.localFile.rotation.strategy` | `RotationStrategy` | — | 轮转策略（见下表） |
-| `output.localFile.rotation.max_files` | `usize` | — | 保留的轮转文件数，`0` 表示无限 |
-| `output.localFile.rotation.check_interval_secs` | `u64` | `30` | 轮转检查间隔秒数 |
+| `output.localFile.rotation.max_files` | `Integer` | — | 保留的轮转文件数，`0` 表示无限 |
+| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | 轮转检查间隔秒数 |
 
 **`rotation.strategy` 可选值：**
 
@@ -159,15 +159,15 @@ ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "cred
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `default_estimator_slots_k` | `usize` | `64` | CMS 默认 slot 数（× 1K），内存约为 `slots_k × 64 KB` |
-| `max_estimator_slots_k` | `usize` | `1024` | CMS 最大 slot 数上限 |
-| `gateway_instance_count` | `u32` | `1` | Gateway 实例数，集群限流时作为分母，**集群部署时必须设置正确值** |
+| `default_estimator_slots_k` | `Integer` | `64` | CMS 默认 slot 数（× 1K），内存约为 `slots_k × 64 KB` |
+| `max_estimator_slots_k` | `Integer` | `1024` | CMS 最大 slot 数上限 |
+| `gateway_instance_count` | `Integer` | `1` | Gateway 实例数，集群限流时作为分母，**集群部署时必须设置正确值** |
 
 ### [plugin_metadata]
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `ctx_log_denylist` | `Vec<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | ctx key 中包含这些子串（大小写不敏感）的条目不写入 access log |
+| `ctx_log_denylist` | `Array<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | ctx key 中包含这些子串（大小写不敏感）的条目不写入 access log |
 
 **重要：** 在 TOML 中设置此字段会**完全替换**默认列表，而非追加。如需保留默认保护，须手动包含所有默认关键词再加上自定义词。
 

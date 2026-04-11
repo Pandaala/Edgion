@@ -104,7 +104,7 @@ Optional. When present, Gateway connects to Controller gRPC using mTLS. When abs
 | `cert` | `String` | — | Client certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path used to verify the Controller server certificate |
-| `skip_tls` | `bool` | `false` | Emergency fallback: `true` skips TLS and connects in plaintext (logs ERROR) |
+| `skip_tls` | `Boolean` | `false` | Emergency fallback: `true` skips TLS and connects in plaintext (logs ERROR) |
 
 When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
@@ -115,21 +115,21 @@ When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically
 | `log_dir` | `String` | `logs` | System log directory. **Does not affect business log paths** |
 | `log_prefix` | `String` | `edgion-gateway` | Log file name prefix |
 | `log_level` | `String` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error`. Supports module-level filtering |
-| `json_format` | `bool` | `false` | Emit structured JSON logs |
-| `console` | `bool` | `true` | Also write logs to stdout |
-| `buffer_size` | `usize` | `10000` | Async log buffer size |
+| `json_format` | `Boolean` | `false` | Emit structured JSON logs |
+| `console` | `Boolean` | `true` | Also write logs to stdout |
+| `buffer_size` | `Integer` | `10000` | Async log buffer size |
 
 ### [server]
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `threads` | `usize` | CPU core count | Pingora worker thread count; `0` means auto-detect |
-| `work_stealing` | `bool` | `true` | Enable Tokio work-stealing to improve CPU utilization |
-| `grace_period_seconds` | `u64` | `30` | Seconds to wait for connections to drain during graceful shutdown |
-| `graceful_shutdown_timeout_seconds` | `u64` | `10` | Force-terminate after this many seconds during shutdown |
-| `upstream_keepalive_pool_size` | `usize` | `128` | Upstream keepalive connection pool size |
-| `downstream_keepalive_request_limit` | `u32` | `1000` | Max requests per downstream connection; `0` means unlimited |
-| `error_log` | `String?` | — | Pingora internal error log file path |
+| `threads` | `Integer` | CPU core count | Pingora worker thread count; `0` means auto-detect |
+| `work_stealing` | `Boolean` | `true` | Enable Tokio work-stealing to improve CPU utilization |
+| `grace_period_seconds` | `Integer` | `30` | Seconds to wait for connections to drain during graceful shutdown |
+| `graceful_shutdown_timeout_seconds` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
+| `upstream_keepalive_pool_size` | `Integer` | `128` | Upstream keepalive connection pool size |
+| `downstream_keepalive_request_limit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
+| `error_log` | `String` | — | Pingora internal error log file path. Optional |
 
 > These are process-level defaults. To adjust server behavior at the GatewayClass level, use [EdgionGatewayConfig](./edgion-gateway-config.md).
 
@@ -139,12 +139,12 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enabled` | `bool` | — | Whether to enable this log type |
+| `enabled` | `Boolean` | — | Whether to enable this log type |
 | `output.localFile.path` | `String` | — | Log file path (relative to work_dir); independent of `[logging].log_dir` |
-| `output.localFile.queue_size` | `usize?` | CPU cores × 10000 | Write queue size |
+| `output.localFile.queue_size` | `Integer` | CPU cores × 10000 | Write queue size. Optional |
 | `output.localFile.rotation.strategy` | `RotationStrategy` | — | Rotation strategy (see table below) |
-| `output.localFile.rotation.max_files` | `usize` | — | Number of rotated files to retain; `0` means unlimited |
-| `output.localFile.rotation.check_interval_secs` | `u64` | `30` | Rotation check interval in seconds |
+| `output.localFile.rotation.max_files` | `Integer` | — | Number of rotated files to retain; `0` means unlimited |
+| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | Rotation check interval in seconds |
 
 **`rotation.strategy` values:**
 
@@ -159,15 +159,15 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `default_estimator_slots_k` | `usize` | `64` | CMS default slot count (× 1K); memory ≈ `slots_k × 64 KB` |
-| `max_estimator_slots_k` | `usize` | `1024` | Maximum CMS slot count cap |
-| `gateway_instance_count` | `u32` | `1` | Gateway instance count used as divisor for cluster rate limiting. **Must be set correctly for multi-instance deployments** |
+| `default_estimator_slots_k` | `Integer` | `64` | CMS default slot count (× 1K); memory ≈ `slots_k × 64 KB` |
+| `max_estimator_slots_k` | `Integer` | `1024` | Maximum CMS slot count cap |
+| `gateway_instance_count` | `Integer` | `1` | Gateway instance count used as divisor for cluster rate limiting. **Must be set correctly for multi-instance deployments** |
 
 ### [plugin_metadata]
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ctx_log_denylist` | `Vec<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx keys containing any of these substrings (case-insensitive) are excluded from access log |
+| `ctx_log_denylist` | `Array<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx keys containing any of these substrings (case-insensitive) are excluded from access log |
 
 **Important:** Setting this field in TOML **completely replaces** the default list — it is not appended. To preserve the default protection, include all default keywords plus any custom ones.
 

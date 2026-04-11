@@ -85,14 +85,14 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `threads` | `u32` | CPU core count | Pingora worker thread count; `0` means auto-detect |
-| `workStealing` | `bool` | `true` | Enable Tokio work-stealing |
-| `gracePeriodSeconds` | `u64` | `30` | Seconds to wait for connections to drain during graceful shutdown |
-| `gracefulShutdownTimeoutS` | `u64` | `10` | Force-terminate after this many seconds during shutdown |
-| `upstreamKeepalivePoolSize` | `u32` | `128` | Upstream keepalive connection pool size |
-| `errorLog` | `String?` | — | Pingora internal error log file path |
-| `enableCompression` | `bool` | `false` | Enable response compression for downstream clients |
-| `downstreamKeepaliveRequestLimit` | `u32` | `1000` | Max requests per downstream connection; `0` means unlimited |
+| `threads` | `Integer` | CPU core count | Pingora worker thread count; `0` means auto-detect |
+| `workStealing` | `Boolean` | `true` | Enable Tokio work-stealing |
+| `gracePeriodSeconds` | `Integer` | `30` | Seconds to wait for connections to drain during graceful shutdown |
+| `gracefulShutdownTimeoutS` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
+| `upstreamKeepalivePoolSize` | `Integer` | `128` | Upstream keepalive connection pool size |
+| `errorLog` | `String` | — | Pingora internal error log file path. Optional |
+| `enableCompression` | `Boolean` | `false` | Enable response compression for downstream clients |
+| `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
 
 ### spec.httpTimeout.client
 
@@ -114,15 +114,15 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `maxRetries` | `u32` | `3` | Maximum retry attempts on upstream connection failure |
+| `maxRetries` | `Integer` | `3` | Maximum retry attempts on upstream connection failure |
 
 ### spec.realIp
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `trustedIps` | `Vec<String>` | `[]` | List of trusted proxy IPs or CIDRs |
+| `trustedIps` | `Array<String>` | `[]` | List of trusted proxy IPs or CIDRs |
 | `realIpHeader` | `String` | `X-Forwarded-For` | Header from which to extract the real client IP |
-| `recursive` | `bool` | `true` | Traverse the header right-to-left, skip trusted proxies, and take the first non-trusted IP |
+| `recursive` | `Boolean` | `true` | Traverse the header right-to-left, skip trusted proxies, and take the first non-trusted IP |
 
 Extraction logic: walk `realIpHeader` from right to left, skip addresses in `trustedIps`, and return the first non-trusted IP.
 
@@ -130,10 +130,10 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in `tru
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `xForwardedForLimit` | `usize` | `200` | Maximum byte length of the `X-Forwarded-For` header; excess is truncated |
-| `requireSniHostMatch` | `bool` | `true` | HTTPS listener-level 421 Misdirected Request detection; rejects requests where SNI does not match the Host header |
-| `fallbackSni` | `String?` | — | Fallback hostname used when the client provides no SNI |
-| `tlsProxyLogRecord` | `bool` | `true` | Record TLS proxy connection logs |
+| `xForwardedForLimit` | `Integer` | `200` | Maximum byte length of the `X-Forwarded-For` header; excess is truncated |
+| `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener-level 421 Misdirected Request detection; rejects requests where SNI does not match the Host header |
+| `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI. Optional |
+| `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
 
 ### spec.globalPluginsRef
 
@@ -150,13 +150,13 @@ globalPluginsRef:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `mode` | `String` | `cors-standard` | `cors-standard`: intercept OPTIONS requests with `Origin` + `ACRM`; `all-options`: intercept all OPTIONS requests |
-| `statusCode` | `u16` | `204` | Preflight response status code when no CORS plugin is attached |
+| `statusCode` | `Integer` | `204` | Preflight response status code when no CORS plugin is attached |
 
 ### spec.enableReferenceGrantValidation
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enableReferenceGrantValidation` | `bool` | `false` | Enforce ReferenceGrant validation for cross-namespace references |
+| `enableReferenceGrantValidation` | `Boolean` | `false` | Enforce ReferenceGrant validation for cross-namespace references |
 
 ## Common Scenarios
 

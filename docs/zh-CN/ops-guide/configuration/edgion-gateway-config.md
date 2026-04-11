@@ -85,14 +85,14 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `threads` | `u32` | CPU 核心数 | Pingora 工作线程数，`0` 表示自动检测 |
-| `workStealing` | `bool` | `true` | 启用 Tokio 任务窃取 |
-| `gracePeriodSeconds` | `u64` | `30` | 优雅关闭期间等待连接结束的秒数 |
-| `gracefulShutdownTimeoutS` | `u64` | `10` | 优雅关闭超时秒数，超过后强制终止 |
-| `upstreamKeepalivePoolSize` | `u32` | `128` | 上游 keepalive 连接池大小 |
-| `errorLog` | `String?` | — | Pingora 内部错误日志文件路径 |
-| `enableCompression` | `bool` | `false` | 是否对下游响应启用压缩 |
-| `downstreamKeepaliveRequestLimit` | `u32` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
+| `threads` | `Integer` | CPU 核心数 | Pingora 工作线程数，`0` 表示自动检测 |
+| `workStealing` | `Boolean` | `true` | 启用 Tokio 任务窃取 |
+| `gracePeriodSeconds` | `Integer` | `30` | 优雅关闭期间等待连接结束的秒数 |
+| `gracefulShutdownTimeoutS` | `Integer` | `10` | 优雅关闭超时秒数，超过后强制终止 |
+| `upstreamKeepalivePoolSize` | `Integer` | `128` | 上游 keepalive 连接池大小 |
+| `errorLog` | `String` | — | Pingora 内部错误日志文件路径，可选 |
+| `enableCompression` | `Boolean` | `false` | 是否对下游响应启用压缩 |
+| `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
 
 ### spec.httpTimeout.client
 
@@ -114,15 +114,15 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `maxRetries` | `u32` | `3` | 上游连接失败时的最大重试次数 |
+| `maxRetries` | `Integer` | `3` | 上游连接失败时的最大重试次数 |
 
 ### spec.realIp
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `trustedIps` | `Vec<String>` | `[]` | 可信代理 IP 或 CIDR 列表 |
+| `trustedIps` | `Array<String>` | `[]` | 可信代理 IP 或 CIDR 列表 |
 | `realIpHeader` | `String` | `X-Forwarded-For` | 从哪个请求头提取真实 IP |
-| `recursive` | `bool` | `true` | 是否从右向左遍历 header，跳过可信代理，取第一个非信任 IP |
+| `recursive` | `Boolean` | `true` | 是否从右向左遍历 header，跳过可信代理，取第一个非信任 IP |
 
 提取逻辑：从右向左遍历 `realIpHeader`，跳过 `trustedIps` 中的地址，取第一个非信任 IP。
 
@@ -130,10 +130,10 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `xForwardedForLimit` | `usize` | `200` | `X-Forwarded-For` 头部最大字节数，超过则截断 |
-| `requireSniHostMatch` | `bool` | `true` | HTTPS listener 级别 421 Misdirected Request 检测，SNI 与 Host 不匹配时拒绝请求 |
-| `fallbackSni` | `String?` | — | 客户端未提供 SNI 时使用的备用主机名 |
-| `tlsProxyLogRecord` | `bool` | `true` | 是否记录 TLS 代理连接日志 |
+| `xForwardedForLimit` | `Integer` | `200` | `X-Forwarded-For` 头部最大字节数，超过则截断 |
+| `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener 级别 421 Misdirected Request 检测，SNI 与 Host 不匹配时拒绝请求 |
+| `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名，可选 |
+| `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
 
 ### spec.globalPluginsRef
 
@@ -150,13 +150,13 @@ globalPluginsRef:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `mode` | `String` | `cors-standard` | `cors-standard`：仅拦截带 `Origin` + `ACRM` 的 OPTIONS 请求；`all-options`：拦截所有 OPTIONS 请求 |
-| `statusCode` | `u16` | `204` | 无 CORS 插件时 preflight 响应的状态码 |
+| `statusCode` | `Integer` | `204` | 无 CORS 插件时 preflight 响应的状态码 |
 
 ### spec.enableReferenceGrantValidation
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `enableReferenceGrantValidation` | `bool` | `false` | 是否启用 ReferenceGrant 跨命名空间引用校验 |
+| `enableReferenceGrantValidation` | `Boolean` | `false` | 是否启用 ReferenceGrant 跨命名空间引用校验 |
 
 ## 常见配置场景
 
