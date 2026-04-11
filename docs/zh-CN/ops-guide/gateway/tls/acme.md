@@ -67,10 +67,10 @@ spec:
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `server` | string | 否 | Let's Encrypt 生产目录 | ACME 目录 URL，如 `https://acme-v02.api.letsencrypt.org/directory`；测试可用 staging 或 Pebble。 |
-| `email` | string | **是** | - | ACME 账号联系邮箱。 |
-| `domains` | []string | **是** | - | 要申请证书的域名；含通配符（如 `*.example.com`）时须使用 DNS-01。 |
-| `keyType` | string | 否 | `ecdsa-p256` | 证书密钥类型：`ecdsa-p256`、`ecdsa-p384`。 |
+| `server` | String | 否 | Let's Encrypt 生产目录 | ACME 目录 URL，如 `https://acme-v02.api.letsencrypt.org/directory`；测试可用 staging 或 Pebble。 |
+| `email` | String | **是** | - | ACME 账号联系邮箱。 |
+| `domains` | Array\<String\> | **是** | - | 要申请证书的域名；含通配符（如 `*.example.com`）时须使用 DNS-01。 |
+| `keyType` | String | 否 | `ecdsa-p256` | 证书密钥类型：`ecdsa-p256`、`ecdsa-p384`。 |
 
 ### 校验方式：challenge
 
@@ -88,7 +88,7 @@ spec:
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `provider` | string | **是** | - | 支持：`cloudflare`、`alidns`；测试环境可用 `pebble`（配合 Pebble + challtestsrv）。 |
+| `provider` | String | **是** | - | 支持：`cloudflare`、`alidns`；测试环境可用 `pebble`（配合 Pebble + challtestsrv）。 |
 | `credentialRef` | object | **是** | - | 存 DNS API 凭据的 Secret 引用。 |
 | `propagationTimeout` | int | 否 | 120 | 等待 DNS 传播的最长时间（秒）。 |
 | `propagationCheckInterval` | int | 否 | 5 | 传播检查间隔（秒）。 |
@@ -109,15 +109,15 @@ spec:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `secretName` | string | **是** | 存放 `tls.crt`、`tls.key` 的 Secret 名称。 |
-| `secretNamespace` | string | 否 | Secret 所在命名空间，缺省为 EdgionAcme 所在命名空间。 |
+| `secretName` | String | **是** | 存放 `tls.crt`、`tls.key` 的 Secret 名称。 |
+| `secretNamespace` | String | 否 | Secret 所在命名空间，缺省为 EdgionAcme 所在命名空间。 |
 
 ### 自动 EdgionTls：autoEdgionTls
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `enabled` | bool | true | 是否自动创建/更新 EdgionTls。 |
-| `name` | string | 否 | EdgionTls 名称，缺省为 `acme-<EdgionAcme 名称>`。 |
+| `enabled` | Boolean | true | 是否自动创建/更新 EdgionTls。 |
+| `name` | String | 否 | EdgionTls 名称，缺省为 `acme-<EdgionAcme 名称>`。 |
 | `parentRefs` | []ParentRef | 否 | 自动创建的 EdgionTls 绑定的 Gateway。 |
 
 ---

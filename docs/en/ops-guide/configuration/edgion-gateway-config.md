@@ -90,7 +90,7 @@ spec:
 | `gracePeriodSeconds` | `Integer` | `30` | Seconds to wait for connections to drain during graceful shutdown |
 | `gracefulShutdownTimeoutS` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
 | `upstreamKeepalivePoolSize` | `Integer` | `128` | Upstream keepalive connection pool size |
-| `errorLog` | `String` | — | Pingora internal error log file path. Optional |
+| `errorLog` | `String` | — | Pingora internal error log file path |
 | `enableCompression` | `Boolean` | `false` | Enable response compression for downstream clients |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
 
@@ -132,7 +132,7 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in `tru
 |-----------|------|---------|-------------|
 | `xForwardedForLimit` | `Integer` | `200` | Maximum byte length of the `X-Forwarded-For` header; excess is truncated |
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener-level 421 Misdirected Request detection; rejects requests where SNI does not match the Host header |
-| `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI. Optional |
+| `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI |
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
 
 ### spec.globalPluginsRef

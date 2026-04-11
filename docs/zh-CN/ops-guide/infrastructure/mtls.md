@@ -38,7 +38,7 @@ spec:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| mode | string | | None/Request/Require |
+| mode | String | | None/Request/Require |
 | caCertificateRefs | array | | 客户端 CA 证书 |
 
 ### clientAuth.mode
@@ -220,17 +220,17 @@ ca   = "certs/grpc/secondary/ca.crt"
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `active` | string | — | 当前生效的证书集名称。存在多个 `[[certs]]` 时必填。 |
+| `active` | String | — | 当前生效的证书集名称。存在多个 `[[certs]]` 时必填。 |
 
 **`[[conf_sync_security.certs]]`** — 证书集（表数组）
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `name` | string | — | 证书集的唯一名称 |
-| `cert` | string | — | PEM 证书路径（相对 work_dir） |
-| `key` | string | — | PEM 私钥路径 |
-| `ca` | string | — | CA 证书路径（用于验证对端） |
-| `skip_tls` | bool | `false` | 紧急降级：跳过 TLS，以明文运行（输出 ERROR 日志） |
+| `name` | String | — | 证书集的唯一名称 |
+| `cert` | String | — | PEM 证书路径（相对 work_dir） |
+| `key` | String | — | PEM 私钥路径 |
+| `ca` | String | — | CA 证书路径（用于验证对端） |
+| `skip_tls` | Boolean | `false` | 紧急降级：跳过 TLS，以明文运行（输出 ERROR 日志） |
 
 ### 证书选择规则
 

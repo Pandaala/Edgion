@@ -129,7 +129,7 @@ When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
 | `upstream_keepalive_pool_size` | `Integer` | `128` | Upstream keepalive connection pool size |
 | `downstream_keepalive_request_limit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
-| `error_log` | `String` | — | Pingora internal error log file path. Optional |
+| `error_log` | `String` | — | Pingora internal error log file path |
 
 > These are process-level defaults. To adjust server behavior at the GatewayClass level, use [EdgionGatewayConfig](./edgion-gateway-config.md).
 
@@ -141,8 +141,8 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 |-----------|------|---------|-------------|
 | `enabled` | `Boolean` | — | Whether to enable this log type |
 | `output.localFile.path` | `String` | — | Log file path (relative to work_dir); independent of `[logging].log_dir` |
-| `output.localFile.queue_size` | `Integer` | CPU cores × 10000 | Write queue size. Optional |
-| `output.localFile.rotation.strategy` | `RotationStrategy` | — | Rotation strategy (see table below) |
+| `output.localFile.queue_size` | `Integer` | CPU cores × 10000 | Write queue size |
+| `output.localFile.rotation.strategy` | `Enum` | — | Rotation strategy (see table below) |
 | `output.localFile.rotation.max_files` | `Integer` | — | Number of rotated files to retain; `0` means unlimited |
 | `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | Rotation check interval in seconds |
 
@@ -233,5 +233,5 @@ ca   = "certs/grpc/ca.crt"
 
 - [Controller Configuration](./controller-config.md)
 - [EdgionGatewayConfig CRD](./edgion-gateway-config.md)
-- [Access Log Format](../../observability/access-log.md)
+- [Access Log Format](../observability/access-log.md)
 - [Working Directory Behavior](../../dev-guide/work-directory.md)

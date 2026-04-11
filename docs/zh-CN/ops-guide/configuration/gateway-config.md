@@ -129,7 +129,7 @@ ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "cred
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | 优雅关闭超时，超过后强制终止 |
 | `upstream_keepalive_pool_size` | `Integer` | `128` | 上游 keepalive 连接池大小 |
 | `downstream_keepalive_request_limit` | `Integer` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
-| `error_log` | `String` | — | Pingora 内部错误日志文件路径，可选 |
+| `error_log` | `String` | — | Pingora 内部错误日志文件路径 |
 
 > 这些是进程级行为。如果需要调整 GatewayClass 级别的 server 行为，请使用 [EdgionGatewayConfig](./edgion-gateway-config.md)。
 
@@ -141,8 +141,8 @@ ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "cred
 |------|------|--------|------|
 | `enabled` | `Boolean` | — | 是否启用此类日志 |
 | `output.localFile.path` | `String` | — | 日志文件路径（相对 work_dir），与 `[logging].log_dir` 无关 |
-| `output.localFile.queue_size` | `Integer` | CPU 核心数 × 10000 | 写入队列大小，可选 |
-| `output.localFile.rotation.strategy` | `RotationStrategy` | — | 轮转策略（见下表） |
+| `output.localFile.queue_size` | `Integer` | CPU 核心数 × 10000 | 写入队列大小 |
+| `output.localFile.rotation.strategy` | `Enum` | — | 轮转策略（见下表） |
 | `output.localFile.rotation.max_files` | `Integer` | — | 保留的轮转文件数，`0` 表示无限 |
 | `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | 轮转检查间隔秒数 |
 
@@ -233,5 +233,5 @@ ca   = "certs/grpc/ca.crt"
 
 - [Controller 配置](./controller-config.md)
 - [EdgionGatewayConfig CRD](./edgion-gateway-config.md)
-- [Access Log 格式](../../observability/access-log.md)
+- [Access Log 格式](../observability/access-log.md)
 - [工作目录行为](../../dev-guide/work-directory.md)

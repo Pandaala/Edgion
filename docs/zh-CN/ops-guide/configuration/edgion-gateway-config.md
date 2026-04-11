@@ -90,7 +90,7 @@ spec:
 | `gracePeriodSeconds` | `Integer` | `30` | 优雅关闭期间等待连接结束的秒数 |
 | `gracefulShutdownTimeoutS` | `Integer` | `10` | 优雅关闭超时秒数，超过后强制终止 |
 | `upstreamKeepalivePoolSize` | `Integer` | `128` | 上游 keepalive 连接池大小 |
-| `errorLog` | `String` | — | Pingora 内部错误日志文件路径，可选 |
+| `errorLog` | `String` | — | Pingora 内部错误日志文件路径 |
 | `enableCompression` | `Boolean` | `false` | 是否对下游响应启用压缩 |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
 
@@ -132,7 +132,7 @@ spec:
 |------|------|--------|------|
 | `xForwardedForLimit` | `Integer` | `200` | `X-Forwarded-For` 头部最大字节数，超过则截断 |
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener 级别 421 Misdirected Request 检测，SNI 与 Host 不匹配时拒绝请求 |
-| `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名，可选 |
+| `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名 |
 | `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
 
 ### spec.globalPluginsRef

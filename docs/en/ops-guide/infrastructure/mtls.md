@@ -38,7 +38,7 @@ spec:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| mode | string | | None/Request/Require |
+| mode | String | | None/Request/Require |
 | caCertificateRefs | array | | Client CA certificates |
 
 ### clientAuth.mode
@@ -220,17 +220,17 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addr` conne
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `active` | string | — | Name of the active cert set. Required when multiple `[[certs]]` entries exist. |
+| `active` | String | — | Name of the active cert set. Required when multiple `[[certs]]` entries exist. |
 
 **`[[conf_sync_security.certs]]`** — certificate set (array of tables)
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `name` | string | — | Unique name for this cert set |
-| `cert` | string | — | PEM certificate path (relative to work_dir) |
-| `key` | string | — | PEM private key path |
-| `ca` | string | — | CA certificate path (for verifying the peer) |
-| `skip_tls` | bool | `false` | Emergency fallback: skip TLS, run plaintext (logs ERROR) |
+| `name` | String | — | Unique name for this cert set |
+| `cert` | String | — | PEM certificate path (relative to work_dir) |
+| `key` | String | — | PEM private key path |
+| `ca` | String | — | CA certificate path (for verifying the peer) |
+| `skip_tls` | Boolean | `false` | Emergency fallback: skip TLS, run plaintext (logs ERROR) |
 
 ### Certificate Selection
 
