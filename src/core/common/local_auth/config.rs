@@ -2,7 +2,7 @@
 //!
 //! Provides built-in username/password authentication with JWT for the Admin API.
 //! When no OIDC (`auth`) section is present and no `[local_auth]` is configured,
-//! credentials are auto-generated and persisted to `{work_dir}/runtime/local_auth_generated.toml`.
+//! credentials are auto-generated and stored as a K8s Secret via `CenterApi`.
 //!
 //! Example TOML:
 //! ```toml
@@ -16,16 +16,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::Path;
-
-/// File name for auto-generated credentials, stored under `{work_dir}/runtime/`.
-pub const GENERATED_CREDENTIALS_FILE: &str = "local_auth_generated.toml";
 
 /// Local authentication configuration.
 ///
 /// When absent from the config file and no OIDC `[auth]` section is configured,
-/// local auth is automatically enabled with auto-generated credentials persisted
-/// to `{work_dir}/runtime/local_auth_generated.toml`.
+/// local auth is automatically enabled with auto-generated credentials stored
+/// as a K8s Secret via `CenterApi`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LocalAuthConfig {
@@ -94,93 +90,6 @@ impl LocalAuthConfig {
     pub fn skip_paths_set(&self) -> HashSet<String> {
         self.skip_paths.iter().cloned().collect()
     }
-}
-
-/// Generate random credentials or load from existing file.
-///
-/// - If `{work_dir}/runtime/local_auth_generated.toml` exists, load it.
-/// - Otherwise, generate random password + jwt_secret, save to file, and return.
-///
-/// Returns a complete `LocalAuthConfig` with real credentials.
-pub fn generate_or_load(work_dir: &Path) -> anyhow::Result<LocalAuthConfig> {
-    let runtime_dir = work_dir.join("runtime");
-    let cred_file = runtime_dir.join(GENERATED_CREDENTIALS_FILE);
-
-    // Try to load existing credentials
-    if cred_file.exists() {
-        let content = std::fs::read_to_string(&cred_file)?;
-        let config: LocalAuthConfig = toml::from_str(&content)?;
-        if !config.password.is_empty() && !config.jwt_secret.is_empty() {
-            tracing::info!(
-                component = "local_auth",
-                file = %cred_file.display(),
-                username = %config.username,
-                "Loaded auto-generated credentials from file"
-            );
-            return Ok(config);
-        }
-    }
-
-    // Generate new credentials
-    let password = generate_random_string(20);
-    let jwt_secret = generate_random_string(32);
-
-    let config = LocalAuthConfig {
-        enabled: true,
-        username: "admin".to_string(),
-        password: password.clone(),
-        jwt_secret,
-        jwt_expiry_hours: 24,
-        skip_paths: default_skip_paths(),
-    };
-
-    // Save to file
-    std::fs::create_dir_all(&runtime_dir)?;
-    let content = toml::to_string_pretty(&config)?;
-    std::fs::write(&cred_file, &content)?;
-
-    tracing::info!(
-        component = "local_auth",
-        file = %cred_file.display(),
-        "Auto-generated local auth credentials saved (see file for details)"
-    );
-
-    Ok(config)
-}
-
-/// Generate a random alphanumeric string using /dev/urandom (Unix)
-/// or a fallback mixing system time if /dev/urandom is unavailable.
-fn generate_random_string(len: usize) -> String {
-    use std::io::Read;
-    let mut buf = vec![0u8; len];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        if f.read_exact(&mut buf).is_ok() {
-            return buf
-                .iter()
-                .map(|b| {
-                    let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    charset[(*b as usize) % charset.len()] as char
-                })
-                .collect();
-        }
-    }
-
-    // Fallback: use system time mixing (less secure but functional)
-    use std::time::SystemTime;
-    let seed = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut state = seed;
-    (0..len)
-        .map(|i| {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407 + i as u128);
-            let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            charset[((state >> 33) as usize) % charset.len()] as char
-        })
-        .collect()
 }
 
 fn default_skip_paths() -> Vec<String> {

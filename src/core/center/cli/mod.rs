@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -9,8 +10,10 @@ use crate::core::center::commander::Commander;
 use crate::core::center::config::CenterConfig;
 use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::fed_sync::server::FederationGrpcServer;
+use crate::core::center::proxy::{PendingProxyMap, ProxyForwarder};
 use crate::core::center::scheduler;
 use crate::core::common::fed_sync::proto::federation_sync_server::FederationSyncServer;
+use parking_lot::Mutex;
 
 #[derive(Parser, Debug)]
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
@@ -54,7 +57,14 @@ impl EdgionCenterCli {
         let aggregator = Arc::new(ResourceAggregator::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        let grpc_server = FederationGrpcServer::new(registry.clone(), aggregator.clone(), config.sync.clone());
+        let pending_proxies: PendingProxyMap = Arc::new(Mutex::new(HashMap::new()));
+
+        let grpc_server = FederationGrpcServer::new(
+            registry.clone(),
+            aggregator.clone(),
+            pending_proxies.clone(),
+            config.sync.clone(),
+        );
         let pending_lists = grpc_server.pending_lists.clone();
         let pending_commands = grpc_server.pending_commands.clone();
 
@@ -64,9 +74,16 @@ impl EdgionCenterCli {
             config.sync.command_timeout_secs,
         ));
 
+        let proxy = Arc::new(ProxyForwarder::new(
+            registry.clone(),
+            pending_proxies,
+            config.sync.command_timeout_secs,
+        ));
+
         let api_state = ApiState {
             aggregator: aggregator.clone(),
             commander,
+            proxy,
         };
         let http_addr: std::net::SocketAddr = config.server.http_addr.parse()?;
         let grpc_addr: std::net::SocketAddr = config.server.grpc_addr.parse()?;

@@ -229,25 +229,26 @@ pub async fn unified_auth_middleware(
         return next.run(request).await;
     }
 
-    // Skip authentication for auth endpoints (login, etc.).
-    if path.starts_with("/api/v1/auth/") {
+    // Skip authentication for public auth endpoints only.
+    if path == "/api/v1/auth/login"
+        || path == "/api/v1/auth/logout"
+        || path == "/api/v1/auth/status"
+    {
         return next.run(request).await;
     }
 
-    // Skip authentication for configserver endpoints (edgion-cli compatibility).
-    if path.starts_with("/configserver/") {
-        return next.run(request).await;
-    }
-
-    // Extract Bearer token.
+    // Extract Bearer token, falling back to httpOnly cookie (browser auth).
     let token = match extract_bearer_token(&request) {
         Some(t) => t,
-        None => {
-            return auth_error_response(
-                StatusCode::UNAUTHORIZED,
-                "Missing or invalid Authorization header",
-            );
-        }
+        None => match extract_cookie_token(&request) {
+            Some(t) => t,
+            None => {
+                return auth_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "Missing or invalid Authorization header",
+                );
+            }
+        },
     };
 
     // Try OIDC validation first.
@@ -477,4 +478,19 @@ fn extract_bearer_token(request: &Request<Body>) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Extract the JWT token from the `edgion_token` httpOnly cookie.
+fn extract_cookie_token(request: &Request<Body>) -> Option<String> {
+    let cookie_header = request.headers().get(header::COOKIE)?;
+    let cookie_str = cookie_header.to_str().ok()?;
+    for part in cookie_str.split(';') {
+        let trimmed = part.trim();
+        if let Some(value) = trimmed.strip_prefix("edgion_token=") {
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }

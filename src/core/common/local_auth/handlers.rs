@@ -1,12 +1,13 @@
 //! HTTP handlers for local authentication endpoints.
 //!
 //! Provides:
-//! - `POST /api/v1/auth/login` — validate credentials, return JWT
-//! - `GET /api/v1/auth/me`    — return authenticated user info from JWT claims
+//! - `POST /api/v1/auth/login`  — validate credentials, return JWT
+//! - `POST /api/v1/auth/logout` — clear the httpOnly auth cookie
+//! - `GET /api/v1/auth/me`      — return authenticated user info from JWT claims
 
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
 };
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -115,11 +116,20 @@ pub async fn login_handler(
                 username = %state.username,
                 "Login successful"
             );
+            let cookie_value = format!(
+                "edgion_token={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+                token, expiry_secs
+            );
             let response = LoginResponse {
                 token,
                 expires_in: expiry_secs,
             };
-            Json(ApiResponse::success(response)).into_response()
+            let mut resp = Json(ApiResponse::success(response)).into_response();
+            resp.headers_mut().insert(
+                header::SET_COOKIE,
+                cookie_value.parse().unwrap(),
+            );
+            resp
         }
         Err(e) => {
             tracing::error!(component = "local_auth", error = %e, "JWT encode error");
@@ -133,11 +143,24 @@ pub async fn login_handler(
 /// GET /api/v1/auth/me
 ///
 /// Returns the authenticated user's info, extracted from the JWT claims inserted
-/// by [`crate::core::common::local_auth::middleware::local_auth_middleware`].
+/// by the unified auth middleware.
 pub async fn me_handler(
-    axum::Extension(claims): axum::Extension<LocalAuthClaims>,
+    axum::Extension(claims): axum::Extension<crate::core::common::unified_auth::UnifiedAuthClaims>,
 ) -> Json<ApiResponse<MeResponse>> {
     Json(ApiResponse::success(MeResponse {
-        username: claims.sub,
+        username: claims.sub.unwrap_or_default(),
     }))
+}
+
+/// POST /api/v1/auth/logout
+///
+/// Clears the httpOnly auth cookie by setting Max-Age=0.
+pub async fn logout_handler() -> Response {
+    let cookie_value = "edgion_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
+    let mut resp = Json(ApiResponse::<()>::success(())).into_response();
+    resp.headers_mut().insert(
+        header::SET_COOKIE,
+        cookie_value.parse().unwrap(),
+    );
+    resp
 }

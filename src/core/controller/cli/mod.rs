@@ -1,6 +1,6 @@
 use crate::core::common::config::ConfSyncSecurityConfig;
 use crate::core::common::{config::EdgionControllerConfig, utils};
-use crate::core::controller::api::serve_with_shutdown as serve_admin_api_with_shutdown;
+use crate::core::controller::api::{create_admin_router, serve_with_shutdown as serve_admin_api_with_shutdown};
 use crate::core::controller::conf_mgr::conf_center::traits::CenterLifeCycle;
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
 use crate::core::controller::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
@@ -271,7 +271,9 @@ impl EdgionControllerCli {
     /// 2. Create shutdown handler for graceful shutdown
     /// 3. Create ConfMgr
     /// 4. Spawn ConfMgr.start() (manages lifecycle: leader election, link, relink)
-    /// 5. Start gRPC and Admin services with shutdown support
+    /// 5. Load CRD schemas (before federation client so router can be created)
+    /// 6. Start federation client with admin router (HTTP-over-gRPC proxy)
+    /// 7. Start gRPC and Admin services with shutdown support
     pub async fn run(&self) -> Result<()> {
         // Load and merge configuration
         let config = EdgionControllerConfig::load(self.config.clone())?;
@@ -322,8 +324,14 @@ impl EdgionControllerCli {
             }
         });
 
-        // 6. Start federation client if center config is present.
+        // 6. Load CRD schemas for validation (skip in K8s mode).
+        // Must happen before federation client so the base admin router can be created.
+        let schema_validator = Self::load_schemas(config.is_k8s_mode());
+
+        // 7. Start federation client if center config is present.
         // Must be after conf_mgr.start() so processor_registry is populated.
+        // The base admin router (without auth middleware) is passed so the client
+        // can proxy HTTP requests from Center directly to the local admin API.
         let _fed_shutdown_tx = if let Some(center_config) = config.center.clone() {
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -338,20 +346,21 @@ impl EdgionControllerCli {
                 .map(|s| s.to_string())
                 .collect();
 
+            // Create the base admin router without auth — Center is trusted, auth handled externally
+            let admin_router = create_admin_router(conf_mgr.clone(), schema_validator.clone());
+
             tokio::spawn(crate::core::controller::fed_sync::fed_client::run(
                 center_config,
                 center_api,
                 kinds,
                 shutdown_rx,
+                admin_router,
             ));
 
             Some(shutdown_tx) // kept alive for duration of process
         } else {
             None
         };
-
-        // 7. Load CRD schemas for validation (skip in K8s mode)
-        let schema_validator = Self::load_schemas(config.is_k8s_mode());
 
         // 8. Parse addresses and start services with shutdown support
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
@@ -363,18 +372,17 @@ impl EdgionControllerCli {
 
         // Resolve local_auth: if [local_auth] is present with real credentials use it as-is;
         // if it has empty password/secret, or if there is no [local_auth] at all (and no OIDC),
-        // auto-generate credentials and persist them to {work_dir}/runtime/local_auth_generated.toml.
+        // auto-generate credentials and store them as a K8s Secret via CenterApi.
         let local_auth_config = if let Some(cfg) = config.local_auth.clone() {
             if cfg.needs_generation() {
-                // [local_auth] exists but password/secret is empty — generate
-                let wd = work_dir();
-                match crate::core::common::local_auth::config::generate_or_load(wd.base()) {
+                // [local_auth] exists but password/secret is empty — use Secret
+                match crate::core::common::local_auth::secret::ensure_admin_credentials(&*conf_mgr).await {
                     Ok(generated) => Some(generated),
                     Err(e) => {
                         tracing::error!(
                             component = COMPONENT_EDGION_CONTROLLER,
                             error = %e,
-                            "Failed to generate local auth credentials, starting without auth"
+                            "Failed to ensure admin credentials Secret"
                         );
                         None
                     }
@@ -383,21 +391,20 @@ impl EdgionControllerCli {
                 Some(cfg)
             }
         } else if config.auth.is_none() {
-            // No [auth] and no [local_auth] — auto-generate credentials
-            let wd = work_dir();
-            match crate::core::common::local_auth::config::generate_or_load(wd.base()) {
+            // No [auth] and no [local_auth] — auto-generate via Secret
+            match crate::core::common::local_auth::secret::ensure_admin_credentials(&*conf_mgr).await {
                 Ok(generated) => Some(generated),
                 Err(e) => {
                     tracing::error!(
                         component = COMPONENT_EDGION_CONTROLLER,
                         error = %e,
-                        "Failed to generate local auth credentials, starting without auth"
+                        "Failed to ensure admin credentials Secret"
                     );
                     None
                 }
             }
         } else {
-            None // OIDC auth is configured
+            None // OIDC auth
         };
 
         Self::start_services(

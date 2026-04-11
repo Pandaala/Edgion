@@ -157,6 +157,10 @@ pub fn add_local_auth_routes(
             post(crate::core::common::local_auth::login_handler),
         )
         .route(
+            "/api/v1/auth/logout",
+            post(crate::core::common::local_auth::logout_handler),
+        )
+        .route(
             "/api/v1/auth/me",
             get(crate::core::common::local_auth::me_handler),
         );

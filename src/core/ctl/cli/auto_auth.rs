@@ -91,55 +91,113 @@ pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, String
     None
 }
 
-/// Read auto-generated credentials from {work_dir}/runtime/local_auth_generated.toml.
-/// The work_dir is parsed from the same controller config file.
+/// Read auto-generated credentials from the Secret YAML file in conf_dir.
+/// The conf_dir is parsed from the same controller config file.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ConfCenterSection {
+    #[serde(rename = "type")]
+    center_type: Option<String>,
+    conf_dir: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct PartialConfig {
+    conf_center: Option<ConfCenterSection>,
+}
+
 fn read_generated_credentials(config_content: &str, config_path: &Path) -> Option<(String, String)> {
-    // Parse work_dir from the config
-    #[derive(Deserialize, Default)]
-    #[serde(default)]
-    struct WorkDirConfig {
-        work_dir: Option<String>,
-    }
+    let partial: PartialConfig = toml::from_str(config_content).ok()?;
 
-    let wd_config: WorkDirConfig = toml::from_str(config_content).ok()?;
-
-    // Resolve work_dir with same priority as the controller:
-    //   1. EDGION_WORK_DIR env var (set by test scripts, Docker entrypoint, etc.)
-    //   2. work_dir from config file
-    //   3. "." (default)
-    let work_dir = if let Ok(env_wd) = std::env::var("EDGION_WORK_DIR") {
-        PathBuf::from(env_wd)
-    } else if let Some(wd) = &wd_config.work_dir {
-        let p = PathBuf::from(wd);
-        if p.is_absolute() {
-            p
+    // Resolve conf_dir with same priority as the controller:
+    //   1. EDGION_WORK_DIR env + "/config" (--conf-dir override used by test scripts)
+    //   2. conf_center.conf_dir from config file
+    let conf_dir = if let Ok(env_wd) = std::env::var("EDGION_WORK_DIR") {
+        // Test scripts set EDGION_WORK_DIR and --conf-dir $WORK_DIR/config
+        let candidate = PathBuf::from(&env_wd).join("config");
+        if candidate.exists() {
+            candidate
         } else {
-            config_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join(p)
+            // Fallback to conf_center.conf_dir
+            resolve_conf_dir_from_config(&partial, config_path)?
         }
     } else {
-        config_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
+        resolve_conf_dir_from_config(&partial, config_path)?
     };
 
-    let cred_file = work_dir
-        .join("runtime")
-        .join(crate::core::common::local_auth::config::GENERATED_CREDENTIALS_FILE);
-    if !cred_file.exists() {
+    // Resolve namespace (same as controller: POD_NAMESPACE or "edgion-system")
+    let namespace = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "edgion-system".to_string());
+
+    // Secret file path: Secret_{namespace}_{name}.yaml
+    let secret_file = conf_dir.join(format!(
+        "Secret_{}_{}.yaml",
+        namespace,
+        crate::core::common::local_auth::secret::ADMIN_SECRET_NAME
+    ));
+
+    if !secret_file.exists() {
         return None;
     }
 
-    let content = std::fs::read_to_string(&cred_file).ok()?;
-    let local_auth: LocalAuthSection = toml::from_str(&content).ok()?;
+    // Parse the Secret YAML to extract username and password
+    let content = std::fs::read_to_string(&secret_file).ok()?;
+    parse_secret_credentials(&content)
+}
 
-    if local_auth.enabled && !local_auth.password.is_empty() {
-        Some((local_auth.username, local_auth.password))
+/// Extract username and password from a K8s Secret YAML (stringData format).
+fn parse_secret_credentials(yaml: &str) -> Option<(String, String)> {
+    // Simple line-based parsing for stringData fields
+    // Format:
+    // stringData:
+    //   username: "admin"
+    //   password: "randomstring"
+    let mut username = None;
+    let mut password = None;
+    let mut in_string_data = false;
+
+    for line in yaml.lines() {
+        let trimmed = line.trim();
+        if trimmed == "stringData:" {
+            in_string_data = true;
+            continue;
+        }
+        if in_string_data {
+            if !trimmed.starts_with("username:")
+                && !trimmed.starts_with("password:")
+                && !trimmed.starts_with("jwt_secret:")
+            {
+                if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                    // We've left the stringData block
+                    break;
+                }
+                continue;
+            }
+            if let Some(val) = trimmed.strip_prefix("username:") {
+                username = Some(val.trim().trim_matches('"').to_string());
+            } else if let Some(val) = trimmed.strip_prefix("password:") {
+                password = Some(val.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+
+    match (username, password) {
+        (Some(u), Some(p)) if !p.is_empty() => Some((u, p)),
+        _ => None,
+    }
+}
+
+/// Resolve conf_dir from the parsed config file.
+fn resolve_conf_dir_from_config(partial: &PartialConfig, config_path: &Path) -> Option<PathBuf> {
+    let conf_center = partial.conf_center.as_ref()?;
+    let conf_dir_str = conf_center.conf_dir.as_ref()?;
+    let conf_dir = PathBuf::from(conf_dir_str);
+    if conf_dir.is_absolute() {
+        Some(conf_dir)
+    } else if conf_dir.exists() {
+        Some(conf_dir)
     } else {
-        None
+        Some(config_path.parent()?.join(conf_dir_str))
     }
 }
 

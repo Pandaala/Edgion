@@ -38,6 +38,7 @@ async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<Ap
 struct ServerInfoResponse {
     server_id: String,
     ready: bool,
+    mode: String,
 }
 
 /// Get server info including server_id
@@ -52,6 +53,7 @@ async fn get_server_info(
             let info = ServerInfoResponse {
                 server_id: server.server_id(),
                 ready: true,
+                mode: "controller".to_string(),
             };
             Ok(Json(ApiResponse::success(info)))
         }
@@ -60,6 +62,7 @@ async fn get_server_info(
             let info = ServerInfoResponse {
                 server_id: String::new(),
                 ready: false,
+                mode: "controller".to_string(),
             };
             Ok(Json(ApiResponse::success(info)))
         }

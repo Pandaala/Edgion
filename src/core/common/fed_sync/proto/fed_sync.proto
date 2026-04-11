@@ -12,10 +12,11 @@ service FederationSync {
 
 message ControllerMessage {
     oneof payload {
-        RegisterRequest register         = 1;  // 首条消息，注册自身信息
-        Pong            pong             = 2;  // 心跳响应
-        ListResponse    list_response    = 3;  // 响应 center 的 ListRequest
-        CommandResponse command_response = 4;  // 响应 center 的命令
+        RegisterRequest   register           = 1;  // 首条消息，注册自身信息
+        Pong              pong               = 2;  // 心跳响应
+        ListResponse      list_response      = 3;  // 响应 center 的 ListRequest
+        CommandResponse   command_response   = 4;  // 响应 center 的命令
+        HttpProxyResponse http_proxy_response = 5;  // HTTP 代理响应
     }
 }
 
@@ -56,10 +57,11 @@ message CommandResponse {
 
 message CenterMessage {
     oneof payload {
-        RegisterAck    register_ack = 1;  // 注册确认
-        Ping           ping         = 2;  // 心跳
-        ListRequest    list_request = 3;  // 定期拉取资源 key
-        CommandRequest command      = 4;  // 下发命令
+        RegisterAck      register_ack = 1;  // 注册确认
+        Ping             ping         = 2;  // 心跳
+        ListRequest      list_request = 3;  // 定期拉取资源 key
+        CommandRequest   command      = 4;  // 下发命令
+        HttpProxyRequest http_proxy   = 5;  // HTTP 代理请求（Center 转发前端请求）
     }
 }
 
@@ -97,4 +99,23 @@ message DeleteCommand {
     string kind      = 1;
     string namespace = 2;
     string name      = 3;
+}
+
+// ── HTTP Proxy（Center ↔ Controller HTTP 隧道）────────────────
+
+// Center → Controller: 将前端 HTTP 请求封装后通过 gRPC 流发送
+message HttpProxyRequest {
+    string              request_id = 1;  // UUID，用于关联响应
+    string              method     = 2;  // HTTP 方法：GET, POST, PUT, DELETE
+    string              path       = 3;  // 请求路径：/api/v1/namespaced/httproute
+    map<string, string> headers    = 4;  // HTTP 请求头
+    bytes               body       = 5;  // 请求体
+}
+
+// Controller → Center: 将内部路由执行结果封装返回
+message HttpProxyResponse {
+    string              request_id  = 1;  // echo HttpProxyRequest.request_id
+    uint32              status_code = 2;  // HTTP 状态码：200, 404, 500...
+    map<string, string> headers     = 3;  // HTTP 响应头
+    bytes               body        = 4;  // 响应体
 }

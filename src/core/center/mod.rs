@@ -4,4 +4,5 @@ pub mod cli;
 pub mod commander;
 pub mod config;
 pub mod fed_sync;
+pub mod proxy;
 pub mod scheduler;

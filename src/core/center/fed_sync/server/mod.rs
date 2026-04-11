@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::config::CenterSyncConfig;
 use crate::core::center::fed_sync::registry::ControllerRegistry;
+use crate::core::center::proxy::PendingProxyMap;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_server::FederationSync, CenterMessage, ControllerMessage, Ping, RegisterAck,
@@ -35,6 +36,7 @@ pub struct FederationGrpcServer {
     pub aggregator: Arc<ResourceAggregator>,
     pub pending_lists: PendingListMap,
     pub pending_commands: PendingCommandMap,
+    pub pending_proxies: PendingProxyMap,
     pub sync_config: CenterSyncConfig,
 }
 
@@ -42,6 +44,7 @@ impl FederationGrpcServer {
     pub fn new(
         registry: ControllerRegistry,
         aggregator: Arc<ResourceAggregator>,
+        pending_proxies: PendingProxyMap,
         sync_config: CenterSyncConfig,
     ) -> Self {
         Self {
@@ -49,6 +52,7 @@ impl FederationGrpcServer {
             aggregator,
             pending_lists: Arc::new(Mutex::new(HashMap::new())),
             pending_commands: Arc::new(Mutex::new(HashMap::new())),
+            pending_proxies,
             sync_config,
         }
     }
@@ -105,6 +109,7 @@ impl FederationSync for FederationGrpcServer {
         let aggregator = self.aggregator.clone();
         let pending_lists = self.pending_lists.clone();
         let pending_commands = self.pending_commands.clone();
+        let pending_proxies = self.pending_proxies.clone();
         let ping_interval = Duration::from_secs(self.sync_config.ping_interval_secs);
         let heartbeat_timeout = ping_interval * 3;
         let cid = controller_id.clone();
@@ -157,6 +162,7 @@ impl FederationSync for FederationGrpcServer {
             let registry = registry.clone();
             let aggregator_for_offline = aggregator.clone();
             let cid = cid.clone();
+            let self_pending_proxies = pending_proxies.clone();
             async move {
                 loop {
                     match tokio::time::timeout(heartbeat_timeout, inbound.message()).await {
@@ -204,6 +210,11 @@ impl FederationSync for FederationGrpcServer {
                                 Some(CtrlPayload::CommandResponse(resp)) => {
                                     if let Some(sender) = pending_commands.lock().remove(&resp.request_id) {
                                         let _ = sender.send(resp);
+                                    }
+                                }
+                                Some(CtrlPayload::HttpProxyResponse(resp)) => {
+                                    if let Some(tx) = self_pending_proxies.lock().remove(&resp.request_id) {
+                                        let _ = tx.send(resp);
                                     }
                                 }
                                 _ => {}

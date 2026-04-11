@@ -16,8 +16,8 @@ use tonic::transport::Channel;
 use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
-    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage, ListResponse,
-    Pong, RegisterRequest,
+    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage, HttpProxyResponse,
+    ListResponse, Pong, RegisterRequest,
 };
 use crate::core::controller::conf_mgr::conf_center::traits::CenterApi;
 use crate::core::controller::fed_sync::resource_collector;
@@ -53,6 +53,7 @@ pub async fn run(
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: Vec<String>,
     mut shutdown: watch::Receiver<bool>,
+    admin_router: axum::Router,
 ) {
     if let Err(e) = config.security.validate() {
         tracing::error!(
@@ -71,7 +72,7 @@ pub async fn run(
                 tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
                 return;
             }
-            result = connect_and_run(&config, conf_center.clone(), &supported_kinds) => {
+            result = connect_and_run(&config, conf_center.clone(), &supported_kinds, admin_router.clone()) => {
                 match result {
                     Ok(()) => {
                         tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
@@ -106,6 +107,7 @@ async fn connect_and_run(
     config: &CenterClientConfig,
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
+    admin_router: axum::Router,
 ) -> Result<()> {
     let tls = config.security.resolve_active_tls();
     let use_tls = tls.is_some_and(|t| !t.skip_tls);
@@ -185,6 +187,7 @@ async fn connect_and_run(
                             tx.clone(),
                             conf_center.clone(),
                             supported_kinds,
+                            admin_router.clone(),
                         ).await?;
                     }
                     Some(_) => {} // empty payload, ignore
@@ -199,6 +202,7 @@ async fn handle_center_message(
     tx: Arc<tokio::sync::mpsc::Sender<ControllerMessage>>,
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
+    admin_router: axum::Router,
 ) -> Result<()> {
     match payload {
         CenterPayload::RegisterAck(ack) => {
@@ -256,6 +260,113 @@ async fn handle_center_message(
                 })),
             })
             .await?;
+        }
+
+        CenterPayload::HttpProxy(proxy_req) => {
+            tracing::debug!(
+                component = "fed_client",
+                request_id = %proxy_req.request_id,
+                method = %proxy_req.method,
+                path = %proxy_req.path,
+                "HttpProxyRequest received"
+            );
+            let tx = tx.clone();
+            // Spawn as a separate task so proxy requests don't block Ping/Pong handling
+            tokio::spawn(async move {
+                let request_id = proxy_req.request_id.clone();
+
+                let method: http::Method = proxy_req.method.parse().unwrap_or(http::Method::GET);
+                let mut builder = http::Request::builder()
+                    .method(method)
+                    .uri(&proxy_req.path);
+
+                for (k, v) in &proxy_req.headers {
+                    builder = builder.header(k.as_str(), v.as_str());
+                }
+
+                let request = match builder.body(axum::body::Body::from(proxy_req.body)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!(
+                            component = "fed_client",
+                            request_id = %request_id,
+                            error = %e,
+                            "Failed to build proxy request"
+                        );
+                        let _ = tx
+                            .send(ControllerMessage {
+                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                    request_id,
+                                    status_code: 400,
+                                    headers: Default::default(),
+                                    body: format!("Bad proxy request: {}", e).into_bytes(),
+                                })),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+
+                // Call the router directly (no network) using tower::ServiceExt::oneshot
+                use tower::ServiceExt;
+                match admin_router.oneshot(request).await {
+                    Ok(response) => {
+                        let status = response.status().as_u16() as u32;
+                        let headers: std::collections::HashMap<String, String> = response
+                            .headers()
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                            .collect();
+                        let body_bytes =
+                            match axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024).await {
+                                Ok(b) => b.to_vec(),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        component = "fed_client",
+                                        request_id = %request_id,
+                                        error = %e,
+                                        "Failed to read proxy response body"
+                                    );
+                                    format!("Failed to read response body: {}", e).into_bytes()
+                                }
+                            };
+                        tracing::debug!(
+                            component = "fed_client",
+                            request_id = %request_id,
+                            status_code = status,
+                            "HttpProxyResponse sent"
+                        );
+                        let _ = tx
+                            .send(ControllerMessage {
+                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                    request_id,
+                                    status_code: status,
+                                    headers,
+                                    body: body_bytes,
+                                })),
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            component = "fed_client",
+                            request_id = %request_id,
+                            error = %e,
+                            "Internal proxy error"
+                        );
+                        let _ = tx
+                            .send(ControllerMessage {
+                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                    request_id,
+                                    status_code: 502,
+                                    headers: Default::default(),
+                                    body: format!("Internal proxy error: {}", e).into_bytes(),
+                                })),
+                            })
+                            .await;
+                    }
+                }
+            });
         }
     }
     Ok(())
