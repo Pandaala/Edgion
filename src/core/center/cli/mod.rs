@@ -103,11 +103,23 @@ impl EdgionCenterCli {
                 .serve(grpc_addr),
         );
 
-        // HTTP Admin API
+        // HTTP Admin API — unified auth supports both OIDC and local auth
         let auth_config = config.auth.clone();
+        let local_auth_config = config.local_auth.clone().or_else(|| {
+            tracing::info!(
+                component = "center",
+                "No local_auth configured, enabling default local auth (admin/edgion1234)"
+            );
+            Some(crate::core::common::local_auth::LocalAuthConfig::default())
+        });
         let http_handle = tokio::spawn(async move {
             let base_router = router(api_state);
-            let app = crate::core::common::api::apply_auth_layer(base_router, auth_config.as_ref(), "center");
+            let app = crate::core::common::api::apply_unified_auth_layer(
+                base_router,
+                auth_config.as_ref(),
+                local_auth_config.as_ref(),
+                "center",
+            );
             let app = crate::core::common::api::apply_cors_layer(app);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();

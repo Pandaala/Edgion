@@ -126,6 +126,26 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
     Json(ApiResponse::success(format!("ACME check triggered for {}", key)))
 }
 
+// ============= Auth Status Helpers =============
+
+/// Build the pre-computed auth status based on the active auth configuration.
+///
+/// When both OIDC and local auth are enabled, `auth_method` is "oidc+local".
+fn build_auth_status(
+    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+) -> crate::core::common::local_auth::AuthStatusResponse {
+    use crate::core::common::local_auth::AuthStatusResponse;
+    let oidc_enabled = auth_config.map_or(false, |c| c.enabled);
+    let local_enabled = local_auth_config.map_or(false, |c| c.enabled);
+    match (oidc_enabled, local_enabled) {
+        (true, true) => AuthStatusResponse { auth_required: true, auth_method: "oidc+local".to_string() },
+        (true, false) => AuthStatusResponse { auth_required: true, auth_method: "oidc".to_string() },
+        (false, true) => AuthStatusResponse { auth_required: true, auth_method: "local".to_string() },
+        (false, false) => AuthStatusResponse { auth_required: false, auth_method: "none".to_string() },
+    }
+}
+
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
@@ -192,9 +212,25 @@ pub async fn serve(
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
 ) -> anyhow::Result<()> {
     let base_router = create_admin_router(conf_mgr, schema_validator);
-    let app = api::apply_cors_layer(api::apply_auth_layer(base_router, auth_config, "admin_api"));
+    // Add local auth login/me endpoints (before auth middleware so login is accessible)
+    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
+    // Apply unified auth middleware (tries OIDC first, falls back to local)
+    let router_with_auth = api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let app = api::apply_cors_layer(router_with_auth);
+
+    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
+    let auth_status = build_auth_status(local_auth_config, auth_config);
+    let status_router = Router::new().route(
+        "/api/v1/auth/status",
+        get(move || {
+            let status = auth_status.clone();
+            async move { axum::Json(ApiResponse::success(status)) }
+        }),
+    );
+    let app = app.merge(status_router);
 
     tracing::info!(
         component = "unified_api",
@@ -215,10 +251,26 @@ pub async fn serve_with_shutdown(
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let base_router = create_admin_router(conf_mgr, schema_validator);
-    let app = api::apply_cors_layer(api::apply_auth_layer(base_router, auth_config, "admin_api"));
+    // Add local auth login/me endpoints (before auth middleware so login is accessible)
+    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
+    // Apply unified auth middleware (tries OIDC first, falls back to local)
+    let router_with_auth = api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let app = api::apply_cors_layer(router_with_auth);
+
+    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
+    let auth_status = build_auth_status(local_auth_config, auth_config);
+    let status_router = Router::new().route(
+        "/api/v1/auth/status",
+        get(move || {
+            let status = auth_status.clone();
+            async move { axum::Json(ApiResponse::success(status)) }
+        }),
+    );
+    let app = app.merge(status_router);
 
     tracing::info!(
         component = "admin_api",

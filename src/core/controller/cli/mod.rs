@@ -150,6 +150,7 @@ impl EdgionControllerCli {
         admin_addr: SocketAddr,
         security: ConfSyncSecurityConfig,
         auth_config: Option<crate::core::common::auth::AdminAuthConfig>,
+        local_auth_config: Option<crate::core::common::local_auth::LocalAuthConfig>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
         tracing::info!(
@@ -213,6 +214,7 @@ impl EdgionControllerCli {
                     schema_validator,
                     admin_addr,
                     auth_config.as_ref(),
+                    local_auth_config.as_ref(),
                     admin_shutdown
                 )
             )
@@ -359,6 +361,45 @@ impl EdgionControllerCli {
         security.validate()?;
         let auth_config = config.auth.clone();
 
+        // Resolve local_auth: if [local_auth] is present with real credentials use it as-is;
+        // if it has empty password/secret, or if there is no [local_auth] at all (and no OIDC),
+        // auto-generate credentials and persist them to {work_dir}/runtime/local_auth_generated.toml.
+        let local_auth_config = if let Some(cfg) = config.local_auth.clone() {
+            if cfg.needs_generation() {
+                // [local_auth] exists but password/secret is empty — generate
+                let wd = work_dir();
+                match crate::core::common::local_auth::config::generate_or_load(wd.base()) {
+                    Ok(generated) => Some(generated),
+                    Err(e) => {
+                        tracing::error!(
+                            component = COMPONENT_EDGION_CONTROLLER,
+                            error = %e,
+                            "Failed to generate local auth credentials, starting without auth"
+                        );
+                        None
+                    }
+                }
+            } else {
+                Some(cfg)
+            }
+        } else if config.auth.is_none() {
+            // No [auth] and no [local_auth] — auto-generate credentials
+            let wd = work_dir();
+            match crate::core::common::local_auth::config::generate_or_load(wd.base()) {
+                Ok(generated) => Some(generated),
+                Err(e) => {
+                    tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        error = %e,
+                        "Failed to generate local auth credentials, starting without auth"
+                    );
+                    None
+                }
+            }
+        } else {
+            None // OIDC auth is configured
+        };
+
         Self::start_services(
             conf_mgr,
             schema_validator,
@@ -366,6 +407,7 @@ impl EdgionControllerCli {
             admin_addr,
             security,
             auth_config,
+            local_auth_config,
             shutdown_handle,
         )
         .await

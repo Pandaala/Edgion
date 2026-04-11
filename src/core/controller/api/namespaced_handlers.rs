@@ -281,6 +281,15 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
+        crate::types::ResourceKind::EdgionAcme => {
+            let acme: EdgionAcme = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
+            let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     }
 
@@ -471,6 +480,15 @@ pub async fn update_namespaced(
             let plugins: EdgionStreamPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
+        crate::types::ResourceKind::EdgionAcme => {
+            let acme: EdgionAcme = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
+            let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await

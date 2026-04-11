@@ -1,5 +1,6 @@
 use crate::core::common::auth::AdminAuthConfig;
 use crate::core::common::config::ConfSyncSecurityConfig;
+use crate::core::common::local_auth::LocalAuthConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -7,11 +8,16 @@ use serde::{Deserialize, Serialize};
 pub struct CenterConfig {
     pub server: CenterServerConfig,
     pub sync: CenterSyncConfig,
-    /// Optional Admin API authentication.
-    /// Omit to disable auth (backward compatible). When present, Admin API
-    /// endpoints (except health/ready) require a valid JWT Bearer token.
+    /// Optional OIDC Admin API authentication.
+    /// Omit to disable OIDC auth. When present, Admin API endpoints (except
+    /// health/ready) require a valid JWT Bearer token from the OIDC provider.
     #[serde(default)]
     pub auth: Option<AdminAuthConfig>,
+    /// Optional local Admin API authentication.
+    /// Omit to use default local auth (admin/edgion1234).
+    /// Both `auth` and `local_auth` can be enabled simultaneously.
+    #[serde(default)]
+    pub local_auth: Option<LocalAuthConfig>,
     /// TLS config for the federation gRPC server.
     /// Omit this section to keep plaintext gRPC (backward compatible).
     #[serde(default)]
@@ -24,6 +30,7 @@ impl Default for CenterConfig {
             server: CenterServerConfig::default(),
             sync: CenterSyncConfig::default(),
             auth: None,
+            local_auth: None,
             grpc_security: ConfSyncSecurityConfig::default(),
         }
     }
