@@ -44,9 +44,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/controllers", get(list_controllers))
         .route("/api/v1/clusters", get(list_clusters))
         .route("/api/v1/resources", get(list_resources))
-        .route("/api/v1/controllers/:id/reload", post(reload_controller))
+        .route("/api/v1/controllers/{id}/reload", post(reload_controller))
         // HTTP proxy to controllers
-        .route("/api/v1/proxy/:controller_id/*rest", any(proxy_handler))
+        .route("/api/v1/proxy/{controller_id}/{*rest}", any(proxy_handler))
         .with_state(state)
 }
 
@@ -128,7 +128,8 @@ async fn list_resources(State(state): State<ApiState>, Query(params): Query<Reso
     Json(ListResponse::success(keys))
 }
 
-async fn reload_controller(State(state): State<ApiState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn reload_controller(State(state): State<ApiState>, Path(id_raw): Path<String>) -> impl IntoResponse {
+    let id = id_raw.replace('~', "/");
     match state
         .commander
         .send_command(&id, Command::Reload(ReloadCommand {}))
@@ -152,11 +153,14 @@ async fn reload_controller(State(state): State<ApiState>, Path(id): Path<String>
 
 async fn proxy_handler(
     State(state): State<ApiState>,
-    Path((controller_id, rest)): Path<(String, String)>,
+    Path((controller_id_raw, rest)): Path<(String, String)>,
     method: axum::http::Method,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Frontend uses "~" instead of "/" in controller_id to avoid browser URL decoding issues
+    let controller_id = controller_id_raw.replace('~', "/");
+
     // Convert headers to HashMap<String, String>, skipping non-UTF-8 values
     let headers_map: std::collections::HashMap<String, String> = headers
         .iter()

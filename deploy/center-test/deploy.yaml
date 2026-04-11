@@ -1,0 +1,218 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edgion-test
+
+---
+# === Controller 1 Config (cluster-east) ===
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: controller-1-config
+  namespace: edgion-test
+data:
+  edgion-controller.toml: |
+    work_dir = "/edgion"
+
+    [server]
+    grpc_listen = "0.0.0.0:50051"
+    admin_listen = "0.0.0.0:5800"
+
+    [conf_center]
+    type = "file_system"
+    conf_dir = "/edgion/data"
+
+    [center]
+    address = "http://center:50052"
+    name = "ctrl-01"
+    cluster = "cluster-east"
+    env = ["testing"]
+    tag = ["team-a"]
+    ping_interval_secs = 5
+
+    [logging]
+    log_level = "info"
+    console = true
+
+    [conf_sync]
+    no_sync_kinds = ["ReferenceGrant", "Secret"]
+
+---
+# === Controller 2 Config (cluster-west) ===
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: controller-2-config
+  namespace: edgion-test
+data:
+  edgion-controller.toml: |
+    work_dir = "/edgion"
+
+    [server]
+    grpc_listen = "0.0.0.0:50051"
+    admin_listen = "0.0.0.0:5800"
+
+    [conf_center]
+    type = "file_system"
+    conf_dir = "/edgion/data"
+
+    [center]
+    address = "http://center:50052"
+    name = "ctrl-02"
+    cluster = "cluster-west"
+    env = ["testing"]
+    tag = ["team-b"]
+    ping_interval_secs = 5
+
+    [logging]
+    log_level = "info"
+    console = true
+
+    [conf_sync]
+    no_sync_kinds = ["ReferenceGrant", "Secret"]
+
+---
+# === Center Config ===
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: center-config
+  namespace: edgion-test
+data:
+  edgion-center.toml: |
+    [server]
+    grpc_addr = "0.0.0.0:50052"
+    http_addr = "0.0.0.0:5810"
+
+    [sync]
+    list_interval_secs = 30
+    list_timeout_secs = 10
+    command_timeout_secs = 30
+    ping_interval_secs = 5
+    offline_evict_hours = 1
+
+    [local_auth]
+    enabled = true
+    username = "admin"
+    password = "edgion1234"
+    jwt_secret = "center-test-jwt-secret-key-2026"
+    jwt_expiry_hours = 24
+    skip_paths = ["/health", "/ready", "/api/v1/server-info"]
+
+---
+# === Center Service (Controllers connect here via DNS name "center") ===
+apiVersion: v1
+kind: Service
+metadata:
+  name: center
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-center
+  ports:
+    - name: grpc
+      port: 50052
+      targetPort: 50052
+    - name: http
+      port: 5810
+      targetPort: 5810
+
+---
+# === Center Pod ===
+apiVersion: v1
+kind: Pod
+metadata:
+  name: center
+  namespace: edgion-test
+  labels:
+    app: edgion-center
+spec:
+  containers:
+    - name: center
+      image: edgion-all:local
+      imagePullPolicy: Never
+      command: ["edgion-center"]
+      args: ["-c", "/edgion/config/edgion-center.toml"]
+      ports:
+        - containerPort: 50052
+          name: grpc
+        - containerPort: 5810
+          name: http
+      volumeMounts:
+        - name: config
+          mountPath: /edgion/config/edgion-center.toml
+          subPath: edgion-center.toml
+  volumes:
+    - name: config
+      configMap:
+        name: center-config
+
+---
+# === Controller 1 Pod ===
+apiVersion: v1
+kind: Pod
+metadata:
+  name: controller-1
+  namespace: edgion-test
+  labels:
+    app: edgion-controller
+    instance: ctrl-01
+spec:
+  containers:
+    - name: controller
+      image: edgion-all:local
+      imagePullPolicy: Never
+      command: ["edgion-controller"]
+      args: ["-c", "/edgion/config/edgion-controller.toml"]
+      ports:
+        - containerPort: 50051
+          name: grpc
+        - containerPort: 5800
+          name: http
+      volumeMounts:
+        - name: config
+          mountPath: /edgion/config/edgion-controller.toml
+          subPath: edgion-controller.toml
+        - name: data
+          mountPath: /edgion/data
+  volumes:
+    - name: config
+      configMap:
+        name: controller-1-config
+    - name: data
+      emptyDir: {}
+
+---
+# === Controller 2 Pod ===
+apiVersion: v1
+kind: Pod
+metadata:
+  name: controller-2
+  namespace: edgion-test
+  labels:
+    app: edgion-controller
+    instance: ctrl-02
+spec:
+  containers:
+    - name: controller
+      image: edgion-all:local
+      imagePullPolicy: Never
+      command: ["edgion-controller"]
+      args: ["-c", "/edgion/config/edgion-controller.toml"]
+      ports:
+        - containerPort: 50051
+          name: grpc
+        - containerPort: 5800
+          name: http
+      volumeMounts:
+        - name: config
+          mountPath: /edgion/config/edgion-controller.toml
+          subPath: edgion-controller.toml
+        - name: data
+          mountPath: /edgion/data
+  volumes:
+    - name: config
+      configMap:
+        name: controller-2-config
+    - name: data
+      emptyDir: {}

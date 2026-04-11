@@ -189,6 +189,38 @@ CLI 特例：
 | `blocked_annotations` | `Vec<String>` | kubectl/helm 常见大注解 | 进入内存前移除的注解 |
 | `remove_managed_fields` | `bool` | `true` | 减少对象体积 |
 
+## `[local_auth]` — 本地认证
+
+内置用户名/密码认证，签发 HS256 JWT。不配置时自动生成随机凭据存入 Secret。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | `bool` | `true` | 启用本地认证 |
+| `username` | `String` | `"admin"` | 用户名 |
+| `password` | `String` | `""` | 密码（空 = 需自动生成）|
+| `jwt_secret` | `String` | `""` | JWT 签名密钥（空 = 需自动生成）|
+| `jwt_expiry_hours` | `u64` | `24` | Token 过期时间（小时）|
+| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | 跳过认证的路径前缀 |
+
+```toml
+[local_auth]
+enabled = true
+username = "admin"
+password = "my-secure-password"
+jwt_secret = "my-jwt-signing-secret"
+jwt_expiry_hours = 24
+```
+
+### 自动生成凭据
+
+当无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
+
+1. Controller 启动时通过 CenterApi 检查 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
+2. 不存在 → 生成随机 20 位密码 + 32 位 JWT secret → 创建 Secret
+3. 已存在 → 读取凭据继续启动
+4. FileSystem 模式：`{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+5. K8s 模式：通过 K8s API 创建真正的 Secret
+
 ## 当前项目里最常见的 Controller 配置改动
 
 - 本地测试切换配置目录：改 `conf_center.type = "file_system"` + `conf_dir`

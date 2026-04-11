@@ -164,6 +164,15 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 
 详细命令和日志入口见 [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)。
 
+## 认证在集成测试中的行为
+
+集成测试中认证由框架自动处理，无需手动操作：
+
+- Controller 启动时自动生成随机凭据，写入 `{WORK_DIR}/config/resources/Secret_edgion-system_edgion-admin-credentials.yaml`
+- `load_conf.sh` 调用 `edgion-cli` 时，`ensure_auth()` 自动通过 `EDGION_WORK_DIR` 找到配置 → 读取 Secret → 完成登录
+- `start_all_with_conf.sh` 导出 `EDGION_WORK_DIR`，使自动认证路径可达
+- CI/测试环境无需任何手动 `edgion-cli login` 步骤
+
 ## 容易踩坑的地方
 
 - YAML 在 `examples/test/conf/` 写了，但 `test_client.rs` 没注册，结果用例根本没跑到

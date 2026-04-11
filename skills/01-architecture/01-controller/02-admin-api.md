@@ -143,6 +143,53 @@ edgion-cli 支持三种 `--target` 模式，对应不同端点：
 | `KubeError` | 500 Internal Server Error |
 | `InternalError` | 500 Internal Server Error |
 
+## 认证系统
+
+Admin API 集成了统一认证中间件，支持 OIDC 和本地 JWT 两种模式。
+
+### 认证中间件（unified_auth）
+
+模块位置：`src/core/common/unified_auth/mod.rs`
+
+请求认证处理顺序：
+
+1. 命中 `skip_paths`（默认 `/health`、`/ready`）→ 直接放行
+2. 公开认证端点（`/api/v1/auth/*`）→ 直接放行
+3. 尝试 OIDC Bearer token 验证（需配置 `[auth]`）
+4. 尝试本地 JWT（HS256）Bearer token 验证
+5. 尝试从 httpOnly Cookie 读取 token → 同上验证
+6. 均失败 → 返回 `401 Unauthorized`
+
+### 认证端点
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/v1/auth/login` | 无需 | 用户名/密码登录；响应 body 含 token，同时设置 httpOnly Cookie |
+| POST | `/api/v1/auth/logout` | 无需 | 清除 httpOnly Cookie |
+| GET | `/api/v1/auth/status` | 无需（公开） | 返回当前认证模式（local/oidc/disabled） |
+| GET | `/api/v1/auth/me` | 需认证 | 返回当前登录用户信息 |
+
+### httpOnly Cookie
+
+登录成功后，响应会 Set-Cookie 携带 httpOnly JWT Cookie，浏览器后续请求自动附带，无需手动管理 token。适合前端 Dashboard 使用。
+
+### 自动生成凭据
+
+当 TOML 中无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
+
+1. Controller 启动时通过 CenterApi 检查 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
+2. 不存在 → 生成随机 20 位密码 + 32 位 JWT secret → 创建 Secret
+3. 已存在 → 读取凭据继续启动
+4. FileSystem 模式存储位置：`{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+5. K8s 模式：通过 K8s API 创建真正的 Secret
+
+### 模块位置
+
+| 模块 | 路径 |
+|------|------|
+| 本地认证（config/handlers/middleware/secret） | `src/core/common/local_auth/` |
+| 统一认证中间件（OIDC + local） | `src/core/common/unified_auth/mod.rs` |
+
 ## 启动方式
 
 Admin API 支持两种启动模式：

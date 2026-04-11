@@ -5,7 +5,7 @@ description: edgion-cli 子命令详解：apply、get、delete、reload 的参�
 
 # edgion-cli 子命令
 
-edgion-cli 提供 5 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）、gen-certs（生成 mTLS 证书）。其中 apply、delete、reload 仅在 center target 下可用，gen-certs 不依赖 target。
+edgion-cli 提供 6 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）、gen-certs（生成 mTLS 证书）、login（登录认证）。其中 apply、delete、reload 仅在 center target 下可用，gen-certs 不依赖 target。
 
 ## apply
 
@@ -259,3 +259,43 @@ src/core/ctl/
     └── commands/
         └── gen_certs.rs      # GenCertsArgs、write_to_files()、write_to_k8s_secrets()
 ```
+
+## login — 登录认证
+
+向 Controller 进行身份验证，token 保存到本地文件供后续命令自动携带。
+
+### 语法
+
+```bash
+edgion-cli login -u <username> -p <password>
+edgion-cli login  # 交互式输入
+```
+
+Token 保存到 `~/.edgion/token`，后续命令自动携带。
+
+### 模块位置
+
+| 模块 | 路径 |
+|------|------|
+| CLI 自动认证逻辑 | `src/core/ctl/cli/auto_auth.rs` |
+| Token 文件管理 | `src/core/ctl/cli/token.rs` |
+
+## 自动认证（ensure_auth）
+
+edgion-cli 在执行命令前自动检测认证状态，无需手动 login：
+
+1. 已有 token → 直接使用
+2. 查询 `/api/v1/auth/status` → 不需要认证则跳过
+3. 自动检测 Controller 配置文件（`--controller-config` / `EDGION_CONTROLLER_CONFIG` / 默认路径）
+4. 从配置推断 conf_dir → 读取 Secret `edgion-admin-credentials` → 自动登录
+5. 检测失败 → 提示手动 `edgion-cli login`
+
+### 配置文件自动检测路径
+
+| 优先级 | 来源 |
+|--------|------|
+| 1 | `--controller-config` / `-C` 参数 |
+| 2 | `EDGION_CONTROLLER_CONFIG` 环境变量 |
+| 3 | `config/edgion-controller.toml`（相对 CWD）|
+| 4 | `/usr/local/edgion/config/edgion-controller.toml` |
+| 5 | `/etc/edgion/edgion-controller.toml` |

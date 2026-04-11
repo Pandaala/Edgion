@@ -98,6 +98,16 @@ make check-agent-docs
 - 不要引入安全漏洞（注入、XSS 等 OWASP Top 10）
 - 改动最小化，不做未被要求的重构或功能添加
 
+## 认证系统
+
+- **默认行为**：无配置时自动生成随机密码，存入 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
+- **查看密码**：`cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+- **API 认证**：Bearer token 或 httpOnly Cookie
+- **CLI 认证**：`edgion-cli login` 或自动检测配置文件 auto-login
+- **认证端点**：`/api/v1/auth/login`、`/api/v1/auth/logout`、`/api/v1/auth/status`、`/api/v1/auth/me`
+- **模块位置**：`src/core/common/local_auth/`、`src/core/common/unified_auth/`
+- **配置**：`[local_auth]` TOML 段（可选，详见 `skills/02-features/02-config/00-controller-config.md`）
+
 ## 知识源规则
 
 - `skills/` 是面向任务的知识层（AI 和开发者）

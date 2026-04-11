@@ -250,13 +250,29 @@ async fn handle_center_message(
                 request_id = %cmd.request_id,
                 "CommandRequest received"
             );
-            // Command execution stubbed — respond with not-implemented
-            let _ = conf_center; // suppress unused warning
+            // Reload command: call the local admin router's /api/v1/reload endpoint
+            use crate::core::common::fed_sync::proto::command_request::Command;
+            let (success, message) = match cmd.command {
+                Some(Command::Reload(_)) => {
+                    use tower::ServiceExt;
+                    let req = http::Request::builder()
+                        .method(http::Method::POST)
+                        .uri("/api/v1/reload")
+                        .body(axum::body::Body::empty())
+                        .unwrap();
+                    match admin_router.clone().oneshot(req).await {
+                        Ok(resp) if resp.status().is_success() => (true, "Reload requested".to_string()),
+                        Ok(resp) => (false, format!("Reload returned {}", resp.status())),
+                        Err(e) => (false, format!("Reload failed: {}", e)),
+                    }
+                }
+                _ => (false, "Command not supported".to_string()),
+            };
             tx.send(ControllerMessage {
                 payload: Some(CtrlPayload::CommandResponse(CommandResponse {
                     request_id: cmd.request_id,
-                    success: false,
-                    message: "Command execution not yet implemented".to_string(),
+                    success,
+                    message,
                 })),
             })
             .await?;
