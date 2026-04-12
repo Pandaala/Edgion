@@ -2,6 +2,7 @@ mod cluster_handlers;
 mod common;
 mod configserver_handlers;
 mod namespaced_handlers;
+mod region_route_handlers;
 mod types;
 
 use crate::core::common::api::{self, ApiResponse};
@@ -213,6 +214,8 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
+        // RegionRoute aggregation
+        .route("/api/v1/region-routes", get(region_route_handlers::list_region_routes))
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
         // ConfigServer endpoints (for edgion-cli --target server)

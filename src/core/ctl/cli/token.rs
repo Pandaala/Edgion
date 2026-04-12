@@ -27,3 +27,10 @@ pub fn save_token(token: &str) -> Result<()> {
     fs::write(&path, token)?;
     Ok(())
 }
+
+/// Delete the saved token file. Silently ignores errors (e.g., file doesn't exist).
+pub fn delete_token() {
+    if let Some(path) = token_file_path() {
+        let _ = fs::remove_file(path);
+    }
+}

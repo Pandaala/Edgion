@@ -145,59 +145,54 @@ pub struct ConfSyncTlsConfig {
 
 路径解析通过 `ConfSyncTlsConfig::resolve_path()` 基于 `work_dir` 处理，与其他配置路径行为一致。
 
-### TOML 配置示例
+### YAML 配置示例
 
 **旧版单证书格式（向后兼容）：**
-```toml
-[conf_sync_security.tls]
-cert = "certs/grpc/server.crt"
-key  = "certs/grpc/server.key"
-ca   = "certs/grpc/ca.crt"
+```yaml
+conf_sync_security:
+  tls:
+    cert: certs/grpc/server.crt
+    key: certs/grpc/server.key
+    ca: certs/grpc/ca.crt
 ```
 
 **多证书格式（支持证书轮换 / CA 迁移）：**
-```toml
-[conf_sync_security]
-active = "primary"
-
-[[conf_sync_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/server.crt"
-key  = "certs/grpc/primary/server.key"
-ca   = "certs/grpc/primary/ca.crt"
-
-[[conf_sync_security.certs]]
-name = "new-ca"
-cert = "certs/grpc/new-ca/server.crt"
-key  = "certs/grpc/new-ca/server.key"
-ca   = "certs/grpc/new-ca/ca.crt"
+```yaml
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
+    - name: new-ca
+      cert: certs/grpc/new-ca/server.crt
+      key: certs/grpc/new-ca/server.key
+      ca: certs/grpc/new-ca/ca.crt
 ```
 
-**Center federation 通道（Center 服务端，`config/edgion-center.toml`）：**
-```toml
-[grpc_security]
-active = "primary"
-
-[[grpc_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/server.crt"
-key  = "certs/grpc/primary/server.key"
-ca   = "certs/grpc/primary/ca.crt"
+**Center federation 通道（Center 服务端，`config/edgion-center.yaml`）：**
+```yaml
+grpc_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
 ```
 
-**Controller federation 客户端（`config/edgion-controller.toml`）：**
-```toml
-[center]
-address = "https://center.example.com:50052"
-
-[center.security]
-active = "primary"
-
-[[center.security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/client.crt"
-key  = "certs/grpc/primary/client.key"
-ca   = "certs/grpc/primary/ca.crt"
+**Controller federation 客户端（`config/edgion-controller.yaml`）：**
+```yaml
+center:
+  address: "https://center.example.com:50052"
+  security:
+    active: primary
+    certs:
+      - name: primary
+        cert: certs/grpc/primary/client.crt
+        key: certs/grpc/primary/client.key
+        ca: certs/grpc/primary/ca.crt
 ```
 
 ### 工作模式

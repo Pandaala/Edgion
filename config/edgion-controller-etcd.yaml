@@ -3,7 +3,7 @@
 # ================================================================================
 #
 # Usage:
-#   ./edgion-controller --config-file config/edgion-controller-etcd.toml
+#   ./edgion-controller --config-file config/edgion-controller-etcd.yaml
 #
 # This configuration uses etcd as the configuration center backend.
 # Resources (Gateway, Route, Plugin, etc.) are stored in etcd instead of
@@ -11,60 +11,62 @@
 #
 # ================================================================================
 
-work_dir = "."
+work_dir: "."
 
 # ============================================================================
 # Logging Configuration
 # ============================================================================
-[logging]
-log_dir = "logs"
-log_prefix = "edgion-controller"
-log_level = "info"
+logging:
+  log_dir: logs
+  log_prefix: edgion-controller
+  log_level: info
 
 # ============================================================================
 # Server Configuration
 # ============================================================================
-[server]
-grpc_listen = "0.0.0.0:50051"
-admin_listen = "0.0.0.0:5800"
+server:
+  grpc_listen: "0.0.0.0:50051"
+  admin_listen: "0.0.0.0:5800"
 
 # ============================================================================
 # Configuration Center — Etcd Mode
 # ============================================================================
-[conf_center]
-type = "etcd"
-endpoints = ["http://127.0.0.1:2379"]
-key_prefix = "/edgion"
-endpoint_mode = "endpoint_slice"
+conf_center:
+  type: etcd
+  endpoints: [http://127.0.0.1:2379]
+  key_prefix: /edgion
+  endpoint_mode: endpoint_slice
 
-# Connection timeout (milliseconds)
-# connect_timeout_ms = 5000
+  # Connection timeout (milliseconds)
+  # connect_timeout_ms: 5000
 
-# Per-request timeout (milliseconds)
-# request_timeout_ms = 10000
+  # Per-request timeout (milliseconds)
+  # request_timeout_ms: 10000
 
-# HTTP/2 keep-alive (seconds)
-# keep_alive_time_secs = 30
-# keep_alive_timeout_secs = 10
+  # HTTP/2 keep-alive (seconds)
+  # keep_alive_time_secs: 30
+  # keep_alive_timeout_secs: 10
 
 # ============================================================================
 # Etcd Authentication (optional)
 # ============================================================================
-# [conf_center.auth]
-# username = "root"
-# password = "changeme"
+# conf_center:
+#   auth:
+#     username: root
+#     password: changeme
 
 # ============================================================================
 # Etcd TLS (optional)
 # ============================================================================
-# [conf_center.tls]
-# ca_cert_file = "/etc/edgion/certs/etcd-ca.pem"
-# client_cert_file = "/etc/edgion/certs/etcd-client.pem"
-# client_key_file = "/etc/edgion/certs/etcd-client-key.pem"
+# conf_center:
+#   tls:
+#     ca_cert_file: /etc/edgion/certs/etcd-ca.pem
+#     client_cert_file: /etc/edgion/certs/etcd-client.pem
+#     client_key_file: /etc/edgion/certs/etcd-client-key.pem
 
 # ============================================================================
 # Config Sync (Controller → Gateway gRPC sync)
 # ============================================================================
-[conf_sync]
-no_sync_kinds = ["ReferenceGrant", "Secret"]
-default_capacity = 200
+conf_sync:
+  no_sync_kinds: [ReferenceGrant, Secret]
+  default_capacity: 200

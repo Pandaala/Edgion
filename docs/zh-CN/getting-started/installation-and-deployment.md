@@ -60,8 +60,8 @@ deploy/standalone/start.sh
 
 仓库里已经有几类可以直接参考的内容：
 
-- `config/edgion-controller.toml`
-- `config/edgion-gateway.toml`
+- `config/edgion-controller.yaml`
+- `config/edgion-gateway.yaml`
 - `examples/k8stest/conf/`
 - `examples/test/conf/`
 
@@ -69,7 +69,7 @@ deploy/standalone/start.sh
 
 - Kubernetes 侧看 `examples/k8stest/conf/`
 - 本地集成测试和文件系统模式看 `examples/test/conf/`
-- 进程级配置看 `config/*.toml`
+- 进程级配置看 `config/*.yaml`
 
 ## 接下来建议做什么
 

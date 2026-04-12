@@ -20,8 +20,8 @@ Standard work directory layout:
 ```
 work_dir/
 ├── config/          # Configuration files
-│   ├── edgion-gateway.toml
-│   └── edgion-controller.toml
+│   ├── edgion-gateway.yaml
+│   └── edgion-controller.yaml
 ├── logs/            # Log files
 │   ├── edgion_access.log
 │   ├── ssl.log
@@ -46,9 +46,9 @@ work_dir/
    ```
 
 3. **Config file**
-   ```toml
-   # edgion-gateway.toml
-   work_dir = "/usr/local/edgion"
+   ```yaml
+   # edgion-gateway.yaml
+   work_dir: "/usr/local/edgion"
    ```
 
 4. **Default** (lowest priority)
@@ -57,19 +57,19 @@ work_dir/
 ### Configuration for Different Scenarios
 
 #### Development Environment
-```toml
-work_dir = "."  # Current directory
+```yaml
+work_dir: "."  # Current directory
 ```
 Or simply omit it to use the default.
 
 #### Production Environment
-```toml
-work_dir = "/usr/local/edgion"
+```yaml
+work_dir: "/usr/local/edgion"
 ```
 
 #### Container Environment
-```toml
-work_dir = "/usr/local/edgion"
+```yaml
+work_dir: "/usr/local/edgion"
 ```
 Or via environment variable:
 ```dockerfile
@@ -103,7 +103,7 @@ let log_path = work_dir().resolve("logs/edgion_access.log");
 |-----------|---------|----------------|
 | `logs/edgion_access.log` | `/usr/local/edgion` | `/usr/local/edgion/logs/edgion_access.log` |
 | `/var/log/edgion.log` | `/usr/local/edgion` | `/var/log/edgion.log` (absolute path preserved) |
-| `config/gateway.toml` | `.` | `./config/gateway.toml` |
+| `config/gateway.yaml` | `.` | `./config/gateway.yaml` |
 
 ### Implementation Details
 
@@ -200,15 +200,15 @@ let log_path = work_dir().logs().join("edgion_access.log");
 ### Configuration File Migration
 
 #### Old Configuration (Deprecated)
-```toml
-# edgion-gateway.toml
-prefix_dir = "/usr/local/edgion"
+```yaml
+# edgion-gateway.yaml
+prefix_dir: "/usr/local/edgion"
 ```
 
 #### New Configuration
-```toml
-# edgion-gateway.toml
-work_dir = "/usr/local/edgion"
+```yaml
+# edgion-gateway.yaml
+work_dir: "/usr/local/edgion"
 ```
 
 ## Testing
@@ -296,12 +296,12 @@ let path = work_dir().resolve("logs/edgion_access.log");
 
 ### 1. Use Absolute Paths in Production
 
-```toml
+```yaml
 # Recommended
-work_dir = "/usr/local/edgion"
+work_dir: "/usr/local/edgion"
 
 # Not recommended (depends on startup location)
-work_dir = "."
+work_dir: "."
 ```
 
 ### 2. Use Environment Variables in Containers
@@ -313,13 +313,15 @@ WORKDIR /usr/local/edgion
 
 ### 3. Use Relative Paths for Log Files
 
-```toml
+```yaml
 # Recommended (relative to work_dir)
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
+access_log:
+  output:
+    localFile:
+      path: logs/edgion_access.log
 
 # Not recommended (absolute path breaks work_dir unified management)
-path = "/var/log/edgion/edgion_access.log"
+# path: /var/log/edgion/edgion_access.log
 ```
 
 ### 4. Validate Before Startup
@@ -346,8 +348,8 @@ mkdir -p /usr/local/edgion/{config,logs,runtime}
 - `src/core/observe/ssl_log.rs` - SSL log path
 
 ### Configuration Files
-- `config/edgion-gateway.toml` - Gateway configuration
-- `config/edgion-controller.toml` - Controller configuration
+- `config/edgion-gateway.yaml` - Gateway configuration
+- `config/edgion-controller.yaml` - Controller configuration
 
 ## References
 

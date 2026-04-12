@@ -160,58 +160,53 @@ edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name secondar
 
 ### Controller 配置
 
-在 `edgion-controller.toml` 中添加：
+在 `edgion-controller.yaml` 中添加：
 
-```toml
-[conf_sync_security]
-active = "primary"              # 选择当前生效的证书集
-
-[[conf_sync_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/server.crt"
-key  = "certs/grpc/primary/server.key"
-ca   = "certs/grpc/primary/ca.crt"
-
-# 可选：预置备用证书集，用于证书轮换
-[[conf_sync_security.certs]]
-name = "secondary"
-cert = "certs/grpc/secondary/server.crt"
-key  = "certs/grpc/secondary/server.key"
-ca   = "certs/grpc/secondary/ca.crt"
+```yaml
+conf_sync_security:
+  active: primary              # 选择当前生效的证书集
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
+    # 可选：预置备用证书集，用于证书轮换
+    - name: secondary
+      cert: certs/grpc/secondary/server.crt
+      key: certs/grpc/secondary/server.key
+      ca: certs/grpc/secondary/ca.crt
 ```
 
 证书路径相对于 `work_dir` 解析。
 
 ### Gateway 配置
 
-在 `edgion-gateway.toml` 中添加：
+在 `edgion-gateway.yaml` 中添加：
 
-```toml
-[conf_sync_security]
-active = "primary"
-
-[[conf_sync_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/client.crt"
-key  = "certs/grpc/primary/client.key"
-ca   = "certs/grpc/primary/ca.crt"
-
-# 可选：预置备用证书集，用于证书轮换
-[[conf_sync_security.certs]]
-name = "secondary"
-cert = "certs/grpc/secondary/client.crt"
-key  = "certs/grpc/secondary/client.key"
-ca   = "certs/grpc/secondary/ca.crt"
+```yaml
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt
+    # 可选：预置备用证书集，用于证书轮换
+    - name: secondary
+      cert: certs/grpc/secondary/client.crt
+      key: certs/grpc/secondary/client.key
+      ca: certs/grpc/secondary/ca.crt
 ```
 
 启用 mTLS 后，Gateway 会自动将 `server_addr` 连接从 `http://` 升级为 `https://`。
 
 > **向后兼容**：旧版单套证书格式仍受支持，无需迁移：
-> ```toml
-> [conf_sync_security.tls]
-> cert = "certs/grpc/server.crt"
-> key  = "certs/grpc/server.key"
-> ca   = "certs/grpc/ca.crt"
+> ```yaml
+> conf_sync_security:
+>   tls:
+>     cert: certs/grpc/server.crt
+>     key: certs/grpc/server.key
+>     ca: certs/grpc/ca.crt
 > ```
 
 ### 配置参考
@@ -257,10 +252,10 @@ ca   = "certs/grpc/secondary/ca.crt"
 在保留回滚能力的前提下轮换证书：
 
 1. 生成新证书集：`edgion-cli gen-certs --cert-name secondary ...`
-2. 在 Controller 和 Gateway 的 TOML 中添加 `secondary` 条目，保持 `active = "primary"` 不变
+2. 在 Controller 和 Gateway 的 YAML 中添加 `secondary` 条目，保持 `active: primary` 不变
 3. 重启两个进程，验证新证书文件可正常加载
-4. 切换：将两边配置改为 `active = "secondary"` 并重启
-5. 若发现异常，改回 `active = "primary"` 并重启，即可立即回滚
+4. 切换：将两边配置改为 `active: secondary` 并重启
+5. 若发现异常，改回 `active: primary` 并重启，即可立即回滚
 
 ### Kubernetes 部署
 
@@ -270,7 +265,7 @@ K8s 部署时，可将证书生成为 K8s Secret：
 edgion-cli gen-certs --output k8s --cert-name primary
 ```
 
-将 Secret 挂载到 Controller 和 Gateway Pod，并在 TOML 配置中引用挂载路径。
+将 Secret 挂载到 Controller 和 Gateway Pod，并在 YAML 配置中引用挂载路径。
 
 ### 验证
 

@@ -6,8 +6,8 @@
 #
 # Options:
 #   --work-dir <path>       Working directory (default: /usr/local/edgion)
-#   --controller-config     Controller TOML config path
-#   --gateway-config        Gateway TOML config path
+#   --controller-config     Controller YAML config path
+#   --gateway-config        Gateway YAML config path
 #   --conf-dir <path>       Gateway API YAML config directory
 #   --foreground            Run in foreground (don't daemonize)
 #
@@ -18,8 +18,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${WORK_DIR:-/usr/local/edgion}"
-CONTROLLER_CONFIG="${SCRIPT_DIR}/edgion-controller.toml"
-GATEWAY_CONFIG="${SCRIPT_DIR}/edgion-gateway.toml"
+CONTROLLER_CONFIG="${SCRIPT_DIR}/edgion-controller.yaml"
+GATEWAY_CONFIG="${SCRIPT_DIR}/edgion-gateway.yaml"
 CONF_DIR="${SCRIPT_DIR}/conf"
 FOREGROUND=false
 

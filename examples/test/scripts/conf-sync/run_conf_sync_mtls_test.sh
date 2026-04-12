@@ -241,86 +241,82 @@ start_mtls_environment() {
     done
     log_success "All mTLS certificates present (primary + secondary)"
 
-    # ── 4. Generate TOML configs with multi-cert mTLS section ──
-    log_section "Creating mTLS-enabled TOML configs (multi-cert format)"
+    # ── 4. Generate YAML configs with multi-cert mTLS section ──
+    log_section "Creating mTLS-enabled YAML configs (multi-cert format)"
 
-    local controller_toml="${WORK_DIR}/edgion-controller-mtls.toml"
-    local gateway_toml="${WORK_DIR}/edgion-gateway-mtls.toml"
+    local controller_yaml="${WORK_DIR}/edgion-controller-mtls.yaml"
+    local gateway_yaml="${WORK_DIR}/edgion-gateway-mtls.yaml"
 
-    # Controller TOML: base + multi-cert mTLS override
-    # active = "primary" selects the primary cert; secondary is listed but inactive
-    cp "${PROJECT_ROOT}/config/edgion-controller.toml" "$controller_toml"
-    cat >> "$controller_toml" <<EOF
-
-# ── Multi-cert mTLS override for integration test ──
-[conf_sync_security]
-active = "primary"
-
-[[conf_sync_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/server.crt"
-key  = "certs/grpc/primary/server.key"
-ca   = "certs/grpc/primary/ca.crt"
-
-[[conf_sync_security.certs]]
-name = "secondary"
-cert = "certs/grpc/secondary/server.crt"
-key  = "certs/grpc/secondary/server.key"
-ca   = "certs/grpc/secondary/ca.crt"
-EOF
-    log_success "Controller TOML (multi-cert): $controller_toml"
-
-    # Gateway TOML: base + multi-cert mTLS override
-    # active = "primary" selects the primary cert; secondary is listed but inactive
-    cp "${PROJECT_ROOT}/config/edgion-gateway.toml" "$gateway_toml"
-    cat >> "$gateway_toml" <<EOF
+    # Controller YAML: base + multi-cert mTLS override
+    # active: primary selects the primary cert; secondary is listed but inactive
+    cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "$controller_yaml"
+    cat >> "$controller_yaml" <<EOF
 
 # ── Multi-cert mTLS override for integration test ──
-[conf_sync_security]
-active = "primary"
-
-[[conf_sync_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/client.crt"
-key  = "certs/grpc/primary/client.key"
-ca   = "certs/grpc/primary/ca.crt"
-
-[[conf_sync_security.certs]]
-name = "secondary"
-cert = "certs/grpc/secondary/client.crt"
-key  = "certs/grpc/secondary/client.key"
-ca   = "certs/grpc/secondary/ca.crt"
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
+    - name: secondary
+      cert: certs/grpc/secondary/server.crt
+      key: certs/grpc/secondary/server.key
+      ca: certs/grpc/secondary/ca.crt
 EOF
-    log_success "Gateway TOML (multi-cert): $gateway_toml"
+    log_success "Controller YAML (multi-cert): $controller_yaml"
 
-    # ── 4b. Also generate backward-compat TOML configs (old single-cert format) ──
+    # Gateway YAML: base + multi-cert mTLS override
+    # active: primary selects the primary cert; secondary is listed but inactive
+    cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "$gateway_yaml"
+    cat >> "$gateway_yaml" <<EOF
+
+# ── Multi-cert mTLS override for integration test ──
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt
+    - name: secondary
+      cert: certs/grpc/secondary/client.crt
+      key: certs/grpc/secondary/client.key
+      ca: certs/grpc/secondary/ca.crt
+EOF
+    log_success "Gateway YAML (multi-cert): $gateway_yaml"
+
+    # ── 4b. Also generate backward-compat YAML configs (old single-cert format) ──
     # These are written out for reference / manual testing, but NOT used in the
     # automated test run (which uses the multi-cert format above).
-    local controller_toml_compat="${WORK_DIR}/edgion-controller-mtls-compat.toml"
-    local gateway_toml_compat="${WORK_DIR}/edgion-gateway-mtls-compat.toml"
+    local controller_yaml_compat="${WORK_DIR}/edgion-controller-mtls-compat.yaml"
+    local gateway_yaml_compat="${WORK_DIR}/edgion-gateway-mtls-compat.yaml"
 
-    cp "${PROJECT_ROOT}/config/edgion-controller.toml" "$controller_toml_compat"
-    cat >> "$controller_toml_compat" <<EOF
-
-# ── Backward-compat single-cert mTLS (old format, still supported) ──
-[conf_sync_security.tls]
-cert = "certs/grpc/primary/server.crt"
-key  = "certs/grpc/primary/server.key"
-ca   = "certs/grpc/primary/ca.crt"
-skip_tls = false
-EOF
-
-    cp "${PROJECT_ROOT}/config/edgion-gateway.toml" "$gateway_toml_compat"
-    cat >> "$gateway_toml_compat" <<EOF
+    cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "$controller_yaml_compat"
+    cat >> "$controller_yaml_compat" <<EOF
 
 # ── Backward-compat single-cert mTLS (old format, still supported) ──
-[conf_sync_security.tls]
-cert = "certs/grpc/primary/client.crt"
-key  = "certs/grpc/primary/client.key"
-ca   = "certs/grpc/primary/ca.crt"
-skip_tls = false
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt
+    key: certs/grpc/primary/server.key
+    ca: certs/grpc/primary/ca.crt
+    skip_tls: false
 EOF
-    log_success "Backward-compat TOML configs written (not used in this run)"
+
+    cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "$gateway_yaml_compat"
+    cat >> "$gateway_yaml_compat" <<EOF
+
+# ── Backward-compat single-cert mTLS (old format, still supported) ──
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/client.crt
+    key: certs/grpc/primary/client.key
+    ca: certs/grpc/primary/ca.crt
+    skip_tls: false
+EOF
+    log_success "Backward-compat YAML configs written (not used in this run)"
 
     # ── 5. Generate runtime TLS/mTLS certs for test suites ──
     log_section "Generating test suite certificates"
@@ -384,7 +380,7 @@ EOF
     fi
 
     "${PROJECT_ROOT}/target/debug/edgion-controller" \
-        -c "$controller_toml" \
+        -c "$controller_yaml" \
         --work-dir "${WORK_DIR}" \
         --conf-dir "$config_dir" \
         --grpc-listen "0.0.0.0:${CONTROLLER_GRPC_PORT}" \
@@ -452,7 +448,7 @@ EOF
     RUST_LOG="${gw_rust_log}" \
     EDGION_TEST_ACCESS_LOG_PATH="${log_dir}/edgion_access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
-        -c "$gateway_toml" \
+        -c "$gateway_yaml" \
         --work-dir "${WORK_DIR}" \
         --server-addr "https://127.0.0.1:${CONTROLLER_GRPC_PORT}" \
         --integration-testing-mode \

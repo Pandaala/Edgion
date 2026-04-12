@@ -296,6 +296,6 @@ edgion-cli 在执行命令前自动检测认证状态，无需手动 login：
 |--------|------|
 | 1 | `--controller-config` / `-C` 参数 |
 | 2 | `EDGION_CONTROLLER_CONFIG` 环境变量 |
-| 3 | `config/edgion-controller.toml`（相对 CWD）|
-| 4 | `/usr/local/edgion/config/edgion-controller.toml` |
-| 5 | `/etc/edgion/edgion-controller.toml` |
+| 3 | `config/edgion-controller.yaml`（相对 CWD）|
+| 4 | `/usr/local/edgion/config/edgion-controller.yaml` |
+| 5 | `/etc/edgion/edgion-controller.yaml` |

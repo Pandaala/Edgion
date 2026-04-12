@@ -160,58 +160,53 @@ edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name secondar
 
 ### Controller Configuration
 
-Add to `edgion-controller.toml`:
+Add to `edgion-controller.yaml`:
 
-```toml
-[conf_sync_security]
-active = "primary"              # Selects the active certificate set
-
-[[conf_sync_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/server.crt"
-key  = "certs/grpc/primary/server.key"
-ca   = "certs/grpc/primary/ca.crt"
-
-# Optional: pre-stage a secondary cert set for rotation
-[[conf_sync_security.certs]]
-name = "secondary"
-cert = "certs/grpc/secondary/server.crt"
-key  = "certs/grpc/secondary/server.key"
-ca   = "certs/grpc/secondary/ca.crt"
+```yaml
+conf_sync_security:
+  active: primary              # Selects the active certificate set
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
+    # Optional: pre-stage a secondary cert set for rotation
+    - name: secondary
+      cert: certs/grpc/secondary/server.crt
+      key: certs/grpc/secondary/server.key
+      ca: certs/grpc/secondary/ca.crt
 ```
 
 Certificate paths are resolved relative to `work_dir`.
 
 ### Gateway Configuration
 
-Add to `edgion-gateway.toml`:
+Add to `edgion-gateway.yaml`:
 
-```toml
-[conf_sync_security]
-active = "primary"
-
-[[conf_sync_security.certs]]
-name = "primary"
-cert = "certs/grpc/primary/client.crt"
-key  = "certs/grpc/primary/client.key"
-ca   = "certs/grpc/primary/ca.crt"
-
-# Optional: pre-stage a secondary cert set for rotation
-[[conf_sync_security.certs]]
-name = "secondary"
-cert = "certs/grpc/secondary/client.crt"
-key  = "certs/grpc/secondary/client.key"
-ca   = "certs/grpc/secondary/ca.crt"
+```yaml
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt
+    # Optional: pre-stage a secondary cert set for rotation
+    - name: secondary
+      cert: certs/grpc/secondary/client.crt
+      key: certs/grpc/secondary/client.key
+      ca: certs/grpc/secondary/ca.crt
 ```
 
 When mTLS is enabled, the Gateway automatically upgrades the `server_addr` connection from `http://` to `https://`.
 
 > **Backward compatibility**: The legacy single-cert format is still supported and requires no migration:
-> ```toml
-> [conf_sync_security.tls]
-> cert = "certs/grpc/server.crt"
-> key  = "certs/grpc/server.key"
-> ca   = "certs/grpc/ca.crt"
+> ```yaml
+> conf_sync_security:
+>   tls:
+>     cert: certs/grpc/server.crt
+>     key: certs/grpc/server.key
+>     ca: certs/grpc/ca.crt
 > ```
 
 ### Configuration Reference
@@ -257,10 +252,10 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addr` conne
 To rotate certificates without losing rollback capability:
 
 1. Generate a new cert set: `edgion-cli gen-certs --cert-name secondary ...`
-2. Add the `secondary` entry to both Controller and Gateway TOML, keeping `active = "primary"`
+2. Add the `secondary` entry to both Controller and Gateway YAML, keeping `active: primary`
 3. Restart both processes to validate the new cert files load correctly
-4. Switch: set `active = "secondary"` in both configs and restart
-5. If issues arise, revert `active = "primary"` and restart to roll back instantly
+4. Switch: set `active: secondary` in both configs and restart
+5. If issues arise, revert `active: primary` and restart to roll back instantly
 
 ### Kubernetes Deployment
 
@@ -270,7 +265,7 @@ For K8s deployments, generate certificates as K8s Secrets:
 edgion-cli gen-certs --output k8s --cert-name primary
 ```
 
-Mount the secrets into Controller and Gateway pods, and reference the mount paths in the TOML configuration.
+Mount the secrets into Controller and Gateway pods, and reference the mount paths in the YAML configuration.
 
 ### Verification
 

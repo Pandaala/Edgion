@@ -28,7 +28,7 @@ pub struct EdgionGatewayConfig {
         short = 'c',
         long = "config-file",
         value_name = "FILE",
-        default_value = "config/edgion-gateway.toml"
+        default_value = "config/edgion-gateway.yaml"
     )]
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -645,8 +645,11 @@ impl EdgionGatewayConfig {
             let content =
                 std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
-            toml::from_str::<EdgionGatewayConfig>(&content)
-                .context(format!("Failed to parse config file: {}", config_path))?
+            {
+                let de = serde_yaml::Deserializer::from_str(&content);
+                serde_yaml::with::singleton_map_recursive::deserialize(de)
+                    .context(format!("Failed to parse config file: {}", config_path))?
+            }
         } else {
             EdgionGatewayConfig::default()
         };
@@ -793,12 +796,12 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_metadata_config_toml_deserialize() {
-        let toml = r#"
-[plugin_metadata]
-ctx_log_denylist = ["custom_key", "my_secret"]
+    fn test_plugin_metadata_config_yaml_deserialize() {
+        let yaml = r#"
+plugin_metadata:
+  ctx_log_denylist: [custom_key, my_secret]
 "#;
-        let config: EdgionGatewayConfig = toml::from_str(toml).expect("parse failed");
+        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("parse failed");
         let denylist = &config.plugin_metadata.ctx_log_denylist;
         assert!(denylist.contains(&"custom_key".to_string()));
         assert!(denylist.contains(&"my_secret".to_string()));

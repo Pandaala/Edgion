@@ -208,10 +208,10 @@ mod tests {
 
     #[test]
     fn test_deserialize_minimal() {
-        let toml = r#"
-endpoints = ["http://127.0.0.1:2379"]
+        let yaml = r#"
+endpoints: ["http://127.0.0.1:2379"]
 "#;
-        let config: EtcdConfig = toml::from_str(toml).unwrap();
+        let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints, vec!["http://127.0.0.1:2379"]);
         assert_eq!(config.key_prefix, "/edgion");
         assert!(config.endpoint_mode.is_auto());
@@ -221,20 +221,19 @@ endpoints = ["http://127.0.0.1:2379"]
 
     #[test]
     fn test_deserialize_full() {
-        let toml = r#"
-endpoints = ["http://etcd-1:2379", "http://etcd-2:2379"]
-key_prefix = "/my-app"
-endpoint_mode = "endpoint_slice"
-connect_timeout_ms = 3000
-request_timeout_ms = 8000
-keep_alive_time_secs = 30
-keep_alive_timeout_secs = 10
-
-[auth]
-username = "root"
-password = "changeme"
+        let yaml = r#"
+endpoints: ["http://etcd-1:2379", "http://etcd-2:2379"]
+key_prefix: /my-app
+endpoint_mode: endpoint_slice
+connect_timeout_ms: 3000
+request_timeout_ms: 8000
+keep_alive_time_secs: 30
+keep_alive_timeout_secs: 10
+auth:
+  username: root
+  password: changeme
 "#;
-        let config: EtcdConfig = toml::from_str(toml).unwrap();
+        let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints.len(), 2);
         assert_eq!(config.key_prefix, "/my-app");
         assert!(config.endpoint_mode.is_endpoint_slice());

@@ -35,7 +35,7 @@ spec:
             else
               BINARY=/usr/local/bin/edgion-gateway
             fi
-            "$BINARY" --config-file /usr/local/edgion/config/edgion-gateway.toml --integration-testing-mode || true
+            "$BINARY" --config-file /usr/local/edgion/config/edgion-gateway.yaml --integration-testing-mode || true
             echo "[restart] edgion-gateway exited, restarting in 2s..."
             sleep 2
           done

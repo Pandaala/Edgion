@@ -61,53 +61,69 @@ impl EdgionClient {
     }
 
     /// Ensure we have a valid token. Called before first API request.
-    /// If no token is saved, tries: (1) check auth/status, (2) auto-detect config, (3) auto-login.
+    /// Flow: (1) check auth/status, (2) if token cached → validate it, (3) auto-login if needed.
     pub async fn ensure_auth(&mut self) -> Result<()> {
-        // Already have a token — nothing to do
-        if self.token.is_some() {
+        // Check if auth is required by querying the status endpoint
+        let status_url = format!("{}/api/v1/auth/status", self.base_url);
+        let (auth_required, auth_method) = match self.client.get(&status_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    let required = body["data"]["auth_required"].as_bool().unwrap_or(false);
+                    let method = body["data"]["auth_method"].as_str().unwrap_or("none").to_string();
+                    (required, method)
+                } else {
+                    (false, "none".to_string())
+                }
+            }
+            // Status endpoint not available (old controller?) — just continue without auth
+            _ => return Ok(()),
+        };
+
+        if !auth_required {
             return Ok(());
         }
 
-        // Check if auth is required by querying the status endpoint
-        let status_url = format!("{}/api/v1/auth/status", self.base_url);
-        if let Ok(resp) = self.client.get(&status_url).send().await {
-            if resp.status().is_success() {
-                if let Ok(body) = resp.json::<serde_json::Value>().await {
-                    let auth_required = body["data"]["auth_required"].as_bool().unwrap_or(false);
-                    let auth_method = body["data"]["auth_method"].as_str().unwrap_or("none");
+        // If we have a cached token, validate it — it may be stale if the controller restarted
+        if self.token.is_some() {
+            let me_url = format!("{}/api/v1/auth/me", self.base_url);
+            let still_valid = self
+                .send_request(self.client.get(&me_url), &me_url)
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if still_valid {
+                return Ok(());
+            }
+            // Token is stale (e.g., controller restarted with new jwt_secret) — clear and re-auth
+            eprintln!("Cached token is no longer valid, re-authenticating...");
+            self.token = None;
+            super::token::delete_token();
+        }
 
-                    if !auth_required {
-                        return Ok(()); // No auth needed
+        if auth_method == "local" {
+            // Try auto-detect credentials from controller config
+            if let Some((username, password)) =
+                super::auto_auth::detect_credentials(self.controller_config.as_deref())
+            {
+                match self.do_login(&username, &password).await {
+                    Ok(token) => {
+                        super::token::save_token(&token)?;
+                        self.token = Some(token);
+                        eprintln!("Auto-login successful (credentials from controller config).");
+                        return Ok(());
                     }
-
-                    if auth_method == "local" {
-                        // Try auto-detect credentials from controller config
-                        if let Some((username, password)) =
-                            super::auto_auth::detect_credentials(self.controller_config.as_deref())
-                        {
-                            match self.do_login(&username, &password).await {
-                                Ok(token) => {
-                                    super::token::save_token(&token)?;
-                                    self.token = Some(token);
-                                    eprintln!("Auto-login successful (credentials from controller config).");
-                                    return Ok(());
-                                }
-                                Err(e) => {
-                                    tracing::debug!("Auto-login failed: {}", e);
-                                }
-                            }
-                        }
-
-                        // Config not found or login failed — inform user
-                        anyhow::bail!(
-                            "Authentication required. Please run: edgion-cli login -u <username> -p <password>"
-                        );
+                    Err(e) => {
+                        tracing::debug!("Auto-login failed: {}", e);
                     }
                 }
             }
+
+            // Config not found or login failed — inform user
+            anyhow::bail!(
+                "Authentication required. Please run: edgion-cli login -u <username> -p <password>"
+            );
         }
 
-        // Status endpoint not available (old controller?) — just continue without auth
         Ok(())
     }
 

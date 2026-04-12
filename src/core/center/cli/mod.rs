@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 #[derive(Parser, Debug)]
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
 pub struct EdgionCenterCli {
-    #[arg(short = 'c', long, default_value = "config/edgion-center.toml")]
+    #[arg(short = 'c', long, default_value = "config/edgion-center.yaml")]
     pub config_file: String,
 }
 
@@ -40,16 +40,19 @@ impl EdgionCenterCli {
                 String::new()
             }
         };
-        let config: CenterConfig = match toml::from_str(&content) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    component = "center",
-                    path = %self.config_file,
-                    error = %e,
-                    "Config parse error, using defaults"
-                );
-                CenterConfig::default()
+        let config: CenterConfig = {
+            let de = serde_yaml::Deserializer::from_str(&content);
+            match serde_yaml::with::singleton_map_recursive::deserialize(de) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        component = "center",
+                        path = %self.config_file,
+                        error = %e,
+                        "Config parse error, using defaults"
+                    );
+                    CenterConfig::default()
+                }
             }
         };
 

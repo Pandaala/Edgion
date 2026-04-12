@@ -111,9 +111,11 @@ impl PortConflictTestSuite {
 
                     // Fetch all Gateways from Admin API
                     let admin_url = format!("{}/configserver/Gateway/list", ctx.admin_api_url());
-                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-
-                    let response = match client.get(&admin_url).send().await {
+                    let mut req = ctx.http_client.get(&admin_url);
+                    if let Some(ref token) = ctx.admin_token {
+                        req = req.header("Authorization", format!("Bearer {}", token));
+                    }
+                    let response = match req.send().await {
                         Ok(resp) => resp,
                         Err(e) => {
                             return TestResult::failed(start.elapsed(), format!("Failed to fetch Gateways: {}", e))
@@ -203,9 +205,11 @@ impl PortConflictTestSuite {
 
                     // Fetch all Gateways from Admin API
                     let admin_url = format!("{}/configserver/Gateway/list", ctx.admin_api_url());
-                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-
-                    let response = match client.get(&admin_url).send().await {
+                    let mut req = ctx.http_client.get(&admin_url);
+                    if let Some(ref token) = ctx.admin_token {
+                        req = req.header("Authorization", format!("Bearer {}", token));
+                    }
+                    let response = match req.send().await {
                         Ok(resp) => resp,
                         Err(e) => {
                             return TestResult::failed(start.elapsed(), format!("Failed to fetch Gateways: {}", e))
@@ -286,9 +290,11 @@ impl PortConflictTestSuite {
 
                     // Fetch all Gateways from Admin API
                     let admin_url = format!("{}/configserver/Gateway/list", ctx.admin_api_url());
-                    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-
-                    let response = match client.get(&admin_url).send().await {
+                    let mut req = ctx.http_client.get(&admin_url);
+                    if let Some(ref token) = ctx.admin_token {
+                        req = req.header("Authorization", format!("Bearer {}", token));
+                    }
+                    let response = match req.send().await {
                         Ok(resp) => resp,
                         Err(e) => {
                             return TestResult::failed(start.elapsed(), format!("Failed to fetch Gateways: {}", e))

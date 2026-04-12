@@ -18,7 +18,7 @@ description: 三个 bin 的入口点、CLI 参数完整参考、work_dir 优先�
 ## work_dir 优先级
 
 ```
-CLI --work-dir > ENV EDGION_WORK_DIR > TOML config > Default (".")
+CLI --work-dir > ENV EDGION_WORK_DIR > YAML config > Default (".")
 ```
 
 所有配置中的相对路径都基于 `work_dir` 解析。
@@ -36,7 +36,7 @@ edgion-controller [OPTIONS]
 | 参数 | 短 | 类型 | 默认值 | 说明 |
 |------|---|------|--------|------|
 | `--work-dir` | `-w` | `PathBuf` | `"."` | 工作目录 |
-| `--config-file` | `-c` | `String` | `config/edgion-controller.toml` | TOML 配置文件路径 |
+| `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML 配置文件路径 |
 | `--conf-dir` | — | `PathBuf` | — | FileSystem 模式的配置目录（覆盖 TOML 中 conf_center.conf_dir） |
 | `--test-mode` | — | `bool` | `false` | 启用测试模式（endpoint_mode=Both + metrics 测试功能） |
 | `--grpc-listen` | — | `String` | `0.0.0.0:50051` | gRPC 监听地址 |
@@ -53,7 +53,7 @@ edgion-controller [OPTIONS]
 edgion-controller -w /opt/edgion --conf-dir config/resources
 
 # K8s 模式（生产）
-edgion-controller -c config/edgion-controller-k8s.toml
+edgion-controller -c config/edgion-controller-k8s.yaml
 ```
 
 ---
@@ -69,7 +69,7 @@ edgion-gateway [OPTIONS]
 | 参数 | 短 | 类型 | 默认值 | 说明 |
 |------|---|------|--------|------|
 | `--work-dir` | `-w` | `PathBuf` | `"."` | 工作目录 |
-| `--config-file` | `-c` | `String` | `config/edgion-gateway.toml` | TOML 配置文件路径 |
+| `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML 配置文件路径 |
 | `--server-addr` | — | `String` | **必填** | Controller gRPC 地址（如 `http://127.0.0.1:50051`） |
 | `--admin-listen` | — | `String` | — | Admin API 地址（注意：当前固定为 `:5900`） |
 | `--threads` | — | `usize` | CPU 核心数 | Pingora 工作线程数 |
@@ -91,7 +91,7 @@ edgion-gateway [OPTIONS]
 edgion-gateway --server-addr http://127.0.0.1:50051
 
 # 生产部署
-edgion-gateway -c config/edgion-gateway.toml --server-addr http://controller:50051 --threads 8
+edgion-gateway -c config/edgion-gateway.yaml --server-addr http://controller:50051 --threads 8
 ```
 
 ---

@@ -348,7 +348,7 @@ main() {
     fi
 
     # Auth is handled automatically by edgion-cli via ensure_auth() on each command.
-    # It reads local_auth credentials from config/edgion-controller.toml when present.
+    # It reads local_auth credentials from config/edgion-controller.yaml when present.
 
     #  "all"
     if [ "$suites" = "all" ]; then

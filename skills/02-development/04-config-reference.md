@@ -12,8 +12,8 @@ Edgion 有三类主要配置文件：
 
 | 文件 | 对应组件 | 典型位置 |
 |------|---------|---------|
-| `controller.toml` | Controller | `{conf_dir}/controller.toml` |
-| `gateway.toml` | Gateway | `{conf_dir}/gateway.toml` |
+| `controller.yaml` | Controller | `{conf_dir}/controller.yaml` |
+| `gateway.yaml` | Gateway | `{conf_dir}/gateway.yaml` |
 | `EdgionGatewayConfig` CRD | Gateway（K8s 驱动） | K8s 资源 |
 
 ## 快速查找配置项

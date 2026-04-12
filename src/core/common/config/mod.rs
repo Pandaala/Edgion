@@ -118,7 +118,7 @@ pub struct EdgionControllerConfig {
         short = 'c',
         long,
         value_name = "FILE",
-        default_value = "config/edgion-controller.toml"
+        default_value = "config/edgion-controller.yaml"
     )]
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -540,8 +540,11 @@ impl EdgionControllerConfig {
             let content =
                 std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
-            toml::from_str::<EdgionControllerConfig>(&content)
-                .context(format!("Failed to parse config file: {}", config_path))?
+            {
+                let de = serde_yaml::Deserializer::from_str(&content);
+                serde_yaml::with::singleton_map_recursive::deserialize(de)
+                    .context(format!("Failed to parse config file: {}", config_path))?
+            }
         } else {
             EdgionControllerConfig::default()
         };
@@ -738,16 +741,16 @@ mod tests {
     }
 
     #[test]
-    fn test_center_client_config_parses_from_toml() {
-        let toml = r#"
-            [center]
-            address = "http://center.example.com:50052"
-            name = "ctrl-01"
-            cluster = "prod-cn"
-            env = ["production"]
-            tag = ["team-infra"]
-        "#;
-        let config: EdgionControllerConfig = toml::from_str(toml).unwrap();
+    fn test_center_client_config_parses_from_yaml() {
+        let yaml = r#"
+center:
+  address: "http://center.example.com:50052"
+  name: "ctrl-01"
+  cluster: "prod-cn"
+  env: [production]
+  tag: [team-infra]
+"#;
+        let config: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
         let center = config.center.unwrap();
         assert_eq!(center.address, "http://center.example.com:50052");
         assert_eq!(center.name, "ctrl-01");

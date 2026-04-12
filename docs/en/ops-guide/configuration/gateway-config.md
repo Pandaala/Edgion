@@ -1,89 +1,95 @@
 # Gateway Configuration
 
-edgion-gateway reads its configuration from a TOML file. The default path is `config/edgion-gateway.toml`; use `--config-file` to specify a different location.
+edgion-gateway reads its configuration from a YAML file. The default path is `config/edgion-gateway.yaml`; use `--config-file` to specify a different location.
 
 ## Full Example
 
-```toml
+```yaml
 # Working directory — all relative paths are resolved against this
 # Priority: CLI --work-dir > env EDGION_WORK_DIR > this value > "."
-work_dir = "."
+work_dir: "."
 
-[gateway]
-server_addr = "http://127.0.0.1:50051"  # Required: Controller gRPC address
-admin_listen = "0.0.0.0:5900"           # Admin API (note: currently fixed at :5900, this field has no effect)
+gateway:
+  server_addr: "http://127.0.0.1:50051"  # Required: Controller gRPC address
+  admin_listen: "0.0.0.0:5900"           # Admin API (note: currently fixed at :5900, this field has no effect)
 
 # ─── gRPC channel security (optional mTLS) ────────────────────────
-# [conf_sync_security.tls]
-# cert = "certs/grpc/client.crt"   # Gateway client certificate (PEM)
-# key  = "certs/grpc/client.key"   # Client private key (PEM)
-# ca   = "certs/grpc/ca.crt"       # CA to verify Controller server certificate
-# skip_tls = false                  # true = emergency plaintext fallback, logs ERROR
+# conf_sync_security:
+#   tls:
+#     cert: certs/grpc/client.crt   # Gateway client certificate (PEM)
+#     key: certs/grpc/client.key    # Client private key (PEM)
+#     ca: certs/grpc/ca.crt         # CA to verify Controller server certificate
+#     skip_tls: false               # true = emergency plaintext fallback, logs ERROR
 
-[logging]
-# System logs only — does NOT affect business log paths
-log_dir = "logs"
-log_prefix = "edgion-gateway"
-log_level = "info"               # Module-level supported: info,edgion::core::gateway::routes=debug
-json_format = false
-console = true
-buffer_size = 10000
+logging:
+  # System logs only — does NOT affect business log paths
+  log_dir: logs
+  log_prefix: edgion-gateway
+  log_level: info               # Module-level supported: info,edgion::core::gateway::routes=debug
+  json_format: false
+  console: true
+  buffer_size: 10000
 
-[server]
-threads = 0                               # 0 = auto-detect CPU core count
-work_stealing = true                      # Enable Tokio work-stealing
-grace_period_seconds = 30                 # Wait for connections to drain on shutdown
-graceful_shutdown_timeout_seconds = 10    # Force-terminate after this timeout
-upstream_keepalive_pool_size = 128        # Upstream keepalive connection pool size
-downstream_keepalive_request_limit = 1000 # Max requests per downstream connection (0 = unlimited)
-# error_log = "logs/pingora_error.log"    # Pingora internal error log path
+server:
+  threads: 0                               # 0 = auto-detect CPU core count
+  work_stealing: true                      # Enable Tokio work-stealing
+  grace_period_seconds: 30                 # Wait for connections to drain on shutdown
+  graceful_shutdown_timeout_seconds: 10    # Force-terminate after this timeout
+  upstream_keepalive_pool_size: 128        # Upstream keepalive connection pool size
+  downstream_keepalive_request_limit: 1000 # Max requests per downstream connection (0 = unlimited)
+  # error_log: logs/pingora_error.log      # Pingora internal error log path
 
 # ─── Business logs ────────────────────────────────────────────────
-# Each log type has its own path; [logging].log_dir does NOT affect these paths
+# Each log type has its own path; logging.log_dir does NOT affect these paths
 
-[access_log]
-enabled = true
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-# queue_size = 80000                      # Default: cpu_cores × 10000
-# [access_log.output.localFile.rotation]
-# strategy = "daily"                      # daily | hourly | never | { Size = 104857600 }
-# max_files = 7
-# check_interval_secs = 30
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      # queue_size: 80000                  # Default: cpu_cores × 10000
+      # rotation:
+      #   strategy: daily                  # daily | hourly | never | { Size: 104857600 }
+      #   max_files: 7
+      #   check_interval_secs: 30
 
-[ssl_log]
-enabled = true
-[ssl_log.output.localFile]
-path = "logs/ssl.log"
+ssl_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/ssl.log
 
-[tcp_log]
-enabled = false
-[tcp_log.output.localFile]
-path = "logs/tcp_access.log"
+tcp_log:
+  enabled: false
+  output:
+    localFile:
+      path: logs/tcp_access.log
 
-[tls_log]
-enabled = true
-[tls_log.output.localFile]
-path = "logs/tls_access.log"
+tls_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/tls_access.log
 
-[udp_log]
-enabled = false
-[udp_log.output.localFile]
-path = "logs/udp_access.log"
+udp_log:
+  enabled: false
+  output:
+    localFile:
+      path: logs/udp_access.log
 
 # ─── Rate limiting plugin ──────────────────────────────────────────
 
-[rate_limit]
-default_estimator_slots_k = 64   # CMS default precision (× 1K slots)
-max_estimator_slots_k = 1024     # CMS maximum precision cap
-gateway_instance_count = 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
+rate_limit:
+  default_estimator_slots_k: 64   # CMS default precision (× 1K slots)
+  max_estimator_slots_k: 1024     # CMS maximum precision cap
+  gateway_instance_count: 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
 
 # ─── Plugin metadata ──────────────────────────────────────────────
 
-[plugin_metadata]
-# IMPORTANT: setting this field REPLACES the default list entirely — it is not appended.
-# To preserve the default protection, include all default keywords plus your custom ones.
-ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "credential"]
+plugin_metadata:
+  # IMPORTANT: setting this field REPLACES the default list entirely — it is not appended.
+  # To preserve the default protection, include all default keywords plus your custom ones.
+  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential]
 ```
 
 ## Configuration Parameters
@@ -169,7 +175,7 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 |-----------|------|---------|-------------|
 | `ctx_log_denylist` | `Array<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx keys containing any of these substrings (case-insensitive) are excluded from access log |
 
-**Important:** Setting this field in TOML **completely replaces** the default list — it is not appended. To preserve the default protection, include all default keywords plus any custom ones.
+**Important:** Setting this field **completely replaces** the default list — it is not appended. To preserve the default protection, include all default keywords plus any custom ones.
 
 Filtering rules (either condition causes the entry to be skipped):
 
@@ -180,53 +186,55 @@ Filtering rules (either condition causes the entry to be skipped):
 
 ### Connecting to a Remote Controller
 
-```toml
-[gateway]
-server_addr = "http://10.0.0.5:50051"
+```yaml
+gateway:
+  server_addr: "http://10.0.0.5:50051"
 ```
 
 ### Enabling Daily Log Rotation for Access Logs
 
-```toml
-[access_log]
-enabled = true
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-[access_log.output.localFile.rotation]
-strategy = "daily"
-max_files = 30
-check_interval_secs = 30
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      rotation:
+        strategy: daily
+        max_files: 30
+        check_interval_secs: 30
 ```
 
 ### Cluster Rate Limiting Configuration
 
 When running multiple Gateway replicas, set `gateway_instance_count` to ensure accurate rate limit accounting:
 
-```toml
-[rate_limit]
-default_estimator_slots_k = 64
-max_estimator_slots_k = 1024
-gateway_instance_count = 3   # Running 3 Gateway replicas
+```yaml
+rate_limit:
+  default_estimator_slots_k: 64
+  max_estimator_slots_k: 1024
+  gateway_instance_count: 3   # Running 3 Gateway replicas
 ```
 
 ### Extending the Sensitive Field Denylist
 
-```toml
-[plugin_metadata]
-# Keep all defaults and add "tenant"
-ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "credential", "tenant"]
+```yaml
+plugin_metadata:
+  # Keep all defaults and add "tenant"
+  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential, tenant]
 ```
 
 ### Enabling mTLS to Controller
 
-```toml
-[gateway]
-server_addr = "http://10.0.0.5:50051"  # scheme is automatically switched to https://
+```yaml
+gateway:
+  server_addr: "http://10.0.0.5:50051"  # scheme is automatically switched to https://
 
-[conf_sync_security.tls]
-cert = "certs/grpc/client.crt"
-key  = "certs/grpc/client.key"
-ca   = "certs/grpc/ca.crt"
+conf_sync_security:
+  tls:
+    cert: certs/grpc/client.crt
+    key: certs/grpc/client.key
+    ca: certs/grpc/ca.crt
 ```
 
 ## Related Documentation

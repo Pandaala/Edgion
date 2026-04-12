@@ -1,79 +1,77 @@
 # Controller 配置
 
-edgion-controller 通过 TOML 文件启动，默认路径为 `config/edgion-controller.toml`，可通过 `--config-file` 指定。
+edgion-controller 通过 YAML 文件启动，默认路径为 `config/edgion-controller.yaml`，可通过 `--config-file` 指定。
 
 ## 完整示例
 
-```toml
+```yaml
 # 工作目录——所有相对路径均基于此目录
 # 优先级：CLI --work-dir > 环境变量 EDGION_WORK_DIR > 此值 > "."
-work_dir = "."
+work_dir: "."
 
-[server]
-grpc_listen = "0.0.0.0:50051"   # ConfigSyncServer gRPC 监听地址
-admin_listen = "0.0.0.0:5800"   # Admin HTTP API 地址
+server:
+  grpc_listen: "0.0.0.0:50051"   # ConfigSyncServer gRPC 监听地址
+  admin_listen: "0.0.0.0:5800"   # Admin HTTP API 地址
 
-[logging]
-log_dir = "logs"                 # 系统日志目录（相对于 work_dir）
-log_prefix = "edgion-controller" # 日志文件名前缀
-log_level = "info"               # 级别：trace | debug | info | warn | error
-                                 # 支持模块级：info,edgion::core::controller=debug
-json_format = false              # 是否以 JSON 格式输出日志
-console = true                   # 是否同时输出到控制台
-buffer_size = 10000              # 异步日志缓冲区大小
+logging:
+  log_dir: logs                   # 系统日志目录（相对于 work_dir）
+  log_prefix: edgion-controller   # 日志文件名前缀
+  log_level: info                 # 级别：trace | debug | info | warn | error
+                                  # 支持模块级：info,edgion::core::controller=debug
+  json_format: false              # 是否以 JSON 格式输出日志
+  console: true                   # 是否同时输出到控制台
+  buffer_size: 10000              # 异步日志缓冲区大小
 
-[debug]
-enabled = true                   # 启用调试功能
+debug:
+  enabled: true                   # 启用调试功能
 
-[validation]
-enable_reference_grant_validation = true  # 启用 ReferenceGrant 跨命名空间校验
+validation:
+  enable_reference_grant_validation: true  # 启用 ReferenceGrant 跨命名空间校验
 
-[conf_sync]
-default_capacity = 200           # EventStore 默认容量（所有资源类型）
+conf_sync:
+  default_capacity: 200           # EventStore 默认容量（所有资源类型）
+  capacity_overrides:
+    # 按资源 kind 单独设置容量，例如：
+    # HTTPRoute: 500
+    # Service: 1000
 
-[conf_sync.capacity_overrides]
-# 按资源 kind 单独设置容量，例如：
-# HTTPRoute = 500
-# Service = 1000
-
-# no_sync_kinds = ["ReferenceGrant", "Secret"]
-# 不同步到 Gateway 的资源列表（设置后完全替换默认列表，不是追加）
+  # no_sync_kinds: [ReferenceGrant, Secret]
+  # 不同步到 Gateway 的资源列表（设置后完全替换默认列表，不是追加）
 
 # ─── gRPC 通道安全（可选 mTLS）────────────────────────────────────
-# [conf_sync_security.tls]
-# cert = "certs/grpc/server.crt"   # Controller 服务端证书（PEM）
-# key  = "certs/grpc/server.key"   # 服务端私钥（PEM）
-# ca   = "certs/grpc/ca.crt"       # 验证 Gateway 客户端证书的 CA
-# skip_tls = false                  # true = 紧急降级明文，会输出 ERROR 日志
+# conf_sync_security:
+#   tls:
+#     cert: certs/grpc/server.crt   # Controller 服务端证书（PEM）
+#     key: certs/grpc/server.key    # 服务端私钥（PEM）
+#     ca: certs/grpc/ca.crt         # 验证 Gateway 客户端证书的 CA
+#     skip_tls: false               # true = 紧急降级明文，会输出 ERROR 日志
 
 # ─── conf_center：FileSystem 模式（本地开发）─────────────────────
-[conf_center]
-type = "filesystem"
-conf_dir = "config/resources"    # YAML 资源目录（建议写绝对路径）
-endpoint_mode = "EndpointSlice"  # EndpointSlice | Endpoints | Both
+conf_center:
+  type: filesystem
+  conf_dir: config/resources      # YAML 资源目录（建议写绝对路径）
+  endpoint_mode: EndpointSlice    # EndpointSlice | Endpoints | Both
 
 # ─── conf_center：Kubernetes 模式（生产部署）─────────────────────
-# [conf_center]
-# type = "kubernetes"
-# gateway_class = "edgion"                          # 必填：匹配的 GatewayClass 名称
-# controller_name = "edgion.io/gateway-controller"  # Gateway API status 回报的 controllerName
-# watch_namespaces = []                             # 空列表 = 监听所有命名空间
-# label_selector = ""                              # 标签过滤
-# endpoint_mode = "EndpointSlice"
-# gateway_address = ""                             # Gateway status 中报告的地址
-# ha_mode = "leader-only"                          # "leader-only" | "all-serve"
-# no_watch_kinds = ["TCPRoute", "UDPRoute"]        # 跳过 CRD 预检和 watch 的资源 kind
-#
-# [conf_center.leader_election]
-# lease_name = "edgion-controller-leader"
-# lease_namespace = "edgion-system"
-# lease_duration_seconds = 15
-# renew_deadline_seconds = 10
-# retry_period_seconds = 2
-#
-# [conf_center.metadata_filter]
-# blocked_annotations = []     # 进入内存前移除的注解（默认移除 kubectl/helm 常见大注解）
-# remove_managed_fields = true # 减少对象体积
+# conf_center:
+#   type: kubernetes
+#   gateway_class: edgion                          # 必填：匹配的 GatewayClass 名称
+#   controller_name: edgion.io/gateway-controller  # Gateway API status 回报的 controllerName
+#   watch_namespaces: []                           # 空列表 = 监听所有命名空间
+#   label_selector: ""                             # 标签过滤
+#   endpoint_mode: EndpointSlice
+#   gateway_address: ""                            # Gateway status 中报告的地址
+#   ha_mode: leader-only                           # "leader-only" | "all-serve"
+#   no_watch_kinds: [TCPRoute, UDPRoute]           # 跳过 CRD 预检和 watch 的资源 kind
+#   leader_election:
+#     lease_name: edgion-controller-leader
+#     lease_namespace: edgion-system
+#     lease_duration_seconds: 15
+#     renew_deadline_seconds: 10
+#     retry_period_seconds: 2
+#   metadata_filter:
+#     blocked_annotations: []     # 进入内存前移除的注解（默认移除 kubectl/helm 常见大注解）
+#     remove_managed_fields: true # 减少对象体积
 ```
 
 ## 配置参数
@@ -176,70 +174,70 @@ endpoint_mode = "EndpointSlice"  # EndpointSlice | Endpoints | Both
 
 使用本地 YAML 文件模拟 Kubernetes 资源，无需集群：
 
-```toml
-[conf_center]
-type = "filesystem"
-conf_dir = "/home/user/my-project/config/resources"
-endpoint_mode = "EndpointSlice"
+```yaml
+conf_center:
+  type: filesystem
+  conf_dir: /home/user/my-project/config/resources
+  endpoint_mode: EndpointSlice
 ```
 
 也可以在启动时用 CLI 参数覆盖：
 
 ```bash
-./edgion-controller --config-file config/edgion-controller.toml \
+./edgion-controller --config-file config/edgion-controller.yaml \
   --conf-dir /home/user/my-project/config/resources
 ```
 
 ### Kubernetes 生产部署
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-controller_name = "edgion.io/gateway-controller"
-watch_namespaces = ["default", "production"]
-endpoint_mode = "EndpointSlice"
-gateway_address = "203.0.113.10"
-ha_mode = "leader-only"
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  controller_name: edgion.io/gateway-controller
+  watch_namespaces: [default, production]
+  endpoint_mode: EndpointSlice
+  gateway_address: "203.0.113.10"
+  ha_mode: leader-only
 ```
 
 ### 调整日志级别
 
 临时提高某个模块的日志详细度，用于排查问题：
 
-```toml
-[logging]
-log_level = "info,edgion::core::controller=debug"
-json_format = true  # 方便结构化搜索
+```yaml
+logging:
+  log_level: "info,edgion::core::controller=debug"
+  json_format: true  # 方便结构化搜索
 ```
 
 ### HA 多副本部署
 
 在 Kubernetes 多副本场景下启用 Leader Election：
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-ha_mode = "leader-only"
-
-[conf_center.leader_election]
-lease_name = "edgion-controller-leader"
-lease_namespace = "edgion-system"
-lease_duration_seconds = 15
-renew_deadline_seconds = 10
-retry_period_seconds = 2
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  ha_mode: leader-only
+  leader_election:
+    lease_name: edgion-controller-leader
+    lease_namespace: edgion-system
+    lease_duration_seconds: 15
+    renew_deadline_seconds: 10
+    retry_period_seconds: 2
 ```
 
 ### 启用 mTLS
 
 确保 Controller 与 Gateway 之间的 gRPC 通信加密：
 
-```toml
-[conf_sync_security.tls]
-cert = "certs/grpc/server.crt"
-key  = "certs/grpc/server.key"
-ca   = "certs/grpc/ca.crt"
+```yaml
+conf_sync_security:
+  tls:
+    cert: certs/grpc/server.crt
+    key: certs/grpc/server.key
+    ca: certs/grpc/ca.crt
 ```
 
 ## 相关文档

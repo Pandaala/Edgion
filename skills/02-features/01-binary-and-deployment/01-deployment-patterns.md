@@ -23,12 +23,12 @@ description: Edgion 常见部署模式：FileSystem 本地开发、K8s 生产部
 
 ### 配置示例
 
-```toml
-# edgion-controller.toml
-[conf_center]
-type = "filesystem"
-conf_dir = "config/resources"     # YAML 资源目录
-endpoint_mode = "EndpointSlice"   # EndpointSlice | Endpoints | Both
+```yaml
+# edgion-controller.yaml
+conf_center:
+  type: filesystem
+  conf_dir: config/resources     # YAML 资源目录
+  endpoint_mode: EndpointSlice   # EndpointSlice | Endpoints | Both
 ```
 
 ### 适用场景
@@ -62,19 +62,19 @@ edgion-gateway --server-addr http://127.0.0.1:50051
 
 ### 配置示例
 
-```toml
-# edgion-controller-k8s.toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"          # 必填：匹配的 GatewayClass 名称
-endpoint_mode = "EndpointSlice"
+```yaml
+# edgion-controller-k8s.yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion          # 必填：匹配的 GatewayClass 名称
+  endpoint_mode: EndpointSlice
 
-# 可选：命名空间过滤
-watch_namespaces = ["default", "production"]
+  # 可选：命名空间过滤
+  watch_namespaces: [default, production]
 
-# 可选：标签过滤
-[conf_center.metadata_filter]
-label_selector = "app=edgion"
+  # 可选：标签过滤
+  metadata_filter:
+    label_selector: app=edgion
 ```
 
 ### 关键字段
@@ -101,18 +101,17 @@ label_selector = "app=edgion"
 
 ### 配置示例
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-ha_mode = true
-
-[conf_center.leader_election]
-lease_name = "edgion-controller-leader"
-lease_namespace = "edgion-system"
-lease_duration_seconds = 15
-renew_deadline_seconds = 10
-retry_period_seconds = 2
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  ha_mode: "true"
+  leader_election:
+    lease_name: edgion-controller-leader
+    lease_namespace: edgion-system
+    lease_duration_seconds: 15
+    renew_deadline_seconds: 10
+    retry_period_seconds: 2
 ```
 
 ### Leader 选举字段 Schema

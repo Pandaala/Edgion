@@ -20,7 +20,7 @@ spec:
         image: docker.io/pandaala/edgion-gateway:0.1.5
         args:
         - "--config-file"
-        - "/usr/local/edgion/config/edgion-gateway.toml"
+        - "/usr/local/edgion/config/edgion-gateway.yaml"
         ports:
         - name: http
           containerPort: 80

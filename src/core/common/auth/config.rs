@@ -183,13 +183,13 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_from_toml() {
-        let toml = r#"
-            discovery = "https://idp.example.com/.well-known/openid-configuration"
-            audiences = ["edgion-admin"]
-            clock_skew_seconds = 60
-        "#;
-        let config: AdminAuthConfig = toml::from_str(toml).unwrap();
+    fn test_deserialize_from_yaml() {
+        let yaml = r#"
+discovery: "https://idp.example.com/.well-known/openid-configuration"
+audiences: [edgion-admin]
+clock_skew_seconds: 60
+"#;
+        let config: AdminAuthConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             config.discovery,
             "https://idp.example.com/.well-known/openid-configuration"

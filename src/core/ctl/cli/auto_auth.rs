@@ -40,9 +40,9 @@ impl Default for LocalAuthSection {
 
 /// Default paths to search for controller config, in order.
 const DEFAULT_CONFIG_PATHS: &[&str] = &[
-    "config/edgion-controller.toml",                   // dev: relative to CWD
-    "/usr/local/edgion/config/edgion-controller.toml", // pod: standard install path
-    "/etc/edgion/edgion-controller.toml",              // pod: alternative path
+    "config/edgion-controller.yaml",                   // dev: relative to CWD
+    "/usr/local/edgion/config/edgion-controller.yaml", // pod: standard install path
+    "/etc/edgion/edgion-controller.yaml",              // pod: alternative path
 ];
 
 /// Try to find and read local_auth credentials from controller config.
@@ -60,7 +60,7 @@ pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, String
     let config_path = resolve_config_path(explicit_path)?;
 
     let content = std::fs::read_to_string(&config_path).ok()?;
-    let config: ControllerConfigAuth = toml::from_str(&content).ok()?;
+    let config: ControllerConfigAuth = serde_yaml::from_str(&content).ok()?;
 
     // If explicit [local_auth] section exists, use it (if it has a real password)
     if let Some(local_auth) = config.local_auth {
@@ -108,7 +108,7 @@ struct PartialConfig {
 }
 
 fn read_generated_credentials(config_content: &str, config_path: &Path) -> Option<(String, String)> {
-    let partial: PartialConfig = toml::from_str(config_content).ok()?;
+    let partial: PartialConfig = serde_yaml::from_str(config_content).ok()?;
 
     // Resolve conf_dir with same priority as the controller:
     //   1. EDGION_WORK_DIR env + "/config" (--conf-dir override used by test scripts)

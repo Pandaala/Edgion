@@ -171,13 +171,13 @@ if [[ -n "${GW_SVC_IP}" && "${GW_SVC_IP}" != "None" ]]; then
   echo "       Gateway Service ClusterIP: ${GW_SVC_IP}"
 
   # Update controller configmap with actual gateway_address
-  CURRENT_TOML=$(kubectl -n edgion-system get configmap edgion-controller-config \
-    -o jsonpath='{.data.edgion-controller\.toml}')
+  CURRENT_YAML=$(kubectl -n edgion-system get configmap edgion-controller-config \
+    -o jsonpath='{.data.edgion-controller\.yaml}')
 
-  UPDATED_TOML=$(echo "${CURRENT_TOML}" | sed "s/gateway_address = \"[^\"]*\"/gateway_address = \"${GW_SVC_IP}\"/")
+  UPDATED_YAML=$(echo "${CURRENT_YAML}" | sed "s/gateway_address: [^ ]*/gateway_address: ${GW_SVC_IP}/")
 
   kubectl -n edgion-system create configmap edgion-controller-config \
-    --from-literal="edgion-controller.toml=${UPDATED_TOML}" \
+    --from-literal="edgion-controller.yaml=${UPDATED_YAML}" \
     --dry-run=client -o yaml | kubectl apply -f -
 
   # Restart controller to pick up new config

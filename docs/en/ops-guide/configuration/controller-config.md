@@ -1,79 +1,77 @@
 # Controller Configuration
 
-edgion-controller reads its configuration from a TOML file. The default path is `config/edgion-controller.toml`; use `--config-file` to specify a different location.
+edgion-controller reads its configuration from a YAML file. The default path is `config/edgion-controller.yaml`; use `--config-file` to specify a different location.
 
 ## Full Example
 
-```toml
+```yaml
 # Working directory — all relative paths are resolved against this
 # Priority: CLI --work-dir > env EDGION_WORK_DIR > this value > "."
-work_dir = "."
+work_dir: "."
 
-[server]
-grpc_listen = "0.0.0.0:50051"   # ConfigSyncServer gRPC listen address
-admin_listen = "0.0.0.0:5800"   # Admin HTTP API address
+server:
+  grpc_listen: "0.0.0.0:50051"   # ConfigSyncServer gRPC listen address
+  admin_listen: "0.0.0.0:5800"   # Admin HTTP API address
 
-[logging]
-log_dir = "logs"                 # System log directory (relative to work_dir)
-log_prefix = "edgion-controller" # Log file name prefix
-log_level = "info"               # trace | debug | info | warn | error
-                                 # Module-level supported: info,edgion::core::controller=debug
-json_format = false              # Output logs in JSON format
-console = true                   # Also print to stdout
-buffer_size = 10000              # Async log buffer size
+logging:
+  log_dir: logs                   # System log directory (relative to work_dir)
+  log_prefix: edgion-controller   # Log file name prefix
+  log_level: info                 # trace | debug | info | warn | error
+                                  # Module-level supported: info,edgion::core::controller=debug
+  json_format: false              # Output logs in JSON format
+  console: true                   # Also print to stdout
+  buffer_size: 10000              # Async log buffer size
 
-[debug]
-enabled = true                   # Enable debug features
+debug:
+  enabled: true                   # Enable debug features
 
-[validation]
-enable_reference_grant_validation = true  # Enforce ReferenceGrant cross-namespace validation
+validation:
+  enable_reference_grant_validation: true  # Enforce ReferenceGrant cross-namespace validation
 
-[conf_sync]
-default_capacity = 200           # Default EventStore capacity for all resource kinds
+conf_sync:
+  default_capacity: 200           # Default EventStore capacity for all resource kinds
+  capacity_overrides:
+    # Override capacity per resource kind, e.g.:
+    # HTTPRoute: 500
+    # Service: 1000
 
-[conf_sync.capacity_overrides]
-# Override capacity per resource kind, e.g.:
-# HTTPRoute = 500
-# Service = 1000
-
-# no_sync_kinds = ["ReferenceGrant", "Secret"]
-# Kinds NOT synced to Gateway — setting this REPLACES the default list entirely, not appended
+  # no_sync_kinds: [ReferenceGrant, Secret]
+  # Kinds NOT synced to Gateway — setting this REPLACES the default list entirely, not appended
 
 # ─── gRPC channel security (optional mTLS) ────────────────────────
-# [conf_sync_security.tls]
-# cert = "certs/grpc/server.crt"   # Controller server certificate (PEM)
-# key  = "certs/grpc/server.key"   # Server private key (PEM)
-# ca   = "certs/grpc/ca.crt"       # CA to verify Gateway client certificates
-# skip_tls = false                  # true = emergency plaintext fallback, logs ERROR
+# conf_sync_security:
+#   tls:
+#     cert: certs/grpc/server.crt   # Controller server certificate (PEM)
+#     key: certs/grpc/server.key    # Server private key (PEM)
+#     ca: certs/grpc/ca.crt         # CA to verify Gateway client certificates
+#     skip_tls: false               # true = emergency plaintext fallback, logs ERROR
 
 # ─── conf_center: FileSystem mode (local development) ─────────────
-[conf_center]
-type = "filesystem"
-conf_dir = "config/resources"    # YAML resource directory (prefer absolute paths)
-endpoint_mode = "EndpointSlice"  # EndpointSlice | Endpoints | Both
+conf_center:
+  type: filesystem
+  conf_dir: config/resources      # YAML resource directory (prefer absolute paths)
+  endpoint_mode: EndpointSlice    # EndpointSlice | Endpoints | Both
 
 # ─── conf_center: Kubernetes mode (production) ────────────────────
-# [conf_center]
-# type = "kubernetes"
-# gateway_class = "edgion"                          # Required: GatewayClass name to manage
-# controller_name = "edgion.io/gateway-controller"  # controllerName reported in Gateway API status
-# watch_namespaces = []                             # Empty = watch all namespaces
-# label_selector = ""                              # Label filter for watched resources
-# endpoint_mode = "EndpointSlice"
-# gateway_address = ""                             # Address reported in Gateway status
-# ha_mode = "leader-only"                          # "leader-only" | "all-serve"
-# no_watch_kinds = ["TCPRoute", "UDPRoute"]        # Skip CRD pre-check and watch for these kinds
-#
-# [conf_center.leader_election]
-# lease_name = "edgion-controller-leader"
-# lease_namespace = "edgion-system"
-# lease_duration_seconds = 15
-# renew_deadline_seconds = 10
-# retry_period_seconds = 2
-#
-# [conf_center.metadata_filter]
-# blocked_annotations = []     # Annotations stripped before entering memory (default: common kubectl/helm annotations)
-# remove_managed_fields = true # Strip managedFields to reduce object size
+# conf_center:
+#   type: kubernetes
+#   gateway_class: edgion                          # Required: GatewayClass name to manage
+#   controller_name: edgion.io/gateway-controller  # controllerName reported in Gateway API status
+#   watch_namespaces: []                           # Empty = watch all namespaces
+#   label_selector: ""                             # Label filter for watched resources
+#   endpoint_mode: EndpointSlice
+#   gateway_address: ""                            # Address reported in Gateway status
+#   ha_mode: leader-only                           # "leader-only" | "all-serve"
+#   no_watch_kinds: [TCPRoute, UDPRoute]           # Skip CRD pre-check and watch for these kinds
+#   leader_election:
+#     lease_name: edgion-controller-leader
+#     lease_namespace: edgion-system
+#     lease_duration_seconds: 15
+#     renew_deadline_seconds: 10
+#     retry_period_seconds: 2
+#   metadata_filter:
+#     blocked_annotations: []     # Annotations stripped before entering memory (default: common kubectl/helm annotations)
+#     remove_managed_fields: true # Strip managedFields to reduce object size
 ```
 
 ## Configuration Parameters
@@ -176,70 +174,70 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 
 Use local YAML files to simulate Kubernetes resources without a cluster:
 
-```toml
-[conf_center]
-type = "filesystem"
-conf_dir = "/home/user/my-project/config/resources"
-endpoint_mode = "EndpointSlice"
+```yaml
+conf_center:
+  type: filesystem
+  conf_dir: /home/user/my-project/config/resources
+  endpoint_mode: EndpointSlice
 ```
 
 You can also override at startup via CLI:
 
 ```bash
-./edgion-controller --config-file config/edgion-controller.toml \
+./edgion-controller --config-file config/edgion-controller.yaml \
   --conf-dir /home/user/my-project/config/resources
 ```
 
 ### Kubernetes Production Deployment
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-controller_name = "edgion.io/gateway-controller"
-watch_namespaces = ["default", "production"]
-endpoint_mode = "EndpointSlice"
-gateway_address = "203.0.113.10"
-ha_mode = "leader-only"
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  controller_name: edgion.io/gateway-controller
+  watch_namespaces: [default, production]
+  endpoint_mode: EndpointSlice
+  gateway_address: "203.0.113.10"
+  ha_mode: leader-only
 ```
 
 ### Adjusting Log Verbosity
 
 Temporarily increase detail for a specific module to debug issues:
 
-```toml
-[logging]
-log_level = "info,edgion::core::controller=debug"
-json_format = true  # Easier to search with structured queries
+```yaml
+logging:
+  log_level: "info,edgion::core::controller=debug"
+  json_format: true  # Easier to search with structured queries
 ```
 
 ### HA Multi-Replica Deployment
 
 Enable leader election for multi-replica Kubernetes deployments:
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-ha_mode = "leader-only"
-
-[conf_center.leader_election]
-lease_name = "edgion-controller-leader"
-lease_namespace = "edgion-system"
-lease_duration_seconds = 15
-renew_deadline_seconds = 10
-retry_period_seconds = 2
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  ha_mode: leader-only
+  leader_election:
+    lease_name: edgion-controller-leader
+    lease_namespace: edgion-system
+    lease_duration_seconds: 15
+    renew_deadline_seconds: 10
+    retry_period_seconds: 2
 ```
 
 ### Enabling mTLS
 
 Encrypt gRPC communication between Controller and Gateway:
 
-```toml
-[conf_sync_security.tls]
-cert = "certs/grpc/server.crt"
-key  = "certs/grpc/server.key"
-ca   = "certs/grpc/ca.crt"
+```yaml
+conf_sync_security:
+  tls:
+    cert: certs/grpc/server.crt
+    key: certs/grpc/server.key
+    ca: certs/grpc/ca.crt
 ```
 
 ## Related Documentation

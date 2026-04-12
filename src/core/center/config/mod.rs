@@ -98,15 +98,15 @@ mod tests {
     }
 
     #[test]
-    fn test_center_config_parses_from_toml() {
-        let toml = r#"
-            [server]
-            grpc_addr = "0.0.0.0:50100"
-            http_addr = "0.0.0.0:5900"
-            [sync]
-            list_interval_secs = 60
-        "#;
-        let config: CenterConfig = toml::from_str(toml).unwrap();
+    fn test_center_config_parses_from_yaml() {
+        let yaml = r#"
+server:
+  grpc_addr: "0.0.0.0:50100"
+  http_addr: "0.0.0.0:5900"
+sync:
+  list_interval_secs: 60
+"#;
+        let config: CenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.server.grpc_addr, "0.0.0.0:50100");
         assert_eq!(config.sync.list_interval_secs, 60);
         assert_eq!(config.sync.ping_interval_secs, 30); // default

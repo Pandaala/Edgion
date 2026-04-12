@@ -47,8 +47,8 @@ EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
 GATEWAY_BIN="${PROJECT_ROOT}/target/debug/edgion-gateway"
 TEST_SERVER_BIN="${PROJECT_ROOT}/target/debug/examples/test_server"
-CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.toml"
-GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
+CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
+GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # ── Ports ───────────────────────────────────────────────────────────────────
 CONTROLLER_ADMIN_PORT=5800

@@ -20,8 +20,8 @@ Work Directory 是 Edgion 的统一工作目录，用于管理所有运行时文
 ```
 work_dir/
 ├── config/          # 配置文件
-│   ├── edgion-gateway.toml
-│   └── edgion-controller.toml
+│   ├── edgion-gateway.yaml
+│   └── edgion-controller.yaml
 ├── logs/            # 日志文件
 │   ├── edgion_access.log
 │   ├── ssl.log
@@ -46,9 +46,9 @@ work_dir/
    ```
 
 3. **配置文件**
-   ```toml
-   # edgion-gateway.toml
-   work_dir = "/usr/local/edgion"
+   ```yaml
+   # edgion-gateway.yaml
+   work_dir: "/usr/local/edgion"
    ```
 
 4. **默认值**（最低优先级）
@@ -57,19 +57,19 @@ work_dir/
 ### 不同场景的配置
 
 #### 开发环境
-```toml
-work_dir = "."  # 当前目录
+```yaml
+work_dir: "."  # 当前目录
 ```
 或直接省略，使用默认值。
 
 #### 生产环境
-```toml
-work_dir = "/usr/local/edgion"
+```yaml
+work_dir: "/usr/local/edgion"
 ```
 
 #### 容器环境
-```toml
-work_dir = "/usr/local/edgion"
+```yaml
+work_dir: "/usr/local/edgion"
 ```
 或通过环境变量：
 ```dockerfile
@@ -103,7 +103,7 @@ let log_path = work_dir().resolve("logs/edgion_access.log");
 |---------|---------|---------|
 | `logs/edgion_access.log` | `/usr/local/edgion` | `/usr/local/edgion/logs/edgion_access.log` |
 | `/var/log/edgion.log` | `/usr/local/edgion` | `/var/log/edgion.log`（保持绝对路径） |
-| `config/gateway.toml` | `.` | `./config/gateway.toml` |
+| `config/gateway.yaml` | `.` | `./config/gateway.yaml` |
 
 ### 实现细节
 
@@ -200,15 +200,15 @@ let log_path = work_dir().logs().join("edgion_access.log");
 ### 配置文件迁移
 
 #### 旧配置（已弃用）
-```toml
-# edgion-gateway.toml
-prefix_dir = "/usr/local/edgion"
+```yaml
+# edgion-gateway.yaml
+prefix_dir: "/usr/local/edgion"
 ```
 
 #### 新配置
-```toml
-# edgion-gateway.toml
-work_dir = "/usr/local/edgion"
+```yaml
+# edgion-gateway.yaml
+work_dir: "/usr/local/edgion"
 ```
 
 ## 测试
@@ -296,12 +296,12 @@ let path = work_dir().resolve("logs/edgion_access.log");
 
 ### 1. 生产环境使用绝对路径
 
-```toml
+```yaml
 # 推荐
-work_dir = "/usr/local/edgion"
+work_dir: "/usr/local/edgion"
 
 # 不推荐（依赖启动位置）
-work_dir = "."
+work_dir: "."
 ```
 
 ### 2. 容器环境使用环境变量
@@ -313,13 +313,15 @@ WORKDIR /usr/local/edgion
 
 ### 3. 日志文件使用相对路径
 
-```toml
+```yaml
 # 推荐（相对于 work_dir）
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
+access_log:
+  output:
+    localFile:
+      path: logs/edgion_access.log
 
 # 不推荐（绝对路径破坏了 work_dir 的统一管理）
-path = "/var/log/edgion/edgion_access.log"
+# path: /var/log/edgion/edgion_access.log
 ```
 
 ### 4. 启动前验证
@@ -346,8 +348,8 @@ mkdir -p /usr/local/edgion/{config,logs,runtime}
 - `src/core/observe/ssl_log.rs` - SSL 日志路径
 
 ### 配置文件
-- `config/edgion-gateway.toml` - Gateway 配置
-- `config/edgion-controller.toml` - Controller 配置
+- `config/edgion-gateway.yaml` - Gateway 配置
+- `config/edgion-controller.yaml` - Controller 配置
 
 ## 参考资料
 
