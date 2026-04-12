@@ -66,6 +66,12 @@ pub enum OpCode {
     Contains,
     /// Pop str, match regex at constant pool index, push Bool
     Matches(u16),
+    /// regex_find(s, literal_pattern) — pattern pre-compiled in regex_cache[idx]
+    /// Stack: [s] → [match_str | Nil]
+    RegexFind(u16),
+    /// regex_replace(s, literal_pattern, replacement) — pattern pre-compiled
+    /// Stack: [s, replacement] → [result_str]
+    RegexReplace(u16),
 
     // ===== Control Flow =====
     /// Unconditional jump (relative offset from NEXT instruction)
@@ -94,6 +100,10 @@ pub enum OpCode {
     ReturnNext,
     /// Pop (body, status) → ErrResponse
     ReturnDeny,
+    /// return terminate() → ErrTerminateRequest
+    ReturnTerminate,
+    /// Pop (message, code) → gRPC error response (HTTP 200 + grpc-status trailer)
+    ReturnGrpcError,
 }
 
 /// Built-in function identifier.
@@ -135,12 +145,27 @@ pub enum BuiltinId {
     RespHeader,    // resp.header(name) → str|nil
     RespHasHeader, // resp.has_header(name) → bool
 
+    // req.* metadata (P1)
+    ReqProtocol,
+    ReqGrpcService,
+    ReqGrpcMethod,
+    ReqContentLength,
+    ReqClientCertCn,
+    ReqClientCertFingerprint,
+
+    // resp.* read (P2)
+    RespHeaderNames,
+    RespContentType,
+
+    // resp.* set status
+    RespSetStatus,
+
     // ctx.*
     CtxGet,
     CtxSet,
     CtxRemove,
 
-    // Utilities
+    // Utilities (existing)
     Log,
     Len,
     Substr,
@@ -160,6 +185,18 @@ pub enum BuiltinId {
     Range,
     Trim,
     Split,
+
+    // Utilities (P3)
+    HmacSha256,
+    JsonGet,
+    Uuid,
+    HexEncode,
+    HexDecode,
+    TimeFormat,
+    IpInCidr,
+    Join,
+    LogWarn,
+    LogError,
 }
 
 /// Constant pool entry

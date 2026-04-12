@@ -1,6 +1,6 @@
 ---
 name: common-conventions
-description: 三个 bin（edgion-controller、edgion-gateway、edgion-ctl）共同遵守的约定：项目总览、命令行/目录/配置路径、Core 分层规范、资源系统。
+description: 三个 bin（edgion-controller、edgion-gateway、edgion-cli）共同遵守的约定：项目总览、命令行/目录/配置路径、Core 分层规范、资源系统。
 ---
 
 # 00 通用约定

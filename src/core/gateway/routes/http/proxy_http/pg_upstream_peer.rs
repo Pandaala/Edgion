@@ -50,6 +50,11 @@ pub async fn upstream_peer(
             .route_unit
             .as_ref()
             .and_then(|unit| unit.rule.parsed_retry.as_ref())
+            .or_else(|| {
+                ctx.grpc_route_unit
+                    .as_ref()
+                    .and_then(|unit| unit.rule.parsed_retry.as_ref())
+            })
             .and_then(|r| r.backoff);
 
         if let Some(base) = base_backoff {
@@ -328,8 +333,11 @@ pub async fn select_http_backend(
         .as_deref()
         .or(Some(route_unit.matched_info.rsc.ns.as_str()));
 
-    backend_ref.backend_tls_policy =
-        crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
+    backend_ref.backend_tls_policy = crate::core::gateway::backends::query_backend_tls_policy_for_service(
+        service_name,
+        service_namespace,
+        backend_ref.port,
+    );
 
     // BackendTLSPolicy is applied via the peer builder; no per-request logging needed
 

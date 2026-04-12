@@ -45,6 +45,7 @@
 pub mod conf_center;
 mod manager;
 pub mod processor_registry;
+pub mod runtime;
 mod schema_validator;
 pub mod sync_runtime;
 
@@ -59,7 +60,10 @@ pub use conf_center::{
 };
 
 // ProcessorRegistry exports
-pub use processor_registry::{ProcessorRegistry, PROCESSOR_REGISTRY};
+pub use processor_registry::ProcessorRegistry;
+
+// ControllerRuntime
+pub use runtime::ControllerRuntime;
 pub use sync_runtime::resource_processor::{
     HandlerContext, ProcessResult, ProcessorHandler, ProcessorObj, ResourceProcessor,
 };

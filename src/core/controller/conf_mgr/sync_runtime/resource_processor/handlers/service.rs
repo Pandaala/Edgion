@@ -6,7 +6,6 @@
 
 use k8s_openapi::api::core::v1::Service;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, ProcessResult, ProcessorHandler,
 };
@@ -24,7 +23,7 @@ impl ServiceHandler {
         let svc_name = svc.metadata.name.as_deref().unwrap_or("");
         let service_key = format!("{}/{}", svc_ns, svc_name);
 
-        let refs = get_service_ref_manager().get_refs(&service_key);
+        let refs = ctx.runtime().service_ref_mgr.get_refs(&service_key);
         if refs.is_empty() {
             return;
         }

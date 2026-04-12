@@ -3,7 +3,7 @@
 # conf_sync gRPC mTLS Integration Test
 #
 # Self-contained end-to-end test that verifies:
-#   1. edgion-ctl gen-certs produces valid mTLS certificates
+#   1. edgion-cli gen-certs produces valid mTLS certificates
 #   2. Controller starts gRPC listener with server TLS + client CA verification
 #   3. Gateway connects to Controller via mTLS client cert
 #   4. Configuration synchronisation works correctly over the mTLS channel
@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UTILS_DIR="${SCRIPT_DIR}/../utils"
 CERTS_DIR_SCRIPT="${SCRIPT_DIR}/../gen_certs"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 # Ports — use different gRPC port to avoid conflict with plain-text tests
 CONTROLLER_GRPC_PORT="${EDGION_TEST_MTLS_GRPC_PORT:-50061}"
@@ -191,7 +191,7 @@ start_mtls_environment() {
 
     # ── 1. Check binaries ──
     log_section "Checking binaries"
-    for bin in edgion-controller edgion-gateway edgion-ctl; do
+    for bin in edgion-controller edgion-gateway edgion-cli; do
         if [ ! -f "${PROJECT_ROOT}/target/debug/${bin}" ]; then
             log_error "${bin} not found — run prepare.sh first"
             exit 1
@@ -230,45 +230,93 @@ start_mtls_environment() {
     EDGION_CONF_SYNC_CERTS_DIR="$certs_dir" \
         bash "${CERTS_DIR_SCRIPT}/generate_conf_sync_certs.sh" --force
 
-    for f in ca.crt server.crt server.key client.crt client.key; do
-        if [ ! -f "$certs_dir/$f" ]; then
-            log_error "Missing expected cert file: $certs_dir/$f"
-            exit 1
-        fi
+    # New multi-cert layout: files are under primary/ and secondary/ subdirectories
+    for set_name in primary secondary; do
+        for f in ca.crt server.crt server.key client.crt client.key; do
+            if [ ! -f "$certs_dir/$set_name/$f" ]; then
+                log_error "Missing expected cert file: $certs_dir/$set_name/$f"
+                exit 1
+            fi
+        done
     done
-    log_success "All mTLS certificates present"
+    log_success "All mTLS certificates present (primary + secondary)"
 
-    # ── 4. Generate TOML configs with mTLS section ──
-    log_section "Creating mTLS-enabled TOML configs"
+    # ── 4. Generate YAML configs with multi-cert mTLS section ──
+    log_section "Creating mTLS-enabled YAML configs (multi-cert format)"
 
-    local controller_toml="${WORK_DIR}/edgion-controller-mtls.toml"
-    local gateway_toml="${WORK_DIR}/edgion-gateway-mtls.toml"
+    local controller_yaml="${WORK_DIR}/edgion-controller-mtls.yaml"
+    local gateway_yaml="${WORK_DIR}/edgion-gateway-mtls.yaml"
 
-    # Controller TOML: base + mTLS override
-    cp "${PROJECT_ROOT}/config/edgion-controller.toml" "$controller_toml"
-    cat >> "$controller_toml" <<EOF
+    # Controller YAML: base + multi-cert mTLS override
+    # active: primary selects the primary cert; secondary is listed but inactive
+    cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "$controller_yaml"
+    cat >> "$controller_yaml" <<EOF
 
-# ── mTLS override for integration test ──
-[conf_sync_security.tls]
-cert = "certs/grpc/server.crt"
-key  = "certs/grpc/server.key"
-ca   = "certs/grpc/ca.crt"
-skip_tls = false
+# ── Multi-cert mTLS override for integration test ──
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
+    - name: secondary
+      cert: certs/grpc/secondary/server.crt
+      key: certs/grpc/secondary/server.key
+      ca: certs/grpc/secondary/ca.crt
 EOF
-    log_success "Controller TOML: $controller_toml"
+    log_success "Controller YAML (multi-cert): $controller_yaml"
 
-    # Gateway TOML: base + mTLS override
-    cp "${PROJECT_ROOT}/config/edgion-gateway.toml" "$gateway_toml"
-    cat >> "$gateway_toml" <<EOF
+    # Gateway YAML: base + multi-cert mTLS override
+    # active: primary selects the primary cert; secondary is listed but inactive
+    cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "$gateway_yaml"
+    cat >> "$gateway_yaml" <<EOF
 
-# ── mTLS override for integration test ──
-[conf_sync_security.tls]
-cert = "certs/grpc/client.crt"
-key  = "certs/grpc/client.key"
-ca   = "certs/grpc/ca.crt"
-skip_tls = false
+# ── Multi-cert mTLS override for integration test ──
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt
+    - name: secondary
+      cert: certs/grpc/secondary/client.crt
+      key: certs/grpc/secondary/client.key
+      ca: certs/grpc/secondary/ca.crt
 EOF
-    log_success "Gateway TOML: $gateway_toml"
+    log_success "Gateway YAML (multi-cert): $gateway_yaml"
+
+    # ── 4b. Also generate backward-compat YAML configs (old single-cert format) ──
+    # These are written out for reference / manual testing, but NOT used in the
+    # automated test run (which uses the multi-cert format above).
+    local controller_yaml_compat="${WORK_DIR}/edgion-controller-mtls-compat.yaml"
+    local gateway_yaml_compat="${WORK_DIR}/edgion-gateway-mtls-compat.yaml"
+
+    cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "$controller_yaml_compat"
+    cat >> "$controller_yaml_compat" <<EOF
+
+# ── Backward-compat single-cert mTLS (old format, still supported) ──
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt
+    key: certs/grpc/primary/server.key
+    ca: certs/grpc/primary/ca.crt
+    skip_tls: false
+EOF
+
+    cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "$gateway_yaml_compat"
+    cat >> "$gateway_yaml_compat" <<EOF
+
+# ── Backward-compat single-cert mTLS (old format, still supported) ──
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/client.crt
+    key: certs/grpc/primary/client.key
+    ca: certs/grpc/primary/ca.crt
+    skip_tls: false
+EOF
+    log_success "Backward-compat YAML configs written (not used in this run)"
 
     # ── 5. Generate runtime TLS/mTLS certs for test suites ──
     log_section "Generating test suite certificates"
@@ -332,7 +380,7 @@ EOF
     fi
 
     "${PROJECT_ROOT}/target/debug/edgion-controller" \
-        -c "$controller_toml" \
+        -c "$controller_yaml" \
         --work-dir "${WORK_DIR}" \
         --conf-dir "$config_dir" \
         --grpc-listen "0.0.0.0:${CONTROLLER_GRPC_PORT}" \
@@ -370,7 +418,7 @@ EOF
     if [ -d "$conf_src" ]; then
         for file in "$conf_src"/*.yaml; do
             [ -f "$file" ] || continue
-            "$EDGION_CTL" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
+            "$EDGION_CLI" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
         done
         log_success "Base config loaded"
     fi
@@ -387,7 +435,7 @@ EOF
         local secret_files
         secret_files=$(find "$generated_secret_dir" -type f \( -name "*.yaml" -o -name "*.yml" \) 2>/dev/null | sort)
         for file in $secret_files; do
-            "$EDGION_CTL" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
+            "$EDGION_CLI" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1 || true
         done
         log_success "Generated secrets loaded"
     fi
@@ -400,7 +448,7 @@ EOF
     RUST_LOG="${gw_rust_log}" \
     EDGION_TEST_ACCESS_LOG_PATH="${log_dir}/edgion_access.log" \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
-        -c "$gateway_toml" \
+        -c "$gateway_yaml" \
         --work-dir "${WORK_DIR}" \
         --server-addr "https://127.0.0.1:${CONTROLLER_GRPC_PORT}" \
         --integration-testing-mode \
@@ -621,7 +669,8 @@ main() {
     echo ""
     if [ -n "$WORK_DIR" ]; then
         echo "  Logs:    ${WORK_DIR}/logs/"
-        echo "  Certs:   ${WORK_DIR}/certs/grpc/"
+        echo "  Certs:   ${WORK_DIR}/certs/grpc/primary/  (active)"
+        echo "           ${WORK_DIR}/certs/grpc/secondary/  (inactive, multi-cert test)"
     fi
     echo ""
 

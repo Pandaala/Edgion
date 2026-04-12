@@ -6,10 +6,10 @@
 //! - ProcessorHandler<T> for resource-specific logic
 //! - Configuration (metadata filter, namespace filter, etc.)
 
+use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::sync::Arc;
 
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -39,6 +39,7 @@ pub enum WorkItemResult<K> {
 
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
 use crate::core::controller::conf_sync::ServerCache;
 use crate::types::ResourceMeta;
@@ -142,9 +143,6 @@ pub trait ProcessorObj: Send + Sync {
     /// Enqueue a key for immediate processing (original events, init revalidation)
     async fn requeue(&self, key: String);
 
-    /// Enqueue a key with delay (unused legacy; prefer requeue_with_chain)
-    async fn requeue_after(&self, key: String, duration: Duration);
-
     /// Cross-resource requeue with trigger chain (goes through delay subsystem)
     async fn requeue_with_chain(&self, key: String, chain: TriggerChain);
 
@@ -213,8 +211,11 @@ where
 
     /// Raw data source for cross-resource key lookups (bypasses handler filter).
     /// K8s mode: injected as KubeRawStore after reflector::store() call.
-    /// FS mode: injected as FsRawStore on controller construction.
+    /// FS/Etcd mode: injected as LocalRawStore on controller construction.
     raw_store: RwLock<Option<Arc<dyn RawStore<K>>>>,
+
+    /// Shared controller runtime (stores, registries, etc.)
+    runtime: Arc<ControllerRuntime>,
 }
 
 impl<K> ResourceProcessor<K>
@@ -227,6 +228,7 @@ where
         capacity: usize,
         handler: Arc<dyn ProcessorHandler<K>>,
         secret_ref_manager: Arc<SecretRefManager>,
+        runtime: Arc<ControllerRuntime>,
     ) -> Self {
         let cache = Arc::new(ServerCache::new(capacity as u32));
         let workqueue = Arc::new(Workqueue::with_defaults(kind));
@@ -247,6 +249,7 @@ where
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
+            runtime,
         }
     }
 
@@ -257,6 +260,7 @@ where
         handler: Arc<dyn ProcessorHandler<K>>,
         secret_ref_manager: Arc<SecretRefManager>,
         workqueue_config: WorkqueueConfig,
+        runtime: Arc<ControllerRuntime>,
     ) -> Self {
         let cache = Arc::new(ServerCache::new(capacity as u32));
         let workqueue = Arc::new(Workqueue::new(kind, workqueue_config));
@@ -270,6 +274,7 @@ where
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
+            runtime,
         }
     }
 
@@ -279,17 +284,17 @@ where
     /// - K8s mode: immediately after `reflector::store()`, before any events arrive.
     /// - FS mode: in `FileSystemResourceController::new()`.
     pub fn set_raw_store(&self, store: Arc<dyn RawStore<K>>) {
-        *self.raw_store.write().unwrap() = Some(store);
+        *self.raw_store.write() = Some(store);
     }
 
     /// Set metadata filter configuration
     pub fn set_metadata_filter(&self, filter: MetadataFilterConfig) {
-        *self.metadata_filter.write().unwrap() = Some(Arc::new(filter));
+        *self.metadata_filter.write() = Some(Arc::new(filter));
     }
 
     /// Set namespace filter
     pub fn set_namespace_filter(&self, namespaces: Vec<String>) {
-        *self.namespace_filter.write().unwrap() = Some(Arc::new(namespaces));
+        *self.namespace_filter.write() = Some(Arc::new(namespaces));
     }
 
     /// Get workqueue reference (for external use like worker spawning)
@@ -432,11 +437,12 @@ where
     fn create_context(&self, trigger_chain: TriggerChain) -> HandlerContext {
         HandlerContext::new(
             self.secret_ref_manager.clone(),
-            self.metadata_filter.read().unwrap().clone(),
-            self.namespace_filter.read().unwrap().clone(),
+            self.metadata_filter.read().clone(),
+            self.namespace_filter.read().clone(),
             trigger_chain,
             self.workqueue.config().max_trigger_cycles,
             self.workqueue.config().max_trigger_depth,
+            self.runtime.clone(),
         )
     }
 
@@ -665,12 +671,6 @@ where
         self.workqueue.enqueue(key).await;
     }
 
-    async fn requeue_after(&self, key: String, duration: Duration) {
-        self.workqueue
-            .enqueue_after(key, duration, TriggerChain::default())
-            .await;
-    }
-
     async fn requeue_with_chain(&self, key: String, chain: TriggerChain) {
         let delay = self.workqueue.config().default_requeue_delay;
         self.workqueue.enqueue_after(key, delay, chain).await;
@@ -682,6 +682,7 @@ where
 
     fn set_ready(&self) {
         WatchObj::set_ready(self.cache.as_ref());
+        self.runtime.processor_registry.notify_ready();
     }
 
     fn set_not_ready(&self) {
@@ -693,11 +694,11 @@ where
     }
 
     fn set_namespace_filter_vec(&self, filter: Option<Vec<String>>) {
-        *self.namespace_filter.write().unwrap() = filter.map(Arc::new);
+        *self.namespace_filter.write() = filter.map(Arc::new);
     }
 
     fn set_metadata_filter_config(&self, filter: Option<MetadataFilterConfig>) {
-        *self.metadata_filter.write().unwrap() = filter.map(Arc::new);
+        *self.metadata_filter.write() = filter.map(Arc::new);
     }
 
     fn workqueue(&self) -> Arc<Workqueue> {
@@ -722,7 +723,7 @@ where
     }
 
     fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
-        let raw_store = self.raw_store.read().unwrap();
+        let raw_store = self.raw_store.read();
         let arc_k = raw_store.as_ref()?.get(key)?;
         Some(arc_k as Arc<dyn Any + Send + Sync>)
     }
@@ -788,7 +789,13 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(DefaultHandler);
 
-        let processor = ResourceProcessor::<TestResource>::new("TestResource", 100, handler, secret_ref_manager);
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            secret_ref_manager,
+            Arc::new(ControllerRuntime::default()),
+        );
 
         assert_eq!(processor.kind(), "TestResource");
         assert!(!processor.is_ready());
@@ -802,7 +809,13 @@ mod tests {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(DefaultHandler);
 
-        let processor = ResourceProcessor::<TestResource>::new("TestResource", 100, handler, secret_ref_manager);
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            secret_ref_manager,
+            Arc::new(ControllerRuntime::default()),
+        );
 
         let resource = TestResource {
             metadata: ObjectMeta {

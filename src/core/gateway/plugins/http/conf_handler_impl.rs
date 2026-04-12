@@ -4,24 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{get_global_plugin_store, PluginStore};
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::types::resources::EdgionPlugins;
-
-/// Implement ConfHandler for Arc<PluginStore>
-impl ConfHandler<EdgionPlugins> for Arc<PluginStore> {
-    fn full_set(&self, data: &HashMap<String, EdgionPlugins>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, EdgionPlugins>,
-        update: HashMap<String, EdgionPlugins>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
 
 /// Create a PluginStore handler for registration with ConfigClient
 pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sync> {
@@ -29,20 +13,15 @@ pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sy
 }
 
 impl ConfHandler<EdgionPlugins> for PluginStore {
-    fn full_set(&self, data: &HashMap<String, EdgionPlugins>) {
+    fn full_set(&self, data: &HashMap<String, Arc<EdgionPlugins>>) {
         tracing::info!(component = "plugin_store", cnt = data.len(), "full set");
-        // Pre-parse plugins to initialize runtime
-        let mut prepared_data = data.clone();
-        for plugin in prepared_data.values_mut() {
-            plugin.preparse();
-        }
-        self.replace_all(prepared_data);
+        self.replace_all(arc_map_to_owned(data));
     }
 
     fn partial_update(
         &self,
-        add: HashMap<String, EdgionPlugins>,
-        update: HashMap<String, EdgionPlugins>,
+        add: HashMap<String, Arc<EdgionPlugins>>,
+        update: HashMap<String, Arc<EdgionPlugins>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -53,13 +32,8 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
             "partial update"
         );
 
-        let mut add_or_update = add;
-        add_or_update.extend(update);
-
-        // Pre-parse plugins
-        for plugin in add_or_update.values_mut() {
-            plugin.preparse();
-        }
+        let mut add_or_update = arc_map_into_owned(add);
+        add_or_update.extend(arc_map_into_owned(update));
 
         self.update(add_or_update, &remove);
     }
@@ -99,8 +73,14 @@ mod tests {
         let store = PluginStore::new();
 
         let mut data = HashMap::new();
-        data.insert("default/plugin1".to_string(), create_test_plugin("default", "plugin1"));
-        data.insert("default/plugin2".to_string(), create_test_plugin("default", "plugin2"));
+        data.insert(
+            "default/plugin1".to_string(),
+            Arc::new(create_test_plugin("default", "plugin1")),
+        );
+        data.insert(
+            "default/plugin2".to_string(),
+            Arc::new(create_test_plugin("default", "plugin2")),
+        );
 
         store.full_set(&data);
 
@@ -114,7 +94,10 @@ mod tests {
         let store = PluginStore::new();
 
         let mut add = HashMap::new();
-        add.insert("default/plugin1".to_string(), create_test_plugin("default", "plugin1"));
+        add.insert(
+            "default/plugin1".to_string(),
+            Arc::new(create_test_plugin("default", "plugin1")),
+        );
 
         store.partial_update(add, HashMap::new(), HashSet::new());
 
@@ -127,12 +110,18 @@ mod tests {
 
         // First add a plugin
         let mut data = HashMap::new();
-        data.insert("default/plugin1".to_string(), create_test_plugin("default", "plugin1"));
+        data.insert(
+            "default/plugin1".to_string(),
+            Arc::new(create_test_plugin("default", "plugin1")),
+        );
         store.full_set(&data);
 
         // Then update it
         let mut update = HashMap::new();
-        update.insert("default/plugin1".to_string(), create_test_plugin("default", "plugin1"));
+        update.insert(
+            "default/plugin1".to_string(),
+            Arc::new(create_test_plugin("default", "plugin1")),
+        );
 
         store.partial_update(HashMap::new(), update, HashSet::new());
 
@@ -145,7 +134,10 @@ mod tests {
 
         // First add a plugin
         let mut data = HashMap::new();
-        data.insert("default/plugin1".to_string(), create_test_plugin("default", "plugin1"));
+        data.insert(
+            "default/plugin1".to_string(),
+            Arc::new(create_test_plugin("default", "plugin1")),
+        );
         store.full_set(&data);
 
         // Then remove it

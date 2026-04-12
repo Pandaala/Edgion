@@ -108,13 +108,13 @@ DynamicTest/
 
 ```bash
 # Apply updated manifests
-./target/debug/edgion-ctl --server http://127.0.0.1:5800 \
+./target/debug/edgion-cli --server http://127.0.0.1:5800 \
     apply -f examples/test/conf/Gateway/DynamicTest/updates/
 
 # Delete resources listed in the delete file
 while read -r resource; do
     [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
-    ./target/debug/edgion-ctl --server http://127.0.0.1:5800 delete "$resource"
+    ./target/debug/edgion-cli --server http://127.0.0.1:5800 delete "$resource"
 done < examples/test/conf/Gateway/DynamicTest/delete/resources_to_delete.txt
 
 # Verify controller and gateway state stay in sync

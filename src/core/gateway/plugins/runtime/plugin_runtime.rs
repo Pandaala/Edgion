@@ -48,6 +48,7 @@ use crate::core::gateway::plugins::http::proxy_rewrite::ProxyRewrite;
 use crate::core::gateway::plugins::http::rate_limit::RateLimit;
 use crate::core::gateway::plugins::http::rate_limit_redis::RateLimitRedis;
 use crate::core::gateway::plugins::http::real_ip::RealIp;
+use crate::core::gateway::plugins::http::region_route::RegionRoute;
 use crate::core::gateway::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::core::gateway::plugins::http::request_restriction::RequestRestriction;
 use crate::core::gateway::plugins::http::response_rewrite::ResponseRewrite;
@@ -356,6 +357,7 @@ impl PluginRuntime {
                 Some(Box::new(RequestHeaderModifierFilter::new(config.clone())))
             }
             EdgionPlugin::RequestRedirect(config) => Some(Box::new(RequestRedirectFilter::new(config.clone()))),
+            EdgionPlugin::UrlRewrite(config) => Some(Box::new(URLRewriteFilter::new(config.clone()))),
             EdgionPlugin::RequestMirror(config) => Some(Box::new(RequestMirrorPlugin::new(
                 config.clone(),
                 namespace.to_string(),
@@ -389,7 +391,12 @@ impl PluginRuntime {
                 Some(Box::new(ext_filter))
             }
             EdgionPlugin::Dsl(config) => DslPlugin::from_config(config),
-            _ => None,
+            EdgionPlugin::RegionRoute(config) => Some(RegionRoute::create(config)),
+            // Response-stage only — not applicable to request filters
+            EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::ResponseRewrite(_)
+            | EdgionPlugin::BandwidthLimit(_) => None,
         }
     }
 
@@ -410,7 +417,36 @@ impl PluginRuntime {
                 Some(Box::new(ext_filter))
             }
             EdgionPlugin::Dsl(config) => DslPlugin::from_config_response(config),
-            _ => None,
+            // Request-stage or other-stage plugins — not applicable to upstream response filters
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::HmacAuth(_)
+            | EdgionPlugin::HeaderCertAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::LdapAuth(_)
+            | EdgionPlugin::Mock(_)
+            | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitRedis(_)
+            | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::ForwardAuth(_)
+            | EdgionPlugin::OpenidConnect(_)
+            | EdgionPlugin::BandwidthLimit(_)
+            | EdgionPlugin::DirectEndpoint(_)
+            | EdgionPlugin::AllEndpointStatus(_)
+            | EdgionPlugin::DynamicInternalUpstream(_)
+            | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::RegionRoute(_) => None,
         }
     }
 
@@ -435,7 +471,39 @@ impl PluginRuntime {
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
                 Some(Box::new(ext_filter))
             }
-            _ => None,
+            // Not body-filter plugins
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::HmacAuth(_)
+            | EdgionPlugin::HeaderCertAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::LdapAuth(_)
+            | EdgionPlugin::Mock(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::ResponseRewrite(_)
+            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitRedis(_)
+            | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::ForwardAuth(_)
+            | EdgionPlugin::OpenidConnect(_)
+            | EdgionPlugin::DirectEndpoint(_)
+            | EdgionPlugin::AllEndpointStatus(_)
+            | EdgionPlugin::DynamicInternalUpstream(_)
+            | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::RegionRoute(_)
+            | EdgionPlugin::Dsl(_) => None,
         }
     }
 
@@ -474,7 +542,21 @@ impl PluginRuntime {
             EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
             EdgionPlugin::Dsl(config) => config.get_validation_error_owned(),
-            _ => None,
+            EdgionPlugin::RegionRoute(config) => config.get_validation_error().map(|s| s.to_string()),
+            EdgionPlugin::Mock(config) => config.validate().err(),
+            // These plugins have no preparse validation
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::ExtensionRef(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::RealIp(_) => None,
         }
     }
 
@@ -514,6 +596,7 @@ impl PluginRuntime {
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::Dsl(_) => "Dsl",
+            EdgionPlugin::RegionRoute(_) => "RegionRoute",
         }
     }
 
@@ -624,6 +707,13 @@ impl PluginRuntime {
                 }
                 session_adapter.set_terminate();
                 break;
+            } else if let PluginRunningResult::ErrGrpcError { grpc_status, message } = result {
+                // Send gRPC native error: HTTP 200 + grpc-status/grpc-message trailers
+                let _ = session_adapter
+                    .send_grpc_error_direct(grpc_status, message.as_deref())
+                    .await;
+                session_adapter.set_terminate();
+                break;
             }
         }
 
@@ -669,9 +759,11 @@ impl PluginRuntime {
             if plugin_log.refer_to.is_none() {
                 plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
+
+            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);
             filter_logs.push(plugin_log);
 
-            if ErrTerminateRequest == result {
+            if should_terminate {
                 session_adapter.set_terminate();
                 break;
             }
@@ -771,9 +863,11 @@ impl PluginRuntime {
             if plugin_log.refer_to.is_none() {
                 plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
+
+            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);
             filter_logs.push(plugin_log);
 
-            if ErrTerminateRequest == result {
+            if should_terminate {
                 session_adapter.set_terminate();
                 break;
             }
@@ -784,5 +878,25 @@ impl PluginRuntime {
             filters: filter_logs,
             edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
         });
+    }
+}
+
+/// Check if a plugin result should terminate execution in the response stage.
+/// Response headers from upstream have been received but not yet sent to the client.
+/// However, we cannot replace them with ErrResponse/ErrGrpcError (sync context has no
+/// async I/O; async context has no way to substitute a different response body).
+/// Instead, log the error details to access log (PluginLog) and terminate.
+fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut PluginLog) -> bool {
+    match result {
+        PluginRunningResult::ErrTerminateRequest => true,
+        PluginRunningResult::ErrResponse { status, .. } => {
+            plugin_log.push(&format!("Deny ErrResponse {}; ", status));
+            true
+        }
+        PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
+            plugin_log.push(&format!("Deny ErrGrpcError {}; ", grpc_status));
+            true
+        }
+        PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,
     }
 }

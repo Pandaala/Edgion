@@ -7,8 +7,8 @@
 //! with active_challenges are synced from the Controller.
 
 use crate::types::resources::edgion_acme::EdgionAcme;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A single challenge entry in the store
@@ -47,13 +47,13 @@ impl AcmeChallengeStore {
     /// This is the fast path check in early_request_filter.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.tokens.read().unwrap().is_empty()
+        self.tokens.read().is_empty()
     }
 
     /// Look up a challenge token and return the key authorization if found and not expired.
     /// Also validates the domain matches.
     pub fn lookup(&self, token: &str, host: &str) -> Option<String> {
-        let tokens = self.tokens.read().unwrap();
+        let tokens = self.tokens.read();
         if let Some(entry) = tokens.get(token) {
             // Check expiry
             let now = SystemTime::now()
@@ -87,8 +87,8 @@ impl AcmeChallengeStore {
     /// Replace all tokens with a new set from EdgionAcme resources.
     /// Called by the ConfHandler on full_set.
     pub fn full_set(&self, data: &HashMap<String, EdgionAcme>) {
-        let mut tokens = self.tokens.write().unwrap();
-        let mut resource_tokens = self.resource_tokens.write().unwrap();
+        let mut tokens = self.tokens.write();
+        let mut resource_tokens = self.resource_tokens.write();
         tokens.clear();
         resource_tokens.clear();
 
@@ -122,8 +122,8 @@ impl AcmeChallengeStore {
     /// - `upsert`: resources that were added or updated — replace their tokens
     /// - `remove_keys`: resource keys that were deleted — remove their tokens
     pub fn partial_update(&self, upsert: &HashMap<String, EdgionAcme>, remove_keys: &HashSet<String>) {
-        let mut tokens = self.tokens.write().unwrap();
-        let mut resource_tokens = self.resource_tokens.write().unwrap();
+        let mut tokens = self.tokens.write();
+        let mut resource_tokens = self.resource_tokens.write();
 
         // Remove tokens for deleted resources
         for key in remove_keys {

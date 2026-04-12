@@ -20,8 +20,11 @@ description: 资源通用处理流程：从 K8s/文件系统变更到 Controller
 
 事件进入 Controller 后经过以下处理链：
 
-```
-Event → Workqueue（去重、合并）→ Worker 出队 → ResourceProcessor 处理
+```mermaid
+flowchart LR
+    A[Event] --> B["Workqueue（去重、合并）"]
+    B --> C[Worker 出队]
+    C --> D[ResourceProcessor 处理]
 ```
 
 ResourceProcessor 对每个资源执行以下有序步骤：
@@ -41,8 +44,13 @@ ResourceProcessor 对每个资源执行以下有序步骤：
 
 ## 阶段三：gRPC 同步（Controller → Gateway）
 
-```
-ServerCache 变更 → ConfigSyncServer → WatchResponse（增量）→ gRPC Stream → ConfigSyncClient → ClientCache
+```mermaid
+flowchart LR
+    A[ServerCache 变更] --> B[ConfigSyncServer]
+    B --> C["WatchResponse（增量）"]
+    C --> D[gRPC Stream]
+    D --> E[ConfigSyncClient]
+    E --> F[ClientCache]
 ```
 
 - **Watch 模式**（常态）：ServerCache 检测到变更后，通过 gRPC 双向流推送增量事件（add/update/remove），每个事件携带 `sync_version`
@@ -51,8 +59,11 @@ ServerCache 变更 → ConfigSyncServer → WatchResponse（增量）→ gRPC St
 
 ## 阶段四：Gateway 接收
 
-```
-ConfigSyncClient → ClientCache 更新 → EventDispatch → ConfHandler
+```mermaid
+flowchart LR
+    A[ConfigSyncClient] --> B[ClientCache 更新]
+    B --> C[EventDispatch]
+    C --> D[ConfHandler]
 ```
 
 ClientCache 收到事件后，通过 EventDispatch 分发给对应资源类型注册的 `ConfHandler`：
@@ -71,8 +82,12 @@ ConfHandler 将数据写入运行时存储：
 
 请求处理时直接从运行时存储读取，无锁访问：
 
-```
-请求 → 端口监听 → 路由匹配（port → domain → path → deep match）→ 读取后端/插件配置 → 转发
+```mermaid
+flowchart LR
+    A[请求] --> B[端口监听]
+    B --> C["路由匹配（port → domain → path → deep match）"]
+    C --> D[读取后端/插件配置]
+    D --> E[转发]
 ```
 
 ## 跨资源联动

@@ -86,7 +86,7 @@ impl KubernetesStorage {
             ),
             "TLSRoute" => match probe_tls_route_version(&self.client)
                 .await
-                .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect TLSRoute version: {}", e)))?
+                .map_err(|e| ConfWriterError::InternalError(format!("Failed to detect TLSRoute version: {}", e)))?
             {
                 Some(TLSRouteVersion::V1) => (
                     ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
@@ -114,10 +114,9 @@ impl KubernetesStorage {
                 )),
                 Scope::Namespaced,
             ),
-            "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client)
-                .await
-                .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect BackendTLSPolicy version: {}", e)))?
-            {
+            "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client).await.map_err(|e| {
+                ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e))
+            })? {
                 Some(BackendTLSPolicyVersion::V1) => (
                     ApiResource::from_gvk(&GroupVersionKind::gvk(
                         "gateway.networking.k8s.io",
@@ -195,7 +194,7 @@ impl KubernetesStorage {
     async fn backend_tls_policy_api_version(&self) -> Result<Option<&'static str>, ConfWriterError> {
         let version = probe_backend_tls_policy_version(&self.client)
             .await
-            .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect BackendTLSPolicy version: {}", e)))?;
+            .map_err(|e| ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e)))?;
 
         Ok(match version {
             Some(BackendTLSPolicyVersion::V1) => Some("gateway.networking.k8s.io/v1"),
@@ -207,7 +206,7 @@ impl KubernetesStorage {
     async fn tls_route_api_version(&self) -> Result<Option<&'static str>, ConfWriterError> {
         let version = probe_tls_route_version(&self.client)
             .await
-            .map_err(|e| ConfWriterError::KubeError(format!("Failed to detect TLSRoute version: {}", e)))?;
+            .map_err(|e| ConfWriterError::InternalError(format!("Failed to detect TLSRoute version: {}", e)))?;
 
         Ok(match version {
             Some(TLSRouteVersion::V1) => Some("gateway.networking.k8s.io/v1"),
@@ -236,8 +235,10 @@ impl KubernetesStorage {
     }
 
     async fn parse_dynamic_object(&self, kind: &str, content: &str) -> Result<DynamicObject, ConfWriterError> {
-        let mut value: serde_json::Value = serde_yaml::from_str(content)
-            .map_err(|e| ConfWriterError::ParseError(format!("Failed to parse YAML: {}", e)))?;
+        let mut value: serde_json::Value = serde_yaml::from_str(content).map_err(|e| ConfWriterError::ParseError {
+            context: "Failed to parse YAML",
+            source: e.into(),
+        })?;
 
         if kind == "BackendTLSPolicy" {
             let Some(api_version) = self.backend_tls_policy_api_version().await? else {
@@ -265,7 +266,10 @@ impl KubernetesStorage {
             }
         }
 
-        serde_json::from_value(value).map_err(|e| ConfWriterError::ParseError(format!("Failed to parse object: {}", e)))
+        serde_json::from_value(value).map_err(|e| ConfWriterError::ParseError {
+            context: "Failed to deserialize JSON",
+            source: e.into(),
+        })
     }
 
     /// Create a dynamic API that lists resources across ALL namespaces (no Discovery call)
@@ -278,19 +282,21 @@ impl KubernetesStorage {
         Ok(Api::all_with(self.client.clone(), &ar))
     }
 
-    /// Map kube::Error to ConfWriterError with appropriate error types
+    /// Map kube::Error to ConfWriterError with appropriate error types.
+    /// Well-known API error codes are mapped to domain variants (String payload).
+    /// All other errors are wrapped in `KubeError` with the original source preserved.
     fn map_kube_error(&self, e: kube::Error) -> ConfWriterError {
-        match e {
-            kube::Error::Api(ref ae) => match ae.code {
-                400 => ConfWriterError::ValidationError(ae.message.clone()),
-                403 => ConfWriterError::PermissionDenied(ae.message.clone()),
-                404 => ConfWriterError::NotFound(ae.message.clone()),
-                409 => ConfWriterError::AlreadyExists(ae.message.clone()),
-                422 => ConfWriterError::ValidationError(ae.message.clone()),
-                _ => ConfWriterError::KubeError(format!("K8s API error ({}): {}", ae.code, ae.message)),
-            },
-            _ => ConfWriterError::KubeError(e.to_string()),
+        if let kube::Error::Api(ae) = &e {
+            match ae.code {
+                400 => return ConfWriterError::ValidationError(ae.message.clone()),
+                403 => return ConfWriterError::PermissionDenied(ae.message.clone()),
+                404 => return ConfWriterError::NotFound(ae.message.clone()),
+                409 => return ConfWriterError::AlreadyExists(ae.message.clone()),
+                422 => return ConfWriterError::ValidationError(ae.message.clone()),
+                _ => {}
+            }
         }
+        ConfWriterError::KubeError(Box::new(e))
     }
 }
 
@@ -312,7 +318,7 @@ impl CenterApi for KubernetesStorage {
         let params = PatchParams::apply("edgion-controller").force();
         api.patch(name, &params, &Patch::Apply(&obj))
             .await
-            .map_err(|e| ConfWriterError::KubeError(format!("Failed to apply resource: {}", e)))?;
+            .map_err(|e| self.map_kube_error(e))?;
 
         tracing::info!(
             component = "kubernetes_writer",
@@ -395,15 +401,12 @@ impl CenterApi for KubernetesStorage {
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
         let api = self.dynamic_api(kind, namespace).await?;
 
-        let obj = api.get(name).await.map_err(|e| match e {
-            kube::Error::Api(ae) if ae.code == 404 => {
-                ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name))
-            }
-            _ => ConfWriterError::KubeError(format!("Failed to get resource: {}", e)),
-        })?;
+        let obj = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
 
-        let content = serde_yaml::to_string(&obj)
-            .map_err(|e| ConfWriterError::ParseError(format!("Failed to serialize: {}", e)))?;
+        let content = serde_yaml::to_string(&obj).map_err(|e| ConfWriterError::ParseError {
+            context: "Failed to serialize to YAML",
+            source: e.into(),
+        })?;
 
         Ok(content)
     }
@@ -412,12 +415,7 @@ impl CenterApi for KubernetesStorage {
         let api = self.dynamic_api(kind, namespace).await?;
 
         let params = DeleteParams::default();
-        api.delete(name, &params).await.map_err(|e| match e {
-            kube::Error::Api(ae) if ae.code == 404 => {
-                ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name))
-            }
-            _ => ConfWriterError::KubeError(format!("Failed to delete resource: {}", e)),
-        })?;
+        api.delete(name, &params).await.map_err(|e| self.map_kube_error(e))?;
 
         tracing::info!(
             component = "kubernetes_writer",
@@ -526,10 +524,7 @@ impl CenterApi for KubernetesStorage {
             }
         }
 
-        let list = api
-            .list(&lp)
-            .await
-            .map_err(|e| ConfWriterError::KubeError(format!("Failed to list {}: {}", kind, e)))?;
+        let list = api.list(&lp).await.map_err(|e| self.map_kube_error(e))?;
 
         let items = list
             .items
@@ -587,10 +582,7 @@ impl CenterApi for KubernetesStorage {
             }
         }
 
-        let list = api
-            .list(&lp)
-            .await
-            .map_err(|e| ConfWriterError::KubeError(format!("Failed to list {}/{}: {}", kind, namespace, e)))?;
+        let list = api.list(&lp).await.map_err(|e| self.map_kube_error(e))?;
 
         let items = list
             .items
@@ -628,19 +620,5 @@ impl CenterApi for KubernetesStorage {
             items,
             continue_token: list.metadata.continue_,
         })
-    }
-
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
-        // Note: K8s API doesn't have a count-only endpoint, so we fetch all items.
-        // This may be slow for large resource sets.
-        // Consider using Controller's Store for faster access if available.
-        let result = self.get_list_by_kind(kind, None).await?;
-        Ok(result.items.len())
-    }
-
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
-        // Note: K8s API doesn't have a count-only endpoint, so we fetch all items.
-        let result = self.get_list_by_kind_ns(kind, namespace, None).await?;
-        Ok(result.items.len())
     }
 }

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -9,13 +10,15 @@ use crate::core::center::commander::Commander;
 use crate::core::center::config::CenterConfig;
 use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::fed_sync::server::FederationGrpcServer;
+use crate::core::center::proxy::{PendingProxyMap, ProxyForwarder};
 use crate::core::center::scheduler;
 use crate::core::common::fed_sync::proto::federation_sync_server::FederationSyncServer;
+use parking_lot::Mutex;
 
 #[derive(Parser, Debug)]
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
 pub struct EdgionCenterCli {
-    #[arg(short = 'c', long, default_value = "config/edgion-center.toml")]
+    #[arg(short = 'c', long, default_value = "config/edgion-center.yaml")]
     pub config_file: String,
 }
 
@@ -37,16 +40,19 @@ impl EdgionCenterCli {
                 String::new()
             }
         };
-        let config: CenterConfig = match toml::from_str(&content) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    component = "center",
-                    path = %self.config_file,
-                    error = %e,
-                    "Config parse error, using defaults"
-                );
-                CenterConfig::default()
+        let config: CenterConfig = {
+            let de = serde_yaml::Deserializer::from_str(&content);
+            match serde_yaml::with::singleton_map_recursive::deserialize(de) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        component = "center",
+                        path = %self.config_file,
+                        error = %e,
+                        "Config parse error, using defaults"
+                    );
+                    CenterConfig::default()
+                }
             }
         };
 
@@ -54,7 +60,14 @@ impl EdgionCenterCli {
         let aggregator = Arc::new(ResourceAggregator::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        let grpc_server = FederationGrpcServer::new(registry.clone(), aggregator.clone(), config.sync.clone());
+        let pending_proxies: PendingProxyMap = Arc::new(Mutex::new(HashMap::new()));
+
+        let grpc_server = FederationGrpcServer::new(
+            registry.clone(),
+            aggregator.clone(),
+            pending_proxies.clone(),
+            config.sync.clone(),
+        );
         let pending_lists = grpc_server.pending_lists.clone();
         let pending_commands = grpc_server.pending_commands.clone();
 
@@ -64,26 +77,73 @@ impl EdgionCenterCli {
             config.sync.command_timeout_secs,
         ));
 
+        let proxy = Arc::new(ProxyForwarder::new(
+            registry.clone(),
+            pending_proxies,
+            config.sync.command_timeout_secs,
+        ));
+
         let api_state = ApiState {
             aggregator: aggregator.clone(),
             commander,
+            proxy,
         };
         let http_addr: std::net::SocketAddr = config.server.http_addr.parse()?;
         let grpc_addr: std::net::SocketAddr = config.server.grpc_addr.parse()?;
 
         tracing::info!(component = "center", grpc_addr = %grpc_addr, http_addr = %http_addr, "Starting edgion-center");
 
+        // Validate security config early
+        config
+            .grpc_security
+            .validate()
+            .map_err(|e| anyhow::anyhow!("Invalid grpc_security config: {}", e))?;
+
+        // Build gRPC server with optional TLS
+        let mut server_builder = tonic::transport::Server::builder();
+        if let Some(tls_cfg) = config.grpc_security.resolve_active_tls() {
+            if tls_cfg.skip_tls {
+                tracing::error!(
+                    component = "center",
+                    "grpc_security skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
+                );
+            } else {
+                let server_tls = crate::core::common::grpc_tls::load_server_tls(tls_cfg).await?;
+                server_builder = server_builder
+                    .tls_config(server_tls)
+                    .map_err(|e| anyhow::anyhow!("Failed to configure center gRPC TLS: {}", e))?;
+                tracing::info!(component = "center", "Federation gRPC mTLS enabled");
+            }
+        }
+
         // gRPC server
         let grpc_handle = tokio::spawn(
-            tonic::transport::Server::builder()
+            server_builder
                 .add_service(FederationSyncServer::new(grpc_server))
                 .serve(grpc_addr),
         );
 
-        // HTTP Admin API
+        // HTTP Admin API — unified auth supports both OIDC and local auth
+        let auth_config = config.auth.clone();
+        let local_auth_config = config.local_auth.clone().or_else(|| {
+            tracing::info!(
+                component = "center",
+                "No local_auth configured, enabling default local auth (admin/edgion1234)"
+            );
+            Some(crate::core::common::local_auth::LocalAuthConfig::default())
+        });
         let http_handle = tokio::spawn(async move {
+            let base_router = router(api_state);
+            let app = crate::core::common::api::add_local_auth_routes(base_router, local_auth_config.as_ref());
+            let app = crate::core::common::api::apply_unified_auth_layer(
+                app,
+                auth_config.as_ref(),
+                local_auth_config.as_ref(),
+                "center",
+            );
+            let app = crate::core::common::api::apply_cors_layer(app);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
-            axum::serve(listener, router(api_state)).await.unwrap();
+            axum::serve(listener, app).await.unwrap();
         });
 
         // Scheduler

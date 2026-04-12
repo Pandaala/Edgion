@@ -1,8 +1,8 @@
+use crate::core::controller::api::common::map_writer_error;
 use crate::core::controller::conf_mgr::{ConfCenter, ConfMgr, ConfWriterError, SchemaValidator};
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use crate::types::ResourceKind;
 use axum::http::StatusCode;
-use serde::Serialize;
 use std::sync::Arc;
 
 /// Admin state containing ConfMgr and SchemaValidator
@@ -42,19 +42,25 @@ impl AdminState {
     // Used by /api/v1/... endpoints - reads directly from storage
 
     /// List all resources of a kind from storage (via ConfCenter)
-    pub async fn center_list_resources(&self, kind: ResourceKind) -> Result<Vec<serde_json::Value>, StatusCode> {
+    pub async fn center_list_resources(
+        &self,
+        kind: ResourceKind,
+        opts: Option<crate::core::controller::conf_mgr::ListOptions>,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>), StatusCode> {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.get_list_by_kind(kind_str, None).await.map_err(|e| {
+        let result = api.get_list_by_kind(kind_str, opts).await.map_err(|e| {
             tracing::warn!(
                 component = "admin_state",
                 kind = kind_str,
                 error = %e,
                 "Failed to list resources from storage"
             );
-            map_center_api_error(e)
+            map_writer_error(e)
         })?;
+
+        let continue_token = result.continue_token;
 
         // Parse YAML/JSON content to Vec<Value>
         let values: Vec<serde_json::Value> = result
@@ -67,7 +73,7 @@ impl AdminState {
             })
             .collect();
 
-        Ok(values)
+        Ok((values, continue_token))
     }
 
     /// List resources of a kind in a specific namespace from storage (via ConfCenter)
@@ -75,11 +81,12 @@ impl AdminState {
         &self,
         kind: ResourceKind,
         namespace: &str,
-    ) -> Result<Vec<serde_json::Value>, StatusCode> {
+        opts: Option<crate::core::controller::conf_mgr::ListOptions>,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>), StatusCode> {
         let api = self.conf_center();
         let kind_str = kind.as_str();
 
-        let result = api.get_list_by_kind_ns(kind_str, namespace, None).await.map_err(|e| {
+        let result = api.get_list_by_kind_ns(kind_str, namespace, opts).await.map_err(|e| {
             tracing::warn!(
                 component = "admin_state",
                 kind = kind_str,
@@ -87,8 +94,10 @@ impl AdminState {
                 error = %e,
                 "Failed to list namespaced resources from storage"
             );
-            map_center_api_error(e)
+            map_writer_error(e)
         })?;
+
+        let continue_token = result.continue_token;
 
         // Parse YAML/JSON content to Vec<Value>
         let values: Vec<serde_json::Value> = result
@@ -101,7 +110,7 @@ impl AdminState {
             })
             .collect();
 
-        Ok(values)
+        Ok((values, continue_token))
     }
 
     /// Get a specific resource by namespace and name from storage (via ConfCenter)
@@ -141,13 +150,12 @@ impl AdminState {
                     error = %e,
                     "Failed to get resource from storage"
                 );
-                Err(map_center_api_error(e))
+                Err(map_writer_error(e))
             }
         }
     }
 
     /// Get a cluster-scoped resource by name from storage (via ConfCenter)
-    #[allow(dead_code)]
     pub async fn center_get_cluster_resource(
         &self,
         kind: ResourceKind,
@@ -181,7 +189,7 @@ impl AdminState {
                     error = %e,
                     "Failed to get cluster resource from storage"
                 );
-                Err(map_center_api_error(e))
+                Err(map_writer_error(e))
             }
         }
     }
@@ -253,79 +261,4 @@ impl AdminState {
     }
 }
 
-/// Map ConfCenter errors to HTTP status codes
-fn map_center_api_error(e: ConfWriterError) -> StatusCode {
-    match e {
-        ConfWriterError::NotFound(_) => StatusCode::NOT_FOUND,
-        ConfWriterError::AlreadyExists(_) => StatusCode::CONFLICT,
-        ConfWriterError::ValidationError(_) => StatusCode::BAD_REQUEST,
-        ConfWriterError::PermissionDenied(_) => StatusCode::FORBIDDEN,
-        ConfWriterError::Conflict(_) => StatusCode::CONFLICT,
-        ConfWriterError::ParseError(_) => StatusCode::BAD_REQUEST,
-        ConfWriterError::IOError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        ConfWriterError::KubeError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        ConfWriterError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
-/// Standard API response format
-#[derive(Serialize)]
-pub struct ApiResponse<T> {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl<T> ApiResponse<T> {
-    pub fn success(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn error(message: String) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(message),
-        }
-    }
-}
-
-/// List response format
-#[derive(Serialize)]
-pub struct ListResponse<T> {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Vec<T>>,
-    pub count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl<T> ListResponse<T> {
-    pub fn success(data: Vec<T>) -> Self {
-        let count = data.len();
-        Self {
-            success: true,
-            data: Some(data),
-            count,
-            error: None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn error(message: String) -> Self {
-        Self {
-            success: false,
-            data: None,
-            count: 0,
-            error: Some(message),
-        }
-    }
-}
+pub use crate::core::common::api::{ApiResponse, ListResponse};

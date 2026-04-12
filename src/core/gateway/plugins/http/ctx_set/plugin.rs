@@ -25,7 +25,10 @@ use tracing::debug;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{CaseType, CtxSetConfig, CtxVarRule, TransformConfig, TransformType};
+use crate::types::resources::edgion_plugins::{
+    CaseType, CompiledTemplate, CtxSetConfig, CtxVarRule, TemplateSegment, TemplateVarType, TransformConfig,
+    TransformType,
+};
 
 // ============================================================================
 // CtxSet Plugin
@@ -55,82 +58,36 @@ impl CtxSet {
         Box::new(plugin)
     }
 
-    /// Resolve a template string with variable interpolation
+    /// Evaluate a pre-compiled template by resolving each segment.
     ///
-    /// Supports:
-    /// - ${header:X-Name} - request header value
-    /// - ${query:name} - query parameter value
-    /// - ${cookie:name} - cookie value
-    /// - ${path} - request path
-    /// - ${method} - HTTP method
-    /// - ${clientIp} - client IP address
-    /// - ${ctx:name} - context variable
-    fn resolve_template(&self, template: &str, session: &dyn PluginSession) -> String {
-        let mut result = template.to_string();
-
-        // Simple pattern matching for ${type:name} or ${type}
-        // Using a loop to handle all occurrences
-        while let Some(start) = result.find("${") {
-            let end = match result[start..].find('}') {
-                Some(pos) => start + pos,
-                None => break,
-            };
-
-            let var_expr = &result[start + 2..end];
-            let replacement = self.resolve_var_expr(var_expr, session);
-
-            result = format!("{}{}{}", &result[..start], replacement, &result[end + 1..]);
+    /// Because the template structure is fixed at config-load time, user-supplied
+    /// values that happen to contain `${…}` are emitted verbatim -- they are
+    /// never re-parsed as template directives.  This eliminates the template
+    /// injection vulnerability present in the old `resolve_template` approach.
+    fn evaluate_template(&self, compiled: &CompiledTemplate, session: &dyn PluginSession) -> String {
+        let mut result = String::with_capacity(compiled.hint_len());
+        for segment in compiled.segments() {
+            match segment {
+                TemplateSegment::Literal(lit) => result.push_str(lit),
+                TemplateSegment::Variable { var_type, var_name } => {
+                    let value = Self::resolve_var(var_type, var_name.as_deref(), session);
+                    result.push_str(&value);
+                }
+            }
         }
-
         result
     }
 
-    /// Resolve a single variable expression (without ${})
-    fn resolve_var_expr(&self, expr: &str, session: &dyn PluginSession) -> String {
-        // Parse type:name or just type
-        let (var_type, var_name) = if let Some(colon_pos) = expr.find(':') {
-            (&expr[..colon_pos], Some(&expr[colon_pos + 1..]))
-        } else {
-            (expr, None)
-        };
-
+    /// Resolve a single variable by type and optional name
+    fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn PluginSession) -> String {
         match var_type {
-            "header" => {
-                if let Some(name) = var_name {
-                    session.header_value(name).unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            }
-            "query" => {
-                if let Some(name) = var_name {
-                    session.get_query_param(name).unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            }
-            "cookie" => {
-                if let Some(name) = var_name {
-                    session.get_cookie(name).unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            }
-            "ctx" => {
-                if let Some(name) = var_name {
-                    session.get_ctx_var(name).unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            }
-            "path" => session.get_path().to_string(),
-            "method" => session.get_method().to_string(),
-            "clientIp" => session.remote_addr().to_string(),
-            _ => {
-                // Unknown variable type, return empty
-                debug!("Unknown template variable type: {}", var_type);
-                String::new()
-            }
+            TemplateVarType::Header => var_name.and_then(|n| session.header_value(n)).unwrap_or_default(),
+            TemplateVarType::Query => var_name.and_then(|n| session.get_query_param(n)).unwrap_or_default(),
+            TemplateVarType::Cookie => var_name.and_then(|n| session.get_cookie(n)).unwrap_or_default(),
+            TemplateVarType::Ctx => var_name.and_then(|n| session.get_ctx_var(n)).unwrap_or_default(),
+            TemplateVarType::Path => session.get_path().to_string(),
+            TemplateVarType::Method => session.get_method().to_string(),
+            TemplateVarType::ClientIp => session.remote_addr().to_string(),
         }
     }
 
@@ -142,9 +99,8 @@ impl CtxSet {
         let mut value = if let Some(ref static_value) = rule.value {
             // Static value has highest priority
             static_value.clone()
-        } else if let Some(ref template) = rule.template {
-            // Template interpolation
-            self.resolve_template(template, session)
+        } else if let Some(compiled) = self.config.get_compiled_template(rule_idx) {
+            self.evaluate_template(compiled, session)
         } else if let Some(ref from) = rule.from {
             // Get from KeyGet source
             session.key_get(from).await.or(rule.default.clone())?
@@ -171,7 +127,8 @@ impl CtxSet {
 
         // Apply transform
         if let Some(ref transform) = rule.transform {
-            value = match self.apply_transform(&value, transform) {
+            let compiled_replace = self.config.get_compiled_transform_regex(rule_idx);
+            value = match self.apply_transform(&value, transform, compiled_replace) {
                 Some(transformed) => transformed,
                 None => {
                     debug!("CtxSet: transform failed for var '{}', using default", rule.name);
@@ -204,16 +161,24 @@ impl CtxSet {
     }
 
     /// Apply transformation
-    fn apply_transform(&self, value: &str, transform: &TransformConfig) -> Option<String> {
+    fn apply_transform(
+        &self,
+        value: &str,
+        transform: &TransformConfig,
+        compiled_replace: Option<&Regex>,
+    ) -> Option<String> {
         // Get the transform type from the config struct
         let transform_type = transform.get_transform_type()?;
 
         match transform_type {
             TransformType::Replace { pattern, with } => {
-                // Compile regex for replacement
-                match Regex::new(&pattern) {
-                    Ok(re) => Some(re.replace_all(value, with.as_str()).to_string()),
-                    Err(_) => None, // Should be caught by validation
+                if let Some(re) = compiled_replace {
+                    Some(re.replace_all(value, with.as_str()).to_string())
+                } else {
+                    // Fallback: should not happen after validate(), pattern already validated
+                    Regex::new(&pattern)
+                        .ok()
+                        .map(|re| re.replace_all(value, with.as_str()).to_string())
                 }
             }
             TransformType::Substring(start, end) => {
@@ -679,5 +644,35 @@ vars:
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("Set 2 vars"));
+    }
+
+    #[tokio::test]
+    async fn test_template_injection_prevention() {
+        let yaml = r#"
+vars:
+  - name: injected
+    template: "${header:X-Inject}"
+"#;
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+        config.validate();
+        assert!(config.is_valid());
+        let plugin = CtxSet::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("CtxSet");
+
+        // Attacker sends header value containing template syntax
+        mock_session
+            .expect_header_value()
+            .withf(|name| name == "X-Inject")
+            .return_const(Some("${header:Authorization}".to_string()));
+        // The value should be the literal string, NOT the resolved Authorization header
+        mock_session
+            .expect_set_ctx_var()
+            .withf(|key, value| key == "injected" && value == "${header:Authorization}")
+            .returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

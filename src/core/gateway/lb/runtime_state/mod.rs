@@ -12,10 +12,11 @@
 //! The outer key is `"namespace/name"` (same as route / discovery key).
 
 use dashmap::DashMap;
+use parking_lot::RwLock;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::Backend;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 
 use super::leastconn::BackendState;
 use super::selection::consistent_hash::ConsistentHashRing;

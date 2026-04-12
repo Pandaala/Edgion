@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::ParentReference;
 
@@ -26,6 +27,7 @@ pub fn resolve_effective_hostnames(
     route_hostnames: Option<&Vec<String>>,
     parent_refs: &[ParentReference],
     route_ns: &str,
+    runtime: &ControllerRuntime,
 ) -> ResolvedHostnames {
     if parent_refs.is_empty() {
         return ResolvedHostnames {
@@ -46,7 +48,7 @@ pub fn resolve_effective_hostnames(
         }
 
         let gw_ns = pr.namespace.as_deref().unwrap_or(route_ns);
-        let gateway = match super::route_utils::lookup_gateway(gw_ns, &pr.name) {
+        let gateway = match super::route_utils::lookup_gateway(gw_ns, &pr.name, runtime) {
             Some(gw) => gw,
             None => {
                 if let Some(hs) = route_hostnames {

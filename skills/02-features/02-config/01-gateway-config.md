@@ -1,15 +1,15 @@
 ---
 name: gateway-config
-description: edgion-gateway TOML 配置完整 Schema。
+description: edgion-gateway YAML 配置完整 Schema。
 ---
 
-# Gateway TOML 配置 Schema
+# Gateway YAML 配置 Schema
 
-> 文件路径默认：`config/edgion-gateway.toml`，通过 `--config-file` 指定。
+> 文件路径默认：`config/edgion-gateway.yaml`，通过 `--config-file` 指定。
 
 ## 看哪些文件
 
-- 样例配置：`config/edgion-gateway.toml`
+- 样例配置：`config/edgion-gateway.yaml`
 - 配置结构：`src/core/gateway/cli/config.rs`
 - 启动逻辑：`src/core/gateway/cli/mod.rs`
 - work_dir：`src/types/work_dir.rs`
@@ -17,85 +17,91 @@ description: edgion-gateway TOML 配置完整 Schema。
 
 ## 完整 Schema
 
-```toml
+```yaml
 # 工作目录
-work_dir = "."
+work_dir: "."
 
-[gateway]
-server_addr = "http://127.0.0.1:50051"   # 必填：Controller gRPC 地址
-admin_listen = "0.0.0.0:5900"            # Admin API（当前固定 :5900）
+gateway:
+  server_addr: "http://127.0.0.1:50051"   # 必填：Controller gRPC 地址
+  admin_listen: "0.0.0.0:5900"            # Admin API（当前固定 :5900）
 
 # ─── gRPC 通道安全（可选 mTLS）───
-# [conf_sync_security.tls]
-# cert = "certs/grpc/client.crt"    # Gateway 客户端证书
-# key  = "certs/grpc/client.key"    # 客户端私钥
-# ca   = "certs/grpc/ca.crt"        # 校验 Controller 服务端的 CA
-# skip_tls = false                   # true = 紧急降级明文（会输出 ERROR 日志）
+# conf_sync_security:
+#   tls:
+#     cert: certs/grpc/client.crt    # Gateway 客户端证书
+#     key: certs/grpc/client.key     # 客户端私钥
+#     ca: certs/grpc/ca.crt          # 校验 Controller 服务端的 CA
+#     skip_tls: false                # true = 紧急降级明文（会输出 ERROR 日志）
 
-[logging]
-# 系统日志（非业务日志）
-log_dir = "logs"
-log_prefix = "edgion-gateway"
-log_level = "info"                        # 支持模块过滤：info,edgion::core::gateway::routes=debug
-json_format = false
-console = true
-buffer_size = 10000
+logging:
+  # 系统日志（非业务日志）
+  log_dir: logs
+  log_prefix: edgion-gateway
+  log_level: info                         # 支持模块过滤：info,edgion::core::gateway::routes=debug
+  json_format: false
+  console: true
+  buffer_size: 10000
 
-[server]
-threads = 0                               # 0 = CPU 核心数
-work_stealing = true                      # Tokio work-stealing
-grace_period_seconds = 30                 # 优雅关闭等待
-graceful_shutdown_timeout_seconds = 10    # 关闭超时
-upstream_keepalive_pool_size = 128        # 上游连接池大小
-downstream_keepalive_request_limit = 1000 # 下游每连接最大请求数（0=无限）
-# error_log = "logs/pingora_error.log"    # Pingora 内部错误日志
+server:
+  threads: 0                               # 0 = CPU 核心数
+  work_stealing: true                      # Tokio work-stealing
+  grace_period_seconds: 30                 # 优雅关闭等待
+  graceful_shutdown_timeout_seconds: 10    # 关闭超时
+  upstream_keepalive_pool_size: 128        # 上游连接池大小
+  downstream_keepalive_request_limit: 1000 # 下游每连接最大请求数（0=无限）
+  # error_log: logs/pingora_error.log      # Pingora 内部错误日志
 
 # ─── 业务日志 ───
 # 每种日志独立开关和路径，logging.log_dir 不影响这些路径
 
-[access_log]
-enabled = true
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-# queue_size = 80000                      # 默认 cpu_cores * 10000
-# [access_log.output.localFile.rotation]
-# strategy = "daily"                      # daily | hourly | never | { Size = 104857600 }
-# max_files = 7
-# check_interval_secs = 30
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      # queue_size: 80000                  # 默认 cpu_cores * 10000
+      # rotation:
+      #   strategy: daily                  # daily | hourly | never | { Size: 104857600 }
+      #   max_files: 7
+      #   check_interval_secs: 30
 
-[ssl_log]
-enabled = true
-[ssl_log.output.localFile]
-path = "logs/ssl.log"
+ssl_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/ssl.log
 
-[tcp_log]
-enabled = false
-[tcp_log.output.localFile]
-path = "logs/tcp_access.log"
+tcp_log:
+  enabled: false
+  output:
+    localFile:
+      path: logs/tcp_access.log
 
-[tls_log]
-enabled = true
-[tls_log.output.localFile]
-path = "logs/tls_access.log"
+tls_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/tls_access.log
 
-[udp_log]
-enabled = false
-[udp_log.output.localFile]
-path = "logs/udp_access.log"
+udp_log:
+  enabled: false
+  output:
+    localFile:
+      path: logs/udp_access.log
 
 # ─── 全局插件配置 ───
 
-[rate_limit]
-default_estimator_slots_k = 64           # CMS 默认精度（× 64KB 内存）
-max_estimator_slots_k = 1024             # CMS 最大精度上限
-gateway_instance_count = 1               # 静态实例数（无 Controller 推送时的 fallback）
+rate_limit:
+  default_estimator_slots_k: 64           # CMS 默认精度（× 64KB 内存）
+  max_estimator_slots_k: 1024             # CMS 最大精度上限
+  gateway_instance_count: 1               # 静态实例数（无 Controller 推送时的 fallback）
 
 # ─── Plugin Metadata ───
 
-[plugin_metadata]
-# Ctx keys containing these substrings (case-insensitive) are excluded from access log.
-# Keys starting with `_` are always excluded regardless of this list.
-ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "credential"]
+plugin_metadata:
+  # Ctx keys containing these substrings (case-insensitive) are excluded from access log.
+  # Keys starting with `_` are always excluded regardless of this list.
+  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential]
 ```
 
 ## 字段详解
@@ -122,7 +128,7 @@ ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "cred
 
 > 不配置此 section 时，gRPC 以明文连接，与历史版本完全兼容。
 > 启用 mTLS 时，`[gateway].server_addr` 的 URI scheme 会自动切换为 `https://`。
-> 证书通过 `edgion-ctl gen-certs --output file --output-dir <dir>` 生成。
+> 证书通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
 ### [server]
 
@@ -179,7 +185,7 @@ LogConfig:
 |------|------|------|------|
 | `ctx_log_denylist` | `Vec<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx key 中包含这些子串（大小写不敏感）的条目不进入 access log |
 
-> **注意：** 在 TOML 中设置此字段会**完全替换**默认列表，而非追加。如需保留默认保护，须手动包含全部默认关键词再加上自定义词。
+> **注意：** 在配置文件中设置此字段会**完全替换**默认列表，而非追加。如需保留默认保护，须手动包含全部默认关键词再加上自定义词。
 
 **过滤规则**（两者满足其一则跳过）：
 1. Key 以 `_` 开头（plugin 内部私有约定）
@@ -197,7 +203,7 @@ LogConfig:
 这是 CLI flag，不是 TOML section：
 
 ```bash
-./target/debug/edgion-gateway --config-file config/edgion-gateway.toml --integration-testing-mode
+./target/debug/edgion-gateway --config-file config/edgion-gateway.yaml --integration-testing-mode
 ```
 
 开启后会额外激活：

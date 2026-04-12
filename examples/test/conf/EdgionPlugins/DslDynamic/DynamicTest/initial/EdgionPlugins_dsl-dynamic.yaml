@@ -1,0 +1,19 @@
+# DSL Plugin - Dynamic Test (Initial)
+# Check X-Version header: allow "v1", deny otherwise with 403
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "dsl-dynamic-version-check"
+        source: |
+          let ver = req.header("X-Version")
+          if ver != "v1" {
+            return deny(403, "version not allowed")
+          }
+        errorPolicy: deny

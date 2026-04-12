@@ -25,13 +25,14 @@ set -eo pipefail
 # Configuration  (edit these variables to customise the build)
 # =============================================================================
 
-DEFAULT_VERSION="0.1.14"
+DEFAULT_VERSION="0.1.19"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
 FEATURES="${FEATURES:-default}"
 BINARIES="gateway controller"
 EXAMPLES="test_server test_client"
+DASHBOARD_REPO="https://github.com/Pandaala/edgion-dashboard.git"
 
 # =============================================================================
 # Internal variables  (no need to change unless you know what you're doing)
@@ -40,6 +41,29 @@ EXAMPLES="test_server test_client"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
 BUILDER_IMAGE="edgion-builder"
+# Prefer local sibling edgion-dashboard if present; fall back to GitHub clone
+DASHBOARD_LOCAL="$(dirname "${PROJECT_DIR}")/edgion-dashboard"
+DASHBOARD_CLONE="${PROJECT_DIR}/docker/.all-in-one-dashboard"
+
+# Map all-in-one mode to Docker image name
+all_in_one_image_name() {
+    local mode=$1
+    if [[ "${mode}" == "controller-gateway" ]]; then
+        echo "edgion-all-in-one"
+    else
+        echo "edgion-all-in-one-${mode}"
+    fi
+}
+
+# Ensure Docker Buildx builder exists and is selected
+ensure_buildx() {
+    if ! docker buildx inspect edgion-builder &> /dev/null; then
+        log_info "Creating Docker Buildx builder..."
+        docker buildx create --name edgion-builder --use
+    else
+        docker buildx use edgion-builder
+    fi
+}
 
 get_arch_info() {
     local arch=$1
@@ -107,15 +131,29 @@ This script builds multi-architecture Docker images using Docker containers:
   3. Create multi-platform manifests (with --push)
 
 Options:
-    --arch ARCH         Comma-separated architectures (default: auto-detect)
-                        Available: arm64, amd64
-    --push              Push images and create multi-arch manifest
-    --rebuild           Force rebuild binaries (ignore cache)
-    --version TAG       Specify version tag (default: git tag or "${DEFAULT_VERSION}")
-    --compile-only      Only compile binaries, don't build images
-    --with-examples     Also build test_server and test_client images
-    --with-example      Alias of --with-examples
-    -h, --help          Show this help message
+    --arch ARCH                  Comma-separated architectures (default: auto-detect)
+                                 Available: arm64, amd64
+    --push                       Push images and create multi-arch manifest
+    --rebuild                    Force rebuild binaries (ignore cache)
+    --version TAG                Specify version tag (default: git tag or "${DEFAULT_VERSION}")
+    --from-tag                   Use current git tag as version (fails if HEAD has no tag)
+    --compile-only               Only compile binaries, don't build images
+    --with-examples              Also build test_server and test_client images
+    --with-example               Alias of --with-examples
+    --all-in-one-controller-gateway     Build all-in-one image: dashboard + controller + gateway
+                                 Image: edgion-all-in-one (standalone, skips standard images)
+    --all-in-one-center                 Build all-in-one image: dashboard + center
+                                 Image: edgion-all-in-one-center (standalone, skips standard images)
+    -h, --help                   Show this help message
+
+All-in-One Notes:
+    --all-in-one-* options produce standalone images that bundle the frontend dashboard
+    with backend binaries and nginx. Dashboard source priority:
+      1. Local sibling directory ../edgion-dashboard (if present)
+      2. Previous GitHub clone (auto-updated)
+      3. Fresh clone from ${DASHBOARD_REPO}
+    When any --all-in-one-* option is specified, standard images are NOT built.
+    Both --all-in-one-* options can be combined to build both all-in-one images in one run.
 
 Environment Variables:
     IMAGE_REGISTRY      Docker registry (default: docker.io)
@@ -134,6 +172,10 @@ Examples:
     # Build and push multi-arch images
     $0 --arch arm64,amd64 --push
 
+    # Build from git tag (interactive confirmation)
+    git tag v0.3.0
+    $0 --from-tag --arch arm64,amd64 --push
+
     # Force rebuild and push
     $0 --arch arm64,amd64 --rebuild --push
 
@@ -142,6 +184,15 @@ Examples:
 
     # Build and push with test_server and test_client
     $0 --arch arm64,amd64 --push --with-examples
+
+    # Build all-in-one: dashboard + controller + gateway
+    $0 --all-in-one-controller-gateway
+
+    # Build all-in-one: dashboard + center
+    $0 --all-in-one-center --push
+
+    # Build both all-in-one images at once
+    $0 --all-in-one-controller-gateway --all-in-one-center --arch arm64,amd64 --push
 
 Build Flow:
     Stage 1: Build Docker builder image (one-time)
@@ -159,7 +210,7 @@ EOF
 check_prerequisites() {
     log_info "Checking prerequisites..."
     local has_error=false
-    
+
     # Check Docker
     if ! command -v docker &> /dev/null; then
         log_error "Docker not found. Please install Docker."
@@ -192,7 +243,7 @@ check_prerequisites() {
     if [[ "${has_error}" == "true" ]]; then
         exit 1
     fi
-    
+
     log_success "Prerequisites check passed"
 }
 
@@ -264,7 +315,7 @@ compile_binaries() {
             --target \"${target}\" \
             --bin edgion-gateway \
             --bin edgion-controller \
-            --bin edgion-ctl \
+            --bin edgion-cli \
             --features \"${FEATURES}\""
 
     if [[ "${force_rebuild}" == "true" ]]; then
@@ -281,12 +332,12 @@ compile_binaries() {
         -w /project \
         "${builder_tag}" \
         bash -c "${build_cmd}"
-        
+
         if [[ $? -ne 0 ]]; then
         log_error "Compilation failed for ${arch}"
             exit 1
         fi
-        
+
     log_success "Compiled binaries for ${arch}"
 }
 
@@ -350,14 +401,8 @@ build_images() {
     IFS=':' read -r platform target suffix <<< "${arch_info}"
     local bin_path="target/${target}/release"
 
-    # Ensure buildx builder exists
-        if ! docker buildx inspect edgion-builder &> /dev/null; then
-        log_info "Creating Docker Buildx builder..."
-            docker buildx create --name edgion-builder --use
-        else
-            docker buildx use edgion-builder
-        fi
-        
+    ensure_buildx
+
     for binary in ${BINARIES}; do
         local image_base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${binary}"
         local image_tag="${image_base}:${version}_${suffix}"
@@ -374,7 +419,7 @@ build_images() {
             --platform "${platform}"
             --tag "${image_tag}"
         )
-        
+
         if [[ "${push}" == "true" ]]; then
             build_cmd+=(--push)
         else
@@ -411,13 +456,7 @@ build_example_images() {
     IFS=':' read -r platform target suffix <<< "${arch_info}"
     local bin_path="target/${target}/release"
 
-    # Ensure buildx builder exists
-    if ! docker buildx inspect edgion-builder &> /dev/null; then
-        log_info "Creating Docker Buildx builder..."
-        docker buildx create --name edgion-builder --use
-    else
-        docker buildx use edgion-builder
-    fi
+    ensure_buildx
 
     for example in ${EXAMPLES}; do
         # Convert example name to image name: test_server -> edgion-test-server
@@ -598,6 +637,267 @@ merge_example_manifests() {
 }
 
 # =============================================================================
+# All-in-One: Clone / update frontend dashboard from GitHub
+# =============================================================================
+
+prepare_dashboard() {
+    # 1. Use local sibling directory if it exists (typical dev setup)
+    if [[ -f "${DASHBOARD_LOCAL}/package.json" ]]; then
+        DASHBOARD_DIR="${DASHBOARD_LOCAL}"
+        log_info "Using local dashboard at ${DASHBOARD_DIR}"
+    # 2. Reuse previous clone if it exists
+    elif [[ -d "${DASHBOARD_CLONE}/.git" ]]; then
+        DASHBOARD_DIR="${DASHBOARD_CLONE}"
+        log_info "Updating dashboard clone at ${DASHBOARD_DIR}..."
+        git -C "${DASHBOARD_DIR}" pull --ff-only || {
+            log_warning "git pull failed, using existing checkout"
+        }
+    # 3. Clone from GitHub as fallback
+    else
+        DASHBOARD_DIR="${DASHBOARD_CLONE}"
+        log_info "Cloning dashboard from ${DASHBOARD_REPO}..."
+        rm -rf "${DASHBOARD_DIR}"
+        git clone --depth 1 "${DASHBOARD_REPO}" "${DASHBOARD_DIR}"
+    fi
+
+    if [[ ! -f "${DASHBOARD_DIR}/package.json" ]]; then
+        log_error "Dashboard not found — package.json missing"
+        exit 1
+    fi
+
+    log_success "Dashboard source ready at ${DASHBOARD_DIR}"
+}
+
+# =============================================================================
+# All-in-One: Build frontend dashboard
+# =============================================================================
+
+compile_frontend() {
+    log_stage "All-in-One: Building frontend dashboard"
+
+    prepare_dashboard
+
+    # Build frontend in Docker for consistency (no local Node.js required)
+    log_info "Running npm ci + npm run build inside Docker (node:20-slim)..."
+    docker run --rm \
+        -v "${DASHBOARD_DIR}":/app \
+        -w /app \
+        node:20-slim \
+        bash -c "npm ci --prefer-offline && npm run build"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Frontend build failed"
+        exit 1
+    fi
+
+    # Copy dist into Docker build context
+    rm -rf "${PROJECT_DIR}/docker/.all-in-one-dist"
+    cp -r "${DASHBOARD_DIR}/dist" "${PROJECT_DIR}/docker/.all-in-one-dist"
+
+    log_success "Frontend dashboard built successfully"
+}
+
+# =============================================================================
+# All-in-One: Compile backend binaries needed for a specific all-in-one mode
+# =============================================================================
+
+compile_all_in_one_binaries() {
+    local arch=$1
+    local force_rebuild=$2
+    local all_in_one_mode=$3   # "controller-gateway" or "center"
+
+    local arch_info
+    arch_info=$(get_arch_info "${arch}")
+    IFS=':' read -r platform target suffix <<< "${arch_info}"
+    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+
+    # Determine which binaries to compile
+    local bins="--bin edgion-cli"
+    case "${all_in_one_mode}" in
+        controller-gateway)
+            bins="${bins} --bin edgion-gateway --bin edgion-controller"
+            ;;
+        center)
+            bins="${bins} --bin edgion-center"
+            ;;
+        both)
+            bins="${bins} --bin edgion-gateway --bin edgion-controller --bin edgion-center"
+            ;;
+    esac
+
+    log_info "Compiling all-in-one [${all_in_one_mode}] binaries for ${arch} (${target})..."
+    log_info "This may take several minutes on first build..."
+
+    ensure_builder_image "${platform}"
+
+    local build_cmd="cargo build --release \
+            --target \"${target}\" \
+            ${bins} \
+            --features \"${FEATURES}\""
+
+    if [[ "${force_rebuild}" == "true" ]]; then
+        log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
+        build_cmd="cargo clean --target \"${target}\" && ${build_cmd}"
+    fi
+
+    docker run --rm \
+        --platform "${platform}" \
+        -v "${PROJECT_DIR}":/project \
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -w /project \
+        "${builder_tag}" \
+        bash -c "${build_cmd}"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "All-in-one compilation failed for ${arch} (${all_in_one_mode})"
+        exit 1
+    fi
+
+    log_success "Compiled all-in-one [${all_in_one_mode}] binaries for ${arch}"
+}
+
+# =============================================================================
+# All-in-One: Build a single all-in-one Docker image
+# =============================================================================
+
+build_all_in_one_image() {
+    local arch=$1
+    local push=$2
+    local version=$3
+    local all_in_one_mode=$4   # "controller-gateway" or "center"
+
+    local arch_info
+    arch_info=$(get_arch_info "${arch}")
+    IFS=':' read -r platform target suffix <<< "${arch_info}"
+    local bin_path="target/${target}/release"
+
+    ensure_buildx
+
+    local image_name
+    image_name=$(all_in_one_image_name "${all_in_one_mode}")
+
+    local image_base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}"
+    local image_tag="${image_base}:${version}_${suffix}"
+
+    log_info "Building all-in-one [${all_in_one_mode}] image for ${arch}..."
+    log_info "  Tag: ${image_tag}"
+
+    local build_cmd=(
+        docker buildx build
+        --file docker/Dockerfile.all-in-one
+        --build-arg "ALL_IN_ONE_MODE=${all_in_one_mode}"
+        --build-arg "BINARY_PATH=${bin_path}"
+        --build-arg "DASHBOARD_DIST_PATH=docker/.all-in-one-dist"
+        --platform "${platform}"
+        --tag "${image_tag}"
+    )
+
+    if [[ "${push}" == "true" ]]; then
+        build_cmd+=(--push)
+    else
+        build_cmd+=(--load)
+    fi
+
+    build_cmd+=("${PROJECT_DIR}")
+
+    "${build_cmd[@]}"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to build all-in-one [${all_in_one_mode}] image for ${arch}"
+        exit 1
+    fi
+
+    log_success "Built ${image_name}:${version}_${suffix}"
+    BUILD_INFO+=("all-in-one-${all_in_one_mode}|${image_tag}|${arch}")
+}
+
+# =============================================================================
+# All-in-One: Merge multi-architecture manifest for a single all-in-one image
+# =============================================================================
+
+merge_all_in_one_manifest() {
+    local version=$1
+    local all_in_one_mode=$2
+    shift 2
+    local archs=("$@")
+
+    local version_no_v="${version#v}"
+    local major="" minor=""
+
+    if [[ "${version_no_v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        major=$(echo "${version_no_v}" | cut -d. -f1)
+        minor=$(echo "${version_no_v}" | cut -d. -f1-2)
+    fi
+
+    local image_name
+    image_name=$(all_in_one_image_name "${all_in_one_mode}")
+
+    local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}"
+
+    log_info "Creating multi-arch manifest for ${image_name}..."
+
+    local tags=()
+    tags+=(-t "${base}:${version_no_v}")
+    tags+=(-t "${base}:latest")
+
+    if [[ -n "${minor}" ]]; then
+        tags+=(-t "${base}:${minor}")
+    fi
+    if [[ -n "${major}" ]]; then
+        tags+=(-t "${base}:${major}")
+    fi
+
+    local sources=()
+    for arch in "${archs[@]}"; do
+        local arch_info
+        arch_info=$(get_arch_info "${arch}")
+        IFS=':' read -r _ _ suffix <<< "${arch_info}"
+        sources+=("${base}:${version}_${suffix}")
+    done
+
+    log_info "  Tags: ${version_no_v}, latest${minor:+, ${minor}}${major:+, ${major}}"
+    log_info "  Sources: ${sources[*]}"
+
+    docker buildx imagetools create \
+        "${tags[@]}" \
+        "${sources[@]}"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to create manifest for ${image_name}"
+        exit 1
+    fi
+
+    log_success "Created multi-arch manifest for ${image_name}"
+}
+
+# =============================================================================
+# All-in-One: Print summary for one all-in-one image
+# =============================================================================
+
+print_all_in_one_summary() {
+    local version_no_v=$1
+    local push=$2
+    local all_in_one_mode=$3
+    shift 3
+    local archs=("$@")
+
+    local image_name
+    image_name=$(all_in_one_image_name "${all_in_one_mode}")
+
+    if [[ "${push}" == "true" ]]; then
+        echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}:${version_no_v}"
+    else
+        for arch in "${archs[@]}"; do
+            local arch_info
+            arch_info=$(get_arch_info "${arch}")
+            IFS=':' read -r _ _ suffix <<< "${arch_info}"
+            echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}:${version}_${suffix} (local)"
+        done
+    fi
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -607,13 +907,16 @@ main() {
         show_usage
         exit 0
     fi
-    
+
     # Parse options
     local archs_arg=""
     local push=false
     local rebuild=false
     local compile_only=false
     local with_examples=false
+    local all_in_one_controller_gateway=false
+    local all_in_one_center=false
+    local from_tag=false
     local version="${VERSION}"
 
     while [[ $# -gt 0 ]]; do
@@ -634,12 +937,24 @@ main() {
                 version=$2
                 shift 2
                 ;;
+            --from-tag)
+                from_tag=true
+                shift
+                ;;
             --compile-only)
                 compile_only=true
                 shift
                 ;;
             --with-examples|--with-example)
                 with_examples=true
+                shift
+                ;;
+            --all-in-one-controller-gateway)
+                all_in_one_controller_gateway=true
+                shift
+                ;;
+            --all-in-one-center)
+                all_in_one_center=true
                 shift
                 ;;
             -h|--help)
@@ -653,6 +968,50 @@ main() {
                 ;;
         esac
     done
+
+    # Derived flag: any all-in-one mode requested?
+    local any_all_in_one=false
+    if [[ "${all_in_one_controller_gateway}" == "true" ]] || [[ "${all_in_one_center}" == "true" ]]; then
+        any_all_in_one=true
+    fi
+
+    # --from-tag: resolve version from current git tag
+    if [[ "${from_tag}" == "true" ]]; then
+        if ! git rev-parse --git-dir > /dev/null 2>&1; then
+            log_error "Not a git repository, cannot use --from-tag"
+            exit 1
+        fi
+        local git_tag
+        git_tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
+        if [[ -z "${git_tag}" ]]; then
+            log_error "HEAD is not on a git tag. Please create a tag first:"
+            log_error "  git tag v0.x.0 && ./build-image.sh --from-tag --push"
+            exit 1
+        fi
+        local git_commit
+        git_commit=$(git rev-parse --short HEAD)
+        local git_branch
+        git_branch=$(git branch --show-current 2>/dev/null || echo "detached")
+
+        version="${git_tag}"
+
+        echo ""
+        log_info "┌─────────────────────────────────────────────┐"
+        log_info "│  Build from Git Tag                         │"
+        log_info "├─────────────────────────────────────────────┤"
+        log_info "│  Tag:      ${git_tag}"
+        log_info "│  Commit:   ${git_commit}"
+        log_info "│  Branch:   ${git_branch}"
+        log_info "│  Push:     ${push}"
+        log_info "└─────────────────────────────────────────────┘"
+        echo ""
+        read -rp "$(echo -e "${YELLOW}Proceed with version ${git_tag}? [y/N]: ${NC}")" confirm
+        if [[ "${confirm}" != "y" && "${confirm}" != "Y" ]]; then
+            log_info "Aborted."
+            exit 0
+        fi
+        echo ""
+    fi
 
     # Auto-detect architecture if not specified
     if [[ -z "${archs_arg}" ]]; then
@@ -681,13 +1040,103 @@ main() {
     log_info "Architectures: ${archs[*]}"
     log_info "Registry: ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}"
     log_info "Push: ${push}"
-    log_info "With Examples: ${with_examples}"
+    if [[ "${any_all_in_one}" == "true" ]]; then
+        log_info "Mode: All-in-One (standalone images)"
+        [[ "${all_in_one_controller_gateway}" == "true" ]] && log_info "  → edgion-all-in-one (dashboard + controller + gateway)"
+        [[ "${all_in_one_center}" == "true" ]]             && log_info "  → edgion-all-in-one-center (dashboard + center)"
+    else
+        log_info "Mode: Standard"
+        [[ "${with_examples}" == "true" ]] && log_info "  → With examples"
+    fi
     echo ""
-    
+
     check_prerequisites
-    
+
     BUILD_INFO=()
-    
+
+    # =========================================================================
+    # All-in-One path — completely separate from standard
+    # =========================================================================
+    if [[ "${any_all_in_one}" == "true" ]]; then
+
+        # --- Compile backend binaries ---
+        # "both" compiles all four binaries in a single cargo invocation;
+        # single mode compiles only what's needed.
+        local compile_mode=""
+        if [[ "${all_in_one_controller_gateway}" == "true" ]] && [[ "${all_in_one_center}" == "true" ]]; then
+            compile_mode="both"
+        elif [[ "${all_in_one_controller_gateway}" == "true" ]]; then
+            compile_mode="controller-gateway"
+        else
+            compile_mode="center"
+        fi
+
+        log_stage "All-in-One: Compiling backend binaries (${compile_mode})"
+        for arch in "${archs[@]}"; do
+            compile_all_in_one_binaries "${arch}" "${rebuild}" "${compile_mode}"
+        done
+
+        # --- Build frontend ---
+        compile_frontend
+
+        if [[ "${compile_only}" == "true" ]]; then
+            log_success "All-in-one compilation completed (--compile-only)"
+            rm -rf "${PROJECT_DIR}/docker/.all-in-one-dist"
+            exit 0
+        fi
+
+        # --- Build all-in-one Docker images ---
+        log_stage "All-in-One: Building Docker images"
+        for arch in "${archs[@]}"; do
+            [[ "${all_in_one_controller_gateway}" == "true" ]] && build_all_in_one_image "${arch}" "${push}" "${version}" "controller-gateway"
+            [[ "${all_in_one_center}" == "true" ]]             && build_all_in_one_image "${arch}" "${push}" "${version}" "center"
+        done
+
+        # --- Merge manifests ---
+        if [[ "${push}" == "true" ]] && [[ ${#archs[@]} -gt 1 ]]; then
+            log_stage "All-in-One: Creating multi-architecture manifests"
+            [[ "${all_in_one_controller_gateway}" == "true" ]] && merge_all_in_one_manifest "${version}" "controller-gateway" "${archs[@]}"
+            [[ "${all_in_one_center}" == "true" ]]             && merge_all_in_one_manifest "${version}" "center" "${archs[@]}"
+        elif [[ "${push}" == "true" ]]; then
+            log_info "Single architecture, creating simple tags..."
+            local version_no_v="${version#v}"
+            local arch_info
+            arch_info=$(get_arch_info "${archs[0]}")
+            IFS=':' read -r _ _ suffix <<< "${arch_info}"
+
+            for all_in_one_mode in controller-gateway center; do
+                local flag_var="all_in_one_${all_in_one_mode//-/_}"
+                [[ "${!flag_var}" != "true" ]] && continue
+
+                local image_name
+                image_name=$(all_in_one_image_name "${all_in_one_mode}")
+                local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}"
+                docker buildx imagetools create \
+                    -t "${base}:${version_no_v}" \
+                    -t "${base}:latest" \
+                    "${base}:${version}_${suffix}"
+            done
+        fi
+
+        # --- Summary ---
+        echo ""
+        log_success "All-in-one build completed successfully!"
+        echo ""
+        log_info "Built all-in-one images:"
+        local version_no_v="${version#v}"
+        [[ "${all_in_one_controller_gateway}" == "true" ]] && print_all_in_one_summary "${version_no_v}" "${push}" "controller-gateway" "${archs[@]}"
+        [[ "${all_in_one_center}" == "true" ]]             && print_all_in_one_summary "${version_no_v}" "${push}" "center" "${archs[@]}"
+
+        # Cleanup temporary frontend dist
+        rm -rf "${PROJECT_DIR}/docker/.all-in-one-dist"
+        echo ""
+        return 0
+    fi
+
+    # =========================================================================
+    # Standard path — gateway + controller (+ optional examples)
+    # =========================================================================
+
     # Stage 2: Compile binaries
     log_stage "Stage 2: Compiling binaries"
     for arch in "${archs[@]}"; do
@@ -724,7 +1173,6 @@ main() {
     # Stage 4: Merge manifests (only when pushing)
     if [[ "${push}" == "true" ]] && [[ ${#archs[@]} -gt 1 ]]; then
         merge_manifests "${version}" "${archs[@]}"
-        # Stage 4b: Merge example manifests (only with --with-examples)
         if [[ "${with_examples}" == "true" ]]; then
             merge_example_manifests "${version}" "${archs[@]}"
         fi
@@ -737,7 +1185,7 @@ main() {
 
         for binary in ${BINARIES}; do
             local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${binary}"
-            
+
             # Tag the arch-specific image as main tags
             docker buildx imagetools create \
                 -t "${base}:${version_no_v}" \
@@ -750,7 +1198,7 @@ main() {
             for example in ${EXAMPLES}; do
                 local image_name="${example//_/-}"
                 local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
-                
+
                 docker buildx imagetools create \
                     -t "${base}:${version_no_v}" \
                     -t "${base}:latest" \

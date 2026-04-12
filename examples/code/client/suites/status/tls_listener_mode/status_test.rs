@@ -1,9 +1,10 @@
 //! TLS Listener Mode Status Test Suite
 //!
 //! Tests that Gateway listener status correctly reflects TLS mode support:
-//! 1. Passthrough mode → Accepted=True
-//! 2. Mixed mode → Accepted=False, reason=UnsupportedValue
-//! 3. Terminate mode → Accepted=True (defaults to TCP backend without annotation)
+//! 1. TLS/Passthrough → Accepted=True
+//! 2. HTTPS/Passthrough → Accepted=False, reason=UnsupportedValue (HTTPS only supports Terminate)
+//! 3. TLS/Terminate → Accepted=True
+//! 4. Two TLS listeners on the same port with different modes → Accepted=False, reason=ProtocolConflict
 
 use super::super::helpers;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -71,10 +72,10 @@ impl TlsListenerModeStatusTestSuite {
         )
     }
 
-    fn test_mixed_unsupported() -> TestCase {
+    fn test_https_passthrough_unsupported() -> TestCase {
         TestCase::new(
-            "mixed_unsupported_tls_mode",
-            "TLS Mixed listener should have Accepted=False with reason UnsupportedValue",
+            "https_passthrough_unsupported",
+            "HTTPS listener with Passthrough mode should have Accepted=False with reason UnsupportedValue",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -82,7 +83,7 @@ impl TlsListenerModeStatusTestSuite {
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
                         Ok(gateway) => {
-                            let cond = Self::find_listener_condition(&gateway, "mixed", "Accepted");
+                            let cond = Self::find_listener_condition(&gateway, "unsupported-mode", "Accepted");
                             match cond {
                                 Some(c)
                                     if c["status"].as_str() == Some("False")
@@ -90,24 +91,74 @@ impl TlsListenerModeStatusTestSuite {
                                 {
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        "mixed listener: Accepted=False(UnsupportedValue)".to_string(),
+                                        "unsupported-mode listener: Accepted=False(UnsupportedValue)".to_string(),
                                     )
                                 }
                                 Some(c) => TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "mixed listener: expected Accepted=False(UnsupportedValue), got: {}",
+                                        "unsupported-mode listener: expected Accepted=False(UnsupportedValue), got: {}",
                                         serde_json::to_string_pretty(c).unwrap_or_default()
                                     ),
                                 ),
                                 None => TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "mixed listener: Accepted condition not found. listeners: {}",
+                                        "unsupported-mode listener: Accepted condition not found. listeners: {}",
                                         serde_json::to_string_pretty(&gateway["status"]["listeners"])
                                             .unwrap_or_default()
                                     ),
                                 ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_mixed_tls_conflict() -> TestCase {
+        TestCase::new(
+            "mixed_tls_conflict",
+            "Two TLS listeners on the same port with different modes should both have Accepted=False, reason=ProtocolConflict",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
+                        Ok(gateway) => {
+                            let check = |listener_name: &str| -> Result<(), String> {
+                                let cond = Self::find_listener_condition(&gateway, listener_name, "Accepted");
+                                match cond {
+                                    Some(c)
+                                        if c["status"].as_str() == Some("False")
+                                            && c["reason"].as_str() == Some("ProtocolConflict") =>
+                                    {
+                                        Ok(())
+                                    }
+                                    Some(c) => Err(format!(
+                                        "{}: expected Accepted=False(ProtocolConflict), got: {}",
+                                        listener_name,
+                                        serde_json::to_string_pretty(c).unwrap_or_default()
+                                    )),
+                                    None => Err(format!(
+                                        "{}: Accepted condition not found. listeners: {}",
+                                        listener_name,
+                                        serde_json::to_string_pretty(&gateway["status"]["listeners"])
+                                            .unwrap_or_default()
+                                    )),
+                                }
+                            };
+
+                            match (check("mixed-passthrough"), check("mixed-terminate")) {
+                                (Ok(()), Ok(())) => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "mixed-passthrough and mixed-terminate: both Accepted=False(ProtocolConflict)"
+                                        .to_string(),
+                                ),
+                                (Err(e), _) | (_, Err(e)) => TestResult::failed(start.elapsed(), e),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), e),
@@ -168,8 +219,9 @@ impl TestSuite for TlsListenerModeStatusTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_passthrough_accepted(),
-            Self::test_mixed_unsupported(),
+            Self::test_https_passthrough_unsupported(),
             Self::test_terminate_accepted(),
+            Self::test_mixed_tls_conflict(),
         ]
     }
 }

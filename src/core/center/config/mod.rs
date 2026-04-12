@@ -1,3 +1,6 @@
+use crate::core::common::auth::AdminAuthConfig;
+use crate::core::common::config::ConfSyncSecurityConfig;
+use crate::core::common::local_auth::LocalAuthConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5,6 +8,20 @@ use serde::{Deserialize, Serialize};
 pub struct CenterConfig {
     pub server: CenterServerConfig,
     pub sync: CenterSyncConfig,
+    /// Optional OIDC Admin API authentication.
+    /// Omit to disable OIDC auth. When present, Admin API endpoints (except
+    /// health/ready) require a valid JWT Bearer token from the OIDC provider.
+    #[serde(default)]
+    pub auth: Option<AdminAuthConfig>,
+    /// Optional local Admin API authentication.
+    /// Omit to use default local auth (admin/edgion1234).
+    /// Both `auth` and `local_auth` can be enabled simultaneously.
+    #[serde(default)]
+    pub local_auth: Option<LocalAuthConfig>,
+    /// TLS config for the federation gRPC server.
+    /// Omit this section to keep plaintext gRPC (backward compatible).
+    #[serde(default)]
+    pub grpc_security: ConfSyncSecurityConfig,
 }
 
 impl Default for CenterConfig {
@@ -12,6 +29,9 @@ impl Default for CenterConfig {
         Self {
             server: CenterServerConfig::default(),
             sync: CenterSyncConfig::default(),
+            auth: None,
+            local_auth: None,
+            grpc_security: ConfSyncSecurityConfig::default(),
         }
     }
 }
@@ -78,15 +98,15 @@ mod tests {
     }
 
     #[test]
-    fn test_center_config_parses_from_toml() {
-        let toml = r#"
-            [server]
-            grpc_addr = "0.0.0.0:50100"
-            http_addr = "0.0.0.0:5900"
-            [sync]
-            list_interval_secs = 60
-        "#;
-        let config: CenterConfig = toml::from_str(toml).unwrap();
+    fn test_center_config_parses_from_yaml() {
+        let yaml = r#"
+server:
+  grpc_addr: "0.0.0.0:50100"
+  http_addr: "0.0.0.0:5900"
+sync:
+  list_interval_secs: 60
+"#;
+        let config: CenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.server.grpc_addr, "0.0.0.0:50100");
         assert_eq!(config.sync.list_interval_secs, 60);
         assert_eq!(config.sync.ping_interval_secs, 30); // default

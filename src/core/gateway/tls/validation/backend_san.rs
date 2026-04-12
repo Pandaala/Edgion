@@ -46,7 +46,7 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
                         {
                             continue;
                         }
-                        if matches_hostname(cert_san, hostname_pattern) {
+                        if super::matches_host_pattern(cert_san, hostname_pattern) {
                             return BackendSanValidationResult {
                                 passed: true,
                                 reason: format!(
@@ -82,35 +82,6 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
             policy_sans.len()
         ),
     }
-}
-
-/// Match a hostname value against a pattern, supporting exact match and wildcard (`*.example.com`).
-fn matches_hostname(value: &str, pattern: &str) -> bool {
-    if pattern == value {
-        return true;
-    }
-
-    if let Some(suffix) = pattern.strip_prefix("*.") {
-        if pattern.len() < 3 {
-            return false;
-        }
-
-        if value.ends_with(suffix) {
-            let prefix_len = value.len() - suffix.len();
-            if prefix_len == 0 {
-                return false;
-            }
-            let prefix = &value[..prefix_len];
-            if let Some(subdomain) = prefix.strip_suffix('.') {
-                if !subdomain.is_empty() {
-                    return !subdomain.contains('.');
-                }
-                return false;
-            }
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]
@@ -207,9 +178,10 @@ mod tests {
 
     #[test]
     fn test_matches_hostname_exact_and_wildcard() {
-        assert!(matches_hostname("foo.example.com", "foo.example.com"));
-        assert!(matches_hostname("foo.example.com", "*.example.com"));
-        assert!(!matches_hostname("foo.bar.example.com", "*.example.com"));
-        assert!(!matches_hostname("example.com", "*.example.com"));
+        use crate::core::gateway::tls::validation::matches_host_pattern;
+        assert!(matches_host_pattern("foo.example.com", "foo.example.com"));
+        assert!(matches_host_pattern("foo.example.com", "*.example.com"));
+        assert!(!matches_host_pattern("foo.bar.example.com", "*.example.com"));
+        assert!(!matches_host_pattern("example.com", "*.example.com"));
     }
 }

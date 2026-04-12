@@ -52,14 +52,9 @@ pub fn upstream_response_body_filter(
                 plugin_ref.namespace.as_deref().unwrap_or("default"),
                 &plugin_ref.name
             );
-            if let Some(edgion_plugin) = get_global_plugin_store().get(&plugin_key) {
-                if edgion_plugin.spec.plugin_runtime.upstream_response_body_plugins_count() > 0 {
-                    if let Some(delay) = edgion_plugin.spec.plugin_runtime.run_upstream_response_body_plugins(
-                        session,
-                        ctx,
-                        body,
-                        end_of_stream,
-                    ) {
+            if let Some(runtime) = get_global_plugin_store().get_plugin_runtime(&plugin_key) {
+                if runtime.upstream_response_body_plugins_count() > 0 {
+                    if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
                         max_delay = Some(match max_delay {
                             Some(current) => current.max(delay),
                             None => delay,

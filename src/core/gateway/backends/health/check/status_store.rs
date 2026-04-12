@@ -1,6 +1,7 @@
 use arc_swap::ArcSwap;
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 static HEALTH_STATUS_STORE: LazyLock<Arc<HealthStatusStore>> = LazyLock::new(|| Arc::new(HealthStatusStore::new()));
@@ -106,7 +107,7 @@ impl HealthStatusStore {
         let unhealthy_threshold = unhealthy_threshold.max(1);
 
         let now = Instant::now();
-        let mut states = service_state.states.lock().expect("lock service states");
+        let mut states = service_state.states.lock();
         let entry = states.entry(backend_hash).or_default();
         let was_healthy = entry.healthy;
         entry.last_check_time = now;
@@ -150,7 +151,7 @@ impl HealthStatusStore {
 
         service_state.tracked_backends.store(Arc::new(backend_set.clone()));
 
-        let mut states = service_state.states.lock().expect("lock service states");
+        let mut states = service_state.states.lock();
         states.retain(|hash, _| backend_set.contains(hash));
         for hash in &backend_set {
             states.entry(*hash).or_default();
@@ -166,7 +167,7 @@ impl HealthStatusStore {
     }
 
     pub fn unregister_service(&self, service_key: &str) {
-        let _guard = self.services_update_lock.lock().expect("lock services update");
+        let _guard = self.services_update_lock.lock();
         let current = self.services.load();
         if !current.contains_key(service_key) {
             return;
@@ -182,7 +183,7 @@ impl HealthStatusStore {
             return existing;
         }
 
-        let _guard = self.services_update_lock.lock().expect("lock services update");
+        let _guard = self.services_update_lock.lock();
         let current = self.services.load();
         if let Some(existing) = current.get(service_key).cloned() {
             return existing;

@@ -72,6 +72,7 @@
 - `ResponseRewrite`
 - `DynamicInternalUpstream`
 - `DynamicExternalUpstream`
+- `RegionRoute`
 - `DirectEndpoint`
 - `Dsl`
 

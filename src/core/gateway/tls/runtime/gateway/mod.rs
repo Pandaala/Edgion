@@ -1,4 +1,4 @@
-#![cfg(any(feature = "boringssl", feature = "openssl"))]
+#![cfg(feature = "boringssl")]
 
 // Downstream (gateway) TLS callbacks and helpers.
 

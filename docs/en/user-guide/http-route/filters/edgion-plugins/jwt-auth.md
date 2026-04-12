@@ -452,3 +452,11 @@ curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/data
 # No Token - returns 401
 curl https://api.example.com/api/data
 ```
+
+---
+
+## Related Links
+
+- [BasicAuth](./basic-auth.md) — Basic authentication
+- [KeyAuth](./key-auth.md) — API Key authentication
+- [HmacAuth](./hmac-auth.md) — HMAC authentication

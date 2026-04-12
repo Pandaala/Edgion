@@ -8,19 +8,19 @@
 
 ## 先读这些真实入口
 
-- [../../docs/zh-CN/dev-guide/http-plugin-development.md](../../docs/zh-CN/dev-guide/http-plugin-development.md)
-- [../../src/types/resources/edgion_plugins/mod.rs](../../src/types/resources/edgion_plugins/mod.rs)
-- [../../src/types/resources/edgion_plugins/entry.rs](../../src/types/resources/edgion_plugins/entry.rs)
-- [../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../src/types/resources/edgion_plugins/edgion_plugin.rs)
-- [../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
-- [../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../src/core/gateway/plugins/runtime/conditional_filter.rs)
-- [../../src/core/gateway/plugins/runtime/traits/session.rs](../../src/core/gateway/plugins/runtime/traits/session.rs)
-- [../../src/core/gateway/plugins/runtime/log.rs](../../src/core/gateway/plugins/runtime/log.rs)
-- [../../src/core/gateway/plugins/http/mod.rs](../../src/core/gateway/plugins/http/mod.rs)
-- [../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
-- [../../src/core/gateway/plugins/http/conf_handler_impl.rs](../../src/core/gateway/plugins/http/conf_handler_impl.rs)
-- [../../src/core/gateway/plugins/http/plugin_store.rs](../../src/core/gateway/plugins/http/plugin_store.rs)
-- [../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
+- [../../../docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
+- [../../../src/types/resources/edgion_plugins/mod.rs](../../../src/types/resources/edgion_plugins/mod.rs)
+- [../../../src/types/resources/edgion_plugins/entry.rs](../../../src/types/resources/edgion_plugins/entry.rs)
+- [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
+- [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
+- [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
+- [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
+- [../../../src/core/gateway/plugins/runtime/log.rs](../../../src/core/gateway/plugins/runtime/log.rs)
+- [../../../src/core/gateway/plugins/http/mod.rs](../../../src/core/gateway/plugins/http/mod.rs)
+- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
+- [../../../src/core/gateway/plugins/http/conf_handler_impl.rs](../../../src/core/gateway/plugins/http/conf_handler_impl.rs)
+- [../../../src/core/gateway/plugins/http/plugin_store.rs](../../../src/core/gateway/plugins/http/plugin_store.rs)
+- [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
 ## 关键心智模型
 
@@ -74,7 +74,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 如果需求只依赖 IP、监听端口、SNI、mTLS，先转去：
 
-- [02-stream-plugin-dev.md](02-stream-plugin-dev.md)
+- [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
 
 ## 选择插件阶段
 
@@ -107,7 +107,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 还要继续看：
 
-- [../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
+- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
 
 当前这个 handler 已经负责：
 
@@ -153,7 +153,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 修改：
 
-- [../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../src/types/resources/edgion_plugins/edgion_plugin.rs)
+- [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
 
 至少补齐：
 
@@ -179,7 +179,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 必须看：
 
-- [../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
+- [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
 
 当前真实入口不是旧文档里的 `runtime.rs`，而是这个文件。
 
@@ -229,7 +229,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 条件执行的真实包装器在：
 
-- [../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../src/core/gateway/plugins/runtime/conditional_filter.rs)
+- [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
 
 重要区别：
 
@@ -249,7 +249,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 如果插件是通过 `ExtensionRef` 被 route 引用，重点看：
 
-- [../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
+- [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
 当前行为是：
 
@@ -264,7 +264,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 最常用的读写入口在：
 
-- [../../src/core/gateway/plugins/runtime/traits/session.rs](../../src/core/gateway/plugins/runtime/traits/session.rs)
+- [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
 
 高频 API：
 
@@ -287,7 +287,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 入口在：
 
-- [../../src/core/gateway/plugins/runtime/log.rs](../../src/core/gateway/plugins/runtime/log.rs)
+- [../../../src/core/gateway/plugins/runtime/log.rs](../../../src/core/gateway/plugins/runtime/log.rs)
 
 规则保持简单：
 
@@ -329,7 +329,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 - `src/types/resources/edgion_plugins/tests.rs`
 - 各插件自身的 `plugin.rs` / `tests.rs`
-- [../05-testing/01-integration-testing.md](../05-testing/01-integration-testing.md)
+- [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
 
 ## 审查清单
 
@@ -343,7 +343,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 ## 相关
 
-- [../../docs/zh-CN/dev-guide/http-plugin-development.md](../../docs/zh-CN/dev-guide/http-plugin-development.md)
-- [observability/00-access-log.md](../03-coding/observability/00-access-log.md)
-- [02-stream-plugin-dev.md](02-stream-plugin-dev.md)
-- [../05-testing/01-integration-testing.md](../05-testing/01-integration-testing.md)
+- [../../../docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
+- [observability/00-access-log.md](../../03-coding/observability/00-access-log.md)
+- [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
+- [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)

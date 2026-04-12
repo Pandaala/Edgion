@@ -271,37 +271,19 @@ where
                             }
                         }
                         Event::InitApply(obj) => {
-                            if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                let result = self.processor.on_init_apply(obj, None).await;
-
-                                if let WorkItemResult::Processed { obj, status_changed } = result {
-                                    init_count += 1;
-                                    let can_write_status = self.leader_handle.as_ref().is_none_or(|h| h.is_leader());
-                                    if status_changed && can_write_status {
-                                        if let Some(status_value) = extract_status_value(&obj) {
-                                            let name = obj.meta().name.as_deref().unwrap_or("");
-                                            let namespace = obj.meta().namespace.as_deref();
-
-                                            if let Err(e) = persist_k8s_status::<K>(
-                                                &self.client,
-                                                &self.api_scope,
-                                                namespace,
-                                                name,
-                                                &status_value,
-                                            )
-                                            .await
-                                            {
-                                                tracing::warn!(
-                                                    component = "resource_controller",
-                                                    kind = kind,
-                                                    name = %name,
-                                                    error = %e,
-                                                    "Failed to persist status during init"
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
+                            if run_init_apply_once(
+                                obj,
+                                &self.processor,
+                                &self.client,
+                                &self.api_scope,
+                                &self.leader_handle,
+                                &self.namespace_filter,
+                                kind,
+                                "init",
+                            )
+                            .await
+                            {
+                                init_count += 1;
                             }
                         }
                         Event::InitDone => {
@@ -338,43 +320,29 @@ where
                         }
                         Event::Apply(obj) => {
                             if !init_done {
+                                metrics::counter!(
+                                    crate::core::controller::conf_mgr::sync_runtime::metrics::names::UNEXPECTED_APPLY_DURING_INIT_TOTAL,
+                                    "kind" => kind
+                                )
+                                .increment(1);
                                 tracing::warn!(
                                     component = "resource_controller",
                                     kind = kind,
                                     "Received Apply event during init phase, treating as InitApply"
                                 );
-                                if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    let result = self.processor.on_init_apply(obj, None).await;
-
-                                    if let WorkItemResult::Processed { obj, status_changed } = result {
-                                        init_count += 1;
-                                        let can_write_status =
-                                            self.leader_handle.as_ref().is_none_or(|h| h.is_leader());
-                                        if status_changed && can_write_status {
-                                            if let Some(status_value) = extract_status_value(&obj) {
-                                                let name = obj.meta().name.as_deref().unwrap_or("");
-                                                let namespace = obj.meta().namespace.as_deref();
-
-                                                if let Err(e) = persist_k8s_status::<K>(
-                                                    &self.client,
-                                                    &self.api_scope,
-                                                    namespace,
-                                                    name,
-                                                    &status_value,
-                                                )
-                                                .await
-                                                {
-                                                    tracing::warn!(
-                                                        component = "resource_controller",
-                                                        kind = kind,
-                                                        name = %name,
-                                                        error = %e,
-                                                        "Failed to persist status during apply-as-init"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
+                                if run_init_apply_once(
+                                    obj,
+                                    &self.processor,
+                                    &self.client,
+                                    &self.api_scope,
+                                    &self.leader_handle,
+                                    &self.namespace_filter,
+                                    kind,
+                                    "apply-as-init",
+                                )
+                                .await
+                                {
+                                    init_count += 1;
                                 }
                             } else {
                                 // Runtime phase - enqueue key for worker
@@ -689,6 +657,55 @@ where
         },
         None => true,
     }
+}
+
+/// Process one object through the init-apply pipeline.
+///
+/// Applies namespace filter, calls `processor.on_init_apply`, and persists status to K8s
+/// if it changed and this node is the leader.
+///
+/// Returns `true` when the object was fully processed (caller should increment `init_count`).
+async fn run_init_apply_once<K>(
+    obj: K,
+    processor: &Arc<ResourceProcessor<K>>,
+    client: &Client,
+    api_scope: &ApiScope,
+    leader_handle: &Option<LeaderHandle>,
+    namespace_filter: &Option<Vec<String>>,
+    kind: &'static str,
+    phase: &'static str,
+) -> bool
+where
+    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
+    K::DynamicType: Default + Eq + Hash + Clone + Debug + Unpin,
+{
+    if !passes_namespace_filter(&obj, namespace_filter) {
+        return false;
+    }
+
+    let WorkItemResult::Processed { obj, status_changed } = processor.on_init_apply(obj, None).await else {
+        return false;
+    };
+
+    let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
+    if status_changed && can_write_status {
+        let name = obj.meta().name.as_deref().unwrap_or("");
+        let namespace = obj.meta().namespace.as_deref();
+        if let Some(status_value) = extract_status_value(&obj) {
+            if let Err(e) = persist_k8s_status::<K>(client, api_scope, namespace, name, &status_value).await {
+                tracing::warn!(
+                    component = "resource_controller",
+                    kind = kind,
+                    name = %name,
+                    phase = phase,
+                    error = %e,
+                    "Failed to persist status during init phase"
+                );
+            }
+        }
+    }
+
+    true
 }
 
 /// Parse a resource key back to ObjectRef

@@ -165,17 +165,10 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
         None => return 1, // No client auth configured, allow
     };
 
-    // SAFETY: Convert SSL* to &SslRef
-    // This transmute is safe because:
-    // 1. SslRef is a transparent wrapper around boring_sys::SSL (foreign_types pattern)
-    // 2. ssl_ptr is guaranteed valid during callback execution by BoringSSL
-    // 3. We only create a reference, not taking ownership
-    // 4. The reference lifetime is bounded by this function scope
-    // 5. SslRef uses #[repr(transparent)] (implied by foreign_types)
-    //
-    // If SslRef's internal representation changes, this would need updating.
-    // Alternative: Use Pingora's safe API if/when it exposes SSL in callbacks.
-    let ssl_ref: &SslRef = std::mem::transmute(&*ssl_ptr);
+    // SAFETY: ssl_ptr is valid during callback execution (guaranteed by BoringSSL).
+    // SslRef is an opaque foreign_types wrapper over boring_sys::SSL;
+    // this cast is the same as ForeignTypeRef::from_ptr().
+    let ssl_ref: &SslRef = &*(ssl_ptr as *const SslRef);
 
     // Perform whitelist validation
     match perform_whitelist_validation(ssl_ref, client_auth) {

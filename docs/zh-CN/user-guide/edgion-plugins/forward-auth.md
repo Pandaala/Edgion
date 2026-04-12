@@ -1,5 +1,9 @@
 # ForwardAuth 插件
 
+> **🔌 Edgion 扩展**
+> 
+> ForwardAuth 是 `EdgionPlugins` CRD 提供的外部鉴权插件，不属于标准 Gateway API。
+
 ## 概述
 
 ForwardAuth 插件将原始请求的关键信息（Headers、Method、URI 等）转发给外部鉴权服务，
@@ -22,44 +26,36 @@ ForwardAuth 插件将原始请求的关键信息（Headers、Method、URI 等）
 
 ## 核心流程
 
-```
-Client Request
-     │
-     ▼
-ForwardAuth Plugin
-     │
-     ├─── 构建鉴权请求（Header + X-Forwarded-* 元数据）
-     │
-     ├─── 发送到外部鉴权服务
-     │
-     ├─── 鉴权服务返回 2xx？
-     │       │
-     │       ├── 是 → 复制 upstreamHeaders 到原始请求 → 转发到上游
-     │       │
-     │       └── 否 → 复制 clientHeaders + 返回鉴权服务的状态码和 Body
-     │
-     └─── 鉴权服务不可达？
-             │
-             ├── allowDegradation: true → 跳过鉴权，放行
-             │
-             └── allowDegradation: false → 返回 statusOnError（默认 503）
+```mermaid
+flowchart TD
+    A["客户端请求"] --> B["ForwardAuth 插件"]
+    B --> C["构建鉴权请求<br/>（Header + X-Forwarded-* 元数据）"]
+    C --> D["发送到外部鉴权服务"]
+    D --> E{"鉴权服务<br/>可达？"}
+    E -->|是| F{"返回 2xx？"}
+    F -->|是| G["复制 upstreamHeaders 到原始请求"]
+    G --> H["转发到上游"]
+    F -->|否| I["复制 clientHeaders +<br/>返回鉴权服务的状态码和 Body"]
+    E -->|否| J{"allowDegradation？"}
+    J -->|"true"| K["跳过鉴权，放行"]
+    J -->|"false"| L["返回 statusOnError（默认 503）"]
 ```
 
 ## 配置说明
 
 ### 配置参数
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `uri` | string | 是 | - | 鉴权服务地址（必须以 `http://` 或 `https://` 开头） |
-| `requestMethod` | string | 否 | `GET` | 发送给鉴权服务的 HTTP 方法 |
-| `requestHeaders` | string[] | 否 | `null` | 转发给鉴权服务的请求头列表（见下方说明） |
-| `upstreamHeaders` | string[] | 否 | `[]` | 鉴权成功时，从鉴权响应复制到原始请求的 Header |
-| `clientHeaders` | string[] | 否 | `[]` | 鉴权失败时，从鉴权响应复制到客户端响应的 Header |
-| `timeoutMs` | integer | 否 | `10000` | 请求超时（毫秒） |
-| `successStatusCodes` | integer[] | 否 | `null` | 自定义成功状态码列表（默认任意 2xx） |
-| `allowDegradation` | boolean | 否 | `false` | 鉴权服务不可用时是否放行请求 |
-| `statusOnError` | integer | 否 | `503` | 鉴权服务网络错误时返回的状态码（200-599） |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `uri` | String | —（必填） | 鉴权服务地址（必须以 `http://` 或 `https://` 开头） |
+| `requestMethod` | String | `"GET"` | 发送给鉴权服务的 HTTP 方法 |
+| `requestHeaders` | Array\<String\> | `null` | 转发给鉴权服务的请求头列表（见下方说明） |
+| `upstreamHeaders` | Array\<String\> | `[]` | 鉴权成功时，从鉴权响应复制到原始请求的 Header |
+| `clientHeaders` | Array\<String\> | `[]` | 鉴权失败时，从鉴权响应复制到客户端响应的 Header |
+| `timeoutMs` | Integer | `10000` | 请求超时（毫秒） |
+| `successStatusCodes` | Array\<Integer\> | `null` | 自定义成功状态码列表（默认任意 2xx） |
+| `allowDegradation` | Boolean | `false` | 鉴权服务不可用时是否放行请求 |
+| `statusOnError` | Integer | `503` | 鉴权服务网络错误时返回的状态码（200-599） |
 
 ### requestHeaders 行为
 
@@ -314,3 +310,10 @@ A: 可以。多个 ForwardAuth 插件按 `requestPlugins` 数组中的顺序依�
 A: 有。开启后，鉴权服务不可用时请求会直接放行（无鉴权），
 只适合鉴权不是关键安全屏障的场景（如 A/B 测试、非敏感 API）。
 对于安全关键的 API，建议保持默认的 `false`。
+
+## 相关文档
+
+- [BasicAuth 插件](../http-route/filters/edgion-plugins/basic-auth.md) - 基础用户名密码认证
+- [JwtAuth 插件](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT 令牌认证
+- [OpenID Connect 插件](openid-connect.md) - OIDC/OAuth2 认证
+- [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览

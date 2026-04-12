@@ -42,14 +42,12 @@ impl TlsRoutePluginRuntime {
                 continue;
             }
 
-            let plugin: Option<Arc<dyn TlsRoutePlugin>> = match &entry.plugin {
-                TlsRouteStreamPlugin::IpRestriction(config) => Some(Arc::new(TlsRouteIpRestriction::new(config))),
+            let plugin: Arc<dyn TlsRoutePlugin> = match &entry.plugin {
+                TlsRouteStreamPlugin::IpRestriction(config) => Arc::new(TlsRouteIpRestriction::new(config)),
             };
 
-            if let Some(p) = plugin {
-                tracing::debug!(plugin_name = p.name(), "Added TLS route plugin to runtime");
-                plugins.push(p);
-            }
+            tracing::debug!(plugin_name = plugin.name(), "Added TLS route plugin to runtime");
+            plugins.push(plugin);
         }
 
         Self { plugins }

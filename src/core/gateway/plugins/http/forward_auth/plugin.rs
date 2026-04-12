@@ -49,11 +49,14 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
 use pingora_http::ResponseHeader;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
+
+const MAX_ERROR_BODY_BYTES: usize = 4096;
 
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
@@ -341,8 +344,25 @@ impl RequestFilter for ForwardAuth {
                 }
             }
 
-            // Try to read auth service's response body for error detail
-            let body = resp.text().await.unwrap_or_default();
+            // Read auth service's error body with a size limit to prevent OOM
+            // from a misbehaving auth service returning an unbounded response.
+            let body = {
+                let mut buf = Vec::with_capacity(MAX_ERROR_BODY_BYTES);
+                let mut stream = resp.bytes_stream();
+                while let Some(chunk_result) = stream.next().await {
+                    match chunk_result {
+                        Ok(chunk) => {
+                            let remaining = MAX_ERROR_BODY_BYTES.saturating_sub(buf.len());
+                            if remaining == 0 {
+                                break;
+                            }
+                            buf.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                String::from_utf8_lossy(&buf).into_owned()
+            };
 
             plugin_log.push(&format!("Auth failed (status: {}); ", status));
             apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;

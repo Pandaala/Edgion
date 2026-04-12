@@ -256,8 +256,8 @@ impl TlsAccept for TlsCallback {
         }
 
         // matched, gen tls id
-        let rand: u32 = random();
-        ssl_ctx.meta.tls_id = Some(format!("{:08x}-{:08x}", ssl_ctx.meta.ts as u32, rand));
+        let rand: u64 = random();
+        ssl_ctx.meta.tls_id = Some(format!("{:016x}-{:016x}", ssl_ctx.meta.ts, rand));
 
         // 3. Store SslCtx for handshake_complete_callback
         if !store_ssl_ctx(ssl, &ssl_ctx) {
@@ -408,7 +408,7 @@ impl TlsCallback {
         };
         // Runtime expiry check: cert may have expired after being loaded into the store.
         // X509 is already parsed here, so this is just one time comparison per connection.
-        // Note: only implemented for boringssl; openssl/rustls builds rely on the TLS
+        // Note: only implemented for boringssl; rustls builds rely on the TLS
         // handshake itself to reject expired certs, but err_log will not reflect it.
         #[cfg(feature = "boringssl")]
         match boring::asn1::Asn1Time::days_from_now(0) {
@@ -798,7 +798,7 @@ impl TlsCallback {
     /// Configure cipher list (similar to Nginx ssl_ciphers directive)
     ///
     /// Takes a list of cipher names in OpenSSL format and applies them via BoringSSL FFI.
-    /// If configuration fails, logs a warning and continues with default ciphers.
+    /// Returns `Err` if the cipher string is invalid or rejected by BoringSSL.
     ///
     /// Note: TLS 1.3 ciphers are hardcoded in BoringSSL and cannot be configured.
     fn configure_ciphers(&self, ssl: &mut SslRef, ciphers: &[String]) -> Result<(), Box<PingoraError>> {
@@ -806,16 +806,13 @@ impl TlsCallback {
             return Ok(());
         }
 
-        let cipher_list = ciphers.join(":");
-
         #[cfg(feature = "boringssl")]
         {
             use std::ffi::CString;
 
-            let cipher_cstr = match CString::new(cipher_list.as_str()) {
-                Ok(c) => c,
-                Err(_) => return Ok(()),
-            };
+            let cipher_list = ciphers.join(":");
+            let cipher_cstr = CString::new(cipher_list.as_str())
+                .map_err(|e| PingoraError::explain(ErrorType::InternalError, format!("cipher null byte: {e}")))?;
 
             // SAFETY: SslRef -> SSL* conversion for FFI call
             // ssl is valid during this function, cipher_cstr lifetime extends past FFI call
@@ -824,7 +821,10 @@ impl TlsCallback {
                 let ret = boring_sys::SSL_set_strict_cipher_list(ssl_ptr, cipher_cstr.as_ptr());
 
                 if ret != 1 {
-                    return Ok(());
+                    return Err(PingoraError::explain(
+                        ErrorType::InternalError,
+                        format!("rejected ciphers: {}", cipher_list),
+                    ));
                 }
             }
         }

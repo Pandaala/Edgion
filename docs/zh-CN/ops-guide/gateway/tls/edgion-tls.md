@@ -638,55 +638,6 @@ TLS Session 复用默认启用，可减少握手开销。
 
 **当前状态**：规划中，未来版本将支持。
 
-### 11. TLS 版本控制相关问题
-
-**Q: 如何只允许 TLS 1.3 连接？**
-
-A: 设置 `minVersion` 和 `maxVersion` 都为 `TLS1_3`：
-
-```yaml
-tlsVersions:
-  minVersion: TLS1_3
-  maxVersion: TLS1_3
-```
-
-**Q: 客户端使用 TLS 1.2 连接 TLS 1.3 only 的服务会怎样？**
-
-A: 连接会被拒绝，客户端收到 TLS 握手失败错误。
-
----
-
-### 12. 密码套件配置相关问题
-
-**Q: 密码套件配置当前为什么不完全生效？**
-
-A: 由于 Pingora 框架的限制，动态 SNI 场景下无法在握手时设置密码套件。这需要 Pingora API 增强。当前配置会被记录但不会立即应用。
-
-**Q: 应该选择哪个密码套件配置文件？**
-
-A: 
-- **大多数场景**: 使用 `Intermediate`（默认）
-- **仅现代客户端**: 使用 `Modern`
-- **必须支持旧客户端**: 使用 `Old`（不推荐）
-
----
-
-### 13. SAN/CN 白名单相关问题
-
-**Q: SAN 白名单和 CN 白名单有什么区别？**
-
-A: 
-- **SAN (Subject Alternative Names)**: 现代标准，支持多个域名/IP，推荐使用
-- **CN (Common Name)**: 旧标准，仅支持单个域名，已被废弃
-
-**Q: SAN 白名单验证当前为什么不完全生效？**
-
-A: 由于 Pingora 架构限制，无法在 HTTP 请求阶段直接访问 SSL 连接。需要在 TLS 层提取证书信息并传递到应用层。这需要架构增强。
-
-**Q: 通配符白名单如何工作？**
-
-A: `*.example.com` 匹配 `sub.example.com`，但不匹配 `example.com` 或 `sub.sub.example.com`（仅一级子域名）。
-
 ---
 
 ## 参考资源
@@ -940,6 +891,50 @@ spec:
           ingress:
             class: nginx
 ```
+
+---
+
+### Q6: 如何只允许 TLS 1.3 连接？
+
+设置 `minVersion` 和 `maxVersion` 都为 `TLS1_3`：
+
+```yaml
+tlsVersions:
+  minVersion: TLS1_3
+  maxVersion: TLS1_3
+```
+
+**Q: 客户端使用 TLS 1.2 连接 TLS 1.3 only 的服务会怎样？**
+
+A: 连接会被拒绝，客户端收到 TLS 握手失败错误。
+
+---
+
+### Q7: 密码套件配置当前为什么不完全生效？
+
+由于 Pingora 框架的限制，动态 SNI 场景下无法在握手时设置密码套件。这需要 Pingora API 增强。当前配置会被记录但不会立即应用。
+
+**Q: 应该选择哪个密码套件配置文件？**
+
+A:
+- **大多数场景**: 使用 `Intermediate`（默认）
+- **仅现代客户端**: 使用 `Modern`
+- **必须支持旧客户端**: 使用 `Old`（不推荐）
+
+---
+
+### Q8: SAN 白名单和 CN 白名单有什么区别？
+
+- **SAN (Subject Alternative Names)**: 现代标准，支持多个域名/IP，推荐使用
+- **CN (Common Name)**: 旧标准，仅支持单个域名，已被废弃
+
+**Q: SAN 白名单验证当前为什么不完全生效？**
+
+A: 由于 Pingora 架构限制，无法在 HTTP 请求阶段直接访问 SSL 连接。需要在 TLS 层提取证书信息并传递到应用层。这需要架构增强。
+
+**Q: 通配符白名单如何工作？**
+
+A: `*.example.com` 匹配 `sub.example.com`，但不匹配 `example.com` 或 `sub.sub.example.com`（仅一级子域名）。
 
 ---
 

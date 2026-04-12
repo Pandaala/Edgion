@@ -1,0 +1,44 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-utility-combo
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "utility-combo"
+        source: |
+          let hex_val = hex_encode("TEST")
+          resp.set_header("X-Hex", hex_val)
+
+          let json_data = req.header("X-Json-Data")
+          if json_data != nil {
+            let role = json_get(json_data, "user.role")
+            if role != nil {
+              resp.set_header("X-User-Role", role)
+            }
+          }
+
+          if req.header("X-Request-ID") == nil {
+            let id = uuid()
+            req.set_header("X-Request-ID", id)
+            resp.set_header("X-Request-ID", id)
+          }
+
+          let client = req.client_ip
+          if ip_in_cidr(client, "127.0.0.0/8") {
+            resp.set_header("X-Network", "loopback")
+          }
+
+          let parts = split("a,b,c", ",")
+          resp.set_header("X-Joined", join(parts, "-"))
+
+          resp.set_header("X-Protocol", req.protocol)
+
+          let cl = req.content_length
+          if cl != nil {
+            resp.set_header("X-Content-Length", to_str(cl))
+          }
+        errorPolicy: deny

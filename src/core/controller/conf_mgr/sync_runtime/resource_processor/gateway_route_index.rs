@@ -16,17 +16,11 @@
 //! Built from ALL parentRefs (not just accepted ones), because even pending
 //! routes need to be re-resolved when a Gateway changes.
 
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, RwLock};
 
 use crate::types::resources::common::ParentReference;
 use crate::types::ResourceKind;
-
-static GATEWAY_ROUTE_INDEX: LazyLock<GatewayRouteIndex> = LazyLock::new(GatewayRouteIndex::new);
-
-pub fn get_gateway_route_index() -> &'static GatewayRouteIndex {
-    &GATEWAY_ROUTE_INDEX
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RouteEntry {
@@ -46,7 +40,7 @@ pub struct GatewayRouteIndex {
 }
 
 impl GatewayRouteIndex {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             forward: RwLock::new(HashMap::new()),
             reverse: RwLock::new(HashMap::new()),
@@ -59,7 +53,7 @@ impl GatewayRouteIndex {
     /// Returns true if the hostnames actually changed (i.e., routes need requeue).
     pub fn update_gateway_hostnames(&self, gateway_key: &str, mut hostnames: Vec<String>) -> bool {
         hostnames.sort();
-        let mut cache = self.gateway_hostnames.write().unwrap();
+        let mut cache = self.gateway_hostnames.write();
         match cache.get(gateway_key) {
             Some(old) if *old == hostnames => false,
             _ => {
@@ -71,14 +65,14 @@ impl GatewayRouteIndex {
 
     /// Remove cached hostnames for a deleted Gateway.
     pub fn remove_gateway_hostnames(&self, gateway_key: &str) {
-        self.gateway_hostnames.write().unwrap().remove(gateway_key);
+        self.gateway_hostnames.write().remove(gateway_key);
     }
 
     /// Update the cached listener ports for a Gateway.
     /// Returns true if the ports actually changed (i.e., routes need requeue).
     pub fn update_gateway_ports(&self, gateway_key: &str, mut ports: Vec<i32>) -> bool {
         ports.sort();
-        let mut cache = self.gateway_ports.write().unwrap();
+        let mut cache = self.gateway_ports.write();
         match cache.get(gateway_key) {
             Some(old) if *old == ports => false,
             _ => {
@@ -90,7 +84,7 @@ impl GatewayRouteIndex {
 
     /// Remove cached ports for a deleted Gateway.
     pub fn remove_gateway_ports(&self, gateway_key: &str) {
-        self.gateway_ports.write().unwrap().remove(gateway_key);
+        self.gateway_ports.write().remove(gateway_key);
     }
 
     /// Update the index for a route based on its parentRefs.
@@ -120,8 +114,8 @@ impl GatewayRouteIndex {
             gateway_keys.insert(gw_key);
         }
 
-        let mut fwd = self.forward.write().unwrap();
-        let mut rev = self.reverse.write().unwrap();
+        let mut fwd = self.forward.write();
+        let mut rev = self.reverse.write();
 
         // Remove old entries
         if let Some(old_gw_keys) = rev.remove(&entry) {
@@ -153,8 +147,8 @@ impl GatewayRouteIndex {
             key: route_key.to_string(),
         };
 
-        let mut fwd = self.forward.write().unwrap();
-        let mut rev = self.reverse.write().unwrap();
+        let mut fwd = self.forward.write();
+        let mut rev = self.reverse.write();
 
         if let Some(old_gw_keys) = rev.remove(&entry) {
             for old_gw_key in &old_gw_keys {
@@ -172,7 +166,7 @@ impl GatewayRouteIndex {
     ///
     /// Returns (ResourceKind, route_key) pairs for requeue.
     pub fn get_routes_for_gateway(&self, gateway_key: &str) -> Vec<(ResourceKind, String)> {
-        let fwd = self.forward.read().unwrap();
+        let fwd = self.forward.read();
         match fwd.get(gateway_key) {
             Some(entries) => entries.iter().map(|e| (e.kind, e.key.clone())).collect(),
             None => Vec::new(),
@@ -189,7 +183,7 @@ impl GatewayRouteIndex {
             kind: route_kind,
             key: route_key.to_string(),
         };
-        let rev = self.reverse.read().unwrap();
+        let rev = self.reverse.read();
         match rev.get(&entry) {
             Some(gw_keys) => gw_keys.iter().cloned().collect(),
             None => Vec::new(),
@@ -200,7 +194,7 @@ impl GatewayRouteIndex {
     /// Used for post-init revalidation to ensure routes that registered
     /// after their parent Gateway's on_change are reprocessed.
     pub fn all_routes(&self) -> Vec<(ResourceKind, String)> {
-        let fwd = self.forward.read().unwrap();
+        let fwd = self.forward.read();
         let mut seen = HashSet::new();
         let mut result = Vec::new();
         for entries in fwd.values() {
@@ -214,10 +208,10 @@ impl GatewayRouteIndex {
     }
 
     pub fn clear(&self) {
-        self.forward.write().unwrap().clear();
-        self.reverse.write().unwrap().clear();
-        self.gateway_hostnames.write().unwrap().clear();
-        self.gateway_ports.write().unwrap().clear();
+        self.forward.write().clear();
+        self.reverse.write().clear();
+        self.gateway_hostnames.write().clear();
+        self.gateway_ports.write().clear();
     }
 }
 

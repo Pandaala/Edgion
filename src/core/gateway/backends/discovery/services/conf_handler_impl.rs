@@ -1,5 +1,5 @@
 use super::{get_global_service_store, ServiceStore};
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::gateway::backends::circuit_breaker::{
     config::parse_circuit_breaker_annotation, get_circuit_breaker_store,
 };
@@ -11,26 +11,15 @@ use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Implement ConfHandler for Arc<ServiceStore>
-impl ConfHandler<Service> for Arc<ServiceStore> {
-    fn full_set(&self, data: &HashMap<String, Service>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(&self, add: HashMap<String, Service>, update: HashMap<String, Service>, remove: HashSet<String>) {
-        (**self).partial_update(add, update, remove)
-    }
-}
-
 /// Create a ServiceStore handler for registration with ConfigClient
 pub fn create_service_handler() -> Box<dyn ConfHandler<Service> + Send + Sync> {
     Box::new(get_global_service_store())
 }
 
 impl ConfHandler<Service> for ServiceStore {
-    fn full_set(&self, data: &HashMap<String, Service>) {
+    fn full_set(&self, data: &HashMap<String, Arc<Service>>) {
         tracing::info!(component = "service_store", cnt = data.len(), "full set");
-        self.replace_all(data.clone());
+        self.replace_all(arc_map_to_owned(data));
 
         let config_store = get_hc_config_store();
         let hc_manager = get_health_check_manager();
@@ -55,7 +44,12 @@ impl ConfHandler<Service> for ServiceStore {
         }
     }
 
-    fn partial_update(&self, add: HashMap<String, Service>, update: HashMap<String, Service>, remove: HashSet<String>) {
+    fn partial_update(
+        &self,
+        add: HashMap<String, Arc<Service>>,
+        update: HashMap<String, Arc<Service>>,
+        remove: HashSet<String>,
+    ) {
         tracing::info!(
             component = "service_store",
             add = add.len(),
@@ -83,9 +77,9 @@ impl ConfHandler<Service> for ServiceStore {
             cb_store.remove_service(key);
         }
 
-        // Merge add and update for storage
-        let mut add_or_update = add;
-        add_or_update.extend(update);
+        // Merge add and update for storage, extracting from Arc
+        let mut add_or_update = arc_map_into_owned(add);
+        add_or_update.extend(arc_map_into_owned(update));
 
         self.update(add_or_update, &remove);
     }
@@ -121,8 +115,14 @@ mod tests {
         let store = ServiceStore::new();
 
         let mut data = HashMap::new();
-        data.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
-        data.insert("default/svc2".to_string(), create_test_service("default", "svc2"));
+        data.insert(
+            "default/svc1".to_string(),
+            Arc::new(create_test_service("default", "svc1")),
+        );
+        data.insert(
+            "default/svc2".to_string(),
+            Arc::new(create_test_service("default", "svc2")),
+        );
 
         store.full_set(&data);
 
@@ -136,7 +136,10 @@ mod tests {
         let store = ServiceStore::new();
 
         let mut add = HashMap::new();
-        add.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
+        add.insert(
+            "default/svc1".to_string(),
+            Arc::new(create_test_service("default", "svc1")),
+        );
 
         store.partial_update(add, HashMap::new(), HashSet::new());
 
@@ -149,12 +152,18 @@ mod tests {
 
         // First add a service
         let mut data = HashMap::new();
-        data.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
+        data.insert(
+            "default/svc1".to_string(),
+            Arc::new(create_test_service("default", "svc1")),
+        );
         store.full_set(&data);
 
         // Then update it
         let mut update = HashMap::new();
-        update.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
+        update.insert(
+            "default/svc1".to_string(),
+            Arc::new(create_test_service("default", "svc1")),
+        );
 
         store.partial_update(HashMap::new(), update, HashSet::new());
 
@@ -167,7 +176,10 @@ mod tests {
 
         // First add a service
         let mut data = HashMap::new();
-        data.insert("default/svc1".to_string(), create_test_service("default", "svc1"));
+        data.insert(
+            "default/svc1".to_string(),
+            Arc::new(create_test_service("default", "svc1")),
+        );
         store.full_set(&data);
 
         // Then remove it

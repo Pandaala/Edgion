@@ -48,7 +48,7 @@
 
 `run_integration.sh` 的真实职责是：
 
-1. 调 `prepare.sh` 构建 `edgion-controller`、`edgion-gateway`、`edgion-ctl`、`test_server`、`test_client`、`test_client_direct`、`resource_diff`、`config_load_validator`
+1. 调 `prepare.sh` 构建 `edgion-controller`、`edgion-gateway`、`edgion-cli`、`test_server`、`test_client`、`test_client_direct`、`resource_diff`、`config_load_validator`
 2. 调 `start_all_with_conf.sh` 清现场、建 `integration_testing/testing_<timestamp>/`
 3. 在 `${WORK_DIR}/generated-secrets/` 生成运行时 Secret，并在 suite YAML 之后再加载一次
 4. 拉起 `test_server`、controller、gateway，并等待健康检查
@@ -159,10 +159,19 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 1. 先看 `${WORK_DIR}/report.log` 和 `${WORK_DIR}/test_logs/<case>.log`
 2. 再看 `${WORK_DIR}/logs/controller.log`、`${WORK_DIR}/logs/gateway.log`
 3. 涉及插件或路由命中时，再看 access log / `tls_access.log`
-4. 怀疑配置未加载时，用 `edgion-ctl` 或 admin API 查 controller/gateway 当前资源
+4. 怀疑配置未加载时，用 `edgion-cli` 或 admin API 查 controller/gateway 当前资源
 5. 怀疑测试后端行为不符时，再回到 `test_server` 端口和端点能力核对
 
 详细命令和日志入口见 [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)。
+
+## 认证在集成测试中的行为
+
+集成测试中认证由框架自动处理，无需手动操作：
+
+- Controller 启动时自动生成随机凭据，写入 `{WORK_DIR}/config/resources/Secret_edgion-system_edgion-admin-credentials.yaml`
+- `load_conf.sh` 调用 `edgion-cli` 时，`ensure_auth()` 自动通过 `EDGION_WORK_DIR` 找到配置 → 读取 Secret → 完成登录
+- `start_all_with_conf.sh` 导出 `EDGION_WORK_DIR`，使自动认证路径可达
+- CI/测试环境无需任何手动 `edgion-cli login` 步骤
 
 ## 容易踩坑的地方
 

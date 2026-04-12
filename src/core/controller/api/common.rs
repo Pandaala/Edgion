@@ -88,26 +88,28 @@ pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
             );
             StatusCode::CONFLICT
         }
-        ConfWriterError::ParseError(msg) => {
+        ConfWriterError::ParseError { context, source } => {
             tracing::warn!(
                 component = "unified_api",
-                error = %msg,
+                context = %context,
+                error = %source,
                 "Parse error"
             );
             StatusCode::BAD_REQUEST
         }
-        ConfWriterError::IOError(msg) => {
+        ConfWriterError::IOError { context, source } => {
             tracing::error!(
                 component = "unified_api",
-                error = %msg,
+                context = %context,
+                error = %source,
                 "IO error"
             );
             StatusCode::INTERNAL_SERVER_ERROR
         }
-        ConfWriterError::KubeError(msg) => {
+        ConfWriterError::KubeError(source) => {
             tracing::error!(
                 component = "unified_api",
-                error = %msg,
+                error = %source,
                 "Kubernetes API error"
             );
             StatusCode::INTERNAL_SERVER_ERROR
@@ -117,6 +119,14 @@ pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
                 component = "unified_api",
                 error = %msg,
                 "Internal error"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+        ConfWriterError::EtcdError(msg) => {
+            tracing::error!(
+                component = "unified_api",
+                error = %msg,
+                "Etcd error"
             );
             StatusCode::INTERNAL_SERVER_ERROR
         }

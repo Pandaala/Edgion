@@ -434,7 +434,8 @@ cat logs/edgion_access.log | jq 'select(.plugin_logs[]?.logs[]? | select(.name =
 3. **Integrate with log systems**: Integrate `edgion_access.log` with ELK, Loki, or other log analysis platforms
 4. **Monitor key metrics**: Set up alerts based on `edgion_access.log` for high latency, high error rates, etc.
 
-## Related Features
+## Related Documentation
 
-- [Gateway Overview](../gateway/overview.md)
-- [Preflight Policy](../gateway/preflight-policy.md)
+- [Monitoring Metrics](./metrics.md)
+- [Gateway Resource Overview](../gateway/overview.md)
+- [edgion-cli Command Line Tool](../edgion-cli.md)

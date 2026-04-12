@@ -30,8 +30,8 @@ PID_DIR="${WORK_DIR}/pids"
 CONFIG_DIR="${WORK_DIR}/config"
 
 # configfile
-CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.toml"
-GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
+CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
+GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # serviceport
 TEST_SERVER_HTTP_PORT=30001

@@ -1,5 +1,9 @@
 # JWE Decrypt Plugin
 
+> **🔌 Edgion Extension**
+> 
+> JweDecrypt is a JWE decryption authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 `JweDecrypt` decrypts Compact JWE tokens from request headers during the request phase (currently supporting `alg=dir` + `enc=A256GCM`), and passes the decrypted plaintext to the upstream service.
@@ -94,3 +98,9 @@ data:
 | Unsupported or mismatched algorithm | `400` | `jwe:bad-alg` |
 | Algorithm not in allowlist | `400` | `jwe:alg-denied` |
 | Token exceeds size limit | `400` | `jwe:too-large` |
+
+## Related Documentation
+
+- [JwtAuth Plugin](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT token authentication
+- [OpenID Connect Plugin](openid-connect.md) - OIDC/OAuth2 authentication
+- [ForwardAuth Plugin](forward-auth.md) - External authentication plugin

@@ -648,3 +648,10 @@ curl -H "X-Forwarded-For: 203.0.113.50" https://api.example.com/api/data
 curl https://api.example.com/api/data
 # -> 200 OK
 ```
+
+---
+
+## Related Links
+
+- [RateLimit](./rate-limit.md) — Rate limiting
+- [RequestRestriction](./request-restriction.md) — Request restriction

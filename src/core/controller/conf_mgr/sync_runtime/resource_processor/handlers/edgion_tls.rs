@@ -10,8 +10,8 @@
 
 use super::{remove_from_gateway_route_index, update_gateway_route_index};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, get_secret, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult,
-    ProcessorHandler, ResolvedRefsError, ResourceRef,
+    format_secret_key, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler,
+    ResolvedRefsError, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionTls;
 use crate::types::resources::edgion_tls::EdgionTlsStatus;
@@ -45,7 +45,7 @@ impl Default for EdgionTlsHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
-    fn validate(&self, tls: &EdgionTls, _ctx: &HandlerContext) -> Vec<String> {
+    fn validate(&self, tls: &EdgionTls, ctx: &HandlerContext) -> Vec<String> {
         let mut warnings = Vec::new();
 
         // Check parent_refs
@@ -61,7 +61,25 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .as_ref()
             .or(tls.metadata.namespace.as_ref());
 
-        if get_secret(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name).is_none() {
+        if let Some(secret) = ctx
+            .runtime()
+            .secret_store
+            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+        {
+            // Secret found — check cert/key matching
+            if let Some(data) = secret.data.as_ref() {
+                use crate::types::constants::secret_keys::tls::{CERT, KEY};
+
+                let cert_pem = data.get(CERT).and_then(|b| std::str::from_utf8(&b.0).ok());
+                let key_pem = data.get(KEY).and_then(|b| std::str::from_utf8(&b.0).ok());
+
+                if let (Some(cert_str), Some(key_str)) = (cert_pem, key_pem) {
+                    if let Err(e) = crate::core::gateway::tls::validation::check_key_matches_cert(cert_str, key_str) {
+                        warnings.push(e.to_string());
+                    }
+                }
+            }
+        } else {
             let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
             warnings.push(format!("Secret '{}' not found (may arrive later)", secret_key));
         }
@@ -69,10 +87,16 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         warnings
     }
 
-    fn preparse(&self, tls: &mut EdgionTls, _ctx: &HandlerContext) -> Vec<String> {
+    fn preparse(&self, tls: &mut EdgionTls, ctx: &HandlerContext) -> Vec<String> {
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");
-        update_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name, tls.spec.parent_refs.as_ref());
+        update_gateway_route_index(
+            ResourceKind::EdgionTls,
+            tls_ns,
+            tls_name,
+            tls.spec.parent_refs.as_ref(),
+            ctx.runtime(),
+        );
         Vec::new()
     }
 
@@ -100,8 +124,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         ctx.secret_ref_manager()
             .add_ref(secret_key.clone(), resource_ref.clone());
 
-        // Try to resolve Secret from global store
-        if let Some(secret) = get_secret(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name) {
+        // Try to resolve Secret from runtime store
+        if let Some(secret) = ctx
+            .runtime()
+            .secret_store
+            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+        {
             tls.spec.secret = Some(secret);
             tracing::debug!(
                 edgion_tls = %resource_ref.key(),
@@ -128,8 +156,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 ctx.secret_ref_manager()
                     .add_ref(ca_secret_key.clone(), resource_ref.clone());
 
-                // Try to resolve CA Secret from global store
-                if let Some(ca_secret) = get_secret(ca_ns.map(|s| s.as_str()), &ca_secret_ref.name) {
+                // Try to resolve CA Secret from runtime store
+                if let Some(ca_secret) = ctx
+                    .runtime()
+                    .secret_store
+                    .get(ca_ns.map(|s| s.as_str()), &ca_secret_ref.name)
+                {
                     client_auth.ca_secret = Some(ca_secret);
                     tracing::debug!(
                         edgion_tls = %resource_ref.key(),
@@ -150,8 +182,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         tls.spec.resolved_listeners = None;
         if let Some(parent_refs) = &tls.spec.parent_refs {
-            let listener_keys =
-                super::route_utils::resolve_listener_keys(parent_refs, resource_ns, tls.metadata.namespace.as_deref());
+            let listener_keys = super::route_utils::resolve_listener_keys(
+                parent_refs,
+                resource_ns,
+                tls.metadata.namespace.as_deref(),
+                ctx.runtime(),
+            );
             if !listener_keys.is_empty() {
                 tracing::debug!(
                     edgion_tls = %resource_ref.key(),
@@ -165,7 +201,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         ProcessResult::Continue(tls)
     }
 
-    async fn on_change(&self, tls: &EdgionTls, _ctx: &HandlerContext) {
+    async fn on_change(&self, tls: &EdgionTls, ctx: &HandlerContext) {
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");
 
@@ -173,7 +209,13 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // this EdgionTls when listener hostnames or ports change. Without this,
         // an EdgionTls processed before its Gateway would permanently have
         // resolved_listeners = None with no mechanism to trigger re-resolution.
-        update_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name, tls.spec.parent_refs.as_ref());
+        update_gateway_route_index(
+            ResourceKind::EdgionTls,
+            tls_ns,
+            tls_name,
+            tls.spec.parent_refs.as_ref(),
+            ctx.runtime(),
+        );
     }
 
     async fn on_delete(&self, tls: &EdgionTls, ctx: &HandlerContext) {
@@ -186,7 +228,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");
-        remove_from_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name);
+        remove_from_gateway_route_index(ResourceKind::EdgionTls, tls_ns, tls_name, ctx.runtime());
 
         tracing::debug!(
             edgion_tls = %resource_ref.key(),
@@ -194,7 +236,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         );
     }
 
-    fn update_status(&self, tls: &mut EdgionTls, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, tls: &mut EdgionTls, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = tls.metadata.generation;
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
 
@@ -207,7 +249,11 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .namespace
             .as_ref()
             .or(tls.metadata.namespace.as_ref());
-        let secret_resolved = get_secret(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name).is_some();
+        let secret_resolved = ctx
+            .runtime()
+            .secret_store
+            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+            .is_some();
 
         let resolved_refs_errors: Vec<ResolvedRefsError> = if secret_resolved {
             vec![]
@@ -222,8 +268,13 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         if let Some(parent_refs) = &tls.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_result =
-                    super::route_utils::validate_parent_ref_accepted(resource_ns, parent_ref, None, "EdgionTls");
+                let accepted_result = super::route_utils::validate_parent_ref_accepted(
+                    resource_ns,
+                    parent_ref,
+                    None,
+                    "EdgionTls",
+                    ctx.runtime(),
+                );
                 let mut accepted_errors = accepted_result.errors;
 
                 // EdgionTls only makes sense on HTTPS/TLS listeners — reject non-TLS ones.
@@ -279,6 +330,7 @@ mod tests {
     use std::sync::Arc;
 
     fn make_ctx() -> HandlerContext {
+        use crate::core::controller::conf_mgr::ControllerRuntime;
         HandlerContext::new(
             Arc::new(SecretRefManager::new()),
             None,
@@ -286,6 +338,7 @@ mod tests {
             TriggerChain::default(),
             3,
             20,
+            Arc::new(ControllerRuntime::default()),
         )
     }
 
@@ -494,6 +547,89 @@ mod tests {
         assert!(
             !conditions.iter().any(|c| c.type_ == "Ready"),
             "Ready should not be set"
+        );
+    }
+
+    /// Build a HandlerContext with a Secret (cert_pem + key_pem) populated in the secret store.
+    fn make_ctx_with_cert_secret(cert_pem: &str, key_pem: &str) -> HandlerContext {
+        use crate::core::controller::conf_mgr::ControllerRuntime;
+        use crate::types::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::{BTreeMap, HashMap};
+
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(cert_pem.as_bytes().to_vec()));
+        data.insert(KEY.to_string(), ByteString(key_pem.as_bytes().to_vec()));
+
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("test-secret".to_string()),
+                namespace: Some("test-ns".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let mut secrets = HashMap::new();
+        secrets.insert("test-ns/test-secret".to_string(), secret);
+        runtime.secret_store.replace_all(secrets);
+
+        HandlerContext::new(
+            Arc::new(SecretRefManager::new()),
+            None,
+            None,
+            TriggerChain::default(),
+            3,
+            20,
+            runtime,
+        )
+    }
+
+    #[test]
+    fn test_validate_detects_cert_key_mismatch() {
+        use rcgen::{CertificateParams, KeyPair};
+
+        let key_a = KeyPair::generate().unwrap();
+        let cert_a = CertificateParams::new(vec!["example.com".to_string()])
+            .unwrap()
+            .self_signed(&key_a)
+            .unwrap();
+        let key_b = KeyPair::generate().unwrap();
+
+        let ctx = make_ctx_with_cert_secret(&cert_a.pem(), &key_b.serialize_pem());
+        let handler = EdgionTlsHandler::default();
+        let tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+
+        let warnings = handler.validate(&tls, &ctx);
+        assert!(
+            warnings.iter().any(|w| w.contains("does not match")),
+            "should detect cert/key mismatch, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_validate_passes_matching_cert_key() {
+        use rcgen::{CertificateParams, KeyPair};
+
+        let key = KeyPair::generate().unwrap();
+        let cert = CertificateParams::new(vec!["example.com".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+
+        let ctx = make_ctx_with_cert_secret(&cert.pem(), &key.serialize_pem());
+        let handler = EdgionTlsHandler::default();
+        let tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+
+        let warnings = handler.validate(&tls, &ctx);
+        assert!(
+            !warnings.iter().any(|w| w.contains("does not match")),
+            "matching cert/key should not produce mismatch warning, got: {:?}",
+            warnings
         );
     }
 }

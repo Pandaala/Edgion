@@ -42,10 +42,8 @@ If the placement is wrong, the code path and the documentation usually drift wit
 
 | Key | Resource | Effect |
 |-----|----------|--------|
-| `edgion.io/max-retries` | `HTTPRoute` / `GRPCRoute` | Route-level retry override. It wins over global config, and `0` disables retries. |
 | `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` | Resolves an `EdgionStreamPlugins` reference |
 | `edgion.io/proxy-protocol` | `TLSRoute` | Current implementation recognizes `"v2"` |
-| `edgion.io/upstream-tls` | `TLSRoute` | Controls whether upstream connections use TLS |
 | `edgion.io/max-connect-retries` | `TLSRoute` | Max upstream connection attempts |
 | `edgion.io/expose-client-cert` | `EdgionTls` | Exposes mTLS client certificate info to the plugin/session layer |
 | `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | Active health-check YAML config (type: http/tcp/grpc) |

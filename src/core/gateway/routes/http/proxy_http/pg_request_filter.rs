@@ -170,13 +170,8 @@ pub async fn request_filter(
                 plugin_ref.name
             );
 
-            // Get plugin from global store
-            if let Some(edgion_plugin) = get_global_plugin_store().get(&plugin_key) {
-                edgion_plugin
-                    .spec
-                    .plugin_runtime
-                    .run_request_plugins(session, ctx)
-                    .await;
+            if let Some(runtime) = get_global_plugin_store().get_plugin_runtime(&plugin_key) {
+                runtime.run_request_plugins(session, ctx).await;
                 if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
                     if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
                         let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
@@ -410,21 +405,21 @@ fn extract_cors_config_from_route_filters(
             continue;
         }
 
-        // Look up EdgionPlugins in global store with namespace/name key
         let key = format!("{}/{}", namespace, ext_ref.name);
-        let store = get_global_plugin_store();
-
-        if let Some(edgion_plugins) = store.get(&key) {
-            // Search for CORS plugin in request_plugins
-            if let Some(ref entries) = edgion_plugins.spec.request_plugins {
-                for entry in entries {
-                    if let EdgionPlugin::Cors(cors_config) = &entry.plugin {
+        let cors = get_global_plugin_store()
+            .with_plugin(&key, |p| {
+                p.spec.request_plugins.as_ref()?.iter().find_map(|entry| {
+                    if let EdgionPlugin::Cors(cfg) = &entry.plugin {
                         if entry.is_enabled() {
-                            return Some(Arc::new(cors_config.clone()));
+                            return Some(Arc::new(cfg.clone()));
                         }
                     }
-                }
-            }
+                    None
+                })
+            })
+            .flatten();
+        if cors.is_some() {
+            return cors;
         }
     }
 

@@ -10,8 +10,8 @@ use anyhow::Result;
 use k8s_openapi::api::core::v1::{Endpoints, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
+use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::sync::RwLock;
 
 pub struct ConfigClient {
     pub base_conf: RwLock<Option<GatewayBaseConf>>,
@@ -179,7 +179,7 @@ impl ConfigClient {
             }
         }
 
-        let mut guard = self.required_cache_names.write().unwrap();
+        let mut guard = self.required_cache_names.write();
         if required.is_empty() {
             *guard = None;
             tracing::warn!(
@@ -214,12 +214,12 @@ impl ConfigClient {
 
     /// Get the current server_id from Controller
     pub fn current_server_id(&self) -> String {
-        self.current_server_id.read().unwrap().clone()
+        self.current_server_id.read().clone()
     }
 
     /// Update the current server_id (called by cache when receiving list/watch responses)
     pub fn set_current_server_id(&self, server_id: String) {
-        let mut current = self.current_server_id.write().unwrap();
+        let mut current = self.current_server_id.write();
         if *current != server_id {
             tracing::debug!(
                 component = "config_client",
@@ -372,7 +372,7 @@ impl ConfigClient {
     /// Get all caches status based on global resource registry
     /// Returns a list of tuples: (cache_name, is_ready)
     fn all_caches_status(&self) -> Vec<(&'static str, bool)> {
-        let required = self.required_cache_names.read().unwrap().clone();
+        let required = self.required_cache_names.read().clone();
         all_resource_type_names()
             .into_iter()
             .filter(|name| required.as_ref().map(|set| set.contains(*name)).unwrap_or(true))

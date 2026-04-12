@@ -67,7 +67,10 @@ EdgionPlugins 定义的插件通过 `Conditional*` wrapper 自动包装，支持
 
 条件类型包括：
 - `KeyExist` — 键是否存在（如 header、query param）
+- `KeyMatch` — 键值精确/多值/正则匹配
 - `Include` — 键值是否在指定集合中（支持 values 列表和正则）
+- `Exclude` — 键值不在集合中（Include 的反向）
+- `TimeRange` — 当前时间是否在指定范围内
 - `Probability` — 概率性执行（如 10% 采样）
 
 条件评估分为异步版本（`evaluate_detail`）和同步版本（`evaluate_detail_sync`），分别用于 async 和 sync 阶段。
@@ -76,7 +79,24 @@ Gateway API 标准 filter（通过 `add_from_httproute_filters` 添加的）不�
 
 跳过日志格式：`"skip:keyExist,hdr:X-Internal"` 或 `"!run:include,method"`。
 
-## HTTP 插件列表（28 个）
+### ⚠️ 关键约束：regex 必须在 preparse 阶段 compile
+
+`KeyMatch`、`Include`、`Exclude` 支持 `regex` 字段。`compiled_regex` 字段标注了 `#[serde(skip)]`，反序列化后为 `None`。**必须在 preparse 阶段调用 `compile()` 完成编译**，否则每次请求命中 fallback 路径时都会执行 `Regex::new()`，造成严重 CPU 开销。
+
+**compile 调用链**（一次性，在 gRPC list/watch 接收资源时触发）：
+
+```
+resource.pre_parse()                        # event_dispatch.rs
+  → EdgionPlugins::preparse()              # edgion_plugins/mod.rs
+      → compile_conditions()               # 遍历全部 entry，调 PluginConditions::compile()
+          → Condition::compile()           # conditions/types.rs
+              → KeyMatchCondition::compile() / IncludeCondition::compile() / ExcludeCondition::compile()
+      → add_from_*()                       # plugin_runtime.rs（此时 clone 到的 conditions 已编译好）
+```
+
+**新增带 regex 的条件类型时**：在 `Condition::compile()` 的 match 臂中加入对应分支，否则该类型 regex 永远不会被编译。
+
+## HTTP 插件列表（29 个）
 
 ### 认证类（8 个）
 
@@ -115,13 +135,14 @@ Gateway API 标准 filter（通过 `add_from_httproute_filters` 添加的）不�
 | ResponseRewrite | `response_rewrite` | 响应头修改（UpstreamResponseFilter 阶段） |
 | RealIp | `real_ip` | 从 X-Forwarded-For 等头部提取真实客户端 IP |
 
-### 路由类（3 个）
+### 路由类（4 个）
 
 | 插件 | 模块 | 说明 |
 |------|------|------|
 | DynamicExternalUpstream | `dynamic_external_upstream` | 动态外部上游（运行时指定外部地址） |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | 动态内部上游（运行时选择 K8s Service） |
 | DirectEndpoint | `direct_endpoint` | 直接指定后端端点地址 |
+| RegionRoute | `region_route` | 多 region 流量路由：baseInfo（serviceGroup/cluster 分组 + regions + myRegion）+ 有序 routeRules（RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange）+ hashKeyGet passthrough + hashCalc writeBack + failoverTo（静态重定向）+ auto failover。Center 按 `{serviceGroup}/{cluster}/{namespace}/{kind}` 聚合管理 |
 
 ### 其他类（8 个）
 

@@ -80,12 +80,6 @@ pub struct TLSRouteRule {
     #[schemars(skip)]
     pub proxy_protocol_version: Option<u8>,
 
-    /// Whether to use TLS when connecting to upstream (runtime only, from annotation).
-    /// false = plain TCP (default), true = TLS.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub upstream_tls: bool,
-
     /// Store key for dynamic stream plugin lookup (runtime only, from annotation).
     /// Format: "namespace/name" referencing an EdgionStreamPlugins resource.
     #[serde(skip)]
@@ -106,7 +100,6 @@ impl Clone for TLSRouteRule {
             backend_finder: BackendSelector::new(),
             plugin_runtime: self.plugin_runtime.clone(),
             proxy_protocol_version: self.proxy_protocol_version,
-            upstream_tls: self.upstream_tls,
             stream_plugin_store_key: self.stream_plugin_store_key.clone(),
             max_connect_retries: self.max_connect_retries,
         }
@@ -120,7 +113,6 @@ impl fmt::Debug for TLSRouteRule {
             .field("backend_finder", &"<skipped>")
             .field("plugin_runtime", &self.plugin_runtime)
             .field("proxy_protocol_version", &self.proxy_protocol_version)
-            .field("upstream_tls", &self.upstream_tls)
             .field("stream_plugin_store_key", &self.stream_plugin_store_key)
             .field("max_connect_retries", &self.max_connect_retries)
             .finish()
@@ -279,7 +271,6 @@ mod tests {
                     backend_finder: BackendSelector::new(),
                     plugin_runtime: Default::default(),
                     proxy_protocol_version: None,
-                    upstream_tls: false,
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
                 }]),

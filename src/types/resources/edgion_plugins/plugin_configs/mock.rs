@@ -65,6 +65,8 @@ fn default_true() -> bool {
     true
 }
 
+const MAX_DELAY_MS: u64 = 30_000;
+
 impl Default for MockConfig {
     fn default() -> Self {
         MockConfig {
@@ -86,6 +88,11 @@ impl MockConfig {
                 "Invalid status code: {}. Must be between 100 and 599",
                 self.status_code
             ));
+        }
+        if let Some(delay) = self.delay {
+            if delay > MAX_DELAY_MS {
+                return Err(format!("delay must not exceed {}ms, got {}ms", MAX_DELAY_MS, delay));
+            }
         }
         Ok(())
     }
@@ -140,6 +147,21 @@ mod tests {
 
         let config = MockConfig {
             status_code: 600,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_delay_limit() {
+        let config = MockConfig {
+            delay: Some(MAX_DELAY_MS),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+
+        let config = MockConfig {
+            delay: Some(MAX_DELAY_MS + 1),
             ..Default::default()
         };
         assert!(config.validate().is_err());

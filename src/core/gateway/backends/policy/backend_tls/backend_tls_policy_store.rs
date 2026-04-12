@@ -26,9 +26,9 @@
 //! - **Incremental update** (`update`): Only rebuilds affected target entries
 
 use arc_swap::ArcSwap;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock};
 
 use crate::types::resources::BackendTLSPolicy;
 
@@ -143,18 +143,12 @@ impl BackendTLSPolicyStore {
 
     /// Check if a backend TLS policy exists
     pub fn contains(&self, key: &str) -> bool {
-        self.policies
-            .read()
-            .map(|policies| policies.contains_key(key))
-            .unwrap_or(false)
+        self.policies.read().contains_key(key)
     }
 
     /// Get a backend TLS policy by key (namespace/name)
     pub fn get(&self, key: &str) -> Option<Arc<BackendTLSPolicy>> {
-        self.policies
-            .read()
-            .ok()
-            .and_then(|policies| policies.get(key).cloned())
+        self.policies.read().get(key).cloned()
     }
 
     /// Get a backend TLS policy by namespace and name
@@ -167,7 +161,7 @@ impl BackendTLSPolicyStore {
     pub fn replace_all(&self, new_policies: HashMap<String, Arc<BackendTLSPolicy>>) {
         // Update policies map and build reverse_index under write lock to prevent race conditions
         let reverse_index = {
-            let mut policies_write = self.policies.write().unwrap();
+            let mut policies_write = self.policies.write();
             *policies_write = new_policies;
 
             // Build reverse_index while holding write lock to ensure consistency
@@ -189,7 +183,7 @@ impl BackendTLSPolicyStore {
 
         // Perform all operations under a single write lock to prevent race conditions
         let new_index = {
-            let mut policies_write = self.policies.write().unwrap();
+            let mut policies_write = self.policies.write();
 
             // Step 1: Collect affected target keys (under write lock protection)
             let mut affected_targets = HashSet::new();
@@ -286,25 +280,18 @@ impl BackendTLSPolicyStore {
 
     /// Get all policies
     pub fn get_all(&self) -> HashMap<String, Arc<BackendTLSPolicy>> {
-        self.policies
-            .read()
-            .map(|policies| policies.clone())
-            .unwrap_or_default()
+        self.policies.read().clone()
     }
 
     /// Get all policies in a specific namespace
     pub fn get_by_namespace(&self, namespace: &str) -> Vec<Arc<BackendTLSPolicy>> {
-        self.policies
-            .read()
-            .map(|policies| {
-                let prefix = format!("{}/", namespace);
-                policies
-                    .iter()
-                    .filter(|(key, _)| key.starts_with(&prefix))
-                    .map(|(_, policy)| policy.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+        let policies = self.policies.read();
+        let prefix = format!("{}/", namespace);
+        policies
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(_, policy)| policy.clone())
+            .collect()
     }
 
     /// Get policies that apply to a given target (O(1) lookup using reverse index)
@@ -325,12 +312,12 @@ impl BackendTLSPolicyStore {
 
     /// Count of policies
     pub fn count(&self) -> usize {
-        self.policies.read().map(|policies| policies.len()).unwrap_or(0)
+        self.policies.read().len()
     }
 
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> BackendTLSPolicyStoreStats {
-        let policies_count = self.policies.read().map(|p| p.len()).unwrap_or(0);
+        let policies_count = self.policies.read().len();
         let reverse_index = self.reverse_index.load();
         BackendTLSPolicyStoreStats {
             policies: policies_count,

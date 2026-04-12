@@ -227,9 +227,16 @@ impl DynamicExternalUpstreamConfig {
                     return;
                 }
             }
-            // Validate domain format (basic check, no spaces, no slashes)
-            if target.domain.contains(' ') || target.domain.contains('/') {
-                self.validation_error = Some(format!("domainMap['{}']: invalid domain '{}'", key, target.domain));
+            // Validate domain: reject control chars, null bytes, and chars invalid in DNS/SNI/Host
+            if let Some(c) = target
+                .domain
+                .chars()
+                .find(|c| c.is_control() || matches!(c, ' ' | '/' | '\\' | '@' | '#' | '?' | '[' | ']'))
+            {
+                self.validation_error = Some(format!(
+                    "domainMap['{}']: domain contains invalid character {:?}",
+                    key, c
+                ));
                 return;
             }
         }

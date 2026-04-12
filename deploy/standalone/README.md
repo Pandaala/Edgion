@@ -7,7 +7,7 @@ In standalone mode, the controller uses a **file-system config center** — it w
 ## Prerequisites
 
 - Linux (x86_64 or aarch64) — tested on Ubuntu 22.04+, Debian 12+, CentOS 9+
-- Edgion binaries: `edgion-controller`, `edgion-gateway`, `edgion-ctl`
+- Edgion binaries: `edgion-controller`, `edgion-gateway`, `edgion-cli`
 
 ## Quick Start
 
@@ -56,10 +56,10 @@ ls target/release/edgion-{controller,gateway,ctl}
 ├── bin/                        # (optional) binaries
 │   ├── edgion-controller
 │   ├── edgion-gateway
-│   └── edgion-ctl
-├── config/                     # TOML configuration
-│   ├── edgion-controller.toml
-│   └── edgion-gateway.toml
+│   └── edgion-cli
+├── config/                     # YAML configuration
+│   ├── edgion-controller.yaml
+│   └── edgion-gateway.yaml
 ├── conf/                       # Gateway API YAML resources
 │   └── gateway.yaml            # GatewayClass, Gateway, etc.
 ├── logs/                       # Log output
@@ -73,62 +73,61 @@ ls target/release/edgion-{controller,gateway,ctl}
 
 ## Configuration
 
-### Controller (`edgion-controller.toml`)
+### Controller (`edgion-controller.yaml`)
 
-```toml
-work_dir = "/usr/local/edgion"
+```yaml
+work_dir: "/usr/local/edgion"
 
-[server]
-grpc_listen = "0.0.0.0:50051"    # gRPC for gateway sync
-admin_listen = "0.0.0.0:5800"    # Admin API (health, apply)
+server:
+  grpc_listen: "0.0.0.0:50051"    # gRPC for gateway sync
+  admin_listen: "0.0.0.0:5800"    # Admin API (health, apply)
 
-[logging]
-log_dir = "logs"
-log_prefix = "edgion-controller"
-log_level = "info"
-json_format = true
+logging:
+  log_dir: logs
+  log_prefix: edgion-controller
+  log_level: info
+  json_format: true
 
 # FileSystem mode: watch local YAML directory
-[conf_center]
-type = "file_system"
-conf_dir = "conf"
+conf_center:
+  type: file_system
+  conf_dir: conf
 
-[conf_sync]
-no_sync_kinds = ["ReferenceGrant", "Secret"]
-default_capacity = 200
+conf_sync:
+  no_sync_kinds: [ReferenceGrant, Secret]
+  default_capacity: 200
 ```
 
-Key difference from Kubernetes mode: `conf_center.type = "file_system"` replaces `"kubernetes"`. The controller watches the `conf_dir` directory for YAML files and hot-reloads on changes.
+Key difference from Kubernetes mode: `conf_center.type: file_system` replaces `kubernetes`. The controller watches the `conf_dir` directory for YAML files and hot-reloads on changes.
 
-### Gateway (`edgion-gateway.toml`)
+### Gateway (`edgion-gateway.yaml`)
 
-```toml
-work_dir = "/usr/local/edgion"
+```yaml
+work_dir: "/usr/local/edgion"
 
-[gateway]
-server_addr = "http://127.0.0.1:50051"   # Controller gRPC address
-admin_listen = "0.0.0.0:5900"            # Gateway admin API
+gateway:
+  server_addr: "http://127.0.0.1:50051"   # Controller gRPC address
+  admin_listen: "0.0.0.0:5900"            # Gateway admin API
 
-[logging]
-log_dir = "logs"
-log_prefix = "edgion-gateway"
-log_level = "info,pingora_proxy=error,pingora_core=error"
+logging:
+  log_dir: logs
+  log_prefix: edgion-gateway
+  log_level: "info,pingora_proxy=error,pingora_core=error"
 
-[server]
-# threads = 4                  # Default: CPU core count
-# work_stealing = true
-# grace_period_seconds = 30
-# upstream_keepalive_pool_size = 128
+server:
+  # threads: 4                  # Default: CPU core count
+  # work_stealing: true
+  # grace_period_seconds: 30
+  # upstream_keepalive_pool_size: 128
 
-[access_log]
-enabled = true
-
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-
-[access_log.output.localFile.rotation]
-strategy = "daily"
-max_files = 7
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      rotation:
+        strategy: daily
+        max_files: 7
 ```
 
 ### Gateway API Config (`conf/`)
@@ -172,13 +171,13 @@ Add HTTPRoute, GRPCRoute, TCPRoute, etc. as additional YAML files in the same di
 ```bash
 # Controller
 edgion-controller \
-  --config-file /usr/local/edgion/config/edgion-controller.toml \
+  --config-file /usr/local/edgion/config/edgion-controller.yaml \
   --work-dir /usr/local/edgion \
   --conf-dir /usr/local/edgion/conf
 
 # Gateway (after controller is healthy)
 edgion-gateway \
-  --config-file /usr/local/edgion/config/edgion-gateway.toml \
+  --config-file /usr/local/edgion/config/edgion-gateway.yaml \
   --work-dir /usr/local/edgion
 ```
 
@@ -190,11 +189,11 @@ deploy/standalone/stop.sh --work-dir /usr/local/edgion
 
 ## Managing Routes
 
-Use `edgion-ctl` to apply configuration changes without restarting:
+Use `edgion-cli` to apply configuration changes without restarting:
 
 ```bash
 # Apply a new route
-edgion-ctl --server http://127.0.0.1:5800 apply -f my-route.yaml
+edgion-cli --server http://127.0.0.1:5800 apply -f my-route.yaml
 
 # Or simply place YAML files in the conf/ directory — the controller watches for changes
 cp my-route.yaml /usr/local/edgion/conf/
@@ -213,7 +212,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/edgion-controller \
-  --config-file /usr/local/edgion/config/edgion-controller.toml \
+  --config-file /usr/local/edgion/config/edgion-controller.yaml \
   --work-dir /usr/local/edgion
 Restart=always
 RestartSec=5
@@ -233,7 +232,7 @@ Requires=edgion-controller.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/edgion-gateway \
-  --config-file /usr/local/edgion/config/edgion-gateway.toml \
+  --config-file /usr/local/edgion/config/edgion-gateway.yaml \
   --work-dir /usr/local/edgion
 Restart=always
 RestartSec=5
@@ -274,6 +273,6 @@ tail -f /usr/local/edgion/logs/edgion-controller.*.log
 # View gateway access logs
 tail -f /usr/local/edgion/logs/edgion_access.log
 
-# Inspect current config via edgion-ctl
-edgion-ctl --server http://127.0.0.1:5800 get routes
+# Inspect current config via edgion-cli
+edgion-cli --server http://127.0.0.1:5800 get routes
 ```

@@ -19,7 +19,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # config
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5900}"
 
@@ -158,7 +158,7 @@ wait_for_ready() {
 }
 
 # =============================================================================
-# use edgion-ctl Loadfile
+# use edgion-cli Loadfile
 # 
 # FileSystemWriter  Kind_namespace_name.yaml ，
 # 
@@ -167,9 +167,9 @@ apply_file() {
     local file=$1
     local filename=$(basename "$file")
     
-    #  edgion-ctl apply 
+    #  edgion-cli apply
     log_info "Load $filename via API..."
-    if "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
+    if "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
         log_success "$filename Loadsuccess"
         return 0
     else
@@ -331,9 +331,9 @@ main() {
     echo -e "Suite:      ${suites}"
     echo ""
     
-    # Check edgion-ctl
-    if [ ! -f "$EDGION_CTL" ]; then
-        log_error "edgion-ctl Build，PleaseRun prepare.sh"
+    # Check edgion-cli
+    if [ ! -f "$EDGION_CLI" ]; then
+        log_error "edgion-cli Build，PleaseRun prepare.sh"
         exit 1
     fi
     
@@ -346,7 +346,10 @@ main() {
     if ! wait_for_ready 30; then
         exit 1
     fi
-    
+
+    # Auth is handled automatically by edgion-cli via ensure_auth() on each command.
+    # It reads local_auth credentials from config/edgion-controller.yaml when present.
+
     #  "all"
     if [ "$suites" = "all" ]; then
         suites=$(get_all_suites)

@@ -1,5 +1,9 @@
 # LDAP Auth 插件
 
+> **🔌 Edgion 扩展**
+> 
+> LdapAuth 是 `EdgionPlugins` CRD 提供的 LDAP 目录认证插件，不属于标准 Gateway API。
+
 ## 概述
 
 LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插件从请求头解析 `username:password`，再使用 LDAP Simple Bind 校验凭证。
@@ -138,3 +142,9 @@ spec:
 - 开启 `hideCredentials: true`，避免凭证透传到上游
 - 设置合理 `cacheTtl`（如 60~300 秒）平衡性能与凭证撤销生效时间
 - 在 LDAP 服务器侧启用账户锁定与防爆破策略
+
+## 相关文档
+
+- [BasicAuth 插件](../http-route/filters/edgion-plugins/basic-auth.md) - 基础用户名密码认证
+- [ForwardAuth 插件](forward-auth.md) - 外部鉴权插件
+- [JwtAuth 插件](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT 令牌认证

@@ -24,6 +24,7 @@ mod proxy_rewrite;
 mod rate_limit;
 mod rate_limit_redis;
 mod real_ip;
+mod region_route;
 mod request_restriction;
 mod response_rewrite;
 
@@ -33,7 +34,8 @@ pub use basic_auth::BasicAuthConfig;
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
 pub use ctx_set::{
-    CaseType, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TransformConfig, TransformType,
+    CaseType, CompiledTemplate, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TemplateSegment,
+    TemplateVarType, TransformConfig, TransformType,
 };
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
 pub use direct_endpoint::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, EndpointExtract};
@@ -60,5 +62,9 @@ pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, ProxyRewriteConf
 pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig, RateLimitScope};
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
+pub use region_route::{
+    AutoFailoverConfig, HashAlgorithm, HashCalcConfig, OnAllDown, RegionDef, RegionRouteBaseInfo, RegionRouteConfig,
+    RouteRule,
+};
 pub use request_restriction::{OnMissing, RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};

@@ -13,7 +13,7 @@ description: 三个 bin 共同遵守的命令行约定、工作目录结构、�
 |-----|---------|
 | edgion-controller | 安装 rustls 加密提供程序 → `parse_args()` → `run()` |
 | edgion-gateway | 安装 rustls 加密提供程序 → `parse_args()` → `run()`（普通 `fn main()`，自管理 Tokio 运行时） |
-| edgion-ctl | `Cli::parse()` → `cli.run().await`（单线程 Tokio） |
+| edgion-cli | `Cli::parse()` → `cli.run().await`（单线程 Tokio） |
 
 ## 命令行参数
 
@@ -22,7 +22,7 @@ description: 三个 bin 共同遵守的命令行约定、工作目录结构、�
 | 标志 | Controller | Gateway | ctl | 默认值 |
 |------|:---------:|:-------:|:---:|--------|
 | `--work-dir` / `-w` | ✓ | ✓ | ✗ | `"."` |
-| `--config-file` / `-c` | ✓ | ✓ | ✗ | `config/edgion-{type}.toml` |
+| `--config-file` / `-c` | ✓ | ✓ | ✗ | `config/edgion-{type}.yaml` |
 | `--log-dir` | ✓ | ✓ | ✗ | `logs` |
 | `--log-level` | ✓ | ✓ | ✗ | `info` |
 | `--json-format` | ✓ | ✓ | ✗ | `false` |
@@ -68,54 +68,55 @@ description: 三个 bin 共同遵守的命令行约定、工作目录结构、�
 ```
 1. 命令行参数（CLI flags）
 2. 环境变量（EDGION_WORK_DIR）
-3. 配置文件（TOML）
+3. 配置文件（YAML）
 4. 代码内默认值
 ```
 
 ### Controller 配置示例
 
-```toml
-[server]
-grpc_listen = "0.0.0.0:50051"
-admin_listen = "0.0.0.0:5800"
+```yaml
+server:
+  grpc_listen: "0.0.0.0:50051"
+  admin_listen: "0.0.0.0:5800"
 
-[logging]
-log_dir = "logs"
-log_prefix = "edgion-controller"
-log_level = "info"
-json_format = false
-console = true
+logging:
+  log_dir: logs
+  log_prefix: edgion-controller
+  log_level: info
+  json_format: false
+  console: true
 
-[conf_center]
-type = "file_system"  # 或 "kubernetes"
-conf_dir = "examples/test/conf"
+conf_center:
+  type: file_system  # 或 kubernetes
+  conf_dir: examples/test/conf
 
-[conf_sync]
-default_capacity = 200
-no_sync_kinds = ["ReferenceGrant", "Secret"]
+conf_sync:
+  default_capacity: 200
+  no_sync_kinds: [ReferenceGrant, Secret]
 ```
 
 ### Gateway 配置示例
 
-```toml
-[gateway]
-server_addr = "http://127.0.0.1:50051"
+```yaml
+gateway:
+  server_addr: "http://127.0.0.1:50051"
 
-[logging]
-log_dir = "logs"
-log_prefix = "edgion-gateway"
-log_level = "debug,pingora_proxy=error,pingora_core=error"
+logging:
+  log_dir: logs
+  log_prefix: edgion-gateway
+  log_level: "debug,pingora_proxy=error,pingora_core=error"
 
-[server]
-threads = 4
-work_stealing = true
-grace_period_seconds = 30
-graceful_shutdown_timeout_seconds = 10
+server:
+  threads: 4
+  work_stealing: true
+  grace_period_seconds: 30
+  graceful_shutdown_timeout_seconds: 10
 
-[access_log]
-enabled = true
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
 ```
 
 ## 工作目录

@@ -1,5 +1,9 @@
 # ForwardAuth Plugin
 
+> **🔌 Edgion Extension**
+> 
+> ForwardAuth is an external authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 The ForwardAuth plugin forwards key information from the original request (Headers, Method, URI, etc.) to an external authentication service, and decides whether to allow or reject the request based on the authentication service's response status code.
@@ -21,44 +25,36 @@ This is the classic external authentication pattern for API Gateways, comparable
 
 ## Core Flow
 
-```
-Client Request
-     │
-     ▼
-ForwardAuth Plugin
-     │
-     ├─── Build auth request (Header + X-Forwarded-* metadata)
-     │
-     ├─── Send to external auth service
-     │
-     ├─── Auth service returns 2xx?
-     │       │
-     │       ├── Yes → Copy upstreamHeaders to original request → Forward to upstream
-     │       │
-     │       └── No → Copy clientHeaders + Return auth service's status code and Body
-     │
-     └─── Auth service unreachable?
-             │
-             ├── allowDegradation: true → Skip auth, allow through
-             │
-             └── allowDegradation: false → Return statusOnError (default 503)
+```mermaid
+flowchart TD
+    A["Client Request"] --> B["ForwardAuth Plugin"]
+    B --> C["Build auth request<br/>(Header + X-Forwarded-* metadata)"]
+    C --> D["Send to external auth service"]
+    D --> E{"Auth service<br/>reachable?"}
+    E -->|Yes| F{"Returns 2xx?"}
+    F -->|Yes| G["Copy upstreamHeaders to original request"]
+    G --> H["Forward to upstream"]
+    F -->|No| I["Copy clientHeaders +<br/>Return auth service's status code and Body"]
+    E -->|No| J{"allowDegradation?"}
+    J -->|"true"| K["Skip auth, allow through"]
+    J -->|"false"| L["Return statusOnError (default 503)"]
 ```
 
 ## Configuration
 
 ### Configuration Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `uri` | string | Yes | - | Auth service address (must start with `http://` or `https://`) |
-| `requestMethod` | string | No | `GET` | HTTP method sent to the auth service |
-| `requestHeaders` | string[] | No | `null` | Request headers to forward to the auth service (see below) |
-| `upstreamHeaders` | string[] | No | `[]` | Headers copied from auth response to original request on success |
-| `clientHeaders` | string[] | No | `[]` | Headers copied from auth response to client response on failure |
-| `timeoutMs` | integer | No | `10000` | Request timeout (milliseconds) |
-| `successStatusCodes` | integer[] | No | `null` | Custom success status code list (default: any 2xx) |
-| `allowDegradation` | boolean | No | `false` | Whether to allow requests through when auth service is unavailable |
-| `statusOnError` | integer | No | `503` | Status code returned on auth service network errors (200-599) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `uri` | String | — (required) | Auth service address (must start with `http://` or `https://`) |
+| `requestMethod` | String | `"GET"` | HTTP method sent to the auth service |
+| `requestHeaders` | Array\<String\> | `null` | Request headers to forward to the auth service (see below) |
+| `upstreamHeaders` | Array\<String\> | `[]` | Headers copied from auth response to original request on success |
+| `clientHeaders` | Array\<String\> | `[]` | Headers copied from auth response to client response on failure |
+| `timeoutMs` | Integer | `10000` | Request timeout (milliseconds) |
+| `successStatusCodes` | Array\<Integer\> | `null` | Custom success status code list (default: any 2xx) |
+| `allowDegradation` | Boolean | `false` | Whether to allow requests through when auth service is unavailable |
+| `statusOnError` | Integer | `503` | Status code returned on auth service network errors (200-599) |
 
 ### requestHeaders Behavior
 
@@ -312,3 +308,10 @@ Any non-2xx response rejects the request.
 A: Yes. When enabled, requests pass through without authentication when the auth service is unavailable.
 Only suitable for scenarios where authentication is not a critical security barrier (e.g., A/B testing, non-sensitive APIs).
 For security-critical APIs, keep the default `false`.
+
+## Related Documentation
+
+- [BasicAuth Plugin](../http-route/filters/edgion-plugins/basic-auth.md) - Basic username/password authentication
+- [JwtAuth Plugin](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT token authentication
+- [OpenID Connect Plugin](openid-connect.md) - OIDC/OAuth2 authentication
+- [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

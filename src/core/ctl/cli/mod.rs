@@ -1,6 +1,8 @@
+pub mod auto_auth;
 pub mod client;
 pub mod commands;
 pub mod output;
+pub mod token;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -9,7 +11,7 @@ use std::path::PathBuf;
 use client::EdgionClient;
 use output::OutputFormat;
 
-/// Target type for edgion-ctl commands
+/// Target type for edgion-cli commands
 ///
 /// - `center`: ConfCenter API (default, full CRUD operations)
 /// - `server`: ConfigServer cache (read-only, Controller side)
@@ -36,7 +38,7 @@ impl std::fmt::Display for TargetType {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "edgion-ctl")]
+#[command(name = "edgion-cli")]
 #[command(about = "Edgion control tool for managing gateway resources", long_about = None)]
 #[command(version)]
 pub struct Cli {
@@ -54,6 +56,11 @@ pub struct Cli {
     /// Unix socket path (e.g., /var/run/edgion/edgion.sock)
     #[arg(long)]
     pub socket: Option<PathBuf>,
+
+    /// Controller config file path for auto-login.
+    /// Auto-detected from default locations if not specified.
+    #[arg(long, short = 'C', value_name = "FILE")]
+    pub controller_config: Option<String>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -111,6 +118,17 @@ pub enum Commands {
 
     /// Generate mTLS certificates for conf_sync gRPC channel
     GenCerts(commands::gen_certs::GenCertsArgs),
+
+    /// Log in to the controller and save the token locally (~/.edgion/token)
+    Login {
+        /// Username
+        #[arg(short, long)]
+        username: Option<String>,
+
+        /// Password
+        #[arg(short, long)]
+        password: Option<String>,
+    },
 }
 
 impl Cli {
@@ -120,8 +138,30 @@ impl Cli {
             return commands::gen_certs::execute(args).await;
         }
 
+        // Login does not need an EdgionClient; it uses a raw HTTP call
+        if let Commands::Login { username, password } = &self.command {
+            let base_url = self.server.clone().unwrap_or_else(|| {
+                format!(
+                    "http://localhost:{}",
+                    match self.target {
+                        TargetType::Center | TargetType::Server => 5800,
+                        TargetType::Client => 5900,
+                    }
+                )
+            });
+            return commands::login::login(&base_url, username.as_deref(), password.as_deref()).await;
+        }
+
         // Create API client with target type
-        let client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone())?;
+        let mut client = EdgionClient::new(
+            self.target,
+            self.server.clone(),
+            self.socket.clone(),
+            self.controller_config.clone(),
+        )?;
+
+        // Ensure authentication (auto-detect and auto-login if needed)
+        client.ensure_auth().await?;
 
         // Execute command
         match &self.command {
@@ -164,7 +204,7 @@ impl Cli {
                 }
                 commands::reload::reload(&client).await
             }
-            Commands::GenCerts(_) => unreachable!(), // handled above
+            Commands::GenCerts(_) | Commands::Login { .. } => unreachable!(), // handled above
         }
     }
 }

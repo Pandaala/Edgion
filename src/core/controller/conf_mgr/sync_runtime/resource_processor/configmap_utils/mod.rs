@@ -5,6 +5,4 @@
 
 mod configmap_store;
 
-pub use configmap_store::{
-    get_configmap, get_global_configmap_store, replace_all_configmaps, update_configmaps, ConfigMapStore,
-};
+pub use configmap_store::ConfigMapStore;

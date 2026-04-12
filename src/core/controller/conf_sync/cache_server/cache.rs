@@ -1,6 +1,7 @@
 use kube::{Resource, ResourceExt};
+use parking_lot::RwLock;
 use serde::Serialize;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, Notify};
 
@@ -49,13 +50,13 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 
     pub fn is_ready(&self) -> bool {
-        *self.ready.read().unwrap()
+        *self.ready.read()
     }
 
     /// Set cache to not ready state
     /// Used during relink to prevent serving stale data
     pub fn set_not_ready(&self) {
-        *self.ready.write().unwrap() = false;
+        *self.ready.write() = false;
     }
 
     /// Clear all data from the cache
@@ -69,7 +70,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     where
         T: Clone,
     {
-        let mut store_guard = self.store.write().unwrap();
+        let mut store_guard = self.store.write();
         store_guard.clear();
         // Do NOT call notify.notify_waiters() here.
         // Old watcher tasks will keep waiting, but gRPC layer will detect
@@ -91,7 +92,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     where
         T: Clone,
     {
-        let store_guard = self.store.read().unwrap();
+        let store_guard = self.store.read();
         let (data, sync_version) = store_guard.snapshot_owned();
         ListData::new(data, sync_version)
     }
@@ -103,12 +104,12 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     where
         T: Clone,
     {
-        let store_guard = self.store.read().unwrap();
+        let store_guard = self.store.read();
         store_guard.get_by_key(key)
     }
 
     pub fn list_keys(&self) -> Vec<String> {
-        let store_guard = self.store.read().unwrap();
+        let store_guard = self.store.read();
         store_guard.keys()
     }
 
@@ -131,7 +132,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
 
             loop {
                 let result = {
-                    let store_guard = store.read().unwrap();
+                    let store_guard = store.read();
                     store_guard.get_events_from_sync_version(from_version)
                 };
 
@@ -148,9 +149,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                             from_version = current_version;
 
                             send_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            if let Ok(mut last_time) = last_send_time.write() {
-                                *last_time = Some(SystemTime::now());
-                            }
+                            *last_send_time.write() = Some(SystemTime::now());
                         }
                         _ => {
                             if current_version > from_version {
@@ -215,7 +214,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         T: Clone + Send + Sync + 'static,
     {
         let watchers_len = {
-            let watchers = self.watchers.read().unwrap();
+            let watchers = self.watchers.read();
             watchers.len()
         };
         tracing::info!(
@@ -223,7 +222,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             client_id = %client_id,
             client_name = %client_name,
             from_version = from_version,
-            ready = *self.ready.read().unwrap(),
+            ready = *self.ready.read(),
             pending_watchers = watchers_len,
             "New watch request"
         );
@@ -241,12 +240,12 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             sender: data_tx,
             watch_start_time: SystemTime::now(),
             send_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            last_send_time: Arc::new(RwLock::new(None)),
+            last_send_time: Arc::new(parking_lot::RwLock::new(None)),
         };
 
         let watcher_clone = watcher.clone();
         {
-            let mut watchers = self.watchers.write().unwrap();
+            let mut watchers = self.watchers.write();
 
             // Lazy cleanup: remove watchers whose receivers have been dropped
             // TODO: need more check on this lazy cleanup logic
@@ -271,7 +270,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             component = "cache_server",
             client_id = %watcher.client_id,
             total_watchers = {
-                let watchers = self.watchers.read().unwrap();
+                let watchers = self.watchers.read();
                 watchers.len()
             },
             "Watcher registered"
@@ -300,7 +299,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         }
 
         {
-            let mut store_guard = self.store.write().unwrap();
+            let mut store_guard = self.store.write();
             store_guard.apply_event(event_type, resource, sync_version);
         }
         self.notify.notify_waiters();
@@ -318,9 +317,9 @@ where
     }
 
     fn list_json(&self) -> Result<(String, u64), String> {
-        let list_data = self.list_owned();
-        serde_json::to_string(&list_data.data)
-            .map(|json| (json, list_data.sync_version))
+        let store_guard = self.store.read();
+        store_guard
+            .serialize_snapshot_json()
             .map_err(|e| format!("Failed to serialize {} data: {}", T::kind_name(), e))
     }
 
@@ -374,19 +373,19 @@ where
     }
 
     fn is_ready(&self) -> bool {
-        *self.ready.read().unwrap()
+        *self.ready.read()
     }
 
     fn set_ready(&self) {
-        *self.ready.write().unwrap() = true;
+        *self.ready.write() = true;
     }
 
     fn set_not_ready(&self) {
-        *self.ready.write().unwrap() = false;
+        *self.ready.write() = false;
     }
 
     fn clear(&self) {
-        let mut store_guard = self.store.write().unwrap();
+        let mut store_guard = self.store.write();
         store_guard.clear();
         self.notify.notify_waiters();
     }
@@ -421,7 +420,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
                 );
             }
             ResourceChange::InitAdd => {
-                let mut store_guard = self.store.write().unwrap();
+                let mut store_guard = self.store.write();
                 store_guard.init_add(sync_version, resource);
             }
             ResourceChange::InitDone => {
@@ -446,7 +445,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
     }
 
     fn set_ready(&self) {
-        *self.ready.write().unwrap() = true;
+        *self.ready.write() = true;
     }
 }
 

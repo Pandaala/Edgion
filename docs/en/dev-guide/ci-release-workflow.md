@@ -103,7 +103,7 @@ Purpose:
 - produce three binaries:
   - `edgion-gateway`
   - `edgion-controller`
-  - `edgion-ctl`
+  - `edgion-cli`
 - install the cross compiler for arm64
 
 ### 3. `build-and-push-images`

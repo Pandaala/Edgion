@@ -1,5 +1,9 @@
 # RateLimit Plugin
 
+> **🔌 Edgion Extension**
+> 
+> RateLimit is a request rate limiting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 The RateLimit plugin provides high-performance request rate limiting based on Pingora's Count-Min Sketch (CMS) algorithm.
@@ -38,20 +42,20 @@ spec:
 
 ### Configuration Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `rate` | integer | No | `100` | Rate limit threshold (max requests per interval) |
-| `interval` | string | No | `"1s"` | Time window, supports `ms`, `s`, `m`, `h`, `d` |
-| `key` | KeyGet[] | No | `[{type: clientIp}]` | Rate limiting key configuration (multiple keys joined with `_`) |
-| `scope` | enum | No | `Instance` | Rate limiting scope: `Instance` or `Cluster` |
-| `skewTolerance` | float | No | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
-| `onMissingKey` | enum | No | `Allow` | Behavior when key cannot be extracted: `Allow` or `Deny` |
-| `defaultKey` | string | No | - | Default key when extraction fails |
-| `rejectStatus` | integer | No | `429` | HTTP status code on rejection (100~599) |
-| `rejectMessage` | string | No | `"Rate limit exceeded"` | Response message on rejection |
-| `showLimitHeaders` | boolean | No | `true` | Whether to add rate limiting headers to the response |
-| `headerNames` | object | No | - | Custom rate limiting response header names |
-| `estimatorSlotsK` | integer | No | - | CMS precision (K units), uses global default if not set |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rate` | Integer | `100` | Rate limit threshold (max requests per interval) |
+| `interval` | String | `"1s"` | Time window, supports `ms`, `s`, `m`, `h`, `d` |
+| `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting key configuration (multiple keys joined with `_`) |
+| `scope` | Enum | `Instance` | Rate limiting scope. Values: `Instance` | `Cluster` |
+| `skewTolerance` | Float | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
+| `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` | `Deny` |
+| `defaultKey` | String | None | Default key when extraction fails |
+| `rejectStatus` | Integer | `429` | HTTP status code on rejection (100~599) |
+| `rejectMessage` | String | `"Rate limit exceeded"` | Response message on rejection |
+| `showLimitHeaders` | Boolean | `true` | Whether to add rate limiting headers to the response |
+| `headerNames` | Object | None | Custom rate limiting response header names |
+| `estimatorSlotsK` | Integer | None | CMS precision (K units), uses global default if not set |
 
 #### rate
 
@@ -424,15 +428,16 @@ Higher precision means fewer hash collisions and more accurate rate limiting, bu
 
 CMS is a probabilistic data structure that uses multiple hash functions (default 4) and a fixed-size counter array for frequency estimation:
 
-```text
-Request key = "192.168.1.1"
-       │
-       ├─ hash1("192.168.1.1") → slot[23]  ++
-       ├─ hash2("192.168.1.1") → slot[87]  ++
-       ├─ hash3("192.168.1.1") → slot[142] ++
-       └─ hash4("192.168.1.1") → slot[256] ++
-       
-estimate = min(slot[23], slot[87], slot[142], slot[256])
+```mermaid
+flowchart TD
+    A["Request key = '192.168.1.1'"] --> B["hash1('192.168.1.1') → slot[23] ++"]
+    A --> C["hash2('192.168.1.1') → slot[87] ++"]
+    A --> D["hash3('192.168.1.1') → slot[142] ++"]
+    A --> E["hash4('192.168.1.1') → slot[256] ++"]
+    B --> F["estimate = min(slot[23], slot[87], slot[142], slot[256])"]
+    C --> F
+    D --> F
+    E --> F
 ```
 
 - **Space efficient**: Fixed memory, doesn't grow with key count
@@ -443,10 +448,14 @@ estimate = min(slot[23], slot[87], slot[142], slot[256])
 
 Pingora's Rate uses a dual-slot (red/blue) design for smooth sliding windows:
 
-```text
-Timeline: ──────────────────────────────────>
-          [  Window A  ][  Window B  ][  Window C  ]
-                        ↑ Old slot cleared on switch
+```mermaid
+flowchart TD
+    subgraph Timeline
+        direction LR
+        WA["Window A"] --> WB["Window B"]
+        WB --> WC["Window C"]
+    end
+    WB -. "Old slot cleared on switch" .-> WA
 ```
 
 On window switch, the old counter slot is cleared and reused, new requests write to the new slot.
@@ -511,3 +520,10 @@ requestPlugins:
         - type: clientIp
         - type: path
 ```
+
+## Related Documentation
+
+- [RateLimit Plugin (HTTPRoute-level)](../http-route/filters/edgion-plugins/rate-limit.md) - HTTPRoute-level rate limiting configuration
+- [IP Restriction Plugin](../http-route/filters/edgion-plugins/ip-restriction.md) - IP allow/deny lists
+- [CtxSet Plugin](ctx-setter.md) - Construct custom rate limiting keys
+- [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

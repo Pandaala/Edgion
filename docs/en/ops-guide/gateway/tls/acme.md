@@ -67,10 +67,10 @@ After creation, the Controller registers an account with the ACME service (defau
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `server` | string | No | Let's Encrypt production directory | ACME directory URL, e.g., `https://acme-v02.api.letsencrypt.org/directory`; use staging or Pebble for testing. |
-| `email` | string | **Yes** | - | ACME account contact email. |
-| `domains` | []string | **Yes** | - | Domains for certificate request; wildcards (e.g., `*.example.com`) require DNS-01. |
-| `keyType` | string | No | `ecdsa-p256` | Certificate key type: `ecdsa-p256`, `ecdsa-p384`. |
+| `server` | String | No | Let's Encrypt production directory | ACME directory URL, e.g., `https://acme-v02.api.letsencrypt.org/directory`; use staging or Pebble for testing. |
+| `email` | String | **Yes** | - | ACME account contact email. |
+| `domains` | Array\<String\> | **Yes** | - | Domains for certificate request; wildcards (e.g., `*.example.com`) require DNS-01. |
+| `keyType` | String | No | `ecdsa-p256` | Certificate key type: `ecdsa-p256`, `ecdsa-p384`. |
 
 ### Challenge Method: challenge
 
@@ -88,7 +88,7 @@ After creation, the Controller registers an account with the ACME service (defau
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `provider` | string | **Yes** | - | Supported: `cloudflare`, `alidns`; use `pebble` for testing (with Pebble + challtestsrv). |
+| `provider` | String | **Yes** | - | Supported: `cloudflare`, `alidns`; use `pebble` for testing (with Pebble + challtestsrv). |
 | `credentialRef` | object | **Yes** | - | Secret reference containing DNS API credentials. |
 | `propagationTimeout` | int | No | 120 | Maximum wait time for DNS propagation (seconds). |
 | `propagationCheckInterval` | int | No | 5 | Propagation check interval (seconds). |
@@ -109,15 +109,15 @@ After creation, the Controller registers an account with the ACME service (defau
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `secretName` | string | **Yes** | Name of the Secret storing `tls.crt` and `tls.key`. |
-| `secretNamespace` | string | No | Namespace of the Secret; defaults to the EdgionAcme namespace. |
+| `secretName` | String | **Yes** | Name of the Secret storing `tls.crt` and `tls.key`. |
+| `secretNamespace` | String | No | Namespace of the Secret; defaults to the EdgionAcme namespace. |
 
 ### Auto EdgionTls: autoEdgionTls
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | true | Whether to automatically create/update EdgionTls. |
-| `name` | string | No | EdgionTls name; defaults to `acme-<EdgionAcme name>`. |
+| `enabled` | Boolean | true | Whether to automatically create/update EdgionTls. |
+| `name` | String | No | EdgionTls name; defaults to `acme-<EdgionAcme name>`. |
 | `parentRefs` | []ParentRef | No | Gateway bindings for the auto-created EdgionTls. |
 
 ---
@@ -198,3 +198,10 @@ Response example:
 - **Local Integration Test (Pebble)**: Docker Compose and instructions under `examples/test/conf/Services/acme/pebble/`.
 
 For usage with EdgionTls, see the [EdgionTls User Guide](./edgion-tls.md).
+
+## Related Documentation
+
+- [TLS Termination](./tls-termination.md)
+- [EdgionTls Extension](./edgion-tls.md)
+- [Gateway Resource Overview](../overview.md)
+- [HTTPS Listener](../listeners/https.md)

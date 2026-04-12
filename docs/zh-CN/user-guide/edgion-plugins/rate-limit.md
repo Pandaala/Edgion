@@ -1,5 +1,9 @@
 # RateLimit 插件
 
+> **🔌 Edgion 扩展**
+> 
+> RateLimit 是 `EdgionPlugins` CRD 提供的请求速率限制插件，不属于标准 Gateway API。
+
 ## 概述
 
 RateLimit 插件提供高性能的请求速率限制功能，基于 Pingora 的 Count-Min Sketch (CMS) 算法实现。
@@ -38,20 +42,20 @@ spec:
 
 ### 配置参数
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `rate` | integer | 否 | `100` | 限流阈值（每个 interval 允许的最大请求数） |
-| `interval` | string | 否 | `"1s"` | 时间窗口，支持 `ms`、`s`、`m`、`h`、`d` |
-| `key` | KeyGet[] | 否 | `[{type: clientIp}]` | 限流键配置（多个键用 `_` 连接） |
-| `scope` | enum | 否 | `Instance` | 限流作用域：`Instance` 或 `Cluster` |
-| `skewTolerance` | float | 否 | `1.2` | 流量倾斜容忍度（仅 Cluster 模式生效，范围 1.0~2.0） |
-| `onMissingKey` | enum | 否 | `Allow` | key 无法提取时的行为：`Allow` 或 `Deny` |
-| `defaultKey` | string | 否 | - | key 无法提取时使用的默认 key |
-| `rejectStatus` | integer | 否 | `429` | 拒绝请求时的 HTTP 状态码（100~599） |
-| `rejectMessage` | string | 否 | `"Rate limit exceeded"` | 拒绝请求时的响应消息 |
-| `showLimitHeaders` | boolean | 否 | `true` | 是否在响应中添加限流头 |
-| `headerNames` | object | 否 | - | 自定义限流响应头名称 |
-| `estimatorSlotsK` | integer | 否 | - | CMS 精度（K 单位），不设置则使用全局默认值 |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `rate` | Integer | `100` | 限流阈值（每个 interval 允许的最大请求数） |
+| `interval` | String | `"1s"` | 时间窗口，支持 `ms`、`s`、`m`、`h`、`d` |
+| `key` | Array\<Object\> | `[{type: clientIp}]` | 限流键配置（多个键用 `_` 连接） |
+| `scope` | Enum | `Instance` | 限流作用域。可选值：`Instance` | `Cluster` |
+| `skewTolerance` | Float | `1.2` | 流量倾斜容忍度（仅 Cluster 模式生效，范围 1.0~2.0） |
+| `onMissingKey` | Enum | `Allow` | key 无法提取时的行为。可选值：`Allow` | `Deny` |
+| `defaultKey` | String | 无 | key 无法提取时使用的默认 key |
+| `rejectStatus` | Integer | `429` | 拒绝请求时的 HTTP 状态码（100~599） |
+| `rejectMessage` | String | `"Rate limit exceeded"` | 拒绝请求时的响应消息 |
+| `showLimitHeaders` | Boolean | `true` | 是否在响应中添加限流头 |
+| `headerNames` | Object | 无 | 自定义限流响应头名称 |
+| `estimatorSlotsK` | Integer | 无 | CMS 精度（K 单位），不设置则使用全局默认值 |
 
 #### rate
 
@@ -424,15 +428,16 @@ gateway_instance_count = 4
 
 CMS 是一种概率数据结构，通过多个 hash 函数（默认 4 个）和固定大小的计数器数组实现频率估计：
 
-```text
-请求 key = "192.168.1.1"
-       │
-       ├─ hash1("192.168.1.1") → slot[23]  ++
-       ├─ hash2("192.168.1.1") → slot[87]  ++
-       ├─ hash3("192.168.1.1") → slot[142] ++
-       └─ hash4("192.168.1.1") → slot[256] ++
-       
-estimate = min(slot[23], slot[87], slot[142], slot[256])
+```mermaid
+flowchart TD
+    A["请求 key = '192.168.1.1'"] --> B["hash1('192.168.1.1') → slot[23] ++"]
+    A --> C["hash2('192.168.1.1') → slot[87] ++"]
+    A --> D["hash3('192.168.1.1') → slot[142] ++"]
+    A --> E["hash4('192.168.1.1') → slot[256] ++"]
+    B --> F["estimate = min(slot[23], slot[87], slot[142], slot[256])"]
+    C --> F
+    D --> F
+    E --> F
 ```
 
 - **空间效率**：固定内存，不随 key 数量增长
@@ -443,10 +448,14 @@ estimate = min(slot[23], slot[87], slot[142], slot[256])
 
 Pingora 的 Rate 使用双槽（红/蓝）设计实现平滑的滑动窗口：
 
-```text
-时间线: ──────────────────────────────────>
-        [  窗口 A  ][  窗口 B  ][  窗口 C  ]
-                    ↑ 切换时旧槽清零
+```mermaid
+flowchart TD
+    subgraph 时间线
+        direction LR
+        WA["窗口 A"] --> WB["窗口 B"]
+        WB --> WC["窗口 C"]
+    end
+    WB -. "切换时旧槽清零" .-> WA
 ```
 
 在窗口切换时，旧的计数器槽被清零并复用，新的请求写入新槽。
@@ -511,3 +520,10 @@ requestPlugins:
         - type: clientIp
         - type: path
 ```
+
+## 相关文档
+
+- [RateLimit 插件（HTTPRoute 级）](../http-route/filters/edgion-plugins/rate-limit.md) - HTTPRoute 级别的限流配置
+- [IP 限制插件](../http-route/filters/edgion-plugins/ip-restriction.md) - IP 黑白名单
+- [CtxSet 插件](ctx-setter.md) - 构造自定义限流键
+- [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览

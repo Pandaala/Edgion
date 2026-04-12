@@ -37,7 +37,7 @@
     - [直接端点](./http-route/filters/edgion-plugins/direct-endpoint.md)
     - [动态上游](./http-route/filters/edgion-plugins/dynamic-upstream.md)
     - [Mock](./http-route/filters/edgion-plugins/mock.md)
-    - [DSL](./http-route/filters/edgion-plugins/dsl.md)
+    - [DSL](./http-route/filters/edgion-plugins/dsl/)
 - 后端配置（Backends）
   - [Service 引用](./http-route/backends/service-ref.md)
   - [权重配置](./http-route/backends/weight.md)

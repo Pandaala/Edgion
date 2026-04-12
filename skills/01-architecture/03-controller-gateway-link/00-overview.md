@@ -111,51 +111,131 @@ List 和 Watch 请求均携带 `expected_server_id`。如果 Gateway 发送的 `
 
 ## 通道安全（mTLS）
 
-conf_sync gRPC 通道支持可选的 mTLS 加密，通过 TOML 配置的 `[conf_sync_security.tls]` section 控制。
+两个 gRPC 通道均支持可选的 mTLS 加密：
+
+| 通道 | 方向 | 配置字段 |
+|------|------|---------|
+| **conf_sync** | Controller (server) ↔ Gateway (client) | `conf_sync_security` |
+| **federation** | Center (server) ↔ Controller (client) | `center.security`（客户端）/ `grpc_security`（Center 服务端） |
 
 ### 配置结构
 
 ```rust
 // src/core/common/config/mod.rs
 pub struct ConfSyncSecurityConfig {
-    pub tls: Option<ConfSyncTlsConfig>,
+    pub active: Option<String>,          // 激活的证书名称
+    pub certs: Vec<ConfSyncTlsConfig>,   // 多证书集（[[...certs]] 数组）
+    pub tls: Option<ConfSyncTlsConfig>,  // 旧版单证书格式（向后兼容）
 }
 
 pub struct ConfSyncTlsConfig {
-    pub cert: String,      // 证书路径（相对 work_dir 或绝对）
-    pub key: String,       // 私钥路径
-    pub ca: String,        // CA 证书路径（校验对端）
-    pub skip_tls: bool,    // 紧急跳过 TLS（仅故障降级用）
+    pub name: Option<String>, // 证书集名称（多证书时必填）
+    pub cert: String,         // 证书路径（相对 work_dir 或绝对）
+    pub key: String,          // 私钥路径
+    pub ca: String,           // CA 证书路径（校验对端）
+    pub skip_tls: bool,       // 紧急跳过 TLS（仅故障降级用）
 }
 ```
 
+`resolve_active_tls()` 按优先级解析生效的 TLS 配置：
+1. `certs` 数组：找到 `name == active` 的条目
+2. `certs` 仅有一条且 `active` 为 None：自动选用
+3. 回退到旧版 `tls` 字段
+4. 均无配置 → 明文 gRPC
+
 路径解析通过 `ConfSyncTlsConfig::resolve_path()` 基于 `work_dir` 处理，与其他配置路径行为一致。
+
+### YAML 配置示例
+
+**旧版单证书格式（向后兼容）：**
+```yaml
+conf_sync_security:
+  tls:
+    cert: certs/grpc/server.crt
+    key: certs/grpc/server.key
+    ca: certs/grpc/ca.crt
+```
+
+**多证书格式（支持证书轮换 / CA 迁移）：**
+```yaml
+conf_sync_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
+    - name: new-ca
+      cert: certs/grpc/new-ca/server.crt
+      key: certs/grpc/new-ca/server.key
+      ca: certs/grpc/new-ca/ca.crt
+```
+
+**Center federation 通道（Center 服务端，`config/edgion-center.yaml`）：**
+```yaml
+grpc_security:
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
+```
+
+**Controller federation 客户端（`config/edgion-controller.yaml`）：**
+```yaml
+center:
+  address: "https://center.example.com:50052"
+  security:
+    active: primary
+    certs:
+      - name: primary
+        cert: certs/grpc/primary/client.crt
+        key: certs/grpc/primary/client.key
+        ca: certs/grpc/primary/ca.crt
+```
 
 ### 工作模式
 
-| 配置状态 | Controller | Gateway |
-|----------|-----------|---------|
-| 无 `[conf_sync_security]` | 明文 gRPC（向后兼容） | 明文连接 |
+| 配置状态 | 服务端（Controller / Center） | 客户端（Gateway / Controller） |
+|----------|------------------------------|-------------------------------|
+| 无 security 配置 | 明文 gRPC（向后兼容） | 明文连接 |
 | 有 TLS config + 证书有效 | mTLS gRPC | mTLS 连接 |
-| 有 TLS config + 证书缺失 | **gRPC 不启动**（严格模式） | 连接失败，backoff 重试 |
+| 有 TLS config + 证书缺失 | **不启动**（严格模式） | 连接失败，backoff 重试 |
 | `skip_tls = true` | 明文 + ERROR 日志 | 明文 + ERROR 日志 |
+
+### 共享 TLS 加载层
+
+TLS 文件读取逻辑统一在 `src/core/common/grpc_tls.rs`：
+
+| 函数 | 用途 |
+|------|------|
+| `load_server_tls(cfg)` | 读取 cert/key/ca，返回 `ServerTlsConfig` |
+| `load_client_tls(cfg)` | 读取 ca/cert/key，返回 `ClientTlsConfig` |
 
 ### 实现位置
 
 | 组件 | 文件 | 关键函数 |
 |------|------|---------|
-| Server TLS | `controller/conf_sync/conf_server/grpc_server.rs` | `load_server_tls()` → `ServerTlsConfig::new().identity().client_ca_root()` |
-| Client TLS | `gateway/conf_sync/conf_client/grpc_client.rs` | `load_client_tls()` → `ClientTlsConfig::new().ca_certificate().identity()` |
-| Controller CLI | `controller/cli/mod.rs` | `start_services()` 接收 `Option<ConfSyncTlsConfig>` |
-| Gateway CLI | `gateway/cli/mod.rs` | `create_config_sync_client()` 传入 `config.conf_sync_security.tls.as_ref()` |
+| 共享 TLS 加载 | `common/grpc_tls.rs` | `load_server_tls()` / `load_client_tls()` |
+| conf_sync Server TLS | `controller/conf_sync/conf_server/grpc_server.rs` | `serve_with_shutdown(security: &ConfSyncSecurityConfig)` |
+| conf_sync Client TLS | `gateway/conf_sync/conf_client/grpc_client.rs` | `new(security: &ConfSyncSecurityConfig)` |
+| Controller CLI | `controller/cli/mod.rs` | `start_services(security: ConfSyncSecurityConfig)` |
+| Gateway CLI | `gateway/cli/mod.rs` | `create_config_sync_client()` 传入 `&config.conf_sync_security` |
+| Center Server TLS | `center/cli/mod.rs` | TLS-aware `tonic::transport::Server::builder()` |
+| Federation Client TLS | `controller/fed_sync/fed_client/mod.rs` | `connect_and_run()` 使用 `config.security` |
 
 ### 证书生成
 
-`edgion-ctl gen-certs` 子命令使用 rcgen 生成完整证书束：
+`edgion-cli gen-certs` 子命令使用 rcgen 生成完整证书束：
 
 - **CA**：自签 ECDSA P-256，CN=edgion-grpc-ca
 - **Server cert**：CN=edgion-controller，SAN 含 localhost/127.0.0.1/::1 + K8s FQDN，EKU=ServerAuth
 - **Client cert**：CN=edgion-gateway，EKU=ClientAuth
+
+`--cert-name <NAME>`（默认 `primary`）参数：
+- **文件模式**：证书写入 `<output_dir>/<cert-name>/` 子目录，支持多套证书并存
+- **K8s 模式**：Secret 命名为 `{prefix}-controller-tls-{cert-name}` / `{prefix}-gateway-tls-{cert-name}`
 
 证书生成逻辑：`src/core/ctl/certs/mod.rs`
 子命令入口：`src/core/ctl/cli/commands/gen_certs.rs`

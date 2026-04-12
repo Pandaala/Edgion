@@ -96,10 +96,7 @@ impl CircuitBreakerStore {
 
         if ejected_at.elapsed() >= svc.config.ejection_duration() {
             drop(ep);
-            if let Some(mut ep_mut) = svc.endpoints.get_mut(&backend_hash) {
-                ep_mut.ejected_at = None;
-                ep_mut.consecutive_failures = 0;
-            }
+            svc.endpoints.remove(&backend_hash);
             crate::core::gateway::observe::metrics::record_cb_recovery(service_key);
             return false;
         }

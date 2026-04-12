@@ -4,3 +4,4 @@
 - [权重配置](./weight.md)
 - [后端 TLS](./backend-tls.md)
 - [后端主动健康检查 🔌](./health-check.md)
+- [熔断器 🔌](./circuit-breaker.md)

@@ -1,3 +1,4 @@
+use crate::core::common::auth::AdminAuthConfig;
 use crate::core::controller::conf_mgr::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
@@ -117,7 +118,7 @@ pub struct EdgionControllerConfig {
         short = 'c',
         long,
         value_name = "FILE",
-        default_value = "config/edgion-controller.toml"
+        default_value = "config/edgion-controller.yaml"
     )]
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -172,6 +173,20 @@ pub struct EdgionControllerConfig {
     #[arg(skip)]
     #[serde(default)]
     pub center: Option<CenterClientConfig>,
+
+    /// Optional Admin API authentication.
+    /// Omit to disable auth (backward compatible). When present, Admin API
+    /// endpoints (except health/ready) require a valid JWT Bearer token.
+    #[arg(skip)]
+    #[serde(default)]
+    pub auth: Option<AdminAuthConfig>,
+
+    /// Optional local authentication (built-in username/password).
+    /// When both `auth` (OIDC) and `local_auth` are absent, local_auth with
+    /// default credentials (admin/edgion1234) is used automatically.
+    #[arg(skip)]
+    #[serde(default)]
+    pub local_auth: Option<crate::core::common::local_auth::LocalAuthConfig>,
 }
 
 /// Server configuration
@@ -311,14 +326,82 @@ impl ConfSyncConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ConfSyncSecurityConfig {
-    /// mTLS configuration (optional)
+    /// Name of the active certificate set. Must match `name` of one entry in `certs`.
+    pub active: Option<String>,
+    /// Certificate sets (TOML [[conf_sync_security.certs]] array).
+    pub certs: Vec<ConfSyncTlsConfig>,
+    /// Legacy single-cert format [conf_sync_security.tls] — kept for backward compat.
     pub tls: Option<ConfSyncTlsConfig>,
     // Reserved: token authentication can be added here later
+}
+
+impl ConfSyncSecurityConfig {
+    /// Resolve the active TLS config.
+    ///
+    /// Priority:
+    /// 1. `certs` array: find entry where `name == active`
+    /// 2. `certs` has exactly one entry and `active` is None: use it
+    /// 3. Fallback to legacy `tls` field
+    /// 4. `None` = plaintext gRPC
+    pub fn resolve_active_tls(&self) -> Option<&ConfSyncTlsConfig> {
+        if !self.certs.is_empty() {
+            if let Some(active) = &self.active {
+                return self.certs.iter().find(|c| c.name.as_deref() == Some(active.as_str()));
+            }
+            if self.certs.len() == 1 {
+                return self.certs.first();
+            }
+            return None;
+        }
+        self.tls.as_ref()
+    }
+
+    /// Validate configuration at startup.
+    ///
+    /// Returns error for:
+    /// - duplicate names in `certs`
+    /// - multiple certs without `active`
+    /// - `active` pointing to nonexistent name
+    /// - cert path fields empty on active cert (unless `skip_tls`)
+    pub fn validate(&self) -> anyhow::Result<()> {
+        // Check duplicate names
+        let mut seen = std::collections::HashSet::new();
+        for cert in &self.certs {
+            if let Some(name) = &cert.name {
+                if !seen.insert(name.as_str()) {
+                    anyhow::bail!("conf_sync_security: duplicate cert name '{}'", name);
+                }
+            }
+        }
+        // Multiple certs require active selector
+        if self.certs.len() > 1 && self.active.is_none() {
+            anyhow::bail!("conf_sync_security: multiple certs configured but no 'active' selector");
+        }
+        // active must match an existing name
+        if let Some(active) = &self.active {
+            if !self.certs.is_empty() {
+                let found = self.certs.iter().any(|c| c.name.as_deref() == Some(active.as_str()));
+                if !found {
+                    anyhow::bail!("conf_sync_security: active='{}' does not match any cert name", active);
+                }
+            }
+        }
+        // Validate the active cert's paths (skip if skip_tls)
+        if let Some(tls) = self.resolve_active_tls() {
+            if !tls.skip_tls {
+                tls.validate()?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// mTLS certificate file paths for conf_sync gRPC channel.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ConfSyncTlsConfig {
+    /// Unique name for this cert set. Required when using [[certs]] array format.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Certificate file path (relative to work_dir or absolute)
     pub cert: String,
     /// Private key file path
@@ -334,6 +417,7 @@ pub struct ConfSyncTlsConfig {
 impl std::fmt::Debug for ConfSyncTlsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConfSyncTlsConfig")
+            .field("name", &self.name)
             .field("cert", &self.cert)
             .field("key", &"***")
             .field("ca", &self.ca)
@@ -456,8 +540,11 @@ impl EdgionControllerConfig {
             let content =
                 std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
-            toml::from_str::<EdgionControllerConfig>(&content)
-                .context(format!("Failed to parse config file: {}", config_path))?
+            {
+                let de = serde_yaml::Deserializer::from_str(&content);
+                serde_yaml::with::singleton_map_recursive::deserialize(de)
+                    .context(format!("Failed to parse config file: {}", config_path))?
+            }
         } else {
             EdgionControllerConfig::default()
         };
@@ -583,6 +670,9 @@ pub struct CenterClientConfig {
     /// Heartbeat interval in seconds (default: 30)
     #[serde(default = "default_ping_interval_secs")]
     pub ping_interval_secs: u64,
+    /// TLS config for the federation gRPC channel to Center.
+    #[serde(default)]
+    pub security: ConfSyncSecurityConfig,
 }
 
 fn default_ping_interval_secs() -> u64 {
@@ -651,21 +741,129 @@ mod tests {
     }
 
     #[test]
-    fn test_center_client_config_parses_from_toml() {
-        let toml = r#"
-            [center]
-            address = "http://center.example.com:50052"
-            name = "ctrl-01"
-            cluster = "prod-cn"
-            env = ["production"]
-            tag = ["team-infra"]
-        "#;
-        let config: EdgionControllerConfig = toml::from_str(toml).unwrap();
+    fn test_center_client_config_parses_from_yaml() {
+        let yaml = r#"
+center:
+  address: "http://center.example.com:50052"
+  name: "ctrl-01"
+  cluster: "prod-cn"
+  env: [production]
+  tag: [team-infra]
+"#;
+        let config: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
         let center = config.center.unwrap();
         assert_eq!(center.address, "http://center.example.com:50052");
         assert_eq!(center.name, "ctrl-01");
         assert_eq!(center.cluster, "prod-cn");
         assert_eq!(center.env, vec!["production"]);
         assert_eq!(center.ping_interval_secs, 30); // default
+    }
+
+    // ── ConfSyncSecurityConfig: resolve_active_tls ──────────────────────────
+
+    fn make_tls(name: Option<&str>, cert: &str) -> ConfSyncTlsConfig {
+        ConfSyncTlsConfig {
+            name: name.map(|s| s.to_string()),
+            cert: cert.to_string(),
+            key: "k".to_string(),
+            ca: "ca".to_string(),
+            skip_tls: false,
+        }
+    }
+
+    #[test]
+    fn test_resolve_active_tls_legacy_fallback() {
+        let cfg = ConfSyncSecurityConfig {
+            tls: Some(make_tls(None, "legacy.crt")),
+            ..Default::default()
+        };
+        assert_eq!(cfg.resolve_active_tls().map(|t| t.cert.as_str()), Some("legacy.crt"));
+    }
+
+    #[test]
+    fn test_resolve_active_tls_single_entry_no_active() {
+        let cfg = ConfSyncSecurityConfig {
+            certs: vec![make_tls(Some("primary"), "primary.crt")],
+            ..Default::default()
+        };
+        assert_eq!(cfg.resolve_active_tls().map(|t| t.cert.as_str()), Some("primary.crt"));
+    }
+
+    #[test]
+    fn test_resolve_active_tls_multi_certs_matching_active() {
+        let cfg = ConfSyncSecurityConfig {
+            active: Some("new".to_string()),
+            certs: vec![make_tls(Some("old"), "old.crt"), make_tls(Some("new"), "new.crt")],
+            ..Default::default()
+        };
+        assert_eq!(cfg.resolve_active_tls().map(|t| t.cert.as_str()), Some("new.crt"));
+    }
+
+    #[test]
+    fn test_resolve_active_tls_multi_certs_no_active_returns_none() {
+        let cfg = ConfSyncSecurityConfig {
+            certs: vec![make_tls(Some("a"), "a.crt"), make_tls(Some("b"), "b.crt")],
+            ..Default::default()
+        };
+        assert!(cfg.resolve_active_tls().is_none());
+    }
+
+    #[test]
+    fn test_resolve_active_tls_no_config_returns_none() {
+        let cfg = ConfSyncSecurityConfig::default();
+        assert!(cfg.resolve_active_tls().is_none());
+    }
+
+    // ── ConfSyncSecurityConfig: validate ────────────────────────────────────
+
+    #[test]
+    fn test_validate_empty_is_ok() {
+        assert!(ConfSyncSecurityConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_single_entry_skip_tls_ok() {
+        let cfg = ConfSyncSecurityConfig {
+            certs: vec![ConfSyncTlsConfig {
+                name: Some("p".to_string()),
+                cert: String::new(),
+                key: String::new(),
+                ca: String::new(),
+                skip_tls: true,
+            }],
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_duplicate_cert_names_errors() {
+        let cfg = ConfSyncSecurityConfig {
+            active: Some("dup".to_string()),
+            certs: vec![make_tls(Some("dup"), "a.crt"), make_tls(Some("dup"), "b.crt")],
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_multi_certs_without_active_errors() {
+        let cfg = ConfSyncSecurityConfig {
+            certs: vec![make_tls(Some("a"), "a.crt"), make_tls(Some("b"), "b.crt")],
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("no 'active' selector"));
+    }
+
+    #[test]
+    fn test_validate_active_not_found_errors() {
+        let cfg = ConfSyncSecurityConfig {
+            active: Some("missing".to_string()),
+            certs: vec![make_tls(Some("primary"), "primary.crt")],
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("does not match any cert name"));
     }
 }

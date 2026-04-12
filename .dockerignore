@@ -74,3 +74,6 @@ LICENSE-*
 *.bak
 *.backup
 *.old
+
+# All-in-one cloned dashboard repo (only docker/.all-in-one-dist is needed in context)
+docker/.all-in-one-dashboard/

@@ -7,6 +7,11 @@ mod route_matching_tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
+    /// Helper: wrap HTTPRoute values in Arc for ConfHandler API
+    fn wrap_arc(data: HashMap<String, HTTPRoute>) -> HashMap<String, Arc<HTTPRoute>> {
+        data.into_iter().map(|(k, v)| (k, Arc::new(v))).collect()
+    }
+
     /// Helper function to create a test Gateway from JSON
     fn create_test_gateway(namespace: &str, name: &str, hostnames: Vec<&str>) -> Gateway {
         let listeners_json: Vec<serde_json::Value> = hostnames
@@ -204,8 +209,8 @@ mod route_matching_tests {
         };
 
         if let Some(route_rules) = route_rules {
-            let normal_count = route_rules.route_rules_list.read().unwrap().len();
-            let regex_count = route_rules.regex_routes.read().unwrap().len();
+            let normal_count = route_rules.route_rules_list.read().len();
+            let regex_count = route_rules.regex_routes.read().len();
             assert_eq!(
                 normal_count, expected_normal_routes,
                 "Expected {} normal routes for hostname '{}', got {}",
@@ -255,7 +260,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -279,6 +284,7 @@ mod route_matching_tests {
         data.insert("default/route2".to_string(), route2);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist
@@ -295,7 +301,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -311,6 +317,7 @@ mod route_matching_tests {
         data.insert("default/route1".to_string(), route1);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist
@@ -327,7 +334,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -351,6 +358,7 @@ mod route_matching_tests {
         data.insert("default/route2".to_string(), route2);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist
@@ -367,7 +375,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -385,7 +393,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
 
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         // Verify route was added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -401,7 +409,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -415,7 +423,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_exists(&domain_routes, "api.example.com", true);
 
@@ -437,7 +445,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -451,7 +459,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_exists(&domain_routes, "api.example.com", true);
         verify_route_exists(&domain_routes, "api1.example.com", false);
@@ -466,7 +474,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         // Verify old hostname was cleaned up and new hostname has route
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -482,7 +490,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -496,7 +504,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_exists(&domain_routes, "api.example.com", true);
 
@@ -514,7 +522,7 @@ mod route_matching_tests {
         // Controller would set resolved_hostnames to the listener's hostname
         route1_updated.spec.resolved_hostnames = Some(vec!["api.example.com".to_string()]);
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         // Route should still exist at api.example.com (resolved by controller)
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -529,7 +537,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -543,7 +551,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
 
@@ -557,7 +565,7 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/posts")],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 2, 0);
 
@@ -578,7 +586,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -592,7 +600,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
 
@@ -606,7 +614,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
     }
@@ -620,7 +628,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -634,7 +642,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_exists(&domain_routes, "api.example.com", true);
 
@@ -656,7 +664,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -678,7 +686,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
 
@@ -701,7 +709,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -723,7 +731,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
 
@@ -746,7 +754,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -770,6 +778,7 @@ mod route_matching_tests {
         data.insert("default/route2".to_string(), route2);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist
@@ -786,7 +795,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -810,6 +819,7 @@ mod route_matching_tests {
         data.insert("default/route2".to_string(), route2);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist
@@ -826,7 +836,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -850,6 +860,7 @@ mod route_matching_tests {
         data.insert("default/route2".to_string(), route2);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist (route1 has 2 matches, route2 has 1 match)
@@ -866,7 +877,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -890,6 +901,7 @@ mod route_matching_tests {
         data.insert("default/route2".to_string(), route2);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist (route1 has 2 regex matches, route2 has 1)
@@ -906,7 +918,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -938,6 +950,7 @@ mod route_matching_tests {
         data.insert("default/route3".to_string(), route3);
 
         // Execute full_set
+        let data = wrap_arc(data);
         mgr.full_set(&data);
 
         // Verify routes exist
@@ -954,7 +967,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -969,7 +982,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
 
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         // Verify route was added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -985,7 +998,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1000,7 +1013,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
 
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         // Verify route was added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -1016,7 +1029,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1039,7 +1052,7 @@ mod route_matching_tests {
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
 
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         // Verify routes were added
         verify_route_exists(&domain_routes, "api.example.com", true);
@@ -1055,7 +1068,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1077,7 +1090,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
 
@@ -1100,7 +1113,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1122,7 +1135,7 @@ mod route_matching_tests {
         );
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
 
@@ -1145,7 +1158,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1159,7 +1172,7 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
 
@@ -1173,7 +1186,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
     }
@@ -1187,7 +1200,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1201,7 +1214,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
 
@@ -1215,7 +1228,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1_updated);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
     }
@@ -1229,7 +1242,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1243,7 +1256,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
 
@@ -1257,7 +1270,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/posts$"],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 0, 2);
     }
@@ -1271,7 +1284,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1285,7 +1298,7 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
 
@@ -1299,7 +1312,7 @@ mod route_matching_tests {
             vec![("PathPrefix", "/api/posts")],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 2, 0);
     }
@@ -1313,7 +1326,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1343,7 +1356,7 @@ mod route_matching_tests {
         add_or_update.insert("default/route1".to_string(), route1);
         add_or_update.insert("default/route2".to_string(), route2);
         add_or_update.insert("default/route3".to_string(), route3);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 2, 1);
 
@@ -1367,7 +1380,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1381,7 +1394,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/users$"],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 0, 1);
 
@@ -1395,7 +1408,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/posts")],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
     }
@@ -1409,7 +1422,7 @@ mod route_matching_tests {
         let domain_routes = mgr.get_global_routes();
         {
             let store = get_global_gateway_store();
-            let mut store_guard = store.write().unwrap();
+            let mut store_guard = store.write();
             let _ = store_guard.add_gateway(gateway);
         }
 
@@ -1423,7 +1436,7 @@ mod route_matching_tests {
             vec![("Exact", "/api/users")],
         );
         add_or_update.insert("default/route1".to_string(), route1);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 0);
 
@@ -1437,7 +1450,7 @@ mod route_matching_tests {
             vec![r"^/api/v\d+/posts$"],
         );
         add_or_update.insert("default/route2".to_string(), route2);
-        mgr.partial_update(add_or_update, HashMap::new(), HashSet::new());
+        mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
     }

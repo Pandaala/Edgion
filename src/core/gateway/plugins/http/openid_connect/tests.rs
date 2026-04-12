@@ -5,9 +5,10 @@ use crate::core::gateway::plugins::runtime::PluginLog;
 use crate::core::gateway::plugins::runtime::RequestFilter;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{OpenidConnectConfig, UnauthAction, VerificationMode};
+use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn base_config() -> OpenidConnectConfig {
@@ -499,24 +500,20 @@ async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it(
         refresh_token: Some("refresh-token".to_string()),
     };
 
-    let captured_cookie = Arc::new(StdMutex::new(None::<String>));
+    let captured_cookie = Arc::new(Mutex::new(None::<String>));
     let captured_cookie_clone = captured_cookie.clone();
 
     let mut session = MockPluginSession::new();
     session.expect_set_response_header().returning(move |name, value| {
         if name.eq_ignore_ascii_case("Set-Cookie") {
-            *captured_cookie_clone.lock().expect("lock") = Some(value.to_string());
+            *captured_cookie_clone.lock() = Some(value.to_string());
         }
         Ok(())
     });
 
     plugin.maybe_set_session_cookie_header(&mut session, &payload).await;
 
-    let set_cookie = captured_cookie
-        .lock()
-        .expect("lock")
-        .clone()
-        .expect("set-cookie header");
+    let set_cookie = captured_cookie.lock().clone().expect("set-cookie header");
     let encoded = set_cookie
         .strip_prefix("edgion_oidc_session=")
         .and_then(|v| v.split(';').next())

@@ -4,6 +4,7 @@
 //! Keys and metadata are loaded from Kubernetes Secrets.
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,6 +14,14 @@ use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::plugin_configs::{KeyAuthConfig, KeyMetadata};
 
+fn sha256_of(s: &str) -> [u8; 32] {
+    Sha256::digest(s.as_bytes()).into()
+}
+
+fn hash_keys(raw: HashMap<String, KeyMetadata>) -> HashMap<[u8; 32], KeyMetadata> {
+    raw.into_iter().map(|(k, v)| (sha256_of(&k), v)).collect()
+}
+
 /// Key Authentication plugin
 ///
 /// Authenticates requests by validating API keys against a pre-configured key store.
@@ -20,8 +29,9 @@ use crate::types::resources::edgion_plugins::plugin_configs::{KeyAuthConfig, Key
 pub struct KeyAuth {
     name: String,
     config: KeyAuthConfig,
-    /// Key -> Metadata mapping for O(1) lookup
-    keys: Arc<HashMap<String, KeyMetadata>>,
+    /// SHA-256(key) → Metadata mapping. Keys are stored as hashes to avoid keeping
+    /// plaintext API keys in process memory after initialization.
+    keys: Arc<HashMap<[u8; 32], KeyMetadata>>,
 }
 
 impl KeyAuth {
@@ -32,7 +42,7 @@ impl KeyAuth {
         let mut validated_config = config.clone();
         validated_config.validate();
 
-        let keys = validated_config.resolved_keys.clone().unwrap_or_default();
+        let keys = hash_keys(validated_config.resolved_keys.take().unwrap_or_default());
 
         tracing::debug!(
             resolved_keys_present = config.resolved_keys.is_some(),
@@ -49,9 +59,9 @@ impl KeyAuth {
         Box::new(plugin)
     }
 
-    /// Create a new KeyAuth plugin from configuration (for testing without Box)
+    #[cfg(test)]
     pub fn new(config: &KeyAuthConfig) -> Self {
-        let keys = config.resolved_keys.clone().unwrap_or_default();
+        let keys = hash_keys(config.resolved_keys.clone().unwrap_or_default());
         Self {
             name: "KeyAuth".to_string(),
             config: config.clone(),
@@ -59,9 +69,9 @@ impl KeyAuth {
         }
     }
 
-    /// Load keys directly (for testing or manual initialization)
+    #[cfg(test)]
     pub fn load_keys(&mut self, keys: HashMap<String, KeyMetadata>) {
-        self.keys = Arc::new(keys);
+        self.keys = Arc::new(hash_keys(keys));
     }
 
     /// Extract API key from request using configured key sources (tried in order)
@@ -84,31 +94,23 @@ impl KeyAuth {
                     }
                 }
                 // Ignore unsupported sources (ClientIp, Path, Method, etc.)
-                _ => {
-                    tracing::warn!(
-                        source = source.source_type(),
-                        "KeyAuth: Unsupported key source type, skipping"
-                    );
-                }
+                _ => {}
             }
         }
         None
     }
 
-    /// Validate key and return metadata if valid
     fn validate_key(&self, key: &str) -> Option<&KeyMetadata> {
-        self.keys.get(key)
+        self.keys.get(&sha256_of(key))
     }
 
     /// Set upstream headers from key metadata (whitelist controlled)
     fn set_upstream_headers(&self, session: &mut dyn PluginSession, metadata: &KeyMetadata) {
         for (name, value) in &metadata.headers {
             if name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-                tracing::warn!("KeyAuth: skip upstream header with invalid header name");
                 continue;
             }
             if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-                tracing::warn!(header = %name, "KeyAuth: skip upstream header with invalid header value");
                 continue;
             }
             // Use set (not append) to prevent client header forgery
@@ -125,20 +127,7 @@ impl KeyAuth {
             KeyGet::Ctx { name } => {
                 let _ = session.remove_ctx_var(name);
             }
-            // Query and Cookie removal would require URI/Cookie header manipulation
-            // which is complex and not commonly needed
-            KeyGet::Query { name } => {
-                tracing::debug!(
-                    query_param = name,
-                    "KeyAuth: Query parameter hiding not implemented, consider using header instead"
-                );
-            }
-            KeyGet::Cookie { name } => {
-                tracing::debug!(
-                    cookie = name,
-                    "KeyAuth: Cookie hiding not implemented, consider using header instead"
-                );
-            }
+            // Query and Cookie removal requires URI/Cookie header manipulation; not implemented.
             _ => {}
         }
     }
@@ -170,7 +159,8 @@ impl RequestFilter for KeyAuth {
                     if self
                         .config
                         .upstream_header_fields
-                        .contains(&"X-Consumer-Username".to_string())
+                        .iter()
+                        .any(|f| f == "X-Consumer-Username")
                     {
                         let _ = session.set_request_header("X-Consumer-Username", anon_user);
                     }

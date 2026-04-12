@@ -491,3 +491,11 @@ curl -u developer:DevSecret456! https://api.example.com/api/data
 curl https://api.example.com/api/users
 ```
 
+---
+
+## 相关链接
+
+- [JwtAuth](./jwt-auth.md) — JWT 认证
+- [KeyAuth](./key-auth.md) — API Key 认证
+- [HmacAuth](./hmac-auth.md) — HMAC 认证
+- [HeaderCertAuth](./header-cert-auth.md) — 证书头认证

@@ -40,15 +40,13 @@ Workqueue
 ```rust
 pub struct WorkItem {
     pub key: String,                // "namespace/name"（命名空间级）或 "name"（集群级）
-    pub retry_count: u32,           // 已重试次数
     pub enqueue_time: Instant,      // 入队时间
     pub trigger_chain: TriggerChain, // 级联追踪链
 }
 ```
 
-三种构造方式：
+两种构造方式：
 - `WorkItem::new(key)` — 原始事件，空链
-- `WorkItem::for_retry(key, retry_count)` — 失败重试
 - `WorkItem::with_chain(key, chain)` — 跨资源 requeue，携带因果链
 
 ## WorkqueueConfig
@@ -56,16 +54,17 @@ pub struct WorkItem {
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `capacity` | `usize` | 5000 | 有界通道容量 |
-| `max_retries` | `u32` | 5 | 最大重试次数，超过后放弃 |
-| `initial_backoff` | `Duration` | 100ms | 退避初始延迟 |
-| `max_backoff` | `Duration` | 30s | 退避最大延迟 |
 | `default_requeue_delay` | `Duration` | 100ms | 跨资源 requeue 默认延迟 |
 | `max_trigger_cycles` | `usize` | 5 | 同一 (kind, key) 在触发链中最大出现次数 |
 | `max_trigger_depth` | `usize` | 20 | 触发链最大总深度（安全网） |
 
+> **注意**：指数退避重试（`requeue_with_backoff`）已被移除。状态写入失败（如 K8s API 短暂不可用）是自愈的：watcher 断连重连后会触发全量缓存重建，重新处理并重写所有状态。在这一层准确区分暂时性与永久性失败并不实际。
+
 ## 去重机制
 
-`pending` 集合（`DashSet<String>`）记录当前在就绪队列中的所有 key。`enqueue()` 入队前检查：
+**两个集合独立去重，互不感知**：
+
+- `enqueue()` 只检查 `pending`：
 
 ```text
 enqueue("ns/my-route"):
@@ -74,7 +73,18 @@ enqueue("ns/my-route"):
     └─ 否 → 插入 pending → 发送到 mpsc → 返回 true
 ```
 
-`enqueue_after()` 额外检查 `scheduled` 集合（延迟队列中的 key），两个集合任一包含该 key 则跳过。
+- `enqueue_after()` 只检查 `scheduled`（不检查 `pending`）：
+
+```text
+enqueue_after("ns/my-route", 100ms, chain):
+  scheduled 已包含 "ns/my-route"?
+    ├─ 是 → 跳过，返回 false
+    └─ 否 → 插入 scheduled → 发送到 delay heap → 返回 true
+```
+
+因此，同一 key 可以同时存在于 `pending` 和 `scheduled`（两者并行进行）。延迟项到期时，delay loop 会检查 `pending` 进行二次去重：若 `pending.insert` 失败（已有立即处理项），则静默丢弃延迟版本。
+
+这一设计是有意为之：处理是幂等的，多处理一次不影响正确性；强制跨集合互斥反而会增加锁争用和误跳过。
 
 当队列深度达到容量 80% 时打印告警日志（每 500 项一次）。
 
@@ -95,42 +105,14 @@ enqueue("ns/my-route"):
 
 `done()` 方法当前是 no-op（仅记录日志），保留 API 兼容性。
 
-## 指数退避
-
-`requeue_with_backoff()` 在处理失败时调用，计算退避延迟后 spawn 异步任务延迟重新入队：
-
-```text
-backoff = initial_backoff * 2^retry_count
-backoff = min(backoff, max_backoff)
-```
-
-具体流程：
-
-1. `retry_count + 1` 超过 `max_retries` → 放弃，记录 warn 日志
-2. 计算退避：`initial_backoff.saturating_mul(2^retry_count).min(max_backoff)`
-3. spawn 异步任务：`sleep(backoff)` → 检查 `pending` 去重 → 插入 `pending` → 发送 `WorkItem::for_retry`
-
-以默认配置为例：
-
-| 重试次数 | 退避 |
-|----------|------|
-| 0 → 1 | 100ms |
-| 1 → 2 | 200ms |
-| 2 → 3 | 400ms |
-| 3 → 4 | 800ms |
-| 4 → 5 | 1.6s |
-| 5 → 放弃 | — |
-
-退避重试与延迟入队（`enqueue_after`）是独立子系统，避免长时间重试退避阻塞短延迟的跨资源 requeue。
-
 ## 延迟入队（enqueue_after）
 
 用于跨资源 requeue 的合并调度。当资源 A 变更需要触发资源 B 重新处理时，通过延迟入队合并短时间内的多次触发：
 
 ```text
 enqueue_after("ns/gateway-1", 100ms, chain):
-  pending 或 scheduled 已包含?
-    ├─ 是 → 跳过
+  scheduled 已包含 "ns/gateway-1"?
+    ├─ 是 → 跳过（scheduled 级去重）
     └─ 否 → 插入 scheduled → 发送 DelayedItem 到 delay_tx
 ```
 

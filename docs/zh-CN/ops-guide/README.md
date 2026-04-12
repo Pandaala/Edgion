@@ -34,6 +34,12 @@
 - [访问日志](./observability/access-log.md)：访问日志字段与输出。
 - [监控指标](./observability/metrics.md)：Prometheus 指标采集与告警建议。
 
+### 配置参考
+
+- [Controller 配置](./configuration/controller-config.md)：Controller TOML 进程配置参数。
+- [Gateway 配置](./configuration/gateway-config.md)：Gateway TOML 进程配置参数。
+- [EdgionGatewayConfig](./configuration/edgion-gateway-config.md)：GatewayClass 级运行时配置（超时、真实 IP、全局插件等）。
+
 ### 运维工具
 
-- [edgion-ctl](./edgion-ctl.md)：资源管理与调试 CLI。
+- [edgion-cli](./edgion-cli.md)：资源管理与调试 CLI。

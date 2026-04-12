@@ -1,11 +1,11 @@
 ---
 name: ctl-commands
-description: edgion-ctl 子命令详解：apply、get、delete、reload 的参数、实现逻辑、示例。
+description: edgion-cli 子命令详解：apply、get、delete、reload 的参数、实现逻辑、示例。
 ---
 
-# edgion-ctl 子命令
+# edgion-cli 子命令
 
-edgion-ctl 提供 5 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）、gen-certs（生成 mTLS 证书）。其中 apply、delete、reload 仅在 center target 下可用，gen-certs 不依赖 target。
+edgion-cli 提供 6 个子命令：apply（应用配置）、get（查询资源）、delete（删除资源）、reload（重载资源）、gen-certs（生成 mTLS 证书）、login（登录认证）。其中 apply、delete、reload 仅在 center target 下可用，gen-certs 不依赖 target。
 
 ## apply
 
@@ -14,7 +14,7 @@ edgion-ctl 提供 5 个子命令：apply（应用配置）、get（查询资源�
 ### 语法
 
 ```bash
-edgion-ctl apply -f <file|directory> [--dry-run]
+edgion-cli apply -f <file|directory> [--dry-run]
 ```
 
 ### 参数
@@ -37,13 +37,13 @@ edgion-ctl apply -f <file|directory> [--dry-run]
 
 ```bash
 # 应用单个文件
-edgion-ctl apply -f gateway.yaml
+edgion-cli apply -f gateway.yaml
 
 # 应用目录下所有 YAML
-edgion-ctl apply -f manifests/
+edgion-cli apply -f manifests/
 
 # Dry run 验证
-edgion-ctl apply -f gateway.yaml --dry-run
+edgion-cli apply -f gateway.yaml --dry-run
 ```
 
 ## get
@@ -53,7 +53,7 @@ edgion-ctl apply -f gateway.yaml --dry-run
 ### 语法
 
 ```bash
-edgion-ctl [-t <target>] get <kind> [name] [-n <namespace>] [-o <format>]
+edgion-cli [-t <target>] get <kind> [name] [-n <namespace>] [-o <format>]
 ```
 
 ### 参数
@@ -81,19 +81,19 @@ server/client 模式下的命名空间过滤是客户端侧完成的：先获取
 
 ```bash
 # 列出所有 HTTPRoute（center 模式）
-edgion-ctl get httproute
+edgion-cli get httproute
 
 # 按命名空间过滤
-edgion-ctl get httproute -n production
+edgion-cli get httproute -n production
 
 # 获取指定资源的 YAML
-edgion-ctl get httproute my-route -n default -o yaml
+edgion-cli get httproute my-route -n default -o yaml
 
 # 查看 Gateway 缓存中的资源（JSON 格式）
-edgion-ctl -t client get httproute -o json
+edgion-cli -t client get httproute -o json
 
 # 宽表格显示更多信息
-edgion-ctl get gateway -o wide
+edgion-cli get gateway -o wide
 ```
 
 ## delete
@@ -104,10 +104,10 @@ edgion-ctl get gateway -o wide
 
 ```bash
 # 方式 1：按 kind/name 删除
-edgion-ctl delete <kind> <name> [-n <namespace>]
+edgion-cli delete <kind> <name> [-n <namespace>]
 
 # 方式 2：从文件删除
-edgion-ctl delete -f <file>
+edgion-cli delete -f <file>
 ```
 
 ### 参数
@@ -128,10 +128,10 @@ edgion-ctl delete -f <file>
 
 ```bash
 # 按 kind/name 删除
-edgion-ctl delete httproute my-route -n default
+edgion-cli delete httproute my-route -n default
 
 # 从文件删除
-edgion-ctl delete -f gateway.yaml
+edgion-cli delete -f gateway.yaml
 ```
 
 ## reload
@@ -141,7 +141,7 @@ edgion-ctl delete -f gateway.yaml
 ### 语法
 
 ```bash
-edgion-ctl reload
+edgion-cli reload
 ```
 
 ### 实现逻辑
@@ -164,10 +164,10 @@ edgion-ctl reload
 
 ```bash
 # 重载所有资源
-edgion-ctl reload
+edgion-cli reload
 
 # 连接指定地址的 Controller
-edgion-ctl --server http://10.0.0.1:5800 reload
+edgion-cli --server http://10.0.0.1:5800 reload
 ```
 
 ## gen-certs
@@ -177,7 +177,7 @@ edgion-ctl --server http://10.0.0.1:5800 reload
 ### 语法
 
 ```bash
-edgion-ctl gen-certs [OPTIONS]
+edgion-cli gen-certs [OPTIONS]
 ```
 
 ### 参数
@@ -186,6 +186,7 @@ edgion-ctl gen-certs [OPTIONS]
 |------|------|------|
 | `--output` | 输出目标：`file`（写入文件）或 `k8s`（写入 K8s Secret） | `file` |
 | `--output-dir` | 文件输出目录（仅 `--output file` 时生效） | `certs/grpc/` |
+| `--cert-name` | 证书集名称；文件写入 `<output-dir>/<cert-name>/`，K8s Secret 名称含此后缀 | `primary` |
 | `--ca-days` | CA 证书有效天数 | `3650`（10 年） |
 | `--cert-days` | 服务端/客户端证书有效天数 | `365` |
 | `--server-san` | 额外 SAN（可多次指定） | 默认含 `localhost`、`127.0.0.1`、`::1` |
@@ -193,8 +194,10 @@ edgion-ctl gen-certs [OPTIONS]
 
 ### 生成的文件
 
+每次调用写入 `<output-dir>/<cert-name>/` 子目录，不同 `--cert-name` 之间相互独立：
+
 ```
-<output-dir>/
+<output-dir>/<cert-name>/
 ├── ca.crt            # CA 证书（分发给双方校验对端）
 ├── ca.key            # CA 私钥（仅签发用，不部署到运行时）
 ├── server.crt        # Controller 服务端证书
@@ -216,30 +219,34 @@ edgion-ctl gen-certs [OPTIONS]
 1. 使用 rcgen 创建自签 CA（ECDSA P-256）
 2. 用 CA 签发 Server 证书（含 SAN 和 ServerAuth EKU）
 3. 用 CA 签发 Client 证书（含 ClientAuth EKU）
-4. `--output file`：写入 PEM 文件到 `--output-dir`
-5. `--output k8s`：写入 K8s Secret（用于 Helm/Operator 部署）
+4. `--output file`：写入 PEM 文件到 `<output-dir>/<cert-name>/`
+5. `--output k8s`：写入 K8s Secret，名称格式 `{prefix}-controller-tls-{cert-name}` / `{prefix}-gateway-tls-{cert-name}`
 
 ### 使用场景
 
 - 本地开发/测试：快速生成自签证书启用 mTLS
 - CI/CD：集成测试自动生成证书
 - 生产环境初始化：一次性生成后交由证书管理系统轮转
+- 证书轮换预置：生成 secondary 套件并预先写入配置，切换时只需改 `active` 字段
 
 ### 示例
 
 ```bash
-# 生成到默认目录 certs/grpc/
-edgion-ctl gen-certs --output file
+# 生成 primary 证书集（默认名称）
+edgion-cli gen-certs --output file --output-dir certs/grpc/
 
-# 指定输出目录，强制覆盖
-edgion-ctl gen-certs --output file --output-dir /etc/edgion/certs --force
+# 显式指定名称，等价上条
+edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name primary
 
-# 添加 K8s Service FQDN 作为额外 SAN
-edgion-ctl gen-certs --output file \
+# 预置 secondary 证书集（用于轮换）
+edgion-cli gen-certs --output file --output-dir certs/grpc/ --cert-name secondary \
     --server-san edgion-controller.edgion-system.svc.cluster.local
 
-# 写入 K8s Secret
-edgion-ctl gen-certs --output k8s
+# 指定输出目录，强制覆盖
+edgion-cli gen-certs --output file --output-dir /etc/edgion/certs --cert-name primary --force
+
+# 写入 K8s Secret（名称：{prefix}-controller-tls-primary 等）
+edgion-cli gen-certs --output k8s --cert-name primary
 ```
 
 ### 模块结构
@@ -252,3 +259,43 @@ src/core/ctl/
     └── commands/
         └── gen_certs.rs      # GenCertsArgs、write_to_files()、write_to_k8s_secrets()
 ```
+
+## login — 登录认证
+
+向 Controller 进行身份验证，token 保存到本地文件供后续命令自动携带。
+
+### 语法
+
+```bash
+edgion-cli login -u <username> -p <password>
+edgion-cli login  # 交互式输入
+```
+
+Token 保存到 `~/.edgion/token`，后续命令自动携带。
+
+### 模块位置
+
+| 模块 | 路径 |
+|------|------|
+| CLI 自动认证逻辑 | `src/core/ctl/cli/auto_auth.rs` |
+| Token 文件管理 | `src/core/ctl/cli/token.rs` |
+
+## 自动认证（ensure_auth）
+
+edgion-cli 在执行命令前自动检测认证状态，无需手动 login：
+
+1. 已有 token → 直接使用
+2. 查询 `/api/v1/auth/status` → 不需要认证则跳过
+3. 自动检测 Controller 配置文件（`--controller-config` / `EDGION_CONTROLLER_CONFIG` / 默认路径）
+4. 从配置推断 conf_dir → 读取 Secret `edgion-admin-credentials` → 自动登录
+5. 检测失败 → 提示手动 `edgion-cli login`
+
+### 配置文件自动检测路径
+
+| 优先级 | 来源 |
+|--------|------|
+| 1 | `--controller-config` / `-C` 参数 |
+| 2 | `EDGION_CONTROLLER_CONFIG` 环境变量 |
+| 3 | `config/edgion-controller.yaml`（相对 CWD）|
+| 4 | `/usr/local/edgion/config/edgion-controller.yaml` |
+| 5 | `/etc/edgion/edgion-controller.yaml` |

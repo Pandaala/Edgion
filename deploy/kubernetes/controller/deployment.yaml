@@ -21,7 +21,7 @@ spec:
         image: docker.io/pandaala/edgion-controller:0.1.5
         args:
         - "--config-file"
-        - "/usr/local/edgion/config/edgion-controller.toml"
+        - "/usr/local/edgion/config/edgion-controller.yaml"
         ports:
         - name: grpc
           containerPort: 50051

@@ -452,3 +452,11 @@ curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/data
 # 无 Token - 返回 401
 curl https://api.example.com/api/data
 ```
+
+---
+
+## 相关链接
+
+- [BasicAuth](./basic-auth.md) — 基本认证
+- [KeyAuth](./key-auth.md) — API Key 认证
+- [HmacAuth](./hmac-auth.md) — HMAC 认证

@@ -1,26 +1,11 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
+use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
 };
-use crate::types::{ListenerKey, ResourceMeta, TCPRoute};
+use crate::types::{ResourceMeta, TCPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-/// Implement ConfHandler for &'static GlobalTcpRouteManagers
-impl ConfHandler<TCPRoute> for &'static GlobalTcpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, TCPRoute>) {
-        (**self).full_set(data)
-    }
-
-    fn partial_update(
-        &self,
-        add: HashMap<String, TCPRoute>,
-        update: HashMap<String, TCPRoute>,
-        remove: HashSet<String>,
-    ) {
-        (**self).partial_update(add, update, remove)
-    }
-}
 
 /// Create a handler for registration with ConfigClient.
 pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync> {
@@ -28,13 +13,13 @@ pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync
 }
 
 impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
-    fn full_set(&self, data: &HashMap<String, TCPRoute>) {
+    fn full_set(&self, data: &HashMap<String, Arc<TCPRoute>>) {
         tracing::info!(component = "tcp_route_manager", cnt = data.len(), "full set");
 
         self.clear_route_cache();
 
         for (key, route) in data {
-            match self.initialize_route(route.clone()) {
+            match self.initialize_route((**route).clone()) {
                 Ok(initialized) => {
                     self.insert_route(initialized);
                 }
@@ -53,8 +38,8 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
 
     fn partial_update(
         &self,
-        add: HashMap<String, TCPRoute>,
-        update: HashMap<String, TCPRoute>,
+        add: HashMap<String, Arc<TCPRoute>>,
+        update: HashMap<String, Arc<TCPRoute>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
@@ -65,72 +50,30 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             "partial update"
         );
 
-        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
+        let add_owned = arc_map_into_owned(add);
+        let update_owned = arc_map_into_owned(update);
 
-        // Collect old listeners from routes being removed or updated BEFORE modifying the cache
-        for key in remove.iter().chain(update.keys()) {
-            if let Some(existing) = self.get_route(key) {
-                for lk in resolved_listeners_for_route(&existing) {
-                    affected_listeners.insert(lk.clone());
-                }
-            }
-        }
-
-        // Process removals
-        for key in &remove {
-            self.remove_route(key);
-            tracing::debug!(resource_key = %key, "Removed TCPRoute");
-        }
-
-        // Process updates (remove old, add new)
-        for (key, route) in update {
-            self.remove_route(&key);
-            match self.initialize_route(route) {
-                Ok(initialized) => {
-                    for lk in resolved_listeners_for_route(&initialized) {
-                        affected_listeners.insert(lk.clone());
-                    }
+        apply_l4_partial_update(
+            "TCPRoute",
+            add_owned,
+            update_owned,
+            remove,
+            |key| self.get_route(key),
+            |r| resolved_listeners_for_route(r).to_vec(),
+            |key| self.remove_route(key),
+            |route| {
+                self.initialize_route(route).map(|initialized| {
+                    let lks = resolved_listeners_for_route(&initialized).to_vec();
                     self.insert_route(initialized);
-                    tracing::debug!(resource_key = %key, "Updated TCPRoute");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        resource_key = %key,
-                        error = %e,
-                        "Failed to update TCPRoute"
-                    );
-                }
-            }
-        }
-
-        // Process additions
-        for (key, route) in add {
-            match self.initialize_route(route) {
-                Ok(initialized) => {
-                    for lk in resolved_listeners_for_route(&initialized) {
-                        affected_listeners.insert(lk.clone());
-                    }
-                    self.insert_route(initialized);
-                    tracing::debug!(resource_key = %key, "Added TCPRoute");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        resource_key = %key,
-                        error = %e,
-                        "Failed to add TCPRoute"
-                    );
-                }
-            }
-        }
-
-        self.rebuild_affected_listener_managers(&affected_listeners);
+                    lks
+                })
+            },
+            |affected| self.rebuild_affected_listener_managers(affected),
+        );
     }
 }
 
-/// Annotation key for referencing EdgionStreamPlugins from TCPRoute.
-/// Same annotation as Gateway-level: `edgion.io/edgion-stream-plugins`.
-/// Value format: "namespace/name" or just "name" (namespace inferred from TCPRoute).
-const ANNOTATION_EDGION_STREAM_PLUGINS: &str = "edgion.io/edgion-stream-plugins";
+use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 
 impl GlobalTcpRouteManagers {
     /// Initialize a TCPRoute by setting up BackendSelector and stream plugin store key.
@@ -176,7 +119,7 @@ impl GlobalTcpRouteManagers {
     /// Resolve the stream plugin store key from the TCPRoute's annotation.
     fn resolve_stream_plugin_store_key(route: &TCPRoute) -> Option<String> {
         let annotations = route.metadata.annotations.as_ref()?;
-        let annotation_value = annotations.get(ANNOTATION_EDGION_STREAM_PLUGINS)?;
+        let annotation_value = annotations.get(EDGION_STREAM_PLUGINS)?;
         let trimmed = annotation_value.trim();
         if trimmed.is_empty() {
             return None;
@@ -213,6 +156,7 @@ mod tests {
     use crate::core::common::conf_sync::traits::ConfHandler;
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::tcp_route::*;
+    use crate::types::ListenerKey;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
@@ -274,8 +218,8 @@ mod tests {
         let route1 = create_test_tcp_route("default", "route1", "gateway1", "tcp-9000", 9000, key9000.clone());
         let route2 = create_test_tcp_route("default", "route2", "gateway1", "tcp-9001", 9001, key9001.clone());
 
-        data.insert("default/route1".to_string(), route1);
-        data.insert("default/route2".to_string(), route2);
+        data.insert("default/route1".to_string(), Arc::new(route1));
+        data.insert("default/route2".to_string(), Arc::new(route2));
 
         managers.full_set(&data);
 
@@ -316,5 +260,63 @@ mod tests {
             ..valid.clone()
         };
         assert!(!is_service_backend_ref(&unknown_kind));
+    }
+
+    #[test]
+    fn test_misclassified_add_rebuilds_old_listener() {
+        // Simulates upstream misclassification: an existing key is sent in
+        // the `add` bucket instead of `update`. Bug 2: pre-collection of
+        // affected listeners must include add.keys() so the old listener
+        // is scheduled for rebuild when the route migrates to a new listener.
+        let managers = GlobalTcpRouteManagers::new();
+        let key9000 = make_listener_key(9000, "TCP");
+        let key9001 = make_listener_key(9001, "TCP");
+
+        // Setup: route-x on L9000
+        let mut add = HashMap::new();
+        add.insert(
+            "default/route-x".to_string(),
+            Arc::new(create_test_tcp_route(
+                "default",
+                "route-x",
+                "gw1",
+                "tcp-9000",
+                9000,
+                key9000.clone(),
+            )),
+        );
+        managers.partial_update(add, HashMap::new(), HashSet::new());
+        let mgr9000 = managers.get_or_create_listener_manager(&key9000);
+        assert!(
+            mgr9000.load_route_table().match_route().is_some(),
+            "test setup failed: route-x should be in L9000"
+        );
+
+        // Misclassified add: same key, new version bound to L9001
+        let mut misclassified_add = HashMap::new();
+        misclassified_add.insert(
+            "default/route-x".to_string(),
+            Arc::new(create_test_tcp_route(
+                "default",
+                "route-x",
+                "gw1",
+                "tcp-9001",
+                9001,
+                key9001.clone(),
+            )),
+        );
+        managers.partial_update(misclassified_add, HashMap::new(), HashSet::new());
+
+        // L9000 must be rebuilt: route-x should be gone
+        assert!(
+            mgr9000.load_route_table().match_route().is_none(),
+            "Bug 2: L9000 still has stale route after misclassified add"
+        );
+        // L9001 should have the new route (created lazily during partial_update)
+        let mgr9001 = managers.get_or_create_listener_manager(&key9001);
+        assert!(
+            mgr9001.load_route_table().match_route().is_some(),
+            "Bug 2 (corollary): L9001 should have the new route"
+        );
     }
 }

@@ -18,11 +18,18 @@ pub struct EdgionClient {
     target: TargetType,
     #[allow(dead_code)]
     socket_path: Option<PathBuf>,
+    token: Option<String>,
+    controller_config: Option<String>, // for auto-login on 401
 }
 
 impl EdgionClient {
     /// Create a new client with target type
-    pub fn new(target: TargetType, server: Option<String>, socket: Option<PathBuf>) -> Result<Self> {
+    pub fn new(
+        target: TargetType,
+        server: Option<String>,
+        socket: Option<PathBuf>,
+        controller_config: Option<String>,
+    ) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
@@ -40,12 +47,113 @@ impl EdgionClient {
             format!("http://localhost:{}", port)
         });
 
+        // Load saved token (if any) from ~/.edgion/token
+        let token = super::token::read_token();
+
         Ok(Self {
             client,
             base_url,
             target,
             socket_path: socket,
+            token,
+            controller_config,
         })
+    }
+
+    /// Ensure we have a valid token. Called before first API request.
+    /// Flow: (1) check auth/status, (2) if token cached → validate it, (3) auto-login if needed.
+    pub async fn ensure_auth(&mut self) -> Result<()> {
+        // Check if auth is required by querying the status endpoint
+        let status_url = format!("{}/api/v1/auth/status", self.base_url);
+        let (auth_required, auth_method) = match self.client.get(&status_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    let required = body["data"]["auth_required"].as_bool().unwrap_or(false);
+                    let method = body["data"]["auth_method"].as_str().unwrap_or("none").to_string();
+                    (required, method)
+                } else {
+                    (false, "none".to_string())
+                }
+            }
+            // Status endpoint not available (old controller?) — just continue without auth
+            _ => return Ok(()),
+        };
+
+        if !auth_required {
+            return Ok(());
+        }
+
+        // If we have a cached token, validate it — it may be stale if the controller restarted
+        if self.token.is_some() {
+            let me_url = format!("{}/api/v1/auth/me", self.base_url);
+            let still_valid = self
+                .send_request(self.client.get(&me_url), &me_url)
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if still_valid {
+                return Ok(());
+            }
+            // Token is stale (e.g., controller restarted with new jwt_secret) — clear and re-auth
+            eprintln!("Cached token is no longer valid, re-authenticating...");
+            self.token = None;
+            super::token::delete_token();
+        }
+
+        if auth_method == "local" {
+            // Try auto-detect credentials from controller config
+            if let Some((username, password)) =
+                super::auto_auth::detect_credentials(self.controller_config.as_deref())
+            {
+                match self.do_login(&username, &password).await {
+                    Ok(token) => {
+                        super::token::save_token(&token)?;
+                        self.token = Some(token);
+                        eprintln!("Auto-login successful (credentials from controller config).");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        tracing::debug!("Auto-login failed: {}", e);
+                    }
+                }
+            }
+
+            // Config not found or login failed — inform user
+            anyhow::bail!(
+                "Authentication required. Please run: edgion-cli login -u <username> -p <password>"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Perform login and return the token.
+    async fn do_login(&self, username: &str, password: &str) -> Result<String> {
+        let url = format!("{}/api/v1/auth/login", self.base_url);
+        let body = serde_json::json!({
+            "username": username,
+            "password": password,
+        });
+
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Login request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Login failed: HTTP {}", resp.status());
+        }
+
+        let data: serde_json::Value = resp.json().await?;
+        let token = data["data"]["token"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid login response: missing token"))?
+            .to_string();
+
+        Ok(token)
     }
 
     /// Get the target type
@@ -64,7 +172,10 @@ impl EdgionClient {
     }
 
     /// Send HTTP request with detailed error handling
-    async fn send_request(&self, request: reqwest::RequestBuilder, url: &str) -> Result<Response> {
+    async fn send_request(&self, mut request: reqwest::RequestBuilder, url: &str) -> Result<Response> {
+        if let Some(ref token) = self.token {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
         request.send().await.map_err(|e| {
             let error_msg = format_request_error(url, &e, self.target);
             anyhow::anyhow!("{}", error_msg)

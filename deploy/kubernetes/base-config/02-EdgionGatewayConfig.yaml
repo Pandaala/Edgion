@@ -29,4 +29,3 @@ spec:
       defaultConnectTimeout: 5s
       defaultRequestTimeout: 60s
       defaultIdleTimeout: 300s
-      defaultMaxRetries: 3

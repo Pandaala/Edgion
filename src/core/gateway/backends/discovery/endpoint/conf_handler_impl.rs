@@ -1,38 +1,13 @@
 use super::get_endpoint_roundrobin_store;
-use crate::core::common::conf_sync::traits::ConfHandler;
+use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
+use crate::core::gateway::backends::discovery::conf_handler_common::{update_affected_lbs, update_all_existing_lbs};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
 use crate::core::gateway::lb::runtime_state;
 use k8s_openapi::api::core::v1::Endpoints;
-use pingora_core::protocols::l4::socket::SocketAddr;
 use std::collections::{HashMap, HashSet};
-
-fn cleanup_removed_backends(service_key: &str, old: &HashSet<SocketAddr>, new: &HashSet<SocketAddr>) {
-    let removed: Vec<SocketAddr> = old.difference(new).cloned().collect();
-    let added: Vec<SocketAddr> = new.difference(old).cloned().collect();
-
-    if !removed.is_empty() || !added.is_empty() {
-        runtime_state::invalidate_selector_cache(service_key);
-    }
-
-    if !removed.is_empty() {
-        tracing::debug!(
-            service_key = %service_key,
-            removed_count = removed.len(),
-            "Cleaning stale backend runtime state"
-        );
-        let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
-        for addr in &removed {
-            if runtime_state::get_count(service_key, addr) > 0 {
-                runtime_state::mark_backend_draining(service_key, addr);
-            } else {
-                runtime_state::remove_backend(service_key, addr);
-            }
-            cb_store.remove_backend(service_key, addr);
-        }
-    }
-}
+use std::sync::Arc;
 
 /// Handler for Endpoints configuration updates
 ///
@@ -44,36 +19,6 @@ pub struct EndpointHandler;
 impl EndpointHandler {
     pub fn new() -> Self {
         Self
-    }
-
-    /// Update all existing RoundRobin LBs (used after full_set/relist).
-    fn update_all_existing_lbs(&self) {
-        let roundrobin_store = get_endpoint_roundrobin_store();
-        for service_key in roundrobin_store.get_existing_service_keys() {
-            roundrobin_store.update_lb_if_exists(&service_key);
-        }
-    }
-
-    /// Update affected RoundRobin LBs and clean stale runtime state.
-    fn update_affected_lbs(&self, affected_services: &HashSet<String>) {
-        let roundrobin_store = get_endpoint_roundrobin_store();
-
-        for service_key in affected_services {
-            let old_addrs: HashSet<SocketAddr> = roundrobin_store
-                .get_backends_from_lb(service_key)
-                .into_iter()
-                .map(|b| b.addr)
-                .collect();
-
-            roundrobin_store.update_lb_if_exists(service_key);
-
-            let new_addrs: HashSet<SocketAddr> = roundrobin_store
-                .get_backends_for_service(service_key)
-                .into_iter()
-                .map(|b| b.addr)
-                .collect();
-            cleanup_removed_backends(service_key, &old_addrs, &new_addrs);
-        }
     }
 
     fn resolve_endpoint_config_for_service(
@@ -109,7 +54,7 @@ pub fn create_endpoint_handler() -> Box<dyn ConfHandler<Endpoints> + Send + Sync
 }
 
 impl ConfHandler<Endpoints> for EndpointHandler {
-    fn full_set(&self, data: &HashMap<String, Endpoints>) {
+    fn full_set(&self, data: &HashMap<String, Arc<Endpoints>>) {
         tracing::info!(
             component = "endpoint_handler",
             cnt = data.len(),
@@ -121,11 +66,12 @@ impl ConfHandler<Endpoints> for EndpointHandler {
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_endpoint_roundrobin_store();
-        let all_services = roundrobin_store.replace_data_only(data.clone());
+        let data_owned = arc_map_to_owned(data);
+        let all_services = roundrobin_store.replace_data_only(data_owned);
 
         // 2. Update all existing LBs in ALL stores
         // This handles relist scenario where data might have changed
-        self.update_all_existing_lbs();
+        update_all_existing_lbs(&*roundrobin_store);
 
         // 3. Sync Endpoints-level health check config
         self.sync_health_check_configs_for_services(&all_services);
@@ -157,8 +103,8 @@ impl ConfHandler<Endpoints> for EndpointHandler {
 
     fn partial_update(
         &self,
-        add: HashMap<String, Endpoints>,
-        update: HashMap<String, Endpoints>,
+        add: HashMap<String, Arc<Endpoints>>,
+        update: HashMap<String, Arc<Endpoints>>,
         remove: HashSet<String>,
     ) {
         let add_count = add.len();
@@ -167,13 +113,29 @@ impl ConfHandler<Endpoints> for EndpointHandler {
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_endpoint_roundrobin_store();
-        let affected_services = roundrobin_store.update_data_only(add, update, &remove);
+        let add_owned = arc_map_into_owned(add);
+        let update_owned = arc_map_into_owned(update);
+        let affected_services = roundrobin_store.update_data_only(add_owned, update_owned, &remove);
 
         // 2. Update affected LBs in ALL stores
-        self.update_affected_lbs(&affected_services);
+        update_affected_lbs(&*roundrobin_store, &affected_services);
 
         // 3. Sync Endpoints-level health check config
         self.sync_health_check_configs_for_services(&affected_services);
+
+        // 4. Clean up stale services whose Endpoints resource was removed
+        if remove_count > 0 {
+            let config_store = get_hc_config_store();
+            let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
+            for service_key in &affected_services {
+                if roundrobin_store.get_endpoint_for_service(service_key).is_none() {
+                    config_store.set_endpoint_config(service_key, None);
+                    get_health_check_manager().reconcile_service(service_key);
+                    runtime_state::remove_service(service_key);
+                    cb_store.remove_service(service_key);
+                }
+            }
+        }
 
         tracing::info!(
             component = "endpoint_handler",

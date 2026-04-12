@@ -46,11 +46,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 ETCD_DIR="${PROJECT_ROOT}/examples/test/conf/Services/etcd"
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
 GATEWAY_BIN="${PROJECT_ROOT}/target/debug/edgion-gateway"
-CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.toml"
-GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
+CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
+GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # ── Ports ───────────────────────────────────────────────────────────────────
 CONTROLLER_ADMIN_PORT=5800
@@ -279,13 +279,13 @@ log_success "Old processes cleaned up"
 if [ "$DO_BUILD" = true ]; then
     log_section "Building Edgion binaries"
     cd "$PROJECT_ROOT"
-    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-ctl 2>&1 | tail -5
+    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-cli 2>&1 | tail -5
     log_success "Build complete"
 else
     log_info "Skipping build (--no-build)"
 fi
 
-for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CTL"; do
+for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CLI"; do
     if [ ! -f "$bin" ]; then
         log_error "Binary not found: $bin — run without --no-build first"
         exit 1
@@ -363,13 +363,13 @@ log_section "Loading configuration"
 
 # Base config (GatewayClass, EdgionGatewayConfig, etc.)
 for f in "${CONF_DIR}/base"/*.yaml; do
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" > /dev/null 2>&1 || true
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" > /dev/null 2>&1 || true
 done
 log_success "Base config loaded"
 
 # LinkSys/Etcd config (Gateway resource + LinkSys CRDs — sorted, so 00_Gateway loads first)
 for f in $(ls "${CONF_DIR}/LinkSys/Etcd"/*.yaml | sort); do
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
 done
 log_success "LinkSys/Etcd config loaded (plain + namespaced)"
 
@@ -707,7 +707,7 @@ assert_json_failure "GET on non-existent client returns error" "$RESP"
 # ── 12. Lifecycle: delete → client removed ─────────────────────────────────
 log_info "─── 12. Lifecycle: Delete LinkSys ───"
 
-"$EDGION_CTL" --server "$CONTROLLER_URL" delete LinkSys etcd-test -n default 2>&1 || true
+"$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys etcd-test -n default 2>&1 || true
 # Wait for sync: Controller → Gateway → ConfHandler → remove client
 sleep 5
 
@@ -720,7 +720,7 @@ assert_contains "etcd-ns-test still present" "$CLIENTS_JSON" "default/etcd-ns-te
 # ── 13. Lifecycle: re-create → client restored ─────────────────────────────
 log_info "─── 13. Lifecycle: Re-create LinkSys ───"
 
-"$EDGION_CTL" --server "$CONTROLLER_URL" apply \
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply \
     -f "${CONF_DIR}/LinkSys/Etcd/01_LinkSys_default_etcd-test.yaml" 2>&1 || true
 sleep 5
 
@@ -743,7 +743,7 @@ assert_eq "Re-created client GET works" "alive" "$(echo "$RESP" | jq -r '.data.v
 gw_api POST "/api/v1/testing/link-sys/etcd/${ETCD_CLIENT}/delete/edgion%2Frecreate-test" > /dev/null
 
 # Also delete the namespaced CRD for clean cleanup
-"$EDGION_CTL" --server "$CONTROLLER_URL" delete LinkSys etcd-ns-test -n default 2>&1 || true
+"$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys etcd-ns-test -n default 2>&1 || true
 
 # =============================================================================
 # ──────────────────────────── REPORT ────────────────────────────────────────

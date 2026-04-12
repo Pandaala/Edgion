@@ -21,7 +21,7 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
-| `edgion.io/enable-http2` | `"true"` / `"false"` | enabled | Controls HTTP/2 support for listeners built from this Gateway. For HTTP listeners this enables h2c; for HTTPS listeners it enables ALPN h2. |
+| `edgion.io/enable-http2` | `"true"` / `"false"` | enabled | **Frontend (Listener-side) only.** Controls HTTP/2 support for listeners built from this Gateway. For HTTP listeners this enables h2c; for HTTPS listeners it enables ALPN h2. When disabled, pure gRPC requests are rejected with 500. Does not affect backend protocol selection (use Service `appProtocol` for that). |
 | `edgion.io/http-to-https-redirect` | `"true"` / `"false"` | disabled | On non-TLS listeners, enables redirect before normal HTTP proxying. |
 | `edgion.io/https-redirect-port` | integer string | `443` | Target port used when HTTP-to-HTTPS redirect is enabled. |
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |
@@ -37,13 +37,11 @@ Important:
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
-| `edgion.io/max-retries` | unsigned integer string | falls back to `EdgionGatewayConfig.spec.max_retries` | Route-level retry override used when upstream connect fails. `0` disables retries for that route. |
 | `edgion.io/hostname-resolution` | controller-generated string | system-managed | Diagnostic annotation describing effective hostname resolution. The controller writes it during parse. Do not hand-author it. |
 
 Notes:
 
-- `edgion.io/max-retries` is parsed in `src/types/resources/http_route_preparse.rs`.
-- Runtime precedence is route annotation first, then global config, per `src/core/gateway/routes/http/proxy_http/pg_fail_to_connect.rs`.
+- Retry configuration uses the standard Gateway API `spec.rules[*].retry` field (see HTTPRoute/GRPCRoute resource docs). Runtime precedence: `rule.retry.attempts > EdgionGatewayConfig.spec.maxRetries`.
 - `edgion.io/hostname-resolution` is currently injected on `HTTPRoute` and `GRPCRoute`.
 
 ## TCPRoute / TLSRoute `metadata.annotations`
@@ -52,7 +50,6 @@ Notes:
 |-----|----------|-------|---------|--------|
 | `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. |
 | `edgion.io/proxy-protocol` | `TLSRoute` | currently `"v2"` is recognized | disabled | Sends Proxy Protocol v2 to upstream. Other values are ignored. |
-| `edgion.io/upstream-tls` | `TLSRoute` | `"true"` / `"false"` | `false` | Enables TLS when connecting from Gateway to backend. |
 | `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `1` | Max upstream connect attempts. Values below `1` are normalized to `1`. |
 
 Current implementation note:
@@ -65,6 +62,19 @@ Current implementation note:
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/expose-client-cert` | `"true"` / `"false"` | disabled | When mTLS is enabled, exposes parsed client certificate info to the plugin/session layer. |
+
+## Service `spec.ports[].appProtocol` — Backend Protocol Selection (GEP-1911)
+
+Not an `edgion.io/*` annotation, but a standard Kubernetes field that Edgion reads for backend protocol selection. This is the **backend-side** counterpart to the frontend-side `edgion.io/enable-http2` annotation.
+
+| Value | Effect |
+|-------|--------|
+| `kubernetes.io/h2c` or `h2c` | Forces HTTP/2 cleartext to upstream (`set_http_version(2, 2)`) |
+| `kubernetes.io/ws`, `ws`, `kubernetes.io/wss`, `wss` | Forces HTTP/1.1 for WebSocket upgrade (`set_http_version(1, 1)`) |
+
+Verify in code: `src/core/gateway/backends/mod.rs` (`detect_backend_app_protocol`, `apply_backend_app_protocol`).
+
+GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 
 ## Service / EndpointSlice / Endpoints `metadata.annotations`
 

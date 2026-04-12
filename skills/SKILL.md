@@ -40,6 +40,18 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **编码规范** — 日志 ID、日志安全、可观测性 | [03-coding/SKILL.md](03-coding/SKILL.md) |
 | **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 | **全局 Review** — 安全/正确性/可观测性检查清单 + 已关闭误报条目 | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
+| **用户文档规范** — 撰写/审阅 docs/ 文档的写作规范 | [11-doc/SKILL.md](11-doc/SKILL.md) |
+| **CI/发布自动化** — GitHub Release、tag 推送、Docker 镜像、发布说明文件位置 | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
+
+## 关键约束（必读，违反会引入运行时 bug）
+
+> 这里只列"非显而易见、代码本身看不出来、犯过错"的约束。
+
+| 约束 | 位置 | 详情 |
+|------|------|------|
+| **PluginConditions regex 必须在 preparse compile** | `conditions/types.rs`, `edgion_plugins/mod.rs` | `compiled_regex` 是 `#[serde(skip)]`，反序列化后为 None。必须在 `EdgionPlugins::preparse()` 阶段调用 `compile_conditions()` 完成编译，否则每请求触发 `Regex::new()`。新增带 regex 的条件类型时，同步在 `Condition::compile()` 加 match 臂。详见 [05-plugin-system.md §条件执行](01-architecture/02-gateway/05-plugin-system.md) |
+| **gRPC H2 grpc-status 必须放 trailers** | Pingora H2 响应路径 | 放在 response headers 里 tonic 会返回 Internal(13)，必须放 trailers |
+| **数据面请求/连接热路径禁止 tracing** | `skills/03-coding/01-log-safety.md` 铁律 3 | 请求/连接处理路径只能用 access log / `PluginLog` / `ctx.err_log` / Metrics，任何 `tracing::` 宏（含 `debug!`）都禁止。例外：配置加载路径、进程启动/关闭、`pg_logging.rs` access log 发送失败。插件 `run_request` / `run_upstream_response` / TLS proxy / stream proxy 全部适用。 |
 
 ## 目录总览
 
@@ -50,11 +62,12 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | 03 | [coding/](03-coding/SKILL.md) | 编码规范：日志 ID、日志安全、可观测性（Access Log / Metrics / Tracing） |
 | 04 | [review/](04-review/SKILL.md) | Review 沉淀：误报判定、可观测性审查 |
 | 05 | [testing/](05-testing/SKILL.md) | 测试：单元测试、集成测试、K8s 测试、专项测试 |
-| 06 | [tracing/](06-tracing/SKILL.md) | 调试：Admin API、edgion-ctl、常见问题 |
+| 06 | [tracing/](06-tracing/SKILL.md) | 调试：Admin API、edgion-cli、常见问题 |
 | 07 | [tasks/](07-tasks/SKILL.md) | 任务管理：目录规则、模板、生命周期阶段、完成检查清单 |
 | 08 | [kubernetes/](08-kubernetes/SKILL.md) | Kubernetes 相关：Gateway API 兼容性、API 版本升级策略 |
 | 09 | [misc/](09-misc/) | 杂项（TLS 排查等） |
 | 10 | [fully-review/](10-fully-review/SKILL.md) | 全局 Review 指南：各维度检查清单、安全误判规则、已关闭条目 |
+| 11 | [11-doc/](11-doc/SKILL.md) | 用户文档规范：目录结构、写作风格、页面模板、多语言、版本管理、Review 检查清单 |
 
 ## 开发生命周期速查
 
@@ -71,3 +84,5 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 ## 用户文档
 
 位于 `docs/`，按语言分目录（en、zh-CN、ja）。完整目录树见 [docs/DIRECTORY.md](../docs/DIRECTORY.md)。
+
+撰写或审阅用户文档时，遵循 [11-doc/SKILL.md](11-doc/SKILL.md) 中的写作规范。

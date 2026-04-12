@@ -28,6 +28,9 @@ pub struct TestContext {
     #[allow(dead_code)]
     pub verbose: bool,
     pub access_log_path: PathBuf,
+    /// Bearer token for Controller Admin API calls (local auth).
+    /// Read from EDGION_TEST_ADMIN_TOKEN env var or ~/.edgion/token at startup.
+    pub admin_token: Option<String>,
 }
 
 impl TestContext {
@@ -87,6 +90,19 @@ impl TestContext {
 
         let http_client = client_builder.build().expect("Failed to create HTTP client");
 
+        // Load admin token for Controller Admin API calls.
+        // Priority: EDGION_TEST_ADMIN_TOKEN env var > ~/.edgion/token file.
+        let admin_token = std::env::var("EDGION_TEST_ADMIN_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .and_then(|h| std::fs::read_to_string(format!("{}/.edgion/token", h)).ok())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            });
+
         Self {
             target_host,
             http_port,
@@ -104,6 +120,7 @@ impl TestContext {
             gateway,
             verbose,
             access_log_path,
+            admin_token,
         }
     }
 
@@ -216,13 +233,14 @@ impl TestContext {
             namespace,
             name
         );
-        let response = client
+        let mut put_req = client
             .put(&update_url)
             .header("Content-Type", "application/x-yaml")
-            .body(yaml_content.to_string())
-            .send()
-            .await
-            .map_err(|e| format!("Admin API PUT failed: {}", e))?;
+            .body(yaml_content.to_string());
+        if let Some(ref token) = self.admin_token {
+            put_req = put_req.header("Authorization", format!("Bearer {}", token));
+        }
+        let response = put_req.send().await.map_err(|e| format!("Admin API PUT failed: {}", e))?;
 
         if response.status().is_success() {
             return Ok(());
@@ -230,10 +248,14 @@ impl TestContext {
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             let create_url = format!("{}/api/v1/namespaced/{}/{}", self.admin_api_url(), kind, namespace);
-            let response = client
+            let mut post_req = client
                 .post(&create_url)
                 .header("Content-Type", "application/x-yaml")
-                .body(yaml_content.to_string())
+                .body(yaml_content.to_string());
+            if let Some(ref token) = self.admin_token {
+                post_req = post_req.header("Authorization", format!("Bearer {}", token));
+            }
+            let response = post_req
                 .send()
                 .await
                 .map_err(|e| format!("Admin API POST failed: {}", e))?;
@@ -265,11 +287,11 @@ impl TestContext {
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-        let response = client
-            .delete(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Admin API request failed: {}", e))?;
+        let mut req = client.delete(&url);
+        if let Some(ref token) = self.admin_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let response = req.send().await.map_err(|e| format!("Admin API request failed: {}", e))?;
 
         if response.status().is_success() {
             Ok(())

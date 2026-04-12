@@ -76,7 +76,7 @@ impl CenterApi for FileSystemStorage {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .await
-                .map_err(|e| ConfWriterError::IOError(format!("Failed to create directory: {}", e)))?;
+                .map_err(|e| ConfWriterError::io("Failed to create directory", e))?;
         }
 
         // Format YAML to pretty format for readability
@@ -84,7 +84,7 @@ impl CenterApi for FileSystemStorage {
 
         fs::write(&path, formatted_content)
             .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| ConfWriterError::io("Failed to write file", e))?;
 
         tracing::info!(
             component = "file_system_writer",
@@ -183,7 +183,7 @@ impl CenterApi for FileSystemStorage {
 
         let content = fs::read_to_string(&path)
             .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ConfWriterError::io("Failed to read file", e))?;
 
         Ok(content)
     }
@@ -196,12 +196,12 @@ impl CenterApi for FileSystemStorage {
         while let Some(dir) = stack.pop() {
             let mut entries = fs::read_dir(&dir)
                 .await
-                .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
+                .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
 
             while let Some(entry) = entries
                 .next_entry()
                 .await
-                .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
+                .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
             {
                 let path = entry.path();
 
@@ -219,7 +219,7 @@ impl CenterApi for FileSystemStorage {
                 // Read and parse file
                 let content = fs::read_to_string(&path)
                     .await
-                    .map_err(|e| ConfWriterError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
+                    .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
 
                 // Extract metadata
                 if let Some(metadata) = extract_resource_metadata(&content) {
@@ -265,7 +265,7 @@ impl CenterApi for FileSystemStorage {
 
         fs::remove_file(&path)
             .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to delete file: {}", e)))?;
+            .map_err(|e| ConfWriterError::io("Failed to delete file", e))?;
 
         tracing::info!(
             component = "file_system_writer",
@@ -286,12 +286,12 @@ impl CenterApi for FileSystemStorage {
 
         let mut entries = fs::read_dir(&self.root)
             .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
+            .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
+            .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
         {
             let path = entry.path();
 
@@ -314,7 +314,7 @@ impl CenterApi for FileSystemStorage {
                 // Read and parse file
                 let content = fs::read_to_string(&path)
                     .await
-                    .map_err(|e| ConfWriterError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
+                    .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
 
                 // Extract metadata to verify
                 if let Some(metadata) = extract_resource_metadata(&content) {
@@ -355,12 +355,12 @@ impl CenterApi for FileSystemStorage {
 
         let mut entries = fs::read_dir(&self.root)
             .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
+            .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
+            .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
         {
             let path = entry.path();
 
@@ -383,7 +383,7 @@ impl CenterApi for FileSystemStorage {
                 // Read and parse file
                 let content = fs::read_to_string(&path)
                     .await
-                    .map_err(|e| ConfWriterError::IOError(format!("Failed to read {:?}: {}", path, e)))?;
+                    .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
 
                 // Extract metadata to verify
                 if let Some(metadata) = extract_resource_metadata(&content) {
@@ -411,70 +411,6 @@ impl CenterApi for FileSystemStorage {
             items: resources,
             continue_token: None, // FileSystem does not support pagination
         })
-    }
-
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError> {
-        let prefix = format!("{}_", kind);
-        let mut count = 0;
-
-        let mut entries = fs::read_dir(&self.root)
-            .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
-
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
-        {
-            let path = entry.path();
-
-            if path.is_dir() {
-                continue;
-            }
-
-            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                if filename.starts_with(&prefix) {
-                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                    if matches!(ext, "yaml" | "yml") {
-                        count += 1;
-                    }
-                }
-            }
-        }
-
-        Ok(count)
-    }
-
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError> {
-        let prefix = format!("{}_{}_", kind, namespace);
-        let mut count = 0;
-
-        let mut entries = fs::read_dir(&self.root)
-            .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read dir: {}", e)))?;
-
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| ConfWriterError::IOError(format!("Failed to read entry: {}", e)))?
-        {
-            let path = entry.path();
-
-            if path.is_dir() {
-                continue;
-            }
-
-            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                if filename.starts_with(&prefix) {
-                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                    if matches!(ext, "yaml" | "yml") {
-                        count += 1;
-                    }
-                }
-            }
-        }
-
-        Ok(count)
     }
 }
 

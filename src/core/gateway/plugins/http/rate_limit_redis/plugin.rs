@@ -458,7 +458,7 @@ impl RateLimitRedis {
             }
         }
 
-        let body = Bytes::from(format!(r#"{{"message":"{}"}}"#, message));
+        let body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
         if let Err(_e) = session.write_response_header(resp, false).await {
             return PluginRunningResult::ErrTerminateRequest;

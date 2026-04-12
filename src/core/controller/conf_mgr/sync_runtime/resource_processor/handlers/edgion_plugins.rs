@@ -8,7 +8,7 @@
 //! - on_delete: Clear SecretRefManager references
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_types, format_secret_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::edgion_plugins::plugin_configs::{
@@ -59,7 +59,7 @@ impl EdgionPluginsHandler {
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
 
-                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                        let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) else {
                             tracing::info!(
                                 edgion_plugins = %resource_ref.key(),
                                 secret_key = %secret_key,
@@ -139,7 +139,7 @@ impl EdgionPluginsHandler {
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
 
-                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                        let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) else {
                             tracing::info!(
                                 edgion_plugins = %resource_ref.key(),
                                 secret_key = %secret_key,
@@ -291,7 +291,7 @@ impl EdgionPluginsHandler {
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
 
-                        if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                        if let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) {
                             if let Some(data) = &secret.data {
                                 let mut cred = ResolvedJwtCredential::default();
                                 // Try "secret" key for HS*
@@ -334,7 +334,7 @@ impl EdgionPluginsHandler {
                             ctx.secret_ref_manager()
                                 .add_ref(secret_key.clone(), resource_ref.clone());
 
-                            if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                            if let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) {
                                 if let Some(data) = &secret.data {
                                     let mut cred = ResolvedJwtCredential::default();
                                     // Get "key" identifier
@@ -392,7 +392,7 @@ impl EdgionPluginsHandler {
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
 
-                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                        let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) else {
                             tracing::info!(
                                 edgion_plugins = %resource_ref.key(),
                                 secret_key = %secret_key,
@@ -539,7 +539,7 @@ impl EdgionPluginsHandler {
                     ctx.secret_ref_manager()
                         .add_ref(secret_key.clone(), resource_ref.clone());
 
-                    if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                    if let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) {
                         let mut resolved = ResolvedJweCredential::default();
 
                         if let Some(data) = &secret.data {
@@ -601,7 +601,7 @@ impl EdgionPluginsHandler {
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
 
-                        let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) else {
+                        let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) else {
                             tracing::info!(
                                 edgion_plugins = %resource_ref.key(),
                                 secret_key = %secret_key,
@@ -683,7 +683,7 @@ impl EdgionPluginsHandler {
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
 
-                        if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                        if let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) {
                             let resolved =
                                 Self::read_secret_utf8(&secret, &["clientSecret", "client_secret", "secret"]);
                             if let Some(value) = resolved {
@@ -717,7 +717,7 @@ impl EdgionPluginsHandler {
                         ctx.secret_ref_manager()
                             .add_ref(secret_key.clone(), resource_ref.clone());
 
-                        if let Some(secret) = get_secret(Some(ns_str), &secret_ref.name) {
+                        if let Some(secret) = ctx.runtime().secret_store.get(Some(ns_str), &secret_ref.name) {
                             let resolved =
                                 Self::read_secret_utf8(&secret, &["sessionSecret", "session_secret", "secret"]);
                             if let Some(value) = resolved {
@@ -880,8 +880,9 @@ fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Conditio
 mod tests {
     use super::EdgionPluginsHandler;
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-        replace_all_secrets, HandlerContext, ProcessResult, ProcessorHandler, SecretRefManager,
+        HandlerContext, ProcessResult, ProcessorHandler, SecretRefManager,
     };
+    use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::resources::edgion_plugins::{
         BasicAuthConfig, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, HeaderCertAuthConfig,
         HmacAuthConfig, JweDecryptConfig, OpenidConnectConfig, RequestFilterEntry,
@@ -891,9 +892,23 @@ mod tests {
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
     use std::collections::{BTreeMap, HashMap};
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::Arc;
 
-    static SECRET_STORE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    fn make_ctx_with_secrets(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
+        let runtime = Arc::new(ControllerRuntime::default());
+        runtime.secret_store.replace_all(secrets);
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let ctx = HandlerContext::new(
+            secret_ref_manager,
+            None,
+            None,
+            Default::default(),
+            5,
+            20,
+            runtime.clone(),
+        );
+        (ctx, runtime)
+    }
 
     fn build_secret(namespace: &str, name: &str, key: &str, value: &str) -> Secret {
         let mut data = BTreeMap::new();
@@ -926,18 +941,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_resolves_basic_auth_users_and_registers_refs() {
-        let _guard = SECRET_STORE_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("secret store test lock poisoned");
-        replace_all_secrets(HashMap::new());
-
         let alice = build_basic_auth_secret("default", "basic-auth-alice", "alice", "alice-password");
         let bob = build_basic_auth_secret("default", "basic-auth-bob", "bob", "bob-password");
         let mut secrets = HashMap::new();
         secrets.insert("default/basic-auth-alice".to_string(), alice);
         secrets.insert("default/basic-auth-bob".to_string(), bob);
-        replace_all_secrets(secrets);
+
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
 
         let mut ep = EdgionPlugins::new("basic-auth-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -961,8 +971,6 @@ mod tests {
             },
         ))]);
 
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -985,24 +993,17 @@ mod tests {
         assert_eq!(resolved_users.get("bob").map(|v| v.as_str()), Some("bob-password"));
         assert_eq!(ctx.secret_ref_manager().get_refs("default/basic-auth-alice").len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/basic-auth-bob").len(), 1);
-
-        replace_all_secrets(HashMap::new());
     }
 
     #[tokio::test]
     async fn test_parse_resolves_openid_connect_secrets_and_registers_refs() {
-        let _guard = SECRET_STORE_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("secret store test lock poisoned");
-        replace_all_secrets(HashMap::new());
-
         let client_secret = build_secret("default", "oidc-client", "clientSecret", "client-secret-value");
         let session_secret = build_secret("default", "oidc-session", "sessionSecret", "session-secret-value");
         let mut secrets = HashMap::new();
         secrets.insert("default/oidc-client".to_string(), client_secret);
         secrets.insert("default/oidc-session".to_string(), session_secret);
-        replace_all_secrets(secrets);
+
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
 
         let mut ep = EdgionPlugins::new("oidc-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -1026,8 +1027,6 @@ mod tests {
             },
         )))]);
 
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1049,22 +1048,15 @@ mod tests {
         assert_eq!(config.resolved_session_secret.as_deref(), Some("session-secret-value"));
         assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-client").len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-session").len(), 1);
-
-        replace_all_secrets(HashMap::new());
     }
 
     #[tokio::test]
     async fn test_parse_resolves_jwe_secret_and_registers_refs() {
-        let _guard = SECRET_STORE_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("secret store test lock poisoned");
-        replace_all_secrets(HashMap::new());
-
         let jwe_secret = build_secret("default", "jwe-secret", "secret", "0123456789abcdef0123456789abcdef");
         let mut secrets = HashMap::new();
         secrets.insert("default/jwe-secret".to_string(), jwe_secret);
-        replace_all_secrets(secrets);
+
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
 
         let mut ep = EdgionPlugins::new("jwe-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -1080,8 +1072,6 @@ mod tests {
             },
         ))]);
 
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1107,18 +1097,10 @@ mod tests {
             .expect("expected resolved secret");
         assert!(!resolved_secret.is_empty());
         assert_eq!(ctx.secret_ref_manager().get_refs("default/jwe-secret").len(), 1);
-
-        replace_all_secrets(HashMap::new());
     }
 
     #[tokio::test]
     async fn test_parse_resolves_hmac_credentials_and_registers_refs() {
-        let _guard = SECRET_STORE_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("secret store test lock poisoned");
-        replace_all_secrets(HashMap::new());
-
         let credentials_yaml = r#"
 - username: alice
   secret: alice-secret-32-bytes-0123456789abcd
@@ -1133,7 +1115,8 @@ mod tests {
         let hmac_secret = build_secret("default", "hmac-credentials", "credentials.yaml", credentials_yaml);
         let mut secrets = HashMap::new();
         secrets.insert("default/hmac-credentials".to_string(), hmac_secret);
-        replace_all_secrets(secrets);
+
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
 
         let mut ep = EdgionPlugins::new("hmac-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -1148,8 +1131,6 @@ mod tests {
             ..Default::default()
         }))]);
 
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1182,18 +1163,10 @@ mod tests {
         assert!(!alice.headers.contains_key("X-Ignored"));
 
         assert_eq!(ctx.secret_ref_manager().get_refs("default/hmac-credentials").len(), 1);
-
-        replace_all_secrets(HashMap::new());
     }
 
     #[tokio::test]
     async fn test_parse_resolves_header_cert_auth_ca_secrets_and_registers_refs() {
-        let _guard = SECRET_STORE_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("secret store test lock poisoned");
-        replace_all_secrets(HashMap::new());
-
         let ca_secret = build_secret(
             "default",
             "header-cert-ca",
@@ -1202,7 +1175,8 @@ mod tests {
         );
         let mut secrets = HashMap::new();
         secrets.insert("default/header-cert-ca".to_string(), ca_secret);
-        replace_all_secrets(secrets);
+
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
 
         let mut ep = EdgionPlugins::new("header-cert-auth-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -1219,8 +1193,6 @@ mod tests {
             },
         ))]);
 
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(secret_ref_manager.clone(), None, None, Default::default(), 5, 20);
         let handler = EdgionPluginsHandler::new();
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
@@ -1244,7 +1216,5 @@ mod tests {
             .expect("expected resolved ca secrets");
         assert_eq!(resolved.len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/header-cert-ca").len(), 1);
-
-        replace_all_secrets(HashMap::new());
     }
 }

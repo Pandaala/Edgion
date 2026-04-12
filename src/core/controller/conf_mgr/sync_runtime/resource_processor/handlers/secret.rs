@@ -4,13 +4,13 @@
 //! - Global SecretStore updates for TLS callback access
 //! - Cascading requeue for dependent resources (EdgionTls, Gateway)
 
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
 
 use k8s_openapi::api::core::v1::Secret;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, replace_all_secrets, update_secrets, HandlerContext, ProcessResult, ProcessorHandler,
+    format_secret_key, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use crate::types::ResourceKind;
 
@@ -122,7 +122,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
 
         // During init phase, accumulate for authoritative replace_all at init_done.
         {
-            let mut acc = self.init_accumulator.write().unwrap();
+            let mut acc = self.init_accumulator.write();
             if let Some(ref mut map) = *acc {
                 map.insert(secret_key.clone(), secret.clone());
             }
@@ -130,7 +130,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
 
         let mut upsert = HashMap::new();
         upsert.insert(secret_key.clone(), secret.clone());
-        update_secrets(upsert, &HashSet::new());
+        ctx.runtime().secret_store.update(upsert, &HashSet::new());
 
         tracing::debug!(
             secret_key = %secret_key,
@@ -142,10 +142,10 @@ impl ProcessorHandler<Secret> for SecretHandler {
     }
 
     fn on_init_done(&self, _ctx: &HandlerContext) {
-        let accumulated = self.init_accumulator.write().unwrap().take();
+        let accumulated = self.init_accumulator.write().take();
         if let Some(secrets) = accumulated {
             let count = secrets.len();
-            replace_all_secrets(secrets);
+            _ctx.runtime().secret_store.replace_all(secrets);
             tracing::info!(count = count, "SecretStore authoritative replace_all on init_done");
         }
     }
@@ -172,7 +172,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
         // 1. Update global SecretStore (delete)
         let mut remove = HashSet::new();
         remove.insert(secret_key.clone());
-        update_secrets(HashMap::new(), &remove);
+        ctx.runtime().secret_store.update(HashMap::new(), &remove);
 
         // 2. Trigger cascading requeue (so dependent resources know Secret is deleted)
         self.trigger_cascading_requeue(&secret_key, "deleted", ctx).await;

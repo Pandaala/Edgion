@@ -1,5 +1,9 @@
 # CtxSet Plugin
 
+> **🔌 Edgion Extension**
+> 
+> CtxSet is a context variable setting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 The `CtxSet` plugin sets context variables during request processing. These variables can be used by subsequent plugins (such as RateLimit, PluginConditions) or output as log fields.
@@ -19,37 +23,37 @@ CtxSet supports extracting data from multiple sources (Header, Query, Cookie, et
 
 ### CtxSetConfig
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `rules` | `[]CtxVarRule` | ✅ | List of setting rules |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rules` | Array\<Object\> | — (required) | List of setting rules, see CtxVarRule sub-fields below |
 
-### CtxVarRule
+### CtxVarRule Sub-fields
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `name` | `string` | ✅ | Target context variable name |
-| `from` | `KeyGet` | ❌ | Data source (choose one of `from`, `value`, or `template`) |
-| `value` | `string` | ❌ | Static value (as data source) |
-| `template` | `string` | ❌ | String template (e.g., `prefix_{{ var }}`) |
-| `default` | `string` | ❌ | Default value when data source is missing |
-| `transform` | `string` | ❌ | String transformation: `"lower"`, `"upper"` |
-| `mapping` | `ValueMapping` | ❌ | Value mapping rules |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | — (required) | Target context variable name |
+| `from` | Object | None | Data source (choose one of `from`, `value`, or `template`), see KeyGet below |
+| `value` | String | None | Static value (as data source) |
+| `template` | String | None | String template (e.g., `prefix_{{ var }}`) |
+| `default` | String | None | Default value when data source is missing |
+| `transform` | String | None | String transformation. Values: `"lower"` | `"upper"` |
+| `mapping` | Object | None | Value mapping rules, see ValueMapping below |
 
-### ValueMapping
+### ValueMapping Sub-fields
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `values` | `map[string]string` | ✅ | Mapping table (`original value` -> `new value`) |
-| `default` | `string` | ❌ | Default value when mapping doesn't match |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `values` | Object | — (required) | Mapping table (`original value` -> `new value`) |
+| `default` | String | None | Default value when mapping doesn't match |
 
-### KeyGet (Data Source)
+### KeyGet (Data Source) Sub-fields
 
 The `from` field uses the unified `KeyGet` structure:
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `type` | `string` | Data source type: `header`, `query`, `cookie`, `path`, `method`, `clientIp`, `ctx` |
-| `name` | `string` | Key name (required for `header`, `query`, `cookie`, `ctx` types) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | String | — (required) | Data source type: `header`, `query`, `cookie`, `path`, `method`, `clientIp`, `ctx` |
+| `name` | String | None | Key name (required for `header`, `query`, `cookie`, `ctx` types) |
 
 ## Configuration Examples
 
@@ -182,3 +186,10 @@ Conditional plugins can use context variables to decide whether to skip subseque
              "127.0.0.1": "true"
           default: "false"
 ```
+
+## Related Documentation
+
+- [ProxyRewrite Plugin](../http-route/filters/edgion-plugins/proxy-rewrite.md) - Request rewrite plugin
+- [ResponseRewrite Plugin](../http-route/filters/edgion-plugins/response-rewrite.md) - Response rewrite plugin
+- [RateLimit Plugin](rate-limit.md) - Can use CtxSet to construct rate limiting keys
+- [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

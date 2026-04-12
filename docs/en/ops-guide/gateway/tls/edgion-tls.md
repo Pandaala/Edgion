@@ -638,55 +638,6 @@ TLS session resumption is enabled by default, reducing handshake overhead.
 
 **Current status**: Planned for future versions.
 
-### 11. TLS Version Control FAQ
-
-**Q: How to allow only TLS 1.3 connections?**
-
-A: Set both `minVersion` and `maxVersion` to `TLS1_3`:
-
-```yaml
-tlsVersions:
-  minVersion: TLS1_3
-  maxVersion: TLS1_3
-```
-
-**Q: What happens when a client using TLS 1.2 connects to a TLS 1.3-only service?**
-
-A: The connection will be rejected, and the client will receive a TLS handshake failure error.
-
----
-
-### 12. Cipher Suite Configuration FAQ
-
-**Q: Why doesn't cipher suite configuration fully take effect currently?**
-
-A: Due to limitations in the Pingora framework, cipher suites cannot be set during handshake in dynamic SNI scenarios. This requires Pingora API enhancements. The current configuration is recorded but not immediately applied.
-
-**Q: Which cipher suite profile should I choose?**
-
-A: 
-- **Most scenarios**: Use `Intermediate` (default)
-- **Modern clients only**: Use `Modern`
-- **Must support legacy clients**: Use `Old` (not recommended)
-
----
-
-### 13. SAN/CN Whitelist FAQ
-
-**Q: What is the difference between SAN whitelist and CN whitelist?**
-
-A: 
-- **SAN (Subject Alternative Names)**: Modern standard, supports multiple domains/IPs, recommended
-- **CN (Common Name)**: Legacy standard, supports only a single domain, deprecated
-
-**Q: Why doesn't SAN whitelist validation fully take effect currently?**
-
-A: Due to Pingora architecture limitations, SSL connections cannot be directly accessed at the HTTP request stage. Certificate information needs to be extracted at the TLS layer and passed to the application layer. This requires architecture enhancements.
-
-**Q: How do wildcard whitelists work?**
-
-A: `*.example.com` matches `sub.example.com`, but does not match `example.com` or `sub.sub.example.com` (single-level subdomain only).
-
 ---
 
 ## Advanced Configuration
@@ -930,6 +881,50 @@ spec:
           ingress:
             class: nginx
 ```
+
+---
+
+### Q6: How to allow only TLS 1.3 connections?
+
+Set both `minVersion` and `maxVersion` to `TLS1_3`:
+
+```yaml
+tlsVersions:
+  minVersion: TLS1_3
+  maxVersion: TLS1_3
+```
+
+**Q: What happens when a client using TLS 1.2 connects to a TLS 1.3-only service?**
+
+A: The connection will be rejected, and the client will receive a TLS handshake failure error.
+
+---
+
+### Q7: Why doesn't cipher suite configuration fully take effect currently?
+
+Due to limitations in the Pingora framework, cipher suites cannot be set during handshake in dynamic SNI scenarios. This requires Pingora API enhancements. The current configuration is recorded but not immediately applied.
+
+**Q: Which cipher suite profile should I choose?**
+
+A:
+- **Most scenarios**: Use `Intermediate` (default)
+- **Modern clients only**: Use `Modern`
+- **Must support legacy clients**: Use `Old` (not recommended)
+
+---
+
+### Q8: What is the difference between SAN whitelist and CN whitelist?
+
+- **SAN (Subject Alternative Names)**: Modern standard, supports multiple domains/IPs, recommended
+- **CN (Common Name)**: Legacy standard, supports only a single domain, deprecated
+
+**Q: Why doesn't SAN whitelist validation fully take effect currently?**
+
+A: Due to Pingora architecture limitations, SSL connections cannot be directly accessed at the HTTP request stage. Certificate information needs to be extracted at the TLS layer and passed to the application layer. This requires architecture enhancements.
+
+**Q: How do wildcard whitelists work?**
+
+A: `*.example.com` matches `sub.example.com`, but does not match `example.com` or `sub.sub.example.com` (single-level subdomain only).
 
 ---
 

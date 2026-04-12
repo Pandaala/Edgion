@@ -462,3 +462,10 @@ spec:
 - **正则预编译**：`regexUri.pattern` 在配置加载时预编译，运行时无额外开销
 - **变量解析**：按需解析，未使用的变量不会被处理
 - **路径参数提取**：采用懒加载机制，只有首次访问时才从路由模式中提取
+
+---
+
+## 相关链接
+
+- [ResponseRewrite](./response-rewrite.md) — 响应重写
+- [URL Rewrite](../gateway-api/url-rewrite.md) — Gateway API 标准 URL 重写

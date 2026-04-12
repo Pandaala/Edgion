@@ -86,6 +86,11 @@ pub trait PluginSession: Send + Sync {
     /// Get a response header value by name (for ResponseRewrite)
     fn get_response_header(&self, name: &str) -> Option<String>;
 
+    /// Get all response header names (for DSL resp.header_names())
+    fn response_header_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Get the response status code (available in upstream_response_filter stage)
     /// Returns None if response has not been received yet (request stage)
     fn get_response_status(&self) -> Option<u16>;
@@ -133,6 +138,24 @@ pub trait PluginSession: Send + Sync {
     /// - connection is TLS without client cert
     /// - EdgionTls did not enable `edgion.io/expose-client-cert`
     fn client_cert_info(&self) -> Option<ClientCertInfo> {
+        None
+    }
+
+    /// Get the discovered protocol type (e.g., "grpc", "grpc-web", "websocket", "http").
+    /// Used by DSL `req.protocol`.
+    fn discover_protocol(&self) -> String {
+        "http".to_string()
+    }
+
+    /// Get the gRPC service name parsed from the request path.
+    /// Returns None for non-gRPC requests.
+    fn grpc_service(&self) -> Option<String> {
+        None
+    }
+
+    /// Get the gRPC method name parsed from the request path.
+    /// Returns None for non-gRPC requests.
+    fn grpc_method(&self) -> Option<String> {
         None
     }
 

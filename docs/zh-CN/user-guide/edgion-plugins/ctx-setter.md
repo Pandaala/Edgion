@@ -1,5 +1,9 @@
 # CtxSet 插件
 
+> **🔌 Edgion 扩展**
+> 
+> CtxSet 是 `EdgionPlugins` CRD 提供的上下文变量设置插件，不属于标准 Gateway API。
+
 ## 概述
 
 `CtxSet` 插件用于在请求处理过程中设置上下文变量（Context Variables）。这些变量可以被后续的插件（如 RateLimit, PluginConditions）使用，或者作为日志字段输出。
@@ -19,37 +23,37 @@ CtxSet 支持从多种数据源（Header, Query, Cookie 等）提取数据，并
 
 ### CtxSetConfig
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `rules` | `[]CtxVarRule` | ✅ | 设置规则列表 |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `rules` | Array\<Object\> | —（必填） | 设置规则列表，见下方 CtxVarRule 子字段 |
 
-### CtxVarRule
+### CtxVarRule 子字段
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | `string` | ✅ | 目标上下文变量名称 |
-| `from` | `KeyGet` | ❌ | 数据来源（与 `value` 或 `template` 三选一） |
-| `value` | `string` | ❌ | 静态值（作为数据源） |
-| `template` | `string` | ❌ | 字符串模板（例如 `prefix_{{ var }}`） |
-| `default` | `string` | ❌ | 当数据源缺失时的默认值 |
-| `transform` | `string` | ❌ | 字符串转换：`"lower"`, `"upper"` |
-| `mapping` | `ValueMapping` | ❌ | 值映射规则 |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | String | —（必填） | 目标上下文变量名称 |
+| `from` | Object | 无 | 数据来源（与 `value` 或 `template` 三选一），见下方 KeyGet |
+| `value` | String | 无 | 静态值（作为数据源） |
+| `template` | String | 无 | 字符串模板（例如 `prefix_{{ var }}`） |
+| `default` | String | 无 | 当数据源缺失时的默认值 |
+| `transform` | String | 无 | 字符串转换。可选值：`"lower"` | `"upper"` |
+| `mapping` | Object | 无 | 值映射规则，见下方 ValueMapping |
 
-### ValueMapping
+### ValueMapping 子字段
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `values` | `map[string]string` | ✅ | 映射表 (`原值` -> `新值`) |
-| `default` | `string` | ❌ | 映射未匹配时的默认值 |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `values` | Object | —（必填） | 映射表（`原值` -> `新值`） |
+| `default` | String | 无 | 映射未匹配时的默认值 |
 
-### KeyGet (数据源)
+### KeyGet（数据源）子字段
 
 `from` 字段使用统一的 `KeyGet` 结构：
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `type` | `string` | 数据源类型：`header`, `query`, `cookie`, `path`, `method`, `clientIp`, `ctx` |
-| `name` | `string` | 键名（`header`, `query`, `cookie`, `ctx` 类型必填） |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `type` | String | —（必填） | 数据源类型：`header`、`query`、`cookie`、`path`、`method`、`clientIp`、`ctx` |
+| `name` | String | 无 | 键名（`header`、`query`、`cookie`、`ctx` 类型必填） |
 
 ## 配置示例
 
@@ -182,3 +186,10 @@ RateLimit 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSet�
              "127.0.0.1": "true"
           default: "false"
 ```
+
+## 相关文档
+
+- [ProxyRewrite 插件](../http-route/filters/edgion-plugins/proxy-rewrite.md) - 请求改写插件
+- [ResponseRewrite 插件](../http-route/filters/edgion-plugins/response-rewrite.md) - 响应改写插件
+- [RateLimit 插件](rate-limit.md) - 可使用 CtxSet 构造限流键
+- [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览

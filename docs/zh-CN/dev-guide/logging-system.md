@@ -362,81 +362,78 @@ pub struct RotationConfig {
 
 ### Access Log 配置
 
-```toml
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-queue_size = 100000  # 可选，默认 cores * 10000
-
-[access_log.output.localFile.rotation]
-strategy = "daily"  # 或 "hourly", "never", { size = 104857600 }
-max_files = 10
-check_interval_secs = 30
+```yaml
+access_log:
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      queue_size: 100000  # 可选，默认 cores * 10000
+      rotation:
+        strategy: daily  # 或 hourly, never, { Size: 104857600 }
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### SSL Log 配置
 
-```toml
-[ssl_log]
-enabled = true
-
-[ssl_log.output.localFile]
-path = "logs/ssl.log"
-queue_size = 100000
-
-[ssl_log.output.localFile.rotation]
-strategy = { size = 104857600 }  # 100MB per file
-max_files = 10
-check_interval_secs = 30
+```yaml
+ssl_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/ssl.log
+      queue_size: 100000
+      rotation:
+        strategy: { Size: 104857600 }  # 100MB per file
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### TCP Log 配置
 
-```toml
-[tcp_log]
-enabled = false  # 默认禁用，按需启用
-
-[tcp_log.output.localFile]
-path = "logs/tcp.log"
-queue_size = 50000
-
-[tcp_log.output.localFile.rotation]
-strategy = "daily"  # 推荐按日轮转
-max_files = 10
-check_interval_secs = 30
+```yaml
+tcp_log:
+  enabled: false  # 默认禁用，按需启用
+  output:
+    localFile:
+      path: logs/tcp.log
+      queue_size: 50000
+      rotation:
+        strategy: daily  # 推荐按日轮转
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### UDP Log 配置
 
-```toml
-[udp_log]
-enabled = false  # 默认禁用，按需启用
-
-[udp_log.output.localFile]
-path = "logs/udp.log"
-queue_size = 50000
-
-[udp_log.output.localFile.rotation]
-strategy = "daily"  # 推荐按日轮转
-max_files = 10
-check_interval_secs = 30
+```yaml
+udp_log:
+  enabled: false  # 默认禁用，按需启用
+  output:
+    localFile:
+      path: logs/udp.log
+      queue_size: 50000
+      rotation:
+        strategy: daily  # 推荐按日轮转
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### 统一配置模式
 
 所有日志类型都遵循相同的配置结构：
 
-```toml
-[<log_type>]
-enabled = true/false  # 启用/禁用日志
-
-[<log_type>.output.localFile]
-path = "logs/<log_type>.log"
-queue_size = <optional>
-
-[<log_type>.output.localFile.rotation]
-strategy = "daily" | "hourly" | "never" | { size = <bytes> }
-max_files = <number>
-check_interval_secs = <seconds>
+```yaml
+<log_type>:
+  enabled: true/false  # 启用/禁用日志
+  output:
+    localFile:
+      path: "logs/<log_type>.log"
+      queue_size: <optional>
+      rotation:
+        strategy: "daily" | "hourly" | "never" | { Size: <bytes> }
+        max_files: <number>
+        check_interval_secs: <seconds>
 ```
 
 **配置优先级**：
@@ -714,7 +711,7 @@ match &config.output {
 3. TLS 配置错误
 
 **排查**：
-1. 检查配置：`cat config/edgion-gateway.toml | grep ssl_log`
+1. 检查配置：`cat config/edgion-gateway.yaml | grep ssl_log`
 2. 检查启动日志：`grep "SSL logger initialized" logs/*.log`
 3. 使用 `curl -k https://...` 测试 TLS
 
@@ -731,7 +728,7 @@ match &config.output {
 
 - `src/core/cli/edgion_gateway/config.rs` - Gateway 配置结构
 - `src/types/link_sys.rs` - 日志输出配置类型
-- `config/edgion-gateway.toml` - 配置示例
+- `config/edgion-gateway.yaml` - 配置示例
 
 ### 用户文档
 
@@ -743,15 +740,21 @@ match &config.output {
 ### 生产环境
 
 1. **启用日志轮转**
-   ```toml
-   [access_log.output.localFile.rotation]
-   strategy = { size = 104857600 }  # 100MB
-   max_files = 30  # 保留 30 个文件（约 3GB）
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         rotation:
+           strategy: { Size: 104857600 }  # 100MB
+           max_files: 30  # 保留 30 个文件（约 3GB）
    ```
 
 2. **适当的队列大小**
-   ```toml
-   queue_size = 200000  # 高流量场景
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         queue_size: 200000  # 高流量场景
    ```
 
 3. **监控 metrics**
@@ -766,20 +769,26 @@ match &config.output {
 ### 开发环境
 
 1. **禁用日志轮转**
-   ```toml
-   [access_log.output.localFile.rotation]
-   strategy = "never"
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         rotation:
+           strategy: never
    ```
 
 2. **减小队列大小**
-   ```toml
-   queue_size = 10000
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         queue_size: 10000
    ```
 
 3. **启用 SSL 日志**
-   ```toml
-   [ssl_log]
-   enabled = true  # 调试 TLS 问题
+   ```yaml
+   ssl_log:
+     enabled: true  # 调试 TLS 问题
    ```
 
 ## 未来计划

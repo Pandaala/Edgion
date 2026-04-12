@@ -1,5 +1,9 @@
 # RealIp 插件
 
+> **🔌 Edgion 扩展**
+> 
+> RealIp 是 `EdgionPlugins` CRD 提供的真实客户端 IP 提取插件，不属于标准 Gateway API。
+
 ## 概述
 
 RealIp 插件用于从 HTTP 请求头中提取真实的客户端 IP 地址，特别适用于网关部署在 CDN、负载均衡器或其他代理后面的场景。
@@ -38,11 +42,11 @@ spec:
 
 ### 配置参数
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `trustedIps` | string[] | 是 | - | 可信代理 IP 地址或 CIDR 范围列表 |
-| `realIpHeader` | string | 否 | `"X-Forwarded-For"` | 提取真实 IP 的 Header 名称 |
-| `recursive` | boolean | 否 | `true` | 是否启用递归查找（Nginx 风格） |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `trustedIps` | Array\<String\> | —（必填） | 可信代理 IP 地址或 CIDR 范围列表 |
+| `realIpHeader` | String | `"X-Forwarded-For"` | 提取真实 IP 的 Header 名称 |
+| `recursive` | Boolean | `true` | 是否启用递归查找（Nginx 风格） |
 
 #### trustedIps
 
@@ -232,8 +236,9 @@ A: 可以，将所有 CDN 的 IP 范围都添加到 `trustedIps` 列表中即可
 
 A: 是的，更新 EdgionPlugins 资源后，配置会自动热重载。
 
-## 相关资源
+## 相关文档
 
-- [Nginx ngx_http_realip_module](https://nginx.org/en/docs/http/ngx_http_realip_module.html)
-- [APISIX real-ip plugin](https://apisix.apache.org/docs/apisix/plugins/real-ip/)
-- [Cloudflare IP Ranges](https://www.cloudflare.com/ips/)
+- [IP 限制插件](../http-route/filters/edgion-plugins/ip-restriction.md) - IP 黑白名单（常与 RealIp 配合使用）
+- [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览
+- [Nginx ngx_http_realip_module](https://nginx.org/en/docs/http/ngx_http_realip_module.html) - Nginx 真实 IP 模块参考
+- [Cloudflare IP Ranges](https://www.cloudflare.com/ips/) - Cloudflare CDN IP 范围

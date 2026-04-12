@@ -1,5 +1,9 @@
 # Request Restriction 插件
 
+> **🔌 Edgion 扩展**
+> 
+> RequestRestriction 是 `EdgionPlugins` CRD 提供的请求限制插件，不属于标准 Gateway API。
+
 ## 概述
 
 `RequestRestriction` 插件用于基于请求属性限制访问，支持多种数据源和匹配方式。与 `IpRestriction` 插件专注于 IP 地址不同，本插件支持基于 Header、Cookie、Query 参数、Path、Method 和 Referer 的访问控制。
@@ -72,36 +76,31 @@
 
 ## 执行逻辑
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  Request Restriction                     │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. 遍历所有规则                                          │
-│     │                                                    │
-│     ├─ 获取数据源的值                                     │
-│     │   └─ Header[key] / Cookie[key] / Query[key]        │
-│     │   └─ Path / Method / Referer                       │
-│     │                                                    │
-│     ├─ 值缺失处理（onMissing）                            │
-│     │   ├─ Allow → 该规则允许                             │
-│     │   ├─ Deny → 该规则拒绝                              │
-│     │   └─ Skip → 跳过该规则                              │
-│     │                                                    │
-│     ├─ Deny 检查（优先级最高）                            │
-│     │   └─ 匹配 deny/denyRegex 列表 → 该规则拒绝          │
-│     │                                                    │
-│     └─ Allow 检查                                        │
-│         ├─ 存在 allow 列表且不匹配 → 该规则拒绝           │
-│         └─ 匹配 allow/allowRegex 列表 → 该规则允许        │
-│                                                          │
-│  2. 汇总规则结果                                          │
-│     ├─ matchMode=Any: 任一规则拒绝 → 返回错误响应         │
-│     └─ matchMode=All: 所有规则拒绝 → 返回错误响应         │
-│                                                          │
-│  3. 通过所有规则 → 继续处理链                             │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["请求限制（Request Restriction）"] --> B["1. 遍历所有规则"]
+    B --> C["从数据源获取值"]
+    C --> C1["Header[key] / Cookie[key] / Query[key]"]
+    C --> C2["Path / Method / Referer"]
+    C1 --> D{"值是否缺失？"}
+    C2 --> D
+    D -->|是| E{"onMissing"}
+    E -->|Allow| F1["该规则允许"]
+    E -->|Deny| F2["该规则拒绝"]
+    E -->|Skip| F3["跳过该规则"]
+    D -->|否| G{"匹配 deny/denyRegex？<br/>（优先级最高）"}
+    G -->|是| F2
+    G -->|否| H{"存在 Allow 列表？"}
+    H -->|"存在，但不匹配"| F2
+    H -->|"存在，且匹配 allow/allowRegex"| F1
+    H -->|无 Allow 列表| F1
+    F1 --> I["2. 汇总规则结果"]
+    F2 --> I
+    F3 --> I
+    I --> J{"matchMode"}
+    J -->|"Any：任一规则拒绝"| K["返回错误响应"]
+    J -->|"All：所有规则拒绝"| K
+    J -->|规则全部通过| L["3. 继续处理链"]
 ```
 
 ## 使用场景
@@ -312,8 +311,7 @@ Edgion 的 `RequestRestriction` 插件将多种限制功能统一到一个插件
 5. **HashSet 优化**：精确匹配列表超过 16 个值时自动使用 HashSet，实现 O(1) 查找
 6. **缺失值处理**：根据安全需求选择合适的 `onMissing` 行为，认证场景通常使用 `Deny`
 
-## 相关插件
+## 相关链接
 
-- [IpRestriction](./ip-restriction.md) - 基于 IP 地址的访问控制
-- [JwtAuth](./jwt-auth.md) - JWT 认证
-- [BasicAuth](./basic-auth.md) - 基本认证
+- [IpRestriction](./ip-restriction.md) — IP 访问控制
+- [RateLimit](./rate-limit.md) — 速率限制

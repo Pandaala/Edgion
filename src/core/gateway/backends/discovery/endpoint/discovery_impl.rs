@@ -6,13 +6,14 @@
 use async_trait::async_trait;
 use futures::FutureExt;
 use k8s_openapi::api::core::v1::Endpoints;
+use parking_lot::RwLock;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_load_balancing::discovery::ServiceDiscovery;
 use pingora_load_balancing::selection::BackendSelection;
 use pingora_load_balancing::Backend;
 use pingora_load_balancing::{Backends, LoadBalancer};
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Extension trait to add port information for service discovery
 pub trait EndpointExt {
@@ -119,7 +120,7 @@ impl EndpointDiscovery {
 
     /// Get the port from Endpoints (returns first port or 80 as default)
     fn get_port(&self) -> u16 {
-        let ep = self.endpoint.read().unwrap();
+        let ep = self.endpoint.read();
         ep.subsets
             .as_ref()
             .and_then(|subsets| subsets.first())
@@ -133,7 +134,7 @@ impl EndpointDiscovery {
     /// This updates the Endpoints without replacing the entire EndpointDiscovery
     pub fn update(&self, new_endpoint: Endpoints) -> Result<(), String> {
         // Update endpoint
-        *self.endpoint.write().unwrap() = new_endpoint;
+        *self.endpoint.write() = new_endpoint;
 
         tracing::debug!("Updated EndpointDiscovery in-place");
         Ok(())
@@ -144,13 +145,13 @@ impl EndpointDiscovery {
     where
         F: FnOnce(&Endpoints) -> R,
     {
-        let ep = self.endpoint.read().unwrap();
+        let ep = self.endpoint.read();
         f(&ep)
     }
 
     /// Get a clone of the underlying Endpoints
     pub fn endpoint(&self) -> Endpoints {
-        self.endpoint.read().unwrap().clone()
+        self.endpoint.read().clone()
     }
 }
 
@@ -161,7 +162,7 @@ impl ServiceDiscovery for EndpointDiscovery {
     /// This method is called by Pingora's load balancer to get the current
     /// list of available backends based on the Endpoints data.
     async fn discover(&self) -> Result<(BTreeSet<Backend>, HashMap<u64, bool>), Box<pingora_core::Error>> {
-        let ep = self.endpoint.read().unwrap();
+        let ep = self.endpoint.read();
         let port = self.get_port();
         let backends = ep.build_backends(port);
 
@@ -266,7 +267,7 @@ where
     /// Used to capture old backends before LB is refreshed.
     pub fn get_current_backends(&self) -> Vec<Backend> {
         let port = self.discovery.get_port();
-        let ep = self.discovery.endpoint.read().unwrap();
+        let ep = self.discovery.endpoint.read();
         ep.build_backends(port).into_iter().collect()
     }
 }

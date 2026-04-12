@@ -87,7 +87,13 @@ impl Compiler {
     }
 
     fn ends_with_return(&self) -> bool {
-        matches!(self.code.last(), Some(OpCode::ReturnNext) | Some(OpCode::ReturnDeny))
+        matches!(
+            self.code.last(),
+            Some(OpCode::ReturnNext)
+                | Some(OpCode::ReturnDeny)
+                | Some(OpCode::ReturnTerminate)
+                | Some(OpCode::ReturnGrpcError)
+        )
     }
 
     fn emit(&mut self, op: OpCode) -> usize {
@@ -290,6 +296,16 @@ impl Compiler {
 
             StmtKind::ReturnNext => {
                 self.emit(OpCode::ReturnNext);
+            }
+
+            StmtKind::ReturnTerminate => {
+                self.emit(OpCode::ReturnTerminate);
+            }
+
+            StmtKind::ReturnGrpcError { code, message } => {
+                self.compile_expr(code)?;
+                self.compile_expr(message)?;
+                self.emit(OpCode::ReturnGrpcError);
             }
 
             StmtKind::ExprStmt { expr } => {
@@ -757,6 +773,24 @@ impl Compiler {
     }
 
     fn compile_fn_call(&mut self, name: &str, args: &[Expr]) -> Result<(), CompileError> {
+        // Literal pattern: emit pre-compiled opcode; dynamic patterns fall through to CallBuiltin.
+        if name == "regex_find" && args.len() == 2 {
+            if let ExprKind::StringLit(pattern) = &args[1].kind {
+                let idx = self.add_regex_const(pattern)?;
+                self.compile_expr(&args[0])?;
+                self.emit(OpCode::RegexFind(idx));
+                return Ok(());
+            }
+        } else if name == "regex_replace" && args.len() == 3 {
+            if let ExprKind::StringLit(pattern) = &args[1].kind {
+                let idx = self.add_regex_const(pattern)?;
+                self.compile_expr(&args[0])?;
+                self.compile_expr(&args[2])?;
+                self.emit(OpCode::RegexReplace(idx));
+                return Ok(());
+            }
+        }
+
         // (builtin_id, expected_argc) — None means variadic / no check
         let (builtin_id, expected_argc): (BuiltinId, Option<usize>) = match name {
             "log" => (BuiltinId::Log, Some(1)),
@@ -778,6 +812,17 @@ impl Compiler {
             "trim" => (BuiltinId::Trim, Some(1)),
             "split" => (BuiltinId::Split, Some(2)),
             "range" => (BuiltinId::Range, Some(2)),
+            // P3 utility functions
+            "hmac_sha256" => (BuiltinId::HmacSha256, Some(2)),
+            "json_get" => (BuiltinId::JsonGet, Some(2)),
+            "uuid" => (BuiltinId::Uuid, Some(0)),
+            "hex_encode" => (BuiltinId::HexEncode, Some(1)),
+            "hex_decode" => (BuiltinId::HexDecode, Some(1)),
+            "time_format" => (BuiltinId::TimeFormat, Some(2)),
+            "ip_in_cidr" => (BuiltinId::IpInCidr, Some(2)),
+            "join" => (BuiltinId::Join, Some(2)),
+            "log_warn" => (BuiltinId::LogWarn, Some(1)),
+            "log_error" => (BuiltinId::LogError, Some(1)),
             _ => {
                 return Err(CompileError::new(format!("unknown function: {}()", name)));
             }
@@ -823,6 +868,14 @@ fn resolve_namespace_method(namespace: &str, method: &str) -> Option<BuiltinId> 
         ("req", "content_type") => Some(BuiltinId::ReqContentType),
         ("req", "has_header") => Some(BuiltinId::ReqHasHeader),
 
+        // req.* metadata (P1)
+        ("req", "protocol") => Some(BuiltinId::ReqProtocol),
+        ("req", "grpc_service") => Some(BuiltinId::ReqGrpcService),
+        ("req", "grpc_method") => Some(BuiltinId::ReqGrpcMethod),
+        ("req", "content_length") => Some(BuiltinId::ReqContentLength),
+        ("req", "client_cert_cn") => Some(BuiltinId::ReqClientCertCn),
+        ("req", "client_cert_fingerprint") => Some(BuiltinId::ReqClientCertFingerprint),
+
         // req.* mutation
         ("req", "set_header") => Some(BuiltinId::ReqSetHeader),
         ("req", "append_header") => Some(BuiltinId::ReqAppendHeader),
@@ -840,6 +893,13 @@ fn resolve_namespace_method(namespace: &str, method: &str) -> Option<BuiltinId> 
         ("resp", "status") => Some(BuiltinId::RespStatus),
         ("resp", "header") => Some(BuiltinId::RespHeader),
         ("resp", "has_header") => Some(BuiltinId::RespHasHeader),
+
+        // resp.* read (P2)
+        ("resp", "header_names") => Some(BuiltinId::RespHeaderNames),
+        ("resp", "content_type") => Some(BuiltinId::RespContentType),
+
+        // resp.* set status
+        ("resp", "set_status") => Some(BuiltinId::RespSetStatus),
 
         // ctx.*
         ("ctx", "get") => Some(BuiltinId::CtxGet),
@@ -863,7 +923,13 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         | BuiltinId::ReqScheme
         | BuiltinId::ReqHost
         | BuiltinId::ReqUri
-        | BuiltinId::ReqContentType => 0,
+        | BuiltinId::ReqContentType
+        | BuiltinId::ReqProtocol
+        | BuiltinId::ReqGrpcService
+        | BuiltinId::ReqGrpcMethod
+        | BuiltinId::ReqContentLength
+        | BuiltinId::ReqClientCertCn
+        | BuiltinId::ReqClientCertFingerprint => 0,
 
         // req.* read — 1-arg
         BuiltinId::ReqHeader
@@ -880,10 +946,10 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => 2,
 
         // resp.* read
-        BuiltinId::RespStatus => 0,
+        BuiltinId::RespStatus | BuiltinId::RespHeaderNames | BuiltinId::RespContentType => 0,
         BuiltinId::RespHeader | BuiltinId::RespHasHeader => 1,
         // resp.* mutation — 1-arg
-        BuiltinId::RespRemoveHeader => 1,
+        BuiltinId::RespRemoveHeader | BuiltinId::RespSetStatus => 1,
         // resp.* mutation — 2-arg
         BuiltinId::RespSetHeader | BuiltinId::RespAppendHeader => 2,
 
@@ -904,10 +970,20 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         | BuiltinId::UrlDecode
         | BuiltinId::Sha256
         | BuiltinId::Md5
-        | BuiltinId::Trim => 1,
+        | BuiltinId::Trim
+        | BuiltinId::HexEncode
+        | BuiltinId::HexDecode
+        | BuiltinId::LogWarn
+        | BuiltinId::LogError => 1,
         BuiltinId::Substr | BuiltinId::RegexReplace => 3,
-        BuiltinId::TimeNow => 0,
-        BuiltinId::RegexFind | BuiltinId::Split => 2,
+        BuiltinId::TimeNow | BuiltinId::Uuid => 0,
+        BuiltinId::RegexFind
+        | BuiltinId::Split
+        | BuiltinId::HmacSha256
+        | BuiltinId::JsonGet
+        | BuiltinId::TimeFormat
+        | BuiltinId::IpInCidr
+        | BuiltinId::Join => 2,
         BuiltinId::Range => 2,
     }
 }

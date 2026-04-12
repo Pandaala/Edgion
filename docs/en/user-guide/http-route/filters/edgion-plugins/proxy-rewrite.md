@@ -462,3 +462,10 @@ spec:
 - **Regex pre-compilation**: `regexUri.pattern` is pre-compiled at configuration load time, with no additional overhead at runtime
 - **Variable resolution**: Resolved on demand; unused variables are not processed
 - **Path parameter extraction**: Uses lazy loading — extracted from the route pattern only on first access
+
+---
+
+## Related Links
+
+- [ResponseRewrite](./response-rewrite.md) — Response rewriting
+- [URL Rewrite](../gateway-api/url-rewrite.md) — Gateway API standard URL rewriting

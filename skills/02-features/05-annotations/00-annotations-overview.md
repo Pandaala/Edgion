@@ -16,7 +16,7 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 
 | 注解 | 值 | 说明 |
 |------|---|------|
-| `edgion.io/enable-http2` | `"true"\|"false"` | 启用 HTTP/2 |
+| `edgion.io/enable-http2` | `"true"\|"false"` | Listener 侧 HTTP/2（默认 true）：HTTP→h2c，HTTPS→ALPN h2 |
 | `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS 重定向 |
 | `edgion.io/https-redirect-port` | `port` | HTTPS 重定向端口 |
 | `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins 绑定 |
@@ -28,7 +28,6 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 
 | 注解 | 值 | 说明 |
 |------|---|------|
-| `edgion.io/max-retries` | `u32` | 最大重试次数 |
 | `edgion.io/hostname-resolution` | — | 系统管理（不要手动设置） |
 
 ### TCPRoute / TLSRoute
@@ -37,7 +36,6 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 |------|---|------|
 | `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins 绑定 |
 | `edgion.io/proxy-protocol` | `"1"\|"2"` | Proxy Protocol 版本 |
-| `edgion.io/upstream-tls` | `"true"\|"false"` | 上游 TLS |
 | `edgion.io/max-connect-retries` | `u32` | 最大连接重试 |
 
 ### EdgionTls
@@ -52,6 +50,8 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 |------|---|------|
 | `edgion.io/health-check` | YAML 字符串 | 健康检查配置 |
 | `edgion.io/circuit-breaker` | YAML 字符串 | 熔断器配置（consecutiveErrors/ejectionSeconds/maxEjectionPercent） |
+
+> **后端协议选择**：不通过注解控制，使用 Service `spec.ports[].appProtocol` 标准字段（GEP-1911）。支持 `kubernetes.io/h2c`（HTTP/2 明文上游）和 `kubernetes.io/ws`（WebSocket）。详见 [annotations-metadata.md](references/annotations-metadata.md)。
 
 ## Options 键
 

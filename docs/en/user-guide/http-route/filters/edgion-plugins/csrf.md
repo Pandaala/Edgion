@@ -580,3 +580,10 @@ curl -X POST https://api.example.com/api/submit \
   -H "Content-Type: application/json" \
   -d '{"data":"value"}'
 ```
+
+---
+
+## Related Links
+
+- [Cors](./cors.md) — Cross-Origin Resource Sharing
+- [BasicAuth](./basic-auth.md) — Basic authentication

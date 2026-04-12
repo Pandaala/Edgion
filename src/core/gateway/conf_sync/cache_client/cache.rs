@@ -3,7 +3,8 @@ use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient 
 use crate::core::common::conf_sync::types::ListData;
 use crate::types::ResourceMeta;
 use kube::Resource;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use tokio::sync::RwLock as AsyncRwLock;
 use tonic::transport::Channel;
 
@@ -66,7 +67,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
 
     /// Check if cache is ready
     pub fn is_ready(&self) -> bool {
-        let cache = self.cache_data.read().unwrap();
+        let cache = self.cache_data.read();
         cache.is_ready()
     }
 
@@ -83,19 +84,19 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     ) where
         T: Clone + ResourceMeta,
     {
-        let mut cache = self.cache_data.write().unwrap();
+        let mut cache = self.cache_data.write();
         cache.set_conf_processor(processor, self.cache_data.clone());
     }
 
     /// Get current sync version
     pub fn get_sync_version(&self) -> u64 {
-        let cache = self.cache_data.read().unwrap();
+        let cache = self.cache_data.read();
         cache.sync_version()
     }
 
     /// Set current sync version
     pub fn set_sync_version(&self, version: u64) {
-        let mut cache = self.cache_data.write().unwrap();
+        let mut cache = self.cache_data.write();
         cache.set_sync_version(version);
     }
 
@@ -106,7 +107,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     where
         T: ResourceMeta,
     {
-        let mut cache = self.cache_data.write().unwrap();
+        let mut cache = self.cache_data.write();
         cache.reset(resources, sync_version);
     }
 
@@ -118,13 +119,13 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         self.list_owned()
     }
 
-    /// List all data as owned values (cloned)
+    /// List all data as owned values (cloned from internal Arc storage)
     pub fn list_owned(&self) -> ListData<T>
     where
         T: Clone,
     {
-        let cache = self.cache_data.read().unwrap();
-        let data = cache.values().cloned().collect();
+        let cache = self.cache_data.read();
+        let data = cache.values().map(|arc| (**arc).clone()).collect();
         let sync_version = cache.sync_version();
         ListData::new(data, sync_version)
     }
@@ -134,31 +135,31 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     where
         T: Clone,
     {
-        let cache = self.cache_data.read().unwrap();
-        cache.get(key).cloned()
+        let cache = self.cache_data.read();
+        cache.get(key).map(|arc| (**arc).clone())
     }
 
     /// Get all keys
     pub fn keys(&self) -> Vec<String> {
-        let cache = self.cache_data.read().unwrap();
+        let cache = self.cache_data.read();
         cache.keys().cloned().collect()
     }
 
     /// Check if cache is empty
     pub fn is_empty(&self) -> bool {
-        let cache = self.cache_data.read().unwrap();
+        let cache = self.cache_data.read();
         cache.is_empty()
     }
 
     /// Get the number of resources in the cache
     pub fn len(&self) -> usize {
-        let cache = self.cache_data.read().unwrap();
+        let cache = self.cache_data.read();
         cache.len()
     }
 
     pub fn trigger_update_event_by_key(&self, key: &str) {
         // Add compress event to trigger partial_update
-        let mut cache = self.cache_data.write().unwrap();
+        let mut cache = self.cache_data.write();
         cache.add_compress_event(
             key.to_string(),
             crate::core::common::conf_sync::traits::ResourceChange::EventUpdate,
@@ -183,7 +184,7 @@ where
     }
 
     fn set_ready(&self) {
-        let mut cache = self.cache_data.write().unwrap();
+        let mut cache = self.cache_data.write();
         cache.set_ready();
     }
 

@@ -55,7 +55,7 @@ body:
       options:
         - edgion-gateway
         - edgion-controller
-        - edgion-ctl
+        - edgion-cli
         - Plugin System
         - Documentation
         - Other

@@ -127,7 +127,7 @@ impl Validator {
             )));
         }
 
-        // 6b. LoadConst / Matches index bounds check
+        // 6b. LoadConst / regex-opcode index bounds check
         let const_count = script.constants.len();
         for (i, op) in script.code.iter().enumerate() {
             match op {
@@ -140,18 +140,13 @@ impl Validator {
                     }
                 }
                 OpCode::Matches(idx) => {
-                    // Matches(idx) indexes into the constants array; the entry must be a Regex
-                    if *idx as usize >= const_count {
-                        errors.push(ValidationError::new(format!(
-                            "Matches at instruction {} references constant {} but pool size is {}",
-                            i, idx, const_count
-                        )));
-                    } else if !matches!(script.constants[*idx as usize], Constant::Regex(_)) {
-                        errors.push(ValidationError::new(format!(
-                            "Matches at instruction {} references constant {} which is not a Regex",
-                            i, idx
-                        )));
-                    }
+                    check_regex_ref(&mut errors, "Matches", i, *idx, &script.constants, const_count)
+                }
+                OpCode::RegexFind(idx) => {
+                    check_regex_ref(&mut errors, "RegexFind", i, *idx, &script.constants, const_count)
+                }
+                OpCode::RegexReplace(idx) => {
+                    check_regex_ref(&mut errors, "RegexReplace", i, *idx, &script.constants, const_count)
                 }
                 _ => {}
             }
@@ -250,6 +245,29 @@ impl Validator {
         }
 
         errors
+    }
+}
+
+/// Validate that an opcode's regex constant index is in-bounds and points to a `Constant::Regex`.
+/// Used for `Matches`, `RegexFind`, and `RegexReplace` arms.
+fn check_regex_ref(
+    errors: &mut Vec<ValidationError>,
+    op_name: &str,
+    instruction: usize,
+    idx: u16,
+    constants: &[Constant],
+    const_count: usize,
+) {
+    if idx as usize >= const_count {
+        errors.push(ValidationError::new(format!(
+            "{} at instruction {} references constant {} but pool size is {}",
+            op_name, instruction, idx, const_count
+        )));
+    } else if !matches!(constants[idx as usize], Constant::Regex(_)) {
+        errors.push(ValidationError::new(format!(
+            "{} at instruction {} references constant {} which is not a Regex",
+            op_name, instruction, idx
+        )));
     }
 }
 

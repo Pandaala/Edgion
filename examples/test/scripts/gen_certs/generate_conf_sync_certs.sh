@@ -2,13 +2,15 @@
 # =============================================================================
 # conf_sync gRPC mTLS certificate generator for integration tests.
 #
-# Uses `edgion-ctl gen-certs --output file` to produce:
-#   ca.crt, server.crt, server.key, client.crt, client.key
+# Uses `edgion-cli gen-certs --output file --cert-name <name>` to produce
+# two named cert sets (primary and secondary) under:
+#   ${CERTS_DIR}/primary/{ca.crt,server.crt,server.key,client.crt,client.key}
+#   ${CERTS_DIR}/secondary/{ca.crt,server.crt,server.key,client.crt,client.key}
 #
 # Output directory:
 #   ${EDGION_CONF_SYNC_CERTS_DIR:-$PROJECT_ROOT/examples/test/certs/conf-sync-grpc}
 #
-# The script is idempotent: skips generation when all five files already exist
+# The script is idempotent: skips generation when all files already exist
 # (unless --force is passed).
 # =============================================================================
 
@@ -28,7 +30,7 @@ log_error()   { echo -e "${RED}[ERR]${NC} $1"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CERTS_DIR="${EDGION_CONF_SYNC_CERTS_DIR:-$PROJECT_ROOT/examples/test/certs/conf-sync-grpc}"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 FORCE=false
 for arg in "$@"; do
@@ -37,14 +39,20 @@ for arg in "$@"; do
     fi
 done
 
-all_certs_exist() {
+# Check if all files for a named cert set exist
+cert_set_exists() {
+    local name="$1"
     local files=("ca.crt" "server.crt" "server.key" "client.crt" "client.key")
     for f in "${files[@]}"; do
-        if [ ! -f "$CERTS_DIR/$f" ]; then
+        if [ ! -f "$CERTS_DIR/$name/$f" ]; then
             return 1
         fi
     done
     return 0
+}
+
+all_certs_exist() {
+    cert_set_exists "primary" && cert_set_exists "secondary"
 }
 
 log_info "conf_sync gRPC mTLS certificate generator"
@@ -55,31 +63,55 @@ if ! $FORCE && all_certs_exist; then
     exit 0
 fi
 
-if [ ! -f "$EDGION_CTL" ]; then
-    log_error "edgion-ctl not found at $EDGION_CTL — run prepare.sh first"
+if [ ! -f "$EDGION_CLI" ]; then
+    log_error "edgion-cli not found at $EDGION_CLI — run prepare.sh first"
     exit 1
 fi
 
 mkdir -p "$CERTS_DIR"
 
-log_info "Generating conf_sync mTLS certificates via edgion-ctl gen-certs..."
-# localhost, 127.0.0.1, ::1 are already included by default in gen-certs
-"$EDGION_CTL" gen-certs \
+# Generate primary cert set
+log_info "Generating 'primary' conf_sync mTLS certificates via edgion-cli gen-certs..."
+"$EDGION_CLI" gen-certs \
     --output file \
     --output-dir "$CERTS_DIR" \
+    --cert-name primary \
     --ca-days 3650 \
     --cert-days 365 \
     --force
 
-if ! all_certs_exist; then
-    log_error "Certificate generation completed but some files are missing"
-    ls -la "$CERTS_DIR"
+if ! cert_set_exists "primary"; then
+    log_error "Primary certificate generation completed but some files are missing"
+    ls -la "$CERTS_DIR/primary/" 2>/dev/null || true
     exit 1
 fi
+log_success "Primary cert set generated: $CERTS_DIR/primary/"
 
-log_success "conf_sync mTLS certificates generated:"
-log_info "  $CERTS_DIR/ca.crt      (CA certificate)"
-log_info "  $CERTS_DIR/server.crt  (Controller server cert)"
-log_info "  $CERTS_DIR/server.key  (Controller server key)"
-log_info "  $CERTS_DIR/client.crt  (Gateway client cert)"
-log_info "  $CERTS_DIR/client.key  (Gateway client key)"
+# Generate secondary cert set (independent CA — used to verify multi-cert config)
+log_info "Generating 'secondary' conf_sync mTLS certificates via edgion-cli gen-certs..."
+"$EDGION_CLI" gen-certs \
+    --output file \
+    --output-dir "$CERTS_DIR" \
+    --cert-name secondary \
+    --ca-days 3650 \
+    --cert-days 365 \
+    --force
+
+if ! cert_set_exists "secondary"; then
+    log_error "Secondary certificate generation completed but some files are missing"
+    ls -la "$CERTS_DIR/secondary/" 2>/dev/null || true
+    exit 1
+fi
+log_success "Secondary cert set generated: $CERTS_DIR/secondary/"
+
+log_success "conf_sync mTLS certificates generated (primary + secondary):"
+log_info "  $CERTS_DIR/primary/ca.crt      (CA certificate)"
+log_info "  $CERTS_DIR/primary/server.crt  (Controller server cert)"
+log_info "  $CERTS_DIR/primary/server.key  (Controller server key)"
+log_info "  $CERTS_DIR/primary/client.crt  (Gateway client cert)"
+log_info "  $CERTS_DIR/primary/client.key  (Gateway client key)"
+log_info "  $CERTS_DIR/secondary/ca.crt      (CA certificate)"
+log_info "  $CERTS_DIR/secondary/server.crt  (Controller server cert)"
+log_info "  $CERTS_DIR/secondary/server.key  (Controller server key)"
+log_info "  $CERTS_DIR/secondary/client.crt  (Gateway client cert)"
+log_info "  $CERTS_DIR/secondary/client.key  (Gateway client key)"

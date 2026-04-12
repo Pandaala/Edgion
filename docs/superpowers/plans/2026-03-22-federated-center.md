@@ -1038,7 +1038,7 @@ use crate::core::center::config::CenterConfig;
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
 pub struct EdgionCenterCli {
     /// Configuration file path (TOML)
-    #[arg(short = 'c', long, default_value = "config/edgion-center.toml")]
+    #[arg(short = 'c', long, default_value = "config/edgion-center.yaml")]
     pub config_file: String,
 }
 
@@ -2346,7 +2346,7 @@ use crate::core::common::fed_sync::proto::federation_sync_server::FederationSync
 #[derive(Parser, Debug)]
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
 pub struct EdgionCenterCli {
-    #[arg(short = 'c', long, default_value = "config/edgion-center.toml")]
+    #[arg(short = 'c', long, default_value = "config/edgion-center.yaml")]
     pub config_file: String,
 }
 

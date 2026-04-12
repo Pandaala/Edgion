@@ -104,7 +104,7 @@ impl<T> RadixHostMatchEngine<T> {
                             radix_host.radix_key,
                             radix_host.is_wildcard
                         );
-                        if radix_host.matches(hostname) {
+                        if radix_host.matches_reversed(&reversed) {
                             tracing::trace!("      Matched!");
                             return Some(radix_host.runtime.clone());
                         } else {

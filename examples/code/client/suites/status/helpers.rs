@@ -18,12 +18,11 @@ pub async fn fetch_resource_status(
         name
     );
 
-    let response = ctx
-        .http_client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
+    let mut req = ctx.http_client.get(&url);
+    if let Some(ref token) = ctx.admin_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    let response = req.send().await.map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
 
     if !response.status().is_success() {
         return Err(format!("API returned status: {}", response.status()));
@@ -45,12 +44,11 @@ pub async fn fetch_resource_status(
 pub async fn fetch_cluster_resource_status(ctx: &TestContext, kind: &str, name: &str) -> Result<Value, String> {
     let url = format!("{}/configserver/{}?name={}", ctx.admin_api_url(), kind, name);
 
-    let response = ctx
-        .http_client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
+    let mut req = ctx.http_client.get(&url);
+    if let Some(ref token) = ctx.admin_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    let response = req.send().await.map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
 
     if !response.status().is_success() {
         return Err(format!("API returned status: {}", response.status()));

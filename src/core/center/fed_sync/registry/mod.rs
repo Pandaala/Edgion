@@ -1,8 +1,9 @@
 //! ControllerRegistry: manages per-controller sessions and stream handles.
 
 use crate::core::common::fed_sync::proto::{CenterMessage, RegisterRequest};
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -49,11 +50,11 @@ impl ControllerRegistry {
             last_seen: Instant::now(),
             offline_since: None,
         };
-        self.inner.write().unwrap().insert(controller_id, session);
+        self.inner.write().insert(controller_id, session);
     }
 
     pub fn get_session(&self, controller_id: &str) -> Option<SessionView> {
-        let map = self.inner.read().unwrap();
+        let map = self.inner.read();
         map.get(controller_id).map(|s| SessionView {
             controller_id: s.controller_id.clone(),
             session_id: s.session_id.clone(),
@@ -65,13 +66,13 @@ impl ControllerRegistry {
     }
 
     pub fn update_last_seen(&self, controller_id: &str) {
-        if let Some(session) = self.inner.write().unwrap().get_mut(controller_id) {
+        if let Some(session) = self.inner.write().get_mut(controller_id) {
             session.last_seen = Instant::now();
         }
     }
 
     pub fn mark_offline(&self, controller_id: &str) {
-        if let Some(session) = self.inner.write().unwrap().get_mut(controller_id) {
+        if let Some(session) = self.inner.write().get_mut(controller_id) {
             if session.offline_since.is_none() {
                 session.offline_since = Some(Instant::now());
                 tracing::info!(
@@ -86,7 +87,6 @@ impl ControllerRegistry {
     pub fn online_controller_ids(&self) -> Vec<String> {
         self.inner
             .read()
-            .unwrap()
             .values()
             .filter(|s| s.is_online())
             .map(|s| s.controller_id.clone())
@@ -96,7 +96,6 @@ impl ControllerRegistry {
     pub fn online_senders(&self) -> Vec<(String, mpsc::Sender<CenterMessage>)> {
         self.inner
             .read()
-            .unwrap()
             .values()
             .filter(|s| s.is_online())
             .map(|s| (s.controller_id.clone(), s.stream_tx.clone()))
@@ -105,7 +104,7 @@ impl ControllerRegistry {
 
     pub fn evict_stale(&self, hours: u64) {
         let threshold = Duration::from_secs(hours * 3600);
-        self.inner.write().unwrap().retain(|id, session| {
+        self.inner.write().retain(|id, session| {
             if let Some(since) = session.offline_since {
                 if since.elapsed() > threshold {
                     tracing::info!(

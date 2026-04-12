@@ -42,7 +42,7 @@ impl Commander {
 
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel::<CommandResponse>();
-        self.pending.lock().unwrap().insert(request_id.clone(), tx);
+        self.pending.lock().insert(request_id.clone(), tx);
 
         let msg = CenterMessage {
             payload: Some(CenterPayload::Command(CommandRequest {
@@ -52,16 +52,19 @@ impl Commander {
         };
 
         session.stream_tx.send(msg).await.map_err(|_| {
-            self.pending.lock().unwrap().remove(&request_id);
+            self.pending.lock().remove(&request_id);
             anyhow!("Failed to send command: stream closed")
         })?;
 
         tokio::time::timeout(self.timeout, rx)
             .await
             .map_err(|_| {
-                self.pending.lock().unwrap().remove(&request_id);
+                self.pending.lock().remove(&request_id);
                 anyhow!("Command timed out after {}s", self.timeout.as_secs())
             })?
-            .map_err(|_| anyhow!("Command response channel dropped"))
+            .map_err(|_| {
+                self.pending.lock().remove(&request_id);
+                anyhow!("Command response channel dropped")
+            })
     }
 }

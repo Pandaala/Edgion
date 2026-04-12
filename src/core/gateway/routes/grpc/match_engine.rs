@@ -400,6 +400,7 @@ mod tests {
             backend_finder: BackendSelector::new(),
             plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
+            parsed_retry: None,
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),
@@ -551,6 +552,7 @@ mod tests {
             backend_finder: BackendSelector::new(),
             plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
+            parsed_retry: None,
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),

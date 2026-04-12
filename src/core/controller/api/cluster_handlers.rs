@@ -13,7 +13,7 @@ use crate::types::resource::is_kind_cluster_scoped;
 
 /// List all cluster-scoped resources of a kind
 pub async fn list_cluster(
-    State(_state): State<Arc<AdminState>>,
+    State(state): State<Arc<AdminState>>,
     Path(kind_str): Path<String>,
 ) -> Result<Json<ListResponse<serde_json::Value>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -22,14 +22,14 @@ pub async fn list_cluster(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // Cluster-scoped resources are typically stored in base_conf or not implemented yet
-    Err(StatusCode::NOT_IMPLEMENTED)
+    let (data, continue_token) = state.center_list_resources(kind, None).await?;
+    Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }
 
 /// Get a cluster-scoped resource
 pub async fn get_cluster(
-    State(_state): State<Arc<AdminState>>,
-    Path((kind_str, _name)): Path<(String, String)>,
+    State(state): State<Arc<AdminState>>,
+    Path((kind_str, name)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -37,8 +37,8 @@ pub async fn get_cluster(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // Cluster-scoped resources not yet implemented
-    Err(StatusCode::NOT_IMPLEMENTED)
+    let resource = state.center_get_cluster_resource(kind, &name).await?;
+    resource.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
 /// Create a cluster-scoped resource

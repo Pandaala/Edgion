@@ -1,4 +1,4 @@
-#![cfg(any(feature = "boringssl", feature = "openssl"))]
+#![cfg(feature = "boringssl")]
 
 pub mod backend_api;
 pub mod cert_extractor;

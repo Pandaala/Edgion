@@ -24,7 +24,7 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .metadata
         .annotations
         .as_ref()
-        .and_then(|annotations| annotations.get(listener_builder::ANNOTATION_ENABLE_HTTP2))
+        .and_then(|annotations| annotations.get(crate::types::constants::annotations::edgion::ENABLE_HTTP2))
         .map(|value| !matches!(value.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
         .unwrap_or(true) // Default to true if annotation is not present
 }
@@ -75,7 +75,7 @@ impl GatewayBase {
         // when GatewayHandler has already added them via full_set/partial_update
         let gateway_store = get_global_gateway_store();
         {
-            let mut store_guard = gateway_store.write().unwrap_or_else(|e| e.into_inner());
+            let mut store_guard = gateway_store.write();
             for gateway in gateways.iter() {
                 store_guard.update_gateway(gateway.clone());
             }

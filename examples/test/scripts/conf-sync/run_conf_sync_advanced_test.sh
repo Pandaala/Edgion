@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UTILS_DIR="${SCRIPT_DIR}/../utils"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf/conf-sync-leak-test"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5900}"
@@ -95,22 +95,22 @@ cleanup() {
 }
 
 # =============================================================================
-# edgion-ctl helpers
+# edgion-cli helpers
 # =============================================================================
 ctl_apply() {
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$1" > /dev/null 2>&1
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$1" > /dev/null 2>&1
 }
 
 ctl_delete() {
     local kind=$1 name=$2 ns=${3:-edgion-test}
-    "$EDGION_CTL" --server "$CONTROLLER_URL" delete "$kind" "$name" -n "$ns" > /dev/null 2>&1 || true
+    "$EDGION_CLI" --server "$CONTROLLER_URL" delete "$kind" "$name" -n "$ns" > /dev/null 2>&1 || true
 }
 
 # =============================================================================
 # Prerequisite checks
 # =============================================================================
 check_prerequisites() {
-    if [ ! -f "$EDGION_CTL" ]; then log_error "edgion-ctl not found"; exit 1; fi
+    if [ ! -f "$EDGION_CLI" ]; then log_error "edgion-cli not found"; exit 1; fi
     if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
         log_error "Controller not reachable at ${CONTROLLER_URL}"; exit 1
     fi

@@ -1,0 +1,56 @@
+# RegionRoute - main config with all three route rules:
+#   RouteByDirectRegion (X-Direct-Region header)
+#   RouteByKeyConfMatch (vip-va/vip-oh → virginia/ohio)
+#   RouteByHashRange    (CRC32 of X-Account-Id / account_id cookie)
+#
+# hashCalc.modulo=1000, hashRange [0,999], 1000 slots, split 60/40
+# writeBack: computed hash → X-Region-Hash response header
+#
+# Two regions using loopback IP endpoints (avoids DNS dependency in tests):
+#   virginia: 127.0.0.1:30001  hashRange [0, 599]  (600/1000 = 60%)
+#   ohio:     127.0.0.1:30002  hashRange [600, 999] (400/1000 = 40%)
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: region-route-main
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        baseInfo:
+          serviceGroup: "region-route-test"
+          cluster: "test"
+          regions:
+            - name: virginia
+              hashRange: [0, 599]
+              backendEndpoint: "127.0.0.1:30001"
+              tls: false
+            - name: ohio
+              hashRange: [600, 999]
+              backendEndpoint: "127.0.0.1:30002"
+              tls: false
+        keyGet:
+          - type: header
+            name: X-Account-Id
+          - type: cookie
+            name: account_id
+        hashKeyGet:
+          - type: cookie
+            name: x_region_hash
+        hashCalc:
+          algorithm: crc32
+          modulo: 1000
+          writeBack:
+            - type: responseHeader
+              name: X-Region-Hash
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByKeyConfMatch
+            matchMap:
+              "vip-va": virginia
+              "vip-oh": ohio
+          - type: RouteByHashRange

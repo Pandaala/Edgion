@@ -91,8 +91,11 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         .as_deref()
         .or(Some(grpc_route_unit.matched_info.rsc.ns.as_str()));
 
-    backend_ref.backend_tls_policy =
-        crate::core::gateway::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
+    backend_ref.backend_tls_policy = crate::core::gateway::backends::query_backend_tls_policy_for_service(
+        service_name,
+        service_namespace,
+        backend_ref.port,
+    );
 
     // Run backend-level request edgion_plugins
     // todo need keep here or change to run before route plugin run?

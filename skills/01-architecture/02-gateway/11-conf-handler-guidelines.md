@@ -52,7 +52,7 @@ partial_update(add, update, remove)
 - ConfHandler **不得**在日志中打印资源的完整内容（Secret、TLS 证书等）
 - 日志只记录 `key_name`、计数、affected scope 等元数据
 - 错误日志只包含错误信息，不含资源 spec
-- 参考 [01-log-safety.md](../03-coding/01-log-safety.md) 的完整规范
+- 参考 [01-log-safety.md](../../03-coding/01-log-safety.md) 的完整规范
 
 ## 5. 注意事项
 

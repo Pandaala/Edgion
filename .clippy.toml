@@ -1,0 +1,4 @@
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "Use parking_lot::Mutex instead — it does not poison on panic" },
+    { path = "std::sync::RwLock", reason = "Use parking_lot::RwLock instead — it does not poison on panic" },
+]

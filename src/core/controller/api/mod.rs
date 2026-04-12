@@ -2,8 +2,10 @@ mod cluster_handlers;
 mod common;
 mod configserver_handlers;
 mod namespaced_handlers;
+mod region_route_handlers;
 mod types;
 
+use crate::core::common::api::{self, ApiResponse};
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
     extract::{Path, State},
@@ -15,26 +17,6 @@ use axum::{
 use serde::Serialize;
 use std::sync::Arc;
 use types::AdminState;
-
-/// Standard API response format
-#[derive(Serialize)]
-struct ApiResponse<T> {
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-impl<T> ApiResponse<T> {
-    fn success(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-}
 
 // ============= Legacy Endpoints =============
 
@@ -57,6 +39,7 @@ async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<Ap
 struct ServerInfoResponse {
     server_id: String,
     ready: bool,
+    mode: String,
 }
 
 /// Get server info including server_id
@@ -71,6 +54,7 @@ async fn get_server_info(
             let info = ServerInfoResponse {
                 server_id: server.server_id(),
                 ready: true,
+                mode: "controller".to_string(),
             };
             Ok(Json(ApiResponse::success(info)))
         }
@@ -79,6 +63,7 @@ async fn get_server_info(
             let info = ServerInfoResponse {
                 server_id: String::new(),
                 ready: false,
+                mode: "controller".to_string(),
             };
             Ok(Json(ApiResponse::success(info)))
         }
@@ -145,6 +130,38 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
     Json(ApiResponse::success(format!("ACME check triggered for {}", key)))
 }
 
+// ============= Auth Status Helpers =============
+
+/// Build the pre-computed auth status based on the active auth configuration.
+///
+/// When both OIDC and local auth are enabled, `auth_method` is "oidc+local".
+fn build_auth_status(
+    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+) -> crate::core::common::local_auth::AuthStatusResponse {
+    use crate::core::common::local_auth::AuthStatusResponse;
+    let oidc_enabled = auth_config.map_or(false, |c| c.enabled);
+    let local_enabled = local_auth_config.map_or(false, |c| c.enabled);
+    match (oidc_enabled, local_enabled) {
+        (true, true) => AuthStatusResponse {
+            auth_required: true,
+            auth_method: "oidc+local".to_string(),
+        },
+        (true, false) => AuthStatusResponse {
+            auth_required: true,
+            auth_method: "oidc".to_string(),
+        },
+        (false, true) => AuthStatusResponse {
+            auth_required: true,
+            auth_method: "local".to_string(),
+        },
+        (false, false) => AuthStatusResponse {
+            auth_required: false,
+            auth_method: "none".to_string(),
+        },
+    }
+}
+
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
@@ -197,9 +214,12 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
+        // RegionRoute aggregation
+        .route("/api/v1/region-routes", get(region_route_handlers::list_region_routes))
+        .route("/api/v1/region-routes/{service_group}/{cluster}/{namespace}/{kind}", get(region_route_handlers::get_region_route_detail))
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
-        // ConfigServer endpoints (for edgion-ctl --target server)
+        // ConfigServer endpoints (for edgion-cli --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))
         .with_state(admin_state)
@@ -210,8 +230,27 @@ pub async fn serve(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(conf_mgr, schema_validator);
+    let base_router = create_admin_router(conf_mgr, schema_validator);
+    // Add local auth login/me endpoints (before auth middleware so login is accessible)
+    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
+    // Apply unified auth middleware (tries OIDC first, falls back to local)
+    let router_with_auth =
+        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let app = api::apply_cors_layer(router_with_auth);
+
+    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
+    let auth_status = build_auth_status(local_auth_config, auth_config);
+    let status_router = Router::new().route(
+        "/api/v1/auth/status",
+        get(move || {
+            let status = auth_status.clone();
+            async move { axum::Json(ApiResponse::success(status)) }
+        }),
+    );
+    let app = app.merge(status_router);
 
     tracing::info!(
         component = "unified_api",
@@ -231,9 +270,28 @@ pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(conf_mgr, schema_validator);
+    let base_router = create_admin_router(conf_mgr, schema_validator);
+    // Add local auth login/me endpoints (before auth middleware so login is accessible)
+    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
+    // Apply unified auth middleware (tries OIDC first, falls back to local)
+    let router_with_auth =
+        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let app = api::apply_cors_layer(router_with_auth);
+
+    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
+    let auth_status = build_auth_status(local_auth_config, auth_config);
+    let status_router = Router::new().route(
+        "/api/v1/auth/status",
+        get(move || {
+            let status = auth_status.clone();
+            async move { axum::Json(ApiResponse::success(status)) }
+        }),
+    );
+    let app = app.merge(status_router);
 
     tracing::info!(
         component = "admin_api",

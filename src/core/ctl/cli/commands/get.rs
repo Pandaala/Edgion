@@ -32,11 +32,11 @@ fn print_connection_hint(client: &EdgionClient) {
         TargetType::Client => "gateway",
     };
     eprintln!();
-    eprintln!("Hint: edgion-ctl is trying to connect to: {}", client.base_url());
+    eprintln!("Hint: edgion-cli is trying to connect to: {}", client.base_url());
     eprintln!("      Target: {} ({})", client.target(), component);
     eprintln!("      Use --server to specify a different address, e.g.:");
     eprintln!(
-        "        ./edgion-ctl -t {} --server {} get httproute",
+        "        ./edgion-cli -t {} --server {} get httproute",
         client.target(),
         client.base_url()
     );

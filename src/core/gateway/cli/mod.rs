@@ -46,11 +46,16 @@ impl EdgionGatewayCli {
             .as_deref()
             .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr or set in config file"))?;
 
+        config
+            .conf_sync_security
+            .validate()
+            .map_err(|e| anyhow!("Invalid conf_sync_security config: {}", e))?;
+
         let sync_client = ConfigSyncClient::new(
             server_addr,
             "edgion-gateway".to_string(),
             Duration::from_secs(10),
-            config.conf_sync_security.tls.as_ref(),
+            &config.conf_sync_security,
         )
         .await
         .map_err(|e| anyhow!("Failed to create ConfigSyncClient: {}", e))?;
@@ -59,7 +64,11 @@ impl EdgionGatewayCli {
     }
 
     /// Start auxiliary services
-    async fn start_auxiliary_services(config_client: Arc<ConfigClient>, config: &EdgionGatewayConfig) {
+    async fn start_auxiliary_services(
+        config_client: Arc<ConfigClient>,
+        config: &EdgionGatewayConfig,
+        shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) {
         // Start backend cleaner
         let cleaner = BackendCleaner::new();
         cleaner.start();
@@ -70,10 +79,18 @@ impl EdgionGatewayCli {
         let _ = crate::core::gateway::backends::health::check::get_health_check_manager();
         tracing::info!("Health check manager initialized");
 
-        // Spawn Admin API server
+        // Spawn Admin API server with graceful shutdown
         let config_client_for_admin = config_client.clone();
+        let mut admin_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(e) = api::serve(config_client_for_admin, 5900).await {
+            let shutdown_future = async move {
+                while !*admin_shutdown.borrow() {
+                    if admin_shutdown.changed().await.is_err() {
+                        break;
+                    }
+                }
+            };
+            if let Err(e) = api::serve_with_shutdown(config_client_for_admin, 5900, shutdown_future).await {
                 tracing::error!(
                     component = "admin_api_gateway",
                     event = "server_error",
@@ -90,10 +107,18 @@ impl EdgionGatewayCli {
             "Gateway Admin API server spawned"
         );
 
-        // Spawn Metrics API server
+        // Spawn Metrics API server with graceful shutdown
         let metrics_cfg = config.metrics.clone();
+        let mut metrics_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(e) = metrics::serve(&metrics_cfg).await {
+            let shutdown_future = async move {
+                while !*metrics_shutdown.borrow() {
+                    if metrics_shutdown.changed().await.is_err() {
+                        break;
+                    }
+                }
+            };
+            if let Err(e) = metrics::serve_with_shutdown(&metrics_cfg, shutdown_future).await {
                 tracing::error!(
                     component = "metrics_api",
                     event = "server_error",
@@ -241,7 +266,13 @@ impl EdgionGatewayCli {
         config::init_request_duration_config(config.metrics.request_duration.clone());
 
         // 6. Start auxiliary services
-        runtime.block_on(Self::start_auxiliary_services(config_client.clone(), &config));
+        // Create shutdown channel for auxiliary services
+        let (aux_shutdown_tx, aux_shutdown_rx) = tokio::sync::watch::channel(false);
+        runtime.block_on(Self::start_auxiliary_services(
+            config_client.clone(),
+            &config,
+            aux_shutdown_rx.clone(),
+        ));
 
         // 7. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
@@ -265,16 +296,35 @@ impl EdgionGatewayCli {
                 .expect("Failed to spawn blocking task")
         })?;
 
-        // 11. Move runtime to background thread to keep async tasks running
-        std::thread::spawn(move || {
+        // 11. Move runtime to background thread with shutdown-aware lifecycle
+        let bg_shutdown_rx = aux_shutdown_rx;
+        let bg_thread = std::thread::spawn(move || {
             runtime.block_on(async {
-                std::future::pending::<()>().await;
+                let mut rx = bg_shutdown_rx;
+                while !*rx.borrow() {
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+                // Grace period for auxiliary services to drain
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             });
         });
 
         // 12. Run Pingora server (blocks until shutdown)
         run_server(pingora_server);
 
+        // 13. Signal auxiliary services to shut down
+        tracing::info!(
+            component = "gateway",
+            "Pingora stopped, shutting down auxiliary services"
+        );
+        let _ = aux_shutdown_tx.send(true);
+
+        // 14. Wait for background runtime to complete (services drain + 5s grace)
+        let _ = bg_thread.join();
+
+        tracing::info!(component = "gateway", "Gateway shutdown complete");
         Ok(())
     }
 }

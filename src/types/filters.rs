@@ -36,6 +36,12 @@ pub enum PluginRunningResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         body: Option<String>,
     },
+    /// Filter returns a gRPC error (HTTP 200 + grpc-status/grpc-message trailers)
+    ErrGrpcError {
+        grpc_status: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
 }
 
 /// Filter tags for categorization

@@ -1,3 +1,3 @@
-mod stream_ip_restriction;
+pub(crate) mod stream_ip_restriction;
 
 pub use stream_ip_restriction::StreamIpRestriction;

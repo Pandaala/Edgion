@@ -7,13 +7,13 @@
 
 ```
 External Service (Docker)          Controller (Admin :5800)
-  e.g. Redis :16379                  ├─ Receives LinkSys YAML via edgion-ctl
+  e.g. Redis :16379                  ├─ Receives LinkSys YAML via edgion-cli
                                      └─ Syncs to Gateway via gRPC
                                    
 Gateway (Admin :5900)              Test Script (bash)
   ├─ ConfHandler creates             ├─ Starts external service (Docker)
   │   runtime client                 ├─ Starts Controller + Gateway
-  ├─ Exposes testing API             ├─ Loads LinkSys config via edgion-ctl
+  ├─ Exposes testing API             ├─ Loads LinkSys config via edgion-cli
   │   /api/v1/testing/link-sys/      ├─ Calls Gateway Admin API to test
   └─ Serves traffic                  └─ Reports PASS/FAIL per test case
 ```
@@ -38,13 +38,13 @@ LinkSys tests verify **the runtime client itself**, not request routing. The Gat
 run_<type>_test.sh orchestrates the full flow:
 
 Step 0: Kill old    →  pkill -9 -f edgion-* (same as kill_all.sh)
-Step 1: Build       →  cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-ctl
+Step 1: Build       →  cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-cli
 Step 2: Work dir    →  mkdir integration_testing/<type>_testing_YYYYMMDD_HHMMSS/
 Step 3: Start Infra →  docker compose up -d (e.g. Redis)
 Step 4: Start Edgion (same args as start_all_with_conf.sh)
   ├─ 4a: Start Controller (--work-dir, --conf-dir, --test-mode) → wait /ready
-  ├─ 4b: Load base config (conf/base/*.yaml) via edgion-ctl
-  ├─ 4c: Load LinkSys config (conf/LinkSys/<Type>/*.yaml) via edgion-ctl
+  ├─ 4b: Load base config (conf/base/*.yaml) via edgion-cli
+  ├─ 4c: Load LinkSys config (conf/LinkSys/<Type>/*.yaml) via edgion-cli
   └─ 4d: Start Gateway (--work-dir, --integration-testing-mode) → wait /ready + LB preload
 Step 5: Run tests   →  curl Gateway Admin API testing endpoints
 Step 6: Report      →  summarise PASS/FAIL

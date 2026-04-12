@@ -3,10 +3,10 @@
 //! This server only handles gRPC list/watch operations.
 //! It holds a HashMap<kind, Arc<dyn WatchObj>> registered by ResourceProcessors.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::RwLock;
 use tokio::sync::mpsc;
 
 use super::client_registry::ClientRegistry;
@@ -93,7 +93,7 @@ impl ConfigSyncServer {
 
     /// Get the current server ID
     pub fn server_id(&self) -> String {
-        self.server_id.read().unwrap().clone()
+        self.server_id.read().clone()
     }
 
     /// Regenerate server ID (for relink)
@@ -106,24 +106,24 @@ impl ConfigSyncServer {
             new_server_id = %new_id,
             "Regenerating server_id for relink"
         );
-        *self.server_id.write().unwrap() = new_id;
+        *self.server_id.write() = new_id;
     }
 
     /// Set endpoint discovery mode
     pub fn set_endpoint_mode(&self, mode: EndpointMode) {
-        *self.endpoint_mode.write().unwrap() = Some(mode);
+        *self.endpoint_mode.write() = Some(mode);
     }
 
     /// Get endpoint discovery mode
     pub fn endpoint_mode(&self) -> Option<EndpointMode> {
-        *self.endpoint_mode.read().unwrap()
+        *self.endpoint_mode.read()
     }
 
     // ==================== WatchObj Registration ====================
 
     /// Register a WatchObj (called by Processor initialization)
     pub fn register_watch_obj(&self, kind: &str, obj: Arc<dyn WatchObj>) {
-        let mut map = self.watch_objects.write().unwrap();
+        let mut map = self.watch_objects.write();
         tracing::info!(
             component = "config_sync_server",
             kind = kind,
@@ -134,7 +134,7 @@ impl ConfigSyncServer {
 
     /// Batch register watch objects
     pub fn register_all(&self, objs: HashMap<String, Arc<dyn WatchObj>>) {
-        let mut map = self.watch_objects.write().unwrap();
+        let mut map = self.watch_objects.write();
         for (kind, obj) in objs {
             tracing::info!(
                 component = "config_sync_server",
@@ -147,12 +147,12 @@ impl ConfigSyncServer {
 
     /// Get a watch object by kind
     pub fn get_watch_obj(&self, kind: &str) -> Option<Arc<dyn WatchObj>> {
-        self.watch_objects.read().unwrap().get(kind).cloned()
+        self.watch_objects.read().get(kind).cloned()
     }
 
     /// Get all registered kind names
     pub fn all_kinds(&self) -> Vec<String> {
-        self.watch_objects.read().unwrap().keys().cloned().collect()
+        self.watch_objects.read().keys().cloned().collect()
     }
 
     // ==================== List/Watch Operations ====================
@@ -163,7 +163,7 @@ impl ConfigSyncServer {
         // (e.g. thousands of EndpointSlices). Pagination is the long-term solution.
         const MAX_LIST_BYTES: usize = 64 * 1024 * 1024;
 
-        let map = self.watch_objects.read().unwrap();
+        let map = self.watch_objects.read();
         let obj = map.get(kind).ok_or_else(|| format!("Unknown kind: {}", kind))?;
 
         let (data, sync_version) = obj.list_json()?;
@@ -199,7 +199,7 @@ impl ConfigSyncServer {
         client_name: String,
         from_version: u64,
     ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
-        let map = self.watch_objects.read().unwrap();
+        let map = self.watch_objects.read();
         let obj = map.get(kind).ok_or_else(|| format!("Unknown kind: {}", kind))?;
 
         tracing::info!(
@@ -254,13 +254,13 @@ impl ConfigSyncServer {
 
     /// Check if all registered watch objects are ready
     pub fn is_all_ready(&self) -> bool {
-        let map = self.watch_objects.read().unwrap();
+        let map = self.watch_objects.read();
         map.values().all(|obj| obj.is_ready())
     }
 
     /// Get list of kinds that are not ready
     pub fn not_ready_kinds(&self) -> Vec<String> {
-        let map = self.watch_objects.read().unwrap();
+        let map = self.watch_objects.read();
         map.iter()
             .filter(|(_, obj)| !obj.is_ready())
             .map(|(k, _)| k.clone())
@@ -269,7 +269,7 @@ impl ConfigSyncServer {
 
     /// Set a specific watch object to ready state by kind
     pub fn set_cache_ready_by_kind(&self, kind: &str) {
-        let map = self.watch_objects.read().unwrap();
+        let map = self.watch_objects.read();
         if let Some(obj) = map.get(kind) {
             obj.set_ready();
             tracing::info!(component = "config_sync_server", kind = kind, "Cache marked as ready");
@@ -284,7 +284,7 @@ impl ConfigSyncServer {
 
     /// Set all watch objects to not ready state
     pub fn set_all_not_ready(&self) {
-        let map = self.watch_objects.read().unwrap();
+        let map = self.watch_objects.read();
         for obj in map.values() {
             obj.set_not_ready();
         }
@@ -292,7 +292,7 @@ impl ConfigSyncServer {
 
     /// Clear all watch objects
     pub fn clear_all(&self) {
-        let map = self.watch_objects.read().unwrap();
+        let map = self.watch_objects.read();
         for obj in map.values() {
             obj.clear();
         }

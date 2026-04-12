@@ -11,6 +11,19 @@ fn is_empty<T>(slice: &&[T]) -> bool {
     slice.is_empty()
 }
 
+/// ASCII case-insensitive substring search — avoids the heap allocation that
+/// `str::to_lowercase().contains()` would require on every call.
+#[inline]
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 /// Unified match info that covers both HTTP and gRPC routes in access logs.
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -69,9 +82,7 @@ impl<'a> AccessLogEntry<'a> {
                 let denylist = get_ctx_log_denylist();
                 ctx.ctx_map
                     .iter()
-                    .filter(|(k, _)| {
-                        !k.starts_with('_') && !denylist.iter().any(|d| k.to_lowercase().contains(d.as_str()))
-                    })
+                    .filter(|(k, _)| !k.starts_with('_') && !denylist.iter().any(|d| contains_ignore_ascii_case(k, d)))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect()
             },

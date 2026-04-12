@@ -60,6 +60,15 @@ ClientCache 内部持有 `CacheData<T>`（RwLock 保护），包含：
 - 全量资源快照（`HashMap<String, T>`）
 - 当前 `sync_version`
 - `server_id`（用于检测 Controller 重启）
+- `CompressEvent`：待处理的增量事件队列（在 `handler` 内部）
+
+#### 事件批压缩 background task
+
+`set_conf_processor` 调用时，`CacheData` 会为该资源类型启动一个后台 Tokio task，每 **100ms** 唤醒一次，把积压的 `CompressEvent` 批量 dispatch 给 `ConfHandler.partial_update()`。
+
+**设计意图**：防止 K8s 短时间内大量资源变更（如滚动更新、ConfigMap 批量写入）导致 `partial_update` 被高频调用，进而触发过多次 ArcSwap 重建。100ms 窗口把多个增量事件合并为一次 `partial_update`，显著降低 ArcSwap store 的频率。
+
+**已知优化点（待实施）**：当前 background task 每 100ms 无条件拿写锁检查队列是否为空，在配置稳定期会造成不必要的 RwLock 写锁竞争（写锁 pending 时会阻塞新的读者）。优化方向：改为 `tokio::sync::Notify` + debounce，`add_compress_event` 时 `notify_one()`，task 在 `notified().await` 处休眠，有事件时才唤醒并等待小窗口（~100ms）批量处理。这是纯性能优化，不改变语义。
 
 ### DynClientCache
 

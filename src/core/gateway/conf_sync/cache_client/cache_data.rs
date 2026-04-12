@@ -1,13 +1,22 @@
 use crate::core::common::conf_sync::traits::{ConfHandler, ResourceChange};
 use crate::types::ResourceMeta;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
-use tokio::time::{interval, Duration};
+use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::time::Duration;
 
-/// Internal cache data structure combining data and version under single lock
+/// Debounce window for batching compressed events before dispatching to ConfHandler.
+/// Prevents rapid config changes (e.g. rolling updates) from triggering excessive ArcSwap rebuilds.
+const BATCH_DEBOUNCE: Duration = Duration::from_millis(100);
+
+/// Internal cache data structure combining data and version under single lock.
+///
+/// Resources are stored as `Arc<T>` to enable zero-copy sharing with handler stores.
+/// This eliminates expensive deep clones on the full_set and partial_update paths.
 pub struct CacheData<T> {
     ready: bool,
-    data: HashMap<String, T>,
+    data: HashMap<String, Arc<T>>,
     sync_version: u64,
 
     // Register handlers to CacheData for processing specific configurations
@@ -27,14 +36,13 @@ impl<T: ResourceMeta> CacheData<T> {
     /// Reset cache with a complete set of resources
     /// Uses resource.key_name() (namespace/name) as the key for each resource
     pub(crate) fn reset(&mut self, resources: Vec<T>, sync_version: u64) {
-        // Build new HashMap directly from resources
+        // Build new HashMap directly from resources, wrapping each in Arc
         self.data = resources
             .into_iter()
-            .map(|resource| (resource.key_name(), resource))
+            .map(|resource| (resource.key_name(), Arc::new(resource)))
             .collect();
         self.sync_version = sync_version;
         if let Some(ref handler) = self.handler {
-            // Pass reference to full_set, no need to clone or move data
             handler.processor.full_set(&self.data);
         }
         if let Some(ref mut handler) = self.handler {
@@ -52,19 +60,19 @@ impl<T: ResourceMeta> CacheData<T> {
     }
 
     // Data methods
-    pub(crate) fn get(&self, key: &str) -> Option<&T> {
+    pub(crate) fn get(&self, key: &str) -> Option<&Arc<T>> {
         self.data.get(key)
     }
 
     pub(crate) fn insert(&mut self, key: String, value: T) {
-        self.data.insert(key, value);
+        self.data.insert(key, Arc::new(value));
     }
 
-    pub(crate) fn remove(&mut self, key: &str) -> Option<T> {
+    pub(crate) fn remove(&mut self, key: &str) -> Option<Arc<T>> {
         self.data.remove(key)
     }
 
-    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Arc<T>> {
         self.data.values()
     }
 
@@ -97,18 +105,17 @@ impl<T: ResourceMeta> CacheData<T> {
     ) where
         T: Clone + ResourceMeta,
     {
-        // Create handler with processor (processor is required, so no Option needed)
-        self.handler = Some(ConfHandlerData::new(processor));
+        let handler_data = ConfHandlerData::new(processor);
+        let notify = handler_data.notify.clone();
+        self.handler = Some(handler_data);
 
-        // Start a background task to process compressed events every 100ms
         let cache_data_clone = cache_data.clone();
 
         tokio::spawn(async move {
-            let mut interval = interval(Duration::from_millis(100));
             loop {
-                interval.tick().await;
+                notify.notified().await;
+                tokio::time::sleep(BATCH_DEBOUNCE).await;
 
-                // Process compressed events, return false if should stop
                 if !Self::process_compressed_events(&cache_data_clone) {
                     break;
                 }
@@ -122,7 +129,7 @@ impl<T: ResourceMeta> CacheData<T> {
     where
         T: Clone + ResourceMeta,
     {
-        let mut cache = cache_data.write().unwrap();
+        let mut cache = cache_data.write();
 
         // Get handler reference at the beginning
         let handler = match cache.handler.as_mut() {
@@ -217,6 +224,7 @@ impl<T: ResourceMeta> CacheData<T> {
         // as the processor will do a full_set on reset anyway
         if let Some(ref mut handler) = self.handler {
             handler.compressed_events.add_event(key, change);
+            handler.notify.notify_one();
         }
     }
 }
@@ -246,6 +254,7 @@ impl CompressEvent {
 pub struct ConfHandlerData<T> {
     processor: Box<dyn ConfHandler<T> + Send + Sync>,
     compressed_events: CompressEvent,
+    notify: Arc<Notify>,
 }
 
 impl<T> ConfHandlerData<T> {
@@ -253,6 +262,7 @@ impl<T> ConfHandlerData<T> {
         Self {
             processor,
             compressed_events: CompressEvent::new(),
+            notify: Arc::new(Notify::new()),
         }
     }
 }

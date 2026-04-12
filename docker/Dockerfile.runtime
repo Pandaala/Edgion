@@ -46,8 +46,8 @@ RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
       chmod +x /usr/local/bin/${BINARY}; \
     else \
       cp /tmp/binaries/edgion-${BINARY} /usr/local/bin/edgion-${BINARY} && \
-      cp /tmp/binaries/edgion-ctl /usr/local/bin/edgion-ctl && \
-      chmod +x /usr/local/bin/edgion-${BINARY} /usr/local/bin/edgion-ctl; \
+      cp /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli && \
+      chmod +x /usr/local/bin/edgion-${BINARY} /usr/local/bin/edgion-cli; \
     fi
 
 # Copy default config files (if exist)

@@ -237,10 +237,13 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DirectEndpoint" => "EdgionPlugins",
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
+        "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
+        "EdgionPlugins/DslDynamic" => "EdgionPlugins",
+        "EdgionPlugins/DslGrpcError" => "GRPCRoute/Basic",
         "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
@@ -762,6 +765,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::DynamicExternalUpstreamTestSuite));
         }
+        "EdgionPlugins/RegionRoute" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RegionRoute tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RegionRouteTestSuite));
+        }
         "EdgionPlugins/AllEndpointStatus" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/AllEndpointStatus tests require --gateway flag");
@@ -810,6 +820,35 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::DslTestSuite));
+        }
+        "EdgionPlugins/DslDynamic" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/DslDynamic tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::DslDynamicInitialTestSuite));
+                }
+                Some("update") => {
+                    runner.add_suite(Box::new(suites::DslDynamicUpdateTestSuite));
+                }
+                None => {
+                    runner.add_suite(Box::new(suites::DslDynamicInitialTestSuite));
+                    runner.add_suite(Box::new(suites::DslDynamicUpdateTestSuite));
+                }
+                _ => {
+                    eprintln!("Error: Invalid phase '{}'. Use 'initial' or 'update'", phase.unwrap());
+                    std::process::exit(1);
+                }
+            }
+        }
+        "EdgionPlugins/DslGrpcError" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/DslGrpcError tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DslGrpcErrorTestSuite));
         }
         "Gateway/ListenerHostname" => {
             if !gateway {

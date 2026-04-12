@@ -169,9 +169,11 @@ pub struct BackendTimeout {
     #[serde(default = "default_backend_idle_timeout")]
     pub default_idle_timeout: String,
 
-    /// Maximum number of retries
-    #[serde(default = "default_backend_max_retries")]
-    pub default_max_retries: u32,
+    /// **DEPRECATED**: Use top-level `maxRetries` in EdgionGatewayConfigSpec instead.
+    /// This field is kept temporarily for backward compatibility detection.
+    /// If present in config, a warning will be logged during config loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_max_retries: Option<u32>,
 }
 
 // ClientTimeout defaults
@@ -198,10 +200,6 @@ fn default_backend_request_timeout() -> String {
 
 fn default_backend_idle_timeout() -> String {
     "300s".to_string()
-}
-
-fn default_backend_max_retries() -> u32 {
-    3
 }
 
 // Global configuration defaults
@@ -240,7 +238,7 @@ impl Default for BackendTimeout {
             default_connect_timeout: default_backend_connect_timeout(),
             default_request_timeout: default_backend_request_timeout(),
             default_idle_timeout: default_backend_idle_timeout(),
-            default_max_retries: default_backend_max_retries(),
+            default_max_retries: None,
         }
     }
 }
@@ -353,6 +351,27 @@ pub struct PluginReference {
     pub namespace: Option<String>,
 }
 
+impl EdgionGatewayConfigSpec {
+    /// Check for deprecated fields and log warnings.
+    pub fn check_deprecated_fields(&self) {
+        if let Some(ref http_timeout) = self.http_timeout {
+            if let Some(old_retries) = http_timeout.backend.default_max_retries {
+                tracing::warn!(
+                    deprecated_field = "httpTimeout.backend.defaultMaxRetries",
+                    old_value = old_retries,
+                    current_field = "maxRetries",
+                    current_value = self.max_retries,
+                    "EdgionGatewayConfig: 'httpTimeout.backend.defaultMaxRetries' is deprecated and will be removed. \
+                     Please migrate to top-level 'maxRetries'. The deprecated value ({}) is ignored; \
+                     current effective value is maxRetries={}.",
+                    old_retries,
+                    self.max_retries,
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +397,42 @@ spec:
 
         let spec = config.spec;
         assert!(spec.http_timeout.is_some());
+    }
+
+    #[test]
+    fn test_deprecated_default_max_retries_accepted() {
+        let yaml = r#"
+apiVersion: example.com/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: test-deprecated
+spec:
+  httpTimeout:
+    backend:
+      defaultConnectTimeout: 5s
+      defaultMaxRetries: 5
+  maxRetries: 7
+"#;
+        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should accept deprecated field");
+        assert_eq!(config.spec.max_retries, 7);
+        assert_eq!(
+            config.spec.http_timeout.as_ref().unwrap().backend.default_max_retries,
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn test_no_deprecated_field_is_none() {
+        let yaml = r#"
+apiVersion: example.com/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: test-new
+spec:
+  maxRetries: 10
+"#;
+        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should parse");
+        assert_eq!(config.spec.max_retries, 10);
+        assert!(config.spec.http_timeout.is_none());
     }
 }

@@ -43,10 +43,10 @@ Useful templates:
 
 Pattern references:
 
-- For a route-like resource that syncs to Gateway and becomes runtime route state, see [references/add-resource-route-like.md](references/add-resource-route-like.md)
-- For a controller-only resource that drives validation/requeue but should not sync to Gateway, see [references/add-resource-controller-only.md](references/add-resource-controller-only.md)
-- For a plugin-like resource that resolves secrets and becomes reusable runtime config, see [references/add-resource-plugin-like.md](references/add-resource-plugin-like.md)
-- For a cluster-scoped base-conf resource, see [references/add-resource-cluster-scoped.md](references/add-resource-cluster-scoped.md)
+- For a route-like resource that syncs to Gateway and becomes runtime route state, see [add-resource-route-like.md](add-resource-route-like.md)
+- For a controller-only resource that drives validation/requeue but should not sync to Gateway, see [add-resource-controller-only.md](add-resource-controller-only.md)
+- For a plugin-like resource that resolves secrets and becomes reusable runtime config, see [add-resource-plugin-like.md](add-resource-plugin-like.md)
+- For a cluster-scoped base-conf resource, see [add-resource-cluster-scoped.md](add-resource-cluster-scoped.md)
 
 Useful search pattern:
 
@@ -102,11 +102,18 @@ What the handler usually owns:
 - status updates
 - dependency registration and requeue behavior
 
-Important rule:
+Important rules:
 
 - If `parse()` looks up Gateway relationships, register with `gateway_route_index` in `on_change()` / `on_delete()`
 - If it tracks Service refs, Secret refs, or cross-namespace refs, follow the matching helper pattern used by similar handlers
 - If the resource needs no special logic, still add a minimal `ProcessorHandler<T>` so it participates in the normal processor lifecycle
+
+> **`on_change` 在 `save_to_cache` 之前执行**（这是有意的设计，见 `processor.rs` Step 10/11 注释）。
+> 在 `on_change` 内部查找"当前正在处理的资源本身"时，**必须使用 `RawStore`（`get_raw_any`）**，
+> 而不是 `ServerCache`——因为此时当前资源还没有写入缓存。
+> 在 `on_change` 里查其他资源（如 Gateway 查自己挂载的 Route）可以正常使用 `ServerCache`。
+> 错误地在 `on_change` 里用 `ServerCache` 查自身会在编译期通过但在运行时返回旧值，
+> 是一种**隐蔽的正确性问题**。
 
 ### 4. Decide Whether It Syncs To Gateway
 
@@ -212,13 +219,13 @@ rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" src config/crd examp
 
 Read these only as needed:
 
-- [references/add-resource-route-like.md](references/add-resource-route-like.md)
-- [references/add-resource-controller-only.md](references/add-resource-controller-only.md)
-- [references/add-resource-plugin-like.md](references/add-resource-plugin-like.md)
-- [references/add-resource-cluster-scoped.md](references/add-resource-cluster-scoped.md)
-- [../01-architecture/00-common/03-resource-system.md](../01-architecture/00-common/03-resource-system.md)
-- [../01-architecture/01-controller/03-config-center/SKILL.md](../01-architecture/01-controller/03-config-center/SKILL.md)
-- [../01-architecture/01-controller/06-requeue-mechanism.md](../01-architecture/01-controller/06-requeue-mechanism.md)
-- [../05-testing/01-integration-testing.md](../05-testing/01-integration-testing.md)
-- [../../docs/zh-CN/dev-guide/add-new-resource-guide.md](../../docs/zh-CN/dev-guide/add-new-resource-guide.md)
-- [../../docs/en/dev-guide/add-new-resource-guide.md](../../docs/en/dev-guide/add-new-resource-guide.md)
+- [add-resource-route-like.md](add-resource-route-like.md)
+- [add-resource-controller-only.md](add-resource-controller-only.md)
+- [add-resource-plugin-like.md](add-resource-plugin-like.md)
+- [add-resource-cluster-scoped.md](add-resource-cluster-scoped.md)
+- [../../00-common/03-resource-system.md](../../00-common/03-resource-system.md)
+- [../03-config-center/SKILL.md](../03-config-center/SKILL.md)
+- [../06-requeue-mechanism.md](../06-requeue-mechanism.md)
+- [../../../05-testing/01-integration-testing.md](../../../05-testing/01-integration-testing.md)
+- [../../../../docs/zh-CN/dev-guide/add-new-resource-guide.md](../../../../docs/zh-CN/dev-guide/add-new-resource-guide.md)
+- [../../../../docs/en/dev-guide/add-new-resource-guide.md](../../../../docs/en/dev-guide/add-new-resource-guide.md)

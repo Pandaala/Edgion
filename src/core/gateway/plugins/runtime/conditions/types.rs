@@ -362,6 +362,19 @@ pub struct ExcludeCondition {
     pub compiled_regex: Option<regex::Regex>,
 }
 
+impl Condition {
+    /// Compile regex patterns in this condition.
+    /// No-op for condition types without regex (KeyExist, TimeRange, Probability).
+    pub fn compile(&mut self) -> Result<(), regex::Error> {
+        match self {
+            Condition::KeyMatch(c) => c.compile(),
+            Condition::Include(c) => c.compile(),
+            Condition::Exclude(c) => c.compile(),
+            _ => Ok(()),
+        }
+    }
+}
+
 impl PluginConditions {
     /// Create an empty conditions (no skip, no run conditions)
     pub fn new() -> Self {
@@ -383,6 +396,19 @@ impl PluginConditions {
     pub fn add_run(mut self, condition: Condition) -> Self {
         self.run.get_or_insert_with(Vec::new).push(condition);
         self
+    }
+
+    /// Compile all conditions in this PluginConditions instance.
+    /// Should be called once after deserialization (during preparse).
+    pub fn compile(&mut self) -> Result<(), regex::Error> {
+        for conds in [&mut self.skip, &mut self.run] {
+            if let Some(conditions) = conds {
+                for c in conditions {
+                    c.compile()?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 

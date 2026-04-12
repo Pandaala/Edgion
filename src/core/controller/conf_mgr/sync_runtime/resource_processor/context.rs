@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 
 use super::SecretRefManager;
 
@@ -39,6 +39,9 @@ pub struct HandlerContext {
 
     /// Maximum total depth of a trigger chain (safety net for cross-kind loops)
     max_trigger_depth: usize,
+
+    /// Controller runtime for shared stores (non-pub, access via methods)
+    runtime: Arc<ControllerRuntime>,
 }
 
 impl HandlerContext {
@@ -50,6 +53,7 @@ impl HandlerContext {
         trigger_chain: TriggerChain,
         max_trigger_cycles: usize,
         max_trigger_depth: usize,
+        runtime: Arc<ControllerRuntime>,
     ) -> Self {
         Self {
             secret_ref_manager,
@@ -58,6 +62,7 @@ impl HandlerContext {
             trigger_chain,
             max_trigger_cycles,
             max_trigger_depth,
+            runtime,
         }
     }
 
@@ -79,6 +84,11 @@ impl HandlerContext {
     /// Get the current trigger chain (for diagnostics / logging)
     pub fn trigger_chain(&self) -> &TriggerChain {
         &self.trigger_chain
+    }
+
+    /// Access the controller runtime for shared stores.
+    pub fn runtime(&self) -> &ControllerRuntime {
+        &self.runtime
     }
 
     /// Cross-resource requeue with cascade cycle detection.
@@ -113,7 +123,8 @@ impl HandlerContext {
             );
             return;
         }
-        PROCESSOR_REGISTRY
+        self.runtime
+            .processor_registry
             .requeue_with_chain(kind, key, self.trigger_chain.clone())
             .await;
     }

@@ -153,7 +153,12 @@ impl EdgionTlsPassthroughProxy {
             }
         };
 
-        // 3. Connect upstream with retry
+        // 3. Execute TLS route plugins (Stage 2: post-route-match)
+        if !super::run_tls_route_plugins(rule, ctx, sni, self.listener_port, None, false).await {
+            return;
+        }
+
+        // 4. Connect upstream with retry
         let max_attempts = rule.max_connect_retries;
         let mut upstream = None;
         let mut last_err = String::new();

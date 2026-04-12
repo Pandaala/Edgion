@@ -5,15 +5,15 @@
 Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller–Gateway 分离架构，gRPC 配置同步。
 支持 HTTP/1.1、HTTP/2、gRPC、TCP、UDP、TLS、WebSocket，含插件系统、负载均衡、TLS/mTLS。
 
-**四个二进制**：Controller（K8s 资源处理）、Gateway（数据面代理）、edgion-ctl（CLI 调试工具）、Center（联邦中心）。
+**四个二进制**：Controller（K8s 资源处理）、Gateway（数据面代理）、edgion-cli（CLI 调试工具）、Center（联邦中心）。
 
 **Feature Flags**（互斥，构建时注意）：
-- TLS 后端：`boringssl`（默认）| `openssl` | `rustls`
+- TLS 后端：`boringssl`（默认）| `rustls`
 - 内存分配器：`allocator-jemalloc`（默认）| `allocator-mimalloc` | `allocator-system`
 
 ## 知识体系
 
-当任务需要项目上下文时，从 `skills/SKILL.md` 开始，**按需渐进加载**，不要一次全部读取。
+当任务需要项目上下文时，从 `skills/SKILL.md` 开始，**按需渐进加载**，不要一次全部读取。详细的 AI Agent 协作指南见 `AGENTS.md`。
 
 ### Skills 导航规则
 
@@ -69,9 +69,9 @@ Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller�
   3. 更新过时示例，不要向前复制遗留键
 
 - **CI/发布自动化**：
-  1. `skills/09-misc/02-github-workflow.md`
-  2. `skills/09-misc/00-local-build.md`
-  3. `skills/09-misc/01-docker-build.md`
+  1. `skills/09-misc/cicd/02-github-workflow.md`
+  2. `skills/09-misc/cicd/00-local-build.md`
+  3. `skills/09-misc/cicd/01-docker-build.md`
 
 ## 常用命令
 
@@ -90,6 +90,19 @@ make check-agent-docs
 ./examples/test/scripts/integration/run_integration.sh
 ```
 
+## 提交前检查（触发词）
+
+当用户说「跑 check」「检查一下代码」「格式化一下代码」「跑一下 CI」「提交前检查」或类似含义的话时，按以下顺序执行：
+
+1. **格式化**：`cargo fmt --all`（直接修复，不是 `--check`）
+2. **编译检查**：`cargo check --all-targets`
+3. **Lint**：`cargo clippy --all-targets`
+4. **文档一致性**：`make check-agent-docs`
+
+步骤 2/3/4 可并行执行。每步如果失败，立即报告错误并尝试修复，修复后重跑该步骤。全部通过后汇总报告结果。
+
+> `cargo test --all` 耗时较长，默认不包含在快速检查中。如需运行测试，用户会明确要求。
+
 ## 编码约束
 
 - 语言：Rust，遵循项目现有风格
@@ -97,6 +110,16 @@ make check-agent-docs
 - 日志 ID、可观测性规范见 `skills/03-coding/`
 - 不要引入安全漏洞（注入、XSS 等 OWASP Top 10）
 - 改动最小化，不做未被要求的重构或功能添加
+
+## 认证系统
+
+- **默认行为**：无配置时自动生成随机密码，存入 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
+- **查看密码**：`cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+- **API 认证**：Bearer token 或 httpOnly Cookie
+- **CLI 认证**：`edgion-cli login` 或自动检测配置文件 auto-login
+- **认证端点**：`/api/v1/auth/login`、`/api/v1/auth/logout`、`/api/v1/auth/status`、`/api/v1/auth/me`
+- **模块位置**：`src/core/common/local_auth/`、`src/core/common/unified_auth/`
+- **配置**：`[local_auth]` TOML 段（可选，详见 `skills/02-features/02-config/00-controller-config.md`）
 
 ## 知识源规则
 

@@ -13,13 +13,13 @@
 use super::event::FileSystemEvent;
 use super::file_watcher::{build_path_from_key, KindEventReceiver};
 use super::status::FileSystemStatusHandler;
+use crate::core::controller::conf_mgr::conf_center::common::parse_resource_content;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    extract_status_value, make_resource_key, FsRawStore, ResourceProcessor, WorkItemResult,
+    extract_status_value, make_resource_key, LocalRawStore, ResourceProcessor, WorkItemResult,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::types::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3, TLSRoute, TLSRouteAlpha3};
-use crate::types::{ResourceKind, ResourceMeta};
+use crate::types::ResourceMeta;
 use anyhow::Result;
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -41,7 +41,7 @@ where
     event_rx: KindEventReceiver,
     shutdown_signal: Option<ShutdownSignal>,
     /// Raw store shared with processor for cross-resource key lookups.
-    fs_raw_store: Arc<FsRawStore<K>>,
+    fs_raw_store: Arc<LocalRawStore<K>>,
 }
 
 impl<K> FileSystemResourceController<K>
@@ -55,7 +55,7 @@ where
         conf_dir: PathBuf,
         event_rx: KindEventReceiver,
     ) -> Self {
-        let fs_raw_store = Arc::new(FsRawStore::new());
+        let fs_raw_store = Arc::new(LocalRawStore::new());
         processor.set_raw_store(fs_raw_store.clone());
         Self {
             kind,
@@ -307,7 +307,7 @@ where
                                     }
                                     Err(e) => {
                                         // File content is invalid — evict any stale entry from
-                                        // FsRawStore so cross-resource lookups don't return
+                                        // LocalRawStore so cross-resource lookups don't return
                                         // a previously-valid but now-outdated version.
                                         if let Some(key) = extract_key_from_path(&path, kind) {
                                             self.fs_raw_store.remove(&key);
@@ -353,11 +353,17 @@ where
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // NOTE: Unlike Kubernetes mode (which triggers a full relink on 410 Gone),
+                    // FileSystem mode has no automatic recovery for lagged events. If the
+                    // broadcast channel drops messages, the in-memory cache may permanently
+                    // diverge from the filesystem until the controller restarts.
+                    // FileSystem mode is intended for static/low-churn configs, so this risk
+                    // is acceptable in practice, but monitor the warn log for anomalies.
                     tracing::warn!(
                         component = "fs_resource_controller",
                         kind = kind,
                         lagged = n,
-                        "Event receiver lagged, some events may be missed"
+                        "Event receiver lagged, some events may be missed — cache may diverge until restart"
                     );
                 }
                 Err(broadcast::error::RecvError::Closed) => {
@@ -424,7 +430,7 @@ fn spawn_worker<K>(
     conf_dir: PathBuf,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
-    fs_raw_store: Arc<FsRawStore<K>>,
+    fs_raw_store: Arc<LocalRawStore<K>>,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -647,38 +653,6 @@ fn extract_key_from_path(path: &std::path::Path, expected_kind: &str) -> Option<
     }
 }
 
-fn parse_resource_content<K>(content: &str) -> serde_yaml::Result<K>
-where
-    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
-{
-    let kind = K::resource_kind();
-
-    if kind != ResourceKind::BackendTLSPolicy && kind != ResourceKind::TLSRoute {
-        return serde_yaml::from_str::<K>(content);
-    }
-
-    match extract_api_version(content).as_deref() {
-        Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::BackendTLSPolicy => {
-            let legacy: BackendTLSPolicyAlpha3 = serde_yaml::from_str(content)?;
-            let canonical: BackendTLSPolicy = legacy.into();
-            let normalized = serde_yaml::to_string(&canonical)?;
-            serde_yaml::from_str::<K>(&normalized)
-        }
-        Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::TLSRoute => {
-            let legacy: TLSRouteAlpha3 = serde_yaml::from_str(content)?;
-            let canonical: TLSRoute = legacy.into();
-            let normalized = serde_yaml::to_string(&canonical)?;
-            serde_yaml::from_str::<K>(&normalized)
-        }
-        _ => serde_yaml::from_str::<K>(content),
-    }
-}
-
-fn extract_api_version(content: &str) -> Option<String> {
-    let value: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
-    value.get("apiVersion")?.as_str().map(ToString::to_string)
-}
-
 #[cfg(test)]
 mod tests {
     use super::parse_resource_content;
@@ -793,7 +767,6 @@ mod tests {
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                     proxy_protocol_version: None,
-                    upstream_tls: false,
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
                 }]),

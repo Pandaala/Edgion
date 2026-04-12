@@ -110,7 +110,6 @@ spec:
 | backend.defaultConnectTimeout | duration | 5s | 后端连接超时 |
 | backend.defaultRequestTimeout | duration | 60s | 后端请求超时 |
 | backend.defaultIdleTimeout | duration | 300s | 后端连接池空闲超时 |
-| backend.defaultMaxRetries | integer | 3 | 最大重试次数 |
 
 ### 完整示例
 
@@ -139,4 +138,6 @@ spec:
 
 ## 相关文档
 
-- [Gateway 总览](./overview.md)
+- [Gateway 资源总览](./overview.md)
+- [监听器配置](./listeners/)
+- [TLS 配置](./tls/)

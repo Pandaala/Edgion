@@ -43,12 +43,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 REDIS_DIR="${PROJECT_ROOT}/examples/test/conf/Services/redis"
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
 GATEWAY_BIN="${PROJECT_ROOT}/target/debug/edgion-gateway"
 TEST_SERVER_BIN="${PROJECT_ROOT}/target/debug/examples/test_server"
-CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.toml"
-GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
+CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
+GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # ── Ports ───────────────────────────────────────────────────────────────────
 CONTROLLER_ADMIN_PORT=5800
@@ -285,13 +285,13 @@ log_success "Old processes cleaned up"
 if [ "$DO_BUILD" = true ]; then
     log_section "Building Edgion binaries"
     cd "$PROJECT_ROOT"
-    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-ctl --example test_server 2>&1 | tail -5
+    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-cli --example test_server 2>&1 | tail -5
     log_success "Build complete"
 else
     log_info "Skipping build (--no-build)"
 fi
 
-for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CTL" "$TEST_SERVER_BIN"; do
+for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CLI" "$TEST_SERVER_BIN"; do
     if [ ! -f "$bin" ]; then
         log_error "Binary not found: $bin — run without --no-build first"
         exit 1
@@ -399,25 +399,25 @@ log_section "Loading configuration"
 
 # Base config (GatewayClass, EdgionGatewayConfig, etc.)
 for f in "${CONF_DIR}/base"/*.yaml; do
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" > /dev/null 2>&1 || true
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" > /dev/null 2>&1 || true
 done
 log_success "Base config loaded"
 
 # LinkSys/Redis config (Gateway resource + LinkSys CRD — sorted, so 00_Gateway loads first)
 for f in $(ls "${CONF_DIR}/LinkSys/Redis"/*.yaml | sort); do
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
 done
 log_success "LinkSys/Redis config loaded"
 
 # Shared plugin Gateway + backend Service/EndpointSlice
-"$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/EdgionPlugins/base/Gateway.yaml" > /dev/null 2>&1
-"$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/HTTPRoute/Basic/Service_test-http.yaml" > /dev/null 2>&1
-"$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/HTTPRoute/Basic/EndpointSlice_test-http.yaml" > /dev/null 2>&1
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/EdgionPlugins/base/Gateway.yaml" > /dev/null 2>&1
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/HTTPRoute/Basic/Service_test-http.yaml" > /dev/null 2>&1
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "${CONF_DIR}/HTTPRoute/Basic/EndpointSlice_test-http.yaml" > /dev/null 2>&1
 log_success "Shared EdgionPlugins gateway/backend config loaded"
 
 # RateLimitRedis plugin resources
 for f in $(ls "${CONF_DIR}/EdgionPlugins/RateLimitRedis"/*.yaml | sort); do
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
 done
 log_success "RateLimitRedis plugin config loaded"
 
@@ -657,7 +657,7 @@ assert_contains "RateLimitRedis fail-close body message" "$HTTP_BODY" "Redis una
 # ── 10. Lifecycle: delete → client removed ────────────────────────────────
 log_info "─── 10. Lifecycle: Delete LinkSys ───"
 
-"$EDGION_CTL" --server "$CONTROLLER_URL" delete LinkSys redis-test -n default 2>&1 || true
+"$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys redis-test -n default 2>&1 || true
 # Wait for sync: Controller → Gateway → ConfHandler → remove client
 sleep 5
 
@@ -673,7 +673,7 @@ else
 fi
 
 # Re-create (useful if --no-cleanup for manual debugging)
-"$EDGION_CTL" --server "$CONTROLLER_URL" apply \
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply \
     -f "${CONF_DIR}/LinkSys/Redis/01_LinkSys_default_redis-test.yaml" > /dev/null 2>&1 || true
 
 # =============================================================================

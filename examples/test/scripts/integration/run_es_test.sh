@@ -42,11 +42,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 ES_DIR="${PROJECT_ROOT}/examples/test/conf/Services/elasticsearch"
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
-EDGION_CTL="${PROJECT_ROOT}/target/debug/edgion-ctl"
+EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
 GATEWAY_BIN="${PROJECT_ROOT}/target/debug/edgion-gateway"
-CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.toml"
-GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.toml"
+CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
+GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # ── Ports ───────────────────────────────────────────────────────────────────
 CONTROLLER_ADMIN_PORT=5800
@@ -270,13 +270,13 @@ log_success "Old processes cleaned up"
 if [ "$DO_BUILD" = true ]; then
     log_section "Building Edgion binaries"
     cd "$PROJECT_ROOT"
-    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-ctl 2>&1 | tail -5
+    cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-cli 2>&1 | tail -5
     log_success "Build complete"
 else
     log_info "Skipping build (--no-build)"
 fi
 
-for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CTL"; do
+for bin in "$CONTROLLER_BIN" "$GATEWAY_BIN" "$EDGION_CLI"; do
     if [ ! -f "$bin" ]; then
         log_error "Binary not found: $bin — run without --no-build first"
         exit 1
@@ -352,12 +352,12 @@ done
 log_section "Loading configuration"
 
 for f in "${CONF_DIR}/base"/*.yaml; do
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" > /dev/null 2>&1 || true
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" > /dev/null 2>&1 || true
 done
 log_success "Base config loaded"
 
 for f in $(ls "${CONF_DIR}/LinkSys/Elasticsearch"/*.yaml | sort); do
-    "$EDGION_CTL" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
+    "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
 done
 log_success "LinkSys/Elasticsearch config loaded"
 
@@ -609,7 +609,7 @@ assert_json_failure "Create index on non-existent client returns error" "$RESP"
 # ── 9. Lifecycle: Delete CRD ──────────────────────────────────────────
 log_info "─── 9. Lifecycle: Delete LinkSys ───"
 
-"$EDGION_CTL" --server "$CONTROLLER_URL" delete LinkSys es-test -n default 2>&1 || true
+"$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys es-test -n default 2>&1 || true
 sleep 5
 
 RESP=$(gw_api GET "/api/v1/testing/link-sys/es/clients")
@@ -619,7 +619,7 @@ assert_not_contains "es-test removed after delete" "$CLIENTS_JSON" "default/es-t
 # ── 10. Lifecycle: Re-create ──────────────────────────────────────────
 log_info "─── 10. Lifecycle: Re-create LinkSys ───"
 
-"$EDGION_CTL" --server "$CONTROLLER_URL" apply \
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply \
     -f "${CONF_DIR}/LinkSys/Elasticsearch/01_LinkSys_default_es-test.yaml" 2>&1 || true
 sleep 5
 

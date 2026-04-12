@@ -1,5 +1,9 @@
 # RealIp Plugin
 
+> **🔌 Edgion Extension**
+> 
+> RealIp is a real client IP extraction plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 ## Overview
 
 The RealIp plugin extracts the real client IP address from HTTP request headers, particularly useful when the gateway is deployed behind CDNs, load balancers, or other proxies.
@@ -38,11 +42,11 @@ spec:
 
 ### Configuration Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `trustedIps` | string[] | Yes | - | List of trusted proxy IP addresses or CIDR ranges |
-| `realIpHeader` | string | No | `"X-Forwarded-For"` | Header name to extract the real IP from |
-| `recursive` | boolean | No | `true` | Whether to enable recursive lookup (Nginx-style) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `trustedIps` | Array\<String\> | — (required) | List of trusted proxy IP addresses or CIDR ranges |
+| `realIpHeader` | String | `"X-Forwarded-For"` | Header name to extract the real IP from |
+| `recursive` | Boolean | `true` | Whether to enable recursive lookup (Nginx-style) |
 
 #### trustedIps
 
@@ -232,8 +236,9 @@ A: Yes, add all CDN IP ranges to the `trustedIps` list.
 
 A: Yes, after updating the EdgionPlugins resource, the configuration is automatically hot-reloaded.
 
-## Related Resources
+## Related Documentation
 
-- [Nginx ngx_http_realip_module](https://nginx.org/en/docs/http/ngx_http_realip_module.html)
-- [APISIX real-ip plugin](https://apisix.apache.org/docs/apisix/plugins/real-ip/)
-- [Cloudflare IP Ranges](https://www.cloudflare.com/ips/)
+- [IP Restriction Plugin](../http-route/filters/edgion-plugins/ip-restriction.md) - IP allow/deny lists (commonly used with RealIp)
+- [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview
+- [Nginx ngx_http_realip_module](https://nginx.org/en/docs/http/ngx_http_realip_module.html) - Nginx real IP module reference
+- [Cloudflare IP Ranges](https://www.cloudflare.com/ips/) - Cloudflare CDN IP ranges

@@ -50,9 +50,8 @@ pub use tcp_route::TcpRouteHandler;
 pub use tls_route::{TlsRouteAlpha3Handler, TlsRouteHandler};
 pub use udp_route::UdpRouteHandler;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_gateway_route_index;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::HandlerContext;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::resources::common::ParentReference;
 use crate::types::ResourceKind;
 
@@ -80,9 +79,14 @@ pub(crate) async fn requeue_parent_gateways(
 
 /// Remove a route from the attached-route tracker.
 /// Returns true if the route was tracked (had entries to remove).
-pub(crate) fn remove_from_attached_route_tracker(route_kind: ResourceKind, route_ns: &str, route_name: &str) -> bool {
+pub(crate) fn remove_from_attached_route_tracker(
+    route_kind: ResourceKind,
+    route_ns: &str,
+    route_name: &str,
+    runtime: &ControllerRuntime,
+) -> bool {
     let route_key = format!("{}/{}", route_ns, route_name);
-    get_attached_route_tracker().remove_route(route_kind, &route_key)
+    runtime.attached_route_tracker.remove_route(route_kind, &route_key)
 }
 
 /// Update the Gateway → Route index so that Gateway changes can requeue affected routes.
@@ -91,17 +95,25 @@ pub(crate) fn update_gateway_route_index(
     route_ns: &str,
     route_name: &str,
     parent_refs: Option<&Vec<ParentReference>>,
+    runtime: &ControllerRuntime,
 ) {
     let route_key = format!("{}/{}", route_ns, route_name);
     let empty_refs = Vec::new();
     let refs = parent_refs.unwrap_or(&empty_refs);
-    get_gateway_route_index().update_route(route_kind, &route_key, refs, route_ns);
+    runtime
+        .gateway_route_index
+        .update_route(route_kind, &route_key, refs, route_ns);
 }
 
 /// Remove a route from the Gateway → Route index.
-pub(crate) fn remove_from_gateway_route_index(route_kind: ResourceKind, route_ns: &str, route_name: &str) {
+pub(crate) fn remove_from_gateway_route_index(
+    route_kind: ResourceKind,
+    route_ns: &str,
+    route_name: &str,
+    runtime: &ControllerRuntime,
+) {
     let route_key = format!("{}/{}", route_ns, route_name);
-    get_gateway_route_index().remove_route(route_kind, &route_key);
+    runtime.gateway_route_index.remove_route(route_kind, &route_key);
 }
 
 /// Requeue BackendTLSPolicies bound to backend Services of this route.
@@ -116,18 +128,16 @@ pub(crate) async fn requeue_backend_tls_policies_for_route(
     route_name: &str,
     ctx: &HandlerContext,
 ) {
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::get_backend_tls_policy_target_manager;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::service_ref::get_service_ref_manager;
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceRef;
 
     let route_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
-    let service_keys = get_service_ref_manager().get_dependencies(&route_ref.key());
+    let service_keys = ctx.runtime().service_ref_mgr.get_dependencies(&route_ref.key());
 
     if service_keys.is_empty() {
         return;
     }
 
-    let target_manager = get_backend_tls_policy_target_manager();
+    let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
     for service_key in &service_keys {
         let btps = target_manager.get_refs(service_key);
         for btp_ref in btps {

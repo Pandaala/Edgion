@@ -150,47 +150,47 @@ mkdir -p "$WORK_DIR/logs" "$WORK_DIR/conf"
 log "Work dir: $WORK_DIR"
 
 # ── Write center config ───────────────────────────────────────────────────────
-cat > "$WORK_DIR/center.toml" <<'EOF'
-[server]
-grpc_addr = "0.0.0.0:50952"
-http_addr = "0.0.0.0:5910"
+cat > "$WORK_DIR/center.yaml" <<'EOF'
+server:
+  grpc_addr: "0.0.0.0:50952"
+  http_addr: "0.0.0.0:5910"
 
-[sync]
-list_interval_secs = 5
-list_timeout_secs = 10
-command_timeout_secs = 10
-ping_interval_secs = 5
-offline_evict_hours = 24
+sync:
+  list_interval_secs: 5
+  list_timeout_secs: 10
+  command_timeout_secs: 10
+  ping_interval_secs: 5
+  offline_evict_hours: 24
 EOF
 
 # ── Write controller config (substitute WORK_DIR) ─────────────────────────────
-sed "s|WORK_DIR_PLACEHOLDER|${WORK_DIR}|g" > "$WORK_DIR/controller.toml" <<EOF
-work_dir = "WORK_DIR_PLACEHOLDER"
+sed "s|WORK_DIR_PLACEHOLDER|${WORK_DIR}|g" > "$WORK_DIR/controller.yaml" <<EOF
+work_dir: "WORK_DIR_PLACEHOLDER"
 
-[server]
-grpc_listen = "0.0.0.0:50953"
-admin_listen = "0.0.0.0:5911"
+server:
+  grpc_listen: "0.0.0.0:50953"
+  admin_listen: "0.0.0.0:5911"
 
-[logging]
-log_dir = "WORK_DIR_PLACEHOLDER/logs"
-log_prefix = "fed-sync-test-ctrl"
-log_level = "info"
-json_format = false
-console = false
+logging:
+  log_dir: "WORK_DIR_PLACEHOLDER/logs"
+  log_prefix: "fed-sync-test-ctrl"
+  log_level: "info"
+  json_format: false
+  console: false
 
-[conf_center]
-type = "file_system"
-conf_dir = "WORK_DIR_PLACEHOLDER/conf"
+conf_center:
+  type: "file_system"
+  conf_dir: "WORK_DIR_PLACEHOLDER/conf"
 
-[conf_sync]
-no_sync_kinds = ["ReferenceGrant", "Secret"]
+conf_sync:
+  no_sync_kinds: ["ReferenceGrant", "Secret"]
 
-[center]
-address = "http://127.0.0.1:50952"
-name = "test-ctrl"
-cluster = "test-cluster"
-env = ["testing"]
-ping_interval_secs = 5
+center:
+  address: "http://127.0.0.1:50952"
+  name: "test-ctrl"
+  cluster: "test-cluster"
+  env: ["testing"]
+  ping_interval_secs: 5
 EOF
 
 # ── Copy test resources ───────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ log "Copied $(ls "$WORK_DIR/conf/"*.yaml 2>/dev/null | wc -l | tr -d ' ') YAML r
 
 # ── Start center ──────────────────────────────────────────────────────────────
 log "Starting edgion-center..."
-"$CENTER_BIN" -c "$WORK_DIR/center.toml" > "$WORK_DIR/center.log" 2>&1 &
+"$CENTER_BIN" -c "$WORK_DIR/center.yaml" > "$WORK_DIR/center.log" 2>&1 &
 CENTER_PID=$!
 log "edgion-center PID: $CENTER_PID"
 sleep 1
@@ -213,7 +213,7 @@ wait_for_http "$CENTER_HTTP/controllers" 15
 
 # ── Start controller ──────────────────────────────────────────────────────────
 log "Starting edgion-controller..."
-"$CTRL_BIN" -c "$WORK_DIR/controller.toml" > "$WORK_DIR/controller.log" 2>&1 &
+"$CTRL_BIN" -c "$WORK_DIR/controller.yaml" > "$WORK_DIR/controller.log" 2>&1 &
 CTRL_PID=$!
 log "edgion-controller PID: $CTRL_PID"
 sleep 1

@@ -362,81 +362,78 @@ pub struct RotationConfig {
 
 ### Access Log Configuration
 
-```toml
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-queue_size = 100000  # Optional, default cores * 10000
-
-[access_log.output.localFile.rotation]
-strategy = "daily"  # or "hourly", "never", { size = 104857600 }
-max_files = 10
-check_interval_secs = 30
+```yaml
+access_log:
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      queue_size: 100000  # Optional, default cores * 10000
+      rotation:
+        strategy: daily  # or hourly, never, { Size: 104857600 }
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### SSL Log Configuration
 
-```toml
-[ssl_log]
-enabled = true
-
-[ssl_log.output.localFile]
-path = "logs/ssl.log"
-queue_size = 100000
-
-[ssl_log.output.localFile.rotation]
-strategy = { size = 104857600 }  # 100MB per file
-max_files = 10
-check_interval_secs = 30
+```yaml
+ssl_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/ssl.log
+      queue_size: 100000
+      rotation:
+        strategy: { Size: 104857600 }  # 100MB per file
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### TCP Log Configuration
 
-```toml
-[tcp_log]
-enabled = false  # Disabled by default, enable as needed
-
-[tcp_log.output.localFile]
-path = "logs/tcp.log"
-queue_size = 50000
-
-[tcp_log.output.localFile.rotation]
-strategy = "daily"  # Recommended daily rotation
-max_files = 10
-check_interval_secs = 30
+```yaml
+tcp_log:
+  enabled: false  # Disabled by default, enable as needed
+  output:
+    localFile:
+      path: logs/tcp.log
+      queue_size: 50000
+      rotation:
+        strategy: daily  # Recommended daily rotation
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### UDP Log Configuration
 
-```toml
-[udp_log]
-enabled = false  # Disabled by default, enable as needed
-
-[udp_log.output.localFile]
-path = "logs/udp.log"
-queue_size = 50000
-
-[udp_log.output.localFile.rotation]
-strategy = "daily"  # Recommended daily rotation
-max_files = 10
-check_interval_secs = 30
+```yaml
+udp_log:
+  enabled: false  # Disabled by default, enable as needed
+  output:
+    localFile:
+      path: logs/udp.log
+      queue_size: 50000
+      rotation:
+        strategy: daily  # Recommended daily rotation
+        max_files: 10
+        check_interval_secs: 30
 ```
 
 ### Unified Configuration Pattern
 
 All log types follow the same configuration structure:
 
-```toml
-[<log_type>]
-enabled = true/false  # Enable/disable logging
-
-[<log_type>.output.localFile]
-path = "logs/<log_type>.log"
-queue_size = <optional>
-
-[<log_type>.output.localFile.rotation]
-strategy = "daily" | "hourly" | "never" | { size = <bytes> }
-max_files = <number>
-check_interval_secs = <seconds>
+```yaml
+<log_type>:
+  enabled: true/false  # Enable/disable logging
+  output:
+    localFile:
+      path: "logs/<log_type>.log"
+      queue_size: <optional>
+      rotation:
+        strategy: "daily" | "hourly" | "never" | { Size: <bytes> }
+        max_files: <number>
+        check_interval_secs: <seconds>
 ```
 
 **Configuration priority**:
@@ -713,7 +710,7 @@ match &config.output {
 3. TLS configuration error
 
 **Investigation**:
-1. Check config: `cat config/edgion-gateway.toml | grep ssl_log`
+1. Check config: `cat config/edgion-gateway.yaml | grep ssl_log`
 2. Check startup logs: `grep "SSL logger initialized" logs/*.log`
 3. Test TLS with `curl -k https://...`
 
@@ -730,7 +727,7 @@ match &config.output {
 
 - `src/core/cli/edgion_gateway/config.rs` - Gateway configuration structure
 - `src/types/link_sys.rs` - Log output configuration types
-- `config/edgion-gateway.toml` - Configuration example
+- `config/edgion-gateway.yaml` - Configuration example
 
 ### User Documentation
 
@@ -742,15 +739,21 @@ match &config.output {
 ### Production Environment
 
 1. **Enable log rotation**
-   ```toml
-   [access_log.output.localFile.rotation]
-   strategy = { size = 104857600 }  # 100MB
-   max_files = 30  # Keep 30 files (~3GB)
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         rotation:
+           strategy: { Size: 104857600 }  # 100MB
+           max_files: 30  # Keep 30 files (~3GB)
    ```
 
 2. **Appropriate queue size**
-   ```toml
-   queue_size = 200000  # High traffic scenario
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         queue_size: 200000  # High traffic scenario
    ```
 
 3. **Monitor metrics**
@@ -765,20 +768,26 @@ match &config.output {
 ### Development Environment
 
 1. **Disable log rotation**
-   ```toml
-   [access_log.output.localFile.rotation]
-   strategy = "never"
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         rotation:
+           strategy: never
    ```
 
 2. **Reduce queue size**
-   ```toml
-   queue_size = 10000
+   ```yaml
+   access_log:
+     output:
+       localFile:
+         queue_size: 10000
    ```
 
 3. **Enable SSL logs**
-   ```toml
-   [ssl_log]
-   enabled = true  # Debug TLS issues
+   ```yaml
+   ssl_log:
+     enabled: true  # Debug TLS issues
    ```
 
 ## Future Plans

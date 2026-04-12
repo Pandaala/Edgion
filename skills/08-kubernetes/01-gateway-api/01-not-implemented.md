@@ -18,8 +18,8 @@ Gateway API 规范将 `Programmed` 列为 Core 必需条件，要求确认配置
 当前采用简化策略：Controller 处理资源后即设置 `Programmed=True`（因为配置会通过 gRPC 同步推送到数据面），当 listener 存在冲突、未解析引用、无效 TLS 配置等异常时设置 `Programmed=False`。这满足 conformance test 的要求，但不代表数据面已实际加载配置。
 
 - Gateway 级和 Listener 级均设置 `Programmed` 条件
-- 详细架构决策见 [skills/01-architecture/01-controller/10-status-management.md](../01-architecture/01-controller/10-status-management.md)
-- 完整方案设计见 [tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)（保留备查，不实施）
+- 详细架构决策见 [skills/01-architecture/01-controller/10-status-management.md](../../01-architecture/01-controller/10-status-management.md)
+- 完整方案设计见 `tasks/todo/data-plane-status-feedback.md`（规划中，保留备查，不实施）
 
 ## Gateway addresses 实际绑定地址上报 / GatewayStaticAddresses / GatewayOptionalAddressValue
 
@@ -37,7 +37,7 @@ Gateway API 规范建议同一 Listener 上 GRPCRoute 和 HTTPRoute 的 hostname
 
 Edgion 当前架构中 gRPC 请求先匹配 GRPCRoute、不匹配再 fallback HTTPRoute，优先级逻辑合理。同一 hostname 上 GRPCRoute + HTTPRoute 共存是正常使用模式，主流实现（Envoy Gateway、Istio）也不做跨类型冲突检测。
 
-- 相关任务见 [tasks/todo/gateway-api-conformance/04-grpcroute-gaps.md](../../tasks/todo/gateway-api-conformance/04-grpcroute-gaps.md)
+- 相关任务见 `tasks/todo/gateway-api-conformance/04-grpcroute-gaps.md`（规划中）
 
 ## Gateway infrastructure 字段
 
@@ -48,7 +48,7 @@ Gateway API Extended 功能，允许用户在 `GatewaySpec.infrastructure` 中�
 Edgion 是自部署网关，不负责创建云基础设施资源，当前无 cloud provider 集成需求。
 
 - 仅在有云厂商集成需求时考虑实现
-- 相关任务见 [tasks/todo/gateway-api-conformance/06-policy-and-experimental.md](../../tasks/todo/gateway-api-conformance/06-policy-and-experimental.md)
+- 相关任务见 `tasks/todo/gateway-api-conformance/06-policy-and-experimental.md`（规划中）
 
 ## ListenerSet
 
@@ -138,6 +138,8 @@ Edgion 的 Gateway 进程在**启动时**通过 `configure_listeners` 绑定所�
 
 Status 报告的局限性：`ancestorRef` 指向 Gateway 表示"控制面认为该 Policy 在此 Gateway 上生效"，但不代表数据面 TLS 连接一定成功（证书不匹配、后端不支持 TLS 等运行时问题无法通过 status 反映）。
 
+**适用范围：仅 HTTPRoute / GRPCRoute。** BackendTLSPolicy 不对 TLSRoute 生效。TLSRoute Passthrough 透传原始 TLS 流量，Gateway 不与后端建立新连接；TLSRoute Terminate 按 SNI 转发解密流量到后端，属于纯 stream 层代理，不涉及 L7 后端 TLS 配置。需要后端 TLS（re-encrypt）的场景应使用 HTTPRoute / GRPCRoute + BackendTLSPolicy。
+
 ## BackendTrafficPolicy (BTP)
 
 **决定：暂不实现（等 GA）**
@@ -148,11 +150,28 @@ Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-bre
 
 - 等 BTP 从实验性毕业到 GA 后再考虑统一到标准 CRD
 - 当前 annotation 方式对用户可用，不影响实际功能
-- 相关任务见 [tasks/todo/gateway-api-conformance/06-policy-and-experimental.md](../../tasks/todo/gateway-api-conformance/06-policy-and-experimental.md)
+- 相关任务见 `tasks/todo/gateway-api-conformance/06-policy-and-experimental.md`（规划中）
 
 ## ~~frontendValidation 标准化~~ ✅ 已完成
 
 Controller 解析 `frontend_validation` CA 引用（Secret/ConfigMap），per-listener 合并，设置 listener status conditions。Gateway 数据面 `configure_gateway_frontend_mtls()` 加载 CA 证书配置 SSL verify mode：AllowValidOnly 用 `PEER | FAIL_IF_NO_PEER_CERT`，AllowInsecureFallback 用自定义 verify callback 始终 accept（boringssl FFI）。与 EdgionTls `client_auth` 完全独立。
+
+## GRPCRoute retry.codes
+
+**决定：不实现（架构限制）**
+
+gRPC 状态码（0–16）位于 HTTP/2 trailers 的 `grpc-status` 头中。基于状态码的重试需要在响应流结束前读取 trailers 并做出重试决策，但 Pingora 代理架构在响应完成后才能读取 trailers，此时已无法回溯重试。
+
+GRPCRoute retry 的其他字段正常工作：
+
+- `retry.attempts`：支持（控制最大重试次数）
+- `retry.backoff`：支持（指数退避，上限 30s）
+- `retry.codes`：**不支持**，YAML 中可以填写但运行时忽略，并输出 warn 日志
+
+当前行为：Controller 解析 GRPCRoute 时，若 `retry.codes` 非空，输出警告日志 `"GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"`，然后将 `ParsedRouteRetry.codes` 设为 `None`。重试仅基于连接错误 / 上游不可达触发，不按 gRPC 状态码区分。
+
+- 替代方案：在客户端 gRPC SDK 层配置 retry policy（如 gRPC service config 的 `retryPolicy.retryableStatusCodes`），客户端能完整读取 trailers 并按状态码重试
+- 相关代码：`src/types/resources/grpc_route.rs` 第 526–541 行
 
 ## GATEWAY-TLS ConformanceProfile
 
@@ -164,4 +183,4 @@ TLS Passthrough 功能已实现；TLS Terminate 也已有数据面主路径，�
 - `TLSRouteModeTerminate` 可作为后续增强继续推进
 - `TLSRouteModeMixed` 明确不实现
 - MESH-HTTP / MESH-GRPC：Edgion 不是 service mesh，不适用
-- 相关任务见 [tasks/todo/gateway-api-conformance/06-policy-and-experimental.md](../../tasks/todo/gateway-api-conformance/06-policy-and-experimental.md)
+- 相关任务见 `tasks/todo/gateway-api-conformance/06-policy-and-experimental.md`（规划中）

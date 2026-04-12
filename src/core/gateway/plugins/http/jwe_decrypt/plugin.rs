@@ -4,7 +4,8 @@
 //! - alg=dir
 //! - enc=A256GCM
 
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aes_gcm::aead::{AeadInPlace, KeyInit};
@@ -165,7 +166,7 @@ impl JweDecrypt {
 
     fn load_key(&self) -> Result<Vec<u8>, String> {
         {
-            let guard = self.credential.read().map_err(|_| "credential lock poisoned")?;
+            let guard = self.credential.read();
             if let Some(ref key) = *guard {
                 return Ok(key.clone());
             }
@@ -174,7 +175,7 @@ impl JweDecrypt {
         let key = self.load_key_from_secret()?;
 
         {
-            let mut guard = self.credential.write().map_err(|_| "credential lock poisoned")?;
+            let mut guard = self.credential.write();
             *guard = Some(key.clone());
         }
 

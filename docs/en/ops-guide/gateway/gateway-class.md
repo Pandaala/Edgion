@@ -110,7 +110,6 @@ Limits the maximum number of HTTP requests a single downstream TCP connection ca
 | backend.defaultConnectTimeout | duration | 5s | Backend connection timeout |
 | backend.defaultRequestTimeout | duration | 60s | Backend request timeout |
 | backend.defaultIdleTimeout | duration | 300s | Backend connection pool idle timeout |
-| backend.defaultMaxRetries | integer | 3 | Maximum retry count |
 
 ### Full Example
 
@@ -139,4 +138,6 @@ spec:
 
 ## Related Documentation
 
-- [Gateway Overview](./overview.md)
+- [Gateway Resource Overview](./overview.md)
+- [Listener Configuration](./listeners/)
+- [TLS Configuration](./tls/)

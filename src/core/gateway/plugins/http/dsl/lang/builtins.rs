@@ -169,6 +169,74 @@ impl Vm {
                 Ok(Value::Bool(session.get_response_header(&name).is_some()))
             }
 
+            // ===== req.* metadata (P1) =====
+            BuiltinId::ReqProtocol => checked_value_str(session.discover_protocol(), self.limits.max_string_len),
+            BuiltinId::ReqGrpcService => checked_value_opt_str(session.grpc_service(), self.limits.max_string_len),
+            BuiltinId::ReqGrpcMethod => checked_value_opt_str(session.grpc_method(), self.limits.max_string_len),
+            BuiltinId::ReqContentLength => match session.header_value("Content-Length") {
+                Some(v) => match v.parse::<i64>() {
+                    Ok(n) => Ok(Value::Int(n)),
+                    Err(_) => Ok(Value::Nil),
+                },
+                None => Ok(Value::Nil),
+            },
+            BuiltinId::ReqClientCertCn => {
+                let cn = session.client_cert_info().and_then(|c| c.cn.clone());
+                checked_value_opt_str(cn, self.limits.max_string_len)
+            }
+            BuiltinId::ReqClientCertFingerprint => {
+                let fp = session.client_cert_info().map(|c| c.fingerprint.clone());
+                checked_value_opt_str(fp, self.limits.max_string_len)
+            }
+
+            // ===== resp.* read (P2) =====
+            BuiltinId::RespHeaderNames => {
+                // Collect response header names — requires response_header to be available
+                // Uses get_response_header pattern: if response_header is None, returns empty list
+                // We don't have a dedicated method, so we check known standard headers
+                // Actually, we need a new PluginSession method for this.
+                // For now, return empty list if response headers are not accessible.
+                let names = session.response_header_names();
+                const MAX_HEADER_NAMES: usize = 256;
+                let mut result: Vec<String> = Vec::new();
+                for name in names.into_iter().take(MAX_HEADER_NAMES) {
+                    check_string_len(&name, self.limits.max_string_len)?;
+                    result.push(name);
+                }
+                Ok(Value::List(result))
+            }
+            BuiltinId::RespContentType => {
+                checked_value_opt_str(session.get_response_header("Content-Type"), self.limits.max_string_len)
+            }
+
+            // ===== resp.* set status =====
+            BuiltinId::RespSetStatus => {
+                let code_val = state.pop()?;
+                let code = match &code_val {
+                    Value::Int(n) => {
+                        let c = *n;
+                        if !(100..=599).contains(&c) {
+                            return Err(RuntimeError::ApiError {
+                                function: "resp.set_status".into(),
+                                message: format!("invalid status code: {} (must be 100-599)", c),
+                            });
+                        }
+                        c as u16
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Int",
+                            got: code_val.type_name(),
+                            operation: "resp.set_status()",
+                        });
+                    }
+                };
+                session
+                    .set_response_status(code)
+                    .map_err(|e| api_error("resp.set_status", e))?;
+                Ok(Value::Nil)
+            }
+
             // ===== resp.* mutation =====
             BuiltinId::RespSetHeader => {
                 let value = state.pop()?.into_string();
@@ -422,6 +490,198 @@ impl Vm {
                 let count = (end - start).max(0).min(1000) as usize;
                 let list: Vec<String> = (start..start + count as i64).map(|i| i.to_string()).collect();
                 Ok(Value::List(list))
+            }
+
+            // ===== P3 Utility Functions =====
+            BuiltinId::HmacSha256 => {
+                use hmac::{Hmac, Mac};
+                type HmacSha256 = Hmac<sha2::Sha256>;
+
+                let data = state.pop()?.into_string();
+                let key = state.pop()?.into_string();
+                let mut mac = HmacSha256::new_from_slice(key.as_bytes()).map_err(|e| RuntimeError::ApiError {
+                    function: "hmac_sha256".into(),
+                    message: format!("invalid key: {}", e),
+                })?;
+                mac.update(data.as_bytes());
+                let result = hex::encode(mac.finalize().into_bytes());
+                Ok(Value::Str(result))
+            }
+            BuiltinId::JsonGet => {
+                let path = state.pop()?.into_string();
+                let json_str = state.pop()?.into_string();
+                // Limit JSON parse size to prevent abuse
+                if json_str.len() > self.limits.max_string_len {
+                    return Err(RuntimeError::StringTooLong {
+                        len: json_str.len(),
+                        limit: self.limits.max_string_len,
+                    });
+                }
+                match serde_json::from_str::<serde_json::Value>(&json_str) {
+                    Ok(val) => {
+                        // Simple dot-notation path traversal with depth limit
+                        let mut current = &val;
+                        let segments: Vec<&str> = path.split('.').collect();
+                        if segments.len() > 32 {
+                            return Err(RuntimeError::ApiError {
+                                function: "json_get".into(),
+                                message: "path too deep (max 32 segments)".into(),
+                            });
+                        }
+                        for key in &segments {
+                            match current {
+                                serde_json::Value::Object(map) => {
+                                    current = match map.get(*key) {
+                                        Some(v) => v,
+                                        None => return Ok(Value::Nil),
+                                    };
+                                }
+                                serde_json::Value::Array(arr) => {
+                                    if let Ok(idx) = key.parse::<usize>() {
+                                        current = match arr.get(idx) {
+                                            Some(v) => v,
+                                            None => return Ok(Value::Nil),
+                                        };
+                                    } else {
+                                        return Ok(Value::Nil);
+                                    }
+                                }
+                                _ => return Ok(Value::Nil),
+                            }
+                        }
+                        match current {
+                            serde_json::Value::String(s) => checked_value_str(s.clone(), self.limits.max_string_len),
+                            serde_json::Value::Number(n) => {
+                                if let Some(i) = n.as_i64() {
+                                    Ok(Value::Int(i))
+                                } else {
+                                    Ok(Value::Str(n.to_string()))
+                                }
+                            }
+                            serde_json::Value::Bool(b) => Ok(Value::Bool(*b)),
+                            serde_json::Value::Null => Ok(Value::Nil),
+                            other => {
+                                let s = other.to_string();
+                                check_string_len(&s, self.limits.max_string_len)?;
+                                Ok(Value::Str(s))
+                            }
+                        }
+                    }
+                    Err(_) => Ok(Value::Nil),
+                }
+            }
+            BuiltinId::Uuid => {
+                let id = uuid::Uuid::new_v4().to_string();
+                Ok(Value::Str(id))
+            }
+            BuiltinId::HexEncode => {
+                let s = state.pop()?.into_string();
+                let encoded = hex::encode(s.as_bytes());
+                check_string_len(&encoded, self.limits.max_string_len)?;
+                Ok(Value::Str(encoded))
+            }
+            BuiltinId::HexDecode => {
+                let s = state.pop()?.into_string();
+                match hex::decode(&s) {
+                    Ok(bytes) => {
+                        let decoded = String::from_utf8_lossy(&bytes).to_string();
+                        check_string_len(&decoded, self.limits.max_string_len)?;
+                        Ok(Value::Str(decoded))
+                    }
+                    Err(_) => Ok(Value::Nil),
+                }
+            }
+            BuiltinId::TimeFormat => {
+                let format = state.pop()?.into_string();
+                if format.len() > 256 {
+                    return Err(RuntimeError::ApiError {
+                        function: "time_format".into(),
+                        message: format!("format string too long: {} (max 256)", format.len()),
+                    });
+                }
+                let timestamp = state.pop()?.as_int().unwrap_or(0);
+                let dt = chrono::DateTime::from_timestamp(timestamp, 0);
+                match dt {
+                    Some(dt) => {
+                        let formatted = dt.format(&format).to_string();
+                        check_string_len(&formatted, self.limits.max_string_len)?;
+                        Ok(Value::Str(formatted))
+                    }
+                    None => Ok(Value::Nil),
+                }
+            }
+            BuiltinId::IpInCidr => {
+                let cidr_str = state.pop()?.into_string();
+                let ip_str = state.pop()?.into_string();
+                let ip: std::net::IpAddr = match ip_str.parse() {
+                    Ok(ip) => ip,
+                    Err(_) => return Ok(Value::Bool(false)),
+                };
+                // Parse CIDR manually: "10.0.0.0/8"
+                let parts: Vec<&str> = cidr_str.splitn(2, '/').collect();
+                if parts.len() != 2 {
+                    return Ok(Value::Bool(false));
+                }
+                let network_ip: std::net::IpAddr = match parts[0].parse() {
+                    Ok(ip) => ip,
+                    Err(_) => return Ok(Value::Bool(false)),
+                };
+                let prefix_len: u8 = match parts[1].parse() {
+                    Ok(p) => p,
+                    Err(_) => return Ok(Value::Bool(false)),
+                };
+                let result = match (ip, network_ip) {
+                    (std::net::IpAddr::V4(ip), std::net::IpAddr::V4(net)) => {
+                        if prefix_len > 32 {
+                            false
+                        } else if prefix_len == 0 {
+                            true
+                        } else {
+                            let mask = u32::MAX.checked_shl(32 - prefix_len as u32).unwrap_or(0);
+                            (u32::from(ip) & mask) == (u32::from(net) & mask)
+                        }
+                    }
+                    (std::net::IpAddr::V6(ip), std::net::IpAddr::V6(net)) => {
+                        if prefix_len > 128 {
+                            false
+                        } else if prefix_len == 0 {
+                            true
+                        } else {
+                            let mask = u128::MAX.checked_shl(128 - prefix_len as u32).unwrap_or(0);
+                            (u128::from(ip) & mask) == (u128::from(net) & mask)
+                        }
+                    }
+                    _ => false, // IPv4 vs IPv6 mismatch
+                };
+                Ok(Value::Bool(result))
+            }
+            BuiltinId::Join => {
+                let delim = state.pop()?.into_string();
+                let list = state.pop()?;
+                match list {
+                    Value::List(items) => {
+                        let joined = items.join(&delim);
+                        check_string_len(&joined, self.limits.max_string_len)?;
+                        Ok(Value::Str(joined))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "List",
+                        got: list.type_name(),
+                        operation: "join()",
+                    }),
+                }
+            }
+            BuiltinId::LogWarn => {
+                let msg = state.pop()?.into_string();
+                tracing::warn!("DSL plugin: {}", msg);
+                log.push(&format!("warn:{}", msg));
+                Ok(Value::Nil)
+            }
+            BuiltinId::LogError => {
+                let msg = state.pop()?.into_string();
+                tracing::error!("DSL plugin: {}", msg);
+                log.push(&format!("error:{}", msg));
+                Ok(Value::Nil)
             }
         }
     }

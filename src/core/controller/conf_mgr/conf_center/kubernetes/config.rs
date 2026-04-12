@@ -437,25 +437,25 @@ remove_managed_fields: false
 
     #[test]
     fn test_ha_mode_serde() {
-        let toml_str = r#"
-gateway_class = "edgion"
-ha_mode = "all-serve"
+        let yaml_str = r#"
+gateway_class: edgion
+ha_mode: all-serve
 "#;
-        let config: KubernetesConfig = toml::from_str(toml_str).unwrap();
+        let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert_eq!(config.ha_mode, HaMode::AllServe);
 
-        let toml_str = r#"
-gateway_class = "edgion"
-ha_mode = "leader-only"
+        let yaml_str = r#"
+gateway_class: edgion
+ha_mode: leader-only
 "#;
-        let config: KubernetesConfig = toml::from_str(toml_str).unwrap();
+        let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert_eq!(config.ha_mode, HaMode::LeaderOnly);
 
         // Default (no ha_mode specified) should be LeaderOnly
-        let toml_str = r#"
-gateway_class = "edgion"
+        let yaml_str = r#"
+gateway_class: edgion
 "#;
-        let config: KubernetesConfig = toml::from_str(toml_str).unwrap();
+        let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert_eq!(config.ha_mode, HaMode::LeaderOnly);
     }
 

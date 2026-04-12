@@ -15,7 +15,7 @@ pub fn validate_san_whitelist(cert_info: &ClientCertInfo, allowed_sans: &Vec<Str
     // Check if any SAN matches the whitelist
     for san in &cert_info.sans {
         for allowed in allowed_sans {
-            if matches_pattern(san, allowed) {
+            if super::matches_host_pattern(san, allowed) {
                 tracing::debug!(
                     san = %san,
                     allowed = %allowed,
@@ -49,7 +49,7 @@ pub fn validate_cn_whitelist(cert_info: &ClientCertInfo, allowed_cns: &Vec<Strin
 
     // Check if CN matches the whitelist
     for allowed in allowed_cns {
-        if matches_pattern(cn, allowed) {
+        if super::matches_host_pattern(cn, allowed) {
             tracing::debug!(
                 cn = %cn,
                 allowed = %allowed,
@@ -67,64 +67,23 @@ pub fn validate_cn_whitelist(cert_info: &ClientCertInfo, allowed_cns: &Vec<Strin
     false
 }
 
-/// Match string against pattern (supports exact match and wildcard)
-/// Wildcard rules:
-/// - * can only appear at the beginning
-/// - *.example.com matches any subdomain of example.com
-fn matches_pattern(value: &str, pattern: &str) -> bool {
-    if pattern == value {
-        // Exact match
-        return true;
-    }
-
-    if let Some(suffix) = pattern.strip_prefix("*.") {
-        // Wildcard match: *.example.com
-        // SAFETY: Check pattern length before slicing to prevent panic
-        if pattern.len() < 3 {
-            // Pattern is just "*." with no suffix - invalid
-            return false;
-        }
-        // Remove "*."
-
-        if value.ends_with(suffix) {
-            // Check that there's exactly one subdomain level
-            // SAFETY: value.len() >= suffix.len() because ends_with() succeeded
-            let prefix_len = value.len() - suffix.len();
-            if prefix_len == 0 {
-                // value equals suffix, no subdomain prefix
-                return false;
-            }
-            let prefix = &value[..prefix_len];
-            // Check if prefix ends with '.' and extract subdomain part
-            if let Some(subdomain) = prefix.strip_suffix('.') {
-                if !subdomain.is_empty() {
-                    // Check subdomain part doesn't contain dots
-                    return !subdomain.contains('.');
-                }
-                // prefix is just "." - invalid
-                return false;
-            }
-        }
-    }
-
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_matches_pattern_exact() {
-        assert!(matches_pattern("example.com", "example.com"));
-        assert!(!matches_pattern("example.com", "other.com"));
+        use crate::core::gateway::tls::validation::matches_host_pattern;
+        assert!(matches_host_pattern("example.com", "example.com"));
+        assert!(!matches_host_pattern("example.com", "other.com"));
     }
 
     #[test]
     fn test_matches_pattern_wildcard() {
-        assert!(matches_pattern("sub.example.com", "*.example.com"));
-        assert!(!matches_pattern("example.com", "*.example.com"));
-        assert!(!matches_pattern("sub.sub.example.com", "*.example.com"));
+        use crate::core::gateway::tls::validation::matches_host_pattern;
+        assert!(matches_host_pattern("sub.example.com", "*.example.com"));
+        assert!(!matches_host_pattern("example.com", "*.example.com"));
+        assert!(!matches_host_pattern("sub.sub.example.com", "*.example.com"));
     }
 
     #[test]

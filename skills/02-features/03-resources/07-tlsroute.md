@@ -30,7 +30,6 @@ metadata:
   annotations:
     edgion.io/edgion-stream-plugins: "default/my-stream-plugins"
     edgion.io/proxy-protocol: "2"
-    edgion.io/upstream-tls: "true"
     edgion.io/max-connect-retries: "3"
 spec:
   parentRefs:
@@ -79,7 +78,6 @@ spec:
 |------|------|------|------|
 | `edgion.io/edgion-stream-plugins` | `ns/name` | — | 绑定 EdgionStreamPlugins |
 | `edgion.io/proxy-protocol` | `"1"\|"2"` | — | 向上游发送 Proxy Protocol |
-| `edgion.io/upstream-tls` | `"true"\|"false"` | `"false"` | 上游连接启用 TLS |
 | `edgion.io/max-connect-retries` | `u32` | `1` | 最大上游连接重试次数 |
 
 ## 与 Gateway TLS 的配合
@@ -94,6 +92,7 @@ spec:
 - 支持标准 `Passthrough`
 - 支持标准 `Terminate`
 - 不支持 `TLSRouteModeMixed`
+- BackendTLSPolicy 不对 TLSRoute 生效（Passthrough 透传原始 TLS，Terminate 走 stream 层；需要后端 TLS 应使用 HTTPRoute/GRPCRoute）
 
 ## 与 TCPRoute 的区别
 

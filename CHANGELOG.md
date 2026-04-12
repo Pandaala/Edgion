@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Request/response timing metrics
 - edgion-controller: Configuration management component
 - edgion-gateway: High-performance proxy component
-- edgion-ctl: CLI tool for management and debugging
+- edgion-cli: CLI tool for management and debugging
 - Multi-language documentation (Chinese, English, Japanese)
 
 ### Infrastructure

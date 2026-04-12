@@ -8,8 +8,8 @@ use super::plugin_configs::{
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
     DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig,
     JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
-    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig,
+    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
@@ -92,6 +92,8 @@ pub enum EdgionPlugin {
     DynamicExternalUpstream(DynamicExternalUpstreamConfig),
     /// DSL plugin — custom inline scripting with sandboxed VM execution
     Dsl(DslConfig),
+    /// RegionRoute filter (consistent hash-range multi-region routing with optional failover)
+    RegionRoute(RegionRouteConfig),
     // TODO: Add more custom Edgion plugins here
     // EdgionCircuitBreaker(CircuitBreakerConfig),
     // EdgionWaf(WafConfig),
@@ -137,6 +139,7 @@ impl EdgionPlugin {
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
             EdgionPlugin::Dsl(_) => "Dsl",
+            EdgionPlugin::RegionRoute(_) => "RegionRoute",
         }
     }
 }

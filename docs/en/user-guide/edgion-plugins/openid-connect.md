@@ -1,5 +1,9 @@
 # OpenID Connect Plugin
 
+> **🔌 Edgion Extension**
+> 
+> OpenidConnect is an OIDC/OAuth2 authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+
 `OpenidConnect` is a request-phase authentication plugin that completes OIDC/OAuth2 authentication before requests reach the upstream.
 
 ## Implemented Capabilities
@@ -13,7 +17,97 @@
 - Logout (local cleanup, optional revoke call, optional end_session redirect)
 - Claims mapping to Headers (dot-notation, injection protection, size limits)
 
-## Minimal Configuration Example (Bearer Only)
+## Configuration Parameters
+
+### Basic Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `discovery` | String | — (required) | OIDC Discovery endpoint URL, must start with `http://` or `https://` |
+| `clientId` | String | — (required) | OAuth2 Client ID |
+| `clientSecretRef` | Object | None | Reference to a K8s Secret containing the client secret |
+| `bearerOnly` | Boolean | `false` | Only validate Bearer Tokens, do not enable browser login flow |
+| `unauthAction` | Enum | `Auth` | Behavior on unauthenticated requests. Values: `Auth` (trigger login) | `Deny` (return 401) | `Pass` (pass through) |
+| `scope` | String | `"openid"` | OIDC request scope |
+| `requiredScopes` | Array\<String\> | None | Required scopes; token missing any will be rejected |
+| `realm` | String | `"edgion"` | Realm value in the `WWW-Authenticate` response header |
+
+### Authentication Flow Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `usePkce` | Boolean | `false` | Whether to enable PKCE (Proof Key for Code Exchange) |
+| `useNonce` | Boolean | `false` | Whether to include nonce in authorization requests |
+| `redirectUri` | String | None | Custom callback URI, must be an absolute path or absolute URL |
+| `authorizationParams` | Object | None | Extra parameters appended to the authorization request (cannot contain reserved keys like `response_type`, `client_id`, etc.) |
+| `revokeTokensOnLogout` | Boolean | `false` | Whether to call the Token Revocation endpoint on logout |
+| `logoutPath` | String | `"/logout"` | Path that triggers logout, must start with `/` |
+| `postLogoutRedirectUri` | String | None | Redirect URI after logout |
+
+### Session Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sessionSecretRef` | Object | None | Reference to a K8s Secret containing the session encryption key (required when `unauthAction=Auth`) |
+| `sessionCookieName` | String | `"edgion_oidc_session"` | Session cookie name |
+| `sessionLifetime` | Integer | `3600` | Session lifetime (seconds) |
+| `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite attribute. Values: `Strict` | `Lax` | `None` |
+| `sessionCookieHttpOnly` | Boolean | `true` | Cookie HttpOnly attribute |
+| `sessionCookieSecure` | Boolean | `true` | Cookie Secure attribute (must be `true` when `SameSite=None`) |
+| `maxSessionCookieBytes` | Integer | `3800` | Maximum session cookie size in bytes |
+| `renewAccessTokenOnExpiry` | Boolean | `true` | Whether to auto-refresh access token on expiry |
+| `accessTokenExpiresLeeway` | Integer | `0` | Access token expiry leeway (seconds) |
+
+### Token Verification Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `verificationMode` | Enum | `Auto` | Verification mode. Values: `Auto` | `JwksOnly` | `IntrospectionOnly` |
+| `tokenSigningAlg` | String | None | Specify token signing algorithm (cannot be `none`) |
+| `allowedSigningAlgs` | Array\<String\> | None | Allowed signing algorithms list (cannot contain `none`) |
+| `useJwks` | Boolean | `true` | Whether to use JWKS for local verification |
+| `sslVerify` | Boolean | `true` | Whether to verify the OIDC Provider's TLS certificate |
+| `issuers` | Array\<String\> | None | Allowed issuer list |
+| `audiences` | Array\<String\> | None | Allowed audience list |
+| `clockSkewSeconds` | Integer | `120` | Clock skew tolerance (seconds) |
+| `jwksCacheTtl` | Integer | `300` | JWKS cache TTL (seconds) |
+| `jwksMinRefreshInterval` | Integer | `10` | Minimum JWKS refresh interval (seconds) |
+| `introspectionEndpoint` | String | None | Custom introspection endpoint URL |
+| `introspectionEndpointAuthMethod` | Enum | `client_secret_basic` | Introspection endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
+| `introspectionCacheTtl` | Integer | `0` | Introspection result cache TTL (seconds), `0` disables |
+| `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
+
+### Header Forwarding Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `setAccessTokenHeader` | Boolean | `false` | Whether to pass the access token to upstream |
+| `setIdTokenHeader` | Boolean | `false` | Whether to pass the ID token to upstream |
+| `setUserinfoHeader` | Boolean | `false` | Whether to pass userinfo to upstream |
+| `accessTokenInAuthorizationHeader` | Boolean | `false` | Whether to set the access token in the upstream `Authorization: Bearer` header |
+| `claimsToHeaders` | Object | None | Claims-to-header mapping (supports dot-notation, e.g., `user.name`) |
+| `storeClaimsInCtx` | Boolean | `false` | Whether to store claims in context variables |
+| `maxHeaderValueBytes` | Integer | `4096` | Maximum size per mapped header value in bytes |
+| `maxTotalHeaderBytes` | Integer | `16384` | Maximum total size for all mapped headers in bytes |
+
+### Security Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `hideCredentials` | Boolean | `false` | Whether to remove the original Authorization header after successful auth |
+| `authFailureDelayMs` | Integer | `0` | Authentication failure delay (milliseconds), mitigates brute-force attacks |
+
+### Network Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `timeout` | Integer | `3` | OIDC Provider request timeout (seconds) |
+
+---
+
+## Quick Start
+
+### Minimal Configuration Example (Bearer Only)
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -83,3 +177,9 @@ spec:
   - `discovery` address is unreachable or TLS verification failed
 - `Session cookie exceeds configured size limit`
   - Reduce claims/header pass-through, or reduce the data stored in the session
+
+## Related Documentation
+
+- [JwtAuth Plugin](../http-route/filters/edgion-plugins/jwt-auth.md) - JWT token authentication
+- [ForwardAuth Plugin](forward-auth.md) - External authentication plugin
+- [JWE Decrypt Plugin](jwe-decrypt.md) - JWE decryption authentication

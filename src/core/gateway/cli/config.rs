@@ -28,7 +28,7 @@ pub struct EdgionGatewayConfig {
         short = 'c',
         long = "config-file",
         value_name = "FILE",
-        default_value = "config/edgion-gateway.toml"
+        default_value = "config/edgion-gateway.yaml"
     )]
     #[serde(skip)]
     pub config_file: Option<String>,
@@ -431,8 +431,9 @@ impl Default for RateLimitGlobalConfig {
 // Global RateLimit Config Store
 // ============================================
 
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{LazyLock, RwLock};
+use std::sync::LazyLock;
 
 // ============================================
 // Gateway Instance Count (for Cluster scope)
@@ -472,38 +473,31 @@ static RATE_LIMIT_GLOBAL_CONFIG: LazyLock<RwLock<RateLimitGlobalConfig>> =
 ///
 /// This should be called once during application startup with the loaded config.
 pub fn init_rate_limit_global_config(config: &RateLimitGlobalConfig) {
-    if let Ok(mut global) = RATE_LIMIT_GLOBAL_CONFIG.write() {
-        *global = config.clone();
+    let mut global = RATE_LIMIT_GLOBAL_CONFIG.write();
+    *global = config.clone();
 
-        // Initialize instance count from static config
-        // (may be overridden by WatchServerMeta later)
-        set_gateway_instance_count(config.gateway_instance_count);
+    // Initialize instance count from static config
+    // (may be overridden by WatchServerMeta later)
+    set_gateway_instance_count(config.gateway_instance_count);
 
-        tracing::info!(
-            default_slots_k = config.default_estimator_slots_k,
-            max_slots_k = config.max_estimator_slots_k,
-            default_slots = config.default_estimator_slots_k * SLOTS_K,
-            max_slots = config.max_estimator_slots_k * SLOTS_K,
-            gateway_instance_count = config.gateway_instance_count,
-            "RateLimit global config initialized"
-        );
-    }
+    tracing::info!(
+        default_slots_k = config.default_estimator_slots_k,
+        max_slots_k = config.max_estimator_slots_k,
+        default_slots = config.default_estimator_slots_k * SLOTS_K,
+        max_slots = config.max_estimator_slots_k * SLOTS_K,
+        gateway_instance_count = config.gateway_instance_count,
+        "RateLimit global config initialized"
+    );
 }
 
 /// Get the default estimator slots from global config (returns actual slot count)
 pub fn get_default_estimator_slots() -> usize {
-    RATE_LIMIT_GLOBAL_CONFIG
-        .read()
-        .map(|c| c.default_estimator_slots_k * SLOTS_K)
-        .unwrap_or(DEFAULT_ESTIMATOR_SLOTS_K * SLOTS_K)
+    RATE_LIMIT_GLOBAL_CONFIG.read().default_estimator_slots_k * SLOTS_K
 }
 
 /// Get the maximum estimator slots from global config (returns actual slot count)
 pub fn get_max_estimator_slots() -> usize {
-    RATE_LIMIT_GLOBAL_CONFIG
-        .read()
-        .map(|c| c.max_estimator_slots_k * SLOTS_K)
-        .unwrap_or(DEFAULT_MAX_ESTIMATOR_SLOTS_K * SLOTS_K)
+    RATE_LIMIT_GLOBAL_CONFIG.read().max_estimator_slots_k * SLOTS_K
 }
 
 /// Get the minimum estimator slots (returns actual slot count)
@@ -651,8 +645,11 @@ impl EdgionGatewayConfig {
             let content =
                 std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
-            toml::from_str::<EdgionGatewayConfig>(&content)
-                .context(format!("Failed to parse config file: {}", config_path))?
+            {
+                let de = serde_yaml::Deserializer::from_str(&content);
+                serde_yaml::with::singleton_map_recursive::deserialize(de)
+                    .context(format!("Failed to parse config file: {}", config_path))?
+            }
         } else {
             EdgionGatewayConfig::default()
         };
@@ -799,12 +796,12 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_metadata_config_toml_deserialize() {
-        let toml = r#"
-[plugin_metadata]
-ctx_log_denylist = ["custom_key", "my_secret"]
+    fn test_plugin_metadata_config_yaml_deserialize() {
+        let yaml = r#"
+plugin_metadata:
+  ctx_log_denylist: [custom_key, my_secret]
 "#;
-        let config: EdgionGatewayConfig = toml::from_str(toml).expect("parse failed");
+        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("parse failed");
         let denylist = &config.plugin_metadata.ctx_log_denylist;
         assert!(denylist.contains(&"custom_key".to_string()));
         assert!(denylist.contains(&"my_secret".to_string()));

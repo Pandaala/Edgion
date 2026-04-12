@@ -18,6 +18,7 @@
 //! then they automatically implement `ConfCenter` via blanket impl.
 
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -58,6 +59,7 @@ pub struct ListResult {
 /// Error types for configuration operations
 #[derive(Debug, Error)]
 pub enum ConfWriterError {
+    // ---- domain-semantic variants (String payload is intentional) ----
     #[error("Configuration not found: {0}")]
     NotFound(String),
 
@@ -73,17 +75,46 @@ pub enum ConfWriterError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
-    #[error("Parse error: {0}")]
-    ParseError(String),
-
-    #[error("IO error: {0}")]
-    IOError(String),
-
-    #[error("Kubernetes API error: {0}")]
-    KubeError(String),
-
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    // ---- infrastructure variants: preserve #[source] for error chain ----
+    /// IO error. `context` names the operation; `std::io::ErrorKind` is
+    /// accessible via `Error::source()` for retry / observability logic.
+    #[error("IO error: {context}")]
+    IOError {
+        context: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Parse / serialization error. `context` must be a `'static` string
+    /// literal; the underlying error (serde_yaml, serde_json, …) is boxed.
+    #[error("Parse error: {context}")]
+    ParseError {
+        context: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Kubernetes client error not mappable to a domain variant.
+    /// The original error is type-erased and accessible via `Error::source()`.
+    #[error("Kubernetes API error")]
+    KubeError(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// Etcd client error.
+    #[error("Etcd error: {0}")]
+    EtcdError(String),
+}
+
+impl ConfWriterError {
+    /// Convenience constructor for `IOError`.
+    pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
+        Self::IOError {
+            context: context.into(),
+            source,
+        }
+    }
 }
 
 // ============================================================================
@@ -156,12 +187,6 @@ pub trait CenterApi: Send + Sync {
         opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError>;
 
-    /// Count configurations by kind
-    async fn cnt_by_kind(&self, kind: &str) -> Result<usize, ConfWriterError>;
-
-    /// Count configurations by kind and namespace
-    async fn cnt_by_kind_ns(&self, kind: &str, namespace: &str) -> Result<usize, ConfWriterError>;
-
     /// Delete a single configuration
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError>;
 
@@ -217,6 +242,9 @@ pub trait CenterLifeCycle: Send + Sync {
     /// Returns Ok(()) if the reload request was accepted (reload happens asynchronously).
     /// Returns Err if the center is not started or not ready.
     fn request_reload(&self) -> Result<(), String>;
+
+    /// Get the ControllerRuntime for this center
+    fn runtime(&self) -> Arc<ControllerRuntime>;
 }
 
 // ============================================================================
@@ -245,3 +273,88 @@ pub trait ConfCenter: CenterApi + CenterLifeCycle {}
 
 /// Blanket implementation: Any type implementing CenterApi + CenterLifeCycle automatically implements ConfCenter
 impl<T: CenterApi + CenterLifeCycle> ConfCenter for T {}
+
+// ============================================================================
+// Delegation macro for CenterApi boilerplate
+// ============================================================================
+
+/// Generate a pure-delegation `impl CenterApi` for a wrapper type.
+/// All trait methods are forwarded to `self.$field`.
+///
+/// # Example
+/// ```ignore
+/// impl_center_api_delegate!(MyCenter, writer);
+/// ```
+///
+/// Requires `CenterApi`, `ConfWriterError`, `ListOptions`, `ListResult` in scope.
+macro_rules! impl_center_api_delegate {
+    ($type:ty, $field:ident) => {
+        #[async_trait::async_trait]
+        impl CenterApi for $type {
+            async fn set_one(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                content: String,
+            ) -> Result<(), ConfWriterError> {
+                self.$field.set_one(kind, namespace, name, content).await
+            }
+
+            async fn create_one(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                content: String,
+            ) -> Result<(), ConfWriterError> {
+                self.$field.create_one(kind, namespace, name, content).await
+            }
+
+            async fn update_one(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                content: String,
+            ) -> Result<(), ConfWriterError> {
+                self.$field.update_one(kind, namespace, name, content).await
+            }
+
+            async fn get_one(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+            ) -> Result<String, ConfWriterError> {
+                self.$field.get_one(kind, namespace, name).await
+            }
+
+            async fn get_list_by_kind(
+                &self,
+                kind: &str,
+                opts: Option<ListOptions>,
+            ) -> Result<ListResult, ConfWriterError> {
+                self.$field.get_list_by_kind(kind, opts).await
+            }
+
+            async fn get_list_by_kind_ns(
+                &self,
+                kind: &str,
+                namespace: &str,
+                opts: Option<ListOptions>,
+            ) -> Result<ListResult, ConfWriterError> {
+                self.$field.get_list_by_kind_ns(kind, namespace, opts).await
+            }
+
+            async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+                self.$field.delete_one(kind, namespace, name).await
+            }
+
+            async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
+                self.$field.list_all(opts).await
+            }
+        }
+    };
+}
+pub(crate) use impl_center_api_delegate;

@@ -2,9 +2,7 @@
 //!
 //! Handles UDPRoute resources with ReferenceGrant validation and cross-namespace reference tracking.
 
-use super::super::ref_grant::{
-    get_global_cross_ns_ref_manager, is_cross_ns_ref_allowed, validate_udp_route_if_enabled,
-};
+use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_udp_route_if_enabled};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
     requeue_parent_gateways, update_gateway_route_index,
@@ -37,7 +35,7 @@ impl UdpRouteHandler {
     }
 
     /// Register Service backend references for cross-resource requeue
-    fn register_service_refs(route: &UDPRoute) {
+    fn register_service_refs(route: &UDPRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -62,14 +60,15 @@ impl UdpRouteHandler {
             route_ns,
             route_name,
             &backend_refs_list,
+            ctx.runtime(),
         );
     }
 
     /// Record cross-namespace references from backend_refs
-    fn record_cross_ns_refs(route: &UDPRoute) {
+    fn record_cross_ns_refs(route: &UDPRoute, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = Self::create_resource_ref(route);
-        let manager = get_global_cross_ns_ref_manager();
+        let manager = &ctx.runtime().cross_ns_ref_mgr;
 
         // Clear old references first (handles updates)
         manager.clear_resource_refs(&resource_ref);
@@ -104,7 +103,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         let backend_ref_tuples = collect_backend_ref_tuples(route);
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         errors.extend(
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples)
+            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime())
                 .iter()
                 .map(|e| e.message()),
         );
@@ -119,16 +118,17 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
             route_ns,
             route_name,
             route.spec.parent_refs.as_ref(),
+            _ctx.runtime(),
         );
         Vec::new()
     }
 
     async fn parse(&self, mut route: UDPRoute, _ctx: &HandlerContext) -> ProcessResult<UDPRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
-        Self::record_cross_ns_refs(&route);
+        Self::record_cross_ns_refs(&route, _ctx);
 
         // Register Service backend references for cross-resource requeue
-        Self::register_service_refs(&route);
+        Self::register_service_refs(&route, _ctx);
 
         // Mark denied cross-namespace references
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
@@ -145,6 +145,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
                                     backend_ref.group.as_ref(),
                                     backend_ref.kind.as_ref(),
                                     &backend_ref.name,
+                                    _ctx.runtime(),
                                 );
                                 if !allowed {
                                     backend_ref.ref_denied = Some(RefDenied {
@@ -172,8 +173,12 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
         // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = &route.spec.parent_refs {
-            let listener_keys =
-                super::route_utils::resolve_listener_keys(parent_refs, route_ns, route.metadata.namespace.as_deref());
+            let listener_keys = super::route_utils::resolve_listener_keys(
+                parent_refs,
+                route_ns,
+                route.metadata.namespace.as_deref(),
+                _ctx.runtime(),
+            );
             if !listener_keys.is_empty() {
                 route.spec.resolved_listeners = Some(listener_keys);
             }
@@ -201,6 +206,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
             route_ns,
             route_name,
             route.spec.parent_refs.as_ref(),
+            ctx.runtime(),
         );
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
@@ -209,16 +215,17 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
     async fn on_delete(&self, route: &UDPRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
-        get_global_cross_ns_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         requeue_backend_tls_policies_for_route(ResourceKind::UDPRoute, route_ns, route_name, ctx).await;
-        super::route_utils::clear_service_backend_refs(ResourceKind::UDPRoute, route_ns, route_name);
+        super::route_utils::clear_service_backend_refs(ResourceKind::UDPRoute, route_ns, route_name, ctx.runtime());
 
-        remove_from_gateway_route_index(ResourceKind::UDPRoute, route_ns, route_name);
+        remove_from_gateway_route_index(ResourceKind::UDPRoute, route_ns, route_name, ctx.runtime());
 
-        let tracker_changed = remove_from_attached_route_tracker(ResourceKind::UDPRoute, route_ns, route_name);
+        let tracker_changed =
+            remove_from_attached_route_tracker(ResourceKind::UDPRoute, route_ns, route_name, ctx.runtime());
         if tracker_changed {
             requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         }
@@ -231,7 +238,8 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
         let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let mut resolved_refs_errors = super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples);
+        let mut resolved_refs_errors =
+            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime());
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(&ref_denied_list));
 
@@ -239,8 +247,13 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_result =
-                    super::route_utils::validate_parent_ref_accepted(route_ns, parent_ref, None, "UDPRoute");
+                let accepted_result = super::route_utils::validate_parent_ref_accepted(
+                    route_ns,
+                    parent_ref,
+                    None,
+                    "UDPRoute",
+                    _ctx.runtime(),
+                );
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
@@ -275,6 +288,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
             route.metadata.name.as_deref().unwrap_or(""),
             route.spec.parent_refs.as_ref(),
             None,
+            _ctx.runtime(),
         );
     }
 }

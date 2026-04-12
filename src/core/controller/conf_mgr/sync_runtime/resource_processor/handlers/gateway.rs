@@ -8,14 +8,11 @@
 //! - Gateway API standard status management
 
 use crate::core::common::config::is_reference_grant_validation_enabled;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::gateway_route_index::get_gateway_route_index;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_attached_route_tracker;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    condition_false, condition_reasons, condition_true, condition_types, format_secret_key,
-    get_global_cross_ns_ref_manager, get_global_reference_grant_store, get_listener_port_manager, get_secret,
-    make_conflict_key, ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_false, condition_reasons, condition_true, condition_types, format_secret_key, make_conflict_key,
+    ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::core::controller::conf_mgr::PROCESSOR_REGISTRY;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::constants::app::GATEWAY_NAME;
 use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
@@ -191,7 +188,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
         );
-        let cross_ns_manager = get_global_cross_ns_ref_manager();
+        let cross_ns_manager = &ctx.runtime().cross_ns_ref_mgr;
         cross_ns_manager.clear_resource_refs(&cross_ns_ref);
 
         // Register listeners to ListenerPortManager (empty list clears stale registrations)
@@ -212,7 +209,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.as_deref().unwrap_or(""),
             g.metadata.name.as_deref().unwrap_or("")
         );
-        get_listener_port_manager().register_gateway(&gateway_key_for_port_mgr, &listener_ports);
+        ctx.runtime()
+            .listener_port_manager
+            .register_gateway(&gateway_key_for_port_mgr, &listener_ports);
 
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
@@ -252,8 +251,12 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                             cross_ns_manager.add_ref(cert_ns_str.to_string(), cross_ns_ref.clone());
                         }
 
-                        // Try to resolve Secret from global store
-                        if let Some(secret) = get_secret(secret_ns.map(|s| s.as_str()), &cert_ref.name) {
+                        // Try to resolve Secret from runtime store
+                        if let Some(secret) = ctx
+                            .runtime()
+                            .secret_store
+                            .get(secret_ns.map(|s| s.as_str()), &cert_ref.name)
+                        {
                             resolved_secrets.push(secret);
                             tracing::debug!(
                                 gateway = %resource_ref.key(),
@@ -379,7 +382,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Requeue routes when listener hostnames or ports actually changed.
         // Cycle safety: route on_change only requeues Gateways when parentRef
         // attachments change; hostname/port-only changes don't trigger Gateway requeue.
-        let route_index = get_gateway_route_index();
+        let route_index = &ctx.runtime().gateway_route_index;
 
         let listeners = gateway.spec.listeners.as_deref().unwrap_or_default();
 
@@ -430,7 +433,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.clone(),
             g.metadata.name.clone().unwrap_or_default(),
         );
-        get_global_cross_ns_ref_manager().clear_resource_refs(&cross_ns_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&cross_ns_ref);
 
         // Clear ListenerPortManager registration (use ns/name format, same as parse/update_status)
         let gateway_key = format!(
@@ -438,9 +441,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.namespace.as_deref().unwrap_or(""),
             g.metadata.name.as_deref().unwrap_or("")
         );
-        get_listener_port_manager().unregister_gateway(&gateway_key);
+        ctx.runtime().listener_port_manager.unregister_gateway(&gateway_key);
 
-        let route_index = get_gateway_route_index();
+        let route_index = &ctx.runtime().gateway_route_index;
         route_index.remove_gateway_hostnames(&gateway_key);
         route_index.remove_gateway_ports(&gateway_key);
 
@@ -458,7 +461,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let gateway_name = gateway.metadata.name.clone().unwrap_or_default();
-        let tracker = get_attached_route_tracker();
+        let tracker = &_ctx.runtime().attached_route_tracker;
         let gateway_key_for_tracker = format!("{}/{}", gateway_ns, gateway_name);
 
         // Pre-compute per-listener info while gateway is only immutably borrowed.
@@ -471,7 +474,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .map(|l| {
                 let route_count = tracker.count_for_listener(&gateway_key_for_tracker, &l.name);
                 let (supported_kinds, mut kind_errors) = compute_supported_kinds(l);
-                let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l);
+                let mut resolved_refs_errors = validate_listener_resolved_refs(gateway, l, _ctx.runtime());
                 resolved_refs_errors.append(&mut kind_errors);
 
                 let no_valid_ca_certificate = has_all_ca_refs_invalid(l, &resolved_refs_errors);
@@ -505,7 +508,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             })
             .collect();
 
-        let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref());
+        let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref(), _ctx.runtime());
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
@@ -521,7 +524,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             gateway.metadata.namespace.as_deref().unwrap_or(""),
             gateway.metadata.name.as_deref().unwrap_or("")
         );
-        let conflicts = get_listener_port_manager().detect_conflicts(&gateway_key);
+        let conflicts = _ctx.runtime().listener_port_manager.detect_conflicts(&gateway_key);
 
         // Set Gateway-level conditions
         // Accepted: True if no validation errors
@@ -722,8 +725,6 @@ fn resolve_frontend_ca_refs(
     cross_ns_ref: &ResourceRef,
     cross_ns_manager: &crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_grant::CrossNamespaceRefManager,
 ) -> Vec<k8s_openapi::api::core::v1::Secret> {
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::get_configmap;
-
     let mut resolved_ca_secrets = Vec::new();
 
     for ca_ref in ca_refs {
@@ -742,7 +743,7 @@ fn resolve_frontend_ca_refs(
                 ctx.secret_ref_manager()
                     .add_ref(secret_key.clone(), resource_ref.clone());
 
-                if let Some(secret) = get_secret(ca_ns.map(|s| s.as_str()), &ca_ref.name) {
+                if let Some(secret) = ctx.runtime().secret_store.get(ca_ns.map(|s| s.as_str()), &ca_ref.name) {
                     resolved_ca_secrets.push(secret);
                     tracing::debug!(
                         gateway = %resource_ref.key(),
@@ -760,7 +761,7 @@ fn resolve_frontend_ca_refs(
                 }
             }
             "ConfigMap" => {
-                if let Some(cm) = get_configmap(Some(ca_ns_str), &ca_ref.name) {
+                if let Some(cm) = ctx.runtime().configmap_store.get(Some(ca_ns_str), &ca_ref.name) {
                     if let Some(data) = &cm.data {
                         if let Some(ca_pem) = data.get("ca.crt") {
                             // Create a synthetic Secret from ConfigMap data
@@ -802,7 +803,11 @@ fn resolve_frontend_ca_refs(
     resolved_ca_secrets
 }
 
-fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) -> Vec<GatewayStatusAddress> {
+fn derive_gateway_addresses(
+    gateway: &Gateway,
+    default_address: Option<&str>,
+    runtime: &ControllerRuntime,
+) -> Vec<GatewayStatusAddress> {
     if let Some(spec_addresses) = gateway.spec.addresses.as_ref().filter(|a| !a.is_empty()) {
         return spec_addresses
             .iter()
@@ -816,7 +821,7 @@ fn derive_gateway_addresses(gateway: &Gateway, default_address: Option<&str>) ->
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
     let gateway_name = gateway.metadata.name.as_deref().unwrap_or("");
     for (service_ns, service_name) in gateway_service_lookup_candidates(gateway_ns, gateway_name) {
-        if let Some(cluster_ip) = lookup_service_cluster_ip(&service_ns, &service_name) {
+        if let Some(cluster_ip) = lookup_service_cluster_ip(&service_ns, &service_name, runtime) {
             return vec![GatewayStatusAddress {
                 address_type: Some("IPAddress".to_string()),
                 value: cluster_ip,
@@ -847,8 +852,8 @@ fn gateway_service_lookup_candidates(gateway_ns: &str, gateway_name: &str) -> Ve
     candidates
 }
 
-fn lookup_service_cluster_ip(namespace: &str, name: &str) -> Option<String> {
-    let processor = PROCESSOR_REGISTRY.get("Service")?;
+fn lookup_service_cluster_ip(namespace: &str, name: &str, runtime: &ControllerRuntime) -> Option<String> {
+    let processor = runtime.processor_registry.get("Service")?;
     let key = format!("{}/{}", namespace, name);
     let svc: Arc<Service> = processor.get_raw_any(&key)?.downcast::<Service>().ok()?;
     svc.spec
@@ -1027,7 +1032,11 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
     "InvalidCertificateRef"
 }
 
-fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener) -> Vec<GatewayResolvedRefsError> {
+fn validate_listener_resolved_refs(
+    gateway: &Gateway,
+    listener: &GatewayListener,
+    runtime: &ControllerRuntime,
+) -> Vec<GatewayResolvedRefsError> {
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
     let mut errors = Vec::new();
 
@@ -1061,7 +1070,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
             .or(gateway.metadata.namespace.as_deref())
             .unwrap_or("default");
 
-        match get_secret(Some(cert_ns), &cert_ref.name) {
+        match runtime.secret_store.get(Some(cert_ns), &cert_ref.name) {
             None => {
                 errors.push(GatewayResolvedRefsError::SecretNotFound {
                     namespace: cert_ns.to_string(),
@@ -1089,19 +1098,41 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
                                 reason: "empty certificate or key data".to_string(),
                             });
                         } else {
-                            if !is_valid_pem(cert_bytes.unwrap()) {
+                            let cert_data = cert_bytes.unwrap();
+                            let key_data = key_bytes.unwrap();
+                            let cert_pem_valid = is_valid_pem(cert_data);
+                            let key_pem_valid = is_valid_pem(key_data);
+
+                            if !cert_pem_valid {
                                 errors.push(GatewayResolvedRefsError::SecretInvalid {
                                     namespace: cert_ns.to_string(),
                                     name: cert_ref.name.clone(),
                                     reason: "invalid certificate PEM data".to_string(),
                                 });
                             }
-                            if !is_valid_pem(key_bytes.unwrap()) {
+                            if !key_pem_valid {
                                 errors.push(GatewayResolvedRefsError::SecretInvalid {
                                     namespace: cert_ns.to_string(),
                                     name: cert_ref.name.clone(),
                                     reason: "invalid private key PEM data".to_string(),
                                 });
+                            }
+
+                            // Check cert/key matching only when both PEMs are valid
+                            if cert_pem_valid && key_pem_valid {
+                                if let (Ok(cert_str), Ok(key_str)) =
+                                    (std::str::from_utf8(cert_data), std::str::from_utf8(key_data))
+                                {
+                                    if let Err(e) =
+                                        crate::core::gateway::tls::validation::check_key_matches_cert(cert_str, key_str)
+                                    {
+                                        errors.push(GatewayResolvedRefsError::SecretInvalid {
+                                            namespace: cert_ns.to_string(),
+                                            name: cert_ref.name.clone(),
+                                            reason: e.to_string(),
+                                        });
+                                    }
+                                }
                             }
                         }
                     }
@@ -1116,7 +1147,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
         }
 
         if gateway_ns != cert_ns && is_reference_grant_validation_enabled() {
-            let allowed = get_global_reference_grant_store().check_reference_allowed(
+            let allowed = runtime.ref_grant_store.check_reference_allowed(
                 gateway_ns,
                 "gateway.networking.k8s.io",
                 "Gateway",
@@ -1156,7 +1187,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
 
                 match ca_kind {
                     "Secret" => {
-                        match get_secret(Some(ca_ns), &ca_ref.name) {
+                        match runtime.secret_store.get(Some(ca_ns), &ca_ref.name) {
                             None => {
                                 errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
                                     namespace: ca_ns.to_string(),
@@ -1186,7 +1217,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
 
                         // Cross-namespace ReferenceGrant check
                         if gateway_ns != ca_ns && is_reference_grant_validation_enabled() {
-                            let allowed = get_global_reference_grant_store().check_reference_allowed(
+                            let allowed = runtime.ref_grant_store.check_reference_allowed(
                                 gateway_ns,
                                 "gateway.networking.k8s.io",
                                 "Gateway",
@@ -1204,8 +1235,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
                         }
                     }
                     "ConfigMap" => {
-                        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::get_configmap;
-                        match get_configmap(Some(ca_ns), &ca_ref.name) {
+                        match runtime.configmap_store.get(Some(ca_ns), &ca_ref.name) {
                             None => {
                                 errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
                                     namespace: ca_ns.to_string(),
@@ -1234,7 +1264,7 @@ fn validate_listener_resolved_refs(gateway: &Gateway, listener: &GatewayListener
 
                         // Cross-namespace ReferenceGrant check for ConfigMap
                         if gateway_ns != ca_ns && is_reference_grant_validation_enabled() {
-                            let allowed = get_global_reference_grant_store().check_reference_allowed(
+                            let allowed = runtime.ref_grant_store.check_reference_allowed(
                                 gateway_ns,
                                 "gateway.networking.k8s.io",
                                 "Gateway",

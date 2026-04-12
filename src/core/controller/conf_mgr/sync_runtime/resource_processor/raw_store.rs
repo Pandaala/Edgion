@@ -2,7 +2,7 @@
 //!
 //! Provides `RawStore<K>` trait and two implementations:
 //! - `KubeRawStore<K>`: wraps kube's reflector `Store<K>` (K8s mode)
-//! - `FsRawStore<K>`: self-maintained `HashMap` (FileSystem mode)
+//! - `LocalRawStore<K>`: self-maintained `HashMap` (FileSystem and Etcd modes)
 //!
 //! The `ProcessorObj::get_raw_any` method exposes this to callers
 //! in an object-safe way (returning `Option<Arc<dyn Any + Send + Sync>>`).
@@ -11,9 +11,10 @@
 //! lookups (e.g. Route → Gateway) can find objects that were excluded from
 //! `ServerCache` by `gatewayClassName` or namespace filters.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use kube::runtime::reflector::Store;
 use kube::Resource;
@@ -80,15 +81,15 @@ where
 // FileSystem backend: self-maintained HashMap
 // ============================================================================
 
-/// FileSystem raw store — self-maintained `RwLock<HashMap<String, Arc<K>>>`.
+/// Local in-memory raw store — self-maintained `RwLock<HashMap<String, Arc<K>>>`.
 ///
-/// `FileSystemResourceController` calls `upsert` / `remove` whenever it
-/// successfully parses an `InitApply`, `Apply`, or `Delete` event.
-pub struct FsRawStore<K> {
+/// Used by both FileSystem and Etcd backends. The resource controller calls
+/// `upsert` / `remove` whenever it successfully parses an `InitApply`, `Apply`, or `Delete` event.
+pub struct LocalRawStore<K> {
     data: RwLock<HashMap<String, Arc<K>>>,
 }
 
-impl<K> Default for FsRawStore<K> {
+impl<K> Default for LocalRawStore<K> {
     fn default() -> Self {
         Self {
             data: RwLock::new(HashMap::new()),
@@ -96,22 +97,22 @@ impl<K> Default for FsRawStore<K> {
     }
 }
 
-impl<K> FsRawStore<K> {
+impl<K> LocalRawStore<K> {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn upsert(&self, key: String, obj: Arc<K>) {
-        self.data.write().unwrap().insert(key, obj);
+        self.data.write().insert(key, obj);
     }
 
     pub fn remove(&self, key: &str) {
-        self.data.write().unwrap().remove(key);
+        self.data.write().remove(key);
     }
 }
 
-impl<K: Send + Sync + 'static> RawStore<K> for FsRawStore<K> {
+impl<K: Send + Sync + 'static> RawStore<K> for LocalRawStore<K> {
     fn get(&self, key: &str) -> Option<Arc<K>> {
-        self.data.read().unwrap().get(key).cloned()
+        self.data.read().get(key).cloned()
     }
 }

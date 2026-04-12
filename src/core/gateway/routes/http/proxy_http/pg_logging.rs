@@ -53,26 +53,12 @@ pub async fn logging(
     let entry = AccessLogEntry::from_context(ctx);
     let entry_json = entry.to_json();
 
-    // In DEBUG mode, print access log to terminal
     if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
-        tracing::debug!(
-            access_log = %entry_json,
-            "Access log"
-        );
+        tracing::debug!(access_log = %entry_json, "Access log");
     }
 
-    // Send to access logger
-    edgion_http.access_logger.send(entry_json.clone()).await;
-
-    // Defensive cleanup for mirror state. Dropping JoinHandle detaches task.
-    if let Some(mirror_state) = ctx.mirror_state.take() {
-        drop(mirror_state);
-    }
-
-    // Store in Access Log Store when integration testing mode is enabled
-    // Only store when request has "access_log: test_store" header to avoid
-    // flooding the store during high-volume tests (e.g., LB distribution tests)
-    if crate::core::common::config::is_integration_testing_mode() {
+    // Clone only when integration testing needs the log stored; production path is zero-copy.
+    let entry_json_for_store = if crate::core::common::config::is_integration_testing_mode() {
         let should_store = session
             .req_header()
             .headers
@@ -80,22 +66,35 @@ pub async fn logging(
             .and_then(|v| v.to_str().ok())
             .map(|v| v == "test_store")
             .unwrap_or(false);
-
         if should_store {
-            let store = crate::core::gateway::observe::access_log_store::get_access_log_store();
-            // Use x_trace_id if available, otherwise generate a unique key
-            let trace_key = ctx
-                .request_info
-                .x_trace_id
-                .clone()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            if let Err(e) = store.store(trace_key, entry_json.clone()) {
-                tracing::warn!(
-                    component = "access_log_store",
-                    error = %e,
-                    "Failed to store access log"
-                );
-            }
+            Some(entry_json.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    edgion_http.access_logger.send(entry_json).await;
+
+    // Defensive cleanup for mirror state. Dropping JoinHandle detaches task.
+    if let Some(mirror_state) = ctx.mirror_state.take() {
+        drop(mirror_state);
+    }
+
+    if let Some(json_for_store) = entry_json_for_store {
+        let store = crate::core::gateway::observe::access_log_store::get_access_log_store();
+        let trace_key = ctx
+            .request_info
+            .x_trace_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        if let Err(e) = store.store(trace_key, json_for_store) {
+            tracing::warn!(
+                component = "access_log_store",
+                error = %e,
+                "Failed to store access log"
+            );
         }
     }
 }

@@ -182,7 +182,6 @@ mod tests {
             backend_finder: BackendSelector::new(),
             plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
-            parsed_max_retries: None,
             parsed_retry: None,
         });
 

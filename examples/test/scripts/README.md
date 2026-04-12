@@ -10,7 +10,7 @@ scripts/
 │   ├── generate_tls_certs.sh
 │   ├── generate_backend_certs.sh
 │   ├── generate_mtls_certs.sh
-│   └── generate_conf_sync_certs.sh   # conf_sync gRPC mTLS certs (uses edgion-ctl gen-certs)
+│   └── generate_conf_sync_certs.sh   # conf_sync gRPC mTLS certs (uses edgion-cli gen-certs)
 ├── ci/                 # CI/CD scripts
 │   └── check.sh        # fmt/clippy/unit test checks
 ├── conf-sync/          # conf_sync channel tests
@@ -138,7 +138,7 @@ Prebuilds all binaries required by the test environment in debug mode.
 Built artifacts:
 - `edgion-controller`: configuration controller
 - `edgion-gateway`: gateway service
-- `edgion-ctl`: command-line tool
+- `edgion-cli`: command-line tool
 - `test_server`: backend test server
 - `test_client`: integration test client
 - `test_client_direct`: direct test client
@@ -149,7 +149,7 @@ Output location:
 target/debug/
 ├── edgion-controller
 ├── edgion-gateway
-├── edgion-ctl
+├── edgion-cli
 └── examples/
     ├── test_server
     └── test_client

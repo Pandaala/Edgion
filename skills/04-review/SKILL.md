@@ -14,8 +14,13 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
 按需读取：
 
 - 判定内存问题时，先看 [memory-leak/not-a-memory-leak.md](memory-leak/not-a-memory-leak.md)
+- 判定 CPU/Memory 性能问题时，先看 [cpu-memory/not-a-performance-issue.md](cpu-memory/not-a-performance-issue.md)
+- 审查 `RwLock`/`Mutex` `.unwrap()` 时，先看 [rwlock-unwrap/rwlock-unwrap-rule.md](rwlock-unwrap/rwlock-unwrap-rule.md)
 - 审查 handler 时，先看 [handler-requeue/handler-requeue-rule.md](handler-requeue/handler-requeue-rule.md)
 - 审查可观测性（日志/metrics/access log）时，先看 [observability/observability-review-rule.md](observability/observability-review-rule.md)
+- 审查 TLS/SSL 客户端配置时，先看 [ssl/tonic-domain-name-false-positive.md](ssl/tonic-domain-name-false-positive.md)
+- 审查 OpenSSL/rustls 后端缺口时，跳过 — 已知限制，BoringSSL 是唯一生产后端，详见 `tasks/todo/multi-tls-backend-gaps.md`
+- 审查 ctx_set 模板/变量设计时，先看 [ctx-set/ctx-set-design-decisions.md](ctx-set/ctx-set-design-decisions.md)
 
 使用原则：
 

@@ -3,8 +3,8 @@
 //! Thread-safe: RwLock for client map, Notify for change signaling.
 //! Designed for low write frequency (only on gateway connect/disconnect).
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::time::SystemTime;
 use tokio::sync::Notify;
 
@@ -36,7 +36,7 @@ impl ClientRegistry {
 
     /// Register a gateway client. Notifies watchers if count changes.
     pub fn register(&self, client_id: String, client_name: String) {
-        let mut clients = self.clients.write().unwrap();
+        let mut clients = self.clients.write();
         let is_new = !clients.contains_key(&client_id);
         clients.insert(
             client_id.clone(),
@@ -59,7 +59,7 @@ impl ClientRegistry {
 
     /// Unregister a gateway client. Notifies watchers if count changes.
     pub fn unregister(&self, client_id: &str) {
-        let mut clients = self.clients.write().unwrap();
+        let mut clients = self.clients.write();
         if clients.remove(client_id).is_some() {
             tracing::info!(
                 client_id = %client_id,
@@ -73,7 +73,7 @@ impl ClientRegistry {
 
     /// Get current connected gateway count (at least 1)
     pub fn count(&self) -> u32 {
-        self.clients.read().unwrap().len().max(1) as u32
+        self.clients.read().len().max(1) as u32
     }
 
     /// Wait until the count changes

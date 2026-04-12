@@ -14,7 +14,8 @@ description: ConfCenter trait 架构：CenterApi、CenterLifeCycle、Workqueue �
 ConfMgr (facade, manager.rs)
 └── Arc<dyn ConfCenter>
     ├── FileSystemCenter   — 监听本地 YAML 目录
-    └── KubernetesCenter   — K8s API watchers + Leader Election
+    ├── KubernetesCenter   — K8s API watchers + Leader Election
+    └── EtcdCenter         — etcd KV 存储 + watch 事件（单 Controller 专用）
 ```
 
 Trait 组合关系：
@@ -25,7 +26,7 @@ Trait 组合关系：
 | `CenterLifeCycle` | 生命周期管理 | `start`, `is_ready`, `config_sync_server`, `is_k8s_mode`, `request_reload` |
 | `ConfCenter` | 完整接口 | `= CenterApi + CenterLifeCycle`（blanket impl：任何同时实现两者的类型自动获得 `ConfCenter`） |
 
-`CenterApi` 由存储层实现：`FileSystemStorage`（本地文件读写）和 `KubernetesStorage`（K8s API 调用）。
+`CenterApi` 由存储层实现：`FileSystemStorage`（本地文件读写）、`KubernetesStorage`（K8s API 调用）、`EtcdStorage`（etcd KV 读写）。
 `CenterLifeCycle` 由中心层实现：`FileSystemCenter` 和 `KubernetesCenter`。
 Center 层通过委托模式将 CRUD 操作转发给 Storage 层，自身专注于生命周期管理。
 
@@ -39,28 +40,28 @@ Center 层通过委托模式将 CRUD 操作转发给 Storage 层，自身专注�
 
 两种后端共享完全相同的处理管线。每种资源类型拥有独立的 `ResourceProcessor<K>` + `Workqueue`：
 
-```
-事件（文件变更 / K8s watch）
-  → ResourceController.on_apply(key) / on_delete(key)
-    → Workqueue.enqueue(key)        # 按 key 去重（pending set）
-      → Worker loop:
-        item = dequeue()            # Key 从 pending 释放（dirty requeue）
-        obj = store.get(key)
-        handler.validate(obj)       # Schema + 语义校验
-        handler.preparse(obj)       # 构建运行时结构
-        handler.parse(obj)          # 更新缓存、解析引用
-        handler.on_change(obj)      # 通知依赖资源
-        handler.update_status(obj)  # 回写 status
+```mermaid
+flowchart TD
+    A["事件（文件变更 / K8s watch）"] --> B["ResourceController\non_apply(key) / on_delete(key)"]
+    B --> C["Workqueue.enqueue(key)\n按 key 去重（pending set）"]
+    C --> D["Worker loop: dequeue()\nKey 从 pending 释放（dirty requeue）"]
+    D --> E["store.get(key)"]
+    E --> F["handler.validate(obj)\nSchema + 语义校验"]
+    F --> G["handler.preparse(obj)\n构建运行时结构"]
+    G --> H["handler.parse(obj)\n更新缓存、解析引用"]
+    H --> I["handler.on_change(obj)\n通知依赖资源"]
+    I --> J["handler.update_status(obj)\n回写 status"]
 ```
 
 差异仅在两端：
 
-| 差异点 | FileSystemCenter | KubernetesCenter |
-|--------|-----------------|-----------------|
-| 事件源 | `notify` 库 inotify/kqueue 文件监听 | K8s API Reflector watch stream |
-| Status 持久化 | `.status` 文件（YAML 格式） | K8s API `PATCH /status`（JSON Merge Patch） |
-| Leader Election | 无（单实例） | Lease-based 分布式选举 |
-| 410 Gone 处理 | 不适用 | 检测到 watcher 重连，触发 KubernetesController 重建 |
+| 差异点 | FileSystemCenter | KubernetesCenter | EtcdCenter |
+|--------|-----------------|-----------------|------------|
+| 事件源 | `notify` 库 inotify/kqueue 文件监听 | K8s API Reflector watch stream | etcd watch stream |
+| Status 持久化 | `.status` 文件（YAML 格式） | K8s API `PATCH /status`（JSON Merge Patch） | 无（不持久化 status） |
+| Leader Election | 无（单实例） | Lease-based 分布式选举 | 无（单实例） |
+| 410 Gone 处理 | 不适用 | 检测到 watcher 重连，触发 KubernetesController 重建 | 不适用 |
+| 并发写约束 | 单进程，check-then-write 非原子 | K8s API Server 保证原子性 | **单 Controller 独占**，check-then-write 非原子，设计上不支持多 Controller 并发写同一 etcd |
 
 中间的 Workqueue、ResourceProcessor、ProcessorHandler、ServerCache、引用管理器等完全复用。
 
@@ -101,11 +102,25 @@ BidirectionalRefManager<V>
 
 跨资源 requeue 必须形成有向无环图，禁止循环触发：
 
-```
-Secret ──────► {EdgionTls, Gateway, EdgionPlugins, BackendTLSPolicy, ...}
-Service ─────► {HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute}
-ReferenceGrant ► {HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, Gateway}
-Route (any) ─► Gateway   (requeue parent gateways for status update)
+```mermaid
+flowchart LR
+    Secret --> EdgionTls
+    Secret --> Gateway
+    Secret --> EdgionPlugins
+    Secret --> BackendTLSPolicy
+    Secret --> etc["..."]
+    Service --> HTTPRoute
+    Service --> GRPCRoute
+    Service --> TCPRoute
+    Service --> TLSRoute
+    Service --> UDPRoute
+    ReferenceGrant --> HTTPRoute2["HTTPRoute"]
+    ReferenceGrant --> GRPCRoute2["GRPCRoute"]
+    ReferenceGrant --> TCPRoute2["TCPRoute"]
+    ReferenceGrant --> TLSRoute2["TLSRoute"]
+    ReferenceGrant --> UDPRoute2["UDPRoute"]
+    ReferenceGrant --> Gateway2["Gateway"]
+    Route["Route (any)"] -->|"requeue parent gateways\nfor status update"| Gateway3["Gateway"]
 ```
 
 关键约束：Gateway 不可以触发 Route requeue，否则 `Route → Gateway → Route` 形成无限循环。

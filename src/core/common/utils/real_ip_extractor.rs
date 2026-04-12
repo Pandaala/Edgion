@@ -39,6 +39,11 @@ pub struct RealIpExtractor {
 
     /// Header name to extract real IP from (e.g., "X-Forwarded-For")
     real_ip_header: String,
+
+    /// Nginx-style `real_ip_recursive` behavior.
+    /// - `true`: traverse right-to-left, skip trusted IPs, return first non-trusted.
+    /// - `false`: take the rightmost IP from the header directly.
+    recursive: bool,
 }
 
 impl RealIpExtractor {
@@ -47,6 +52,8 @@ impl RealIpExtractor {
     /// # Arguments
     /// * `trusted_ips` - List of CIDR strings (e.g., ["10.0.0.0/8", "192.168.0.0/16"])
     /// * `real_ip_header` - Header name to extract real IP from (e.g., "X-Forwarded-For")
+    /// * `recursive` - Nginx-style `real_ip_recursive`: true = traverse right-to-left skipping trusted;
+    ///   false = take rightmost IP directly
     ///
     /// # Returns
     /// * `Ok(RealIpExtractor)` - Successfully created extractor
@@ -55,7 +62,7 @@ impl RealIpExtractor {
     /// # Notes
     /// - Invalid CIDRs are skipped with a warning log
     /// - If no valid CIDRs are provided, returns extractor with no matcher (all IPs untrusted)
-    pub fn new(trusted_ips: &[String], real_ip_header: String) -> Result<Self, IpRadixError> {
+    pub fn new(trusted_ips: &[String], real_ip_header: String, recursive: bool) -> Result<Self, IpRadixError> {
         let trusted_proxy_matcher = if !trusted_ips.is_empty() {
             let mut builder = IpRadixMatcher::builder();
             let mut valid_count = 0;
@@ -98,6 +105,7 @@ impl RealIpExtractor {
         Ok(Self {
             trusted_proxy_matcher,
             real_ip_header,
+            recursive,
         })
     }
 
@@ -123,13 +131,6 @@ impl RealIpExtractor {
 
     /// Extracts the real client IP address using Nginx-style logic
     ///
-    /// # Algorithm
-    /// 1. If no trusted proxies configured, return client_addr as-is
-    /// 2. If client_addr is not a trusted proxy, return client_addr
-    /// 3. Extract IPs from the configured header (e.g., X-Forwarded-For)
-    /// 4. Traverse from right to left, find first non-trusted IP
-    /// 5. Fallback to client_addr if no valid IP found
-    ///
     /// # Arguments
     /// * `client_addr` - TCP client address (socket addr with port)
     /// * `headers` - Request headers
@@ -137,37 +138,67 @@ impl RealIpExtractor {
     /// # Returns
     /// * Real client IP address as string (without port)
     pub fn extract_real_ip(&self, client_addr: &str, headers: &RequestHeader) -> String {
-        // 1. If no trusted proxies configured, return client_addr
-        if self.trusted_proxy_matcher.is_none() {
-            return extract_ip_from_socket_addr(client_addr).to_string();
-        }
-
-        // 2. Check if client_addr is a trusted proxy
         let client_ip = extract_ip_from_socket_addr(client_addr);
-        if !self.is_trusted_proxy(&client_ip) {
+
+        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&client_ip) {
             return client_ip.to_string();
         }
 
-        // 3. Extract IPs from the configured header (Nginx-style: right-to-left)
         if let Some(header_value) = headers.headers.get(&self.real_ip_header) {
             if let Ok(xff_str) = header_value.to_str() {
-                // Parse comma-separated IP list
-                let ips: Vec<&str> = xff_str.split(',').map(|s| s.trim()).collect();
-
-                // Traverse from right to left
-                for ip_str in ips.iter().rev() {
-                    if let Ok(ip_addr) = ip_str.parse::<IpAddr>() {
-                        // Find first non-trusted IP
-                        if !self.is_trusted_proxy(&ip_addr) {
-                            return ip_addr.to_string();
-                        }
-                    }
-                }
+                return self.resolve_from_header(xff_str, &client_ip);
             }
         }
 
-        // 4. Fallback to client_addr
         client_ip.to_string()
+    }
+
+    /// Extracts the real client IP from a pre-fetched header value string.
+    ///
+    /// Used by the RealIp plugin which accesses headers via PluginSession.
+    pub fn extract_from_header_value(&self, client_addr: &str, header_value: &str) -> String {
+        let client_ip = extract_ip_from_socket_addr(client_addr);
+
+        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&client_ip) {
+            return client_ip.to_string();
+        }
+
+        self.resolve_from_header(header_value, &client_ip)
+    }
+
+    /// Core extraction logic shared by both entry points.
+    ///
+    /// Nginx behavior:
+    /// - `recursive = true`: traverse right-to-left, skip trusted IPs, return first non-trusted.
+    /// - `recursive = false`: take rightmost IP; if trusted, use client_addr; if not, use it.
+    /// - Fallback when all IPs trusted (recursive mode): return leftmost IP.
+    fn resolve_from_header(&self, header_value: &str, client_ip: &IpAddr) -> String {
+        let iter = || header_value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
+
+        if self.recursive {
+            let mut leftmost: Option<IpAddr> = None;
+            // Traverse right-to-left, find first non-trusted IP
+            for ip_str in iter().rev() {
+                if let Ok(ip_addr) = ip_str.parse::<IpAddr>() {
+                    leftmost = Some(ip_addr);
+                    if !self.is_trusted_proxy(&ip_addr) {
+                        return ip_addr.to_string();
+                    }
+                }
+            }
+            // All trusted: return leftmost IP (Nginx behavior)
+            leftmost
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| client_ip.to_string())
+        } else {
+            // Non-recursive: take the rightmost IP directly
+            let rightmost = iter().rev().find_map(|s| s.parse::<IpAddr>().ok());
+            match rightmost {
+                Some(ip) if self.is_trusted_proxy(&ip) => client_ip.to_string(),
+                Some(ip) => ip.to_string(),
+                None => client_ip.to_string(),
+            }
+        }
     }
 }
 
@@ -202,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_no_trusted_ips() {
-        let extractor = RealIpExtractor::new(&[], "X-Forwarded-For".to_string()).unwrap();
+        let extractor = RealIpExtractor::new(&[], "X-Forwarded-For".to_string(), true).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();
@@ -213,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_client_not_trusted() {
-        let extractor = RealIpExtractor::new(&["10.0.0.0/8".to_string()], "X-Forwarded-For".to_string()).unwrap();
+        let extractor = RealIpExtractor::new(&["10.0.0.0/8".to_string()], "X-Forwarded-For".to_string(), true).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();
@@ -224,10 +255,11 @@ mod tests {
     }
 
     #[test]
-    fn test_nginx_style_extraction() {
+    fn test_recursive_extraction() {
         let extractor = RealIpExtractor::new(
             &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
             "X-Forwarded-For".to_string(),
+            true,
         )
         .unwrap();
 
@@ -236,10 +268,35 @@ mod tests {
             .insert_header("X-Forwarded-For", "203.0.113.1, 198.51.100.2, 192.168.1.1")
             .unwrap();
 
-        // Client is 192.168.1.254 (trusted)
-        // XFF traversal: 192.168.1.1 (trusted) -> 198.51.100.2 (trusted) -> 203.0.113.1 (NOT trusted)
+        // Recursive: 192.168.1.1 (trusted) -> 198.51.100.2 (trusted) -> 203.0.113.1 (NOT trusted)
         let result = extractor.extract_real_ip("192.168.1.254:45678", &headers);
         assert_eq!(result, "203.0.113.1");
+    }
+
+    #[test]
+    fn test_non_recursive_extraction() {
+        let extractor = RealIpExtractor::new(
+            &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
+            "X-Forwarded-For".to_string(),
+            false,
+        )
+        .unwrap();
+
+        // Non-recursive: rightmost 192.168.1.1 is trusted → use client_addr
+        let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
+        headers
+            .insert_header("X-Forwarded-For", "203.0.113.1, 198.51.100.2, 192.168.1.1")
+            .unwrap();
+        let result = extractor.extract_real_ip("192.168.1.254:45678", &headers);
+        assert_eq!(result, "192.168.1.254");
+
+        // Non-recursive: rightmost 8.8.8.8 is NOT trusted → use it
+        let mut headers2 = RequestHeader::build("GET", b"/", None).unwrap();
+        headers2
+            .insert_header("X-Forwarded-For", "203.0.113.1, 8.8.8.8")
+            .unwrap();
+        let result2 = extractor.extract_real_ip("192.168.1.254:45678", &headers2);
+        assert_eq!(result2, "8.8.8.8");
     }
 
     #[test]
@@ -247,6 +304,7 @@ mod tests {
         let extractor = RealIpExtractor::new(
             &["0.0.0.0/0".to_string()], // All IPs trusted
             "X-Forwarded-For".to_string(),
+            true,
         )
         .unwrap();
 
@@ -255,9 +313,9 @@ mod tests {
             .insert_header("X-Forwarded-For", "203.0.113.1, 198.51.100.2")
             .unwrap();
 
-        // All IPs are trusted, fallback to client_addr
+        // All IPs trusted, recursive: return leftmost IP (Nginx behavior)
         let result = extractor.extract_real_ip("192.168.1.254:45678", &headers);
-        assert_eq!(result, "192.168.1.254");
+        assert_eq!(result, "203.0.113.1");
     }
 
     #[test]
@@ -269,43 +327,40 @@ mod tests {
 
     #[test]
     fn test_invalid_cidrs_skipped() {
-        // Mix of valid and invalid CIDRs
         let extractor = RealIpExtractor::new(
             &[
-                "10.0.0.0/8".to_string(),     // valid
-                "invalid-cidr".to_string(),   // invalid
-                "192.168.0.0/16".to_string(), // valid
-                "300.0.0.0/8".to_string(),    // invalid IP
-                "172.16.0.0/12".to_string(),  // valid
+                "10.0.0.0/8".to_string(),
+                "invalid-cidr".to_string(),
+                "192.168.0.0/16".to_string(),
+                "300.0.0.0/8".to_string(),
+                "172.16.0.0/12".to_string(),
             ],
             "X-Forwarded-For".to_string(),
+            true,
         )
         .unwrap();
 
-        // Should have valid CIDRs working
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers
             .insert_header("X-Forwarded-For", "203.0.113.1, 10.0.0.1")
             .unwrap();
 
-        // Client 192.168.1.1 is trusted (valid CIDR), should extract from XFF
         let result = extractor.extract_real_ip("192.168.1.254:45678", &headers);
         assert_eq!(result, "203.0.113.1");
     }
 
     #[test]
     fn test_all_invalid_cidrs() {
-        // All CIDRs are invalid - extractor should work but with no trusted proxies
         let extractor = RealIpExtractor::new(
             &["invalid-cidr".to_string(), "not-an-ip/24".to_string()],
             "X-Forwarded-For".to_string(),
+            true,
         )
         .unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();
 
-        // No valid CIDRs, so should just return client_addr
         let result = extractor.extract_real_ip("192.168.1.1:45678", &headers);
         assert_eq!(result, "192.168.1.1");
     }

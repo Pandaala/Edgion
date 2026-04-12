@@ -3,11 +3,11 @@ use crate::types::constants::labels::k8s::SERVICE_NAME;
 use arc_swap::ArcSwap;
 use futures::FutureExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use parking_lot::{Mutex, RwLock};
 use pingora_load_balancing::selection::{BackendSelection, RoundRobin};
 use pingora_load_balancing::Backend;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::LazyLock;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, LazyLock};
 
 /// Store for RoundRobin LoadBalancers (primary data layer + LB)
 static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> = LazyLock::new(|| Arc::new(EpSliceStore::new()));
@@ -133,7 +133,7 @@ where
         }
 
         // 2. Slow path: acquire creation_lock
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // 3. Double-check: another thread might have created it
         if let Some(lb) = self.service_lbs.load().get(service_key).cloned() {
@@ -165,14 +165,14 @@ where
     /// Get slices for a service from data layer (public, acquires lock)
     /// Used by other algorithm stores to fetch data from RoundRobin store
     pub fn get_slices_for_service(&self, service_key: &str) -> Option<Vec<EndpointSlice>> {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
         self.get_slices_for_service_internal(service_key)
     }
 
     /// Internal: Get slices for a service (caller must hold creation_lock)
     fn get_slices_for_service_internal(&self, service_key: &str) -> Option<Vec<EndpointSlice>> {
-        let service_to_slices = self.service_to_slices.read().unwrap();
-        let ep_slices = self.ep_slices.read().unwrap();
+        let service_to_slices = self.service_to_slices.read();
+        let ep_slices = self.ep_slices.read();
 
         let slice_keys = service_to_slices.get(service_key)?;
         let slices: Vec<EndpointSlice> = slice_keys
@@ -193,7 +193,7 @@ where
     /// Acquires creation_lock internally
     /// Returns all service_keys in the new data
     pub fn replace_data_only(&self, data: HashMap<String, EndpointSlice>) -> HashSet<String> {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         let mut new_ep_slices: HashMap<String, (EndpointSlice, String)> = HashMap::new();
         let mut new_service_to_slices: HashMap<String, HashSet<String>> = HashMap::new();
@@ -207,8 +207,8 @@ where
             new_service_to_slices.entry(service_key).or_default().insert(ep_key);
         }
 
-        *self.service_to_slices.write().unwrap() = new_service_to_slices;
-        *self.ep_slices.write().unwrap() = new_ep_slices;
+        *self.service_to_slices.write() = new_service_to_slices;
+        *self.ep_slices.write() = new_ep_slices;
 
         tracing::debug!(services = all_services.len(), "Replaced data layer (data only)");
 
@@ -224,11 +224,11 @@ where
         update: HashMap<String, EndpointSlice>,
         remove: &HashSet<String>,
     ) -> HashSet<String> {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         let mut affected_services: HashSet<String> = HashSet::new();
-        let mut service_to_slices = self.service_to_slices.write().unwrap();
-        let mut ep_slices = self.ep_slices.write().unwrap();
+        let mut service_to_slices = self.service_to_slices.write();
+        let mut ep_slices = self.ep_slices.write();
 
         // Process remove
         for ep_key in remove {
@@ -298,7 +298,7 @@ where
     /// Acquires creation_lock internally
     /// If data layer has no data for this service, removes the LB
     pub fn update_lb_if_exists(&self, service_key: &str) {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // Check if LB exists and get a reference
         let current = self.service_lbs.load();
@@ -386,7 +386,7 @@ where
     where
         F: FnOnce(&str) -> Option<Vec<EndpointSlice>>,
     {
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // Check if LB exists and get a reference
         let current = self.service_lbs.load();
@@ -448,7 +448,7 @@ where
         }
 
         // 2. Slow path: acquire creation_lock
-        let _lock = self.creation_lock.lock().unwrap();
+        let _lock = self.creation_lock.lock();
 
         // 3. Double-check
         if let Some(lb) = self.service_lbs.load().get(service_key).cloned() {
@@ -512,8 +512,8 @@ where
 
         // 3. Atomically update all stores
         self.service_lbs.store(Arc::new(new_service_lbs));
-        *self.service_to_slices.write().unwrap() = new_service_to_slices;
-        *self.ep_slices.write().unwrap() = new_ep_slices;
+        *self.service_to_slices.write() = new_service_to_slices;
+        *self.ep_slices.write() = new_ep_slices;
     }
 
     /// Update endpoint slices with service aggregation
@@ -532,7 +532,7 @@ where
         let mut affected_services: HashSet<String> = HashSet::new();
 
         {
-            let ep_slices = self.ep_slices.read().unwrap();
+            let ep_slices = self.ep_slices.read();
 
             // Services affected by remove
             for ep_key in remove {
@@ -556,8 +556,8 @@ where
         }
 
         // 2. Update ep_slices and service_to_slices
-        let mut ep_slices = self.ep_slices.write().unwrap();
-        let mut service_to_slices = self.service_to_slices.write().unwrap();
+        let mut ep_slices = self.ep_slices.write();
+        let mut service_to_slices = self.service_to_slices.write();
 
         // Process remove
         for ep_key in remove {

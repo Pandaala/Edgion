@@ -115,3 +115,32 @@ pub async fn serve(cfg: &MetricsConfig) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Serve the metrics API on the specified port with graceful shutdown support
+pub async fn serve_with_shutdown(
+    cfg: &MetricsConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    if PROMETHEUS_HANDLE.get().is_none() {
+        init_metrics_exporter(cfg).map_err(|e| anyhow::anyhow!("Failed to initialize metrics exporter: {}", e))?;
+    }
+
+    let app = create_metrics_router();
+    let addr: std::net::SocketAddr = cfg
+        .listen
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid metrics listen address '{}': {}", cfg.listen, e))?;
+
+    tracing::info!(
+        component = "metrics_api",
+        event = "server_starting",
+        addr = %addr,
+        "Metrics API server listening"
+    );
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+
+    tracing::info!(component = "metrics_api", "Metrics API server stopped");
+    Ok(())
+}

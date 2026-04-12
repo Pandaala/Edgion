@@ -15,7 +15,7 @@ description: Core 模块分层规范：顶级分组、各 bin 布局、放置规
 src/core/
 ├── controller/   # edgion-controller 归属逻辑
 ├── gateway/      # edgion-gateway 归属逻辑
-├── ctl/          # edgion-ctl 归属逻辑
+├── ctl/          # edgion-cli 归属逻辑
 └── common/       # 跨 bin 共享代码
 ```
 
@@ -72,7 +72,6 @@ src/core/gateway/
 ├── services/     # Gateway 侧服务（ACME challenge）
 └── tls/          # TLS 管理
     ├── boringssl/    # BoringSSL 后端（feature）
-    ├── openssl/      # OpenSSL 后端（feature）
     ├── runtime/      # 下游/上游 TLS 回调
     ├── store/        # 证书存储 + SNI 匹配
     └── validation/   # 证书验证

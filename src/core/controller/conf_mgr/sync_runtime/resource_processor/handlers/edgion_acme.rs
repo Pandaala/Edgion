@@ -8,7 +8,7 @@
 //! - Notifying AcmeService for background certificate issuance/renewal
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, get_secret, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    format_secret_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::services::acme::notify_resource_changed;
 use crate::types::prelude_resources::EdgionAcme;
@@ -38,7 +38,7 @@ impl Default for EdgionAcmeHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
-    fn validate(&self, acme: &EdgionAcme, _ctx: &HandlerContext) -> Vec<String> {
+    fn validate(&self, acme: &EdgionAcme, ctx: &HandlerContext) -> Vec<String> {
         let mut warnings = Vec::new();
 
         // Validate email
@@ -86,7 +86,12 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                         .as_ref()
                         .or(acme.metadata.namespace.as_ref());
 
-                    if get_secret(secret_ns.map(|s| s.as_str()), &dns01.credential_ref.name).is_none() {
+                    if ctx
+                        .runtime()
+                        .secret_store
+                        .get(secret_ns.map(|s| s.as_str()), &dns01.credential_ref.name)
+                        .is_none()
+                    {
                         let secret_key = format_secret_key(secret_ns, &dns01.credential_ref.name);
                         warnings.push(format!(
                             "EdgionAcme: DNS credential Secret '{}' not found (may arrive later)",
@@ -124,7 +129,11 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                 .add_ref(secret_key.clone(), resource_ref.clone());
 
             // Try to resolve Secret
-            if let Some(secret) = get_secret(secret_ns.map(|s| s.as_str()), &dns01.credential_ref.name) {
+            if let Some(secret) = ctx
+                .runtime()
+                .secret_store
+                .get(secret_ns.map(|s| s.as_str()), &dns01.credential_ref.name)
+            {
                 acme.spec.dns_credential_secret = Some(secret);
                 tracing::debug!(
                     edgion_acme = %resource_ref.key(),

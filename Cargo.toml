@@ -17,7 +17,7 @@ name = "edgion-controller"
 path = "src/bin/edgion_controller.rs"
 
 [[bin]]
-name = "edgion-ctl"
+name = "edgion-cli"
 path = "src/bin/edgion_ctl.rs"
 
 [[bin]]
@@ -63,11 +63,6 @@ boringssl = [
     "pingora-proxy/boringssl",
     "dep:boring-sys",
     "dep:boring",
-]
-
-openssl = [
-    "pingora-core/openssl",
-    "pingora-proxy/openssl",
 ]
 
 rustls = [
@@ -118,10 +113,6 @@ futures = "0.3.31"
 
 # HTTP server
 axum = { version = "0.8.8", features = ["macros", "ws"] }
-axum-server = { version = "0.8", features = ["tls-rustls"] }
-tower-http = { version = "0.6", features = ["fs"] }  # Only for static files
-rust-embed = { version = "8.11" }  # For embedding frontend
-mime_guess = "2.0"
 
 # Utilities
 bytes = "1.11.1"
@@ -176,19 +167,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 http = "1.4.0"
 percent-encoding = "2.3"
-mockall = "0.14.0"
 
 # Test client dependencies
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
-console = "0.16"
-colored = "2.2"
 
 # CLI table formatting
 tabled = "0.20"
 
-# Unix Socket support for HTTP
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
-tower = "0.5"
 md-5 = "0.10"
 cookie = "0.18.1"
 instant-acme = "0.8.4"
@@ -198,8 +183,9 @@ sha1 = "0.10.6"
 async_singleflight = "0.6"
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
-proxy-header = "0.1.2"
 pingora-ketama = "0.8.0"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]
 tonic-build = "0.12"
@@ -210,3 +196,11 @@ tokio-tungstenite = "0.28"
 base64 = "0.22"
 tonic-build = "0.12"
 time = { version = "0.3", features = ["std"] }
+mockall = "0.14.0"
+colored = "2.2"
+console = "0.16"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+proxy-header = "0.1.2"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }

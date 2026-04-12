@@ -2,8 +2,9 @@ use crate::core::common::matcher::HashHost;
 use crate::core::gateway::tls::validation::cert::{validate_cert, CertValidationResult};
 use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 
 /// Internal entry for TLS certificate with validation status
 struct TlsEntry {
@@ -25,11 +26,7 @@ impl TlsStore {
     }
 
     /// Replace all TLS certificates with the provided data
-    ///
-    /// # Panics
-    /// This method will NOT panic on lock poisoning. Instead, it will log an error
-    /// and attempt to recover the lock state.
-    pub fn full_set(&self, data: HashMap<String, EdgionTls>) {
+    pub fn replace_all_tls(&self, data: HashMap<String, EdgionTls>) {
         // Capture count before moving
         let cert_count = data.len();
 
@@ -40,15 +37,7 @@ impl TlsStore {
             "Full set of TLS certificates"
         );
 
-        let mut tls_data = self.tls_data.write().unwrap_or_else(|poisoned| {
-            tracing::error!(
-                component = "tls_store",
-                "TLS store write lock poisoned - recovering data from poisoned lock. \
-                    A thread previously panicked while holding this lock."
-            );
-            // TODO(observability): Add metric for lock poison recovery
-            poisoned.into_inner()
-        });
+        let mut tls_data = self.tls_data.write();
         tls_data.clear();
 
         for (key, tls) in data {
@@ -93,7 +82,7 @@ impl TlsStore {
     }
 
     /// Partially update TLS certificates
-    pub fn partial_update(
+    pub fn apply_partial_update(
         &self,
         add: HashMap<String, EdgionTls>,
         update: HashMap<String, EdgionTls>,
@@ -112,15 +101,7 @@ impl TlsStore {
             "Partial update of TLS certificates"
         );
 
-        let mut tls_data = self.tls_data.write().unwrap_or_else(|poisoned| {
-            tracing::error!(
-                component = "tls_store",
-                "TLS store write lock poisoned during partial update - recovering. \
-                    A thread previously panicked while holding this lock."
-            );
-            // TODO(observability): Add metric for lock poison recovery
-            poisoned.into_inner()
-        });
+        let mut tls_data = self.tls_data.write();
 
         // Add new certificates
         for (key, tls) in add {
@@ -270,10 +251,7 @@ impl TlsStore {
     /// Prefer `rebuild_matcher_from_data` when the caller already holds a lock.
     #[allow(dead_code)]
     fn rebuild_matcher(&self) -> anyhow::Result<()> {
-        let tls_data = self
-            .tls_data
-            .read()
-            .expect("TLS store read lock poisoned - data integrity cannot be guaranteed");
+        let tls_data = self.tls_data.read();
         self.rebuild_matcher_from_data(&tls_data)
     }
 
@@ -288,14 +266,8 @@ impl TlsStore {
     ///
     /// # Thread Safety
     /// Thread-safe: acquires RwLock read lock
-    ///
-    /// # Panics
-    /// Panics if the lock is poisoned (a thread panicked while holding this lock)
     pub fn list_all(&self) -> Vec<Arc<EdgionTls>> {
-        let tls_data = self.tls_data.read().expect(
-            "TLS store read lock poisoned - a thread panicked while holding the lock. \
-                     Data integrity cannot be guaranteed.",
-        );
+        let tls_data = self.tls_data.read();
         tls_data.values().map(|entry| entry.tls.clone()).collect()
     }
 
@@ -312,14 +284,8 @@ impl TlsStore {
     ///
     /// # Thread Safety
     /// Thread-safe: acquires RwLock read lock
-    ///
-    /// # Panics
-    /// Panics if the lock is poisoned
     pub fn contains(&self, key: &str) -> bool {
-        let tls_data = self
-            .tls_data
-            .read()
-            .expect("TLS store read lock poisoned - data integrity cannot be guaranteed");
+        let tls_data = self.tls_data.read();
         tls_data.contains_key(key)
     }
 
@@ -336,14 +302,8 @@ impl TlsStore {
     ///
     /// # Thread Safety
     /// Thread-safe: acquires RwLock read lock
-    ///
-    /// # Panics
-    /// Panics if the lock is poisoned
     pub fn get_validation_status(&self, key: &str) -> Option<CertValidationResult> {
-        let tls_data = self
-            .tls_data
-            .read()
-            .expect("TLS store read lock poisoned - data integrity cannot be guaranteed");
+        let tls_data = self.tls_data.read();
         tls_data.get(key).map(|entry| entry.validation.clone())
     }
 
@@ -361,14 +321,8 @@ impl TlsStore {
     ///
     /// # Thread Safety
     /// Thread-safe: acquires RwLock read lock
-    ///
-    /// # Panics
-    /// Panics if the lock is poisoned
     pub fn get_invalid_certs(&self) -> Vec<(String, CertValidationResult)> {
-        let tls_data = self
-            .tls_data
-            .read()
-            .expect("TLS store read lock poisoned - data integrity cannot be guaranteed");
+        let tls_data = self.tls_data.read();
         tls_data
             .iter()
             .filter(|(_, entry)| !entry.validation.is_valid)
@@ -393,10 +347,7 @@ impl TlsStore {
     /// println!("Valid: {}, Invalid: {}", valid, invalid);
     /// ```
     pub fn get_cert_stats(&self) -> (usize, usize) {
-        let tls_data = self
-            .tls_data
-            .read()
-            .expect("TLS store read lock poisoned - data integrity cannot be guaranteed");
+        let tls_data = self.tls_data.read();
         let total = tls_data.len();
         let invalid = tls_data.values().filter(|entry| !entry.validation.is_valid).count();
         (total - invalid, invalid)
@@ -419,14 +370,8 @@ impl TlsStore {
     ///
     /// # Thread Safety
     /// Thread-safe: acquires RwLock read lock
-    ///
-    /// # Panics
-    /// Panics if the lock is poisoned
     pub fn get_tls_by_host(&self, hostname: &str) -> Option<Arc<EdgionTls>> {
-        let tls_data = self
-            .tls_data
-            .read()
-            .expect("TLS store read lock poisoned - data integrity cannot be guaranteed");
+        let tls_data = self.tls_data.read();
 
         for entry in tls_data.values() {
             // Only return valid certificates
@@ -447,7 +392,7 @@ impl TlsStore {
 impl TlsStore {
     /// Total number of TLS entries (valid + invalid).
     pub fn entry_count(&self) -> usize {
-        self.tls_data.read().expect("TLS store read lock poisoned").len()
+        self.tls_data.read().len()
     }
 }
 

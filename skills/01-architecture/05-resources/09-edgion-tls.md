@@ -20,6 +20,7 @@ EdgionTls 是 Edgion 的自定义扩展资源，提供比 Gateway 内置 certifi
 
 1. 检查 `parent_refs` 是否存在且非空，未设置则警告不会生效
 2. 从 GLOBAL_SECRET_STORE 检查 `secret_ref` 引用的 Secret 是否存在，不存在则警告（可能后续到达）
+3. **证书/私钥匹配校验**：若 Secret 已存在，提取 `tls.crt` 和 `tls.key`，通过 `check_key_matches_cert()`（`x509-parser` + `rcgen`，纯 Rust 无 TLS 后端依赖）比对公钥字节，不匹配则警告。Secret 未到时跳过，依赖 SecretRefManager requeue 后重试
 
 ### parse
 
@@ -46,6 +47,8 @@ EdgionTls 是 Edgion 的自定义扩展资源，提供比 Gateway 内置 certifi
 ## Gateway 侧处理
 
 EdgionTls 同步到 Gateway 后存入 TlsStore，提供 SNI 匹配的证书。请求到达时，根据 TLS ClientHello 的 SNI 字段匹配证书，支持按 hostname 和端口维度的精确匹配。
+
+TlsStore 写入时调用 `validate_cert()` 做二次校验（含 cert/key 匹配），无效证书不进入 `TlsCertMatcher`，作为 Controller 校验的兜底防线。
 
 ## 跨资源关联
 

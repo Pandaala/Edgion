@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
+use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::types::resources::EdgionPlugins;
 
 static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore::new()));
@@ -52,6 +53,11 @@ impl PluginStore {
     {
         let map = self.plugins.load();
         map.get(key).map(f)
+    }
+
+    /// Get the plugin runtime Arc for a given key
+    pub fn get_plugin_runtime(&self, key: &str) -> Option<Arc<PluginRuntime>> {
+        self.with_plugin(key, |p| Arc::clone(&p.spec.plugin_runtime))
     }
 
     /// Replace all edgion_plugins atomically

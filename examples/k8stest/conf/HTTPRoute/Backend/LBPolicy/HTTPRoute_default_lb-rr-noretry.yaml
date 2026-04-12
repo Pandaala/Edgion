@@ -3,8 +3,6 @@ kind: HTTPRoute
 metadata:
   name: lb-rr-noretry
   namespace: edgion-default
-  annotations:
-    edgion.io/max-retries: "0"
 spec:
   parentRefs:
     - name: lb-policy-gateway
@@ -16,6 +14,8 @@ spec:
         - path:
             type: PathPrefix
             value: /test
+      retry:
+        attempts: 0
       timeouts:
         request: 2s        # Total request timeout
         backendRequest: 1s # Backend connect + response timeout (overrides global 5s)

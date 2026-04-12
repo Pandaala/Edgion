@@ -53,4 +53,4 @@ cat ${WORK_DIR}/report.log
 - [references/test-server-capabilities.md](references/test-server-capabilities.md) — `test_server` 端口、HTTP 端点、OIDC/auth、mirror、TLS 后端能力
 
 ### 调试排障（已移至独立目录）
-- [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md) — 日常开发调试、Admin API、edgion-ctl、问题速查
+- [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md) — 日常开发调试、Admin API、edgion-cli、问题速查

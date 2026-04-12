@@ -11,14 +11,14 @@ description: 三个 bin 的入口点、CLI 参数完整参考、work_dir 优先�
 |--------|------|---------|------|
 | `edgion-controller` | 控制面：资源接收/校验/处理/分发 | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
 | `edgion-gateway` | 数据面：高性能代理（基于 Pingora） | Admin `:5900`, Metrics `:5901` | `src/bin/edgion_gateway.rs` |
-| `edgion-ctl` | CLI 工具：资源 CRUD 和运维 | — | `src/bin/edgion_ctl.rs` |
+| `edgion-cli` | CLI 工具：资源 CRUD 和运维 | — | `src/bin/edgion_cli.rs` |
 
 三个 bin 都采用**薄入口点**模式 — `src/bin/*.rs` 只做最少的工作：安装 rustls 加密提供程序 → 解析参数 → `run()`。
 
 ## work_dir 优先级
 
 ```
-CLI --work-dir > ENV EDGION_WORK_DIR > TOML config > Default (".")
+CLI --work-dir > ENV EDGION_WORK_DIR > YAML config > Default (".")
 ```
 
 所有配置中的相对路径都基于 `work_dir` 解析。
@@ -36,7 +36,7 @@ edgion-controller [OPTIONS]
 | 参数 | 短 | 类型 | 默认值 | 说明 |
 |------|---|------|--------|------|
 | `--work-dir` | `-w` | `PathBuf` | `"."` | 工作目录 |
-| `--config-file` | `-c` | `String` | `config/edgion-controller.toml` | TOML 配置文件路径 |
+| `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML 配置文件路径 |
 | `--conf-dir` | — | `PathBuf` | — | FileSystem 模式的配置目录（覆盖 TOML 中 conf_center.conf_dir） |
 | `--test-mode` | — | `bool` | `false` | 启用测试模式（endpoint_mode=Both + metrics 测试功能） |
 | `--grpc-listen` | — | `String` | `0.0.0.0:50051` | gRPC 监听地址 |
@@ -53,7 +53,7 @@ edgion-controller [OPTIONS]
 edgion-controller -w /opt/edgion --conf-dir config/resources
 
 # K8s 模式（生产）
-edgion-controller -c config/edgion-controller-k8s.toml
+edgion-controller -c config/edgion-controller-k8s.yaml
 ```
 
 ---
@@ -69,7 +69,7 @@ edgion-gateway [OPTIONS]
 | 参数 | 短 | 类型 | 默认值 | 说明 |
 |------|---|------|--------|------|
 | `--work-dir` | `-w` | `PathBuf` | `"."` | 工作目录 |
-| `--config-file` | `-c` | `String` | `config/edgion-gateway.toml` | TOML 配置文件路径 |
+| `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML 配置文件路径 |
 | `--server-addr` | — | `String` | **必填** | Controller gRPC 地址（如 `http://127.0.0.1:50051`） |
 | `--admin-listen` | — | `String` | — | Admin API 地址（注意：当前固定为 `:5900`） |
 | `--threads` | — | `usize` | CPU 核心数 | Pingora 工作线程数 |
@@ -91,15 +91,15 @@ edgion-gateway [OPTIONS]
 edgion-gateway --server-addr http://127.0.0.1:50051
 
 # 生产部署
-edgion-gateway -c config/edgion-gateway.toml --server-addr http://controller:50051 --threads 8
+edgion-gateway -c config/edgion-gateway.yaml --server-addr http://controller:50051 --threads 8
 ```
 
 ---
 
-## edgion-ctl CLI
+## edgion-cli CLI
 
 ```
-edgion-ctl [OPTIONS] <COMMAND>
+edgion-cli [OPTIONS] <COMMAND>
 ```
 
 ### 全局参数
@@ -122,22 +122,22 @@ edgion-ctl [OPTIONS] <COMMAND>
 
 ```bash
 # 应用资源
-edgion-ctl apply -f route.yaml
-edgion-ctl apply -f config/resources/    # 目录
+edgion-cli apply -f route.yaml
+edgion-cli apply -f config/resources/    # 目录
 
 # 查询资源
-edgion-ctl get httproute                 # 列出所有
-edgion-ctl get httproute my-route -n default -o yaml
+edgion-cli get httproute                 # 列出所有
+edgion-cli get httproute my-route -n default -o yaml
 
 # 删除资源
-edgion-ctl delete httproute my-route -n default
-edgion-ctl delete -f route.yaml
+edgion-cli delete httproute my-route -n default
+edgion-cli delete -f route.yaml
 
 # 重载
-edgion-ctl reload
+edgion-cli reload
 
 # 查看 Gateway 侧缓存
-edgion-ctl -t client --server http://localhost:5900 get httproute
+edgion-cli -t client --server http://localhost:5900 get httproute
 ```
 
 ### 子命令参数 Schema

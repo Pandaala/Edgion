@@ -1,15 +1,15 @@
 ---
 name: controller-config
-description: edgion-controller TOML 配置完整 Schema。
+description: edgion-controller YAML 配置完整 Schema。
 ---
 
-# Controller TOML 配置 Schema
+# Controller YAML 配置 Schema
 
-> 文件路径默认：`config/edgion-controller.toml`，通过 `--config-file` 指定。
+> 文件路径默认：`config/edgion-controller.yaml`，通过 `--config-file` 指定。
 
 ## 看哪些文件
 
-- 样例配置：`config/edgion-controller.toml`
+- 样例配置：`config/edgion-controller.yaml`
 - 配置结构：`src/core/common/config/mod.rs`
 - `conf_center` 顶层：`src/core/controller/conf_mgr/conf_center/config.rs`
 - FileSystem 模式：`src/core/controller/conf_mgr/conf_center/file_system/config.rs`
@@ -17,76 +17,75 @@ description: edgion-controller TOML 配置完整 Schema。
 
 ## 完整 Schema
 
-```toml
+```yaml
 # 工作目录（所有相对路径基于此目录）
 # 优先级：CLI --work-dir > ENV EDGION_WORK_DIR > 此值 > "."
-work_dir = "."
+work_dir: "."
 
-[server]
-grpc_listen = "0.0.0.0:50051"    # gRPC 监听地址（ConfigSyncServer）
-admin_listen = "0.0.0.0:5800"    # Admin HTTP API 地址
+server:
+  grpc_listen: "0.0.0.0:50051"    # gRPC 监听地址（ConfigSyncServer）
+  admin_listen: "0.0.0.0:5800"    # Admin HTTP API 地址
 
-[logging]
-log_dir = "logs"                  # 日志目录
-log_prefix = "edgion-controller"  # 日志文件前缀
-log_level = "info"                # trace | debug | info | warn | error
-                                  # 支持模块级别：info,edgion::core::controller=debug
-json_format = false               # JSON 结构化日志
-console = true                    # 同时输出到控制台
-buffer_size = 10000               # 日志缓冲区大小
+logging:
+  log_dir: logs                    # 日志目录
+  log_prefix: edgion-controller    # 日志文件前缀
+  log_level: info                  # trace | debug | info | warn | error
+                                   # 支持模块级别：info,edgion::core::controller=debug
+  json_format: false               # JSON 结构化日志
+  console: true                    # 同时输出到控制台
+  buffer_size: 10000               # 日志缓冲区大小
 
-[debug]
-enabled = true                    # 启用调试功能
+debug:
+  enabled: true                    # 启用调试功能
 
-[validation]
-enable_reference_grant_validation = true   # 启用 ReferenceGrant 跨命名空间校验
+validation:
+  enable_reference_grant_validation: true   # 启用 ReferenceGrant 跨命名空间校验
 
-[conf_sync]
-default_capacity = 200            # EventStore 默认容量（所有资源类型）
-# 特定资源类型容量覆盖
-# 注意：设置 no_sync_kinds 会完全替换默认列表，不是追加
-[conf_sync.capacity_overrides]
-# HTTPRoute = 500
-# Service = 1000
-# no_sync_kinds = ["ReferenceGrant", "Secret"]   # 不同步到 Gateway 的资源
+conf_sync:
+  default_capacity: 200            # EventStore 默认容量（所有资源类型）
+  # 特定资源类型容量覆盖
+  # 注意：设置 no_sync_kinds 会完全替换默认列表，不是追加
+  capacity_overrides:
+    # HTTPRoute: 500
+    # Service: 1000
+  # no_sync_kinds: [ReferenceGrant, Secret]   # 不同步到 Gateway 的资源
 
 # ─── gRPC 通道安全（可选 mTLS）───
-# [conf_sync_security.tls]
-# cert = "certs/grpc/server.crt"    # Controller 服务端证书
-# key  = "certs/grpc/server.key"    # 服务端私钥
-# ca   = "certs/grpc/ca.crt"        # 校验 Gateway 客户端的 CA
-# skip_tls = false                   # true = 紧急降级明文（会输出 ERROR 日志）
+# conf_sync_security:
+#   tls:
+#     cert: certs/grpc/server.crt    # Controller 服务端证书
+#     key: certs/grpc/server.key     # 服务端私钥
+#     ca: certs/grpc/ca.crt          # 校验 Gateway 客户端的 CA
+#     skip_tls: false                # true = 紧急降级明文（会输出 ERROR 日志）
 
 # ─── FileSystem 模式 ───
-[conf_center]
-type = "filesystem"
-conf_dir = "config/resources"              # YAML 资源目录
-endpoint_mode = "EndpointSlice"            # EndpointSlice | Endpoints | Both
+conf_center:
+  type: filesystem
+  conf_dir: config/resources              # YAML 资源目录
+  endpoint_mode: EndpointSlice            # EndpointSlice | Endpoints | Both
 
 # ─── Kubernetes 模式 ───
-# [conf_center]
-# type = "kubernetes"
-# gateway_class = "edgion"                 # 必填：匹配的 GatewayClass
-# controller_name = "edgion.io/gateway-controller"  # Gateway API status 回报的 controllerName
-# watch_namespaces = []                    # 空 = 所有命名空间
-# label_selector = ""                      # 标签过滤
-# endpoint_mode = "EndpointSlice"
-# gateway_address = ""                     # Gateway status 报告地址
-# ha_mode = "leader-only"                  # "leader-only" | "all-serve"
-# no_watch_kinds = ["TCPRoute", "UDPRoute"] # 跳过 CRD 预检和 watch 的资源 kind
-#
-# [conf_center.leader_election]
-# lease_name = "edgion-controller-leader"
-# lease_namespace = "edgion-system"
-# lease_duration_seconds = 15
-# renew_deadline_seconds = 10
-# retry_period_seconds = 2
-#
-# [conf_center.metadata_filter]
-# label_selector = ""                      # 资源标签过滤
-# field_selector = ""                      # 资源字段过滤
-# blocked_annotations = []                 # 进入内存前移除的注解（默认移除 kubectl/helm 常见大注解）
-# remove_managed_fields = true             # 减少对象体积
+# conf_center:
+#   type: kubernetes
+#   gateway_class: edgion                 # 必填：匹配的 GatewayClass
+#   controller_name: edgion.io/gateway-controller  # Gateway API status 回报的 controllerName
+#   watch_namespaces: []                  # 空 = 所有命名空间
+#   label_selector: ""                    # 标签过滤
+#   endpoint_mode: EndpointSlice
+#   gateway_address: ""                   # Gateway status 报告地址
+#   ha_mode: leader-only                  # "leader-only" | "all-serve"
+#   no_watch_kinds: [TCPRoute, UDPRoute]  # 跳过 CRD 预检和 watch 的资源 kind
+#   leader_election:
+#     lease_name: edgion-controller-leader
+#     lease_namespace: edgion-system
+#     lease_duration_seconds: 15
+#     renew_deadline_seconds: 10
+#     retry_period_seconds: 2
+#   metadata_filter:
+#     label_selector: ""                  # 资源标签过滤
+#     field_selector: ""                  # 资源字段过滤
+#     blocked_annotations: []             # 进入内存前移除的注解（默认移除 kubectl/helm 常见大注解）
+#     remove_managed_fields: true         # 减少对象体积
 ```
 
 ## 字段详解
@@ -98,7 +97,7 @@ endpoint_mode = "EndpointSlice"            # EndpointSlice | Endpoints | Both
 | `grpc_listen` | `String` | `0.0.0.0:50051` | ConfigSyncServer gRPC 地址 |
 | `admin_listen` | `String` | `0.0.0.0:5800` | Admin API HTTP 地址 |
 
-> 注意：实际日常开发里默认会加载 `config/edgion-controller.toml`，所以你通常看到的是 `5800`，不是代码 fallback 的 `8080`。
+> 注意：实际日常开发里默认会加载 `config/edgion-controller.yaml`，所以你通常看到的是 `5800`，不是代码 fallback 的 `8080`。
 
 ### [logging]
 
@@ -139,7 +138,7 @@ endpoint_mode = "EndpointSlice"            # EndpointSlice | Endpoints | Both
 | `skip_tls` | `bool` | `false` | 紧急降级开关：`true` 跳过 TLS，以明文启动（输出 ERROR 日志） |
 
 > 不配置此 section 时，gRPC 以明文运行，与历史版本完全兼容。
-> 证书通过 `edgion-ctl gen-certs --output file --output-dir <dir>` 生成。
+> 证书通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
 ### [conf_center] — FileSystem
 
@@ -188,6 +187,38 @@ CLI 特例：
 |------|------|------|------|
 | `blocked_annotations` | `Vec<String>` | kubectl/helm 常见大注解 | 进入内存前移除的注解 |
 | `remove_managed_fields` | `bool` | `true` | 减少对象体积 |
+
+## `[local_auth]` — 本地认证
+
+内置用户名/密码认证，签发 HS256 JWT。不配置时自动生成随机凭据存入 Secret。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | `bool` | `true` | 启用本地认证 |
+| `username` | `String` | `"admin"` | 用户名 |
+| `password` | `String` | `""` | 密码（空 = 需自动生成）|
+| `jwt_secret` | `String` | `""` | JWT 签名密钥（空 = 需自动生成）|
+| `jwt_expiry_hours` | `u64` | `24` | Token 过期时间（小时）|
+| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | 跳过认证的路径前缀 |
+
+```yaml
+local_auth:
+  enabled: true
+  username: admin
+  password: my-secure-password
+  jwt_secret: my-jwt-signing-secret
+  jwt_expiry_hours: 24
+```
+
+### 自动生成凭据
+
+当无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
+
+1. Controller 启动时通过 CenterApi 检查 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
+2. 不存在 → 生成随机 20 位密码 + 32 位 JWT secret → 创建 Secret
+3. 已存在 → 读取凭据继续启动
+4. FileSystem 模式：`{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+5. K8s 模式：通过 K8s API 创建真正的 Secret
 
 ## 当前项目里最常见的 Controller 配置改动
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::ReferenceGrantStore;
 use crate::core::common::config::is_reference_grant_validation_enabled;
+use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
 
 /// Validator for cross-namespace references
@@ -14,10 +15,8 @@ pub struct CrossNamespaceValidator {
 }
 
 impl CrossNamespaceValidator {
-    pub fn new() -> Self {
-        Self {
-            store: super::get_global_reference_grant_store(),
-        }
+    pub fn from_store(store: Arc<ReferenceGrantStore>) -> Self {
+        Self { store }
     }
 
     /// Validate Route's backendRefs for cross-namespace references
@@ -113,12 +112,6 @@ impl CrossNamespaceValidator {
     }
 }
 
-impl Default for CrossNamespaceValidator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Check if ReferenceGrant validation is enabled by querying EdgionGatewayConfig
 fn is_validation_enabled() -> bool {
     is_reference_grant_validation_enabled()
@@ -142,16 +135,16 @@ pub fn is_cross_ns_ref_allowed(
     backend_group: Option<&String>,
     backend_kind: Option<&String>,
     backend_name: &str,
+    runtime: &ControllerRuntime,
 ) -> bool {
     if !is_validation_enabled() {
         return true;
     }
 
-    let validator = CrossNamespaceValidator::new();
     let group = normalize_group(backend_group);
     let kind = normalize_kind(backend_kind);
 
-    validator.store.check_reference_allowed(
+    runtime.ref_grant_store.check_reference_allowed(
         route_namespace,
         "gateway.networking.k8s.io",
         route_kind,

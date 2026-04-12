@@ -42,10 +42,8 @@
 
 | Key | 资源 | 作用 |
 |-----|------|------|
-| `edgion.io/max-retries` | `HTTPRoute` / `GRPCRoute` | 路由级重试覆盖，优先级高于全局配置，`0` 表示禁用 |
 | `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` | 解析 `EdgionStreamPlugins` 引用 |
 | `edgion.io/proxy-protocol` | `TLSRoute` | 当前实现只识别 `"v2"` |
-| `edgion.io/upstream-tls` | `TLSRoute` | 控制到上游是否走 TLS |
 | `edgion.io/max-connect-retries` | `TLSRoute` | 上游连接重试次数 |
 | `edgion.io/expose-client-cert` | `EdgionTls` | 把 mTLS 客户端证书信息暴露给插件层 |
 | `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | 主动健康检查 YAML 配置（type: http/tcp/grpc） |

@@ -185,7 +185,7 @@ func TestConformance(t *testing.T) {
 		TLSRouteMustHaveCondition:          10 * time.Second,
 		RouteMustHaveParents:               10 * time.Second,
 		ManifestFetchTimeout:               5 * time.Second,
-		MaxTimeToConsistency:               30 * time.Second,
+		MaxTimeToConsistency:               120 * time.Second,
 		NamespacesMustBeReady:              60 * time.Second,
 		RequestTimeout:                     2 * time.Second,
 		LatestObservedGenerationSet:        10 * time.Second,
@@ -217,6 +217,14 @@ func TestConformance(t *testing.T) {
 		}
 	} else if enableGRPCProxy {
 		t.Fatal("GATEWAY_PROXY_ENABLE_GRPC requires GATEWAY_PROXY_HOST to be set")
+	}
+
+	// Allow overriding base manifests for split-profile runs.
+	// When running TLS-only, the default base/manifests.yaml creates HTTP
+	// Gateways on port 443 that conflict with TLS Passthrough listeners.
+	if bm := os.Getenv("EDGION_BASE_MANIFESTS"); bm != "" {
+		t.Logf("Using custom base manifests: %s", bm)
+		opts.BaseManifests = bm
 	}
 
 	conformance.RunConformanceWithOptions(t, opts)

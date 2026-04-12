@@ -1,5 +1,9 @@
 # Request Restriction Plugin
 
+> **🔌 Edgion Extension**
+> 
+> RequestRestriction is a request restriction plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
+
 ## Overview
 
 The `RequestRestriction` plugin restricts access based on request attributes, supporting multiple data sources and matching methods. Unlike the `IpRestriction` plugin which focuses on IP addresses, this plugin supports access control based on Header, Cookie, Query parameters, Path, Method, and Referer.
@@ -72,36 +76,31 @@ The `RequestRestriction` plugin restricts access based on request attributes, su
 
 ## Execution Logic
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  Request Restriction                     │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. Iterate through all rules                            │
-│     │                                                    │
-│     ├─ Get value from data source                        │
-│     │   └─ Header[key] / Cookie[key] / Query[key]        │
-│     │   └─ Path / Method / Referer                       │
-│     │                                                    │
-│     ├─ Missing value handling (onMissing)                 │
-│     │   ├─ Allow → rule allows                           │
-│     │   ├─ Deny → rule denies                            │
-│     │   └─ Skip → skip this rule                         │
-│     │                                                    │
-│     ├─ Deny check (highest priority)                     │
-│     │   └─ Matches deny/denyRegex list → rule denies     │
-│     │                                                    │
-│     └─ Allow check                                       │
-│         ├─ Allow list exists but no match → rule denies   │
-│         └─ Matches allow/allowRegex list → rule allows    │
-│                                                          │
-│  2. Aggregate rule results                               │
-│     ├─ matchMode=Any: any rule denies → return error     │
-│     └─ matchMode=All: all rules deny → return error      │
-│                                                          │
-│  3. All rules pass → continue processing chain           │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["Request Restriction"] --> B["1. Iterate through all rules"]
+    B --> C["Get value from data source"]
+    C --> C1["Header[key] / Cookie[key] / Query[key]"]
+    C --> C2["Path / Method / Referer"]
+    C1 --> D{"Value missing?"}
+    C2 --> D
+    D -->|Yes| E{"onMissing"}
+    E -->|Allow| F1["Rule allows"]
+    E -->|Deny| F2["Rule denies"]
+    E -->|Skip| F3["Skip this rule"]
+    D -->|No| G{"Matches deny/denyRegex?<br/>(highest priority)"}
+    G -->|Yes| F2
+    G -->|No| H{"Allow list exists?"}
+    H -->|Yes, no match| F2
+    H -->|Yes, matches allow/allowRegex| F1
+    H -->|No allow list| F1
+    F1 --> I["2. Aggregate rule results"]
+    F2 --> I
+    F3 --> I
+    I --> J{"matchMode"}
+    J -->|"Any: any rule denies"| K["Return error"]
+    J -->|"All: all rules deny"| K
+    J -->|Rules pass| L["3. Continue processing chain"]
 ```
 
 ## Use Cases
@@ -312,8 +311,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 5. **HashSet optimization**: Exact match lists exceeding 16 values automatically use HashSet for O(1) lookup
 6. **Missing value handling**: Choose the appropriate `onMissing` behavior based on security requirements — authentication scenarios typically use `Deny`
 
-## Related Plugins
+## Related Links
 
-- [IpRestriction](./ip-restriction.md) - IP-based access control
-- [JwtAuth](./jwt-auth.md) - JWT authentication
-- [BasicAuth](./basic-auth.md) - Basic authentication
+- [IpRestriction](./ip-restriction.md) — IP access control
+- [RateLimit](./rate-limit.md) — Rate limiting

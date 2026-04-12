@@ -1,13 +1,13 @@
 //! ConfigMap Handler
 //!
-//! Minimal handler for ConfigMap resources. Populates the global ConfigMapStore
-//! so BackendTLSPolicy can resolve `caCertificateRefs` with `kind: ConfigMap`.
+//! Minimal handler for ConfigMap resources. Populates the ConfigMapStore
+//! (via ControllerRuntime) so BackendTLSPolicy can resolve `caCertificateRefs`
+//! with `kind: ConfigMap`.
 
 use std::collections::{HashMap, HashSet};
 
 use k8s_openapi::api::core::v1::ConfigMap;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::configmap_utils::update_configmaps;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ProcessResult, ProcessorHandler,
 };
@@ -47,7 +47,7 @@ impl Default for ConfigMapHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
-    async fn parse(&self, cm: ConfigMap, _ctx: &HandlerContext) -> ProcessResult<ConfigMap> {
+    async fn parse(&self, cm: ConfigMap, ctx: &HandlerContext) -> ProcessResult<ConfigMap> {
         let cm_key = format_secret_key(
             cm.metadata.namespace.as_ref(),
             cm.metadata.name.as_deref().unwrap_or(""),
@@ -55,7 +55,7 @@ impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
 
         let mut upsert = HashMap::new();
         upsert.insert(cm_key.clone(), cm.clone());
-        update_configmaps(upsert, &HashSet::new());
+        ctx.runtime().configmap_store.update(upsert, &HashSet::new());
 
         tracing::debug!(configmap_key = %cm_key, "ConfigMap parsed and added to ConfigMapStore");
         ProcessResult::Continue(cm)
@@ -77,7 +77,7 @@ impl ProcessorHandler<ConfigMap> for ConfigMapHandler {
 
         let mut remove = HashSet::new();
         remove.insert(cm_key.clone());
-        update_configmaps(HashMap::new(), &remove);
+        ctx.runtime().configmap_store.update(HashMap::new(), &remove);
 
         self.trigger_cascading_requeue(&cm_key, "deleted", ctx).await;
     }

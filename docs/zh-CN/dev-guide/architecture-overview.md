@@ -109,9 +109,9 @@ graph TD
   - `src/core/gateway/conf_sync/conf_client/config_client.rs`
   - `src/core/common/conf_sync/traits.rs`
 - CLI 检查：
-  - `edgion-ctl --target center`
-  - `edgion-ctl --target server`
-  - `edgion-ctl --target client`
+  - `edgion-cli --target center`
+  - `edgion-cli --target server`
+  - `edgion-cli --target client`
 
 实际排障时，先比对 `server` 和 `client` 两侧视图，通常最快就能判断问题是在 controller 解析、同步链路，还是 gateway 运行时。
 

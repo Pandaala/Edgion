@@ -2,8 +2,9 @@
 //!
 //! Provides event-driven revalidation when ReferenceGrants are modified
 
+use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
 /// ReferenceGrant changed event
 #[derive(Debug, Clone)]
@@ -34,14 +35,26 @@ impl ReferenceGrantEventDispatcher {
 
     /// Register a listener
     pub fn register_listener(&self, listener: Arc<dyn RevalidationListener>) {
-        let mut listeners = self.listeners.write().unwrap();
+        let mut listeners = self.listeners.write();
         listeners.push(listener);
         tracing::debug!(component = "ref_grant_events", "Registered revalidation listener");
     }
 
+    /// Clear all registered listeners.
+    ///
+    /// **不在正常 reset 流程中调用**——监听器在进程启动时通过 `ConfMgr::create()` 注册一次，
+    /// 必须跨 reset 持久存在。若在 reset 中调用此方法，首次重启后 ReferenceGrant 变更将
+    /// 永远无法触发路由重新入队（见 `ControllerRuntime::reset()` 注释）。
+    ///
+    /// 仅供测试使用。
+    pub fn clear_listeners(&self) {
+        self.listeners.write().clear();
+        tracing::debug!(component = "ref_grant_events", "Cleared all revalidation listeners");
+    }
+
     /// Dispatch event to all listeners
     pub async fn dispatch(&self, event: &ReferenceGrantChangedEvent) {
-        let listeners: Vec<_> = self.listeners.read().unwrap().clone();
+        let listeners: Vec<_> = self.listeners.read().clone();
         tracing::info!(
             component = "ref_grant_events",
             affected_ns_count = event.affected_namespaces.len(),
@@ -59,15 +72,6 @@ impl Default for ReferenceGrantEventDispatcher {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Global event dispatcher singleton
-static GLOBAL_DISPATCHER: OnceLock<Arc<ReferenceGrantEventDispatcher>> = OnceLock::new();
-
-pub fn get_global_dispatcher() -> Arc<ReferenceGrantEventDispatcher> {
-    GLOBAL_DISPATCHER
-        .get_or_init(|| Arc::new(ReferenceGrantEventDispatcher::new()))
-        .clone()
 }
 
 #[cfg(test)]

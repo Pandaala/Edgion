@@ -8,6 +8,8 @@
 //!   - String length limit
 //!   - catch_unwind for fault isolation
 
+use std::borrow::Cow;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -518,6 +520,52 @@ impl Vm {
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
                 }
+                OpCode::RegexFind(regex_idx) => {
+                    let s = state.pop()?;
+                    // Nil-friendly: non-Str input returns Nil, consistent with Matches.
+                    let result = match s {
+                        Value::Str(s) => {
+                            if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
+                                if let Some(m) = re.find(&s) {
+                                    let found = m.as_str();
+                                    if found.len() > self.limits.max_string_len {
+                                        return Err(RuntimeError::StringTooLong {
+                                            len: found.len(),
+                                            limit: self.limits.max_string_len,
+                                        });
+                                    }
+                                    Value::Str(found.to_string())
+                                } else {
+                                    Value::Nil
+                                }
+                            } else {
+                                Value::Nil
+                            }
+                        }
+                        _ => Value::Nil,
+                    };
+                    state.push(result, self.limits.max_stack_depth)?;
+                }
+                OpCode::RegexReplace(regex_idx) => {
+                    let replacement = state.pop()?.into_string();
+                    let s = state.pop()?.into_string();
+                    let result = if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
+                        // Cow::Borrowed means nothing matched — reuse the already-owned String.
+                        match re.replace_all(&s, replacement.as_str()) {
+                            Cow::Borrowed(_) => s,
+                            Cow::Owned(o) => o,
+                        }
+                    } else {
+                        s
+                    };
+                    if result.len() > self.limits.max_string_len {
+                        return Err(RuntimeError::StringTooLong {
+                            len: result.len(),
+                            limit: self.limits.max_string_len,
+                        });
+                    }
+                    state.push(Value::Str(result), self.limits.max_stack_depth)?;
+                }
 
                 // ===== Control Flow =====
                 OpCode::Jump(offset) => {
@@ -640,6 +688,36 @@ impl Vm {
                     return Ok(PluginRunningResult::ErrResponse {
                         status: status_code,
                         body: body_str,
+                    });
+                }
+                OpCode::ReturnTerminate => {
+                    return Ok(PluginRunningResult::ErrTerminateRequest);
+                }
+                OpCode::ReturnGrpcError => {
+                    let message = state.pop()?;
+                    let code = state.pop()?;
+                    let grpc_code = match &code {
+                        Value::Int(n) => {
+                            let c = *n;
+                            if !(0..=16).contains(&c) {
+                                tracing::warn!(
+                                    "DSL grpc_error code {} out of valid range (0-16), using 13 (INTERNAL)",
+                                    c
+                                );
+                                13u16
+                            } else {
+                                c as u16
+                            }
+                        }
+                        _ => 13, // INTERNAL
+                    };
+                    let message_str = match message {
+                        Value::Nil => None,
+                        other => Some(other.into_string()),
+                    };
+                    return Ok(PluginRunningResult::ErrGrpcError {
+                        grpc_status: grpc_code,
+                        message: message_str,
                     });
                 }
             }
