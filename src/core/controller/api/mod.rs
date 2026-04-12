@@ -216,6 +216,7 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .route("/api/v1/reload", post(reload_all_resources))
         // RegionRoute aggregation
         .route("/api/v1/region-routes", get(region_route_handlers::list_region_routes))
+        .route("/api/v1/region-routes/{service_group}/{cluster}/{namespace}/{kind}", get(region_route_handlers::get_region_route_detail))
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
         // ConfigServer endpoints (for edgion-cli --target server)

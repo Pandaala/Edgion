@@ -21,7 +21,7 @@ RegionRoute 通过有序路由规则（routeRules）将流量路由到多个 reg
 **核心行为：**
 - 只改变上游 **IP**（通过 DNS 解析 `backendEndpoint`）。原始请求的 **Host header**、**SNI**、路径、body 全部保持不变。
 - 每个 region 占用 `[0, modulo-1]` 中的一段范围，范围不得重叠，允许有间隙。
-- `myRegion`：若路由结果等于本网关所在 region，插件直接放行，不设 `ExternalJumpPreset`（流量已在本地，无需跨 region 跳转）。
+- `baseInfo.myRegion`：若路由结果等于本网关所在 region，插件直接放行，不设 `ExternalJumpPreset`（流量已在本地，无需跨 region 跳转）。
 - `failoverTo`：per-region 静态重定向——该 region 的流量在健康检查前先重定向到另一个 region。
 - 可选的 auto failover 通过 DNS 探测每个 region 的健康状态；若某 region DNS 无返回，流量自动切到最健康的其他 region。
 - `routeRules` 为空 → 插件 no-op。
@@ -32,8 +32,11 @@ RegionRoute 通过有序路由规则（routeRules）将流量路由到多个 reg
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `regions` | Array\<Object\> | —（必填） | Region 定义列表，见下方 `RegionDef` 子字段 |
-| `myRegion` | String | `""` | 本网关所在 region 名称，路由目标等于此值时直接放行 |
+| `baseInfo` | Object | —（必填） | 基础信息包装对象，包含 region 定义及 Center 联邦聚合所需的元数据 |
+| `baseInfo.serviceGroup` | String | —（必填，DNS-1123 label） | 服务组名称，用于分组相关的 RegionRoute 插件。Center 联邦模式下，同一 `serviceGroup` 的插件会被聚合到一起进行全局视图展示和统一管理 |
+| `baseInfo.cluster` | String | `""` | 集群标识符（如 `"us-prod"`、`"eu-staging"`），用于在 Center 联邦模式下区分来自不同集群的 RegionRoute 配置 |
+| `baseInfo.regions` | Array\<Object\> | —（必填） | Region 定义列表，见下方 `RegionDef` 子字段 |
+| `baseInfo.myRegion` | String | `""` | 本网关所在 region 名称，路由目标等于此值时直接放行 |
 | `keyGet` | Array\<Object\> | `[]` | 共享的 key 提取配置（RouteByKeyConfMatch 和 RouteByHashRange 共用） |
 | `hashKeyGet` | Array\<Object\> | 无 | 预计算 hash 读取源（RouteByHashRange 计算前先尝试读取） |
 | `hashCalc` | Object | 无 | Hash 计算配置，缺省时 RouteByHashRange 仅做 passthrough |
@@ -82,21 +85,27 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        # region 定义 — hashRange [low, high]，闭区间
-        regions:
-          - name: virginia
-            hashRange: [0, 599]           # 60% 流量（1000 槽中的 600 个）
-            backendEndpoint: virginia-internal.example.com:8443
-            tls: true
-            # failoverTo: ohio            # 可选：将 virginia 流量静态重定向到 ohio
-          - name: ohio
-            hashRange: [600, 999]         # 40% 流量（1000 槽中的 400 个）
-            backendEndpoint: ohio-internal.example.com:8443
-            tls: true
-            # failoverTo: virginia        # 可选：将 ohio 流量静态重定向到 virginia
+        baseInfo:
+          # 服务组名称 — Center 联邦模式下用于聚合同一服务的 RegionRoute 配置
+          serviceGroup: my-service
+          # 可选：集群标识符 — 区分不同集群的配置（如 "us-prod"、"eu-staging"）
+          # cluster: us-prod
 
-        # 可选：本网关所在 region——路由目标等于此值时直接放行（本地流量，无跨 region 跳转）
-        # myRegion: virginia
+          # region 定义 — hashRange [low, high]，闭区间
+          regions:
+            - name: virginia
+              hashRange: [0, 599]           # 60% 流量（1000 槽中的 600 个）
+              backendEndpoint: virginia-internal.example.com:8443
+              tls: true
+              # failoverTo: ohio            # 可选：将 virginia 流量静态重定向到 ohio
+            - name: ohio
+              hashRange: [600, 999]         # 40% 流量（1000 槽中的 400 个）
+              backendEndpoint: ohio-internal.example.com:8443
+              tls: true
+              # failoverTo: virginia        # 可选：将 ohio 流量静态重定向到 virginia
+
+          # 可选：本网关所在 region——路由目标等于此值时直接放行（本地流量，无跨 region 跳转）
+          # myRegion: virginia
 
         # RouteByKeyConfMatch 和 RouteByHashRange 共用的 key 提取配置
         keyGet:
@@ -195,10 +204,12 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 与配置保持�
 
 ### myRegion — 本地放行
 
-当网关实例部署在某个 region 内时，将 `myRegion` 设置为该 region 的名称。若路由结果等于本 region，插件直接放行，不设 `ExternalJumpPreset`，避免本地流量产生不必要的跨 region 网络跳转。
+当网关实例部署在某个 region 内时，将 `baseInfo.myRegion` 设置为该 region 的名称。若路由结果等于本 region，插件直接放行，不设 `ExternalJumpPreset`，避免本地流量产生不必要的跨 region 网络跳转。
 
 ```yaml
-myRegion: virginia    # 本网关部署在 virginia
+baseInfo:
+  serviceGroup: my-service
+  myRegion: virginia    # 本网关部署在 virginia
 ```
 
 - 空字符串（默认）= 功能禁用，所有路由均走 `ExternalJumpPreset`。
@@ -209,16 +220,18 @@ myRegion: virginia    # 本网关部署在 virginia
 在任意 `RegionDef` 上配置 `failoverTo`，可将该 region 的流量静态重定向到另一个 region。在路由规则确定目标之后、`autoFailover` 健康检查之前生效。
 
 ```yaml
-regions:
-  - name: ohio
-    hashRange: [600, 999]
-    backendEndpoint: ohio-internal.example.com:8443
-    failoverTo: virginia     # ohio 的所有流量 → 改走 virginia
+baseInfo:
+  serviceGroup: my-service
+  regions:
+    - name: ohio
+      hashRange: [600, 999]
+      backendEndpoint: ohio-internal.example.com:8443
+      failoverTo: virginia     # ohio 的所有流量 → 改走 virginia
 ```
 
 典型场景：
 - **手动 failover**：运维将某 region 标记为下线，流量全量切到备用 region。
-- **结合 myRegion 使用**：若重定向目标等于 `myRegion`，重定向后的流量也会本地放行。
+- **结合 myRegion 使用**：若重定向目标等于 `baseInfo.myRegion`，重定向后的流量也会本地放行。
 
 约束：
 - 目标必须是合法的 region 名称，否则该条重定向静默忽略（access log 记录 `err:failoverTo invalid;`）。

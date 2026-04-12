@@ -43,15 +43,17 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        regions:
-          - name: us-east
-            hashRange: [0, 499]
-            backendEndpoint: us-east.example.com:8443
-            tls: true
-          - name: us-west
-            hashRange: [500, 999]
-            backendEndpoint: us-west.example.com:8443
-            tls: true
+        baseInfo:
+          serviceGroup: my-service
+          regions:
+            - name: us-east
+              hashRange: [0, 499]
+              backendEndpoint: us-east.example.com:8443
+              tls: true
+            - name: us-west
+              hashRange: [500, 999]
+              backendEndpoint: us-west.example.com:8443
+              tls: true
         keyGet:
           - type: header
             name: X-Account-Id

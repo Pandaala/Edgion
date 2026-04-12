@@ -8,13 +8,16 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        regions:
-          - name: virginia
-            hashRange: [0, 599]
-            backendEndpoint: "127.0.0.1:30001"
-            tls: false
-          - name: ohio
-            hashRange: [600, 999]
-            backendEndpoint: "127.0.0.1:30002"
-            tls: false
+        baseInfo:
+          serviceGroup: "region-route-norules"
+          cluster: "test"
+          regions:
+            - name: virginia
+              hashRange: [0, 599]
+              backendEndpoint: "127.0.0.1:30001"
+              tls: false
+            - name: ohio
+              hashRange: [600, 999]
+              backendEndpoint: "127.0.0.1:30002"
+              tls: false
         # routeRules intentionally absent → plugin no-op

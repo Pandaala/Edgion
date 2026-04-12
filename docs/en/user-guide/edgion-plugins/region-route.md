@@ -32,15 +32,23 @@ Three rule types are available:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `regions` | Array\<Object\> | — (required) | Region definitions list, see `RegionDef` sub-fields below |
-| `myRegion` | String | `""` | This gateway's own region name; pass through when routing target equals this value |
+| `baseInfo` | Object | — (required) | Base information wrapper containing region definitions and identity fields; used by Center for aggregation |
 | `keyGet` | Array\<Object\> | `[]` | Shared key extraction config (used by RouteByKeyConfMatch and RouteByHashRange) |
 | `hashKeyGet` | Array\<Object\> | None | Pre-computed hash sources (read before computing in RouteByHashRange) |
 | `hashCalc` | Object | None | Hash computation config; if absent, RouteByHashRange is passthrough-only |
 | `routeRules` | Array\<Object\> | `[]` | Ordered route rules list; empty list makes the plugin a no-op |
 | `autoFailover` | Object | None | Auto failover configuration (DNS probe-based) |
 
-### `regions[]` (RegionDef) Sub-fields
+### `baseInfo` Sub-fields
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `serviceGroup` | String | — (required, DNS-1123 label) | Service group name for grouping related RegionRoute plugins; used by Center to aggregate region topology across clusters |
+| `cluster` | String | `""` | Cluster identifier (e.g., `"us-prod"`, `"eu-staging"`); used by Center to distinguish which cluster reported this config |
+| `regions` | Array\<Object\> | — (required) | Region definitions list, see `RegionDef` sub-fields below |
+| `myRegion` | String | `""` | This gateway's own region name; pass through when routing target equals this value |
+
+### `baseInfo.regions[]` (RegionDef) Sub-fields
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -82,22 +90,27 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        # Region definitions — hashRange [low, high], closed interval
-        regions:
-          - name: virginia
-            hashRange: [0, 599]           # 60% of traffic (600 of 1000 slots)
-            backendEndpoint: virginia-internal.example.com:8443
-            tls: true
-            # failoverTo: ohio            # optional: redirect virginia traffic to ohio
-          - name: ohio
-            hashRange: [600, 999]         # 40% of traffic (400 of 1000 slots)
-            backendEndpoint: ohio-internal.example.com:8443
-            tls: true
-            # failoverTo: virginia        # optional: redirect ohio traffic to virginia
+        # Base information — region definitions and identity for Center aggregation
+        baseInfo:
+          serviceGroup: my-service       # required: groups related RegionRoute plugins
+          cluster: us-prod               # optional: identifies this cluster to Center
 
-        # Optional: this gateway's own region — if routing targets this region,
-        # pass through without ExternalJumpPreset (traffic is already local).
-        # myRegion: virginia
+          # Region definitions — hashRange [low, high], closed interval
+          regions:
+            - name: virginia
+              hashRange: [0, 599]           # 60% of traffic (600 of 1000 slots)
+              backendEndpoint: virginia-internal.example.com:8443
+              tls: true
+              # failoverTo: ohio            # optional: redirect virginia traffic to ohio
+            - name: ohio
+              hashRange: [600, 999]         # 40% of traffic (400 of 1000 slots)
+              backendEndpoint: ohio-internal.example.com:8443
+              tls: true
+              # failoverTo: virginia        # optional: redirect ohio traffic to virginia
+
+          # Optional: this gateway's own region — if routing targets this region,
+          # pass through without ExternalJumpPreset (traffic is already local).
+          # myRegion: virginia
 
         # Shared key extraction for RouteByKeyConfMatch and RouteByHashRange
         keyGet:
@@ -199,7 +212,10 @@ The plugin writes entries to the request's plugin log (100-byte limit — entrie
 When a gateway instance is deployed inside one of the regions, set `myRegion` to that region's name. If routing determines the target region is the local one, the plugin skips `ExternalJumpPreset` and passes through to the local upstream directly — no cross-region network hop.
 
 ```yaml
-myRegion: virginia    # this gateway is deployed in virginia
+baseInfo:
+  serviceGroup: my-service
+  myRegion: virginia    # this gateway is deployed in virginia
+  regions: [...]
 ```
 
 - Empty string (default) = feature disabled; all routing always sets `ExternalJumpPreset`.
@@ -210,11 +226,13 @@ myRegion: virginia    # this gateway is deployed in virginia
 Add `failoverTo` to any `RegionDef` to statically redirect traffic away from that region. Applied after the routing rule determines the target, before the `autoFailover` health check.
 
 ```yaml
-regions:
-  - name: ohio
-    hashRange: [600, 999]
-    backendEndpoint: ohio-internal.example.com:8443
-    failoverTo: virginia     # all ohio-bound traffic → virginia instead
+baseInfo:
+  serviceGroup: my-service
+  regions:
+    - name: ohio
+      hashRange: [600, 999]
+      backendEndpoint: ohio-internal.example.com:8443
+      failoverTo: virginia     # all ohio-bound traffic → virginia instead
 ```
 
 Typical use cases:

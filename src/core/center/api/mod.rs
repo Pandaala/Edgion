@@ -8,6 +8,8 @@
 //!   GET  /api/v1/clusters                     → list distinct cluster names
 //!   GET  /api/v1/resources                    → list resource keys (query: cluster=, kind=)
 //!   POST /api/v1/controllers/{id}/reload      → send reload command
+//!   GET  /api/v1/center/region-routes         → aggregated region-route keys from all controllers
+//!   GET  /api/v1/center/region-routes/{sg}/{cluster}/{ns} → aggregated region-route detail
 //!   ANY  /api/v1/proxy/{controller_id}/*rest  → proxy HTTP request to controller
 
 use axum::{
@@ -19,6 +21,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+mod region_route_handlers;
 
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::commander::Commander;
@@ -45,6 +49,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/clusters", get(list_clusters))
         .route("/api/v1/resources", get(list_resources))
         .route("/api/v1/controllers/{id}/reload", post(reload_controller))
+        // Aggregated region-route endpoints
+        .route("/api/v1/center/region-routes", get(region_route_handlers::list_center_region_routes))
+        .route("/api/v1/center/region-routes/{service_group}/{cluster}/{namespace}/{kind}", get(region_route_handlers::get_center_region_route_detail))
         // HTTP proxy to controllers
         .route("/api/v1/proxy/{controller_id}/{*rest}", any(proxy_handler))
         .with_state(state)

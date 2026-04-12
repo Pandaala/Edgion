@@ -12,22 +12,25 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        regions:
-          - name: virginia
-            hashRange: [0, 333]
-            backendEndpoint: "127.0.0.1:30001"
-            tls: false
-          - name: ohio
-            hashRange: [334, 666]
-            backendEndpoint: "127.0.0.1:30002"
-            tls: false
-            failoverTo: virginia
-          - name: europe
-            hashRange: [667, 999]
-            backendEndpoint: "127.0.0.1:30002"
-            tls: false
-            failoverTo: ohio
-        myRegion: virginia
+        baseInfo:
+          serviceGroup: "region-route-myregion"
+          cluster: "test"
+          regions:
+            - name: virginia
+              hashRange: [0, 333]
+              backendEndpoint: "127.0.0.1:30001"
+              tls: false
+            - name: ohio
+              hashRange: [334, 666]
+              backendEndpoint: "127.0.0.1:30002"
+              tls: false
+              failoverTo: virginia
+            - name: europe
+              hashRange: [667, 999]
+              backendEndpoint: "127.0.0.1:30002"
+              tls: false
+              failoverTo: ohio
+          myRegion: virginia
         routeRules:
           - type: RouteByDirectRegion
             keyFrom:

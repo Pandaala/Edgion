@@ -89,7 +89,7 @@ pub struct RegionRoute {
     health: Arc<RegionHealthTable>,
     /// Cached at creation to avoid Arc → Option traversal on every hot-path call.
     healthy_threshold: f32,
-    /// Index of myRegion in config.regions. None = feature disabled.
+    /// Index of myRegion in config.base_info.regions. None = feature disabled.
     my_region_idx: Option<usize>,
     /// Per-region redirect state. Invalid failoverTo entries are surfaced via pluginLog.
     region_redirect: Vec<RegionRedirectState>,
@@ -102,7 +102,7 @@ impl RegionRoute {
         let mut validated = config.clone();
         validated.validate();
 
-        let n = validated.regions.len();
+        let n = validated.base_info.regions.len();
         let healthy_threshold = validated
             .auto_failover
             .as_ref()
@@ -110,16 +110,17 @@ impl RegionRoute {
             .map(|f| f.healthy_threshold)
             .unwrap_or(0.0);
         // myRegion: if configured but not found in regions, silently disable the feature.
-        let my_region_idx = if validated.my_region.is_empty() {
+        let my_region_idx = if validated.base_info.my_region.is_empty() {
             None
         } else {
-            validated.regions.iter().position(|r| r.name == validated.my_region)
+            validated.base_info.regions.iter().position(|r| r.name == validated.base_info.my_region)
         };
 
         // failoverTo: resolve each region's redirect target.
         // Invalid config (target not found, self-ref, cycle) → RegionRedirectState::Invalid.
         // Invalid state is surfaced per-request via pluginLog; plugin works normally otherwise.
         let region_redirect: Vec<RegionRedirectState> = validated
+            .base_info
             .regions
             .iter()
             .enumerate()
@@ -133,22 +134,22 @@ impl RegionRoute {
                     return RegionRedirectState::Invalid;
                 }
                 // Target must exist in regions
-                let target_idx = match validated.regions.iter().position(|r| r.name == target) {
+                let target_idx = match validated.base_info.regions.iter().position(|r| r.name == target) {
                     Some(idx) => idx,
                     None => return RegionRedirectState::Invalid,
                 };
                 // Cycle detection (n≤5, simple walk)
                 let mut seen = vec![i];
                 let mut cur = target_idx;
-                for _ in 0..validated.regions.len() {
+                for _ in 0..validated.base_info.regions.len() {
                     if seen.contains(&cur) {
                         return RegionRedirectState::Invalid;
                     }
                     seen.push(cur);
-                    match validated.regions[cur]
+                    match validated.base_info.regions[cur]
                         .failover_to
                         .as_deref()
-                        .and_then(|t| validated.regions.iter().position(|r| r.name == t))
+                        .and_then(|t| validated.base_info.regions.iter().position(|r| r.name == t))
                     {
                         Some(next) => cur = next,
                         None => break,
@@ -204,6 +205,7 @@ impl RegionRoute {
 
     fn lookup_region(&self, hash_val: u16) -> Option<(usize, &RegionDef)> {
         self.config
+            .base_info
             .regions
             .iter()
             .enumerate()
@@ -211,7 +213,7 @@ impl RegionRoute {
     }
 
     fn find_region(&self, name: &str) -> Option<(usize, &RegionDef)> {
-        self.config.regions.iter().enumerate().find(|(_, r)| r.name == name)
+        self.config.base_info.regions.iter().enumerate().find(|(_, r)| r.name == name)
     }
 
     // ── Health check ──────────────────────────────────────────────────────────
@@ -234,11 +236,11 @@ impl RegionRoute {
     ) -> (usize, &'a RegionDef) {
         match self.region_redirect.get(idx) {
             Some(RegionRedirectState::Valid(target_idx)) => {
-                if let Some(target_region) = self.config.regions.get(*target_idx) {
+                if let Some(target_region) = self.config.base_info.regions.get(*target_idx) {
                     log.push(&format!("redirect {}→{}; ", region.name, target_region.name));
                     return (*target_idx, target_region);
                 }
-                // target_idx was resolved from config.regions at construction — this is unreachable.
+                // target_idx was resolved from config.base_info.regions at construction — this is unreachable.
                 unreachable!("region_redirect index {} out of bounds", target_idx)
             }
             Some(RegionRedirectState::Invalid) => {
@@ -260,9 +262,9 @@ impl RegionRoute {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         // myRegion check: pass through if this is the local region.
-        // my_region_idx is always a valid index into config.regions (resolved at construction).
+        // my_region_idx is always a valid index into config.base_info.regions (resolved at construction).
         if let Some(my_idx) = self.my_region_idx {
-            if self.config.regions[my_idx].name == region.name {
+            if self.config.base_info.regions[my_idx].name == region.name {
                 log.push("local, pass; ");
                 return PluginRunningResult::GoodNext;
             }
@@ -309,6 +311,7 @@ impl RegionRoute {
 
         let best = self
             .config
+            .base_info
             .regions
             .iter()
             .enumerate()
@@ -559,7 +562,7 @@ async fn probe_loop(config: Arc<RegionRouteConfig>, health: Arc<RegionHealthTabl
     loop {
         tokio::time::sleep(interval).await;
 
-        for (i, region) in config.regions.iter().enumerate() {
+        for (i, region) in config.base_info.regions.iter().enumerate() {
             let ratio = probe_region(region).await;
             health.store(i, ratio);
             tracing::debug!(

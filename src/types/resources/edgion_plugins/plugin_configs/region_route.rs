@@ -3,6 +3,10 @@
 //! Routes traffic across multiple regions using ordered route rules.
 //! Supports direct region override, key-to-region conf match, consistent hash-range routing,
 //! pre-computed hash passthrough, and auto failover.
+//!
+//! `base_info` groups management metadata (service_group, cluster) with region definitions
+//! so that Center can aggregate region-route entries across controllers by
+//! `{service_group}/{cluster}/{namespace}`.
 
 use std::collections::HashMap;
 
@@ -20,17 +24,12 @@ use crate::types::common::{KeyGet, KeySet};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegionRouteConfig {
-    /// Region definitions: name, hash range [low, high], and backend endpoint.
-    /// Ranges must not overlap. Gaps are allowed (requests in gap pass through).
-    pub regions: Vec<RegionDef>,
-
-    /// Optional: name of this gateway instance's own region.
-    /// Must match a region name in `regions`. When routing determines this region
-    /// as the target, the plugin passes through without ExternalJumpPreset
-    /// (traffic is already in the right region — no cross-region jump needed).
-    /// Empty string = feature disabled.
+    /// Base information: service group, cluster, region definitions, and local region.
+    ///
+    /// Groups management metadata with the region topology so that Center can
+    /// aggregate region-route entries across controllers by `{service_group}/{cluster}/{namespace}`.
     #[serde(default)]
-    pub my_region: String,
+    pub base_info: RegionRouteBaseInfo,
 
     /// Shared key extraction for RouteByKeyConfMatch and RouteByHashRange.
     /// Tried in order — first non-empty value wins.
@@ -66,6 +65,41 @@ pub struct RegionRouteConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub validation_error: Option<String>,
+}
+
+/// Base information for grouping and management.
+///
+/// Contains the service group name, cluster identifier, region definitions,
+/// and the local region name. These fields enable Center to aggregate
+/// region-route configurations across multiple controllers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionRouteBaseInfo {
+    /// Service group name for grouping related RegionRoute plugins.
+    ///
+    /// Multiple plugins with the same `service_group` form a logical group
+    /// managed together. Must be a valid K8s DNS-1123 label
+    /// (lowercase alphanumeric and hyphens, max 63 chars, must start/end with alphanumeric).
+    pub service_group: String,
+
+    /// Cluster identifier (e.g., "us-prod", "eu-staging").
+    ///
+    /// Used together with `service_group` and the resource namespace to form
+    /// the composite management key `{service_group}/{cluster}/{namespace}`.
+    #[serde(default)]
+    pub cluster: String,
+
+    /// Region definitions: name, hash range [low, high], and backend endpoint.
+    /// Ranges must not overlap. Gaps are allowed (requests in gap pass through).
+    pub regions: Vec<RegionDef>,
+
+    /// Optional: name of this gateway instance's own region.
+    /// Must match a region name in `regions`. When routing determines this region
+    /// as the target, the plugin passes through without ExternalJumpPreset
+    /// (traffic is already in the right region — no cross-region jump needed).
+    /// Empty string = feature disabled.
+    #[serde(default)]
+    pub my_region: String,
 }
 
 /// Region definition
@@ -239,11 +273,44 @@ impl RegionDef {
 
 // ── RegionRouteConfig validation ─────────────────────────────────────────────
 
+/// Check whether `s` is a valid K8s DNS-1123 label:
+/// - 1..=63 chars
+/// - lowercase alphanumeric and hyphens only
+/// - must start and end with an alphanumeric character
+fn is_dns1123_label(s: &str) -> bool {
+    if s.is_empty() || s.len() > 63 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_lowercase() && !bytes[0].is_ascii_digit() {
+        return false;
+    }
+    if !bytes[bytes.len() - 1].is_ascii_lowercase() && !bytes[bytes.len() - 1].is_ascii_digit() {
+        return false;
+    }
+    bytes
+        .iter()
+        .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 impl RegionRouteConfig {
     /// Validate config and cache any error message. Called in preparse.
     pub fn validate(&mut self) {
-        if self.regions.is_empty() {
-            self.validation_error = Some("regions must not be empty".to_string());
+        // Validate baseInfo.serviceGroup (required, DNS-1123 label)
+        if self.base_info.service_group.is_empty() {
+            self.validation_error = Some("baseInfo.serviceGroup must not be empty".to_string());
+            return;
+        }
+        if !is_dns1123_label(&self.base_info.service_group) {
+            self.validation_error = Some(format!(
+                "baseInfo.serviceGroup '{}' is not a valid DNS-1123 label",
+                self.base_info.service_group
+            ));
+            return;
+        }
+
+        if self.base_info.regions.is_empty() {
+            self.validation_error = Some("baseInfo.regions must not be empty".to_string());
             return;
         }
 
@@ -256,7 +323,7 @@ impl RegionRouteConfig {
             return;
         }
 
-        for region in &self.regions {
+        for region in &self.base_info.regions {
             if region.name.is_empty() {
                 self.validation_error = Some("region name must not be empty".to_string());
                 return;
@@ -289,6 +356,7 @@ impl RegionRouteConfig {
 
         // Check for overlapping ranges (sort by low, check adjacent)
         let mut sorted: Vec<(u16, u16, &str)> = self
+            .base_info
             .regions
             .iter()
             .map(|r| (r.hash_range[0], r.hash_range[1], r.name.as_str()))

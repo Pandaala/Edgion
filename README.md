@@ -114,14 +114,9 @@ graph TD;
 
 ```mermaid
 graph TD
-    Center1[Center 1] --- Center2[Center 2]
-
-    Center1 --> C1[Controller 1]
-    Center1 --> C2[Controller 2]
-    Center1 --> C3[Controller 3]
-    Center2 --> C1
-    Center2 --> C2
-    Center2 --> C3
+    Center[Center] --> C1[Controller 1]
+    Center --> C2[Controller 2]
+    Center --> C3[Controller 3]
 
     C1 --> G1[Gateway]
     C1 --> G2[Gateway]
