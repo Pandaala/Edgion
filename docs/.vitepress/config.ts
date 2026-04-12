@@ -510,7 +510,7 @@ export default defineConfig({
   themeConfig: {
     outline: { level: [2, 3] },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/your-org/Edgion' },
+      { icon: 'github', link: 'https://github.com/Pandaala/Edgion' },
     ],
     footer: {
       message: 'Released under the Apache 2.0 License.',
