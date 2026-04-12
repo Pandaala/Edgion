@@ -9,46 +9,22 @@ description: Pingora ProxyHttp 生命周期回调：8 阶段处理链、Connecti
 
 ## ProxyHttp 8 阶段回调链
 
-```
-                    ┌──────────────────────────────┐
-    TCP 连接 ──────>│  ConnectionFilter (TCP 层)    │──── 拒绝 ──> 关闭连接
-                    └──────────┬───────────────────┘
-                               │ 允许
-                    ┌──────────▼───────────────────┐
-                    │  TLS 握手 (如果 HTTPS)        │
-                    └──────────┬───────────────────┘
-                               │
-                    ┌──────────▼───────────────────┐
-              ① ──> │  early_request_filter         │──── ACME 命中 ──> 直接响应
-                    └──────────┬───────────────────┘
-                               │
-              ② ──> ┌──────────▼───────────────────┐
-                    │  request_filter               │──── 400/404/421 ──> 错误响应
-                    └──────────┬───────────────────┘
-                               │
-              ③ ──> ┌──────────▼───────────────────┐
-                    │  upstream_peer                │──── 504 ──> 超时
-                    └──────────┬───────────────────┘
-                               │
-              ④ ──> ┌──────────▼───────────────────┐
-                    │  connected_to_upstream        │
-                    └──────────┬───────────────────┘
-                               │
-              ⑤ ──> ┌──────────▼───────────────────┐
-                    │  upstream_response_filter     │ (sync)
-                    └──────────┬───────────────────┘
-                               │
-              ⑥ ──> ┌──────────▼───────────────────┐
-                    │  upstream_response_body_filter│ (sync, 逐 chunk)
-                    └──────────┬───────────────────┘
-                               │
-              ⑦ ──> ┌──────────▼───────────────────┐
-                    │  response_filter              │ (async)
-                    └──────────┬───────────────────┘
-                               │
-              ⑧ ──> ┌──────────▼───────────────────┐
-                    │  logging                      │
-                    └──────────────────────────────┘
+```mermaid
+flowchart TD
+    TCP["TCP 连接"] --> CF["ConnectionFilter (TCP 层)"]
+    CF -->|"拒绝"| CLOSE["关闭连接"]
+    CF -->|"允许"| TLS["TLS 握手 (如果 HTTPS)"]
+    TLS --> S1["① early_request_filter"]
+    S1 -->|"ACME 命中"| ACME["直接响应"]
+    S1 --> S2["② request_filter"]
+    S2 -->|"400/404/421"| ERR["错误响应"]
+    S2 --> S3["③ upstream_peer"]
+    S3 -->|"504"| TIMEOUT["超时"]
+    S3 --> S4["④ connected_to_upstream"]
+    S4 --> S5["⑤ upstream_response_filter (sync)"]
+    S5 --> S6["⑥ upstream_response_body_filter (sync, 逐 chunk)"]
+    S6 --> S7["⑦ response_filter (async)"]
+    S7 --> S8["⑧ logging"]
 ```
 
 ### 阶段 1：early_request_filter

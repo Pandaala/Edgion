@@ -9,56 +9,40 @@ description: 资源间依赖关系速查：spec 引用、Controller 内 Store �
 
 ## 依赖关系索引图
 
-```
-                        ┌──────────────────────────────────────────────────────────┐
-                        │  Secret  ──on_change──► requeue 所有 SecretRefManager 登记方 │
-                        └───────────��──────┬──────────────────────���────────────────┘
-                                           │ 被引用（certificateRef / secretRef / 凭据）
-                    ┌──────────��───────────┼─────────────��────────┐
-                    ▼                      ▼                       ▼
-                Gateway               EdgionTls            EdgionPlugins
-           BackendTLSPolicy           EdgionAcme
+```mermaid
+flowchart LR
+    subgraph Secret依赖
+        Secret -- "on_change requeue\nSecretRefManager 登记方" --> Gateway
+        Secret -- "certificateRef\nsecretRef / 凭据" --> EdgionTls
+        Secret --> EdgionPlugins
+        Secret --> BackendTLSPolicy
+        Secret --> EdgionAcme
+    end
 
-                        ┌───────────────���────────────────────��────────────────────��┐
-                        │  ConfigMap  ──on_change──► requeue SecretRefManager 登记方 ��
-                        └──────────────────┬────────────���───────────────────���──────┘
-                                           │ 被引用（frontend CA / backend CA）
-                                    ┌──────┴──────┐
-                                    ▼             ▼
-                                 Gateway   BackendTLSPolicy
+    subgraph ConfigMap依赖
+        ConfigMap -- "on_change requeue\nSecretRefManager 登记方" --> Gateway2[Gateway]
+        ConfigMap -- "frontend CA\nbackend CA" --> BackendTLSPolicy2[BackendTLSPolicy]
+    end
 
-                        ┌──────────────────────────────────────────────────────────┐
-                        │  Service  ──on_change──► requeue ServiceRefManager 登记方  │
-                        └──────────────────┬───────────────��───────────────────────┘
-                                           │ 被引用（backendRef / clusterIP）
-                    ┌──���───────────────────┴──────────────────────┐
-                    ▼                                              ▼
-          各类 Route（HTTP/GRPC/TCP/TLS/UDP）                   Gateway
-         （验证 backend 存在性）                          （推导 status ��址）
+    subgraph Service依赖
+        Service -- "on_change requeue\nServiceRefManager 登记方" --> Routes["各类 Route\n（HTTP/GRPC/TCP/TLS/UDP）"]
+        Service -- "backendRef\nclusterIP" --> Gateway3["Gateway\n（推导 status 地址）"]
+    end
 
-                        ┌───────��──────────────────────────────────────────────────┐
-                        │  ReferenceGrant  ──on_change──► requeue 跨 ns 引用方       │
-                        ���──────────────────┬──��────────────────────────────────────┘
-                                           │ 被查询（跨 ns 引���权限校验）
-                    ┌──────────────────────┴──────────────────────┐
-                    ▼                                              ▼
-                Gateway（跨 ns Secret/CA）              各类 Route（跨 ns backendRef）
+    subgraph ReferenceGrant依赖
+        ReferenceGrant -- "on_change requeue\n跨 ns 引用方" --> Gateway4["Gateway\n（跨 ns Secret/CA）"]
+        ReferenceGrant -- "跨 ns 权限校验" --> Routes2["各类 Route\n（跨 ns backendRef）"]
+    end
 
-                        ┌──────────────────────────────────────────────────────────┐
-                        │  Namespace  ──label 变更──► requeue Selector Gateway       │
-                        └──────────────────┬────���──────────────────────────────────┘
-                                           │ 被查询（allowedRoutes Selector 策略）
-                                           ▼
-                                     各类 Route（listener 是否允许该 namespace）
+    subgraph Namespace依赖
+        Namespace -- "label 变更 requeue\nSelector Gateway" --> Routes3["各类 Route\n（listener 是否允许该 namespace）"]
+    end
 
-                        ┌─��────────────────────────────────────────────────────────┐
-                        │  Gateway  ──on_change──► requeue gateway_route_index 中的 Route │
-                        └──────────────────┬───��───────────────────────────────────┘
-                                           │ 被引用（parentRef）
-                    ┌──────────────────────┴──────────────────────┐
-                    ▼                                              ▼
-          各�� Route（验证 listener 匹配）                      EdgionTls
-          ��─on_change──► requeue �� Gateway
+    subgraph Gateway依赖
+        GW[Gateway] -- "on_change requeue\ngateway_route_index" --> Routes4["各类 Route\n（验证 listener 匹配）"]
+        GW -- "parentRef" --> EdgionTls2[EdgionTls]
+        Routes4 -- "on_change requeue" --> GW
+    end
 ```
 
 ## Store 与写入/读取方

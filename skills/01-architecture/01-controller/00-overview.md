@@ -157,38 +157,15 @@ src/core/controller/
 
 完整的数据流从事件源到 Gateway 同步：
 
-```text
-┌─────────────────┐     ┌─────────────────┐
-│ K8s Informer /  │     │  FileSystem     │
-│ Watcher         │     │  Watcher        │
-└────────┬────────┘     └────────┬────────┘
-         │ 事件(Add/Update/Delete)│
-         └──────────┬────────────┘
-                    ▼
-            ┌───────────────┐
-            │   Workqueue   │  每个 kind 独立队列
-            │  (去重+退避)  │  支持跨资源 requeue
-            └───────┬───────┘
-                    ▼
-         ┌─────────────────────┐
-         │ ResourceProcessor<T>│
-         │  ├─ on_init         │  初始化加载
-         │  ├─ on_apply        │  新增/更新处理
-         │  └─ on_delete       │  删除处理
-         └─────────┬───────────┘
-                   ▼
-           ┌──────────────┐
-           │ ServerCache  │  内存缓存（处理后的资源）
-           └──────┬───────┘
-                  ▼
-        ┌──────────────────┐
-        │ ConfigSyncServer │  gRPC 服务端
-        │  (Watch/List)    │  检测变更并推送增量
-        └────────┬─────────┘
-                 ▼
-          ┌────────────┐
-          │  Gateway   │  数据面接收配置
-          └────────────┘
+```mermaid
+flowchart TD
+    A["K8s Informer / Watcher"] --> C["事件(Add/Update/Delete)"]
+    B["FileSystem Watcher"] --> C
+    C --> D["Workqueue\n每个 kind 独立队列\n去重+退避，支持跨资源 requeue"]
+    D --> E["ResourceProcessor‹T›\non_init — 初始化加载\non_apply — 新增/更新处理\non_delete — 删除处理"]
+    E --> F["ServerCache\n内存缓存（处理后的资源）"]
+    F --> G["ConfigSyncServer\ngRPC 服务端（Watch/List）\n检测变更并推送增量"]
+    G --> H["Gateway\n数据面接收配置"]
 ```
 
 关键流转细节：

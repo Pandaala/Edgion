@@ -9,8 +9,11 @@ description: 路由匹配总览：多级流水线（Listener→Domain→Path→D
 
 请求到达 Gateway 后，路由匹配按以下层级依次执行：
 
-```
-Listener → Domain (精确/通配/catch-all) → Path (regex/radix) → Deep match
+```mermaid
+flowchart LR
+    A["Listener"] --> B["Domain (精确/通配/catch-all)"]
+    B --> C["Path (regex/radix)"]
+    C --> D["Deep match"]
 ```
 
 1. **Listener 隔离**：根据连接到达的监听地址和协议（`ListenerKey`，格式 `"{addr}/{protocol}"`），选择对应的 per-listener 路由表。
@@ -103,36 +106,25 @@ priority_weight = path_char_count * 4 + type_bonus
 
 ## 路由注册流程
 
-```
-Controller 推送 HTTPRoute
-       │
-       ▼
-ConfHandler<HTTPRoute>::full_set / partial_update
-       │
-       ▼
-route_cache 更新（DashMap insert/remove）
-       │
-       ▼
-sync_lb_policies_for_routes（同步 LB 策略到全局 PolicyStore）
-       │
-       ▼
-rebuild_all_listener_managers / rebuild_affected_listener_managers
-       │
-       ├── bucket_routes_by_listener（按 resolved_listeners 分桶）
-       │   └── resolved_listeners 为空的路由直接 skip+warn
-       │
-       ├── 对每个受影响 listener：
-       │   ├── parse_http_routes_to_domain_rules（解析路由为 domain→rules）
-       │   │   ├── filter_accepted_parent_refs（过滤已 Accepted 的 parentRef）
-       │   │   ├── get_effective_hostnames（resolved_hostnames > spec.hostnames > "*"）
-       │   │   └── 分流：regex routes vs normal routes
-       │   ├── build_domain_route_rules_from_routes
-       │   │   ├── RadixRouteMatchEngine::build（radix tree 冻结）
-       │   │   ├── RegexRoutesEngine::build（RegexSet 编译）
-       │   │   └── RadixHostMatchEngine 初始化（通配域名）
-       │   └── HttpPortRouteManager::store_route_table（ArcSwap 原子切换）
-       │
-       └── 清理无路由且无活跃 Listener 的过期 listener
+```mermaid
+flowchart TD
+    A["Controller 推送 HTTPRoute"] --> B["ConfHandler&lt;HTTPRoute&gt;::full_set / partial_update"]
+    B --> C["route_cache 更新 (DashMap insert/remove)"]
+    C --> D["sync_lb_policies_for_routes (同步 LB 策略到全局 PolicyStore)"]
+    D --> E["rebuild_all_listener_managers / rebuild_affected_listener_managers"]
+    E --> F["bucket_routes_by_listener (按 resolved_listeners 分桶)"]
+    F -->|"resolved_listeners 为空"| F1["skip + warn"]
+    E --> G["对每个受影响 listener"]
+    G --> G1["parse_http_routes_to_domain_rules"]
+    G1 --> G1a["filter_accepted_parent_refs"]
+    G1 --> G1b["get_effective_hostnames"]
+    G1 --> G1c["分流: regex routes vs normal routes"]
+    G --> G2["build_domain_route_rules_from_routes"]
+    G2 --> G2a["RadixRouteMatchEngine::build (radix tree 冻结)"]
+    G2 --> G2b["RegexRoutesEngine::build (RegexSet 编译)"]
+    G2 --> G2c["RadixHostMatchEngine 初始化 (通配域名)"]
+    G --> G3["HttpPortRouteManager::store_route_table (ArcSwap 原子切换)"]
+    E --> H["清理无路由且无活跃 Listener 的过期 listener"]
 ```
 
 整个更新过程中，已有请求持有旧快照引用，不会被中断。新请求自动获取最新快照。

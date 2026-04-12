@@ -23,38 +23,22 @@
 
 ### 2.1 整体架构图
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Controller Runtime                            │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                    ProcessorRegistry (全局)                      │ │
-│  │           RwLock<HashMap<&'static str, Arc<dyn ProcessorObj>>>  │ │
-│  │                                                                  │ │
-│  │  ┌─────────────────────┐  ┌─────────────────────┐               │ │
-│  │  │ HttpRouteProcessor  │  │ GatewayProcessor    │  ...          │ │
-│  │  │  ├─ ServerCache<T>  │  │  ├─ ServerCache<T>  │               │ │
-│  │  │  ├─ Store (K8s)     │  │  ├─ Store (K8s)     │               │ │
-│  │  │  ├─ Workqueue       │  │  ├─ Workqueue       │               │ │
-│  │  │  └─ ProcessConfig   │  │  └─ ProcessConfig   │               │ │
-│  │  └─────────────────────┘  └─────────────────────┘               │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-│         │                              │                             │
-│         │ (typed access)               │ (as WatchObj)              │
-│         ▼                              ▼                             │
-│  ┌─────────────────┐          ┌────────────────────────────────┐   │
-│  │   Admin API     │          │       ConfigSyncServer         │   │
-│  │   (CRUD ops)    │          │  (gRPC list/watch only)        │   │
-│  └─────────────────┘          │  HashMap<kind, Arc<dyn WatchObj>>│   │
-│                               └────────────────────────────────┘   │
-│                                          │                          │
-│                                          ▼                          │
-│                               ┌──────────────────────┐              │
-│                               │    Gateway Nodes     │              │
-│                               │  (config consumers)  │              │
-│                               └──────────────────────┘              │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph CR["Controller Runtime"]
+        subgraph PR["ProcessorRegistry (Global)<br/>RwLock&lt;HashMap&lt;&amp;'static str, Arc&lt;dyn ProcessorObj&gt;&gt;&gt;"]
+            HP["HttpRouteProcessor<br/>- ServerCache&lt;T&gt;<br/>- Store (K8s)<br/>- Workqueue<br/>- ProcessConfig"]
+            GP["GatewayProcessor<br/>- ServerCache&lt;T&gt;<br/>- Store (K8s)<br/>- Workqueue<br/>- ProcessConfig"]
+            ETC["..."]
+        end
+        AA["Admin API<br/>(CRUD ops)"]
+        CSS["ConfigSyncServer<br/>(gRPC list/watch only)<br/>HashMap&lt;kind, Arc&lt;dyn WatchObj&gt;&gt;"]
+        GN["Gateway Nodes<br/>(config consumers)"]
+    end
+
+    PR -->|"typed access"| AA
+    PR -->|"as WatchObj"| CSS
+    CSS --> GN
 ```
 
 ### 2.2 核心组件职责

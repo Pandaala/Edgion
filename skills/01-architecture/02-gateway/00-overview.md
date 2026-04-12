@@ -20,19 +20,12 @@ Gateway 进程内并存两个运行时：
 
 ## 配置同步管线
 
-```
-Controller gRPC ──> ConfigSyncClient
-                         │
-                         ▼
-                    ClientCache<T>  (per resource kind)
-                         │
-                    event_dispatch (apply_change / set_ready)
-                         │
-                         ▼
-                    ConfHandler<T>  (full_set / partial_update)
-                         │
-                         ▼
-                Runtime Stores (ArcSwap atomic swap)
+```mermaid
+flowchart TD
+    A["Controller gRPC"] --> B["ConfigSyncClient"]
+    B --> C["ClientCache&lt;T&gt; (per resource kind)"]
+    C -->|"event_dispatch (apply_change / set_ready)"| D["ConfHandler&lt;T&gt; (full_set / partial_update)"]
+    D --> E["Runtime Stores (ArcSwap atomic swap)"]
 ```
 
 关键组件说明：

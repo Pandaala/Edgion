@@ -25,27 +25,19 @@ This is the classic external authentication pattern for API Gateways, comparable
 
 ## Core Flow
 
-```
-Client Request
-     │
-     ▼
-ForwardAuth Plugin
-     │
-     ├─── Build auth request (Header + X-Forwarded-* metadata)
-     │
-     ├─── Send to external auth service
-     │
-     ├─── Auth service returns 2xx?
-     │       │
-     │       ├── Yes → Copy upstreamHeaders to original request → Forward to upstream
-     │       │
-     │       └── No → Copy clientHeaders + Return auth service's status code and Body
-     │
-     └─── Auth service unreachable?
-             │
-             ├── allowDegradation: true → Skip auth, allow through
-             │
-             └── allowDegradation: false → Return statusOnError (default 503)
+```mermaid
+flowchart TD
+    A["Client Request"] --> B["ForwardAuth Plugin"]
+    B --> C["Build auth request<br/>(Header + X-Forwarded-* metadata)"]
+    C --> D["Send to external auth service"]
+    D --> E{"Auth service<br/>reachable?"}
+    E -->|Yes| F{"Returns 2xx?"}
+    F -->|Yes| G["Copy upstreamHeaders to original request"]
+    G --> H["Forward to upstream"]
+    F -->|No| I["Copy clientHeaders +<br/>Return auth service's status code and Body"]
+    E -->|No| J{"allowDegradation?"}
+    J -->|"true"| K["Skip auth, allow through"]
+    J -->|"false"| L["Return statusOnError (default 503)"]
 ```
 
 ## Configuration

@@ -11,43 +11,39 @@ description: 架构导航 skill。按 bin 类型（Controller/Gateway/Ctl）和�
 
 Edgion 是单 Crate、三 bin 的项目。**Controller 决策，Gateway 执行，Ctl 运维。**
 
-```
-  用户 / K8s API                                            客户端流量
-       │                                                         │
-       ▼                                                         ▼
-┌──────────────────────────────────────┐    gRPC     ┌───────────────────────────────────────┐
-│         edgion-controller            │  Watch/List │          edgion-gateway                │
-│         (控制面)                     │ ──────────► │          (数据面)                      │
-│                                      │             │                                       │
-│  ConfCenter (File/K8s)               │             │  ConfigSyncClient → ClientCache       │
-│  └► Workqueue (per-kind)             │             │                     └► ConfHandler     │
-│     └► ResourceProcessor            │             │                                       │
-│        (validate/preparse/parse)     │             │  Pingora Server                       │
-│        └► ServerCache ──────────► gRPC 推送 ──────►│  ├─ ConnectionFilter (StreamPlugins)   │
-│                                      │             │  ├─ ProxyHttp (HTTP/gRPC)              │
-│  跨资源依赖                          │             │  │  ├─ route match + plugins           │
-│  ├─ SecretRefManager                 │             │  │  ├─ upstream_peer + LB              │
-│  ├─ ServiceRefManager               │             │  │  └─ logging (AccessLog + Metrics)   │
-│  ├─ CrossNamespaceRefManager         │             │  └─ TCP/TLS/UDP Routes                │
-│  └─ RequeueChain                     │             │                                       │
-│                                      │             │  TLS 子系统                            │
-│  Admin API (:5800)                   │             │  ├─ 下游 TLS (客户端→网关)             │
-│  ConfigSyncServer (:50051)           │             │  └─ 上游 TLS (网关→后端 mTLS)         │
-│  ACME Service (可选, 仅 Leader)      │             │                                       │
-└──────────────────────────────────────┘             │  Admin API (:5900)                     │
-       ▲                                             │  Metrics  (:5901)                      │
-       │ HTTP API                                    └───────────────────────────────────────┘
-┌──────┴───────┐
-│ edgion-cli   │
-│ (CLI 工具)   │
-│              │
-│ apply/delete │
-│ get/reload   │
-│              │
-│ 3 种 target: │
-│ center/server│
-│ /client      │
-└──────────────┘
+```mermaid
+flowchart TD
+    User["用户 / K8s API"] --> Controller
+    Traffic["客户端流量"] --> Gateway
+
+    subgraph Controller["edgion-controller (控制面)"]
+        CC["ConfCenter (File/K8s)"] --> WQ["Workqueue (per-kind)"]
+        WQ --> RP["ResourceProcessor\n(validate/preparse/parse)"]
+        RP --> SC["ServerCache"]
+        CrossRef["跨资源依赖\nSecretRefManager\nServiceRefManager\nCrossNamespaceRefManager\nRequeueChain"]
+        CtrlServices["Admin API (:5800)\nConfigSyncServer (:50051)\nACME Service (可选, 仅 Leader)"]
+    end
+
+    SC -- "gRPC Watch/List" --> SyncClient
+
+    subgraph Gateway["edgion-gateway (数据面)"]
+        SyncClient["ConfigSyncClient"] --> ClientCache["ClientCache"] --> ConfHandler["ConfHandler"]
+        PingoraServer["Pingora Server"]
+        ConnFilter["ConnectionFilter (StreamPlugins)"]
+        ProxyHttp["ProxyHttp (HTTP/gRPC)\nroute match + plugins\nupstream_peer + LB\nlogging (AccessLog + Metrics)"]
+        StreamRoutes["TCP/TLS/UDP Routes"]
+        PingoraServer --- ConnFilter
+        PingoraServer --- ProxyHttp
+        PingoraServer --- StreamRoutes
+        TLS["TLS 子系统\n下游 TLS (客户端→网关)\n上游 TLS (网关→后端 mTLS)"]
+        GwServices["Admin API (:5900)\nMetrics (:5901)"]
+    end
+
+    subgraph CLI["edgion-cli (CLI 工具)"]
+        CliOps["apply/delete/get/reload\n3 种 target: center/server/client"]
+    end
+
+    CLI -- "HTTP API" --> Controller
 ```
 
 - **edgion-controller**（控制面）：从 K8s API 或本地文件接收资源，经校验/预解析/处理后通过 gRPC 推送给 Gateway。负责状态回写、跨资源依赖管理、ACME 证书签发。

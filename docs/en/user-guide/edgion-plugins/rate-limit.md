@@ -428,15 +428,16 @@ Higher precision means fewer hash collisions and more accurate rate limiting, bu
 
 CMS is a probabilistic data structure that uses multiple hash functions (default 4) and a fixed-size counter array for frequency estimation:
 
-```text
-Request key = "192.168.1.1"
-       │
-       ├─ hash1("192.168.1.1") → slot[23]  ++
-       ├─ hash2("192.168.1.1") → slot[87]  ++
-       ├─ hash3("192.168.1.1") → slot[142] ++
-       └─ hash4("192.168.1.1") → slot[256] ++
-       
-estimate = min(slot[23], slot[87], slot[142], slot[256])
+```mermaid
+flowchart TD
+    A["Request key = '192.168.1.1'"] --> B["hash1('192.168.1.1') → slot[23] ++"]
+    A --> C["hash2('192.168.1.1') → slot[87] ++"]
+    A --> D["hash3('192.168.1.1') → slot[142] ++"]
+    A --> E["hash4('192.168.1.1') → slot[256] ++"]
+    B --> F["estimate = min(slot[23], slot[87], slot[142], slot[256])"]
+    C --> F
+    D --> F
+    E --> F
 ```
 
 - **Space efficient**: Fixed memory, doesn't grow with key count
@@ -447,10 +448,14 @@ estimate = min(slot[23], slot[87], slot[142], slot[256])
 
 Pingora's Rate uses a dual-slot (red/blue) design for smooth sliding windows:
 
-```text
-Timeline: ──────────────────────────────────>
-          [  Window A  ][  Window B  ][  Window C  ]
-                        ↑ Old slot cleared on switch
+```mermaid
+flowchart TD
+    subgraph Timeline
+        direction LR
+        WA["Window A"] --> WB["Window B"]
+        WB --> WC["Window C"]
+    end
+    WB -. "Old slot cleared on switch" .-> WA
 ```
 
 On window switch, the old counter slot is cleared and reused, new requests write to the new slot.

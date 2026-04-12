@@ -7,33 +7,37 @@ description: Edgion 项目高层架构图、Crate 结构、三个 bin 定义、�
 
 ## 高层架构
 
-```
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                  edgion-controller                       │
-                    │                                                          │
-  YAML/K8s CRD ──► │  ConfCenter ──► Workqueue ──► ResourceProcessor          │
-                    │  (File/K8s)     (per-kind)    (validate/preparse/parse)  │
-                    │                                                          │
-  edgion-cli ────► │  Admin API (:5800)   ConfigSyncServer (gRPC :50051)      │
-                    └─────────────────────────────┬────────────────────────────┘
-                                                  │ gRPC Watch/List
-                                                  ▼
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                  edgion-gateway                          │
-                    │                                                          │
-                    │  ConfigSyncClient ──► ClientCache ──► Preparse           │
-                    │                       (per-kind)                         │
-                    │  Pingora Server                                          │
-                    │  ├─ ConnectionFilter (TCP-level, StreamPlugins)          │
-                    │  ├─ ProxyHttp (HTTP/gRPC lifecycle)                      │
-                    │  │  ├─ request_filter     → route match + plugins        │
-                    │  │  ├─ upstream_peer      → backend selection + LB       │
-                    │  │  ├─ upstream_response  → response plugins             │
-                    │  │  └─ logging            → AccessLog                    │
-                    │  └─ TCP/UDP/TLS Routes                                   │
-                    │                                                          │
-                    │  Admin API (:5900)   Metrics API (:5901)                 │
-                    └──────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    YAML["YAML / K8s CRD"] --> CC
+    CLI["edgion-cli"] --> AdminCtrl
+
+    subgraph Controller["edgion-controller"]
+        CC["ConfCenter\n(File/K8s)"] --> WQ["Workqueue\n(per-kind)"] --> RP["ResourceProcessor\n(validate/preparse/parse)"]
+        AdminCtrl["Admin API (:5800)"]
+        SyncServer["ConfigSyncServer\n(gRPC :50051)"]
+    end
+
+    SyncServer -- "gRPC Watch/List" --> SyncClient
+
+    subgraph Gateway["edgion-gateway"]
+        SyncClient["ConfigSyncClient"] --> ClientCache["ClientCache\n(per-kind)"] --> Preparse["Preparse"]
+        subgraph Pingora["Pingora Server"]
+            ConnFilter["ConnectionFilter\n(TCP-level, StreamPlugins)"]
+            ProxyHttp["ProxyHttp (HTTP/gRPC lifecycle)"]
+            ReqFilter["request_filter → route match + plugins"]
+            UpstreamPeer["upstream_peer → backend selection + LB"]
+            UpstreamResp["upstream_response → response plugins"]
+            Logging["logging → AccessLog"]
+            ProxyHttp --- ReqFilter
+            ProxyHttp --- UpstreamPeer
+            ProxyHttp --- UpstreamResp
+            ProxyHttp --- Logging
+            StreamRoutes["TCP/UDP/TLS Routes"]
+        end
+        AdminGw["Admin API (:5900)"]
+        MetricsGw["Metrics API (:5901)"]
+    end
 ```
 
 ## Crate 结构
