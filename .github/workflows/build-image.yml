@@ -1,9 +1,10 @@
 name: Build and Push Docker Images
 
 on:
-  push:
-    tags:
-      - "v*" # matches v1.0.0, v0.1.0-beta, etc.
+  workflow_dispatch: # 手动触发only，自动推送已关闭
+  # push:
+  #   tags:
+  #     - "v*" # matches v1.0.0, v0.1.0-beta, etc.
 
 env:
   IMAGE_REGISTRY: docker.io
@@ -151,6 +152,23 @@ jobs:
               --cache-to type=gha,mode=max \
               .
           done
+
+  create-release:
+    needs: build-and-push-images
+    runs-on: ubuntu-latest
+    name: Create GitHub Release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: releases/${{ github.ref_name }}.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   merge-manifests:
     needs: build-and-push-images

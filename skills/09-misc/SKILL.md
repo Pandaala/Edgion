@@ -12,9 +12,7 @@ description: Miscellaneous skill for Edgion. Includes CI/CD (compiling binaries,
 
 | 文件 | 主题 | 状态 |
 |------|------|------|
-| [00-local-build.md](00-local-build.md) | 本地编译命令、产物位置、Feature 组合、常见编译问题 | ✅ 已重构 |
-| [01-docker-build.md](01-docker-build.md) | Docker 多阶段构建、cargo-chef、多架构支持 | ✅ 已重构 |
-| [02-github-workflow.md](02-github-workflow.md) | CI 流水线、Release 发布、Docker Hub 推送 | ✅ 已重构 |
+| [cicd/](cicd/) | CI/CD：本地构建、Docker 构建、GitHub Workflow、Release 发布 | ✅ |
 | [debugging-tls-gateway.md](debugging-tls-gateway.md) | K8s 环境下 TLS 专项调试（kubectl exec + 日志文件 + grep 模式） | ✅ |
 | [debugging-conformance.md](debugging-conformance.md) | Conformance 测试调试：rv/sv/access log 三元组、orbstack-dev.sh 日志命令、各 profile 失败模式 | ✅ |
 
@@ -38,7 +36,7 @@ make check-agent-docs
 
 补充入口：
 
-- 本地构建细节见 [00-local-build.md](00-local-build.md)
+- 本地构建细节见 [cicd/00-local-build.md](cicd/00-local-build.md)
 - Feature 组合细节见 [../02-features/01-binary-and-deployment/02-feature-flags.md](../02-features/01-binary-and-deployment/02-feature-flags.md)
 
 ### Docker 构建

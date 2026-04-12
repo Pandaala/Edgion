@@ -69,9 +69,9 @@ Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller�
   3. 更新过时示例，不要向前复制遗留键
 
 - **CI/发布自动化**：
-  1. `skills/09-misc/02-github-workflow.md`
-  2. `skills/09-misc/00-local-build.md`
-  3. `skills/09-misc/01-docker-build.md`
+  1. `skills/09-misc/cicd/02-github-workflow.md`
+  2. `skills/09-misc/cicd/00-local-build.md`
+  3. `skills/09-misc/cicd/01-docker-build.md`
 
 ## 常用命令
 

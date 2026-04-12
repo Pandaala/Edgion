@@ -41,6 +41,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 | **全局 Review** — 安全/正确性/可观测性检查清单 + 已关闭误报条目 | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
 | **用户文档规范** — 撰写/审阅 docs/ 文档的写作规范 | [11-doc/SKILL.md](11-doc/SKILL.md) |
+| **CI/发布自动化** — GitHub Release、tag 推送、Docker 镜像、发布说明文件位置 | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
 
 ## 关键约束（必读，违反会引入运行时 bug）
 

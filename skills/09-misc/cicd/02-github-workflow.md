@@ -13,10 +13,10 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
 
 ## 先读这些真实入口
 
-- [../../.github/workflows/ci.yml](../../.github/workflows/ci.yml)
-- [../../.github/workflows/build-image.yml](../../.github/workflows/build-image.yml)
-- [../../.github/actions/setup-rust/action.yml](../../.github/actions/setup-rust/action.yml)
-- [../../docker/Dockerfile.runtime](../../docker/Dockerfile.runtime)
+- [../../../.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
+- [../../../.github/workflows/build-image.yml](../../../.github/workflows/build-image.yml)
+- [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
+- [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime)
 - [00-local-build.md](00-local-build.md)
 - [01-docker-build.md](01-docker-build.md)
 
@@ -33,7 +33,7 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
 
 几个关键事实：
 
-- `check`、`fmt`、`clippy`、`test` 四个 Rust job 都会先走本地 action [../../.github/actions/setup-rust/action.yml](../../.github/actions/setup-rust/action.yml)
+- `check`、`fmt`、`clippy`、`test` 四个 Rust job 都会先走本地 action [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
 - `agent-docs` 只需要 checkout + `make check-agent-docs`，不依赖 Rust toolchain 初始化
 - `fmt` 不安装系统依赖，也不开 cargo cache；其他构建型 Rust job 会装依赖并开启 cache
 - 当前 CI 命令没有 `--all-features`，改命令前要先确认是否真的要扩大矩阵，而不是顺手把 CI 成本抬高
@@ -80,7 +80,7 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
 
 3. `build-and-push-images`
    - 下载上一阶段的二进制产物
-   - 用 [../../docker/Dockerfile.runtime](../../docker/Dockerfile.runtime) 打 runtime 镜像
+   - 用 [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime) 打 runtime 镜像
    - 逐架构 push：
      - `pandaala/edgion-gateway:<tag>_amd64`
      - `pandaala/edgion-gateway:<tag>_arm64`
@@ -97,6 +97,19 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
      - `:<minor>`
      - `:<major>`
      - `:latest`
+
+## 发布 GitHub Release
+
+**发布步骤：**
+
+1. 写好 `releases/<tag>.md`（如 `releases/v0.2.0.md`），commit 进仓库
+2. 推 tag → workflow 自动在镜像推完后创建 Release，body 取自该文件
+
+**文件格式：** 纯 Markdown，按 `## Features` / `## Bug Fixes` 等分节，末尾加引流链接到 README。
+
+**含 `-` 的 tag**（如 `v0.2.0-beta`）自动标为 pre-release。
+
+> 历史发布说明存于 `releases/` 目录，文件名即 tag 名。
 
 ## 本地复现命令
 
@@ -154,4 +167,4 @@ docker build \
 
 - [00-local-build.md](00-local-build.md)
 - [01-docker-build.md](01-docker-build.md)
-- [../02-features/01-binary-and-deployment/02-feature-flags.md](../02-features/01-binary-and-deployment/02-feature-flags.md)
+- [../../02-features/01-binary-and-deployment/02-feature-flags.md](../../02-features/01-binary-and-deployment/02-feature-flags.md)

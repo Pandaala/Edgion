@@ -112,6 +112,7 @@ Options:
     --push              Push images and create multi-arch manifest
     --rebuild           Force rebuild binaries (ignore cache)
     --version TAG       Specify version tag (default: git tag or "${DEFAULT_VERSION}")
+    --from-tag          Use current git tag as version (fails if HEAD has no tag)
     --compile-only      Only compile binaries, don't build images
     --with-examples     Also build test_server and test_client images
     --with-example      Alias of --with-examples
@@ -133,6 +134,10 @@ Examples:
 
     # Build and push multi-arch images
     $0 --arch arm64,amd64 --push
+
+    # Build from git tag (interactive confirmation)
+    git tag v0.3.0
+    $0 --from-tag --arch arm64,amd64 --push
 
     # Force rebuild and push
     $0 --arch arm64,amd64 --rebuild --push
@@ -614,6 +619,7 @@ main() {
     local rebuild=false
     local compile_only=false
     local with_examples=false
+    local from_tag=false
     local version="${VERSION}"
 
     while [[ $# -gt 0 ]]; do
@@ -634,6 +640,10 @@ main() {
                 version=$2
                 shift 2
                 ;;
+            --from-tag)
+                from_tag=true
+                shift
+                ;;
             --compile-only)
                 compile_only=true
                 shift
@@ -653,6 +663,44 @@ main() {
                 ;;
         esac
     done
+
+    # --from-tag: resolve version from current git tag
+    if [[ "${from_tag}" == "true" ]]; then
+        if ! git rev-parse --git-dir > /dev/null 2>&1; then
+            log_error "Not a git repository, cannot use --from-tag"
+            exit 1
+        fi
+        local git_tag
+        git_tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
+        if [[ -z "${git_tag}" ]]; then
+            log_error "HEAD is not on a git tag. Please create a tag first:"
+            log_error "  git tag v0.x.0 && ./build-image.sh --from-tag --push"
+            exit 1
+        fi
+        local git_commit
+        git_commit=$(git rev-parse --short HEAD)
+        local git_branch
+        git_branch=$(git branch --show-current 2>/dev/null || echo "detached")
+
+        version="${git_tag}"
+
+        echo ""
+        log_info "┌─────────────────────────────────────────────┐"
+        log_info "│  Build from Git Tag                         │"
+        log_info "├─────────────────────────────────────────────┤"
+        log_info "│  Tag:      ${git_tag}"
+        log_info "│  Commit:   ${git_commit}"
+        log_info "│  Branch:   ${git_branch}"
+        log_info "│  Push:     ${push}"
+        log_info "└─────────────────────────────────────────────┘"
+        echo ""
+        read -rp "$(echo -e "${YELLOW}Proceed with version ${git_tag}? [y/N]: ${NC}")" confirm
+        if [[ "${confirm}" != "y" && "${confirm}" != "Y" ]]; then
+            log_info "Aborted."
+            exit 0
+        fi
+        echo ""
+    fi
 
     # Auto-detect architecture if not specified
     if [[ -z "${archs_arg}" ]]; then

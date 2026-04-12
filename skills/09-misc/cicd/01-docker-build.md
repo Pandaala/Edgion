@@ -164,5 +164,5 @@ docker run --rm --platform linux/arm64 -v "$(pwd)":/project edgion-builder \
 ## 相关
 
 - [00-local-build.md](00-local-build.md)
-- [../02-features/01-binary-and-deployment/02-feature-flags.md](../02-features/01-binary-and-deployment/02-feature-flags.md)
+- [../../02-features/01-binary-and-deployment/02-feature-flags.md](../../02-features/01-binary-and-deployment/02-feature-flags.md)
 - `.github/workflows/build-image.yml`
