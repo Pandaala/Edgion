@@ -31,7 +31,7 @@ Referenced through `ExtensionRef` to EdgionPlugins resources:
 | CSRF | CSRF protection | [Details](./edgion-plugins/csrf.md) |
 | CtxSet | Context variable extraction | [Details](./edgion-plugins/ctx-setter.md) |
 | DirectEndpoint | Direct connection to a specific endpoint | [Details](./edgion-plugins/direct-endpoint.md) |
-| DSL | DSL scripting engine | [Details](./edgion-plugins/dsl.md) |
+| DSL | DSL scripting engine | [Details](./edgion-plugins/dsl/) |
 | DynamicUpstream | Dynamic upstream selection | [Details](./edgion-plugins/dynamic-upstream.md) |
 | ForwardAuth | External authentication delegation | [Details](./edgion-plugins/forward-auth.md) |
 | HeaderCertAuth | Header/certificate authentication | [Details](./edgion-plugins/header-cert-auth.md) |

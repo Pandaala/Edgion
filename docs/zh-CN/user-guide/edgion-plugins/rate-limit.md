@@ -428,15 +428,16 @@ gateway_instance_count = 4
 
 CMS 是一种概率数据结构，通过多个 hash 函数（默认 4 个）和固定大小的计数器数组实现频率估计：
 
-```text
-请求 key = "192.168.1.1"
-       │
-       ├─ hash1("192.168.1.1") → slot[23]  ++
-       ├─ hash2("192.168.1.1") → slot[87]  ++
-       ├─ hash3("192.168.1.1") → slot[142] ++
-       └─ hash4("192.168.1.1") → slot[256] ++
-       
-estimate = min(slot[23], slot[87], slot[142], slot[256])
+```mermaid
+flowchart TD
+    A["请求 key = '192.168.1.1'"] --> B["hash1('192.168.1.1') → slot[23] ++"]
+    A --> C["hash2('192.168.1.1') → slot[87] ++"]
+    A --> D["hash3('192.168.1.1') → slot[142] ++"]
+    A --> E["hash4('192.168.1.1') → slot[256] ++"]
+    B --> F["estimate = min(slot[23], slot[87], slot[142], slot[256])"]
+    C --> F
+    D --> F
+    E --> F
 ```
 
 - **空间效率**：固定内存，不随 key 数量增长
@@ -447,10 +448,14 @@ estimate = min(slot[23], slot[87], slot[142], slot[256])
 
 Pingora 的 Rate 使用双槽（红/蓝）设计实现平滑的滑动窗口：
 
-```text
-时间线: ──────────────────────────────────>
-        [  窗口 A  ][  窗口 B  ][  窗口 C  ]
-                    ↑ 切换时旧槽清零
+```mermaid
+flowchart TD
+    subgraph 时间线
+        direction LR
+        WA["窗口 A"] --> WB["窗口 B"]
+        WB --> WC["窗口 C"]
+    end
+    WB -. "切换时旧槽清零" .-> WA
 ```
 
 在窗口切换时，旧的计数器槽被清零并复用，新的请求写入新槽。

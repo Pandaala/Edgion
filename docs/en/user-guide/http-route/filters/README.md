@@ -15,7 +15,7 @@
   - [CSRF](./edgion-plugins/csrf.md)
   - [CtxSet](./edgion-plugins/ctx-setter.md)
   - [DirectEndpoint](./edgion-plugins/direct-endpoint.md)
-  - [DSL](./edgion-plugins/dsl.md)
+  - [DSL](./edgion-plugins/dsl/)
   - [DynamicUpstream](./edgion-plugins/dynamic-upstream.md)
   - [ForwardAuth](./edgion-plugins/forward-auth.md)
   - [HeaderCertAuth](./edgion-plugins/header-cert-auth.md)

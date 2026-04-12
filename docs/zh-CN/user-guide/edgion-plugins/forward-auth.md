@@ -26,27 +26,19 @@ ForwardAuth 插件将原始请求的关键信息（Headers、Method、URI 等）
 
 ## 核心流程
 
-```
-Client Request
-     │
-     ▼
-ForwardAuth Plugin
-     │
-     ├─── 构建鉴权请求（Header + X-Forwarded-* 元数据）
-     │
-     ├─── 发送到外部鉴权服务
-     │
-     ├─── 鉴权服务返回 2xx？
-     │       │
-     │       ├── 是 → 复制 upstreamHeaders 到原始请求 → 转发到上游
-     │       │
-     │       └── 否 → 复制 clientHeaders + 返回鉴权服务的状态码和 Body
-     │
-     └─── 鉴权服务不可达？
-             │
-             ├── allowDegradation: true → 跳过鉴权，放行
-             │
-             └── allowDegradation: false → 返回 statusOnError（默认 503）
+```mermaid
+flowchart TD
+    A["客户端请求"] --> B["ForwardAuth 插件"]
+    B --> C["构建鉴权请求<br/>（Header + X-Forwarded-* 元数据）"]
+    C --> D["发送到外部鉴权服务"]
+    D --> E{"鉴权服务<br/>可达？"}
+    E -->|是| F{"返回 2xx？"}
+    F -->|是| G["复制 upstreamHeaders 到原始请求"]
+    G --> H["转发到上游"]
+    F -->|否| I["复制 clientHeaders +<br/>返回鉴权服务的状态码和 Body"]
+    E -->|否| J{"allowDegradation？"}
+    J -->|"true"| K["跳过鉴权，放行"]
+    J -->|"false"| L["返回 statusOnError（默认 503）"]
 ```
 
 ## 配置说明

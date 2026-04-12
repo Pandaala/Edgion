@@ -1,6 +1,6 @@
 # Edgion 技术白皮书
 
-> 基于 Rust + Pingora 的下一代云原生 API 网关
+> 本文档面向架构师和技术决策者，深入阐述 Edgion 的核心架构设计、关键技术选型（Rust / Pingora / Gateway API）的决策依据，以及各子系统的实现原理。如需产品功能概览，请参见 [GitHub README](../../../README.md)。
 
 ---
 

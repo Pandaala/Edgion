@@ -31,7 +31,7 @@
 | CSRF | CSRF 防护 | [详情](./edgion-plugins/csrf.md) |
 | CtxSet | 上下文变量提取 | [详情](./edgion-plugins/ctx-setter.md) |
 | DirectEndpoint | 直连指定 Endpoint | [详情](./edgion-plugins/direct-endpoint.md) |
-| DSL | DSL 脚本引擎 | [详情](./edgion-plugins/dsl.md) |
+| DSL | DSL 脚本引擎 | [详情](./edgion-plugins/dsl/) |
 | DynamicUpstream | 动态上游选择 | [详情](./edgion-plugins/dynamic-upstream.md) |
 | ForwardAuth | 外部认证委托 | [详情](./edgion-plugins/forward-auth.md) |
 | HeaderCertAuth | 请求头/证书认证 | [详情](./edgion-plugins/header-cert-auth.md) |

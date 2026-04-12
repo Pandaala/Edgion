@@ -37,7 +37,7 @@ This section is intended for application developers and covers how to configure 
     - [Direct Endpoint](./http-route/filters/edgion-plugins/direct-endpoint.md)
     - [Dynamic Upstream](./http-route/filters/edgion-plugins/dynamic-upstream.md)
     - [Mock](./http-route/filters/edgion-plugins/mock.md)
-    - [DSL](./http-route/filters/edgion-plugins/dsl.md)
+    - [DSL](./http-route/filters/edgion-plugins/dsl/)
 - Backends
   - [Service Reference](./http-route/backends/service-ref.md)
   - [Weight Configuration](./http-route/backends/weight.md)
