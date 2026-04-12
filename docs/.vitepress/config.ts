@@ -470,7 +470,7 @@ export default defineConfig({
     '**/refactoring/**',
     '**/review/**',
     '**/superpowers/**',
-    '**/zh-CN/promotion/**',
+    '**/promotion/**',
   ],
 
   locales: {
