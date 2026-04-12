@@ -135,9 +135,9 @@ YAML 示例 + 参数说明。
 
 | 主题 | 文档 | 说明 |
 |------|------|------|
-| 匹配规则 | [matches/](matches/) | ... |
-| 过滤器 | [filters/](filters/) | ... |
-| 后端配置 | [backends/](backends/) | ... |
+| 匹配规则 | matches/ | ... |
+| 过滤器 | filters/ | ... |
+| 后端配置 | backends/ | ... |
 ```
 
 ## 运维配置页模板

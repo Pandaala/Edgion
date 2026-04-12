@@ -5,7 +5,7 @@ description: 资源间依赖关系速查：spec 引用、Controller 内 Store �
 
 # 资源间依赖关系
 
-> 详细分析见 [tasks/references/resource-dependency-map.md](../../../../tasks/references/resource-dependency-map.md)
+> 详细分析（规划中，尚未创建）：`tasks/references/resource-dependency-map.md`
 
 ## 依赖关系索引图
 

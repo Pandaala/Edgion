@@ -81,27 +81,19 @@ pub async fn local_auth_middleware(
     }
 
     // Skip authentication for public auth endpoints only.
-    if path == "/api/v1/auth/login"
-        || path == "/api/v1/auth/logout"
-        || path == "/api/v1/auth/status"
-    {
+    if path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || path == "/api/v1/auth/status" {
         return next.run(request).await;
     }
 
     // Extract Bearer token, falling back to httpOnly cookie (browser auth).
     let token = match extract_bearer_token(&request) {
         Some(t) => t,
-        None => {
-            match extract_cookie_token(&request) {
-                Some(t) => t,
-                None => {
-                    return auth_error_response(
-                        StatusCode::UNAUTHORIZED,
-                        "Missing or invalid Authorization header",
-                    );
-                }
+        None => match extract_cookie_token(&request) {
+            Some(t) => t,
+            None => {
+                return auth_error_response(StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header");
             }
-        }
+        },
     };
 
     // Decode and validate JWT.

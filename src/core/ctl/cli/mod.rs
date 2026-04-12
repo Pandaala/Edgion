@@ -141,16 +141,24 @@ impl Cli {
         // Login does not need an EdgionClient; it uses a raw HTTP call
         if let Commands::Login { username, password } = &self.command {
             let base_url = self.server.clone().unwrap_or_else(|| {
-                format!("http://localhost:{}", match self.target {
-                    TargetType::Center | TargetType::Server => 5800,
-                    TargetType::Client => 5900,
-                })
+                format!(
+                    "http://localhost:{}",
+                    match self.target {
+                        TargetType::Center | TargetType::Server => 5800,
+                        TargetType::Client => 5900,
+                    }
+                )
             });
             return commands::login::login(&base_url, username.as_deref(), password.as_deref()).await;
         }
 
         // Create API client with target type
-        let mut client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone(), self.controller_config.clone())?;
+        let mut client = EdgionClient::new(
+            self.target,
+            self.server.clone(),
+            self.socket.clone(),
+            self.controller_config.clone(),
+        )?;
 
         // Ensure authentication (auto-detect and auto-login if needed)
         client.ensure_auth().await?;

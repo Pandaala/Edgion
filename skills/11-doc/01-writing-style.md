@@ -270,27 +270,24 @@ filters:
 
 所有文档内引用使用**相对路径**，不使用绝对路径或 URL：
 
-```markdown
-✅ [过滤器总览](../overview.md)
-✅ [mTLS 配置](../../infrastructure/mtls.md)
-
-❌ [过滤器总览](/docs/zh-CN/user-guide/http-route/filters/overview.md)
-```
+- ✅ 相对路径写法（正确）：显示文字加相对路径，如 `[显示文字]` `(../overview.md)` — 路径相对于当前文件
+- ✅ 跨目录相对路径（正确）：`[显示文字]` `(../../infrastructure/mtls.md)`
+- ❌ 绝对路径（错误）：`/docs/zh-CN/user-guide/http-route/filters/overview.md`
 
 - 链接起点是当前文件所在目录
 - 跨语言目录时不要链接（en/ 中不链接到 zh-CN/）
-- 链接到目录入口时写 README.md：`[后端配置](../backends/README.md)`
+- 链接到目录入口时写 README.md，例如：`[后端配置]` `(../backends/README.md)`（路径需指向存在的文件）
 
 ### "相关文档"章节
 
 放在页面末尾，列出 3-6 个最相关的链接：
 
-```markdown
+```text
 ## 相关文档
 
-- [HTTPS 监听器](../listeners/https.md)
-- [EdgionTls 扩展](./edgion-tls.md)
-- [mTLS 配置](../../infrastructure/mtls.md)
+- HTTPS 监听器（相对路径，如 ../listeners/https.md）
+- EdgionTls 扩展（相对路径，如 ./edgion-tls.md）
+- mTLS 配置（相对路径，如 ../../infrastructure/mtls.md）
 ```
 
 规则：按相关度排序；链接文字是目标文档标题；不写描述。

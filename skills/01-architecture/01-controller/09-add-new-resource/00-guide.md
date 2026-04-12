@@ -43,10 +43,10 @@ Useful templates:
 
 Pattern references:
 
-- For a route-like resource that syncs to Gateway and becomes runtime route state, see [references/add-resource-route-like.md](references/add-resource-route-like.md)
-- For a controller-only resource that drives validation/requeue but should not sync to Gateway, see [references/add-resource-controller-only.md](references/add-resource-controller-only.md)
-- For a plugin-like resource that resolves secrets and becomes reusable runtime config, see [references/add-resource-plugin-like.md](references/add-resource-plugin-like.md)
-- For a cluster-scoped base-conf resource, see [references/add-resource-cluster-scoped.md](references/add-resource-cluster-scoped.md)
+- For a route-like resource that syncs to Gateway and becomes runtime route state, see [add-resource-route-like.md](add-resource-route-like.md)
+- For a controller-only resource that drives validation/requeue but should not sync to Gateway, see [add-resource-controller-only.md](add-resource-controller-only.md)
+- For a plugin-like resource that resolves secrets and becomes reusable runtime config, see [add-resource-plugin-like.md](add-resource-plugin-like.md)
+- For a cluster-scoped base-conf resource, see [add-resource-cluster-scoped.md](add-resource-cluster-scoped.md)
 
 Useful search pattern:
 
@@ -219,13 +219,13 @@ rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" src config/crd examp
 
 Read these only as needed:
 
-- [references/add-resource-route-like.md](references/add-resource-route-like.md)
-- [references/add-resource-controller-only.md](references/add-resource-controller-only.md)
-- [references/add-resource-plugin-like.md](references/add-resource-plugin-like.md)
-- [references/add-resource-cluster-scoped.md](references/add-resource-cluster-scoped.md)
-- [../01-architecture/00-common/03-resource-system.md](../01-architecture/00-common/03-resource-system.md)
-- [../01-architecture/01-controller/03-config-center/SKILL.md](../01-architecture/01-controller/03-config-center/SKILL.md)
-- [../01-architecture/01-controller/06-requeue-mechanism.md](../01-architecture/01-controller/06-requeue-mechanism.md)
-- [../05-testing/01-integration-testing.md](../05-testing/01-integration-testing.md)
-- [../../docs/zh-CN/dev-guide/add-new-resource-guide.md](../../docs/zh-CN/dev-guide/add-new-resource-guide.md)
-- [../../docs/en/dev-guide/add-new-resource-guide.md](../../docs/en/dev-guide/add-new-resource-guide.md)
+- [add-resource-route-like.md](add-resource-route-like.md)
+- [add-resource-controller-only.md](add-resource-controller-only.md)
+- [add-resource-plugin-like.md](add-resource-plugin-like.md)
+- [add-resource-cluster-scoped.md](add-resource-cluster-scoped.md)
+- [../../00-common/03-resource-system.md](../../00-common/03-resource-system.md)
+- [../03-config-center/SKILL.md](../03-config-center/SKILL.md)
+- [../06-requeue-mechanism.md](../06-requeue-mechanism.md)
+- [../../../05-testing/01-integration-testing.md](../../../05-testing/01-integration-testing.md)
+- [../../../../docs/zh-CN/dev-guide/add-new-resource-guide.md](../../../../docs/zh-CN/dev-guide/add-new-resource-guide.md)
+- [../../../../docs/en/dev-guide/add-new-resource-guide.md](../../../../docs/en/dev-guide/add-new-resource-guide.md)

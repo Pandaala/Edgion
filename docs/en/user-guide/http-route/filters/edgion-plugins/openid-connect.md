@@ -4,7 +4,7 @@
 >  
 > OpenidConnect is an OIDC/OAuth2 authentication plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
-OpenidConnect can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../edgion-plugins/openid-connect.md).
+OpenidConnect can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/openid-connect.md).
 
 ## Using in HTTPRoute
 
@@ -49,6 +49,6 @@ spec:
 
 ## Related Documentation
 
-- [OpenID Connect Full Documentation (all configuration parameters)](../../edgion-plugins/openid-connect.md)
+- [OpenID Connect Full Documentation (all configuration parameters)](../../../edgion-plugins/openid-connect.md)
 - [Plugin Composition and References](../plugin-composition.md)
 - [Filters Overview](../overview.md)

@@ -292,9 +292,7 @@ async fn handle_center_message(
                 let request_id = proxy_req.request_id.clone();
 
                 let method: http::Method = proxy_req.method.parse().unwrap_or(http::Method::GET);
-                let mut builder = http::Request::builder()
-                    .method(method)
-                    .uri(&proxy_req.path);
+                let mut builder = http::Request::builder().method(method).uri(&proxy_req.path);
 
                 for (k, v) in &proxy_req.headers {
                     builder = builder.header(k.as_str(), v.as_str());
@@ -333,19 +331,18 @@ async fn handle_center_message(
                             .iter()
                             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                             .collect();
-                        let body_bytes =
-                            match axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024).await {
-                                Ok(b) => b.to_vec(),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        component = "fed_client",
-                                        request_id = %request_id,
-                                        error = %e,
-                                        "Failed to read proxy response body"
-                                    );
-                                    format!("Failed to read response body: {}", e).into_bytes()
-                                }
-                            };
+                        let body_bytes = match axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024).await {
+                            Ok(b) => b.to_vec(),
+                            Err(e) => {
+                                tracing::warn!(
+                                    component = "fed_client",
+                                    request_id = %request_id,
+                                    error = %e,
+                                    "Failed to read proxy response body"
+                                );
+                                format!("Failed to read response body: {}", e).into_bytes()
+                            }
+                        };
                         tracing::debug!(
                             component = "fed_client",
                             request_id = %request_id,

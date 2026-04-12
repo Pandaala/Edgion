@@ -4,7 +4,7 @@
 >  
 > ForwardAuth 是 `EdgionPlugins` CRD 提供的外部认证委托插件，不属于标准 Gateway API。
 
-ForwardAuth 可以作为 HTTPRoute 的过滤器使用，也可以通过 `EdgionPlugins` 全局配置。本页介绍如何在 HTTPRoute 中使用；完整配置参数请见 [独立插件页](../../edgion-plugins/forward-auth.md)。
+ForwardAuth 可以作为 HTTPRoute 的过滤器使用，也可以通过 `EdgionPlugins` 全局配置。本页介绍如何在 HTTPRoute 中使用；完整配置参数请见 [独立插件页](../../../edgion-plugins/forward-auth.md)。
 
 ## 在 HTTPRoute 中使用
 
@@ -48,6 +48,6 @@ spec:
 
 ## 相关文档
 
-- [ForwardAuth 完整文档（包含所有配置参数）](../../edgion-plugins/forward-auth.md)
+- [ForwardAuth 完整文档（包含所有配置参数）](../../../edgion-plugins/forward-auth.md)
 - [插件组合与引用](../plugin-composition.md)
 - [过滤器总览](../overview.md)

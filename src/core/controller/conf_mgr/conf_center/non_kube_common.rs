@@ -124,17 +124,13 @@ impl CenterBase {
                 return;
             }
             let remaining = timeout - elapsed;
-            let _ =
-                tokio::time::timeout(remaining.min(Duration::from_secs(1)), notify.notified())
-                    .await;
+            let _ = tokio::time::timeout(remaining.min(Duration::from_secs(1)), notify.notified()).await;
         }
 
         // Phase B: wait for all registered processors to become ready.
         let remaining = timeout.saturating_sub(start.elapsed());
         let all_kinds = registry.all_kinds();
-        let ready = registry
-            .wait_kinds_ready(&all_kinds, remaining)
-            .await;
+        let ready = registry.wait_kinds_ready(&all_kinds, remaining).await;
         if !ready {
             tracing::warn!(
                 component = component,

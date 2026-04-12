@@ -4,7 +4,7 @@
 >  
 > CtxSet is a context variable extraction plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
-CtxSet can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../edgion-plugins/ctx-setter.md).
+CtxSet can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/ctx-setter.md).
 
 ## Using in HTTPRoute
 
@@ -52,6 +52,6 @@ spec:
 
 ## Related Documentation
 
-- [CtxSet Full Documentation (all configuration parameters)](../../edgion-plugins/ctx-setter.md)
+- [CtxSet Full Documentation (all configuration parameters)](../../../edgion-plugins/ctx-setter.md)
 - [Plugin Composition and References](../plugin-composition.md)
 - [Filters Overview](../overview.md)

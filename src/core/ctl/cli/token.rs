@@ -20,8 +20,7 @@ pub fn read_token() -> Option<String> {
 
 /// Save token to file. Creates ~/.edgion/ directory if needed.
 pub fn save_token(token: &str) -> Result<()> {
-    let path = token_file_path()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let path = token_file_path().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

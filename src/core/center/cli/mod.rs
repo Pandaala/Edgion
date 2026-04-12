@@ -131,10 +131,7 @@ impl EdgionCenterCli {
         });
         let http_handle = tokio::spawn(async move {
             let base_router = router(api_state);
-            let app = crate::core::common::api::add_local_auth_routes(
-                base_router,
-                local_auth_config.as_ref(),
-            );
+            let app = crate::core::common::api::add_local_auth_routes(base_router, local_auth_config.as_ref());
             let app = crate::core::common::api::apply_unified_auth_layer(
                 app,
                 auth_config.as_ref(),

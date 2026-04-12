@@ -13,18 +13,18 @@ description: Use when implementing or extending EdgionStreamPlugins, wiring Gate
 
 ## 先看这些真实入口
 
-- [../../src/types/resources/edgion_stream_plugins/mod.rs](../../src/types/resources/edgion_stream_plugins/mod.rs)
-- [../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../src/types/resources/edgion_stream_plugins/stream_plugins.rs)
-- [../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs)
-- [../../src/types/resource/meta/impls.rs](../../src/types/resource/meta/impls.rs)
-- [../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs)
-- [../../src/core/gateway/plugins/stream/mod.rs](../../src/core/gateway/plugins/stream/mod.rs)
-- [../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../src/core/gateway/plugins/stream/stream_plugin_trait.rs)
-- [../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs](../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs)
-- [../../src/core/gateway/plugins/stream/stream_plugin_store.rs](../../src/core/gateway/plugins/stream/stream_plugin_store.rs)
-- [../../src/core/gateway/runtime/server/listener_builder.rs](../../src/core/gateway/runtime/server/listener_builder.rs)
-- [../../src/core/gateway/routes/tcp/conf_handler_impl.rs](../../src/core/gateway/routes/tcp/conf_handler_impl.rs)
-- [../../src/core/gateway/routes/tls/proxy.rs](../../src/core/gateway/routes/tls/proxy.rs)
+- [../../../src/types/resources/edgion_stream_plugins/mod.rs](../../../src/types/resources/edgion_stream_plugins/mod.rs)
+- [../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs)
+- [../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs)
+- [../../../src/types/resource/meta/impls.rs](../../../src/types/resource/meta/impls.rs)
+- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs)
+- [../../../src/core/gateway/plugins/stream/mod.rs](../../../src/core/gateway/plugins/stream/mod.rs)
+- [../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs)
+- [../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs)
+- [../../../src/core/gateway/plugins/stream/stream_plugin_store.rs](../../../src/core/gateway/plugins/stream/stream_plugin_store.rs)
+- [../../../src/core/gateway/runtime/server/listener_builder.rs](../../../src/core/gateway/runtime/server/listener_builder.rs)
+- [../../../src/core/gateway/routes/tcp/conf_handler_impl.rs](../../../src/core/gateway/routes/tcp/conf_handler_impl.rs)
+- [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs)
 
 ## 心智模型
 
@@ -61,7 +61,7 @@ src/core/gateway/plugins/stream/
 
 ### Stage 1: ConnectionFilter
 
-- trait 在 [../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../src/core/gateway/plugins/stream/stream_plugin_trait.rs)
+- trait 在 [../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs)
 - 上下文是 `StreamContext`
 - 返回值是：
   - `StreamPluginResult::Allow`
@@ -76,7 +76,7 @@ src/core/gateway/plugins/stream/
 
 ### Stage 2: TlsRoute
 
-- 运行时入口在 [../../src/core/gateway/routes/tls/proxy.rs](../../src/core/gateway/routes/tls/proxy.rs)
+- 运行时入口在 [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs)
 - 优先执行 `tls_route_plugin_runtime`
 - 如果资源没有 `tlsRoutePlugins`，但有老的 `plugins`，当前实现会 fallback 到 Stage 1 runtime 做兼容
 - 适合：
@@ -96,7 +96,7 @@ src/core/gateway/plugins/stream/
 
 当前 `IpRestriction` 直接复用了 HTTP 插件侧的 `IpRestrictionConfig`：
 
-- [../../src/types/resources/edgion_plugins/plugin_configs/](../../src/types/resources/edgion_plugins/plugin_configs/)
+- [../../../src/types/resources/edgion_plugins/plugin_configs/](../../../src/types/resources/edgion_plugins/plugin_configs/)
 
 如果你的 stream plugin 也能和 HTTP 层共享配置，优先复用；否则再新增专属配置。
 
@@ -104,11 +104,11 @@ src/core/gateway/plugins/stream/
 
 Stage 1:
 
-- 修改 [../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../src/types/resources/edgion_stream_plugins/stream_plugins.rs)
+- 修改 [../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs)
 
 Stage 2:
 
-- 修改 [../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs)
+- 修改 [../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs)
 
 至少要补：
 
@@ -130,21 +130,21 @@ pub trait StreamPlugin: Send + Sync {
 
 最直接的参考实现：
 
-- [../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs](../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs)
+- [../../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs](../../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs)
 
 Stage 2 插件则看：
 
-- [../../src/core/gateway/plugins/stream/tls_route/](../../src/core/gateway/plugins/stream/tls_route/)
+- [../../../src/core/gateway/plugins/stream/tls_route/](../../../src/core/gateway/plugins/stream/tls_route/)
 
 ## 5. 在 runtime 里注册构造逻辑
 
 Stage 1 runtime：
 
-- [../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs](../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs)
+- [../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs)
 
 Stage 2 runtime：
 
-- [../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs](../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs)
+- [../../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs)
 
 这里是“资源配置 -> 运行时插件对象”的真正装配点。只改 enum、不改 runtime，Gateway 不会执行你的新插件。
 
@@ -152,19 +152,19 @@ Stage 2 runtime：
 
 当前 `EdgionStreamPlugins` 的 runtime 初始化不是在 handler 里做，而是在：
 
-- [../../src/types/resource/meta/impls.rs](../../src/types/resource/meta/impls.rs)
+- [../../../src/types/resource/meta/impls.rs](../../../src/types/resource/meta/impls.rs)
 
 也就是 `ResourceMeta` 预处理阶段会调用：
 
 - `init_stream_plugin_runtime()`
 - `init_tls_route_plugin_runtime()`
 
-Controller handler [../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs) 目前主要负责 status，而不是构建运行时。
+Controller handler [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs) 目前主要负责 status，而不是构建运行时。
 
 Gateway 侧热更新入口是：
 
-- [../../src/core/gateway/plugins/stream/stream_plugin_store.rs](../../src/core/gateway/plugins/stream/stream_plugin_store.rs)
-- [../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../src/core/gateway/conf_sync/conf_client/config_client.rs)
+- [../../../src/core/gateway/plugins/stream/stream_plugin_store.rs](../../../src/core/gateway/plugins/stream/stream_plugin_store.rs)
+- [../../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../../src/core/gateway/conf_sync/conf_client/config_client.rs)
 
 ## 7. 绑定 YAML 注解并验证引用路径
 
@@ -232,9 +232,9 @@ metadata:
 
 参考现有样例：
 
-- [../../examples/test/conf/Gateway/StreamPlugins/](../../examples/test/conf/Gateway/StreamPlugins/)
-- [../../examples/test/conf/TCPRoute/StreamPlugins/](../../examples/test/conf/TCPRoute/StreamPlugins/)
-- [../../examples/test/conf/TLSRoute/StreamPlugins/](../../examples/test/conf/TLSRoute/StreamPlugins/)
+- [../../../examples/test/conf/Gateway/StreamPlugins/](../../../examples/test/conf/Gateway/StreamPlugins/)
+- [../../../examples/test/conf/TCPRoute/StreamPlugins/](../../../examples/test/conf/TCPRoute/StreamPlugins/)
+- [../../../examples/test/conf/TLSRoute/StreamPlugins/](../../../examples/test/conf/TLSRoute/StreamPlugins/)
 
 ## 审查清单
 
@@ -247,6 +247,6 @@ metadata:
 
 ## 相关
 
-- [05-annotations-reference.md](05-annotations-reference.md)
-- [08-conf-handler-guidelines.md](08-conf-handler-guidelines.md)
-- [../05-testing/01-integration-testing.md](../05-testing/01-integration-testing.md)
+- [00-annotations-overview.md](../../02-features/05-annotations/00-annotations-overview.md)
+- [11-conf-handler-guidelines.md](11-conf-handler-guidelines.md)
+- [01-integration-testing.md](../../05-testing/01-integration-testing.md)

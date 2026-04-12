@@ -4,7 +4,7 @@
 >  
 > ForwardAuth is an external authentication delegation plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
-ForwardAuth can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../edgion-plugins/forward-auth.md).
+ForwardAuth can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/forward-auth.md).
 
 ## Using in HTTPRoute
 
@@ -48,6 +48,6 @@ spec:
 
 ## Related Documentation
 
-- [ForwardAuth Full Documentation (all configuration parameters)](../../edgion-plugins/forward-auth.md)
+- [ForwardAuth Full Documentation (all configuration parameters)](../../../edgion-plugins/forward-auth.md)
 - [Plugin Composition and References](../plugin-composition.md)
 - [Filters Overview](../overview.md)

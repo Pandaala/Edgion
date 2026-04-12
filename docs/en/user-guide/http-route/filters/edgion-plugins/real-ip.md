@@ -4,7 +4,7 @@
 >  
 > RealIp is a client real IP extraction plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
-RealIp can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../edgion-plugins/real-ip.md).
+RealIp can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/real-ip.md).
 
 ## Using in HTTPRoute
 
@@ -49,6 +49,6 @@ spec:
 
 ## Related Documentation
 
-- [RealIp Full Documentation (all configuration parameters)](../../edgion-plugins/real-ip.md)
+- [RealIp Full Documentation (all configuration parameters)](../../../edgion-plugins/real-ip.md)
 - [Plugin Composition and References](../plugin-composition.md)
 - [Filters Overview](../overview.md)

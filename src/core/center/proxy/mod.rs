@@ -85,10 +85,7 @@ impl ProxyForwarder {
             })?
             .map_err(|_| {
                 self.pending.lock().remove(&request_id);
-                (
-                    StatusCode::BAD_GATEWAY,
-                    "Proxy response channel dropped".to_string(),
-                )
+                (StatusCode::BAD_GATEWAY, "Proxy response channel dropped".to_string())
             })
     }
 }

@@ -142,10 +142,22 @@ fn build_auth_status(
     let oidc_enabled = auth_config.map_or(false, |c| c.enabled);
     let local_enabled = local_auth_config.map_or(false, |c| c.enabled);
     match (oidc_enabled, local_enabled) {
-        (true, true) => AuthStatusResponse { auth_required: true, auth_method: "oidc+local".to_string() },
-        (true, false) => AuthStatusResponse { auth_required: true, auth_method: "oidc".to_string() },
-        (false, true) => AuthStatusResponse { auth_required: true, auth_method: "local".to_string() },
-        (false, false) => AuthStatusResponse { auth_required: false, auth_method: "none".to_string() },
+        (true, true) => AuthStatusResponse {
+            auth_required: true,
+            auth_method: "oidc+local".to_string(),
+        },
+        (true, false) => AuthStatusResponse {
+            auth_required: true,
+            auth_method: "oidc".to_string(),
+        },
+        (false, true) => AuthStatusResponse {
+            auth_required: true,
+            auth_method: "local".to_string(),
+        },
+        (false, false) => AuthStatusResponse {
+            auth_required: false,
+            auth_method: "none".to_string(),
+        },
     }
 }
 
@@ -221,7 +233,8 @@ pub async fn serve(
     // Add local auth login/me endpoints (before auth middleware so login is accessible)
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
-    let router_with_auth = api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let router_with_auth =
+        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
     let app = api::apply_cors_layer(router_with_auth);
 
     // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
@@ -261,7 +274,8 @@ pub async fn serve_with_shutdown(
     // Add local auth login/me endpoints (before auth middleware so login is accessible)
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
-    let router_with_auth = api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let router_with_auth =
+        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
     let app = api::apply_cors_layer(router_with_auth);
 
     // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)

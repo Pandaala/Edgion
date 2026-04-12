@@ -97,8 +97,7 @@ fn parse_secret_to_config(yaml: &str) -> anyhow::Result<LocalAuthConfig> {
                 .ok_or_else(|| anyhow::anyhow!("Secret missing data.{}", field))?;
             let bytes =
                 base64_decode(encoded).map_err(|e| anyhow::anyhow!("Failed to decode data.{}: {}", field, e))?;
-            String::from_utf8(bytes)
-                .map_err(|e| anyhow::anyhow!("data.{} is not valid UTF-8: {}", field, e))
+            String::from_utf8(bytes).map_err(|e| anyhow::anyhow!("data.{} is not valid UTF-8: {}", field, e))
         };
         (decode("username")?, decode("password")?, decode("jwt_secret")?)
     };

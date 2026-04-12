@@ -13,7 +13,7 @@ Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller�
 
 ## 知识体系
 
-当任务需要项目上下文时，从 `skills/SKILL.md` 开始，**按需渐进加载**，不要一次全部读取。
+当任务需要项目上下文时，从 `skills/SKILL.md` 开始，**按需渐进加载**，不要一次全部读取。详细的 AI Agent 协作指南见 `AGENTS.md`。
 
 ### Skills 导航规则
 
@@ -89,6 +89,19 @@ make check-agent-docs
 # 完整集成测试
 ./examples/test/scripts/integration/run_integration.sh
 ```
+
+## 提交前检查（触发词）
+
+当用户说「跑 check」「检查一下代码」「格式化一下代码」「跑一下 CI」「提交前检查」或类似含义的话时，按以下顺序执行：
+
+1. **格式化**：`cargo fmt --all`（直接修复，不是 `--check`）
+2. **编译检查**：`cargo check --all-targets`
+3. **Lint**：`cargo clippy --all-targets`
+4. **文档一致性**：`make check-agent-docs`
+
+步骤 2/3/4 可并行执行。每步如果失败，立即报告错误并尝试修复，修复后重跑该步骤。全部通过后汇总报告结果。
+
+> `cargo test --all` 耗时较长，默认不包含在快速检查中。如需运行测试，用户会明确要求。
 
 ## 编码约束
 

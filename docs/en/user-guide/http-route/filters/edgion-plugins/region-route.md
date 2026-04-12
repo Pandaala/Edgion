@@ -4,7 +4,7 @@
 >  
 > RegionRoute is a multi-region traffic routing plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
-RegionRoute can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../edgion-plugins/region-route.md).
+RegionRoute can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/region-route.md).
 
 ## Using in HTTPRoute
 
@@ -63,6 +63,6 @@ For complete `routeRules` types (`RouteByDirectRegion`, `RouteByKeyConfMatch`, `
 
 ## Related Documentation
 
-- [RegionRoute Full Documentation (all configuration parameters)](../../edgion-plugins/region-route.md)
+- [RegionRoute Full Documentation (all configuration parameters)](../../../edgion-plugins/region-route.md)
 - [Plugin Composition and References](../plugin-composition.md)
 - [Filters Overview](../overview.md)

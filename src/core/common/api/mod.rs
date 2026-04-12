@@ -2,7 +2,10 @@ mod types;
 
 pub use types::{ApiResponse, ListResponse};
 
-use axum::{routing::{get, post}, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use tower_http::cors::{Any, CorsLayer};
 
 /// Apply unified auth middleware (OIDC + local) to a router.
@@ -17,11 +20,8 @@ pub fn apply_unified_auth_layer(
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     component: &str,
 ) -> Router {
-    let state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
-        auth_config,
-        local_auth_config,
-        component,
-    );
+    let state =
+        crate::core::common::unified_auth::UnifiedAuthState::from_configs(auth_config, local_auth_config, component);
     router.layer(axum::middleware::from_fn_with_state(
         state,
         crate::core::common::unified_auth::unified_auth_middleware,
@@ -90,10 +90,7 @@ pub fn apply_local_auth_layer(
     component: &str,
 ) -> Router {
     let Some(local_auth_cfg) = local_auth_config else {
-        tracing::info!(
-            component = component,
-            "Local auth not configured"
-        );
+        tracing::info!(component = component, "Local auth not configured");
         return router;
     };
 
@@ -145,8 +142,8 @@ pub fn add_local_auth_routes(
         return router;
     }
 
-    use std::sync::Arc;
     use crate::core::common::local_auth::LocalAuthState;
+    use std::sync::Arc;
 
     let local_auth_state = LocalAuthState::from_config(local_auth_cfg);
 
@@ -160,10 +157,7 @@ pub fn add_local_auth_routes(
             "/api/v1/auth/logout",
             post(crate::core::common::local_auth::logout_handler),
         )
-        .route(
-            "/api/v1/auth/me",
-            get(crate::core::common::local_auth::me_handler),
-        );
+        .route("/api/v1/auth/me", get(crate::core::common::local_auth::me_handler));
 
     // `with_state` produces a `Router<()>` that can be merged into the main router.
     let auth_router_with_state: Router<()> = auth_router.with_state(local_auth_state);

@@ -164,9 +164,7 @@ async fn proxy_handler(
     // Convert headers to HashMap<String, String>, skipping non-UTF-8 values
     let headers_map: std::collections::HashMap<String, String> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str().ok().map(|val| (k.as_str().to_string(), val.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.as_str().to_string(), val.to_string())))
         .collect();
 
     // Ensure path starts with / for forwarding
@@ -178,18 +176,11 @@ async fn proxy_handler(
 
     match state
         .proxy
-        .forward(
-            &controller_id,
-            method.to_string(),
-            path,
-            headers_map,
-            body.to_vec(),
-        )
+        .forward(&controller_id, method.to_string(), path, headers_map, body.to_vec())
         .await
     {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status_code as u16)
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let status = StatusCode::from_u16(resp.status_code as u16).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
             let mut builder = axum::http::Response::builder().status(status);
 
@@ -197,14 +188,12 @@ async fn proxy_handler(
                 builder = builder.header(key.as_str(), value.as_str());
             }
 
-            builder
-                .body(axum::body::Body::from(resp.body))
-                .unwrap_or_else(|_| {
-                    axum::http::Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(axum::body::Body::empty())
-                        .unwrap()
-                })
+            builder.body(axum::body::Body::from(resp.body)).unwrap_or_else(|_| {
+                axum::http::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(axum::body::Body::empty())
+                    .unwrap()
+            })
         }
         Err((status, message)) => {
             tracing::warn!(

@@ -8,13 +8,13 @@
 
 先读这些真实入口：
 
-- [../../src/types/resources/link_sys/mod.rs](../../src/types/resources/link_sys/mod.rs)
-- [../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
-- [../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../src/core/gateway/conf_sync/conf_client/config_client.rs)
-- [../../src/core/gateway/link_sys/runtime/conf_handler.rs](../../src/core/gateway/link_sys/runtime/conf_handler.rs)
-- [../../src/core/gateway/link_sys/runtime/store.rs](../../src/core/gateway/link_sys/runtime/store.rs)
-- [../../src/core/gateway/link_sys/providers/webhook/mod.rs](../../src/core/gateway/link_sys/providers/webhook/mod.rs)
-- [../05-testing/03-link-sys-testing.md](../05-testing/03-link-sys-testing.md)
+- [../../../src/types/resources/link_sys/mod.rs](../../../src/types/resources/link_sys/mod.rs)
+- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
+- [../../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../../src/core/gateway/conf_sync/conf_client/config_client.rs)
+- [../../../src/core/gateway/link_sys/runtime/conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
+- [../../../src/core/gateway/link_sys/runtime/store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
+- [../../../src/core/gateway/link_sys/providers/webhook/mod.rs](../../../src/core/gateway/link_sys/providers/webhook/mod.rs)
+- [03-link-sys-testing.md](../../05-testing/03-link-sys-testing.md)
 
 ## 先分清你改的是哪一类东西
 
@@ -118,8 +118,8 @@ LinkSys 现在的桥接关系已经固定了：
 
 因此，如果你改的是 gateway 侧 runtime 行为，重点看的是：
 
-- [conf_handler.rs](../../src/core/gateway/link_sys/runtime/conf_handler.rs)
-- [store.rs](../../src/core/gateway/link_sys/runtime/store.rs)
+- [conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
+- [store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
 
 不是再自己造一套旁路 watcher。
 

@@ -53,7 +53,7 @@ from the control plane would be misleading.
 曾评估过 Controller → Gateway HTTP Pull 反查方案（设计完成到文件级实现计划），
 但引入全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。
 
-- 方案设计保留备查：[tasks/todo/data-plane-status-feedback.md](../../tasks/todo/data-plane-status-feedback.md)
+- 方案设计保留备查：`tasks/todo/data-plane-status-feedback.md`（已归档，文件不再存在）
 - 不实现决策记录：[skills/08-kubernetes/01-gateway-api/01-not-implemented.md](../../../skills/08-kubernetes/01-gateway-api/01-not-implemented.md)
 
 ## 4. Resource Categories and Status Patterns
@@ -355,7 +355,7 @@ determine.
 
 ## 11. Related
 
-- [02-resource-controller.md](../01-architecture/01-controller/03-config-center/02-kubernetes/02-resource-controller.md) — Status persistence and leader guard
-- [03-resource-system.md](../01-architecture/00-common/03-resource-system.md) — Resource system and preparse
-- [00-add-new-resource.md](00-add-new-resource.md) — Adding new resource types
-- [08-conf-handler-guidelines.md](08-conf-handler-guidelines.md) — ConfHandler (gateway side) guidelines
+- [02-resource-controller.md](03-config-center/02-kubernetes/02-resource-controller.md) — Status persistence and leader guard
+- [03-resource-system.md](../00-common/03-resource-system.md) — Resource system and preparse
+- [00-guide.md](09-add-new-resource/00-guide.md) — Adding new resource types
+- [11-conf-handler-guidelines.md](../02-gateway/11-conf-handler-guidelines.md) — ConfHandler (gateway side) guidelines

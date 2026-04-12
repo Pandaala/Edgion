@@ -63,16 +63,10 @@ pub struct AuthStatusResponse {
 /// POST /api/v1/auth/login
 ///
 /// Validates username + password against the stored config and returns a signed JWT.
-pub async fn login_handler(
-    State(state): State<Arc<LocalAuthState>>,
-    Json(req): Json<LoginRequest>,
-) -> Response {
+pub async fn login_handler(State(state): State<Arc<LocalAuthState>>, Json(req): Json<LoginRequest>) -> Response {
     // Validate username
     if req.username != state.username {
-        tracing::debug!(
-            component = "local_auth",
-            "Login failed: unknown username"
-        );
+        tracing::debug!(component = "local_auth", "Login failed: unknown username");
         let body: Json<ApiResponse<LoginResponse>> =
             Json(ApiResponse::error("Invalid username or password".to_string()));
         return (StatusCode::UNAUTHORIZED, body).into_response();
@@ -125,10 +119,8 @@ pub async fn login_handler(
                 expires_in: expiry_secs,
             };
             let mut resp = Json(ApiResponse::success(response)).into_response();
-            resp.headers_mut().insert(
-                header::SET_COOKIE,
-                cookie_value.parse().unwrap(),
-            );
+            resp.headers_mut()
+                .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
             resp
         }
         Err(e) => {
@@ -158,9 +150,7 @@ pub async fn me_handler(
 pub async fn logout_handler() -> Response {
     let cookie_value = "edgion_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
     let mut resp = Json(ApiResponse::<()>::success(())).into_response();
-    resp.headers_mut().insert(
-        header::SET_COOKIE,
-        cookie_value.parse().unwrap(),
-    );
+    resp.headers_mut()
+        .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
     resp
 }

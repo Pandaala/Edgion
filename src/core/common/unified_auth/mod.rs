@@ -131,17 +131,11 @@ impl UnifiedAuthState {
                 }
             }
             Some(_) => {
-                tracing::info!(
-                    component = component,
-                    "OIDC authentication disabled by config"
-                );
+                tracing::info!(component = component, "OIDC authentication disabled by config");
                 None
             }
             None => {
-                tracing::info!(
-                    component = component,
-                    "OIDC authentication not configured"
-                );
+                tracing::info!(component = component, "OIDC authentication not configured");
                 None
             }
         };
@@ -168,17 +162,11 @@ impl UnifiedAuthState {
                 }
             }
             Some(_) => {
-                tracing::info!(
-                    component = component,
-                    "Local authentication disabled by config"
-                );
+                tracing::info!(component = component, "Local authentication disabled by config");
                 None
             }
             None => {
-                tracing::info!(
-                    component = component,
-                    "Local authentication not configured"
-                );
+                tracing::info!(component = component, "Local authentication not configured");
                 None
             }
         };
@@ -230,10 +218,7 @@ pub async fn unified_auth_middleware(
     }
 
     // Skip authentication for public auth endpoints only.
-    if path == "/api/v1/auth/login"
-        || path == "/api/v1/auth/logout"
-        || path == "/api/v1/auth/status"
-    {
+    if path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || path == "/api/v1/auth/status" {
         return next.run(request).await;
     }
 
@@ -243,10 +228,7 @@ pub async fn unified_auth_middleware(
         None => match extract_cookie_token(&request) {
             Some(t) => t,
             None => {
-                return auth_error_response(
-                    StatusCode::UNAUTHORIZED,
-                    "Missing or invalid Authorization header",
-                );
+                return auth_error_response(StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header");
             }
         },
     };
@@ -308,10 +290,7 @@ pub async fn unified_auth_middleware(
     // Both failed — build an informative error message.
     let message = match (oidc_error, local_error) {
         (Some(oidc_err), Some(local_err)) => {
-            format!(
-                "Authentication failed: OIDC: {}; Local: {}",
-                oidc_err, local_err
-            )
+            format!("Authentication failed: OIDC: {}; Local: {}", oidc_err, local_err)
         }
         (Some(oidc_err), None) => {
             format!("Authentication failed (OIDC): {}", oidc_err)
@@ -330,13 +309,9 @@ pub async fn unified_auth_middleware(
 // ---------------------------------------------------------------------------
 
 /// Attempt to validate a JWT token against the OIDC provider's JWKS.
-async fn try_oidc_validation(
-    state: &AuthMiddlewareState,
-    token: &str,
-) -> Result<UnifiedAuthClaims, String> {
+async fn try_oidc_validation(state: &AuthMiddlewareState, token: &str) -> Result<UnifiedAuthClaims, String> {
     // Decode header to get algorithm + kid.
-    let header =
-        decode_header(token).map_err(|e| format!("Invalid token header: {}", e))?;
+    let header = decode_header(token).map_err(|e| format!("Invalid token header: {}", e))?;
 
     // Resolve algorithm policy.
     let allowed_algs_strs: Option<Vec<String>> = if state.allowed_algorithms.is_empty() {
@@ -344,15 +319,11 @@ async fn try_oidc_validation(
     } else {
         Some(state.allowed_algorithms.clone())
     };
-    let (expected_alg, allowed_algs) = resolve_algorithm_policy(
-        None,
-        allowed_algs_strs.as_deref().map(|v| v as &[String]),
-    )
-    .map_err(|(_, msg)| msg)?;
+    let (expected_alg, allowed_algs) =
+        resolve_algorithm_policy(None, allowed_algs_strs.as_deref().map(|v| v as &[String])).map_err(|(_, msg)| msg)?;
 
     // Validate token algorithm against policy.
-    validate_token_alg(header.alg, expected_alg, &allowed_algs)
-        .map_err(|(_, msg)| msg)?;
+    validate_token_alg(header.alg, expected_alg, &allowed_algs).map_err(|(_, msg)| msg)?;
 
     // Fetch JWKS from the provider (with caching).
     let jwks = state
@@ -368,8 +339,7 @@ async fn try_oidc_validation(
     })?;
 
     // Build decoding key from the selected JWK.
-    let decoding_key =
-        DecodingKey::from_jwk(&jwk).map_err(|e| format!("Decoding key error: {}", e))?;
+    let decoding_key = DecodingKey::from_jwk(&jwk).map_err(|e| format!("Decoding key error: {}", e))?;
 
     // Build validation parameters.
     let mut validation = Validation::new(header.alg);
@@ -422,10 +392,7 @@ async fn try_oidc_validation(
 // ---------------------------------------------------------------------------
 
 /// Attempt to validate a JWT token using the local HS256 secret.
-fn try_local_validation(
-    state: &LocalAuthState,
-    token: &str,
-) -> Result<UnifiedAuthClaims, String> {
+fn try_local_validation(state: &LocalAuthState, token: &str) -> Result<UnifiedAuthClaims, String> {
     let decoding_key = DecodingKey::from_secret(state.jwt_secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
