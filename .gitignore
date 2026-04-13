@@ -25,6 +25,9 @@ Thumbs.db
 # Integration test workspace (generated at runtime, do not commit)
 integration_testing/
 
+# Temporary conformance test files (copied from upstream, not tracked)
+.tmp-conformance-tests/
+
 # Generated conf_sync mTLS certificates (never commit private keys)
 examples/test/certs/conf-sync-grpc/
 
