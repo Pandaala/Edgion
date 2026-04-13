@@ -111,6 +111,10 @@ make check-agent-docs
 - 不要引入安全漏洞（注入、XSS 等 OWASP Top 10）
 - 改动最小化，不做未被要求的重构或功能添加
 
+## Git 约束
+
+- **禁止自行 `git commit` 或 `git push`**：完成代码修改后，向用户汇报变更内容，等待用户明确指令后再提交。
+
 ## 认证系统
 
 - **默认行为**：无配置时自动生成随机密码，存入 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
