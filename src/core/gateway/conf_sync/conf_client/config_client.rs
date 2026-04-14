@@ -153,7 +153,13 @@ impl ConfigClient {
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            plugin_metadata: ClientCache::new(client_id.clone(), client_name.clone()),
+            plugin_metadata: {
+                let pm_cache = ClientCache::new(client_id.clone(), client_name.clone());
+                let pm_handler =
+                    crate::core::gateway::plugins::runtime::plugin_metadata::create_plugin_metadata_handler();
+                pm_cache.set_conf_processor(pm_handler);
+                pm_cache
+            },
             edgion_acme: edgion_acme_cache,
             required_cache_names: RwLock::new(None),
         }

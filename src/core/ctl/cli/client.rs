@@ -102,8 +102,7 @@ impl EdgionClient {
 
         if auth_method == "local" {
             // Try auto-detect credentials from controller config
-            if let Some((username, password)) =
-                super::auto_auth::detect_credentials(self.controller_config.as_deref())
+            if let Some((username, password)) = super::auto_auth::detect_credentials(self.controller_config.as_deref())
             {
                 match self.do_login(&username, &password).await {
                     Ok(token) => {
@@ -119,9 +118,7 @@ impl EdgionClient {
             }
 
             // Config not found or login failed — inform user
-            anyhow::bail!(
-                "Authentication required. Please run: edgion-cli login -u <username> -p <password>"
-            );
+            anyhow::bail!("Authentication required. Please run: edgion-cli login -u <username> -p <password>");
         }
 
         Ok(())

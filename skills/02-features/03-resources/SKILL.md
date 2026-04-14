@@ -30,7 +30,9 @@ description: 所有 Kubernetes 资源的功能与配置 Schema 参考。编号�
 | 18 | LinkSys | `05-resources/18-link-sys.md` | [18-link-sys.md](18-link-sys.md) |
 
 > 编号 03（EdgionGatewayConfig）的功能文档在 `02-config/` 下，因为它本质是配置层资源。
-> 编号 10（Secret）、11（ReferenceGrant）、15（PluginMetaData）暂无独立功能文档，参见架构文档。
+> 编号 10（Secret）、11（ReferenceGrant）暂无独立功能文档，参见架构文档。
+
+| 15 | PluginMetaData | `05-resources/15-plugin-metadata.md` | 插件元数据，含 RegionRoute 状态管理变体 |
 
 ## 按分类浏览
 

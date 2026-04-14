@@ -1,0 +1,19 @@
+# Service PluginMetaData for region-route-main
+#
+# Auto-created by Controller when EdgionPlugins/region-route-main is processed.
+# References the GlobalRegionRoute PluginMetaData for topology; lists all regions with optional failoverTo.
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: region-route-main
+  namespace: edgion-default
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+        globalRef:
+          namespace: edgion-default
+          name: global-region-conf
+        regions:
+          - name: virginia
+          - name: ohio

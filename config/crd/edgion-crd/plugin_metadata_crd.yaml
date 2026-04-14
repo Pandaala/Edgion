@@ -14,11 +14,11 @@ spec:
           properties:
             spec:
               type: object
-              description: "PluginMetaData defines metadata for plugins, supporting three data types"
+              description: "PluginMetaData defines metadata for plugins, supporting multiple data types"
               properties:
                 stringList:
                   type: object
-                  description: "List of strings with metadata (only one of stringList, ipList, or regexList should be set)"
+                  description: "List of strings with metadata (only one of stringList, ipList, regexList, or metadata should be set)"
                   properties:
                     items:
                       type: array
@@ -47,7 +47,7 @@ spec:
                             description: "Defines how this item should be processed"
                 ipList:
                   type: object
-                  description: "List of IP addresses/CIDR ranges (only one of stringList, ipList, or regexList should be set)"
+                  description: "List of IP addresses/CIDR ranges (only one of stringList, ipList, regexList, or metadata should be set)"
                   properties:
                     items:
                       type: array
@@ -56,7 +56,7 @@ spec:
                         type: string
                 regexList:
                   type: object
-                  description: "List of regex patterns with metadata (only one of stringList, ipList, or regexList should be set)"
+                  description: "List of regex patterns with metadata (only one of stringList, ipList, regexList, or metadata should be set)"
                   properties:
                     items:
                       type: array
@@ -83,11 +83,86 @@ spec:
                           behavior:
                             type: string
                             description: "Defines how this pattern should be processed"
+                metadata:
+                  type: object
+                  description: "Plugin-based metadata entry (RegionRoute, etc.). Mutually exclusive with stringList/ipList/regexList."
+                  required:
+                    - type
+                    - config
+                  properties:
+                    type:
+                      type: string
+                      description: "Plugin type identifier (GlobalRegionRoute or ServiceRegionRoute)"
+                      enum:
+                        - GlobalRegionRoute
+                        - ServiceRegionRoute
+                    config:
+                      type: object
+                      description: "Plugin-specific configuration"
+                      properties:
+                        regions:
+                          type: array
+                          description: "Region definitions (GlobalRegionRoute) or per-region entries (ServiceRegionRoute)."
+                          items:
+                            type: object
+                            required:
+                              - name
+                            properties:
+                              name:
+                                type: string
+                                description: "Region identifier"
+                              hashRange:
+                                type: array
+                                description: "Hash range [low, high], closed interval (GlobalRegionRoute only)"
+                                items:
+                                  type: integer
+                                  format: int32
+                                minItems: 2
+                                maxItems: 2
+                              backendEndpoint:
+                                type: string
+                                description: "Target backend endpoint: host or host:port (GlobalRegionRoute only)"
+                              tls:
+                                type: boolean
+                                description: "Whether the upstream connection uses TLS (GlobalRegionRoute only)"
+                              failoverTo:
+                                type: string
+                                description: "Failover target region name"
+                        myRegion:
+                          type: string
+                          description: "Name of this gateway instance's own region (GlobalRegionRoute only)"
+                        globalRef:
+                          type: object
+                          description: "Reference to the GlobalRegionRoute PM (ServiceRegionRoute only)"
+                          required:
+                            - namespace
+                            - name
+                          properties:
+                            namespace:
+                              type: string
+                              description: "Namespace of the GlobalRegionRoute PM"
+                            name:
+                              type: string
+                              description: "Name of the GlobalRegionRoute PM"
+                        routeByKeyConfMatch:
+                          type: object
+                          description: "RouteByKeyConfMatch configuration with bypass support"
+                          properties:
+                            matchMap:
+                              type: object
+                              description: "Map of key value to region name"
+                              additionalProperties:
+                                type: string
+                            bypassGlobalKeys:
+                              type: array
+                              description: "Keys that bypass global matchMap override (service PM only)"
+                              items:
+                                type: string
       additionalPrinterColumns:
         - name: Type
           type: string
           jsonPath: .spec
-          description: "Data type (stringList, ipList, or regexList)"
+          description: "Data type (stringList, ipList, regexList, or metadata)"
           priority: 1
         - name: Age
           type: date
@@ -99,4 +174,3 @@ spec:
     kind: PluginMetaData
     shortNames:
       - pmd
-

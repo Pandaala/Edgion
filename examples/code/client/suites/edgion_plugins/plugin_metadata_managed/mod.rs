@@ -1,0 +1,2 @@
+mod plugin_metadata_managed;
+pub use plugin_metadata_managed::PluginMetaDataManagedTestSuite;

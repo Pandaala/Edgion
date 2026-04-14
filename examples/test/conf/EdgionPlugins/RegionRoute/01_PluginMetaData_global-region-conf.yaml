@@ -1,0 +1,59 @@
+# Global PluginMetaData for the region-route-test service group.
+#
+# This is the canonical region topology and routing configuration.
+# Center manages this resource; EdgionPlugins reference it via serviceRegionRouteRef
+# (via the ServiceRegionRoute PluginMetaData's globalRef).
+#
+# Contains the COMPLETE routing config: regions, keyGet, hashKeyGet, hashCalc,
+# routeRules, and routeByKeyConfMatch (matchMap). The EdgionPlugins
+# region-route-main has NO local config — everything comes from here.
+#
+# Two regions using loopback IP endpoints (avoids DNS dependency in tests):
+#   virginia: 127.0.0.1:30001  hashRange [0, 599]  (600/1000 = 60%)
+#   ohio:     127.0.0.1:30002  hashRange [600, 999] (400/1000 = 40%)
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: global-region-conf
+  namespace: edgion-default
+spec:
+  metadata:
+    type: GlobalRegionRoute
+    config:
+        regions:
+          - name: virginia
+            hashRange: [0, 599]
+            backendEndpoint: "127.0.0.1:30001"
+            tls: false
+          - name: ohio
+            hashRange: [600, 999]
+            backendEndpoint: "127.0.0.1:30002"
+            tls: false
+        keyGet:
+          - type: header
+            name: X-Account-Id
+          - type: cookie
+            name: account_id
+        hashKeyGet:
+          - type: cookie
+            name: x_region_hash
+        hashCalc:
+          algorithm: crc32
+          modulo: 1000
+          writeBack:
+            - type: responseHeader
+              name: X-Region-Hash
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByKeyConfMatch
+            matchMap:
+              "vip-va": virginia
+              "vip-oh": ohio
+          - type: RouteByHashRange
+        routeByKeyConfMatch:
+          matchMap:
+            "vip-va": "virginia"
+            "vip-oh": "ohio"

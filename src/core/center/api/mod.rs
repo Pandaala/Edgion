@@ -1,31 +1,35 @@
 //! Admin HTTP API for edgion-center.
 //!
 //! Routes:
-//!   GET  /health                              → health check
-//!   GET  /ready                               → readiness check
-//!   GET  /api/v1/server-info                  → {"mode":"center"}
-//!   GET  /api/v1/controllers                  → list all controller summaries
-//!   GET  /api/v1/clusters                     → list distinct cluster names
-//!   GET  /api/v1/resources                    → list resource keys (query: cluster=, kind=)
-//!   POST /api/v1/controllers/{id}/reload      → send reload command
-//!   GET  /api/v1/center/region-routes         → aggregated region-route keys from all controllers
-//!   GET  /api/v1/center/region-routes/{sg}/{cluster}/{ns} → aggregated region-route detail
-//!   ANY  /api/v1/proxy/{controller_id}/*rest  → proxy HTTP request to controller
+//!   GET  /health                                          → health check
+//!   GET  /ready                                           → readiness check
+//!   GET  /api/v1/server-info                              → {"mode":"center"}
+//!   GET  /api/v1/controllers                              → list all controller summaries
+//!   GET  /api/v1/clusters                                 → list distinct cluster names
+//!   GET  /api/v1/resources                                → list resource keys (query: cluster=, kind=)
+//!   POST /api/v1/controllers/{id}/reload                  → send reload command
+//!   GET  /api/v1/center/global-region-pms                 → aggregated GlobalRegionRoute PluginMetaData list from all controllers
+//!   POST /api/v1/center/global-region-pms/failover        → trigger failover on a GlobalRegionRoute PluginMetaData region
+//!   GET  /api/v1/center/service-region-pms                → aggregated ServiceRegionRoute PluginMetaData list from all controllers
+//!   POST /api/v1/center/service-region-pms/failover       → trigger failover on a ServiceRegionRoute PluginMetaData region
+//!   ANY  /api/v1/proxy/{controller_id}/*rest              → proxy HTTP request to controller
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{any, get, post},
+    routing::{any, delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod region_plugin_metadata_handlers;
 mod region_route_handlers;
 
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::commander::Commander;
+use crate::core::center::db::CenterDb;
 use crate::core::center::proxy::ProxyForwarder;
 use crate::core::common::api::{ApiResponse, ListResponse};
 use crate::core::common::fed_sync::proto::command_request::Command;
@@ -36,6 +40,7 @@ pub struct ApiState {
     pub aggregator: Arc<ResourceAggregator>,
     pub commander: Arc<Commander>,
     pub proxy: Arc<ProxyForwarder>,
+    pub db: Option<Arc<CenterDb>>,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -49,9 +54,28 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/clusters", get(list_clusters))
         .route("/api/v1/resources", get(list_resources))
         .route("/api/v1/controllers/{id}/reload", post(reload_controller))
-        // Aggregated region-route endpoints
-        .route("/api/v1/center/region-routes", get(region_route_handlers::list_center_region_routes))
-        .route("/api/v1/center/region-routes/{service_group}/{cluster}/{namespace}/{kind}", get(region_route_handlers::get_center_region_route_detail))
+        // Aggregated RegionRoute PluginMetaData endpoints
+        .route(
+            "/api/v1/center/global-region-pms",
+            get(region_plugin_metadata_handlers::list_center_global_region_plugin_metadata),
+        )
+        .route(
+            "/api/v1/center/global-region-pms/failover",
+            post(region_plugin_metadata_handlers::global_plugin_metadata_failover),
+        )
+        .route(
+            "/api/v1/center/service-region-pms",
+            get(region_plugin_metadata_handlers::list_center_service_region_plugin_metadata),
+        )
+        .route(
+            "/api/v1/center/service-region-pms/failover",
+            post(region_plugin_metadata_handlers::service_plugin_metadata_failover),
+        )
+        // Admin endpoints (DB-backed)
+        .route("/api/v1/center/admin/controllers", get(list_admin_controllers))
+        .route("/api/v1/center/admin/controllers/{id}", delete(delete_admin_controller))
+        .route("/api/v1/center/admin/cache", delete(clear_admin_cache))
+        .route("/api/v1/center/admin/sync", post(trigger_admin_sync))
         // HTTP proxy to controllers
         .route("/api/v1/proxy/{controller_id}/{*rest}", any(proxy_handler))
         .with_state(state)
@@ -156,6 +180,132 @@ async fn reload_controller(State(state): State<ApiState>, Path(id_raw): Path<Str
             (status, Json(ApiResponse::<String>::error(e.to_string())))
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminControllerDto {
+    controller_id: String,
+    cluster: String,
+    env: Vec<String>,
+    tag: Vec<String>,
+    online: bool,
+    last_seen_at: i64,
+}
+
+async fn list_admin_controllers(State(state): State<ApiState>) -> impl IntoResponse {
+    let Some(db) = &state.db else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ListResponse::<AdminControllerDto>::error(
+                "Database not enabled".to_string(),
+            )),
+        )
+            .into_response();
+    };
+    let db2 = db.clone();
+    match tokio::task::spawn_blocking(move || db2.list_controllers()).await {
+        Ok(Ok(rows)) => {
+            let dtos: Vec<AdminControllerDto> = rows
+                .into_iter()
+                .map(|r| AdminControllerDto {
+                    controller_id: r.controller_id,
+                    cluster: r.cluster,
+                    env: r.env,
+                    tag: r.tag,
+                    online: r.online,
+                    last_seen_at: r.last_seen_at,
+                })
+                .collect();
+            Json(ListResponse::success(dtos)).into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ListResponse::<AdminControllerDto>::error(e.to_string())),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ListResponse::<AdminControllerDto>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_admin_controller(State(state): State<ApiState>, Path(id_raw): Path<String>) -> impl IntoResponse {
+    let Some(db) = &state.db else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::<String>::error("Database not enabled".to_string())),
+        )
+            .into_response();
+    };
+    let id = id_raw.replace('~', "/");
+    let db2 = db.clone();
+    match tokio::task::spawn_blocking(move || db2.delete_controller(&id)).await {
+        Ok(Ok(())) => Json(ApiResponse::success("ok".to_string())).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<String>::error(e.to_string())),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<String>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+async fn clear_admin_cache(State(state): State<ApiState>) -> impl IntoResponse {
+    let Some(db) = &state.db else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::<String>::error("Database not enabled".to_string())),
+        )
+            .into_response();
+    };
+    let db2 = db.clone();
+    match tokio::task::spawn_blocking(move || db2.clear_plugin_metadata_cache()).await {
+        Ok(Ok(())) => Json(ApiResponse::success("ok".to_string())).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<String>::error(e.to_string())),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<String>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+async fn trigger_admin_sync(State(state): State<ApiState>) -> impl IntoResponse {
+    let Some(db) = &state.db else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::<String>::error("Database not enabled".to_string())),
+        )
+            .into_response();
+    };
+    let summaries = state.aggregator.controller_summaries();
+    let online: Vec<_> = summaries.into_iter().filter(|s| s.online).collect();
+    let count = online.len();
+    let db2 = db.clone();
+    let proxy2 = state.proxy.clone();
+    tokio::spawn(async move {
+        let futs = online.iter().map(|s| {
+            let proxy = proxy2.clone();
+            let db = db2.clone();
+            let id = s.controller_id.clone();
+            async move {
+                crate::core::center::db::sync::sync_one_controller(&proxy, &db, &id).await;
+            }
+        });
+        futures::future::join_all(futs).await;
+    });
+    Json(ApiResponse::success(count)).into_response()
 }
 
 async fn proxy_handler(

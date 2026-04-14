@@ -43,26 +43,11 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        baseInfo:
-          serviceGroup: my-service
-          cluster: us-prod
-          regions:
-            - name: us-east
-              hashRange: [0, 499]
-              backendEndpoint: us-east.example.com:8443
-              tls: true
-            - name: us-west
-              hashRange: [500, 999]
-              backendEndpoint: us-west.example.com:8443
-              tls: true
-        keyGet:
-          - type: header
-            name: X-Account-Id
-        routeRules:
-          - type: RouteByHashRange
+        # Reference a ServiceRegionRoute PluginMetaData in the same namespace
+        serviceRegionRouteRef: my-svc-pm
 ```
 
-For complete `routeRules` types (`RouteByDirectRegion`, `RouteByKeyConfMatch`, `RouteByHashRange`), `hashCalc`, `autoFailover`, and other parameters, see the standalone plugin page.
+For complete configuration parameters (GlobalRegionRoute PluginMetaData, ServiceRegionRoute PluginMetaData, `routeRules` types, etc.), see the standalone plugin page.
 
 ## Related Documentation
 

@@ -457,6 +457,7 @@ const zhSidebar = [
 export default defineConfig({
   title: 'Edgion',
   description: 'High-performance Kubernetes Gateway built on Pingora and Gateway API',
+  base: '/Edgion/',
 
   // Suppress build failure from pre-existing dead links across the docs:
   // categories include links to skills/, examples/, localhost dev endpoints,

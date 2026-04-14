@@ -142,6 +142,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
+            "plugin-metadata-managed" | "pluginmetadatamanaged" | "pm-managed" => {
+                "EdgionPlugins/PluginMetaDataManaged".to_string()
+            }
             "ref-grant-status" => "Status/RefGrant".to_string(),
             "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
             "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
@@ -238,6 +241,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
+        "EdgionPlugins/PluginMetaDataManaged" | "EdgionPlugins/plugin-metadata-managed" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
@@ -771,6 +775,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RegionRouteTestSuite));
+        }
+        "EdgionPlugins/PluginMetaDataManaged" | "EdgionPlugins/plugin-metadata-managed" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginMetaDataManaged tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PluginMetaDataManagedTestSuite));
         }
         "EdgionPlugins/AllEndpointStatus" => {
             if !gateway {

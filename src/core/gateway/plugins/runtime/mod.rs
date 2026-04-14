@@ -4,6 +4,7 @@ pub mod conditional_filter;
 pub mod conditions;
 pub mod gateway_api_filters;
 pub mod log;
+pub mod plugin_metadata;
 mod plugin_runtime;
 pub mod session_adapter;
 pub mod traits;

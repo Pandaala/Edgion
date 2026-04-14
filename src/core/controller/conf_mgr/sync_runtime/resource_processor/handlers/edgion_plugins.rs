@@ -7,6 +7,7 @@
 //! - parse: Resolve Secret references and register to SecretRefManager for cascading updates
 //! - on_delete: Clear SecretRefManager references
 
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::RefPluginEntry;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, format_secret_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
@@ -22,11 +23,6 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::chrono::Utc;
 use std::collections::{HashMap, HashSet};
 
-/// EdgionPlugins handler
-///
-/// Features:
-/// - parse: Resolve JWT/KeyAuth Secret references and register to SecretRefManager
-/// - on_delete: Clear SecretRefManager references
 pub struct EdgionPluginsHandler;
 
 impl EdgionPluginsHandler {
@@ -754,12 +750,73 @@ impl Default for EdgionPluginsHandler {
     }
 }
 
+// ============================================================================
+// RegionRoute + PluginMetaData helpers
+// ============================================================================
+
+impl EdgionPluginsHandler {
+    /// Clear all PluginMetaData refs and service table ref_plugins for this EdgionPlugins.
+    fn clear_region_route_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
+        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+        let ep_name = ep.metadata.name.as_deref().unwrap_or("");
+        let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
+        ctx.runtime().plugin_metadata_refs.clear_refs_from(&ep_key);
+        ctx.runtime().service_region_route_table.clear_ref_plugins_from(
+            ResourceKind::EdgionPlugins.as_str(),
+            ns,
+            ep_name,
+        );
+    }
+
+    /// Extract the `service_region_route_ref` name from the first RegionRoute plugin, if any.
+    fn get_service_region_route_ref(ep: &EdgionPlugins) -> Option<String> {
+        ep.spec.request_plugins.as_ref()?.iter().find_map(|e| {
+            if let EdgionPlugin::RegionRoute(ref config) = e.plugin {
+                config.service_region_route_ref.clone()
+            } else {
+                None
+            }
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
-    fn preparse(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext) -> Vec<String> {
+    fn preparse(&self, ep: &mut EdgionPlugins, ctx: &HandlerContext) -> Vec<String> {
         // Build plugin runtime and collect validation errors
         ep.preparse();
-        ep.get_preparse_errors().to_vec()
+        let mut errors = ep.get_preparse_errors().to_vec();
+
+        // Check serviceRegionRouteRef ServiceRegionRoute PluginMetaData availability so errors appear in status conditions
+        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+        if let Some(plugins) = &ep.spec.request_plugins {
+            for (idx, entry) in plugins.iter().enumerate() {
+                if let EdgionPlugin::RegionRoute(ref config) = entry.plugin {
+                    if let Some(ref svc_name) = config.service_region_route_ref {
+                        let plugin_metadata = ctx.runtime().plugin_metadata_store.get(Some(ns), svc_name);
+                        match plugin_metadata {
+                            None => {
+                                errors.push(format!(
+                                    "requestPlugins[{}] RegionRoute: serviceRegionRouteRef {}/{} not found",
+                                    idx, ns, svc_name
+                                ));
+                            }
+                            Some(plugin_metadata) => {
+                                use crate::types::resources::plugin_metadata::MetaDataEntry;
+                                if !matches!(plugin_metadata.spec.metadata, MetaDataEntry::ServiceRegionRoute(_)) {
+                                    errors.push(format!(
+                                        "requestPlugins[{}] RegionRoute: PluginMetaData {}/{} is not a ServiceRegionRoute",
+                                        idx, ns, svc_name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        errors
     }
 
     async fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {
@@ -769,31 +826,49 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.name.clone().unwrap_or_default(),
         );
 
-        // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
-        // Resolve BasicAuth users from Secrets and register references
         Self::resolve_basic_auth_users(&mut ep, &resource_ref, ctx);
-
-        // Resolve JWT credentials from Secrets and register references
         Self::resolve_jwt_credentials(&mut ep, &resource_ref, ctx);
-
-        // Resolve JWE decrypt credentials from Secrets and register references
         Self::resolve_jwe_credentials(&mut ep, &resource_ref, ctx);
-
-        // Resolve HeaderCertAuth CA secrets and register references
         Self::resolve_header_cert_auth_ca_secrets(&mut ep, &resource_ref, ctx);
-
-        // Resolve HMAC credentials from Secrets and register references
         Self::resolve_hmac_credentials(&mut ep, &resource_ref, ctx);
-
-        // Resolve KeyAuth keys from Secrets and register references
         Self::resolve_key_auth_keys(&mut ep, &resource_ref, ctx);
-
-        // Resolve OpenID Connect secrets and register references
         Self::resolve_openid_connect_secrets(&mut ep, &resource_ref, ctx);
 
-        // Note: preparse() is called by processor before parse(), so we don't call it here
+        Self::clear_region_route_refs(&ep, ctx);
+
+        let ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
+        let ep_name = ep.metadata.name.as_deref().unwrap_or("").to_string();
+        let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
+
+        // Register PluginMetaData refs and service table entries for each RegionRoute plugin
+        if let Some(pm_name) = Self::get_service_region_route_ref(&ep) {
+            let pm_key = format!("{}/{}", ns, pm_name);
+            ctx.runtime()
+                .plugin_metadata_refs
+                .add_ref(pm_key.clone(), ep_key.clone());
+            ctx.runtime().service_region_route_table.add_ref_plugin(
+                &pm_key,
+                RefPluginEntry {
+                    kind: ResourceKind::EdgionPlugins.as_str().to_string(),
+                    namespace: ns.clone(),
+                    name: ep_name.clone(),
+                },
+            );
+
+            // Also register ref to the GlobalRegionRoute PluginMetaData
+            // (via ServiceRegionRoute PluginMetaData's globalRef) for requeue
+            if let Some(svc_entry) = ctx.runtime().service_region_route_table.get(&pm_key) {
+                if let Some(ref gref) = svc_entry.global_pm_ref {
+                    let g_ns = gref.namespace.as_deref().unwrap_or(&ns);
+                    let global_plugin_metadata_key = format!("{}/{}", g_ns, gref.name);
+                    ctx.runtime()
+                        .plugin_metadata_refs
+                        .add_ref(global_plugin_metadata_key, ep_key.clone());
+                }
+            }
+        }
 
         ProcessResult::Continue(ep)
     }
@@ -805,9 +880,11 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        Self::clear_region_route_refs(ep, ctx);
+
         tracing::debug!(
             edgion_plugins = %resource_ref.key(),
-            "Cleared secret references on EdgionPlugins delete"
+            "Cleared secret and PluginMetaData references on EdgionPlugins delete"
         );
     }
 
@@ -883,11 +960,15 @@ mod tests {
         HandlerContext, ProcessResult, ProcessorHandler, SecretRefManager,
     };
     use crate::core::controller::conf_mgr::ControllerRuntime;
+    use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
     use crate::types::resources::edgion_plugins::{
         BasicAuthConfig, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, HeaderCertAuthConfig,
-        HmacAuthConfig, JweDecryptConfig, OpenidConnectConfig, RequestFilterEntry,
+        HmacAuthConfig, JweDecryptConfig, OpenidConnectConfig, RegionRouteConfig, RequestFilterEntry,
     };
     use crate::types::resources::gateway::SecretObjectReference;
+    use crate::types::resources::plugin_metadata::{
+        MetaDataEntry, PluginMetaData, PluginMetaDataSpec, ServiceRegionRouteConfig,
+    };
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
@@ -1216,5 +1297,99 @@ mod tests {
             .expect("expected resolved ca secrets");
         assert_eq!(resolved.len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/header-cert-ca").len(), 1);
+    }
+
+    // ── RegionRoute + PluginMetaData resolution tests ────────────────────────
+
+    /// Helper: build a PluginMetaData with namespace and name set.
+    fn build_plugin_metadata(namespace: &str, name: &str, spec: PluginMetaDataSpec) -> PluginMetaData {
+        let mut pm = PluginMetaData::new(name, spec);
+        pm.metadata.namespace = Some(namespace.to_string());
+        pm
+    }
+
+    #[tokio::test]
+    async fn test_validate_region_route_refs_ok() {
+        // ServiceRegionRoute PluginMetaData exists → no validation_error
+        let service_pm = build_plugin_metadata(
+            "default",
+            "svc-rr",
+            PluginMetaDataSpec {
+                metadata: MetaDataEntry::ServiceRegionRoute(ServiceRegionRouteConfig {
+                    global_ref: Some(PluginMetaDataRef {
+                        name: "global-rr".to_string(),
+                        namespace: None,
+                    }),
+                    regions: vec![],
+                }),
+            },
+        );
+
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut pm_map = HashMap::new();
+        pm_map.insert("default/svc-rr".to_string(), service_pm);
+        runtime.plugin_metadata_store.replace_all(pm_map);
+
+        let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
+            RegionRouteConfig {
+                service_region_route_ref: Some("svc-rr".to_string()),
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::RegionRoute(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+        assert!(config.validation_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_validate_region_route_refs_missing() {
+        // Empty store → preparse() reports error via status conditions
+        // (validation_error on the config is no longer set; the check moved to preparse())
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
+            RegionRouteConfig {
+                service_region_route_ref: Some("missing-pm".to_string()),
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+
+        // preparse() should report the missing PluginMetaData reference as an error
+        let errors = handler.preparse(&mut ep, &ctx);
+        assert!(
+            !errors.is_empty(),
+            "expected preparse to report an error for missing PM"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("not found")),
+            "expected 'not found' in errors, got: {:?}",
+            errors
+        );
+
+        // parse() no longer sets validation_error — config.validation_error stays None
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::RegionRoute(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+        assert!(config.validation_error.is_none());
     }
 }

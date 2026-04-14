@@ -5,9 +5,33 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct DatabaseConfig {
+    /// Path to the SQLite database file. Relative paths are resolved from the current working directory.
+    pub sqlite_path: String,
+    /// Whether the SQLite database is enabled.
+    pub enabled: bool,
+    /// How often (seconds) to sync RegionRoute snapshots from online controllers.
+    pub sync_interval_secs: u64,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            sqlite_path: "data/center.db".to_string(),
+            enabled: true,
+            sync_interval_secs: 60,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CenterConfig {
     pub server: CenterServerConfig,
     pub sync: CenterSyncConfig,
+    /// SQLite database configuration.
+    #[serde(default)]
+    pub database: DatabaseConfig,
     /// Optional OIDC Admin API authentication.
     /// Omit to disable OIDC auth. When present, Admin API endpoints (except
     /// health/ready) require a valid JWT Bearer token from the OIDC provider.
@@ -29,6 +53,7 @@ impl Default for CenterConfig {
         Self {
             server: CenterServerConfig::default(),
             sync: CenterSyncConfig::default(),
+            database: DatabaseConfig::default(),
             auth: None,
             local_auth: None,
             grpc_security: ConfSyncSecurityConfig::default(),

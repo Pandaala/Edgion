@@ -1,0 +1,18 @@
+# PluginMetaDataManagedRegionRoute - Scenario 1: PluginMetaData validation
+#
+# An EdgionPlugins with serviceRegionRouteRef pointing to a pre-created ServiceRegionRoute PluginMetaData.
+# The ServiceRegionRoute PluginMetaData "pm-managed" must be created by administrators before applying this file.
+# The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.globalRef → GlobalRegionRoute PluginMetaData
+#
+# Verification: GET /configserver/EdgionPlugins?namespace=edgion-default&name=pm-managed
+# should return data with status.conditions Accepted=True.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: pm-managed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        serviceRegionRouteRef: "pm-managed"

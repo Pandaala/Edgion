@@ -240,7 +240,10 @@ impl TestContext {
         if let Some(ref token) = self.admin_token {
             put_req = put_req.header("Authorization", format!("Bearer {}", token));
         }
-        let response = put_req.send().await.map_err(|e| format!("Admin API PUT failed: {}", e))?;
+        let response = put_req
+            .send()
+            .await
+            .map_err(|e| format!("Admin API PUT failed: {}", e))?;
 
         if response.status().is_success() {
             return Ok(());
@@ -291,7 +294,10 @@ impl TestContext {
         if let Some(ref token) = self.admin_token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
-        let response = req.send().await.map_err(|e| format!("Admin API request failed: {}", e))?;
+        let response = req
+            .send()
+            .await
+            .map_err(|e| format!("Admin API request failed: {}", e))?;
 
         if response.status().is_success() {
             Ok(())

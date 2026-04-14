@@ -1,0 +1,26 @@
+# ServiceRegionRoute PluginMetaData for region-route-myregion
+#
+# Pre-created by administrator. References the GlobalRegionRoute PluginMetaData
+# that has myRegion=virginia.
+#
+# Per-service failover overrides:
+#   ohio: failoverTo=virginia  (ohio → redirect to local myRegion → pass-through → 200)
+#   europe: failoverTo=ohio    (europe → redirect to ohio → jump to loopback → 502)
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: region-route-myregion
+  namespace: edgion-default
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+        globalRef:
+          namespace: edgion-default
+          name: global-region-myregion
+        regions:
+          - name: virginia
+          - name: ohio
+            failoverTo: virginia
+          - name: europe
+            failoverTo: ohio

@@ -22,7 +22,10 @@ pub async fn fetch_resource_status(
     if let Some(ref token) = ctx.admin_token {
         req = req.header("Authorization", format!("Bearer {}", token));
     }
-    let response = req.send().await.map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
 
     if !response.status().is_success() {
         return Err(format!("API returned status: {}", response.status()));
@@ -48,7 +51,10 @@ pub async fn fetch_cluster_resource_status(ctx: &TestContext, kind: &str, name: 
     if let Some(ref token) = ctx.admin_token {
         req = req.header("Authorization", format!("Bearer {}", token));
     }
-    let response = req.send().await.map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch {}: {}", kind, e))?;
 
     if !response.status().is_success() {
         return Err(format!("API returned status: {}", response.status()));

@@ -142,7 +142,7 @@ resource.pre_parse()                        # event_dispatch.rs
 | DynamicExternalUpstream | `dynamic_external_upstream` | 动态外部上游（运行时指定外部地址） |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | 动态内部上游（运行时选择 K8s Service） |
 | DirectEndpoint | `direct_endpoint` | 直接指定后端端点地址 |
-| RegionRoute | `region_route` | 多 region 流量路由：baseInfo（serviceGroup/cluster 分组 + regions + myRegion）+ 有序 routeRules（RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange）+ hashKeyGet passthrough + hashCalc writeBack + failoverTo（静态重定向）+ auto failover。Center 按 `{serviceGroup}/{cluster}/{namespace}/{kind}` 聚合管理 |
+| RegionRoute | `region_route` | 多 region 流量路由：引用 ServiceRegionRoute PluginMetaData（`serviceRegionRouteRef`）→ globalRef → GlobalRegionRoute PluginMetaData。Gateway 实时查询 PluginMetaDataGatewayStore，有序 routeRules（RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange）+ hashKeyGet passthrough + hashCalc writeBack + failoverTo（静态重定向）。无 baseInfo，无 auto failover |
 
 ### 其他类（8 个）
 

@@ -214,9 +214,23 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
-        // RegionRoute aggregation
-        .route("/api/v1/region-routes", get(region_route_handlers::list_region_routes))
-        .route("/api/v1/region-routes/{service_group}/{cluster}/{namespace}/{kind}", get(region_route_handlers::get_region_route_detail))
+        // RegionRoute PluginMetaData endpoints
+        .route(
+            "/api/v1/global-region-pms",
+            get(region_route_handlers::list_global_region_plugin_metadata),
+        )
+        .route(
+            "/api/v1/service-region-pms",
+            get(region_route_handlers::list_service_region_plugin_metadata),
+        )
+        .route(
+            "/api/v1/global-region-pms/failover",
+            post(region_route_handlers::global_plugin_metadata_failover),
+        )
+        .route(
+            "/api/v1/service-region-pms/failover",
+            post(region_route_handlers::service_plugin_metadata_failover),
+        )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
         // ConfigServer endpoints (for edgion-cli --target server)

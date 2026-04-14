@@ -21,10 +21,12 @@ mod handler;
 pub mod handlers;
 pub mod listener_port_manager;
 pub mod namespace_store;
+pub mod plugin_metadata_utils;
 mod processor;
 pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
+pub mod region_route_table;
 pub mod secret_utils;
 pub mod service_ref;
 pub mod status_diff;
@@ -83,6 +85,12 @@ pub use backend_tls_policy_ref::{make_target_conflict_key, BackendTLSPolicyState
 
 // Re-export namespace_store utilities
 pub use namespace_store::NamespaceStore;
+
+// Re-export plugin_metadata_utils
+pub use plugin_metadata_utils::PluginMetaDataStore;
+
+// Re-export region_route_table utilities
+pub use region_route_table::{RegionRouteGlobalTable, RegionRouteServiceTable};
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

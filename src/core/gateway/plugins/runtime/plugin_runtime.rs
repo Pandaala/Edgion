@@ -391,7 +391,7 @@ impl PluginRuntime {
                 Some(Box::new(ext_filter))
             }
             EdgionPlugin::Dsl(config) => DslPlugin::from_config(config),
-            EdgionPlugin::RegionRoute(config) => Some(RegionRoute::create(config)),
+            EdgionPlugin::RegionRoute(config) => Some(RegionRoute::create(config, namespace)),
             // Response-stage only — not applicable to request filters
             EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
