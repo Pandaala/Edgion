@@ -5,7 +5,7 @@
 //! and pre-computed hash passthrough.
 //!
 //! EP only holds a `serviceRegionRouteRef` — all routing config lives in
-//! PluginMetaData (GlobalRegionRoute / ServiceRegionRoute).
+//! PluginMetaData (ClusterRegionRoute / ServiceRegionRoute).
 
 use std::collections::HashMap;
 
@@ -17,19 +17,19 @@ use crate::types::common::{KeyGet, KeySet};
 /// RegionRoute plugin: multi-region traffic routing.
 ///
 /// EP only holds `serviceRegionRouteRef`. All routing config lives in
-/// PluginMetaData (GlobalRegionRoute / ServiceRegionRoute).
+/// PluginMetaData (ClusterRegionRoute / ServiceRegionRoute).
 ///
 /// Gateway resolves the PluginMetaData chain at plugin-build time via the global
 /// `PluginMetaDataGatewayStore`:
 ///   `EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData
-///     → ServiceRegionRoute PluginMetaData.globalRef → GlobalRegionRoute PluginMetaData`
+///     → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData`
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegionRouteConfig {
     /// Reference to a ServiceRegionRoute PluginMetaData by name.
     /// Namespace is inherited from the parent EdgionPlugins.
     /// The ServiceRegionRoute PluginMetaData must be pre-created by the administrator;
-    /// it in turn references the GlobalRegionRoute PluginMetaData via its globalRef.
+    /// it in turn references the ClusterRegionRoute PluginMetaData via its clusterRef.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_region_route_ref: Option<String>,
 
@@ -38,15 +38,15 @@ pub struct RegionRouteConfig {
     pub validation_error: Option<String>,
 }
 
-/// Region definition
+/// Cluster definition
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegionDef {
-    /// Region identifier used in RouteByDirectRegion and failover notify_header.
+    /// Cluster identifier used in RouteByDirectRegion and failover notify_header.
     pub name: String,
 
     /// Hash range [low, high], closed interval. Must satisfy: 0 ≤ low ≤ high < modulo.
-    /// Requests whose computed hash falls within [low, high] are routed to this region.
+    /// Requests whose computed hash falls within [low, high] are routed to this cluster.
     pub hash_range: [u16; 2],
 
     /// Target backend endpoint: "host" or "host:port".
@@ -60,10 +60,10 @@ pub struct RegionDef {
     #[serde(default = "default_true")]
     pub tls: bool,
 
-    /// Failover target: if set, traffic routed to this region is redirected
-    /// to the named region. Set by Center (GlobalRegionRoute PluginMetaData) or
+    /// Failover target: if set, traffic routed to this cluster is redirected
+    /// to the named cluster. Set by Center (ClusterRegionRoute PluginMetaData) or
     /// overridden by ServiceRegionRoute PluginMetaData.
-    /// Must be a valid region name in the same regions list. Cannot be self.
+    /// Must be a valid cluster name in the same clusters list. Cannot be self.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failover_to: Option<String>,
 }

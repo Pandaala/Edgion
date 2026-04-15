@@ -8,7 +8,7 @@ spec:
   metadata:
     type: ServiceRegionRoute
     config:
-        globalRef:
+        clusterRef:
           namespace: edgion-default
           name: pm-managed-global
         regions:

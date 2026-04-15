@@ -1,15 +1,15 @@
 // RegionRoute Integration Test Suite
 //
-// Tests the ServiceRegionRoute PluginMetaData → GlobalRegionRoute PluginMetaData → EdgionPlugins resolve flow.
+// Tests the ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData → EdgionPlugins resolve flow.
 //
 // Required conf files (examples/test/conf/EdgionPlugins/RegionRoute/):
 //   01_EdgionPlugins_region-route-main.yaml      — ref-only: serviceRegionRouteRef
 //   01_EdgionPlugins_region-route-norules.yaml    — ref-only: serviceRegionRouteRef
 //   01_EdgionPlugins_region-route-myregion.yaml   — ref-only: serviceRegionRouteRef
-//   01_PluginMetaData_global-region-conf.yaml     — GlobalRegionRoute PluginMetaData with complete config:
+//   01_PluginMetaData_global-region-conf.yaml     — ClusterRegionRoute PluginMetaData with complete config:
 //                                                   regions, keyGet, hashKeyGet, hashCalc, routeRules,
 //                                                   routeByKeyConfMatch.matchMap (vip-va→virginia, vip-oh→ohio)
-//   01_PluginMetaData_region-route-main.yaml      — ServiceRegionRoute PluginMetaData with globalRef + regions
+//   01_PluginMetaData_region-route-main.yaml      — ServiceRegionRoute PluginMetaData with clusterRef + regions
 //   02_HTTPRoute_region-route-main-test.yaml
 //   02_HTTPRoute_region-route-norules-test.yaml
 //   02_HTTPRoute_region-route-myregion-test.yaml
@@ -17,8 +17,8 @@
 // PluginMetaData resolve flow:
 //   1. Controller processes EdgionPlugins "region-route-main"
 //   2. Resolves serviceRegionRouteRef → loads ServiceRegionRoute PluginMetaData "region-route-main"
-//   3. Follows ServiceRegionRoute PluginMetaData's globalRef → loads GlobalRegionRoute PluginMetaData "global-region-conf"
-//   4. Copies ALL config from GlobalRegionRoute PluginMetaData: regions, keyGet, hashCalc, routeRules
+//   3. Follows ServiceRegionRoute PluginMetaData's clusterRef → loads ClusterRegionRoute PluginMetaData "global-region-conf"
+//   4. Copies ALL config from ClusterRegionRoute PluginMetaData: regions, keyGet, hashCalc, routeRules
 //   5. Injects routeByKeyConfMatch.matchMap into RouteByKeyConfMatch route rules
 //   6. Overlays per-region failoverTo from ServiceRegionRoute PluginMetaData (none in this test)
 //   7. Gateway receives the fully merged config

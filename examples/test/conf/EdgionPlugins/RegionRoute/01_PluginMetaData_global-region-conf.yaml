@@ -2,7 +2,7 @@
 #
 # This is the canonical region topology and routing configuration.
 # Center manages this resource; EdgionPlugins reference it via serviceRegionRouteRef
-# (via the ServiceRegionRoute PluginMetaData's globalRef).
+# (via the ServiceRegionRoute PluginMetaData's clusterRef).
 #
 # Contains the COMPLETE routing config: regions, keyGet, hashKeyGet, hashCalc,
 # routeRules, and routeByKeyConfMatch (matchMap). The EdgionPlugins
@@ -18,7 +18,7 @@ metadata:
   namespace: edgion-default
 spec:
   metadata:
-    type: GlobalRegionRoute
+    type: ClusterRegionRoute
     config:
         regions:
           - name: virginia

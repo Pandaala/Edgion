@@ -6,11 +6,11 @@
 //!
 //! ## Tables
 //!
-//! - `RegionRouteGlobalTable`: serviceGroup → GlobalRegionRouteEntry
+//! - `RegionRouteClusterTable`: serviceGroup → ClusterRegionRouteEntry
 //! - `RegionRouteServiceTable`: pm_key (ns/name) → ServiceRegionRouteEntry
 
-mod global_table;
+mod cluster_table;
 mod service_table;
 
-pub use global_table::{GlobalRegionRouteEntry, RegionRouteGlobalTable};
+pub use cluster_table::{ClusterRegionRouteEntry, RegionRouteClusterTable};
 pub use service_table::{RefPluginEntry, RegionRouteServiceTable, ServiceRegionRouteEntry};

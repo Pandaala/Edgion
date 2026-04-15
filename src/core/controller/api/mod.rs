@@ -216,16 +216,16 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .route("/api/v1/reload", post(reload_all_resources))
         // RegionRoute PluginMetaData endpoints
         .route(
-            "/api/v1/global-region-pms",
-            get(region_route_handlers::list_global_region_plugin_metadata),
+            "/api/v1/cluster-region-pms",
+            get(region_route_handlers::list_cluster_region_plugin_metadata),
         )
         .route(
             "/api/v1/service-region-pms",
             get(region_route_handlers::list_service_region_plugin_metadata),
         )
         .route(
-            "/api/v1/global-region-pms/failover",
-            post(region_route_handlers::global_plugin_metadata_failover),
+            "/api/v1/cluster-region-pms/failover",
+            post(region_route_handlers::cluster_plugin_metadata_failover),
         )
         .route(
             "/api/v1/service-region-pms/failover",

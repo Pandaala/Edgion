@@ -25,7 +25,7 @@ use super::sync_runtime::resource_processor::{
         events::ReferenceGrantEventDispatcher,
         ReferenceGrantStore,
     },
-    region_route_table::{RegionRouteGlobalTable, RegionRouteServiceTable},
+    region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable},
     secret_utils::SecretStore,
     service_ref::{new_service_ref_manager, ServiceRefManager},
 };
@@ -51,9 +51,9 @@ pub struct ControllerRuntime {
     /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each PluginMetaData.
     /// Used by the PluginMetaData handler to requeue referencing resources on change.
     pub(crate) plugin_metadata_refs: PluginMetaDataRefManager,
-    /// Global RegionRoute table: pm_key → GlobalRegionRouteEntry.
+    /// Cluster RegionRoute table: pm_key → ClusterRegionRouteEntry.
     /// Maintained by PluginMetaData handler on change/delete.
-    pub(crate) global_region_route_table: RegionRouteGlobalTable,
+    pub(crate) cluster_region_route_table: RegionRouteClusterTable,
     /// Service RegionRoute table: pm_key → ServiceRegionRouteEntry.
     /// Maintained by PluginMetaData handler (PluginMetaData fields) and EdgionPlugins handler (ref_plugins).
     pub(crate) service_region_route_table: RegionRouteServiceTable,
@@ -80,7 +80,7 @@ impl ControllerRuntime {
             backend_tls_policy: BackendTLSPolicyState::new(),
             plugin_metadata_store: PluginMetaDataStore::new(),
             plugin_metadata_refs: PluginMetaDataRefManager::new(),
-            global_region_route_table: RegionRouteGlobalTable::new(),
+            cluster_region_route_table: RegionRouteClusterTable::new(),
             service_region_route_table: RegionRouteServiceTable::new(),
             conf_writer: RwLock::new(None),
         }
@@ -146,8 +146,8 @@ impl ControllerRuntime {
         self.plugin_metadata_refs.clear_all();
         tracing::info!(component = "controller_runtime", "Cleared PluginMetaDataRefManager");
 
-        self.global_region_route_table.clear();
-        tracing::info!(component = "controller_runtime", "Cleared RegionRouteGlobalTable");
+        self.cluster_region_route_table.clear();
+        tracing::info!(component = "controller_runtime", "Cleared RegionRouteClusterTable");
 
         self.service_region_route_table.clear();
         tracing::info!(component = "controller_runtime", "Cleared RegionRouteServiceTable");

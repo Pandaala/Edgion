@@ -1,8 +1,8 @@
 //! RegionRoute-related PluginMetaData types
 //!
-//! GlobalRegionRouteConfig — full region topology, route rules, matchMap
-//! ServiceRegionRouteConfig — per-service failover overrides with globalRef
-//! RouteByKeyConfMatchMeta — key-to-region mapping managed by Center
+//! ClusterRegionRouteConfig — full cluster topology, route rules, matchMap
+//! ServiceRegionRouteConfig — per-service failover overrides with clusterRef
+//! RouteByKeyConfMatchMeta — key-to-cluster mapping managed by Center
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,23 +10,23 @@ use std::collections::HashMap;
 
 use crate::types::common::KeyGet;
 use crate::types::resources::edgion_plugins::plugin_configs::{
-    HashCalcConfig, PluginMetaDataRef, RegionDef, RouteRule,
+    RegionDef, HashCalcConfig, PluginMetaDataRef, RouteRule,
 };
 
-/// Global RegionRoute configuration within PluginMetaData.
+/// Cluster RegionRoute configuration within PluginMetaData.
 ///
-/// Contains the full region topology, route rules, and matchMap.
+/// Contains the full cluster topology, route rules, and matchMap.
 /// PluginMetaData namespace = cluster-type dimension, name = cluster identifier.
 /// This is the authoritative source managed by operators / Center.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GlobalRegionRouteConfig {
-    /// Region definitions.
+pub struct ClusterRegionRouteConfig {
+    /// Cluster definitions.
     #[serde(default)]
     pub regions: Vec<RegionDef>,
 
-    /// Name of this gateway instance's own region.
-    /// When routed to own region, skips external jump (pass-through).
+    /// Name of this gateway instance's own cluster.
+    /// When routed to own cluster, skips external jump (pass-through).
     /// Empty = feature disabled.
     #[serde(default)]
     pub my_region: String,
@@ -54,31 +54,31 @@ pub struct GlobalRegionRouteConfig {
 
 /// Service-level RegionRoute configuration within PluginMetaData.
 ///
-/// Contains per-region failover state. Created by administrator.
-/// The `global_ref` links this ServiceRegionRoute PluginMetaData
-/// to a GlobalRegionRoute PluginMetaData.
-/// Lists all regions (mirroring GlobalRegionRoute's region names);
+/// Contains per-cluster failover state. Created by administrator.
+/// The `cluster_ref` links this ServiceRegionRoute PluginMetaData
+/// to a ClusterRegionRoute PluginMetaData.
+/// Lists all clusters (mirroring ClusterRegionRoute's cluster names);
 /// only entries with `failover_to` set have an active failover override.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceRegionRouteConfig {
-    /// Reference to the GlobalRegionRoute PluginMetaData.
-    /// Explicit linkage: namespace/name of the GlobalRegionRoute PluginMetaData
+    /// Reference to the ClusterRegionRoute PluginMetaData.
+    /// Explicit linkage: namespace/name of the ClusterRegionRoute PluginMetaData
     /// this ServiceRegionRoute PluginMetaData belongs to.
     /// Set by the administrator when creating the ServiceRegionRoute PluginMetaData.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub global_ref: Option<PluginMetaDataRef>,
+    pub cluster_ref: Option<PluginMetaDataRef>,
 
-    /// Per-region failover state. Mirrors GlobalRegionRoute PluginMetaData's region names.
+    /// Per-cluster failover state. Mirrors ClusterRegionRoute PluginMetaData's cluster names.
     /// Only entries with `failover_to` set have an active override.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<ServiceRegionDef>,
 }
 
-/// A region entry in ServiceRegionRoute.
-/// Mirrors the GlobalRegionRoute PluginMetaData's region names.
+/// A cluster entry in ServiceRegionRoute.
+/// Mirrors the ClusterRegionRoute PluginMetaData's cluster names.
 /// Only `failover_to` is service-specific; if set it overrides the
-/// GlobalRegionRoute PluginMetaData's value.
+/// ClusterRegionRoute PluginMetaData's value.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceRegionDef {
@@ -91,10 +91,10 @@ pub struct ServiceRegionDef {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteByKeyConfMatchMeta {
-    /// Key-to-region mapping.
+    /// Key-to-cluster mapping.
     #[serde(default)]
     pub match_map: HashMap<String, String>,
-    /// Keys in this list bypass global matchMap override (ServiceRegionRoute PluginMetaData only).
+    /// Keys in this list bypass cluster matchMap override (ServiceRegionRoute PluginMetaData only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bypass_global_keys: Vec<String>,
+    pub bypass_cluster_keys: Vec<String>,
 }

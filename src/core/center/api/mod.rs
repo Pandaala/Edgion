@@ -8,8 +8,8 @@
 //!   GET  /api/v1/clusters                                 → list distinct cluster names
 //!   GET  /api/v1/resources                                → list resource keys (query: cluster=, kind=)
 //!   POST /api/v1/controllers/{id}/reload                  → send reload command
-//!   GET  /api/v1/center/global-region-pms                 → aggregated GlobalRegionRoute PluginMetaData list from all controllers
-//!   POST /api/v1/center/global-region-pms/failover        → trigger failover on a GlobalRegionRoute PluginMetaData region
+//!   GET  /api/v1/center/cluster-region-pms                → aggregated ClusterRegionRoute PluginMetaData list from all controllers
+//!   POST /api/v1/center/cluster-region-pms/failover       → trigger failover on a ClusterRegionRoute PluginMetaData region
 //!   GET  /api/v1/center/service-region-pms                → aggregated ServiceRegionRoute PluginMetaData list from all controllers
 //!   POST /api/v1/center/service-region-pms/failover       → trigger failover on a ServiceRegionRoute PluginMetaData region
 //!   ANY  /api/v1/proxy/{controller_id}/*rest              → proxy HTTP request to controller
@@ -56,12 +56,12 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/controllers/{id}/reload", post(reload_controller))
         // Aggregated RegionRoute PluginMetaData endpoints
         .route(
-            "/api/v1/center/global-region-pms",
-            get(region_plugin_metadata_handlers::list_center_global_region_plugin_metadata),
+            "/api/v1/center/cluster-region-pms",
+            get(region_plugin_metadata_handlers::list_center_cluster_region_plugin_metadata),
         )
         .route(
-            "/api/v1/center/global-region-pms/failover",
-            post(region_plugin_metadata_handlers::global_plugin_metadata_failover),
+            "/api/v1/center/cluster-region-pms/failover",
+            post(region_plugin_metadata_handlers::cluster_plugin_metadata_failover),
         )
         .route(
             "/api/v1/center/service-region-pms",

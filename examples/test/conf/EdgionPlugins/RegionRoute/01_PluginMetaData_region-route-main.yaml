@@ -1,7 +1,7 @@
 # Service PluginMetaData for region-route-main
 #
 # Auto-created by Controller when EdgionPlugins/region-route-main is processed.
-# References the GlobalRegionRoute PluginMetaData for topology; lists all regions with optional failoverTo.
+# References the ClusterRegionRoute PluginMetaData for topology; lists all regions with optional failoverTo.
 apiVersion: edgion.io/v1
 kind: PluginMetaData
 metadata:
@@ -11,7 +11,7 @@ spec:
   metadata:
     type: ServiceRegionRoute
     config:
-        globalRef:
+        clusterRef:
           namespace: edgion-default
           name: global-region-conf
         regions:

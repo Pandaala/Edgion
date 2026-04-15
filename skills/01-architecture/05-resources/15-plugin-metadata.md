@@ -15,12 +15,12 @@ PluginMetaData 是 Edgion 的自定义扩展资源，支持两种用途：
 ## 源码位置
 
 - 类型定义: `src/types/resources/plugin_metadata/mod.rs`（主模块）、`src/types/resources/plugin_metadata/region_route.rs`（RegionRoute 配置结构体）
-- Plugin 类型: `MetaDataPlugin` enum（GlobalRegionRoute / ServiceRegionRoute 变体）
+- Plugin 类型: `MetaDataPlugin` enum（ClusterRegionRoute / ServiceRegionRoute 变体）
 - Controller Handler: `handlers/plugin_metadata.rs`
 - EdgionPlugins Handler（验证逻辑）: `handlers/edgion_plugins.rs`
 - PluginMetaDataStore（Controller 侧）: `plugin_metadata_utils/plugin_metadata_store.rs`
 - PluginMetaDataGatewayStore（Gateway 侧）: `src/core/gateway/plugins/runtime/plugin_metadata/conf_handler.rs`
-- RegionRoute 表（Controller）: `region_route_table/global_table.rs`、`region_route_table/service_table.rs`
+- RegionRoute 表（Controller）: `region_route_table/cluster_table.rs`、`region_route_table/service_table.rs`
 - Controller API: `src/core/controller/api/region_route_handlers.rs`
 - Center API: `src/core/center/api/region_pm_handlers.rs`
 
@@ -31,15 +31,15 @@ PluginMetaData 是 Edgion 的自定义扩展资源，支持两种用途：
 ```yaml
 spec:
   plugins:
-    - type: GlobalRegionRoute    # 全局拓扑 + 路由规则（无 baseInfo 包装）
+    - type: ClusterRegionRoute    # 集群拓扑 + 路由规则（无 baseInfo 包装）
       config:
         myRegion: ...
         regions: [...]
         keyGet: [...]
         routeRules: [...]
-    - type: ServiceRegionRoute   # 服务级 failover + globalRef 引用
+    - type: ServiceRegionRoute   # 服务级 failover + clusterRef 引用
       config:
-        globalRef:
+        clusterRef:
           name: global-region-conf
           namespace: edgion-system
         regions: [...]
@@ -49,22 +49,22 @@ spec:
 
 | 变体 | 用途 |
 |------|------|
-| `GlobalRegionRoute` | 全局拓扑 + 路由规则 + matchMap（运维/Center 管理） |
-| `ServiceRegionRoute` | 服务级 failover + globalRef 引用（管理员预建） |
+| `ClusterRegionRoute` | 集群拓扑 + 路由规则 + matchMap（运维/Center 管理） |
+| `ServiceRegionRoute` | 服务级 failover + clusterRef 引用（管理员预建） |
 
 ## RegionRoute 两层架构
 
 ```
-GlobalRegionRoute PluginMetaData ←── ServiceRegionRoute PluginMetaData
-│ myRegion                          │ globalRef → GlobalRegionRoute PluginMetaData
-│ regions（完整拓扑）                │ regions（per-region failoverTo 覆盖）
-│ keyGet                            │
-│ hashCalc                          │
-│ routeRules                        │
-│ routeByKeyConfMatch（matchMap）     │
+ClusterRegionRoute PluginMetaData ←── ServiceRegionRoute PluginMetaData
+│ myRegion                           │ clusterRef → ClusterRegionRoute PluginMetaData
+│ regions（完整拓扑）                 │ regions（per-region failoverTo 覆盖）
+│ keyGet                             │
+│ hashCalc                           │
+│ routeRules                         │
+│ routeByKeyConfMatch（matchMap）      │
 │ （无 baseInfo 包装，无 autoFailover）│
-└────────────────────────────────── EdgionPlugins.serviceRegionRouteRef ──┘
-                                    （RegionRoute plugin，只有一个 ref）
+└─────────────────────────────────── EdgionPlugins.serviceRegionRouteRef ──┘
+                                     （RegionRoute plugin，只有一个 ref）
 ```
 
 ### 解析链（Gateway 请求时实时查询）
@@ -72,13 +72,13 @@ GlobalRegionRoute PluginMetaData ←── ServiceRegionRoute PluginMetaData
 ```
 EP.serviceRegionRouteRef
   → ServiceRegionRoute PluginMetaData（名称在 EP 命名空间下查找）
-    → ServiceRegionRoute PluginMetaData.globalRef
-      → GlobalRegionRoute PluginMetaData（namespace/name）
+    → ServiceRegionRoute PluginMetaData.clusterRef
+      → ClusterRegionRoute PluginMetaData（namespace/name）
 ```
 
 Gateway 在请求时从全局 `PluginMetaDataGatewayStore`（ArcSwap + pre-indexed typed maps）中实时解析此链，无锁、零克隆读取。配置**不**由 Controller 预复制进 EP，而是 Gateway 按需查询。
 
-### GlobalRegionRoute PluginMetaData（全局配置）
+### ClusterRegionRoute PluginMetaData（集群配置）
 
 由 Center/运维预建，所有 RegionRoute 共享。**不含 `baseInfo` 包装**，所有字段直接位于 `config` 下，也不含 `autoFailover`（已移除）。
 
@@ -90,7 +90,7 @@ metadata:
   namespace: edgion-system
 spec:
   plugins:
-    - type: GlobalRegionRoute
+    - type: ClusterRegionRoute
       config:
         myRegion: "virginia"
         regions:
@@ -116,7 +116,7 @@ spec:
 
 ### ServiceRegionRoute PluginMetaData（业务配置）
 
-**必须由管理员预先创建**，Controller 不会自动生成。包含 `globalRef` 指向对应的 GlobalRegionRoute PluginMetaData。
+**必须由管理员预先创建**，Controller 不会自动生成。包含 `clusterRef` 指向对应的 ClusterRegionRoute PluginMetaData。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -128,7 +128,7 @@ spec:
   plugins:
     - type: ServiceRegionRoute
       config:
-        globalRef:
+        clusterRef:
           name: global-region-conf
           namespace: edgion-system
         regions:
@@ -152,15 +152,15 @@ EdgionPlugins 中的 `RegionRouteConfig` 只有 `serviceRegionRouteRef` 一个�
 
 Gateway 不缓存解析结果，每次请求通过 `PluginMetaDataGatewayStore` 实时走完引用链：
 
-- **存储结构**：ArcSwap 持有 pre-indexed typed maps（`GlobalRegionRouteMap`、`ServiceRegionRouteMap`），key 为 `"namespace/name"`
-- **查找**：`get_global_region_route(ns, name)` / `get_service_region_route(ns, name)` — ArcSwap load + HashMap get，零克隆
+- **存储结构**：ArcSwap 持有 pre-indexed typed maps（`ClusterRegionRouteMap`、`ServiceRegionRouteMap`），key 为 `"namespace/name"`
+- **查找**：`get_cluster_region_route(ns, name)` / `get_service_region_route(ns, name)` — ArcSwap load + HashMap get，零克隆
 - **更新**：ConfHandler 收到增量时重建 typed maps 并 ArcSwap store，读路径无锁
 
 ### 合并优先级（Gateway 最终配置）
 
 | 优先级 | 来源 | 说明 |
 |--------|------|------|
-| 1 | GlobalRegionRoute PluginMetaData 全部配置 | `regions`, `keyGet`, `hashCalc`, `routeRules`, `matchMap` |
+| 1 | ClusterRegionRoute PluginMetaData 全部配置 | `regions`, `keyGet`, `hashCalc`, `routeRules`, `matchMap` |
 | 2 | ServiceRegionRoute PluginMetaData `regions[].failoverTo` | 设置 `region.failover_to`（服务级覆盖） |
 
 > `autoFailover` 已从系统中完全移除：DNS 健康探测、RegionHealthTable、probe_loop 等全部删除。仅剩静态 `failoverTo` 重定向。
@@ -169,17 +169,17 @@ Gateway 不缓存解析结果，每次请求通过 `PluginMetaDataGatewayStore` 
 
 | 操作 | 目标 | 端点 |
 |------|------|------|
-| 全局 region failover（静态） | GlobalRegionRoute PluginMetaData `regions[].failoverTo` | `POST /api/v1/center/global-region-pms/failover` |
+| 集群 region failover（静态） | ClusterRegionRoute PluginMetaData `regions[].failoverTo` | `POST /api/v1/center/cluster-region-pms/failover` |
 | 服务级 failover | ServiceRegionRoute PluginMetaData `regions[].failoverTo` | `POST /api/v1/center/service-region-pms/failover` |
-| 全局 matchMap | GlobalRegionRoute PluginMetaData `routeByKeyConfMatch.matchMap` | 通过 proxy PUT PluginMetaData |
+| 集群 matchMap | ClusterRegionRoute PluginMetaData `routeByKeyConfMatch.matchMap` | 通过 proxy PUT PluginMetaData |
 
 ### Controller API
 
 | 端点 | 说明 |
 |------|------|
-| `GET /api/v1/global-region-pms` | 列出所有 GlobalRegionRoute PluginMetaData |
+| `GET /api/v1/cluster-region-pms` | 列出所有 ClusterRegionRoute PluginMetaData |
 | `GET /api/v1/service-region-pms` | 列出所有 ServiceRegionRoute PluginMetaData |
-| `POST /api/v1/global-region-pms/failover` | 修改 Global PM 中某 region 的 failoverTo |
+| `POST /api/v1/cluster-region-pms/failover` | 修改 Cluster PM 中某 region 的 failoverTo |
 | `POST /api/v1/service-region-pms/failover` | 修改 Service PM 中某 region 的 failoverTo |
 
 ## Controller 侧处理
@@ -187,7 +187,7 @@ Gateway 不缓存解析结果，每次请求通过 `PluginMetaDataGatewayStore` 
 ### parse
 
 - 更新 `PluginMetaDataStore`（供 EdgionPlugins handler 验证时查找）
-- 更新 `RegionRouteGlobalTable`（GlobalRegionRoute 变体）或 `RegionRouteServiceTable`（ServiceRegionRoute 变体）
+- 更新 `RegionRouteClusterTable`（ClusterRegionRoute 变体）或 `RegionRouteServiceTable`（ServiceRegionRoute 变体）
 
 ### on_change
 
@@ -196,7 +196,7 @@ Gateway 不缓存解析结果，每次请求通过 `PluginMetaDataGatewayStore` 
 ### on_delete
 
 - 从 `PluginMetaDataStore` 移除
-- 从 `RegionRouteGlobalTable` / `RegionRouteServiceTable` 移除
+- 从 `RegionRouteClusterTable` / `RegionRouteServiceTable` 移除
 - Requeue 依赖资源
 
 ## EdgionPlugins 侧验证逻辑
@@ -205,7 +205,7 @@ Controller **不会**将路由配置复制进 EdgionPlugins，也**不会**自�
 
 1. 检查 `serviceRegionRouteRef` 是否设置（未设置则在 `validation_error` 中写入错误）
 2. 从 `PluginMetaDataStore` 查找 ServiceRegionRoute PluginMetaData（未找到则写入 `validation_error`）
-3. 检查找到的 PluginMetaData 是否包含 `ServiceRegionRoute` 变体，以及其 `globalRef` 是否存在
+3. 检查找到的 PluginMetaData 是否包含 `ServiceRegionRoute` 变体，以及其 `clusterRef` 是否存在
 
 `validation_error` 是 `RegionRouteConfig` 上的 `#[serde(skip)]` 字段，仅在 Controller 内存中存在，不写入 K8s 资源。错误会体现在 `EdgionPlugins.status.conditions[Accepted]` 中。
 
@@ -215,6 +215,6 @@ Controller **不会**将路由配置复制进 EdgionPlugins，也**不会**自�
 
 | 关联方向 | 目标资源 | 关联机制 | 说明 |
 |---------|---------|---------|------|
-| ServiceRegionRoute PluginMetaData → GlobalRegionRoute PluginMetaData | PluginMetaData | `globalRef` 字段 | Service PluginMetaData 链接全局 PluginMetaData |
+| ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData | PluginMetaData | `clusterRef` 字段 | Service PluginMetaData 链接集群 PluginMetaData |
 | PluginMetaData ← EdgionPlugins | EdgionPlugins | `serviceRegionRouteRef` | EP 引用 ServiceRegionRoute PluginMetaData |
 | PluginMetaData → EdgionPlugins | EdgionPlugins | `plugin_metadata_refs` | PluginMetaData 变更触发 EP requeue |

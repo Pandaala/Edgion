@@ -606,7 +606,19 @@ get_suites_to_load() {
                             fi
                         done
                         
-                        if ! $has_deep_subdir; then
+                        if $has_deep_subdir; then
+                            # Also add the parent suite if it has YAML files directly
+                            local has_yaml=false
+                            for f in "$subdir"/*.yaml "$subdir"/*.yml; do
+                                if [ -f "$f" ]; then
+                                    has_yaml=true
+                                    break
+                                fi
+                            done
+                            if $has_yaml; then
+                                suites="$suites ${resource_name}/${subdir_name}"
+                            fi
+                        else
                             suites="$suites ${resource_name}/${subdir_name}"
                         fi
                     fi

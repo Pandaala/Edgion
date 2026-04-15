@@ -1,10 +1,10 @@
 // PluginMetaDataManagedRegionRoute Integration Test Suite
 //
 // Tests the new PluginMetaData-managed architecture where ServiceRegionRoute PluginMetaDatas are pre-created by administrators.
-// The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.globalRef → GlobalRegionRoute PluginMetaData
+// The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData
 //
 // Required conf files (examples/test/conf/EdgionPlugins/plugin-metadata-managed/):
-//   01_PluginMetaData_pm-managed-global.yaml  — GlobalRegionRoute PluginMetaData (shared by both tests)
+//   01_PluginMetaData_pm-managed-global.yaml  — ClusterRegionRoute PluginMetaData (shared by both tests)
 //   01_PluginMetaData_pm-managed.yaml          — ServiceRegionRoute PluginMetaData for pm-managed test
 //   01_PluginMetaData_pm-validated.yaml        — ServiceRegionRoute PluginMetaData for pm-validated test
 //   01_EdgionPlugins_pm-managed.yaml           — EdgionPlugins referencing pm-managed ServiceRegionRoute PluginMetaData
@@ -13,9 +13,9 @@
 //
 // Scenarios:
 //   1. service_pm_exists: Verify that the pre-created ServiceRegionRoute PluginMetaData "pm-managed" exists
-//      with correct globalRef and regions via the configserver API.
+//      with correct clusterRef and regions via the configserver API.
 //   2. ep_resolves_pm_chain: Verify that EdgionPlugins "pm-managed" is processed successfully
-//      (Accepted condition) — the PluginMetaData chain (EP → ServiceRegionRoute PluginMetaData → GlobalRegionRoute PluginMetaData) resolves correctly.
+//      (Accepted condition) — the PluginMetaData chain (EP → ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData) resolves correctly.
 //   3. pm_validated_accepted: Verify that EdgionPlugins "pm-validated" is also accepted
 //      when its pre-created ServiceRegionRoute PluginMetaData is present.
 
@@ -44,11 +44,11 @@ impl PluginMetaDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that the pre-created ServiceRegionRoute PluginMetaData "pm-managed" exists with the correct
-    /// globalRef and regions. Administrators must create this PluginMetaData before the EP is applied.
+    /// clusterRef and regions. Administrators must create this PluginMetaData before the EP is applied.
     fn service_pm_exists() -> TestCase {
         TestCase::new(
             "service_pm_exists",
-            "Pre-created ServiceRegionRoute PM 'pm-managed' exists with correct globalRef and regions",
+            "Pre-created ServiceRegionRoute PM 'pm-managed' exists with correct clusterRef and regions",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -76,22 +76,22 @@ impl PluginMetaDataManagedTestSuite {
                                     let md_type = metadata["type"].as_str().unwrap_or("");
                                     if md_type == "ServiceRegionRoute" {
                                         let config = &metadata["config"];
-                                        let global_ref = &config["globalRef"];
-                                        let global_name = global_ref["name"].as_str().unwrap_or("");
-                                        let global_ns = global_ref["namespace"].as_str().unwrap_or("");
+                                        let cluster_ref = &config["clusterRef"];
+                                        let cluster_name = cluster_ref["name"].as_str().unwrap_or("");
+                                        let cluster_ns = cluster_ref["namespace"].as_str().unwrap_or("");
                                         let regions = &config["regions"];
                                         let has_regions = regions.as_array().map(|r| !r.is_empty()).unwrap_or(false);
 
-                                        if global_name == "pm-managed-global"
-                                            && global_ns == PM_MANAGED_NS
+                                        if cluster_name == "pm-managed-global"
+                                            && cluster_ns == PM_MANAGED_NS
                                             && has_regions
                                         {
                                             found = true;
                                             break;
                                         } else {
                                             last_err = format!(
-                                                    "ServiceRegionRoute found but globalRef or regions mismatch: globalRef.name={}, globalRef.namespace={}, has_regions={}",
-                                                    global_name, global_ns, has_regions
+                                                    "ServiceRegionRoute found but clusterRef or regions mismatch: clusterRef.name={}, clusterRef.namespace={}, has_regions={}",
+                                                    cluster_name, cluster_ns, has_regions
                                                 );
                                         }
                                     } else {
@@ -122,7 +122,7 @@ impl PluginMetaDataManagedTestSuite {
                     if found {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "ServiceRegionRoute PM 'pm-managed' exists with correct globalRef and regions".to_string(),
+                            "ServiceRegionRoute PM 'pm-managed' exists with correct clusterRef and regions".to_string(),
                         )
                     } else {
                         TestResult::failed(
@@ -143,12 +143,12 @@ impl PluginMetaDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that EdgionPlugins "pm-managed" is processed successfully (Accepted condition).
-    /// The PluginMetaData chain (EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.globalRef → GlobalRegionRoute PluginMetaData)
+    /// The PluginMetaData chain (EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData)
     /// must resolve correctly for the EP to be accepted.
     fn ep_resolves_pm_chain() -> TestCase {
         TestCase::new(
             "ep_resolves_pm_chain",
-            "EdgionPlugins 'pm-managed' is Accepted after resolving the Service PM → Global PM chain",
+            "EdgionPlugins 'pm-managed' is Accepted after resolving the Service PM → Cluster PM chain",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -237,7 +237,7 @@ impl PluginMetaDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that EdgionPlugins "pm-validated" is also accepted when its pre-created
-    /// ServiceRegionRoute PluginMetaData "pm-validated" is present and references the shared GlobalRegionRoute PluginMetaData.
+    /// ServiceRegionRoute PluginMetaData "pm-validated" is present and references the shared ClusterRegionRoute PluginMetaData.
     fn pm_validated_accepted() -> TestCase {
         TestCase::new(
             "pm_validated_accepted",

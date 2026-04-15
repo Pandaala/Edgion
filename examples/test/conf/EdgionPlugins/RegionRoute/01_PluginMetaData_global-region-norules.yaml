@@ -1,4 +1,4 @@
-# GlobalRegionRoute PluginMetaData for region-route-norules
+# ClusterRegionRoute PluginMetaData for region-route-norules
 #
 # No routeRules configured → plugin is always a no-op (pass-through).
 # The norules test verifies that a RegionRoute plugin with no routeRules
@@ -10,7 +10,7 @@ metadata:
   namespace: edgion-default
 spec:
   metadata:
-    type: GlobalRegionRoute
+    type: ClusterRegionRoute
     config:
         regions:
           - name: virginia

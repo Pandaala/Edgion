@@ -47,7 +47,7 @@ spec:
         serviceRegionRouteRef: my-svc-pm
 ```
 
-完整配置参数（GlobalRegionRoute PluginMetaData、ServiceRegionRoute PluginMetaData、`routeRules` 类型等）请见独立插件页。
+完整配置参数（ClusterRegionRoute PluginMetaData、ServiceRegionRoute PluginMetaData、`routeRules` 类型等）请见独立插件页。
 
 ## 相关文档
 

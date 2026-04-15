@@ -1,13 +1,13 @@
 //! Region Route PluginMetaData API handlers
 //!
-//! GET /api/v1/global-region-pms
-//!   Lists all GlobalRegionRoute entries from the pre-built table.
+//! GET /api/v1/cluster-region-pms
+//!   Lists all ClusterRegionRoute entries from the pre-built table.
 //!
 //! GET /api/v1/service-region-pms
 //!   Lists all ServiceRegionRoute entries from the pre-built table.
 //!
-//! POST /api/v1/global-region-pms/failover
-//!   Modifies a single region's failoverTo in a GlobalRegionRoute PluginMetaData.
+//! POST /api/v1/cluster-region-pms/failover
+//!   Modifies a single region's failoverTo in a ClusterRegionRoute PluginMetaData.
 //!
 //! POST /api/v1/service-region-pms/failover
 //!   Modifies a single region's failoverTo in a ServiceRegionRoute PluginMetaData.
@@ -20,11 +20,11 @@ use crate::core::common::api::ListResponse;
 
 use super::types::AdminState;
 
-// ============= GlobalRegionRoute PluginMetaData Types =============
+// ============= ClusterRegionRoute PluginMetaData Types =============
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GlobalRegionPluginMetadataEntry {
+pub struct ClusterRegionPluginMetadataEntry {
     pub namespace: String,
     pub name: String,
     pub my_region: String,
@@ -47,7 +47,7 @@ pub struct ServiceRegionPluginMetadataEntry {
     pub namespace: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub global_ref: Option<serde_json::Value>,
+    pub cluster_ref: Option<serde_json::Value>,
     pub regions: serde_json::Value,
     pub ref_plugins: serde_json::Value,
 }
@@ -66,18 +66,18 @@ pub struct PluginMetadataFailoverRequest {
 
 // ============= Handlers =============
 
-/// `GET /api/v1/global-region-pms`
+/// `GET /api/v1/cluster-region-pms`
 ///
-/// Lists all GlobalRegionRoute PluginMetaData entries from the pre-built table.
-pub async fn list_global_region_plugin_metadata(
+/// Lists all ClusterRegionRoute PluginMetaData entries from the pre-built table.
+pub async fn list_cluster_region_plugin_metadata(
     State(state): State<Arc<AdminState>>,
-) -> Result<Json<ListResponse<GlobalRegionPluginMetadataEntry>>, StatusCode> {
+) -> Result<Json<ListResponse<ClusterRegionPluginMetadataEntry>>, StatusCode> {
     let runtime = state.runtime();
-    let entries = runtime.global_region_route_table.all();
+    let entries = runtime.cluster_region_route_table.all();
 
-    let mut result: Vec<GlobalRegionPluginMetadataEntry> = entries
+    let mut result: Vec<ClusterRegionPluginMetadataEntry> = entries
         .into_iter()
-        .map(|e| GlobalRegionPluginMetadataEntry {
+        .map(|e| ClusterRegionPluginMetadataEntry {
             namespace: e.pm_namespace,
             name: e.pm_name,
             my_region: e.my_region,
@@ -111,7 +111,7 @@ pub async fn list_service_region_plugin_metadata(
         .map(|e| ServiceRegionPluginMetadataEntry {
             namespace: e.pm_namespace,
             name: e.pm_name,
-            global_ref: e.global_pm_ref.as_ref().and_then(|v| serde_json::to_value(v).ok()),
+            cluster_ref: e.cluster_pm_ref.as_ref().and_then(|v| serde_json::to_value(v).ok()),
             regions: serde_json::to_value(&e.regions).unwrap_or_default(),
             ref_plugins: serde_json::to_value(&e.ref_plugins).unwrap_or_default(),
         })
@@ -121,10 +121,10 @@ pub async fn list_service_region_plugin_metadata(
     Ok(Json(ListResponse::success(result)))
 }
 
-/// `POST /api/v1/global-region-pms/failover`
+/// `POST /api/v1/cluster-region-pms/failover`
 ///
-/// Modifies a single region's failoverTo in a local GlobalRegionRoute PluginMetaData.
-pub async fn global_plugin_metadata_failover(
+/// Modifies a single region's failoverTo in a local ClusterRegionRoute PluginMetaData.
+pub async fn cluster_plugin_metadata_failover(
     State(state): State<Arc<AdminState>>,
     Json(body): Json<PluginMetadataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -132,7 +132,7 @@ pub async fn global_plugin_metadata_failover(
         &state,
         &body.namespace,
         &body.name,
-        "GlobalRegionRoute",
+        "ClusterRegionRoute",
         &body.region_name,
         &body.failover_to,
     )
@@ -140,7 +140,7 @@ pub async fn global_plugin_metadata_failover(
     {
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "modified": true }))),
         Ok(false) => Ok(Json(
-            serde_json::json!({ "success": false, "error": "no matching region found" }),
+            serde_json::json!({ "success": false, "error": "no matching cluster found" }),
         )),
         Err(e) => Ok(Json(serde_json::json!({ "success": false, "error": e }))),
     }
@@ -165,7 +165,7 @@ pub async fn service_plugin_metadata_failover(
     {
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "modified": true }))),
         Ok(false) => Ok(Json(
-            serde_json::json!({ "success": false, "error": "no matching region found" }),
+            serde_json::json!({ "success": false, "error": "no matching cluster found" }),
         )),
         Err(e) => Ok(Json(serde_json::json!({ "success": false, "error": e }))),
     }
@@ -192,26 +192,30 @@ async fn patch_plugin_metadata_failover(
 
     let mut resource = resource;
 
-    // Find the plugin entry and modify the region's failoverTo
+    // Find the plugin entry and modify the region's failoverTo.
+    // Support both storage formats:
+    //   - spec.plugins[].type/config (processed format)
+    //   - spec.metadata.type/config  (raw file format)
     let mut modified = false;
+
+    // Try processed format: spec.plugins[]
     if let Some(plugins) = resource.pointer_mut("/spec/plugins").and_then(|p| p.as_array_mut()) {
         for plugin in plugins.iter_mut() {
             if plugin.get("type").and_then(|t| t.as_str()) != Some(plugin_type) {
                 continue;
             }
             if let Some(regions) = plugin.pointer_mut("/config/regions").and_then(|r| r.as_array_mut()) {
-                for region in regions.iter_mut() {
-                    if region.get("name").and_then(|n| n.as_str()) != Some(region_name) {
-                        continue;
-                    }
-                    if failover_to.is_empty() {
-                        if let Some(obj) = region.as_object_mut() {
-                            obj.remove("failoverTo");
-                        }
-                    } else {
-                        region["failoverTo"] = serde_json::Value::String(failover_to.to_string());
-                    }
-                    modified = true;
+                modified = patch_region_failover(regions, region_name, failover_to);
+            }
+        }
+    }
+
+    // Try raw file format: spec.metadata
+    if !modified {
+        if let Some(metadata) = resource.pointer_mut("/spec/metadata") {
+            if metadata.get("type").and_then(|t| t.as_str()) == Some(plugin_type) {
+                if let Some(regions) = metadata.pointer_mut("/config/regions").and_then(|r| r.as_array_mut()) {
+                    modified = patch_region_failover(regions, region_name, failover_to);
                 }
             }
         }
@@ -234,4 +238,27 @@ async fn patch_plugin_metadata_failover(
     .map_err(|e| format!("update_one failed: {}", e))?;
 
     Ok(true)
+}
+
+/// Modify a single region's failoverTo in a regions array. Returns true if modified.
+fn patch_region_failover(
+    regions: &mut Vec<serde_json::Value>,
+    region_name: &str,
+    failover_to: &str,
+) -> bool {
+    let mut modified = false;
+    for region in regions.iter_mut() {
+        if region.get("name").and_then(|n| n.as_str()) != Some(region_name) {
+            continue;
+        }
+        if failover_to.is_empty() {
+            if let Some(obj) = region.as_object_mut() {
+                obj.remove("failoverTo");
+            }
+        } else {
+            region["failoverTo"] = serde_json::Value::String(failover_to.to_string());
+        }
+        modified = true;
+    }
+    modified
 }

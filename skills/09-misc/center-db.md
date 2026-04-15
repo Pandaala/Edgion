@@ -71,10 +71,10 @@ database:
 
 1. 读取所有已注册 controller（从内存 registry，非 DB）
 2. **批量 upsert** 所有 controller 记录到 `controllers` 表（含当前 online/offline 状态）
-3. 对 **online** controller 调用 `GET /api/v1/global-region-pms`，获取所有 GlobalRegionRoute PluginMetaData 列表
+3. 对 **online** controller 调用 `GET /api/v1/cluster-region-pms`，获取所有 ClusterRegionRoute PluginMetaData 列表
 4. 并发拉取详情，批量 upsert 到 `region_route_cache`
 
-> 注：步骤 3-4 在 RegionRoute PM 重构后改用新的 `global-region-pms` / `service-region-pms` 端点，旧的 `region-routes` 端点已删除。
+> 注：步骤 3-4 在 RegionRoute PM 重构后改用新的 `cluster-region-pms` / `service-region-pms` 端点，旧的 `region-routes` 端点已删除。
 
 **为什么只同步 online controller：**
 - Offline controller 无法响应 HTTP，不必尝试
@@ -85,9 +85,9 @@ database:
 
 ## 离线回退（`api/region_pm_handlers.rs`）
 
-`GET /api/v1/center/global-region-pms` 的处理逻辑：
+`GET /api/v1/center/cluster-region-pms` 的处理逻辑：
 
-1. 对所有 **online** controller：并发拉取 `GET /api/v1/global-region-pms`
+1. 对所有 **online** controller：并发拉取 `GET /api/v1/cluster-region-pms`
 2. 对 **offline** controller 或在线但拉取失败的 controller：从 `region_route_cache` 读历史数据
 3. 合并响应：条目含 `is_cached: bool` 和 `last_synced_at: Option<i64>` 标识数据来源
 

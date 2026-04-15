@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::plugin_metadata::{
-    GlobalRegionRouteConfig, IpListData, KeyListData, MetaDataEntry, PluginMetaData, ServiceRegionRouteConfig,
+    ClusterRegionRouteConfig, IpListData, KeyListData, MetaDataEntry, PluginMetaData, ServiceRegionRouteConfig,
 };
 
 static GLOBAL_PLUGIN_METADATA_STORE: LazyLock<Arc<PluginMetaDataGatewayStore>> =
@@ -34,14 +34,14 @@ pub fn create_plugin_metadata_handler() -> Box<dyn ConfHandler<PluginMetaData> +
 type RawMap = HashMap<String, Arc<PluginMetaData>>;
 
 /// Type-indexed config maps. Key: same "namespace/name" as the parent PluginMetaData.
-type GlobalRegionRouteConfigMap = HashMap<String, Arc<GlobalRegionRouteConfig>>;
+type ClusterRegionRouteConfigMap = HashMap<String, Arc<ClusterRegionRouteConfig>>;
 type ServiceRegionRouteConfigMap = HashMap<String, Arc<ServiceRegionRouteConfig>>;
 type KeyListConfigMap = HashMap<String, Arc<KeyListData>>;
 type IpListConfigMap = HashMap<String, Arc<IpListData>>;
 
 /// All typed indexes bundled into a single struct so they can be swapped atomically.
 struct TypedIndexes {
-    global_region_route_configs: GlobalRegionRouteConfigMap,
+    cluster_region_route_configs: ClusterRegionRouteConfigMap,
     service_region_route_configs: ServiceRegionRouteConfigMap,
     key_list_configs: KeyListConfigMap,
     ip_list_configs: IpListConfigMap,
@@ -68,7 +68,7 @@ impl PluginMetaDataGatewayStore {
         Self {
             raw: ArcSwap::from_pointee(HashMap::new()),
             indexes: ArcSwap::from_pointee(TypedIndexes {
-                global_region_route_configs: HashMap::new(),
+                cluster_region_route_configs: HashMap::new(),
                 service_region_route_configs: HashMap::new(),
                 key_list_configs: HashMap::new(),
                 ip_list_configs: HashMap::new(),
@@ -78,10 +78,10 @@ impl PluginMetaDataGatewayStore {
 
     // ── Typed getters (zero-clone, returns Arc) ─────────────────────────────
 
-    pub fn get_global_region_route_config(&self, namespace: &str, name: &str) -> Option<Arc<GlobalRegionRouteConfig>> {
+    pub fn get_cluster_region_route_config(&self, namespace: &str, name: &str) -> Option<Arc<ClusterRegionRouteConfig>> {
         let indexes = self.indexes.load();
         indexes
-            .global_region_route_configs
+            .cluster_region_route_configs
             .get(&format!("{}/{}", namespace, name))
             .cloned()
     }
@@ -116,9 +116,9 @@ impl PluginMetaDataGatewayStore {
         indexes.service_region_route_configs.get(key).cloned()
     }
 
-    pub fn get_global_region_route_config_by_key(&self, key: &str) -> Option<Arc<GlobalRegionRouteConfig>> {
+    pub fn get_cluster_region_route_config_by_key(&self, key: &str) -> Option<Arc<ClusterRegionRouteConfig>> {
         let indexes = self.indexes.load();
-        indexes.global_region_route_configs.get(key).cloned()
+        indexes.cluster_region_route_configs.get(key).cloned()
     }
 
     // ── Index rebuild ───────────────────────────────────────────────────────
@@ -126,14 +126,14 @@ impl PluginMetaDataGatewayStore {
     /// Rebuild all typed indexes from the raw map.
     /// Called at conf change time (low frequency).
     fn rebuild_indexes(&self, raw: &RawMap) {
-        let mut global_rr = GlobalRegionRouteConfigMap::new();
+        let mut global_rr = ClusterRegionRouteConfigMap::new();
         let mut service_rr = ServiceRegionRouteConfigMap::new();
         let mut key_lists = KeyListConfigMap::new();
         let mut ip_lists = IpListConfigMap::new();
 
         for (key, pm) in raw {
             match &pm.spec.metadata {
-                MetaDataEntry::GlobalRegionRoute(cfg) => {
+                MetaDataEntry::ClusterRegionRoute(cfg) => {
                     global_rr.insert(key.clone(), Arc::new(cfg.clone()));
                 }
                 MetaDataEntry::ServiceRegionRoute(cfg) => {
@@ -149,7 +149,7 @@ impl PluginMetaDataGatewayStore {
         }
 
         self.indexes.store(Arc::new(TypedIndexes {
-            global_region_route_configs: global_rr,
+            cluster_region_route_configs: global_rr,
             service_region_route_configs: service_rr,
             key_list_configs: key_lists,
             ip_list_configs: ip_lists,

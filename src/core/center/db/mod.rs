@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS controllers (
 -- Drop old table (idempotent, safe on both old and new databases)
 DROP TABLE IF EXISTS region_route_cache;
 
-CREATE TABLE IF NOT EXISTS global_plugin_metadata_cache (
+CREATE TABLE IF NOT EXISTS cluster_plugin_metadata_cache (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     controller_id TEXT NOT NULL,
     pm_namespace TEXT NOT NULL,
@@ -142,15 +142,15 @@ impl CenterDb {
         Ok(())
     }
 
-    /// Upsert a GlobalRegionRoute PluginMetaData cache entry.
-    pub fn upsert_global_plugin_metadata_cache(
+    /// Upsert a ClusterRegionRoute PluginMetaData cache entry.
+    pub fn upsert_cluster_plugin_metadata_cache(
         &self,
         ctrl_id: &str,
         pm_ns: &str,
         pm_name: &str,
         entries_json: &str,
     ) -> Result<(), rusqlite::Error> {
-        self.upsert_plugin_metadata_cache("global_plugin_metadata_cache", ctrl_id, pm_ns, pm_name, entries_json)
+        self.upsert_plugin_metadata_cache("cluster_plugin_metadata_cache", ctrl_id, pm_ns, pm_name, entries_json)
     }
 
     /// Upsert a ServiceRegionRoute PluginMetaData cache entry.
@@ -168,7 +168,7 @@ impl CenterDb {
     pub fn delete_controller(&self, id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
         conn.execute(
-            "DELETE FROM global_plugin_metadata_cache WHERE controller_id = ?1",
+            "DELETE FROM cluster_plugin_metadata_cache WHERE controller_id = ?1",
             rusqlite::params![id],
         )?;
         conn.execute(
@@ -185,7 +185,7 @@ impl CenterDb {
     /// Delete all PluginMetaData cache rows.
     pub fn clear_plugin_metadata_cache(&self) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
-        conn.execute("DELETE FROM global_plugin_metadata_cache", [])?;
+        conn.execute("DELETE FROM cluster_plugin_metadata_cache", [])?;
         conn.execute("DELETE FROM service_plugin_metadata_cache", [])?;
         Ok(())
     }

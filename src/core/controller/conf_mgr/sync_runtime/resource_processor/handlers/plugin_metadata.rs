@@ -9,7 +9,7 @@
 //!   pick up updated failover / match_map from the PluginMetaData.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
-    GlobalRegionRouteEntry, ServiceRegionRouteEntry,
+    ClusterRegionRouteEntry, ServiceRegionRouteEntry,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
@@ -38,10 +38,10 @@ fn update_region_route_tables(pm: &PluginMetaData, ctx: &HandlerContext) {
     let pm_key = PluginMetaDataStore::make_key(Some(ns), name);
 
     match &pm.spec.metadata {
-        MetaDataEntry::GlobalRegionRoute(cfg) => {
-            ctx.runtime().global_region_route_table.upsert(
+        MetaDataEntry::ClusterRegionRoute(cfg) => {
+            ctx.runtime().cluster_region_route_table.upsert(
                 pm_key,
-                GlobalRegionRouteEntry {
+                ClusterRegionRouteEntry {
                     pm_namespace: ns.to_string(),
                     pm_name: name.to_string(),
                     my_region: cfg.my_region.clone(),
@@ -60,7 +60,7 @@ fn update_region_route_tables(pm: &PluginMetaData, ctx: &HandlerContext) {
                 ServiceRegionRouteEntry {
                     pm_namespace: ns.to_string(),
                     pm_name: name.to_string(),
-                    global_pm_ref: cfg.global_ref.clone(),
+                    cluster_pm_ref: cfg.cluster_ref.clone(),
                     regions: cfg.regions.clone(),
                     ref_plugins: vec![],
                 },
@@ -78,7 +78,7 @@ fn remove_from_region_route_tables(pm: &PluginMetaData, ctx: &HandlerContext) {
         pm.metadata.namespace.as_deref(),
         pm.metadata.name.as_deref().unwrap_or(""),
     );
-    ctx.runtime().global_region_route_table.remove(&pm_key);
+    ctx.runtime().cluster_region_route_table.remove(&pm_key);
     ctx.runtime().service_region_route_table.remove(&pm_key);
 }
 

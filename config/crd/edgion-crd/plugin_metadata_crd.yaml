@@ -92,9 +92,9 @@ spec:
                   properties:
                     type:
                       type: string
-                      description: "Plugin type identifier (GlobalRegionRoute or ServiceRegionRoute)"
+                      description: "Plugin type identifier (ClusterRegionRoute or ServiceRegionRoute)"
                       enum:
-                        - GlobalRegionRoute
+                        - ClusterRegionRoute
                         - ServiceRegionRoute
                     config:
                       type: object
@@ -102,7 +102,7 @@ spec:
                       properties:
                         regions:
                           type: array
-                          description: "Region definitions (GlobalRegionRoute) or per-region entries (ServiceRegionRoute)."
+                          description: "Region definitions (ClusterRegionRoute) or per-region entries (ServiceRegionRoute)."
                           items:
                             type: object
                             required:
@@ -113,7 +113,7 @@ spec:
                                 description: "Region identifier"
                               hashRange:
                                 type: array
-                                description: "Hash range [low, high], closed interval (GlobalRegionRoute only)"
+                                description: "Hash range [low, high], closed interval (ClusterRegionRoute only)"
                                 items:
                                   type: integer
                                   format: int32
@@ -121,29 +121,29 @@ spec:
                                 maxItems: 2
                               backendEndpoint:
                                 type: string
-                                description: "Target backend endpoint: host or host:port (GlobalRegionRoute only)"
+                                description: "Target backend endpoint: host or host:port (ClusterRegionRoute only)"
                               tls:
                                 type: boolean
-                                description: "Whether the upstream connection uses TLS (GlobalRegionRoute only)"
+                                description: "Whether the upstream connection uses TLS (ClusterRegionRoute only)"
                               failoverTo:
                                 type: string
                                 description: "Failover target region name"
                         myRegion:
                           type: string
-                          description: "Name of this gateway instance's own region (GlobalRegionRoute only)"
-                        globalRef:
+                          description: "Name of this gateway instance's own region (ClusterRegionRoute only)"
+                        clusterRef:
                           type: object
-                          description: "Reference to the GlobalRegionRoute PM (ServiceRegionRoute only)"
+                          description: "Reference to the ClusterRegionRoute PM (ServiceRegionRoute only)"
                           required:
                             - namespace
                             - name
                           properties:
                             namespace:
                               type: string
-                              description: "Namespace of the GlobalRegionRoute PM"
+                              description: "Namespace of the ClusterRegionRoute PM"
                             name:
                               type: string
-                              description: "Name of the GlobalRegionRoute PM"
+                              description: "Name of the ClusterRegionRoute PM"
                         routeByKeyConfMatch:
                           type: object
                           description: "RouteByKeyConfMatch configuration with bypass support"
@@ -153,9 +153,9 @@ spec:
                               description: "Map of key value to region name"
                               additionalProperties:
                                 type: string
-                            bypassGlobalKeys:
+                            bypassClusterKeys:
                               type: array
-                              description: "Keys that bypass global matchMap override (service PM only)"
+                              description: "Keys that bypass cluster matchMap override (service PM only)"
                               items:
                                 type: string
       additionalPrinterColumns:

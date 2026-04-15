@@ -1,4 +1,4 @@
-# GlobalRegionRoute PluginMetaData for region-route-myregion
+# ClusterRegionRoute PluginMetaData for region-route-myregion
 #
 # Three-region topology with myRegion=virginia (local pass-through).
 # europe failoverTo=ohio; ohio failoverTo=virginia.
@@ -17,7 +17,7 @@ metadata:
   namespace: edgion-default
 spec:
   metadata:
-    type: GlobalRegionRoute
+    type: ClusterRegionRoute
     config:
         myRegion: virginia
         regions:

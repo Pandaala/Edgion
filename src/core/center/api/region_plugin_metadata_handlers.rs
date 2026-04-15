@@ -1,13 +1,13 @@
 //! Center aggregation endpoints for RegionRoute PluginMetaData data.
 //!
-//! GET  /api/v1/center/global-region-pms
-//!   Aggregates GlobalRegionRoute PluginMetaData across all online controllers, grouped by (namespace, name).
+//! GET  /api/v1/center/cluster-region-pms
+//!   Aggregates ClusterRegionRoute PluginMetaData across all online controllers, grouped by (namespace, name).
 //!
 //! GET  /api/v1/center/service-region-pms
 //!   Aggregates ServiceRegionRoute PluginMetaData across all online controllers, grouped by (namespace, name).
 //!
-//! POST /api/v1/center/global-region-pms/failover
-//!   Sets failoverTo for a region in a GlobalRegionRoute PluginMetaData on all online controllers.
+//! POST /api/v1/center/cluster-region-pms/failover
+//!   Sets failoverTo for a region in a ClusterRegionRoute PluginMetaData on all online controllers.
 //!
 //! POST /api/v1/center/service-region-pms/failover
 //!   Sets failoverTo for a region in a ServiceRegionRoute PluginMetaData on all online controllers.
@@ -115,12 +115,12 @@ async fn aggregate_plugin_metadata_list(
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// `GET /api/v1/center/global-region-pms`
+/// `GET /api/v1/center/cluster-region-pms`
 ///
-/// Calls every online controller's `GET /api/v1/global-region-pms`, then aggregates
+/// Calls every online controller's `GET /api/v1/cluster-region-pms`, then aggregates
 /// results by `(namespace, name)`, collecting which controllers have each entry.
-pub async fn list_center_global_region_plugin_metadata(State(state): State<ApiState>) -> impl IntoResponse {
-    let items = aggregate_plugin_metadata_list(&state, "/api/v1/global-region-pms", "global-region-pms").await;
+pub async fn list_center_cluster_region_plugin_metadata(State(state): State<ApiState>) -> impl IntoResponse {
+    let items = aggregate_plugin_metadata_list(&state, "/api/v1/cluster-region-pms", "cluster-region-pms").await;
     Json(ListResponse::success(items))
 }
 
@@ -133,13 +133,13 @@ pub async fn list_center_service_region_plugin_metadata(State(state): State<ApiS
     Json(ListResponse::success(items))
 }
 
-/// `POST /api/v1/center/global-region-pms/failover`
+/// `POST /api/v1/center/cluster-region-pms/failover`
 ///
-/// Fans out `POST /api/v1/global-region-pms/failover` to all online controllers
+/// Fans out `POST /api/v1/cluster-region-pms/failover` to all online controllers
 /// with the same request body.
 ///
 /// Response: `{ modified: N, failed: N }`
-pub async fn global_plugin_metadata_failover(
+pub async fn cluster_plugin_metadata_failover(
     State(state): State<ApiState>,
     Json(body): Json<PluginMetadataFailoverRequest>,
 ) -> impl IntoResponse {
@@ -149,7 +149,7 @@ pub async fn global_plugin_metadata_failover(
     };
 
     let (modified, failed) =
-        fan_out_failover(&state, "/api/v1/global-region-pms/failover".to_string(), body_bytes).await;
+        fan_out_failover(&state, "/api/v1/cluster-region-pms/failover".to_string(), body_bytes).await;
 
     Json(ApiResponse::success(serde_json::json!({
         "modified": modified,

@@ -7,7 +7,7 @@
 //! At request time, the plugin resolves the PluginMetaData chain from the global
 //! `PluginMetaDataGatewayStore` (ArcSwap, lock-free):
 //!   EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData
-//!     → globalRef → GlobalRegionRoute PluginMetaData
+//!     → clusterRef → ClusterRegionRoute PluginMetaData
 //!
 //! No config is cached — every request sees the latest PluginMetaData.
 
@@ -20,7 +20,7 @@ use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFi
 use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
-use crate::types::resources::plugin_metadata::{GlobalRegionRouteConfig, ServiceRegionRouteConfig};
+use crate::types::resources::plugin_metadata::{ClusterRegionRouteConfig, ServiceRegionRouteConfig};
 use crate::types::ExternalJumpPreset;
 
 // Hash function
@@ -65,12 +65,12 @@ impl RegionRoute {
         })
     }
 
-    /// Resolve the PluginMetaData chain and return (global_config, service_config).
+    /// Resolve the PluginMetaData chain and return (cluster_config, service_config).
     /// Returns None if any link in the chain is broken.
     fn resolve_config(
         &self,
         log: &mut PluginLog,
-    ) -> Option<(Arc<GlobalRegionRouteConfig>, Arc<ServiceRegionRouteConfig>)> {
+    ) -> Option<(Arc<ClusterRegionRouteConfig>, Arc<ServiceRegionRouteConfig>)> {
         if self.service_ref_name.is_empty() {
             log.push("config invalid, pass; ");
             return None;
@@ -86,7 +86,7 @@ impl RegionRoute {
             }
         };
 
-        let global_ref = match &svc.global_ref {
+        let cluster_ref = match &svc.cluster_ref {
             Some(r) => r,
             None => {
                 log.push("config invalid, pass; ");
@@ -94,9 +94,9 @@ impl RegionRoute {
             }
         };
 
-        let global_ns = global_ref.namespace.as_deref().unwrap_or(&self.ep_namespace);
-        let global_key = format!("{}/{}", global_ns, global_ref.name);
-        let global = match store.get_global_region_route_config_by_key(&global_key) {
+        let cluster_ns = cluster_ref.namespace.as_deref().unwrap_or(&self.ep_namespace);
+        let cluster_key = format!("{}/{}", cluster_ns, cluster_ref.name);
+        let cluster = match store.get_cluster_region_route_config_by_key(&cluster_key) {
             Some(g) => g,
             None => {
                 log.push("config invalid, pass; ");
@@ -104,7 +104,7 @@ impl RegionRoute {
             }
         };
 
-        Some((global, svc))
+        Some((cluster, svc))
     }
 
     // Key extraction
@@ -123,7 +123,7 @@ impl RegionRoute {
         None
     }
 
-    // Region lookup (on borrowed GlobalRegionRouteConfig)
+    // Region lookup (on borrowed ClusterRegionRouteConfig)
     fn lookup_region(regions: &[RegionDef], hash_val: u16) -> Option<(usize, &RegionDef)> {
         regions
             .iter()
@@ -145,7 +145,7 @@ impl RegionRoute {
         svc: &ServiceRegionRouteConfig,
         log: &mut PluginLog,
     ) -> (usize, &'a RegionDef) {
-        // Service override takes priority over global failoverTo
+        // Service override takes priority over cluster failoverTo
         let effective = svc
             .regions
             .iter()
@@ -180,11 +180,11 @@ impl RegionRoute {
         &self,
         session: &mut dyn PluginSession,
         region: &RegionDef,
-        global: &GlobalRegionRouteConfig,
+        cluster: &ClusterRegionRouteConfig,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         // myRegion check: pass through if this is the local region
-        if !global.my_region.is_empty() && global.my_region == region.name {
+        if !cluster.my_region.is_empty() && cluster.my_region == region.name {
             log.push("local, pass; ");
             return PluginRunningResult::GoodNext;
         }
@@ -216,22 +216,22 @@ impl RegionRoute {
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
-        global: &'a GlobalRegionRouteConfig,
+        cluster: &'a ClusterRegionRouteConfig,
     ) -> Option<(usize, &'a RegionDef)> {
-        let modulo = global.hash_calc.as_ref().map(|c| c.modulo).unwrap_or(1000);
+        let modulo = cluster.hash_calc.as_ref().map(|c| c.modulo).unwrap_or(1000);
 
-        if let Some(ref hkg) = global.hash_key_get {
+        if let Some(ref hkg) = cluster.hash_key_get {
             if let Some((raw, src)) = self.extract_first(session, hkg).await {
                 if let Ok(v) = raw.parse::<u16>() {
                     if v < modulo {
                         log.push(&format!("hash_pass={} from:{}; ", v, src.as_log_str()));
-                        return Self::lookup_region(&global.regions, v);
+                        return Self::lookup_region(&cluster.regions, v);
                     }
                 }
             }
         }
 
-        let calc = match global.hash_calc.as_ref() {
+        let calc = match cluster.hash_calc.as_ref() {
             Some(c) => c,
             None => {
                 log.push("no hashCalc, pass; ");
@@ -239,12 +239,12 @@ impl RegionRoute {
             }
         };
 
-        if global.key_get.is_empty() {
+        if cluster.key_get.is_empty() {
             log.push("no keyGet, pass; ");
             return None;
         }
 
-        let (key, src) = match self.extract_first(session, &global.key_get).await {
+        let (key, src) = match self.extract_first(session, &cluster.key_get).await {
             Some(v) => v,
             None => {
                 log.push("key missing, pass; ");
@@ -267,7 +267,7 @@ impl RegionRoute {
             log.push(&format!("wb→{}; ", targets));
         }
 
-        let result = Self::lookup_region(&global.regions, hash_val);
+        let result = Self::lookup_region(&cluster.regions, hash_val);
         if result.is_none() {
             log.push(&format!("hash={} no_range, pass; ", hash_val));
         }
@@ -283,31 +283,31 @@ impl RequestFilter for RegionRoute {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        // Resolve PluginMetaData chain: ServiceRegionRoute → GlobalRegionRoute
-        let (global, svc) = match self.resolve_config(log) {
+        // Resolve PluginMetaData chain: ServiceRegionRoute → ClusterRegionRoute
+        let (cluster, svc) = match self.resolve_config(log) {
             Some(pair) => pair,
             None => return PluginRunningResult::GoodNext,
         };
 
-        // Use global's route_by_key_conf_match.match_map for RouteByKeyConfMatch rules
-        let global_match_map = global
+        // Use cluster's route_by_key_conf_match.match_map for RouteByKeyConfMatch rules
+        let cluster_match_map = cluster
             .route_by_key_conf_match
             .as_ref()
             .filter(|kmc| !kmc.match_map.is_empty())
             .map(|kmc| &kmc.match_map);
 
-        for rule in &global.route_rules {
+        for rule in &cluster.route_rules {
             match rule {
                 RouteRule::RouteByDirectRegion { key_from } => {
                     let (name, src) = match self.extract_first(session, key_from).await {
                         Some(v) => v,
                         None => continue,
                     };
-                    match Self::find_region(&global.regions, &name) {
+                    match Self::find_region(&cluster.regions, &name) {
                         Some((idx, region)) => {
                             log.push(&format!("direct={}(from:{}); ", name, src.as_log_str()));
-                            let (_, region) = Self::apply_redirect(&global.regions, idx, region, &svc, log);
-                            return self.route_to(session, region, &global, log).await;
+                            let (_, region) = Self::apply_redirect(&cluster.regions, idx, region, &svc, log);
+                            return self.route_to(session, region, &cluster, log).await;
                         }
                         None => {
                             log.push(&format!("direct unknown '{}', fallthrough; ", name));
@@ -317,18 +317,18 @@ impl RequestFilter for RegionRoute {
                 }
 
                 RouteRule::RouteByKeyConfMatch { match_map } => {
-                    let (value, src) = match self.extract_first(session, &global.key_get).await {
+                    let (value, src) = match self.extract_first(session, &cluster.key_get).await {
                         Some(v) => v,
                         None => continue,
                     };
-                    // Use global matchMap if available, otherwise inline rule matchMap
-                    let effective_map = global_match_map.unwrap_or(match_map);
+                    // Use cluster matchMap if available, otherwise inline rule matchMap
+                    let effective_map = cluster_match_map.unwrap_or(match_map);
                     match effective_map.get(&value) {
-                        Some(region_name) => match Self::find_region(&global.regions, region_name) {
+                        Some(region_name) => match Self::find_region(&cluster.regions, region_name) {
                             Some((idx, region)) => {
                                 log.push(&format!("match={}→{}; ", src.as_log_str(), region.name));
-                                let (_, region) = Self::apply_redirect(&global.regions, idx, region, &svc, log);
-                                return self.route_to(session, region, &global, log).await;
+                                let (_, region) = Self::apply_redirect(&cluster.regions, idx, region, &svc, log);
+                                return self.route_to(session, region, &cluster, log).await;
                             }
                             None => {
                                 log.push(&format!("match={}→{} unknown; ", src.as_log_str(), region_name));
@@ -342,10 +342,10 @@ impl RequestFilter for RegionRoute {
                     }
                 }
 
-                RouteRule::RouteByHashRange => match self.exec_hash_range(session, log, &global).await {
+                RouteRule::RouteByHashRange => match self.exec_hash_range(session, log, &cluster).await {
                     Some((idx, region)) => {
-                        let (_, region) = Self::apply_redirect(&global.regions, idx, region, &svc, log);
-                        return self.route_to(session, region, &global, log).await;
+                        let (_, region) = Self::apply_redirect(&cluster.regions, idx, region, &svc, log);
+                        return self.route_to(session, region, &cluster, log).await;
                     }
                     None => return PluginRunningResult::GoodNext,
                 },

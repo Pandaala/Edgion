@@ -90,7 +90,7 @@ pub use namespace_store::NamespaceStore;
 pub use plugin_metadata_utils::PluginMetaDataStore;
 
 // Re-export region_route_table utilities
-pub use region_route_table::{RegionRouteGlobalTable, RegionRouteServiceTable};
+pub use region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable};
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

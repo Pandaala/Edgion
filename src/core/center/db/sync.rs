@@ -84,8 +84,8 @@ pub(crate) async fn sync_one_controller(proxy: &ProxyForwarder, db: &CenterDb, c
         proxy,
         db,
         controller_id,
-        "/api/v1/global-region-pms",
-        "global_plugin_metadata_cache",
+        "/api/v1/cluster-region-pms",
+        "cluster_plugin_metadata_cache",
     )
     .await;
     sync_plugin_metadata_list(

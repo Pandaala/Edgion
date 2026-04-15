@@ -1,6 +1,6 @@
 # ServiceRegionRoute PluginMetaData for region-route-myregion
 #
-# Pre-created by administrator. References the GlobalRegionRoute PluginMetaData
+# Pre-created by administrator. References the ClusterRegionRoute PluginMetaData
 # that has myRegion=virginia.
 #
 # Per-service failover overrides:
@@ -15,7 +15,7 @@ spec:
   metadata:
     type: ServiceRegionRoute
     config:
-        globalRef:
+        clusterRef:
           namespace: edgion-default
           name: global-region-myregion
         regions:

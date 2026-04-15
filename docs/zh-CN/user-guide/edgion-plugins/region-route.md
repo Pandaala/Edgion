@@ -31,11 +31,11 @@ RegionRoute 的配置分为三层：
 
 | 层次 | 资源 | 管理者 | 说明 |
 |------|------|--------|------|
-| 全局配置 | `GlobalRegionRoute` PluginMetaData | 运维/Center | 持有完整路由配置：regions、keyGet、hashCalc、routeRules、routeByKeyConfMatch |
-| 服务配置 | `ServiceRegionRoute` PluginMetaData | 管理员预建 | 引用全局配置（`globalRef`），可按 region 设置 `failoverTo` 覆盖 |
+| 集群配置 | `ClusterRegionRoute` PluginMetaData | 运维/Center | 持有完整路由配置：regions、keyGet、hashCalc、routeRules、routeByKeyConfMatch |
+| 服务配置 | `ServiceRegionRoute` PluginMetaData | 管理员预建 | 引用集群配置（`clusterRef`），可按 region 设置 `failoverTo` 覆盖 |
 | 插件引用 | `EdgionPlugins` RegionRoute plugin | 用户 | 只有 `serviceRegionRouteRef` 一个字段，指向 Service PM 名称 |
 
-引用链：`EP.serviceRegionRouteRef → ServiceRegionRoute PM → globalRef → GlobalRegionRoute PM`
+引用链：`EP.serviceRegionRouteRef → ServiceRegionRoute PM → clusterRef → ClusterRegionRoute PM`
 
 **ServiceRegionRoute PluginMetaData 必须由管理员预先创建**，系统不会自动生成。
 
@@ -49,7 +49,7 @@ RegionRoute 的配置分为三层：
 |------|------|--------|------|
 | `serviceRegionRouteRef` | String | 无 | 同命名空间下 ServiceRegionRoute PluginMetaData 的名称 |
 
-### GlobalRegionRoute PluginMetaData 配置
+### ClusterRegionRoute PluginMetaData 配置
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -75,7 +75,7 @@ RegionRoute 的配置分为三层：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `globalRef` | Object | 无 | 指向 GlobalRegionRoute PluginMetaData 的引用（namespace + name） |
+| `clusterRef` | Object | 无 | 指向 ClusterRegionRoute PluginMetaData 的引用（namespace + name） |
 | `regions` | Array\<Object\> | `[]` | per-region failoverTo 覆盖列表（只有 `name` 和 `failoverTo` 字段有效） |
 
 ### `hashCalc` 子字段
@@ -90,7 +90,7 @@ RegionRoute 的配置分为三层：
 
 ## 快速开始
 
-### 第一步：创建 GlobalRegionRoute PluginMetaData（运维/Center 操作）
+### 第一步：创建 ClusterRegionRoute PluginMetaData（运维/Center 操作）
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -100,7 +100,7 @@ metadata:
   namespace: edgion-system
 spec:
   plugins:
-    - type: GlobalRegionRoute
+    - type: ClusterRegionRoute
       config:
         # 本网关所在 region——路由目标等于此值时直接放行
         myRegion: virginia
@@ -159,8 +159,8 @@ spec:
   plugins:
     - type: ServiceRegionRoute
       config:
-        # 引用全局配置
-        globalRef:
+        # 引用集群配置
+        clusterRef:
           name: global-region-conf
           namespace: edgion-system
         # 可选：per-region failoverTo 覆盖
@@ -238,7 +238,7 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 与配置保持�
 
 ### myRegion — 本地放行
 
-当网关实例部署在某个 region 内时，将 `myRegion` 设置为该 region 的名称（在 GlobalRegionRoute PluginMetaData 中配置）。若路由结果等于本 region，插件直接放行，不设 `ExternalJumpPreset`，避免本地流量产生不必要的跨 region 网络跳转。
+当网关实例部署在某个 region 内时，将 `myRegion` 设置为该 region 的名称（在 ClusterRegionRoute PluginMetaData 中配置）。若路由结果等于本 region，插件直接放行，不设 `ExternalJumpPreset`，避免本地流量产生不必要的跨 region 网络跳转。
 
 - 空字符串（默认）= 功能禁用，所有路由均走 `ExternalJumpPreset`。
 - 若值不匹配任何 region，运行时静默禁用该功能。
@@ -247,8 +247,8 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 与配置保持�
 
 在 `RegionDef` 上配置 `failoverTo`，可将该 region 的流量静态重定向到另一个 region。路由规则确定目标后立即生效。
 
-- `failoverTo` 可在 GlobalRegionRoute PluginMetaData 的 `regions[]` 中配置（影响所有服务）
-- 也可在 ServiceRegionRoute PluginMetaData 的 `regions[]` 中配置（只影响该服务），会覆盖全局配置
+- `failoverTo` 可在 ClusterRegionRoute PluginMetaData 的 `regions[]` 中配置（影响所有服务）
+- 也可在 ServiceRegionRoute PluginMetaData 的 `regions[]` 中配置（只影响该服务），会覆盖集群配置
 
 典型场景：
 - **手动 failover**：运维将某 region 标记为下线，流量全量切到备用 region。
@@ -264,7 +264,7 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 与配置保持�
 - `backendEndpoint` 每次请求都会 DNS 解析（复用 Pingora 的 `ExternalJumpPreset` 机制），建议使用内部稳定 DNS 名指向 region 负载均衡器。
 - 插件**不修改** Host header 和 SNI。若上游校验 SNI，需确保后端证书覆盖原始 hostname。
 - `routeRules: []`（空列表或省略）使插件变为 no-op，可用于分阶段上线。
-- ServiceRegionRoute PluginMetaData 必须与 EdgionPlugins 在**同一命名空间**下。GlobalRegionRoute PluginMetaData 可在任意命名空间（通过 `globalRef` 的 `namespace` 字段指定）。
+- ServiceRegionRoute PluginMetaData 必须与 EdgionPlugins 在**同一命名空间**下。ClusterRegionRoute PluginMetaData 可在任意命名空间（通过 `clusterRef` 的 `namespace` 字段指定）。
 
 ## 相关文档
 

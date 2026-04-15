@@ -857,15 +857,15 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 },
             );
 
-            // Also register ref to the GlobalRegionRoute PluginMetaData
-            // (via ServiceRegionRoute PluginMetaData's globalRef) for requeue
+            // Also register ref to the ClusterRegionRoute PluginMetaData
+            // (via ServiceRegionRoute PluginMetaData's clusterRef) for requeue
             if let Some(svc_entry) = ctx.runtime().service_region_route_table.get(&pm_key) {
-                if let Some(ref gref) = svc_entry.global_pm_ref {
-                    let g_ns = gref.namespace.as_deref().unwrap_or(&ns);
-                    let global_plugin_metadata_key = format!("{}/{}", g_ns, gref.name);
+                if let Some(ref cref) = svc_entry.cluster_pm_ref {
+                    let c_ns = cref.namespace.as_deref().unwrap_or(&ns);
+                    let cluster_plugin_metadata_key = format!("{}/{}", c_ns, cref.name);
                     ctx.runtime()
                         .plugin_metadata_refs
-                        .add_ref(global_plugin_metadata_key, ep_key.clone());
+                        .add_ref(cluster_plugin_metadata_key, ep_key.clone());
                 }
             }
         }
@@ -1316,7 +1316,7 @@ mod tests {
             "svc-rr",
             PluginMetaDataSpec {
                 metadata: MetaDataEntry::ServiceRegionRoute(ServiceRegionRouteConfig {
-                    global_ref: Some(PluginMetaDataRef {
+                    cluster_ref: Some(PluginMetaDataRef {
                         name: "global-rr".to_string(),
                         namespace: None,
                     }),

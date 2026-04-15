@@ -146,10 +146,10 @@ macro_rules! get_client_resource {
             }
             ResourceKind::PluginMetaData => find_resource($client.plugin_metadata().list().data, ns_opt, name_str),
             ResourceKind::LinkSys => find_resource($client.link_sys().list().data, ns_opt, name_str),
-            ResourceKind::GatewayClass => find_cluster_resource($client.gateway_classes().list().data, name_str),
+            ResourceKind::GatewayClass => find_region_resource($client.gateway_classes().list().data, name_str),
             ResourceKind::Gateway => find_resource($client.gateways().list().data, ns_opt, name_str),
             ResourceKind::EdgionGatewayConfig => {
-                find_cluster_resource($client.edgion_gateway_configs().list().data, name_str)
+                find_region_resource($client.edgion_gateway_configs().list().data, name_str)
             }
             _ => None,
         }
@@ -189,7 +189,7 @@ fn find_resource_alt<T: ResourceExt + serde::Serialize>(
 }
 
 /// Find a cluster-scoped resource by name only
-fn find_cluster_resource<T: ResourceExt + serde::Serialize>(items: Vec<T>, name: &str) -> Option<serde_json::Value> {
+fn find_region_resource<T: ResourceExt + serde::Serialize>(items: Vec<T>, name: &str) -> Option<serde_json::Value> {
     items
         .into_iter()
         .find(|r| r.name_any() == name)

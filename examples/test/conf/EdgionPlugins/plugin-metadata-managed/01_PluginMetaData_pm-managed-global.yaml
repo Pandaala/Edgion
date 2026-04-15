@@ -1,4 +1,4 @@
-# GlobalRegionRoute PluginMetaData for pm-managed test
+# ClusterRegionRoute PluginMetaData for pm-managed test
 apiVersion: edgion.io/v1
 kind: PluginMetaData
 metadata:
@@ -6,7 +6,7 @@ metadata:
   namespace: edgion-default
 spec:
   metadata:
-    type: GlobalRegionRoute
+    type: ClusterRegionRoute
     config:
         regions:
           - name: east

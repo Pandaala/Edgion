@@ -2,7 +2,7 @@
 //!
 //! Stores ServiceRegionRoute entries indexed by pm_key (namespace/name).
 //! Built from PluginMetaData containing ServiceRegionRoute plugin entries.
-//! `ref_plugins` and `global_pm_ref` are updated by EdgionPlugins handlers.
+//! `ref_plugins` and `cluster_pm_ref` are updated by EdgionPlugins handlers.
 
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -24,7 +24,7 @@ pub struct RefPluginEntry {
 pub struct ServiceRegionRouteEntry {
     pub pm_namespace: String,
     pub pm_name: String,
-    pub global_pm_ref: Option<PluginMetaDataRef>,
+    pub cluster_pm_ref: Option<PluginMetaDataRef>,
     pub regions: Vec<ServiceRegionDef>,
     pub ref_plugins: Vec<RefPluginEntry>,
 }
@@ -40,14 +40,14 @@ impl RegionRouteServiceTable {
         }
     }
 
-    /// Update PluginMetaData-sourced fields (including global_pm_ref) without touching ref_plugins.
+    /// Update PluginMetaData-sourced fields (including cluster_pm_ref) without touching ref_plugins.
     /// If the entry already exists, preserves ref_plugins.
     pub fn upsert_from_pm(&self, pm_key: String, entry: ServiceRegionRouteEntry) {
         let mut data = self.data.write();
         if let Some(existing) = data.get_mut(&pm_key) {
             existing.pm_namespace = entry.pm_namespace;
             existing.pm_name = entry.pm_name;
-            existing.global_pm_ref = entry.global_pm_ref;
+            existing.cluster_pm_ref = entry.cluster_pm_ref;
             existing.regions = entry.regions;
         } else {
             data.insert(pm_key, entry);
@@ -80,7 +80,7 @@ impl RegionRouteServiceTable {
                 ServiceRegionRouteEntry {
                     pm_namespace: String::new(),
                     pm_name: String::new(),
-                    global_pm_ref: None,
+                    cluster_pm_ref: None,
                     regions: vec![],
                     ref_plugins: vec![ref_entry],
                 },

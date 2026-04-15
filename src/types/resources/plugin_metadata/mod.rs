@@ -5,8 +5,8 @@
 //!
 //! - `KeyList`: Key-value list with exact or regex matching (for plugins like IpRestriction, KeyAuth)
 //! - `IpList`: IP address / CIDR list (for IP-based filtering)
-//! - `GlobalRegionRoute`: Full region topology and routing rules
-//! - `ServiceRegionRoute`: Per-service failover overrides referencing a GlobalRegionRoute
+//! - `ClusterRegionRoute`: Full region topology and routing rules
+//! - `ServiceRegionRoute`: Per-service failover overrides referencing a ClusterRegionRoute
 
 pub mod ip_list;
 pub mod key_list;
@@ -14,7 +14,7 @@ pub mod region_route;
 
 pub use ip_list::IpListData;
 pub use key_list::{KeyListData, KeyMatchMode, MetaDataItem};
-pub use region_route::{GlobalRegionRouteConfig, RouteByKeyConfMatchMeta, ServiceRegionDef, ServiceRegionRouteConfig};
+pub use region_route::{ClusterRegionRouteConfig, RouteByKeyConfMatchMeta, ServiceRegionDef, ServiceRegionRouteConfig};
 
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -59,11 +59,11 @@ pub enum MetaDataEntry {
     /// IP address / CIDR range list for IP-based filtering.
     IpList(IpListData),
 
-    /// Global RegionRoute: complete topology + route rules + matchMap.
+    /// Cluster RegionRoute: complete topology + route rules + matchMap.
     /// Created by operators / Center.
-    GlobalRegionRoute(GlobalRegionRouteConfig),
+    ClusterRegionRoute(ClusterRegionRouteConfig),
 
-    /// Service-level RegionRoute: failover overrides with globalRef.
+    /// Service-level RegionRoute: failover overrides with clusterRef.
     /// Created by administrator.
     ServiceRegionRoute(ServiceRegionRouteConfig),
 }
@@ -74,7 +74,7 @@ impl PluginMetaData {
         match &self.spec.metadata {
             MetaDataEntry::KeyList(_) => "KeyList",
             MetaDataEntry::IpList(_) => "IpList",
-            MetaDataEntry::GlobalRegionRoute(_) => "GlobalRegionRoute",
+            MetaDataEntry::ClusterRegionRoute(_) => "ClusterRegionRoute",
             MetaDataEntry::ServiceRegionRoute(_) => "ServiceRegionRoute",
         }
     }
@@ -109,7 +109,7 @@ impl PluginMetaData {
                 }
             }
             // RegionRoute variants: no additional validation needed at pre-parse
-            MetaDataEntry::GlobalRegionRoute(_) | MetaDataEntry::ServiceRegionRoute(_) => {}
+            MetaDataEntry::ClusterRegionRoute(_) | MetaDataEntry::ServiceRegionRoute(_) => {}
         }
     }
 

@@ -1,19 +1,19 @@
-//! Global RegionRoute Table
+//! Cluster RegionRoute Table
 //!
-//! Stores GlobalRegionRoute entries indexed by pm_key (namespace/name).
-//! Built from PluginMetaData containing GlobalRegionRoute plugin entries.
+//! Stores ClusterRegionRoute entries indexed by pm_key (namespace/name).
+//! Built from PluginMetaData containing ClusterRegionRoute plugin entries.
 
 use parking_lot::RwLock;
 use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::types::common::KeyGet;
-use crate::types::resources::edgion_plugins::plugin_configs::{HashCalcConfig, RegionDef, RouteRule};
+use crate::types::resources::edgion_plugins::plugin_configs::{RegionDef, HashCalcConfig, RouteRule};
 use crate::types::resources::plugin_metadata::RouteByKeyConfMatchMeta;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GlobalRegionRouteEntry {
+pub struct ClusterRegionRouteEntry {
     pub pm_namespace: String,
     pub pm_name: String,
     pub my_region: String,
@@ -25,18 +25,18 @@ pub struct GlobalRegionRouteEntry {
     pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
 }
 
-pub struct RegionRouteGlobalTable {
-    data: RwLock<HashMap<String, GlobalRegionRouteEntry>>,
+pub struct RegionRouteClusterTable {
+    data: RwLock<HashMap<String, ClusterRegionRouteEntry>>,
 }
 
-impl RegionRouteGlobalTable {
+impl RegionRouteClusterTable {
     pub fn new() -> Self {
         Self {
             data: RwLock::new(HashMap::new()),
         }
     }
 
-    pub fn upsert(&self, pm_key: String, entry: GlobalRegionRouteEntry) {
+    pub fn upsert(&self, pm_key: String, entry: ClusterRegionRouteEntry) {
         self.data.write().insert(pm_key, entry);
     }
 
@@ -44,11 +44,11 @@ impl RegionRouteGlobalTable {
         self.data.write().remove(pm_key);
     }
 
-    pub fn get(&self, pm_key: &str) -> Option<GlobalRegionRouteEntry> {
+    pub fn get(&self, pm_key: &str) -> Option<ClusterRegionRouteEntry> {
         self.data.read().get(pm_key).cloned()
     }
 
-    pub fn all(&self) -> Vec<GlobalRegionRouteEntry> {
+    pub fn all(&self) -> Vec<ClusterRegionRouteEntry> {
         self.data.read().values().cloned().collect()
     }
 
