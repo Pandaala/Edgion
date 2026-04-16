@@ -18,10 +18,15 @@ use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::config::CenterSyncConfig;
 use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::proxy::PendingProxyMap;
+use crate::core::center::watch_cache::{CenterSyncClient, WatchEventSimple};
+use crate::core::common::conf_sync::types::EventType;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
-    federation_sync_server::FederationSync, CenterMessage, ControllerMessage, Ping, RegisterAck,
+    federation_sync_server::FederationSync, CenterMessage, ControllerMessage, FedWatchRequest, Ping,
+    RegisterAck,
 };
+use crate::types::resource::meta::ResourceMeta;
+use crate::types::resources::plugin_metadata::PluginMetaData;
 
 pub struct PendingListEntry {
     pub sender: oneshot::Sender<Vec<crate::core::common::fed_sync::proto::ResourceKey>>,
@@ -38,6 +43,7 @@ pub struct FederationGrpcServer {
     pub pending_commands: PendingCommandMap,
     pub pending_proxies: PendingProxyMap,
     pub sync_config: CenterSyncConfig,
+    pub sync_client: Arc<CenterSyncClient>,
 }
 
 impl FederationGrpcServer {
@@ -46,6 +52,7 @@ impl FederationGrpcServer {
         aggregator: Arc<ResourceAggregator>,
         pending_proxies: PendingProxyMap,
         sync_config: CenterSyncConfig,
+        sync_client: Arc<CenterSyncClient>,
     ) -> Self {
         Self {
             registry,
@@ -54,6 +61,7 @@ impl FederationGrpcServer {
             pending_commands: Arc::new(Mutex::new(HashMap::new())),
             pending_proxies,
             sync_config,
+            sync_client,
         }
     }
 }
@@ -105,11 +113,35 @@ impl FederationSync for FederationGrpcServer {
             })
             .await;
 
+        // Send FedWatchRequest for PluginMetaData
+        let pm_cache = self.sync_client.plugin_metadata.get_or_create(&controller_id);
+        let from_version = pm_cache.get_sync_version();
+        let watch_request_id = Uuid::new_v4().to_string();
+
+        let _ = inner_tx
+            .send(CenterMessage {
+                payload: Some(CenterPayload::WatchRequest(FedWatchRequest {
+                    request_id: watch_request_id.clone(),
+                    kind: "PluginMetaData".to_string(),
+                    from_version,
+                })),
+            })
+            .await;
+
+        tracing::debug!(
+            component = "fed_server",
+            controller_id = %controller_id,
+            request_id = %watch_request_id,
+            from_version = from_version,
+            "Sent FedWatchRequest for PluginMetaData"
+        );
+
         let registry = self.registry.clone();
         let aggregator = self.aggregator.clone();
         let pending_lists = self.pending_lists.clone();
         let pending_commands = self.pending_commands.clone();
         let pending_proxies = self.pending_proxies.clone();
+        let sync_client = self.sync_client.clone();
         let ping_interval = Duration::from_secs(self.sync_config.ping_interval_secs);
         let heartbeat_timeout = ping_interval * 3;
         let cid = controller_id.clone();
@@ -163,7 +195,16 @@ impl FederationSync for FederationGrpcServer {
             let aggregator_for_offline = aggregator.clone();
             let cid = cid.clone();
             let self_pending_proxies = pending_proxies.clone();
+            let pm_cache = pm_cache.clone();
+            let inner_tx = inner_tx.clone();
             async move {
+                // Watch state tracking (local to this session)
+                let mut pm_watch_request_id = watch_request_id;
+                let mut pm_watch_server_id: Option<String> = {
+                    let sid = pm_cache.get_server_id();
+                    if sid.is_empty() { None } else { Some(sid) }
+                };
+
                 loop {
                     match tokio::time::timeout(heartbeat_timeout, inbound.message()).await {
                         Err(_) => {
@@ -174,6 +215,7 @@ impl FederationSync for FederationGrpcServer {
                             );
                             registry.mark_offline(&cid);
                             aggregator_for_offline.mark_offline(&cid);
+                            sync_client.plugin_metadata.mark_offline(&cid);
                             break;
                         }
                         Ok(Err(e)) => {
@@ -185,6 +227,7 @@ impl FederationSync for FederationGrpcServer {
                             );
                             registry.mark_offline(&cid);
                             aggregator_for_offline.mark_offline(&cid);
+                            sync_client.plugin_metadata.mark_offline(&cid);
                             break;
                         }
                         Ok(Ok(None)) => {
@@ -195,6 +238,7 @@ impl FederationSync for FederationGrpcServer {
                             );
                             registry.mark_offline(&cid);
                             aggregator_for_offline.mark_offline(&cid);
+                            sync_client.plugin_metadata.mark_offline(&cid);
                             break;
                         }
                         Ok(Ok(Some(msg))) => {
@@ -215,6 +259,168 @@ impl FederationSync for FederationGrpcServer {
                                 Some(CtrlPayload::HttpProxyResponse(resp)) => {
                                     if let Some(tx) = self_pending_proxies.lock().remove(&resp.request_id) {
                                         let _ = tx.send(resp);
+                                    }
+                                }
+                                Some(CtrlPayload::WatchListResponse(resp)) => {
+                                    if resp.request_id != pm_watch_request_id {
+                                        tracing::debug!(
+                                            component = "fed_server",
+                                            controller_id = %cid,
+                                            expected = %pm_watch_request_id,
+                                            got = %resp.request_id,
+                                            "Skipping stale WatchListResponse"
+                                        );
+                                        continue;
+                                    }
+                                    match serde_json::from_str::<Vec<PluginMetaData>>(&resp.data) {
+                                        Ok(items) => {
+                                            let keyed: Vec<(String, PluginMetaData)> = items
+                                                .into_iter()
+                                                .map(|pm| {
+                                                    let key = pm.key_name();
+                                                    (key, pm)
+                                                })
+                                                .collect();
+                                            pm_cache.replace_all(keyed, resp.sync_version, resp.server_id.clone());
+                                            pm_watch_server_id = Some(resp.server_id);
+                                            tracing::debug!(
+                                                component = "fed_server",
+                                                controller_id = %cid,
+                                                sync_version = resp.sync_version,
+                                                "PluginMetaData WatchListResponse applied"
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                component = "fed_server",
+                                                controller_id = %cid,
+                                                error = %e,
+                                                "Failed to deserialize WatchListResponse data"
+                                            );
+                                        }
+                                    }
+                                }
+                                Some(CtrlPayload::WatchEventResponse(resp)) => {
+                                    if resp.request_id != pm_watch_request_id {
+                                        tracing::debug!(
+                                            component = "fed_server",
+                                            controller_id = %cid,
+                                            expected = %pm_watch_request_id,
+                                            got = %resp.request_id,
+                                            "Skipping stale WatchEventResponse"
+                                        );
+                                        continue;
+                                    }
+
+                                    // Error → re-watch from 0
+                                    if !resp.error.is_empty() {
+                                        tracing::warn!(
+                                            component = "fed_server",
+                                            controller_id = %cid,
+                                            error = %resp.error,
+                                            "WatchEventResponse error, re-watching from 0"
+                                        );
+                                        let new_id = Uuid::new_v4().to_string();
+                                        let _ = inner_tx
+                                            .send(CenterMessage {
+                                                payload: Some(CenterPayload::WatchRequest(FedWatchRequest {
+                                                    request_id: new_id.clone(),
+                                                    kind: "PluginMetaData".to_string(),
+                                                    from_version: 0,
+                                                })),
+                                            })
+                                            .await;
+                                        pm_watch_request_id = new_id;
+                                        continue;
+                                    }
+
+                                    // Server restart detection → re-watch from 0
+                                    if let Some(ref expected_sid) = pm_watch_server_id {
+                                        if *expected_sid != resp.server_id {
+                                            tracing::warn!(
+                                                component = "fed_server",
+                                                controller_id = %cid,
+                                                expected_server_id = %expected_sid,
+                                                got_server_id = %resp.server_id,
+                                                "Controller server_id changed, re-watching from 0"
+                                            );
+                                            let new_id = Uuid::new_v4().to_string();
+                                            let _ = inner_tx
+                                                .send(CenterMessage {
+                                                    payload: Some(CenterPayload::WatchRequest(FedWatchRequest {
+                                                        request_id: new_id.clone(),
+                                                        kind: "PluginMetaData".to_string(),
+                                                        from_version: 0,
+                                                    })),
+                                                })
+                                                .await;
+                                            pm_watch_request_id = new_id;
+                                            continue;
+                                        }
+                                    }
+
+                                    // Parse events
+                                    match serde_json::from_str::<Vec<serde_json::Value>>(&resp.data) {
+                                        Ok(raw_events) => {
+                                            let mut events = Vec::new();
+                                            for val in raw_events {
+                                                let event_type_str = val.get("type")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let event_type = match event_type_str {
+                                                    "add" => EventType::Add,
+                                                    "update" => EventType::Update,
+                                                    "delete" => EventType::Delete,
+                                                    _ => {
+                                                        tracing::warn!(
+                                                            component = "fed_server",
+                                                            controller_id = %cid,
+                                                            event_type = %event_type_str,
+                                                            "Unknown event type, skipping"
+                                                        );
+                                                        continue;
+                                                    }
+                                                };
+                                                if let Some(data_val) = val.get("data") {
+                                                    match serde_json::from_value::<PluginMetaData>(data_val.clone()) {
+                                                        Ok(pm) => {
+                                                            let key = pm.key_name();
+                                                            events.push(WatchEventSimple {
+                                                                event_type,
+                                                                key,
+                                                                data: pm,
+                                                            });
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::warn!(
+                                                                component = "fed_server",
+                                                                controller_id = %cid,
+                                                                error = %e,
+                                                                "Failed to deserialize event data"
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if !events.is_empty() {
+                                                pm_cache.apply_events(events, resp.sync_version, resp.server_id.clone());
+                                            }
+                                            pm_watch_server_id = Some(resp.server_id);
+                                            tracing::debug!(
+                                                component = "fed_server",
+                                                controller_id = %cid,
+                                                sync_version = resp.sync_version,
+                                                "PluginMetaData WatchEventResponse applied"
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                component = "fed_server",
+                                                controller_id = %cid,
+                                                error = %e,
+                                                "Failed to parse WatchEventResponse data"
+                                            );
+                                        }
                                     }
                                 }
                                 _ => {}

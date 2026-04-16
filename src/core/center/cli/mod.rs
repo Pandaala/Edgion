@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -12,8 +12,31 @@ use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::fed_sync::server::FederationGrpcServer;
 use crate::core::center::proxy::{PendingProxyMap, ProxyForwarder};
 use crate::core::center::scheduler;
+use crate::core::center::watch_cache::{CenterConfHandler, CenterSyncClient, CenterWatchCacheRegistry};
 use crate::core::common::fed_sync::proto::federation_sync_server::FederationSyncServer;
+use crate::types::resources::plugin_metadata::PluginMetaData;
 use parking_lot::Mutex;
+
+/// No-op handler for PluginMetaData watch cache.
+/// Will be replaced by CenterMetaDataStore in a later task.
+struct NoopPmHandler;
+
+impl CenterConfHandler<PluginMetaData> for NoopPmHandler {
+    fn full_set(&self, _controller_id: &str, _data: &HashMap<String, Arc<PluginMetaData>>) {}
+
+    fn partial_update(
+        &self,
+        _controller_id: &str,
+        _add: HashMap<String, Arc<PluginMetaData>>,
+        _update: HashMap<String, Arc<PluginMetaData>>,
+        _remove: HashSet<String>,
+    ) {
+    }
+
+    fn controller_offline(&self, _controller_id: &str) {}
+
+    fn controller_removed(&self, _controller_id: &str) {}
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
@@ -62,11 +85,16 @@ impl EdgionCenterCli {
 
         let pending_proxies: PendingProxyMap = Arc::new(Mutex::new(HashMap::new()));
 
+        let sync_client = Arc::new(CenterSyncClient {
+            plugin_metadata: CenterWatchCacheRegistry::new(Arc::new(NoopPmHandler)),
+        });
+
         let grpc_server = FederationGrpcServer::new(
             registry.clone(),
             aggregator.clone(),
             pending_proxies.clone(),
             config.sync.clone(),
+            sync_client,
         );
         let pending_lists = grpc_server.pending_lists.clone();
         let pending_commands = grpc_server.pending_commands.clone();
