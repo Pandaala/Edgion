@@ -11,6 +11,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
 use crate::core::common::config::CenterClientConfig;
@@ -176,6 +177,10 @@ async fn connect_and_run(
         "Connected and registered with center"
     );
 
+    // Tracks the cancellation token for the active watch forwarding task, if any.
+    // A new WatchRequest cancels the previous one before starting a new task.
+    let mut active_watch_cancel: Option<CancellationToken> = None;
+
     loop {
         tokio::select! {
             msg = inbound.message() => {
@@ -192,6 +197,7 @@ async fn connect_and_run(
                             supported_kinds,
                             admin_router.clone(),
                             conf_mgr.clone(),
+                            &mut active_watch_cancel,
                         ).await?;
                     }
                     Some(_) => {} // empty payload, ignore
@@ -208,6 +214,7 @@ async fn handle_center_message(
     supported_kinds: &[String],
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
+    active_watch_cancel: &mut Option<CancellationToken>,
 ) -> Result<()> {
     match payload {
         CenterPayload::RegisterAck(ack) => {
@@ -446,24 +453,44 @@ async fn handle_center_message(
             };
 
             // Step 2: start watch forwarding task
+            // Cancel any previously active watch task before starting a new one.
+            if let Some(prev) = active_watch_cancel.take() {
+                prev.cancel();
+            }
+
             let watch_id = format!("center-{}", req.request_id);
             match css.watch(&req.kind, watch_id, "center".to_string(), watch_from) {
                 Ok(mut event_rx) => {
+                    let cancel = CancellationToken::new();
+                    *active_watch_cancel = Some(cancel.clone());
+
                     let tx = tx.clone();
                     let request_id = req.request_id.clone();
                     tokio::spawn(async move {
-                        while let Some(event) = event_rx.recv().await {
-                            let msg = ControllerMessage {
-                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                                    request_id: request_id.clone(),
-                                    data: event.data,
-                                    sync_version: event.sync_version,
-                                    server_id: event.server_id,
-                                    error: event.err.unwrap_or_default(),
-                                })),
-                            };
-                            if tx.send(msg).await.is_err() {
-                                break; // federation stream closed
+                        loop {
+                            tokio::select! {
+                                _ = cancel.cancelled() => {
+                                    break; // Explicitly cancelled by a new WatchRequest
+                                }
+                                event = event_rx.recv() => {
+                                    match event {
+                                        Some(event) => {
+                                            let msg = ControllerMessage {
+                                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                                                    request_id: request_id.clone(),
+                                                    data: event.data,
+                                                    sync_version: event.sync_version,
+                                                    server_id: event.server_id,
+                                                    error: event.err.unwrap_or_default(),
+                                                })),
+                                            };
+                                            if tx.send(msg).await.is_err() {
+                                                break; // federation stream closed
+                                            }
+                                        }
+                                        None => break, // channel closed
+                                    }
+                                }
                             }
                         }
                     });
