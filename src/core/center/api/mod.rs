@@ -14,6 +14,8 @@
 //!   POST /api/v1/center/service-region-routes/failover             → fan-out failover to all online controllers (new-URL path)
 //!   GET  /api/v1/center/cluster-region-routes/consistency          → consistency detection across controllers
 //!   GET  /api/v1/center/service-region-routes/consistency          → consistency detection across controllers
+//!   GET  /api/v1/center/admin/watch-status                          → watch cache sync status per controller
+//!   GET  /api/v1/center/admin/metadata-store                         → metadata store key summary
 //!   ANY  /api/v1/proxy/{controller_id}/*rest                       → proxy HTTP request to controller
 
 use axum::{
@@ -34,6 +36,7 @@ use crate::core::center::commander::Commander;
 use crate::core::center::db::CenterDb;
 use crate::core::center::metadata_store::CenterMetaDataStore;
 use crate::core::center::proxy::ProxyForwarder;
+use crate::core::center::watch_cache::CenterSyncClient;
 use crate::core::common::api::{ApiResponse, ListResponse};
 use crate::core::common::fed_sync::proto::command_request::Command;
 use crate::core::common::fed_sync::proto::ReloadCommand;
@@ -45,6 +48,7 @@ pub struct ApiState {
     pub proxy: Arc<ProxyForwarder>,
     pub db: Option<Arc<CenterDb>>,
     pub metadata_store: Arc<CenterMetaDataStore>,
+    pub sync_client: Arc<CenterSyncClient>,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -88,6 +92,9 @@ pub fn router(state: ApiState) -> Router {
         // Admin endpoints (DB-backed)
         .route("/api/v1/center/admin/controllers", get(list_admin_controllers))
         .route("/api/v1/center/admin/controllers/{id}", delete(delete_admin_controller))
+        // Watch cache admin endpoints
+        .route("/api/v1/center/admin/watch-status", get(watch_status))
+        .route("/api/v1/center/admin/metadata-store", get(metadata_store_status))
         // HTTP proxy to controllers
         .route("/api/v1/proxy/{controller_id}/{*rest}", any(proxy_handler))
         .with_state(state)
@@ -267,6 +274,66 @@ async fn delete_admin_controller(State(state): State<ApiState>, Path(id_raw): Pa
         )
             .into_response(),
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchControllerStatus {
+    controller_id: String,
+    sync_version: u64,
+    server_id: String,
+}
+
+async fn watch_status(State(state): State<ApiState>) -> impl IntoResponse {
+    let entries = state.sync_client.plugin_metadata.list_controllers();
+    let dtos: Vec<WatchControllerStatus> = entries
+        .into_iter()
+        .map(|(id, ver, sid)| WatchControllerStatus {
+            controller_id: id,
+            sync_version: ver,
+            server_id: sid,
+        })
+        .collect();
+    Json(ListResponse::success(dtos))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetaDataStoreStatus {
+    cluster_routes: Vec<MetaDataStoreEntry>,
+    service_routes: Vec<MetaDataStoreEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetaDataStoreEntry {
+    pm_key: String,
+    controller_count: usize,
+}
+
+async fn metadata_store_status(State(state): State<ApiState>) -> impl IntoResponse {
+    let cluster_routes: Vec<MetaDataStoreEntry> = state
+        .metadata_store
+        .list_cluster_routes()
+        .into_iter()
+        .map(|v| MetaDataStoreEntry {
+            pm_key: format!("{}/{}", v.namespace, v.name),
+            controller_count: v.controllers.len(),
+        })
+        .collect();
+    let service_routes: Vec<MetaDataStoreEntry> = state
+        .metadata_store
+        .list_service_routes()
+        .into_iter()
+        .map(|v| MetaDataStoreEntry {
+            pm_key: format!("{}/{}", v.namespace, v.name),
+            controller_count: v.controllers.len(),
+        })
+        .collect();
+    Json(ApiResponse::success(MetaDataStoreStatus {
+        cluster_routes,
+        service_routes,
+    }))
 }
 
 async fn proxy_handler(

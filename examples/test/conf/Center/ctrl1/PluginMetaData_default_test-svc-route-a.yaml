@@ -1,0 +1,17 @@
+# ServiceRegionRoute PluginMetaData — service A, controller 1
+# References the ClusterRegionRoute (test-cluster-route) for topology.
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: test-svc-route-a
+  namespace: default
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+      clusterRef:
+        namespace: default
+        name: test-cluster-route
+      regions:
+        - name: east
+        - name: west

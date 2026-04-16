@@ -1,0 +1,19 @@
+# ServiceRegionRoute PluginMetaData — service B, controller 1
+# References the same ClusterRegionRoute; has per-service failover overrides.
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: test-svc-route-b
+  namespace: default
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+      clusterRef:
+        namespace: default
+        name: test-cluster-route
+      regions:
+        - name: east
+          failoverTo: west
+        - name: west
+          failoverTo: east

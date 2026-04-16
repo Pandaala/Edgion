@@ -40,6 +40,16 @@ impl<T: Send + Sync + 'static> CenterWatchCacheRegistry<T> {
             .clone()
     }
 
+    /// List all controllers with their sync state.
+    /// Returns (controller_id, sync_version, server_id).
+    pub fn list_controllers(&self) -> Vec<(String, u64, String)> {
+        self.caches
+            .read()
+            .iter()
+            .map(|(id, cache)| (id.clone(), cache.get_sync_version(), cache.get_server_id()))
+            .collect()
+    }
+
     /// Mark controller offline. Preserves cache for reconnect.
     pub fn mark_offline(&self, controller_id: &str) {
         self.handler.controller_offline(controller_id);

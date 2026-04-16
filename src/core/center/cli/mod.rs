@@ -74,7 +74,7 @@ impl EdgionCenterCli {
             aggregator.clone(),
             pending_proxies.clone(),
             config.sync.clone(),
-            sync_client,
+            sync_client.clone(),
         );
         let pending_lists = grpc_server.pending_lists.clone();
         let pending_commands = grpc_server.pending_commands.clone();
@@ -112,6 +112,7 @@ impl EdgionCenterCli {
             proxy: proxy.clone(),
             db: db.clone(),
             metadata_store: metadata_store.clone(),
+            sync_client,
         };
         let http_addr: std::net::SocketAddr = config.server.http_addr.parse()?;
         let grpc_addr: std::net::SocketAddr = config.server.grpc_addr.parse()?;
