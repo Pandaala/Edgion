@@ -6,5 +6,6 @@ pub mod fed_sync;
 pub mod grpc_tls;
 pub mod local_auth;
 pub mod matcher;
+pub mod metadata_conf_handler;
 pub mod unified_auth;
 pub mod utils;
