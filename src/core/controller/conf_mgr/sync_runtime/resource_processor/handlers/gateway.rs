@@ -392,10 +392,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
         let ports_changed = route_index.update_gateway_ports(&gateway_key, current_ports);
 
-        // Only requeue referencing routes when listener hostnames or ports
-        // actually changed. Previously this was unconditional, causing every
-        // attached-route-count update to fan out and reprocess all routes on
-        // the Gateway (e.g. adding 1 route would requeue the other 99).
+        // CYCLE PREVENTION: Only requeue referencing routes when listener
+        // hostnames or ports actually changed. All Route.on_change handlers
+        // unconditionally requeue their parent Gateways, so removing this
+        // condition would create Route→Gateway→Route infinite loops.
         if hostnames_changed || ports_changed {
             let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
             if !referencing_routes.is_empty() {

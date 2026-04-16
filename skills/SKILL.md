@@ -44,6 +44,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **CI/发布自动化** — GitHub Release、tag 推送、Docker 镜像、发布说明文件位置 | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
 | **Center 联邦持久化** — SQLite `controllers` 表、CenterDb、database 配置（PM 数据已改用反向 Watch，无 SQLite 缓存） | [09-misc/center-db.md](09-misc/center-db.md) |
 | **Center 反向 Watch 架构** — CenterWatchCache、CenterMetaDataStore、federation gRPC 双向流 PM 数据流 | [09-misc/center-db.md#pluginmetadata-数据流反向-watch-架构](09-misc/center-db.md) |
+| **开发部署热替换** — 原生镜像 + shell loop + 交叉编译 + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
 
 ## 关键约束（必读，违反会引入运行时 bug）
 

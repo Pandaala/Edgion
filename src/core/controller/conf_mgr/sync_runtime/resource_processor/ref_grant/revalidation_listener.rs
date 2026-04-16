@@ -3,6 +3,7 @@
 //! Listens for ReferenceGrant changes and triggers revalidation of affected resources.
 
 use super::events::{ReferenceGrantChangedEvent, RevalidationListener};
+use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use std::sync::Arc;
 
@@ -151,6 +152,18 @@ impl RevalidationListener for CrossNsRevalidationListener {
             return;
         }
 
+        // Build a chain origin so downstream cascades inherit TriggerChain
+        // cycle detection. Without this, resources requeued here would start
+        // with an empty chain and any further cascading requeues would bypass
+        // the cycle limit entirely.
+        let origin_key = event
+            .affected_namespaces
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "*".to_string());
+        let origin_chain = TriggerChain::new().extend("ReferenceGrant", &origin_key);
+
         let mut requeued = std::collections::HashSet::new();
         let mut requeued_count = 0;
 
@@ -174,7 +187,10 @@ impl RevalidationListener for CrossNsRevalidationListener {
                     "Requeuing resource due to ReferenceGrant change"
                 );
 
-                self.runtime.processor_registry.requeue(kind, key).await;
+                self.runtime
+                    .processor_registry
+                    .requeue_with_chain(kind, key, origin_chain.clone())
+                    .await;
                 requeued.insert(ref_key);
                 requeued_count += 1;
             }
