@@ -402,6 +402,13 @@ impl FederationSync for FederationGrpcServer {
                                                             );
                                                         }
                                                     }
+                                                } else {
+                                                    tracing::warn!(
+                                                        component = "fed_server",
+                                                        controller_id = %cid,
+                                                        event_type = %event_type_str,
+                                                        "watch event missing 'data' field, skipping"
+                                                    );
                                                 }
                                             }
                                             if !events.is_empty() {

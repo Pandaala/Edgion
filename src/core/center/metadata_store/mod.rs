@@ -13,6 +13,7 @@ use crate::core::common::metadata_conf_handler::{parse_region_route, ParsedRegio
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
     ClusterRegionRouteEntry, ServiceRegionRouteEntry,
 };
+use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
 use crate::types::resources::plugin_metadata::PluginMetaData;
 
 /// View of aggregated ClusterRegionRoute entries from all controllers for a single pm_key.
@@ -31,6 +32,7 @@ pub struct CenterClusterRouteView {
 pub struct CenterServiceRouteView {
     pub namespace: String,
     pub name: String,
+    pub cluster_ref: Option<PluginMetaDataRef>,
     /// Map of controller_id → ServiceRegionRouteEntry
     pub controllers: HashMap<String, ServiceRegionRouteEntry>,
 }
@@ -76,9 +78,11 @@ impl CenterMetaDataStore {
             .iter()
             .map(|(pm_key, controllers)| {
                 let (namespace, name) = split_pm_key(pm_key);
+                let cluster_ref = controllers.values().next().and_then(|e| e.cluster_pm_ref.clone());
                 CenterServiceRouteView {
                     namespace,
                     name,
+                    cluster_ref,
                     controllers: controllers.clone(),
                 }
             })
