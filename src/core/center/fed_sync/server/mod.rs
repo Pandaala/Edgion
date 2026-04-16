@@ -27,6 +27,17 @@ use crate::core::common::fed_sync::proto::{
 use crate::types::resource::meta::ResourceMeta;
 use crate::types::resources::plugin_metadata::PluginMetaData;
 
+/// Typed representation of a single watch event from the controller.
+#[derive(serde::Deserialize)]
+struct WatchEventRaw {
+    #[serde(rename = "type")]
+    event_type: String,
+    data: serde_json::Value,
+    #[serde(default)]
+    #[allow(dead_code)]
+    sync_version: u64,
+}
+
 pub struct PendingListEntry {
     pub sender: oneshot::Sender<Vec<crate::core::common::fed_sync::proto::ResourceKey>>,
     pub created_at: std::time::Instant,
@@ -362,53 +373,42 @@ impl FederationSync for FederationGrpcServer {
                                         }
                                     }
 
-                                    // Parse events
-                                    match serde_json::from_str::<Vec<serde_json::Value>>(&resp.data) {
+                                    // Parse events using typed struct
+                                    match serde_json::from_str::<Vec<WatchEventRaw>>(&resp.data) {
                                         Ok(raw_events) => {
                                             let mut events = Vec::new();
-                                            for val in raw_events {
-                                                let event_type_str =
-                                                    val.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                                                let event_type = match event_type_str {
+                                            for raw in raw_events {
+                                                let event_type = match raw.event_type.as_str() {
                                                     "add" => EventType::Add,
                                                     "update" => EventType::Update,
                                                     "delete" => EventType::Delete,
-                                                    _ => {
+                                                    other => {
                                                         tracing::warn!(
                                                             component = "fed_server",
                                                             controller_id = %cid,
-                                                            event_type = %event_type_str,
-                                                            "Unknown event type, skipping"
+                                                            event_type = other,
+                                                            "Unknown watch event type, skipping"
                                                         );
                                                         continue;
                                                     }
                                                 };
-                                                if let Some(data_val) = val.get("data") {
-                                                    match serde_json::from_value::<PluginMetaData>(data_val.clone()) {
-                                                        Ok(pm) => {
-                                                            let key = pm.key_name();
-                                                            events.push(WatchEventSimple {
-                                                                event_type,
-                                                                key,
-                                                                data: pm,
-                                                            });
-                                                        }
-                                                        Err(e) => {
-                                                            tracing::warn!(
-                                                                component = "fed_server",
-                                                                controller_id = %cid,
-                                                                error = %e,
-                                                                "Failed to deserialize event data"
-                                                            );
-                                                        }
+                                                match serde_json::from_value::<PluginMetaData>(raw.data) {
+                                                    Ok(pm) => {
+                                                        let key = pm.key_name();
+                                                        events.push(WatchEventSimple {
+                                                            event_type,
+                                                            key,
+                                                            data: pm,
+                                                        });
                                                     }
-                                                } else {
-                                                    tracing::warn!(
-                                                        component = "fed_server",
-                                                        controller_id = %cid,
-                                                        event_type = %event_type_str,
-                                                        "watch event missing 'data' field, skipping"
-                                                    );
+                                                    Err(e) => {
+                                                        tracing::warn!(
+                                                            component = "fed_server",
+                                                            controller_id = %cid,
+                                                            error = %e,
+                                                            "Failed to parse watch event data as PluginMetaData"
+                                                        );
+                                                    }
                                                 }
                                             }
                                             if !events.is_empty() {

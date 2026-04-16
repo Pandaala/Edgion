@@ -94,61 +94,17 @@ impl CenterMetaDataStore {
     fn remove_all_for_controller(&self, controller_id: &str) {
         {
             let mut cluster = self.cluster_routes.write();
-            for inner in cluster.values_mut() {
+            cluster.retain(|_, inner| {
                 inner.remove(controller_id);
-            }
-            cluster.retain(|_, inner| !inner.is_empty());
+                !inner.is_empty()
+            });
         }
         {
             let mut service = self.service_routes.write();
-            for inner in service.values_mut() {
+            service.retain(|_, inner| {
                 inner.remove(controller_id);
-            }
-            service.retain(|_, inner| !inner.is_empty());
-        }
-    }
-
-    /// Insert or update a single PluginMetaData entry for the given controller.
-    fn upsert_pm(&self, controller_id: &str, pm_key: &str, pm: &PluginMetaData) {
-        match parse_region_route(pm) {
-            ParsedRegionRoute::Cluster { entry, .. } => {
-                self.cluster_routes
-                    .write()
-                    .entry(pm_key.to_string())
-                    .or_default()
-                    .insert(controller_id.to_string(), entry);
-            }
-            ParsedRegionRoute::Service { entry, .. } => {
-                self.service_routes
-                    .write()
-                    .entry(pm_key.to_string())
-                    .or_default()
-                    .insert(controller_id.to_string(), entry);
-            }
-            ParsedRegionRoute::Other => {}
-        }
-    }
-
-    /// Remove a single pm_key entry for the given controller from both maps.
-    /// Cannot know the type at delete time, so tries both.
-    fn remove_pm(&self, controller_id: &str, pm_key: &str) {
-        {
-            let mut cluster = self.cluster_routes.write();
-            if let Some(inner) = cluster.get_mut(pm_key) {
-                inner.remove(controller_id);
-                if inner.is_empty() {
-                    cluster.remove(pm_key);
-                }
-            }
-        }
-        {
-            let mut service = self.service_routes.write();
-            if let Some(inner) = service.get_mut(pm_key) {
-                inner.remove(controller_id);
-                if inner.is_empty() {
-                    service.remove(pm_key);
-                }
-            }
+                !inner.is_empty()
+            });
         }
     }
 }
@@ -161,9 +117,44 @@ impl Default for CenterMetaDataStore {
 
 impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
     fn full_set(&self, controller_id: &str, data: &HashMap<String, Arc<PluginMetaData>>) {
-        self.remove_all_for_controller(controller_id);
+        // Classify all PMs first (no locks needed)
+        let mut new_cluster: HashMap<String, ClusterRegionRouteEntry> = HashMap::new();
+        let mut new_service: HashMap<String, ServiceRegionRouteEntry> = HashMap::new();
+
         for (pm_key, pm) in data {
-            self.upsert_pm(controller_id, pm_key, pm);
+            match parse_region_route(pm) {
+                ParsedRegionRoute::Cluster { entry, .. } => {
+                    new_cluster.insert(pm_key.clone(), entry);
+                }
+                ParsedRegionRoute::Service { entry, .. } => {
+                    new_service.insert(pm_key.clone(), entry);
+                }
+                ParsedRegionRoute::Other => {}
+            }
+        }
+
+        // Single lock acquisition for cluster_routes
+        {
+            let mut cluster = self.cluster_routes.write();
+            cluster.retain(|_, controllers| {
+                controllers.remove(controller_id);
+                !controllers.is_empty()
+            });
+            for (pm_key, entry) in new_cluster {
+                cluster.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+            }
+        }
+
+        // Single lock acquisition for service_routes
+        {
+            let mut service = self.service_routes.write();
+            service.retain(|_, controllers| {
+                controllers.remove(controller_id);
+                !controllers.is_empty()
+            });
+            for (pm_key, entry) in new_service {
+                service.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+            }
         }
     }
 
@@ -174,11 +165,52 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
         update: HashMap<String, Arc<PluginMetaData>>,
         remove: HashSet<String>,
     ) {
+        // Classify add+update (no locks needed)
+        let mut cluster_upserts: HashMap<String, ClusterRegionRouteEntry> = HashMap::new();
+        let mut service_upserts: HashMap<String, ServiceRegionRouteEntry> = HashMap::new();
+
         for (pm_key, pm) in add.iter().chain(update.iter()) {
-            self.upsert_pm(controller_id, pm_key, pm);
+            match parse_region_route(pm) {
+                ParsedRegionRoute::Cluster { entry, .. } => {
+                    cluster_upserts.insert(pm_key.clone(), entry);
+                }
+                ParsedRegionRoute::Service { entry, .. } => {
+                    service_upserts.insert(pm_key.clone(), entry);
+                }
+                ParsedRegionRoute::Other => {}
+            }
         }
-        for pm_key in &remove {
-            self.remove_pm(controller_id, pm_key);
+
+        // Apply cluster changes in one lock
+        {
+            let mut cluster = self.cluster_routes.write();
+            for pm_key in &remove {
+                if let Some(controllers) = cluster.get_mut(pm_key.as_str()) {
+                    controllers.remove(controller_id);
+                    if controllers.is_empty() {
+                        cluster.remove(pm_key.as_str());
+                    }
+                }
+            }
+            for (pm_key, entry) in cluster_upserts {
+                cluster.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+            }
+        }
+
+        // Apply service changes in one lock
+        {
+            let mut service = self.service_routes.write();
+            for pm_key in &remove {
+                if let Some(controllers) = service.get_mut(pm_key.as_str()) {
+                    controllers.remove(controller_id);
+                    if controllers.is_empty() {
+                        service.remove(pm_key.as_str());
+                    }
+                }
+            }
+            for (pm_key, entry) in service_upserts {
+                service.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+            }
         }
     }
 
