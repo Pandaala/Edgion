@@ -2,6 +2,33 @@ syntax = "proto3";
 
 package fed_sync;
 
+// ── Center → Controller: request list/watch of a resource kind ──
+
+message FedWatchRequest {
+    string request_id    = 1;  // UUID for correlating responses
+    string kind          = 2;  // Resource kind, e.g. "PluginMetaData"
+    uint64 from_version  = 3;  // 0 = full list + watch; >0 = resume watch
+}
+
+// ── Controller → Center: full list response ──
+
+message FedWatchListResponse {
+    string request_id    = 1;  // Echo FedWatchRequest.request_id
+    string data          = 2;  // JSON-serialized full list
+    uint64 sync_version  = 3;  // Current version
+    string server_id     = 4;  // ConfigSyncServer instance ID (restart detection)
+}
+
+// ── Controller → Center: incremental watch events ──
+
+message FedWatchEventResponse {
+    string request_id    = 1;  // Echo FedWatchRequest.request_id
+    string data          = 2;  // JSON-serialized event array
+    uint64 sync_version  = 3;  // Current version
+    string server_id     = 4;  // ConfigSyncServer instance ID
+    string error         = 5;  // Non-empty = error code
+}
+
 // Controller (client) 连接 Center (server) 的持久双向流
 // Controller 第一条消息必须是 RegisterRequest
 service FederationSync {
@@ -12,11 +39,13 @@ service FederationSync {
 
 message ControllerMessage {
     oneof payload {
-        RegisterRequest   register           = 1;  // 首条消息，注册自身信息
-        Pong              pong               = 2;  // 心跳响应
-        ListResponse      list_response      = 3;  // 响应 center 的 ListRequest
-        CommandResponse   command_response   = 4;  // 响应 center 的命令
-        HttpProxyResponse http_proxy_response = 5;  // HTTP 代理响应
+        RegisterRequest      register              = 1;  // 首条消息，注册自身信息
+        Pong                 pong                  = 2;  // 心跳响应
+        ListResponse         list_response         = 3;  // 响应 center 的 ListRequest
+        CommandResponse      command_response      = 4;  // 响应 center 的命令
+        HttpProxyResponse    http_proxy_response   = 5;  // HTTP 代理响应
+        FedWatchListResponse watch_list_response   = 6;  // 反向 list/watch：全量列表响应
+        FedWatchEventResponse watch_event_response = 7;  // 反向 list/watch：增量事件响应
     }
 }
 
@@ -57,11 +86,12 @@ message CommandResponse {
 
 message CenterMessage {
     oneof payload {
-        RegisterAck      register_ack = 1;  // 注册确认
-        Ping             ping         = 2;  // 心跳
-        ListRequest      list_request = 3;  // 定期拉取资源 key
-        CommandRequest   command      = 4;  // 下发命令
-        HttpProxyRequest http_proxy   = 5;  // HTTP 代理请求（Center 转发前端请求）
+        RegisterAck      register_ack  = 1;  // 注册确认
+        Ping             ping          = 2;  // 心跳
+        ListRequest      list_request  = 3;  // 定期拉取资源 key
+        CommandRequest   command       = 4;  // 下发命令
+        HttpProxyRequest http_proxy    = 5;  // HTTP 代理请求（Center 转发前端请求）
+        FedWatchRequest  watch_request = 6;  // 请求 controller 反向 list/watch
     }
 }
 

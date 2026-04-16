@@ -381,6 +381,16 @@ async fn handle_center_message(
                 }
             });
         }
+
+        CenterPayload::WatchRequest(req) => {
+            tracing::debug!(
+                component = "fed_client",
+                request_id = %req.request_id,
+                kind = %req.kind,
+                from_version = req.from_version,
+                "FedWatchRequest received (not yet implemented)"
+            );
+        }
     }
     Ok(())
 }
