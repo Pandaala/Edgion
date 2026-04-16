@@ -22,7 +22,11 @@ PluginMetaData 是 Edgion 的自定义扩展资源，支持两种用途：
 - PluginMetaDataGatewayStore（Gateway 侧）: `src/core/gateway/plugins/runtime/plugin_metadata/conf_handler.rs`
 - RegionRoute 表（Controller）: `region_route_table/cluster_table.rs`、`region_route_table/service_table.rs`
 - Controller API: `src/core/controller/api/region_route_handlers.rs`
-- Center API: `src/core/center/api/region_pm_handlers.rs`
+- Center API（列表 + failover）: `src/core/center/api/region_route_handlers.rs`
+- Center API（一致性）: `src/core/center/api/consistency_handlers.rs`
+- Center 元数据存储: `src/core/center/metadata_store/` （CenterMetaDataStore，内存强类型，按 Controller 聚合）
+- Center Watch 缓存: `src/core/center/watch_cache/`（反向 list/watch，接收 Controller gRPC 推送）
+- Center ConfHandler: `src/core/center/api/metadata_conf_handler.rs`
 
 ## Plugin 体系
 
@@ -167,20 +171,26 @@ Gateway 不缓存解析结果，每次请求通过 `PluginMetaDataGatewayStore` 
 
 ### Center 操作
 
+> Center 通过反向 list/watch（联邦 gRPC 流）从各 Controller 接收 PM 数据，存入 `CenterMetaDataStore`（内存强类型，按 Controller 聚合）。Center **不再**主动向 Controller 轮询 HTTP 接口获取 PM 数据。
+
 | 操作 | 目标 | 端点 |
 |------|------|------|
-| 集群 region failover（静态） | ClusterRegionRoute PluginMetaData `regions[].failoverTo` | `POST /api/v1/center/cluster-region-pms/failover` |
-| 服务级 failover | ServiceRegionRoute PluginMetaData `regions[].failoverTo` | `POST /api/v1/center/service-region-pms/failover` |
+| 列出集群 RegionRoute | ClusterRegionRoute PM 聚合列表 | `GET /api/v1/center/cluster-region-routes` |
+| 列出服务 RegionRoute | ServiceRegionRoute PM 聚合列表 | `GET /api/v1/center/service-region-routes` |
+| 集群 region failover（静态） | ClusterRegionRoute PluginMetaData `regions[].failoverTo` | `POST /api/v1/center/cluster-region-routes/failover` |
+| 服务级 failover | ServiceRegionRoute PluginMetaData `regions[].failoverTo` | `POST /api/v1/center/service-region-routes/failover` |
+| 集群一致性检查 | 各 Controller 数据一致性比对 | `GET /api/v1/center/cluster-region-routes/consistency` |
+| 服务一致性检查 | 各 Controller 数据一致性比对 | `GET /api/v1/center/service-region-routes/consistency` |
 | 集群 matchMap | ClusterRegionRoute PluginMetaData `routeByKeyConfMatch.matchMap` | 通过 proxy PUT PluginMetaData |
 
 ### Controller API
 
 | 端点 | 说明 |
 |------|------|
-| `GET /api/v1/cluster-region-pms` | 列出所有 ClusterRegionRoute PluginMetaData |
-| `GET /api/v1/service-region-pms` | 列出所有 ServiceRegionRoute PluginMetaData |
-| `POST /api/v1/cluster-region-pms/failover` | 修改 Cluster PM 中某 region 的 failoverTo |
-| `POST /api/v1/service-region-pms/failover` | 修改 Service PM 中某 region 的 failoverTo |
+| `GET /api/v1/cluster-region-routes` | 列出所有 ClusterRegionRoute PluginMetaData |
+| `GET /api/v1/service-region-routes` | 列出所有 ServiceRegionRoute PluginMetaData |
+| `POST /api/v1/cluster-region-routes/failover` | 修改 Cluster PM 中某 region 的 failoverTo |
+| `POST /api/v1/service-region-routes/failover` | 修改 Service PM 中某 region 的 failoverTo |
 
 ## Controller 侧处理
 
