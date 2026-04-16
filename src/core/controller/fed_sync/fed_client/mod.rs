@@ -16,10 +16,11 @@ use tonic::transport::Channel;
 use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
-    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage, HttpProxyResponse,
-    ListResponse, Pong, RegisterRequest,
+    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
+    FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, ListResponse, Pong, RegisterRequest,
 };
 use crate::core::controller::conf_mgr::conf_center::traits::CenterApi;
+use crate::core::controller::conf_mgr::ConfMgr;
 use crate::core::controller::fed_sync::resource_collector;
 
 /// Exponential backoff state for reconnection attempts.
@@ -54,6 +55,7 @@ pub async fn run(
     supported_kinds: Vec<String>,
     mut shutdown: watch::Receiver<bool>,
     admin_router: axum::Router,
+    conf_mgr: Arc<ConfMgr>,
 ) {
     if let Err(e) = config.security.validate() {
         tracing::error!(
@@ -72,7 +74,7 @@ pub async fn run(
                 tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
                 return;
             }
-            result = connect_and_run(&config, conf_center.clone(), &supported_kinds, admin_router.clone()) => {
+            result = connect_and_run(&config, conf_center.clone(), &supported_kinds, admin_router.clone(), conf_mgr.clone()) => {
                 match result {
                     Ok(()) => {
                         tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
@@ -108,6 +110,7 @@ async fn connect_and_run(
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
     admin_router: axum::Router,
+    conf_mgr: Arc<ConfMgr>,
 ) -> Result<()> {
     let tls = config.security.resolve_active_tls();
     let use_tls = tls.is_some_and(|t| !t.skip_tls);
@@ -188,6 +191,7 @@ async fn connect_and_run(
                             conf_center.clone(),
                             supported_kinds,
                             admin_router.clone(),
+                            conf_mgr.clone(),
                         ).await?;
                     }
                     Some(_) => {} // empty payload, ignore
@@ -203,6 +207,7 @@ async fn handle_center_message(
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
     admin_router: axum::Router,
+    conf_mgr: Arc<ConfMgr>,
 ) -> Result<()> {
     match payload {
         CenterPayload::RegisterAck(ack) => {
@@ -388,8 +393,92 @@ async fn handle_center_message(
                 request_id = %req.request_id,
                 kind = %req.kind,
                 from_version = req.from_version,
-                "FedWatchRequest received (not yet implemented)"
+                "FedWatchRequest received"
             );
+
+            let css = match conf_mgr.config_sync_server() {
+                Some(css) => css,
+                None => {
+                    // ConfigSyncServer not ready yet
+                    let err_msg = ControllerMessage {
+                        payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                            request_id: req.request_id,
+                            error: "NotReady".to_string(),
+                            ..Default::default()
+                        })),
+                    };
+                    let _ = tx.send(err_msg).await;
+                    return Ok(());
+                }
+            };
+
+            // Step 1: if from_version == 0, send list first
+            let watch_from = if req.from_version == 0 {
+                match css.list(&req.kind) {
+                    Ok(list_data) => {
+                        let list_msg = ControllerMessage {
+                            payload: Some(CtrlPayload::WatchListResponse(FedWatchListResponse {
+                                request_id: req.request_id.clone(),
+                                data: list_data.data,
+                                sync_version: list_data.sync_version,
+                                server_id: list_data.server_id,
+                            })),
+                        };
+                        if tx.send(list_msg).await.is_err() {
+                            return Ok(());
+                        }
+                        list_data.sync_version
+                    }
+                    Err(e) => {
+                        let err_msg = ControllerMessage {
+                            payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                                request_id: req.request_id,
+                                error: e,
+                                ..Default::default()
+                            })),
+                        };
+                        let _ = tx.send(err_msg).await;
+                        return Ok(());
+                    }
+                }
+            } else {
+                req.from_version
+            };
+
+            // Step 2: start watch forwarding task
+            let watch_id = format!("center-{}", req.request_id);
+            match css.watch(&req.kind, watch_id, "center".to_string(), watch_from) {
+                Ok(mut event_rx) => {
+                    let tx = tx.clone();
+                    let request_id = req.request_id.clone();
+                    tokio::spawn(async move {
+                        while let Some(event) = event_rx.recv().await {
+                            let msg = ControllerMessage {
+                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                                    request_id: request_id.clone(),
+                                    data: event.data,
+                                    sync_version: event.sync_version,
+                                    server_id: event.server_id,
+                                    error: event.err.unwrap_or_default(),
+                                })),
+                            };
+                            if tx.send(msg).await.is_err() {
+                                break; // federation stream closed
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    let err_msg = ControllerMessage {
+                        payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                            request_id: req.request_id,
+                            error: e,
+                            ..Default::default()
+                        })),
+                    };
+                    let _ = tx.send(err_msg).await;
+                }
+            }
         }
     }
     Ok(())

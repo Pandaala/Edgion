@@ -355,6 +355,7 @@ impl EdgionControllerCli {
                 kinds,
                 shutdown_rx,
                 admin_router,
+                conf_mgr.clone(),
             ));
 
             Some(shutdown_tx) // kept alive for duration of process
