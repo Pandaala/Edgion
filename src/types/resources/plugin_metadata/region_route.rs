@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::types::common::KeyGet;
 use crate::types::resources::edgion_plugins::plugin_configs::{
-    RegionDef, HashCalcConfig, PluginMetaDataRef, RouteRule,
+    HashCalcConfig, PluginMetaDataRef, RegionDef, RouteRule,
 };
 
 /// Cluster RegionRoute configuration within PluginMetaData.

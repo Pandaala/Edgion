@@ -72,8 +72,8 @@ pub fn parse_region_route(pm: &PluginMetaData) -> ParsedRegionRoute {
 mod tests {
     use super::*;
     use crate::types::resources::plugin_metadata::{
-        ClusterRegionRouteConfig, KeyListData, KeyMatchMode, MetaDataEntry, MetaDataItem,
-        PluginMetaDataSpec, ServiceRegionRouteConfig,
+        ClusterRegionRouteConfig, KeyListData, KeyMatchMode, MetaDataEntry, MetaDataItem, PluginMetaDataSpec,
+        ServiceRegionRouteConfig,
     };
 
     fn build_plugin_metadata(namespace: &str, name: &str, spec: PluginMetaDataSpec) -> PluginMetaData {

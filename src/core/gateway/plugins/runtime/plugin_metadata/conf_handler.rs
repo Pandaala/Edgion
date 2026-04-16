@@ -78,7 +78,11 @@ impl PluginMetaDataGatewayStore {
 
     // ── Typed getters (zero-clone, returns Arc) ─────────────────────────────
 
-    pub fn get_cluster_region_route_config(&self, namespace: &str, name: &str) -> Option<Arc<ClusterRegionRouteConfig>> {
+    pub fn get_cluster_region_route_config(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Option<Arc<ClusterRegionRouteConfig>> {
         let indexes = self.indexes.load();
         indexes
             .cluster_region_route_configs

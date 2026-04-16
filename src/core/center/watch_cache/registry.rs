@@ -36,12 +36,7 @@ impl<T: Send + Sync + 'static> CenterWatchCacheRegistry<T> {
         let mut caches = self.caches.write();
         caches
             .entry(controller_id.to_string())
-            .or_insert_with(|| {
-                Arc::new(CenterWatchCache::new(
-                    controller_id.to_string(),
-                    self.handler.clone(),
-                ))
-            })
+            .or_insert_with(|| Arc::new(CenterWatchCache::new(controller_id.to_string(), self.handler.clone())))
             .clone()
     }
 

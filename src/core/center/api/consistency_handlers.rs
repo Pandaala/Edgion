@@ -138,7 +138,5 @@ pub async fn service_region_routes_consistency(State(state): State<ApiState>) ->
 
 /// Count the number of distinct values in a `controller_id → value` map.
 fn unique_values(map: &HashMap<String, String>) -> usize {
-    map.values()
-        .collect::<std::collections::HashSet<_>>()
-        .len()
+    map.values().collect::<std::collections::HashSet<_>>().len()
 }

@@ -319,27 +319,22 @@ mod tests {
         // Add one cluster route and one service route for ctrl-1
         let cluster_pm = make_cluster_pm("prod", "c-rr");
         let service_pm = make_service_pm("prod", "s-rr");
-        let data = make_full_set(vec![
-            ("prod/c-rr", cluster_pm),
-            ("prod/s-rr", service_pm),
-        ]);
+        let data = make_full_set(vec![("prod/c-rr", cluster_pm), ("prod/s-rr", service_pm)]);
         store.full_set("ctrl-1", &data);
         assert_eq!(store.list_cluster_routes().len(), 1);
         assert_eq!(store.list_service_routes().len(), 1);
 
         // partial_update remove — we don't know which map each key belongs to
-        let remove: HashSet<String> = ["prod/c-rr", "prod/s-rr"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        store.partial_update(
-            "ctrl-1",
-            HashMap::new(),
-            HashMap::new(),
-            remove,
-        );
+        let remove: HashSet<String> = ["prod/c-rr", "prod/s-rr"].iter().map(|s| s.to_string()).collect();
+        store.partial_update("ctrl-1", HashMap::new(), HashMap::new(), remove);
 
-        assert!(store.list_cluster_routes().is_empty(), "cluster route should be removed");
-        assert!(store.list_service_routes().is_empty(), "service route should be removed");
+        assert!(
+            store.list_cluster_routes().is_empty(),
+            "cluster route should be removed"
+        );
+        assert!(
+            store.list_service_routes().is_empty(),
+            "service route should be removed"
+        );
     }
 }

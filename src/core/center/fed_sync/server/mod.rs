@@ -22,8 +22,7 @@ use crate::core::center::watch_cache::{CenterSyncClient, WatchEventSimple};
 use crate::core::common::conf_sync::types::EventType;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
-    federation_sync_server::FederationSync, CenterMessage, ControllerMessage, FedWatchRequest, Ping,
-    RegisterAck,
+    federation_sync_server::FederationSync, CenterMessage, ControllerMessage, FedWatchRequest, Ping, RegisterAck,
 };
 use crate::types::resource::meta::ResourceMeta;
 use crate::types::resources::plugin_metadata::PluginMetaData;
@@ -202,7 +201,11 @@ impl FederationSync for FederationGrpcServer {
                 let mut pm_watch_request_id = watch_request_id;
                 let mut pm_watch_server_id: Option<String> = {
                     let sid = pm_cache.get_server_id();
-                    if sid.is_empty() { None } else { Some(sid) }
+                    if sid.is_empty() {
+                        None
+                    } else {
+                        Some(sid)
+                    }
                 };
 
                 loop {
@@ -364,9 +367,8 @@ impl FederationSync for FederationGrpcServer {
                                         Ok(raw_events) => {
                                             let mut events = Vec::new();
                                             for val in raw_events {
-                                                let event_type_str = val.get("type")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("");
+                                                let event_type_str =
+                                                    val.get("type").and_then(|v| v.as_str()).unwrap_or("");
                                                 let event_type = match event_type_str {
                                                     "add" => EventType::Add,
                                                     "update" => EventType::Update,
@@ -403,7 +405,11 @@ impl FederationSync for FederationGrpcServer {
                                                 }
                                             }
                                             if !events.is_empty() {
-                                                pm_cache.apply_events(events, resp.sync_version, resp.server_id.clone());
+                                                pm_cache.apply_events(
+                                                    events,
+                                                    resp.sync_version,
+                                                    resp.server_id.clone(),
+                                                );
                                             }
                                             pm_watch_server_id = Some(resp.server_id);
                                             tracing::debug!(

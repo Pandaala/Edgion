@@ -8,9 +8,7 @@ use super::ApiState;
 
 // ============= RegionRoute MetaDataStore Handlers =============
 
-pub async fn list_cluster_region_routes(
-    State(state): State<ApiState>,
-) -> Json<serde_json::Value> {
+pub async fn list_cluster_region_routes(State(state): State<ApiState>) -> Json<serde_json::Value> {
     let routes = state.metadata_store.list_cluster_routes();
     Json(serde_json::json!({
         "success": true,
@@ -18,9 +16,7 @@ pub async fn list_cluster_region_routes(
     }))
 }
 
-pub async fn list_service_region_routes(
-    State(state): State<ApiState>,
-) -> Json<serde_json::Value> {
+pub async fn list_service_region_routes(State(state): State<ApiState>) -> Json<serde_json::Value> {
     let routes = state.metadata_store.list_service_routes();
     Json(serde_json::json!({
         "success": true,
@@ -132,4 +128,3 @@ async fn fan_out_failover(state: &ApiState, path: String, body_bytes: Vec<u8>) -
     let failed = results.iter().filter(|&&ok| !ok).count();
     (modified, failed)
 }
-

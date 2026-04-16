@@ -29,10 +29,7 @@ struct CacheState<T> {
 }
 
 impl<T: Send + Sync + 'static> CenterWatchCache<T> {
-    pub fn new(
-        controller_id: String,
-        handler: Arc<dyn CenterConfHandler<T> + Send + Sync>,
-    ) -> Self {
+    pub fn new(controller_id: String, handler: Arc<dyn CenterConfHandler<T> + Send + Sync>) -> Self {
         Self {
             controller_id,
             inner: RwLock::new(CacheState {
@@ -47,18 +44,10 @@ impl<T: Send + Sync + 'static> CenterWatchCache<T> {
     /// Full replace from list response. Triggers handler.full_set().
     ///
     /// Handler call happens OUTSIDE the lock to avoid deadlocks.
-    pub fn replace_all(
-        &self,
-        items: Vec<(String, T)>,
-        sync_version: u64,
-        server_id: String,
-    ) {
+    pub fn replace_all(&self, items: Vec<(String, T)>, sync_version: u64, server_id: String) {
         let snapshot = {
             let mut state = self.inner.write();
-            state.data = items
-                .into_iter()
-                .map(|(k, v)| (k, Arc::new(v)))
-                .collect();
+            state.data = items.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
             state.sync_version = sync_version;
             state.server_id = server_id;
             // Clone snapshot for handler (cheap Arc clone)
@@ -72,12 +61,7 @@ impl<T: Send + Sync + 'static> CenterWatchCache<T> {
     /// handler.partial_update().
     ///
     /// Handler call happens OUTSIDE the lock to avoid deadlocks.
-    pub fn apply_events(
-        &self,
-        events: Vec<WatchEventSimple<T>>,
-        sync_version: u64,
-        server_id: String,
-    ) {
+    pub fn apply_events(&self, events: Vec<WatchEventSimple<T>>, sync_version: u64, server_id: String) {
         let (add, update, remove) = {
             let mut state = self.inner.write();
 
@@ -110,8 +94,7 @@ impl<T: Send + Sync + 'static> CenterWatchCache<T> {
             (add, update, remove)
         };
 
-        self.handler
-            .partial_update(&self.controller_id, add, update, remove);
+        self.handler.partial_update(&self.controller_id, add, update, remove);
     }
 
     pub fn get_sync_version(&self) -> u64 {

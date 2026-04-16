@@ -241,11 +241,7 @@ async fn patch_plugin_metadata_failover(
 }
 
 /// Modify a single region's failoverTo in a regions array. Returns true if modified.
-fn patch_region_failover(
-    regions: &mut Vec<serde_json::Value>,
-    region_name: &str,
-    failover_to: &str,
-) -> bool {
+fn patch_region_failover(regions: &mut Vec<serde_json::Value>, region_name: &str, failover_to: &str) -> bool {
     let mut modified = false;
     for region in regions.iter_mut() {
         if region.get("name").and_then(|n| n.as_str()) != Some(region_name) {
