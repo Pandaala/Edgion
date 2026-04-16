@@ -1,15 +1,15 @@
 //! Region Route PluginMetaData API handlers
 //!
-//! GET /api/v1/cluster-region-pms
+//! GET /api/v1/cluster-region-routes
 //!   Lists all ClusterRegionRoute entries from the pre-built table.
 //!
-//! GET /api/v1/service-region-pms
+//! GET /api/v1/service-region-routes
 //!   Lists all ServiceRegionRoute entries from the pre-built table.
 //!
-//! POST /api/v1/cluster-region-pms/failover
+//! POST /api/v1/cluster-region-routes/failover
 //!   Modifies a single region's failoverTo in a ClusterRegionRoute PluginMetaData.
 //!
-//! POST /api/v1/service-region-pms/failover
+//! POST /api/v1/service-region-routes/failover
 //!   Modifies a single region's failoverTo in a ServiceRegionRoute PluginMetaData.
 
 use axum::{extract::State, http::StatusCode, response::Json};
@@ -66,7 +66,7 @@ pub struct PluginMetadataFailoverRequest {
 
 // ============= Handlers =============
 
-/// `GET /api/v1/cluster-region-pms`
+/// `GET /api/v1/cluster-region-routes`
 ///
 /// Lists all ClusterRegionRoute PluginMetaData entries from the pre-built table.
 pub async fn list_cluster_region_plugin_metadata(
@@ -97,7 +97,7 @@ pub async fn list_cluster_region_plugin_metadata(
     Ok(Json(ListResponse::success(result)))
 }
 
-/// `GET /api/v1/service-region-pms`
+/// `GET /api/v1/service-region-routes`
 ///
 /// Lists all ServiceRegionRoute PluginMetaData entries from the pre-built table.
 pub async fn list_service_region_plugin_metadata(
@@ -121,7 +121,7 @@ pub async fn list_service_region_plugin_metadata(
     Ok(Json(ListResponse::success(result)))
 }
 
-/// `POST /api/v1/cluster-region-pms/failover`
+/// `POST /api/v1/cluster-region-routes/failover`
 ///
 /// Modifies a single region's failoverTo in a local ClusterRegionRoute PluginMetaData.
 pub async fn cluster_plugin_metadata_failover(
@@ -146,7 +146,7 @@ pub async fn cluster_plugin_metadata_failover(
     }
 }
 
-/// `POST /api/v1/service-region-pms/failover`
+/// `POST /api/v1/service-region-routes/failover`
 ///
 /// Modifies a single region's failoverTo in a local ServiceRegionRoute PluginMetaData.
 pub async fn service_plugin_metadata_failover(

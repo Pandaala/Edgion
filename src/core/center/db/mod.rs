@@ -1,5 +1,3 @@
-pub mod sync;
-
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -21,28 +19,10 @@ CREATE TABLE IF NOT EXISTS controllers (
     created_at INTEGER NOT NULL DEFAULT 0
 );
 
--- Drop old table (idempotent, safe on both old and new databases)
+-- Drop legacy tables (idempotent, safe on both old and new databases)
 DROP TABLE IF EXISTS region_route_cache;
-
-CREATE TABLE IF NOT EXISTS cluster_plugin_metadata_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    controller_id TEXT NOT NULL,
-    pm_namespace TEXT NOT NULL,
-    pm_name TEXT NOT NULL,
-    entries_json TEXT NOT NULL DEFAULT '{}',
-    synced_at INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(controller_id, pm_namespace, pm_name)
-);
-
-CREATE TABLE IF NOT EXISTS service_plugin_metadata_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    controller_id TEXT NOT NULL,
-    pm_namespace TEXT NOT NULL,
-    pm_name TEXT NOT NULL,
-    entries_json TEXT NOT NULL DEFAULT '{}',
-    synced_at INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(controller_id, pm_namespace, pm_name)
-);
+DROP TABLE IF EXISTS cluster_plugin_metadata_cache;
+DROP TABLE IF EXISTS service_plugin_metadata_cache;
 "#;
 
 pub struct CenterDb {
@@ -64,11 +44,6 @@ pub struct DbController {
     pub tag: Vec<String>,
     pub online: bool,
     pub last_seen_at: i64,
-}
-
-pub struct DbCachedEntries {
-    pub entries_json: String,
-    pub synced_at: i64,
 }
 
 impl CenterDb {
@@ -119,74 +94,13 @@ impl CenterDb {
         Ok(())
     }
 
-    pub(crate) fn upsert_plugin_metadata_cache(
-        &self,
-        table: &str,
-        ctrl_id: &str,
-        pm_ns: &str,
-        pm_name: &str,
-        entries_json: &str,
-    ) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock();
-        let now = unix_now();
-        conn.execute(
-            &format!(
-                "INSERT INTO {table}(controller_id, pm_namespace, pm_name, entries_json, synced_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(controller_id, pm_namespace, pm_name) DO UPDATE SET
-                   entries_json = excluded.entries_json,
-                   synced_at = excluded.synced_at"
-            ),
-            rusqlite::params![ctrl_id, pm_ns, pm_name, entries_json, now],
-        )?;
-        Ok(())
-    }
-
-    /// Upsert a ClusterRegionRoute PluginMetaData cache entry.
-    pub fn upsert_cluster_plugin_metadata_cache(
-        &self,
-        ctrl_id: &str,
-        pm_ns: &str,
-        pm_name: &str,
-        entries_json: &str,
-    ) -> Result<(), rusqlite::Error> {
-        self.upsert_plugin_metadata_cache("cluster_plugin_metadata_cache", ctrl_id, pm_ns, pm_name, entries_json)
-    }
-
-    /// Upsert a ServiceRegionRoute PluginMetaData cache entry.
-    pub fn upsert_service_plugin_metadata_cache(
-        &self,
-        ctrl_id: &str,
-        pm_ns: &str,
-        pm_name: &str,
-        entries_json: &str,
-    ) -> Result<(), rusqlite::Error> {
-        self.upsert_plugin_metadata_cache("service_plugin_metadata_cache", ctrl_id, pm_ns, pm_name, entries_json)
-    }
-
-    /// Delete a controller record and its associated cache rows from DB.
+    /// Delete a controller record from DB.
     pub fn delete_controller(&self, id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
-        conn.execute(
-            "DELETE FROM cluster_plugin_metadata_cache WHERE controller_id = ?1",
-            rusqlite::params![id],
-        )?;
-        conn.execute(
-            "DELETE FROM service_plugin_metadata_cache WHERE controller_id = ?1",
-            rusqlite::params![id],
-        )?;
         conn.execute(
             "DELETE FROM controllers WHERE controller_id = ?1",
             rusqlite::params![id],
         )?;
-        Ok(())
-    }
-
-    /// Delete all PluginMetaData cache rows.
-    pub fn clear_plugin_metadata_cache(&self) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock();
-        conn.execute("DELETE FROM cluster_plugin_metadata_cache", [])?;
-        conn.execute("DELETE FROM service_plugin_metadata_cache", [])?;
         Ok(())
     }
 

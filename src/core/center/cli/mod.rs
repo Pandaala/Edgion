@@ -179,32 +179,7 @@ impl EdgionCenterCli {
             shutdown_rx.clone(),
         ));
 
-        let db_sync_handle = if let Some(db) = &db {
-            let db = db.clone();
-            let agg = aggregator.clone();
-            let prx = proxy.clone();
-            let interval = config.database.sync_interval_secs;
-            let shutdown_rx2 = shutdown_rx.clone();
-            Some(tokio::spawn(crate::core::center::db::sync::run_sync_task(
-                agg,
-                prx,
-                db,
-                interval,
-                shutdown_rx2,
-            )))
-        } else {
-            None
-        };
-
         // Wait for any task to exit or Ctrl-C
-        // We use a helper future so the optional db_sync_handle can be selected on.
-        let db_sync_fut = async move {
-            match db_sync_handle {
-                Some(h) => h.await,
-                None => std::future::pending().await,
-            }
-        };
-
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!(component = "center", "Ctrl-C received, shutting down");
@@ -213,7 +188,6 @@ impl EdgionCenterCli {
             r = grpc_handle => { tracing::error!(component = "center", "gRPC server exited: {:?}", r); }
             r = http_handle => { tracing::error!(component = "center", "HTTP server exited: {:?}", r); }
             r = sched_handle => { tracing::error!(component = "center", "Scheduler exited: {:?}", r); }
-            r = db_sync_fut => { tracing::error!(component = "center", "DB sync task exited: {:?}", r); }
         }
 
         Ok(())
