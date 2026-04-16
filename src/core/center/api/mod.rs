@@ -12,9 +12,13 @@
 //!   POST /api/v1/center/cluster-region-pms/failover       → trigger failover on a ClusterRegionRoute PluginMetaData region
 //!   GET  /api/v1/center/service-region-pms                → aggregated ServiceRegionRoute PluginMetaData list from all controllers
 //!   POST /api/v1/center/service-region-pms/failover       → trigger failover on a ServiceRegionRoute PluginMetaData region
-//!   GET  /api/v1/center/cluster-region-routes             → aggregated ClusterRegionRoute list from MetaDataStore
-//!   GET  /api/v1/center/service-region-routes             → aggregated ServiceRegionRoute list from MetaDataStore
-//!   ANY  /api/v1/proxy/{controller_id}/*rest              → proxy HTTP request to controller
+//!   GET  /api/v1/center/cluster-region-routes                      → aggregated ClusterRegionRoute list from MetaDataStore
+//!   GET  /api/v1/center/service-region-routes                      → aggregated ServiceRegionRoute list from MetaDataStore
+//!   POST /api/v1/center/cluster-region-routes/failover             → fan-out failover to all online controllers (new-URL path)
+//!   POST /api/v1/center/service-region-routes/failover             → fan-out failover to all online controllers (new-URL path)
+//!   GET  /api/v1/center/cluster-region-routes/consistency          → consistency detection across controllers
+//!   GET  /api/v1/center/service-region-routes/consistency          → consistency detection across controllers
+//!   ANY  /api/v1/proxy/{controller_id}/*rest                       → proxy HTTP request to controller
 
 use axum::{
     extract::{Path, Query, State},
@@ -26,6 +30,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod consistency_handlers;
 mod region_plugin_metadata_handlers;
 mod region_route_handlers;
 
@@ -83,6 +88,24 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/center/service-region-routes",
             get(region_route_handlers::list_service_region_routes),
+        )
+        // RegionRoute failover (new-URL paths)
+        .route(
+            "/api/v1/center/cluster-region-routes/failover",
+            post(region_route_handlers::cluster_region_route_failover),
+        )
+        .route(
+            "/api/v1/center/service-region-routes/failover",
+            post(region_route_handlers::service_region_route_failover),
+        )
+        // Consistency detection endpoints
+        .route(
+            "/api/v1/center/cluster-region-routes/consistency",
+            get(consistency_handlers::cluster_region_routes_consistency),
+        )
+        .route(
+            "/api/v1/center/service-region-routes/consistency",
+            get(consistency_handlers::service_region_routes_consistency),
         )
         // Admin endpoints (DB-backed)
         .route("/api/v1/center/admin/controllers", get(list_admin_controllers))
