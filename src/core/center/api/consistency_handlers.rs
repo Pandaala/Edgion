@@ -54,9 +54,7 @@ pub async fn cluster_region_routes_consistency(State(state): State<ApiState>) ->
         .map(|route| {
             let mut conflicts = Vec::new();
 
-            if let Some(c) = compare_cluster_field(&route.controllers, "my_region", |e| e.my_region.clone()) {
-                conflicts.push(c);
-            }
+            // my_region is intentionally different per controller — skip it.
             if let Some(c) =
                 compare_cluster_field(&route.controllers, "regions.length", |e| e.regions.len().to_string())
             {

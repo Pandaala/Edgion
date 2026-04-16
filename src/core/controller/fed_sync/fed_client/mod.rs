@@ -10,7 +10,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
@@ -23,6 +23,13 @@ use crate::core::common::fed_sync::proto::{
 use crate::core::controller::conf_mgr::conf_center::traits::CenterApi;
 use crate::core::controller::conf_mgr::ConfMgr;
 use crate::core::controller::fed_sync::resource_collector;
+
+/// Minimum connection duration before backoff is reset.
+/// Connections shorter than this are considered unstable (e.g., Center crash-loop).
+const MIN_STABLE_CONNECTION_SECS: u64 = 30;
+
+/// Maximum concurrent HttpProxy tasks forwarded from Center.
+const MAX_CONCURRENT_PROXY: usize = 16;
 
 /// Exponential backoff state for reconnection attempts.
 pub struct ReconnectBackoff {
@@ -67,9 +74,34 @@ pub async fn run(
         return;
     }
 
+    // Wait for ConfigSyncServer to be ready before connecting to Center.
+    // This prevents the tight NotReady error loop where Center sends
+    // FedWatchRequest before the Controller's caches are initialized.
+    tracing::info!(
+        component = "fed_client",
+        "Waiting for ConfigSyncServer to be ready before connecting to Center"
+    );
+    loop {
+        if conf_mgr.is_ready() {
+            tracing::info!(
+                component = "fed_client",
+                "ConfigSyncServer is ready, proceeding to connect"
+            );
+            break;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            _ = shutdown.changed() => {
+                tracing::info!(component = "fed_client", "Shutdown during ready-wait, exiting");
+                return;
+            }
+        }
+    }
+
     let mut backoff = ReconnectBackoff::new();
 
     loop {
+        let connect_start = std::time::Instant::now();
         tokio::select! {
             _ = shutdown.changed() => {
                 tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
@@ -78,8 +110,14 @@ pub async fn run(
             result = connect_and_run(&config, conf_center.clone(), &supported_kinds, admin_router.clone(), conf_mgr.clone()) => {
                 match result {
                     Ok(()) => {
+                        // Only reset backoff if connection was alive long enough.
+                        // Prevents rapid reconnection when Center crash-loops
+                        // (connects briefly then dies), which would cause repeated
+                        // TLS handshakes + full resource serialization.
+                        if connect_start.elapsed() > Duration::from_secs(MIN_STABLE_CONNECTION_SECS) {
+                            backoff.reset();
+                        }
                         tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
-                        backoff.reset();
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -181,16 +219,20 @@ async fn connect_and_run(
     // A new WatchRequest cancels the previous one before starting a new task.
     let mut active_watch_cancel: Option<CancellationToken> = None;
 
-    loop {
+    // Limit concurrent HttpProxy tasks to prevent Center from overwhelming Controller.
+    let proxy_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PROXY));
+
+    let result: Result<()> = loop {
         tokio::select! {
             msg = inbound.message() => {
-                match msg? {
-                    None => {
+                match msg {
+                    Err(e) => break Err(e.into()),
+                    Ok(None) => {
                         tracing::info!(component = "fed_client", "Center closed stream");
-                        return Ok(());
+                        break Ok(());
                     }
-                    Some(CenterMessage { payload: Some(payload) }) => {
-                        handle_center_message(
+                    Ok(Some(CenterMessage { payload: Some(payload) })) => {
+                        if let Err(e) = handle_center_message(
                             payload,
                             tx.clone(),
                             conf_center.clone(),
@@ -198,15 +240,28 @@ async fn connect_and_run(
                             admin_router.clone(),
                             conf_mgr.clone(),
                             &mut active_watch_cancel,
-                        ).await?;
+                            proxy_semaphore.clone(),
+                        ).await {
+                            break Err(e);
+                        }
                     }
-                    Some(_) => {} // empty payload, ignore
+                    Ok(Some(_)) => {} // empty payload, ignore
                 }
             }
         }
+    };
+
+    // Cleanup: cancel any active watch forwarding task on disconnect.
+    // Without this, old forwarding tasks linger until the gRPC stream's
+    // internal channels detect the disconnect asynchronously.
+    if let Some(prev) = active_watch_cancel.take() {
+        prev.cancel();
     }
+
+    result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_center_message(
     payload: CenterPayload,
     tx: Arc<tokio::sync::mpsc::Sender<ControllerMessage>>,
@@ -215,6 +270,7 @@ async fn handle_center_message(
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
     active_watch_cancel: &mut Option<CancellationToken>,
+    proxy_semaphore: Arc<Semaphore>,
 ) -> Result<()> {
     match payload {
         CenterPayload::RegisterAck(ack) => {
@@ -262,20 +318,21 @@ async fn handle_center_message(
                 request_id = %cmd.request_id,
                 "CommandRequest received"
             );
-            // Reload command: call the local admin router's /api/v1/reload endpoint
             use crate::core::common::fed_sync::proto::command_request::Command;
             let (success, message) = match cmd.command {
                 Some(Command::Reload(_)) => {
                     use tower::ServiceExt;
-                    let req = http::Request::builder()
+                    match http::Request::builder()
                         .method(http::Method::POST)
                         .uri("/api/v1/reload")
                         .body(axum::body::Body::empty())
-                        .unwrap();
-                    match admin_router.clone().oneshot(req).await {
-                        Ok(resp) if resp.status().is_success() => (true, "Reload requested".to_string()),
-                        Ok(resp) => (false, format!("Reload returned {}", resp.status())),
-                        Err(e) => (false, format!("Reload failed: {}", e)),
+                    {
+                        Ok(req) => match admin_router.clone().oneshot(req).await {
+                            Ok(resp) if resp.status().is_success() => (true, "Reload requested".to_string()),
+                            Ok(resp) => (false, format!("Reload returned {}", resp.status())),
+                            Err(e) => (false, format!("Reload failed: {}", e)),
+                        },
+                        Err(e) => (false, format!("Failed to build reload request: {}", e)),
                     }
                 }
                 _ => (false, "Command not supported".to_string()),
@@ -298,9 +355,32 @@ async fn handle_center_message(
                 path = %proxy_req.path,
                 "HttpProxyRequest received"
             );
+            // Limit concurrent proxy tasks to prevent Center from overwhelming Controller.
+            let permit = match proxy_semaphore.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    tracing::warn!(
+                        component = "fed_client",
+                        request_id = %proxy_req.request_id,
+                        "HttpProxy rejected: too many concurrent requests"
+                    );
+                    let _ = tx
+                        .send(ControllerMessage {
+                            payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                request_id: proxy_req.request_id,
+                                status_code: 429,
+                                headers: Default::default(),
+                                body: b"Too many concurrent proxy requests".to_vec(),
+                            })),
+                        })
+                        .await;
+                    return Ok(());
+                }
+            };
             let tx = tx.clone();
             // Spawn as a separate task so proxy requests don't block Ping/Pong handling
             tokio::spawn(async move {
+                let _permit = permit; // held until task completes
                 let request_id = proxy_req.request_id.clone();
 
                 let method: http::Method = proxy_req.method.parse().unwrap_or(http::Method::GET);
@@ -403,10 +483,18 @@ async fn handle_center_message(
                 "FedWatchRequest received"
             );
 
+            // If ConfigSyncServer is not ready, return NotReady immediately.
+            // The ready gate in run() ensures CSS is ready before first connection.
+            // Center-side backoff (3s) handles transient unavailability during reload.
+            // We must NOT block here — this would stall Ping/Pong and cause heartbeat timeout.
             let css = match conf_mgr.config_sync_server() {
                 Some(css) => css,
                 None => {
-                    // ConfigSyncServer not ready yet
+                    tracing::info!(
+                        component = "fed_client",
+                        request_id = %req.request_id,
+                        "ConfigSyncServer not ready, returning NotReady (Center will retry with backoff)"
+                    );
                     let err_msg = ControllerMessage {
                         payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
                             request_id: req.request_id,
@@ -466,7 +554,10 @@ async fn handle_center_message(
 
                     let tx = tx.clone();
                     let request_id = req.request_id.clone();
+                    let initial_server_id = css.server_id();
+                    let reload_conf_mgr = conf_mgr.clone();
                     tokio::spawn(async move {
+                        let mut reload_check = tokio::time::interval(Duration::from_secs(1));
                         loop {
                             tokio::select! {
                                 _ = cancel.cancelled() => {
@@ -490,6 +581,32 @@ async fn handle_center_message(
                                         }
                                         None => break, // channel closed
                                     }
+                                }
+                                _ = reload_check.tick() => {
+                                    // Detect Controller reload: new CSS has a different server_id.
+                                    // Without this, the forwarding task sits idle forever after reload
+                                    // because the old EventStore stops receiving events.
+                                    if let Some(new_css) = reload_conf_mgr.config_sync_server() {
+                                        if new_css.server_id() != initial_server_id {
+                                            tracing::info!(
+                                                component = "fed_client",
+                                                request_id = %request_id,
+                                                old_server_id = %initial_server_id,
+                                                new_server_id = %new_css.server_id(),
+                                                "Controller reloaded, sending ServerReload to trigger Center re-watch"
+                                            );
+                                            let msg = ControllerMessage {
+                                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                                                    request_id: request_id.clone(),
+                                                    error: "ServerReload".to_string(),
+                                                    ..Default::default()
+                                                })),
+                                            };
+                                            let _ = tx.send(msg).await;
+                                            break;
+                                        }
+                                    }
+                                    // If config_sync_server() returns None, reload is in progress — keep waiting
                                 }
                             }
                         }

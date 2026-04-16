@@ -264,6 +264,12 @@ impl CenterBase {
             iteration_shutdown.shutdown();
 
             // 10. Cleanup.
+            // Clear all caches before dropping CSS — this wakes any active
+            // Federation watchers so they detect EventsLost and exit,
+            // allowing Center to re-watch on the new CSS after reload.
+            if let Some(css) = self.config_sync_server() {
+                css.clear_all();
+            }
             self.set_config_sync_server(None, component);
             self.abort_controller();
             self.runtime.reset();

@@ -62,19 +62,19 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     /// Clear all data from the cache
     /// Used during relink to remove stale data
     ///
-    /// Note: This does NOT notify watcher tasks. The gRPC layer will detect
-    /// server_id changes after the new ConfigSyncServer is ready, and notify
-    /// clients to relist at that point. This ensures clients only relist when
-    /// the new server is available.
+    /// Notifies all waiting watcher tasks so they can detect the version
+    /// discontinuity (EventsLost) and exit cleanly. This is essential for
+    /// Federation watchers (Center) which don't have server_id polling —
+    /// without notification they'd wait forever on a dead cache.
     pub fn clear(&self)
     where
         T: Clone,
     {
         let mut store_guard = self.store.write();
         store_guard.clear();
-        // Do NOT call notify.notify_waiters() here.
-        // Old watcher tasks will keep waiting, but gRPC layer will detect
-        // server_id change and send WATCH_ERR_SERVER_RELOAD when new server is ready.
+        drop(store_guard);
+        // Wake all watchers so they detect the version discontinuity and exit.
+        self.notify.notify_waiters();
     }
 
     /// List all data - returns all resources in the cache with resource version
@@ -387,6 +387,7 @@ where
     fn clear(&self) {
         let mut store_guard = self.store.write();
         store_guard.clear();
+        drop(store_guard);
         self.notify.notify_waiters();
     }
 }

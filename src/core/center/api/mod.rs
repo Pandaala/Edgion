@@ -80,6 +80,15 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/center/service-region-routes/failover",
             post(region_route_handlers::service_region_route_failover),
         )
+        // Config sync endpoints
+        .route(
+            "/api/v1/center/cluster-region-routes/sync",
+            post(region_route_handlers::cluster_region_route_sync),
+        )
+        .route(
+            "/api/v1/center/service-region-routes/sync",
+            post(region_route_handlers::service_region_route_sync),
+        )
         // Consistency detection endpoints
         .route(
             "/api/v1/center/cluster-region-routes/consistency",

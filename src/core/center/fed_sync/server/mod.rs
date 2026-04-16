@@ -38,6 +38,42 @@ struct WatchEventRaw {
     sync_version: u64,
 }
 
+/// Per-kind watch state for a controller session.
+/// Currently only PluginMetaData is watched; this struct makes it straightforward
+/// to add more kinds by storing a `HashMap<kind, FedWatchState>`.
+struct FedWatchState {
+    /// Current request_id for correlation (stale responses are skipped).
+    request_id: String,
+    /// Controller's ConfigSyncServer instance ID (detects restarts).
+    server_id: Option<String>,
+    /// Consecutive error count (INFO on first, WARN on subsequent).
+    consecutive_errors: u32,
+}
+
+impl FedWatchState {
+    fn new(request_id: String, server_id: Option<String>) -> Self {
+        Self {
+            request_id,
+            server_id,
+            consecutive_errors: 0,
+        }
+    }
+
+    /// Generate a new FedWatchRequest (from_version=0) and update internal request_id.
+    fn re_watch(&mut self, kind: &str) -> CenterMessage {
+        let new_id = Uuid::new_v4().to_string();
+        self.request_id = new_id.clone();
+        self.consecutive_errors = 0;
+        CenterMessage {
+            payload: Some(CenterPayload::WatchRequest(FedWatchRequest {
+                request_id: new_id,
+                kind: kind.to_string(),
+                from_version: 0,
+            })),
+        }
+    }
+}
+
 pub struct PendingListEntry {
     pub sender: oneshot::Sender<Vec<crate::core::common::fed_sync::proto::ResourceKey>>,
     pub created_at: std::time::Instant,
@@ -209,15 +245,14 @@ impl FederationSync for FederationGrpcServer {
             let inner_tx = inner_tx.clone();
             async move {
                 // Watch state tracking (local to this session)
-                let mut pm_watch_request_id = watch_request_id;
-                let mut pm_watch_server_id: Option<String> = {
+                let mut pm_watch = FedWatchState::new(watch_request_id, {
                     let sid = pm_cache.get_server_id();
                     if sid.is_empty() {
                         None
                     } else {
                         Some(sid)
                     }
-                };
+                });
 
                 loop {
                     match tokio::time::timeout(heartbeat_timeout, inbound.message()).await {
@@ -276,11 +311,11 @@ impl FederationSync for FederationGrpcServer {
                                     }
                                 }
                                 Some(CtrlPayload::WatchListResponse(resp)) => {
-                                    if resp.request_id != pm_watch_request_id {
+                                    if resp.request_id != pm_watch.request_id {
                                         tracing::debug!(
                                             component = "fed_server",
                                             controller_id = %cid,
-                                            expected = %pm_watch_request_id,
+                                            expected = %pm_watch.request_id,
                                             got = %resp.request_id,
                                             "Skipping stale WatchListResponse"
                                         );
@@ -296,7 +331,8 @@ impl FederationSync for FederationGrpcServer {
                                                 })
                                                 .collect();
                                             pm_cache.replace_all(keyed, resp.sync_version, resp.server_id.clone());
-                                            pm_watch_server_id = Some(resp.server_id);
+                                            pm_watch.server_id = Some(resp.server_id);
+                                            pm_watch.consecutive_errors = 0;
                                             tracing::debug!(
                                                 component = "fed_server",
                                                 controller_id = %cid,
@@ -315,41 +351,57 @@ impl FederationSync for FederationGrpcServer {
                                     }
                                 }
                                 Some(CtrlPayload::WatchEventResponse(resp)) => {
-                                    if resp.request_id != pm_watch_request_id {
+                                    if resp.request_id != pm_watch.request_id {
                                         tracing::debug!(
                                             component = "fed_server",
                                             controller_id = %cid,
-                                            expected = %pm_watch_request_id,
+                                            expected = %pm_watch.request_id,
                                             got = %resp.request_id,
                                             "Skipping stale WatchEventResponse"
                                         );
                                         continue;
                                     }
 
-                                    // Error → re-watch from 0
+                                    // Error → backoff then re-watch from 0
                                     if !resp.error.is_empty() {
-                                        tracing::warn!(
-                                            component = "fed_server",
-                                            controller_id = %cid,
-                                            error = %resp.error,
-                                            "WatchEventResponse error, re-watching from 0"
-                                        );
-                                        let new_id = Uuid::new_v4().to_string();
-                                        let _ = inner_tx
-                                            .send(CenterMessage {
-                                                payload: Some(CenterPayload::WatchRequest(FedWatchRequest {
-                                                    request_id: new_id.clone(),
-                                                    kind: "PluginMetaData".to_string(),
-                                                    from_version: 0,
-                                                })),
-                                            })
-                                            .await;
-                                        pm_watch_request_id = new_id;
+                                        pm_watch.consecutive_errors += 1;
+                                        if pm_watch.consecutive_errors == 1 {
+                                            // First error is normal during startup/reload
+                                            tracing::info!(
+                                                component = "fed_server",
+                                                controller_id = %cid,
+                                                error = %resp.error,
+                                                "WatchEventResponse error (likely startup delay), backing off before re-watch"
+                                            );
+                                        } else {
+                                            tracing::warn!(
+                                                component = "fed_server",
+                                                controller_id = %cid,
+                                                error = %resp.error,
+                                                consecutive_errors = pm_watch.consecutive_errors,
+                                                "WatchEventResponse error persists, backing off before re-watch"
+                                            );
+                                        }
+                                        // Backoff before retrying to avoid tight loop.
+                                        // Use select! to detect session close during sleep.
+                                        tokio::select! {
+                                            _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
+                                            _ = inner_tx.closed() => {
+                                                tracing::debug!(
+                                                    component = "fed_server",
+                                                    controller_id = %cid,
+                                                    "Session closed during backoff, stopping re-watch"
+                                                );
+                                                break;
+                                            }
+                                        }
+                                        let re_watch_msg = pm_watch.re_watch("PluginMetaData");
+                                        let _ = inner_tx.send(re_watch_msg).await;
                                         continue;
                                     }
 
                                     // Server restart detection → re-watch from 0
-                                    if let Some(ref expected_sid) = pm_watch_server_id {
+                                    if let Some(ref expected_sid) = pm_watch.server_id {
                                         if *expected_sid != resp.server_id {
                                             tracing::warn!(
                                                 component = "fed_server",
@@ -358,17 +410,8 @@ impl FederationSync for FederationGrpcServer {
                                                 got_server_id = %resp.server_id,
                                                 "Controller server_id changed, re-watching from 0"
                                             );
-                                            let new_id = Uuid::new_v4().to_string();
-                                            let _ = inner_tx
-                                                .send(CenterMessage {
-                                                    payload: Some(CenterPayload::WatchRequest(FedWatchRequest {
-                                                        request_id: new_id.clone(),
-                                                        kind: "PluginMetaData".to_string(),
-                                                        from_version: 0,
-                                                    })),
-                                                })
-                                                .await;
-                                            pm_watch_request_id = new_id;
+                                            let re_watch_msg = pm_watch.re_watch("PluginMetaData");
+                                            let _ = inner_tx.send(re_watch_msg).await;
                                             continue;
                                         }
                                     }
@@ -418,7 +461,8 @@ impl FederationSync for FederationGrpcServer {
                                                     resp.server_id.clone(),
                                                 );
                                             }
-                                            pm_watch_server_id = Some(resp.server_id);
+                                            pm_watch.server_id = Some(resp.server_id);
+                                            pm_watch.consecutive_errors = 0;
                                             tracing::debug!(
                                                 component = "fed_server",
                                                 controller_id = %cid,
