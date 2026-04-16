@@ -57,16 +57,24 @@ pub async fn cluster_region_routes_consistency(State(state): State<ApiState>) ->
             if let Some(c) = compare_cluster_field(&route.controllers, "my_region", |e| e.my_region.clone()) {
                 conflicts.push(c);
             }
-            if let Some(c) = compare_cluster_field(&route.controllers, "regions.length", |e| e.regions.len().to_string()) {
+            if let Some(c) =
+                compare_cluster_field(&route.controllers, "regions.length", |e| e.regions.len().to_string())
+            {
                 conflicts.push(c);
             }
-            if let Some(c) = compare_cluster_field(&route.controllers, "key_get.length", |e| e.key_get.len().to_string()) {
+            if let Some(c) =
+                compare_cluster_field(&route.controllers, "key_get.length", |e| e.key_get.len().to_string())
+            {
                 conflicts.push(c);
             }
-            if let Some(c) = compare_cluster_field(&route.controllers, "route_rules.length", |e| e.route_rules.len().to_string()) {
+            if let Some(c) = compare_cluster_field(&route.controllers, "route_rules.length", |e| {
+                e.route_rules.len().to_string()
+            }) {
                 conflicts.push(c);
             }
-            if let Some(c) = compare_cluster_field(&route.controllers, "hash_calc.present", |e| e.hash_calc.is_some().to_string()) {
+            if let Some(c) = compare_cluster_field(&route.controllers, "hash_calc.present", |e| {
+                e.hash_calc.is_some().to_string()
+            }) {
                 conflicts.push(c);
             }
 
@@ -97,7 +105,9 @@ pub async fn service_region_routes_consistency(State(state): State<ApiState>) ->
         .map(|route| {
             let mut conflicts = Vec::new();
 
-            if let Some(c) = compare_service_field(&route.controllers, "regions.length", |e| e.regions.len().to_string()) {
+            if let Some(c) =
+                compare_service_field(&route.controllers, "regions.length", |e| e.regions.len().to_string())
+            {
                 conflicts.push(c);
             }
 

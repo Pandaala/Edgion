@@ -141,7 +141,10 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                 !controllers.is_empty()
             });
             for (pm_key, entry) in new_cluster {
-                cluster.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+                cluster
+                    .entry(pm_key)
+                    .or_default()
+                    .insert(controller_id.to_string(), entry);
             }
         }
 
@@ -153,7 +156,10 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                 !controllers.is_empty()
             });
             for (pm_key, entry) in new_service {
-                service.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+                service
+                    .entry(pm_key)
+                    .or_default()
+                    .insert(controller_id.to_string(), entry);
             }
         }
     }
@@ -193,7 +199,10 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                 }
             }
             for (pm_key, entry) in cluster_upserts {
-                cluster.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+                cluster
+                    .entry(pm_key)
+                    .or_default()
+                    .insert(controller_id.to_string(), entry);
             }
         }
 
@@ -209,7 +218,10 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                 }
             }
             for (pm_key, entry) in service_upserts {
-                service.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
+                service
+                    .entry(pm_key)
+                    .or_default()
+                    .insert(controller_id.to_string(), entry);
             }
         }
     }
