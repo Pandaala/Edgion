@@ -231,6 +231,15 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
             "/api/v1/service-region-pms/failover",
             post(region_route_handlers::service_plugin_metadata_failover),
         )
+        // New-URL aliases for RegionRoute listings
+        .route(
+            "/api/v1/cluster-region-routes",
+            get(region_route_handlers::list_cluster_region_plugin_metadata),
+        )
+        .route(
+            "/api/v1/service-region-routes",
+            get(region_route_handlers::list_service_region_plugin_metadata),
+        )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
         // ConfigServer endpoints (for edgion-cli --target server)

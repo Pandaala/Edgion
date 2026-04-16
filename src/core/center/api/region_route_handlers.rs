@@ -1,8 +1,32 @@
-//! Shared helpers for Center aggregation handlers.
+//! Region Route handlers and shared helpers for Center aggregation handlers.
 
+use axum::extract::State;
+use axum::Json;
 use std::collections::HashMap;
 
 use super::ApiState;
+
+// ============= RegionRoute MetaDataStore Handlers =============
+
+pub async fn list_cluster_region_routes(
+    State(state): State<ApiState>,
+) -> Json<serde_json::Value> {
+    let routes = state.metadata_store.list_cluster_routes();
+    Json(serde_json::json!({
+        "success": true,
+        "data": routes,
+    }))
+}
+
+pub async fn list_service_region_routes(
+    State(state): State<ApiState>,
+) -> Json<serde_json::Value> {
+    let routes = state.metadata_store.list_service_routes();
+    Json(serde_json::json!({
+        "success": true,
+        "data": routes,
+    }))
+}
 
 /// Forward a GET request to all online controllers in parallel, parse each
 /// response as `T`, and return `(controller_id, parsed)` pairs.

@@ -12,6 +12,8 @@
 //!   POST /api/v1/center/cluster-region-pms/failover       → trigger failover on a ClusterRegionRoute PluginMetaData region
 //!   GET  /api/v1/center/service-region-pms                → aggregated ServiceRegionRoute PluginMetaData list from all controllers
 //!   POST /api/v1/center/service-region-pms/failover       → trigger failover on a ServiceRegionRoute PluginMetaData region
+//!   GET  /api/v1/center/cluster-region-routes             → aggregated ClusterRegionRoute list from MetaDataStore
+//!   GET  /api/v1/center/service-region-routes             → aggregated ServiceRegionRoute list from MetaDataStore
 //!   ANY  /api/v1/proxy/{controller_id}/*rest              → proxy HTTP request to controller
 
 use axum::{
@@ -30,6 +32,7 @@ mod region_route_handlers;
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::commander::Commander;
 use crate::core::center::db::CenterDb;
+use crate::core::center::metadata_store::CenterMetaDataStore;
 use crate::core::center::proxy::ProxyForwarder;
 use crate::core::common::api::{ApiResponse, ListResponse};
 use crate::core::common::fed_sync::proto::command_request::Command;
@@ -41,6 +44,7 @@ pub struct ApiState {
     pub commander: Arc<Commander>,
     pub proxy: Arc<ProxyForwarder>,
     pub db: Option<Arc<CenterDb>>,
+    pub metadata_store: Arc<CenterMetaDataStore>,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -70,6 +74,15 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/center/service-region-pms/failover",
             post(region_plugin_metadata_handlers::service_plugin_metadata_failover),
+        )
+        // MetaDataStore-backed RegionRoute endpoints
+        .route(
+            "/api/v1/center/cluster-region-routes",
+            get(region_route_handlers::list_cluster_region_routes),
+        )
+        .route(
+            "/api/v1/center/service-region-routes",
+            get(region_route_handlers::list_service_region_routes),
         )
         // Admin endpoints (DB-backed)
         .route("/api/v1/center/admin/controllers", get(list_admin_controllers))
