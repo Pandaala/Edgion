@@ -48,9 +48,11 @@ pub struct ProfileRules {
     // Runtime-only, not serialized
     #[serde(skip)]
     #[schemars(skip)]
+    #[allow(dead_code)]
     pub(crate) allow_matcher: Option<IpRadixMatcher>,
     #[serde(skip)]
     #[schemars(skip)]
+    #[allow(dead_code)]
     pub(crate) deny_matcher: Option<IpRadixMatcher>,
 }
 
