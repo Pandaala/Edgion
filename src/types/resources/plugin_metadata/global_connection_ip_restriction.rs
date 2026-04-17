@@ -106,14 +106,18 @@ impl ProfileRules {
 
     /// Check whether an IP should be allowed under this profile's rules.
     /// Priority: deny > allow > default_action.
+    ///
+    /// `match_ip().is_some()` means "IP is covered by some CIDR in the matcher".
+    /// build_flat_matcher always inserts with a sentinel `true` value; the stored
+    /// value is not semantically meaningful (we only care if any CIDR matched).
     pub fn check_ip(&self, ip: &IpAddr) -> bool {
         if let Some(deny) = &self.deny_matcher {
-            if deny.match_ip(ip) == Some(true) {
+            if deny.match_ip(ip).is_some() {
                 return false;
             }
         }
         if let Some(allow) = &self.allow_matcher {
-            return allow.match_ip(ip) == Some(true);
+            return allow.match_ip(ip).is_some();
         }
         matches!(self.default_action, DefaultAction::Allow)
     }
@@ -121,6 +125,9 @@ impl ProfileRules {
 
 /// Flatten `Vec<IpGroup>` into a single IpRadixMatcher, while enforcing uniqueness of group names.
 fn build_flat_matcher(groups: &[IpGroup]) -> Result<IpRadixMatcher, String> {
+    if groups.is_empty() {
+        return Err("group list is empty".to_string());
+    }
     let mut seen = std::collections::HashSet::new();
     let mut all_cidrs: Vec<String> = Vec::new();
     for g in groups {
@@ -390,5 +397,25 @@ mod tests {
         assert!(p.check_ip(&"173.245.48.1".parse().unwrap()));
         assert!(p.check_ip(&"192.168.1.50".parse().unwrap()));
         assert!(!p.check_ip(&"8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn validate_allow_some_empty_errs_cleanly() {
+        let p = ProfileRules {
+            allow: Some(vec![]),  // Some but empty
+            deny: Some(vec![group("bad", &["1.2.3.4"])]),
+            default_action: DefaultAction::Deny,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        let mut d = GlobalConnectionIpRestrictionData {
+            enable: true,
+            active_profile: "p1".to_string(),
+            profiles: HashMap::from([("p1".to_string(), p)]),
+            description: None,
+        };
+        let err = d.validate_and_init().unwrap_err();
+        // Should error cleanly mentioning empty group list (not opaque "Failed to build IpRadixMatcher")
+        assert!(err.contains("empty"), "error should mention empty: {}", err);
     }
 }
