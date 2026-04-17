@@ -8,7 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- 
+
+- **GlobalConnectionIpRestriction** — new `PluginMetaData::GlobalConnectionIpRestriction` variant and
+  `EdgionStreamPlugin::GlobalConnectionIpRestriction` variant for L4 TCP connection-phase IP restriction.
+  Centrally managed by Center with per-Controller fan-out CRUD, PATCH shortcuts, and progressive sync.
+
+  New Center REST endpoints (all under `/api/v1/center/global-connection-ip-restrictions`):
+  - `GET  /` — aggregated list across all Controllers
+  - `GET  /consistency` — content-hash-based consistency check
+  - `GET  /{ns}/{name}` — single resource detail view
+  - `POST /` — create on specified controllers (fan-out)
+  - `PUT  /{ns}/{name}` — full update (fan-out)
+  - `DELETE /{ns}/{name}` — delete (fan-out)
+  - `PATCH /{ns}/{name}/enable` — fast toggle for `enable` flag
+  - `PATCH /{ns}/{name}/active-profile` — fast switch between named profiles
+  - `POST /{ns}/{name}/sync` — copy resource from source → target controllers
+
+  New frontend page: **"Global IP Restrictions"** in the Center sidebar.
 
 ### Changed
 - 
@@ -18,6 +34,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - 
+
+### Breaking Changes
+
+- **`EdgionStreamPlugin::IpRestriction`** — now uses `ConnectionIpRestrictionRules` (L4-only) instead of
+  the HTTP `IpRestrictionConfig`. The following fields have been **removed** and will cause deserialization
+  errors if present in existing YAML (`serde deny_unknown_fields` enforced):
+
+  | Removed field | Reason |
+  |---|---|
+  | `ipSource` | L4 has no headers; only `RemoteAddr` is available |
+  | `message`  | L4 rejection is a silent TCP close; no protocol-level response message |
+  | `status`   | L4 has no HTTP status codes |
+
+  **Migration** — remove all three fields from every `type: IpRestriction` entry under
+  `EdgionStreamPlugins.spec.plugins[]`:
+
+  ```yaml
+  # Before (fails to parse — unknown fields)
+  - type: IpRestriction
+    config:
+      allow: ["192.168.1.0/24"]
+      ipSource: RemoteAddr      # DELETE
+      message: "blocked"        # DELETE
+      status: 403               # DELETE
+      defaultAction: deny
+
+  # After
+  - type: IpRestriction
+    config:
+      allow: ["192.168.1.0/24"]
+      defaultAction: deny
+  ```
+
+  > **Note:** `TlsRouteStreamPlugin::IpRestriction` (Stage 2, `spec.tlsRoutePlugins`) still uses
+  > the HTTP `IpRestrictionConfig` (post-TLS handshake with SNI context) and is **unchanged**.
 
 ---
 
