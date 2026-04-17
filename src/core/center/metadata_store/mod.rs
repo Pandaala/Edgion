@@ -15,6 +15,10 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_
 };
 use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
 use crate::types::resources::plugin_metadata::PluginMetaData;
+#[allow(unused_imports)]
+use crate::types::resources::plugin_metadata::{
+    GlobalConnectionIpRestrictionData, ProfileRules,
+};
 
 /// View of aggregated ClusterRegionRoute entries from all controllers for a single pm_key.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -37,14 +41,36 @@ pub struct CenterServiceRouteView {
     pub controllers: HashMap<String, ServiceRegionRouteEntry>,
 }
 
+/// Per-Controller view of a GlobalConnectionIpRestriction PM aggregated at Center.
+/// (Naming disambiguation: distinct from `GlobalConnectionIpRestrictionEntry` in
+/// edgion_stream_plugins — that one is the stream-plugin ref carrier.)
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct ControllerPmEntry {
+    pub pm_namespace: String,
+    pub pm_name: String,
+    pub enable: bool,
+    pub active_profile: String,
+    pub profiles: std::collections::HashMap<String, ProfileRules>,
+    pub description: Option<String>,
+    /// sha256 over canonical JSON of the PM data; used for consistency/freshness display.
+    pub content_hash: String,
+    /// Unix ms of last modification on the Controller (Center-assigned on observation).
+    pub last_modified: i64,
+}
+
 /// Aggregates RegionRoute PluginMetaData across all controllers.
 ///
 /// Internal structure:
 /// - `cluster_routes`: pm_key → { controller_id → ClusterRegionRouteEntry }
 /// - `service_routes`: pm_key → { controller_id → ServiceRegionRouteEntry }
+/// - `global_ip_restrictions`: pm_key → { controller_id → ControllerPmEntry }
 pub struct CenterMetaDataStore {
     cluster_routes: RwLock<HashMap<String, HashMap<String, ClusterRegionRouteEntry>>>,
     service_routes: RwLock<HashMap<String, HashMap<String, ServiceRegionRouteEntry>>>,
+    // pm_key ("ns/name") → { controller_id → entry }
+    global_ip_restrictions: RwLock<HashMap<String, HashMap<String, ControllerPmEntry>>>,
 }
 
 impl CenterMetaDataStore {
@@ -52,6 +78,7 @@ impl CenterMetaDataStore {
         Self {
             cluster_routes: RwLock::new(HashMap::new()),
             service_routes: RwLock::new(HashMap::new()),
+            global_ip_restrictions: RwLock::new(HashMap::new()),
         }
     }
 
@@ -87,6 +114,24 @@ impl CenterMetaDataStore {
                 }
             })
             .collect()
+    }
+
+    /// List all GlobalConnectionIpRestriction PMs aggregated across Controllers.
+    /// Returns `pm_key → { controller_id → entry }`.
+    #[allow(dead_code)]
+    pub fn list_global_ip_restrictions(
+        &self,
+    ) -> std::collections::HashMap<String, std::collections::HashMap<String, ControllerPmEntry>> {
+        self.global_ip_restrictions.read().clone()
+    }
+
+    /// Get a single PM's entries across Controllers.
+    #[allow(dead_code)]
+    pub fn get_global_ip_restriction(
+        &self,
+        pm_key: &str,
+    ) -> Option<std::collections::HashMap<String, ControllerPmEntry>> {
+        self.global_ip_restrictions.read().get(pm_key).cloned()
     }
 
     /// Remove all entries for a given controller from both maps.
