@@ -8,8 +8,9 @@ use crate::core::gateway::plugins::stream::stream_plugin_trait::{
 };
 use crate::types::resources::edgion_gateway_config::PluginReference;
 
+const PLUGIN_NAME: &str = "GlobalConnectionIpRestriction";
+
 pub struct GlobalConnectionIpRestrictionPlugin {
-    name: String,
     plugin_metadata_ref: PluginReference,
     parent_namespace: String,
 }
@@ -17,7 +18,6 @@ pub struct GlobalConnectionIpRestrictionPlugin {
 impl GlobalConnectionIpRestrictionPlugin {
     pub fn new(plugin_metadata_ref: PluginReference, parent_namespace: String) -> Self {
         Self {
-            name: "GlobalConnectionIpRestriction".to_string(),
             plugin_metadata_ref,
             parent_namespace,
         }
@@ -35,7 +35,7 @@ impl GlobalConnectionIpRestrictionPlugin {
 #[async_trait]
 impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
     fn name(&self) -> &str {
-        &self.name
+        PLUGIN_NAME
     }
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
