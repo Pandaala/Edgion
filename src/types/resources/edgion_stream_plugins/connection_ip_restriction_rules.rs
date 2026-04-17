@@ -124,4 +124,29 @@ mod tests {
         let result: Result<ConnectionIpRestrictionRules, _> = serde_json::from_str(json);
         assert!(result.is_err(), "should reject unknown 'message' field");
     }
+
+    #[test]
+    fn deny_only_default_deny_blocks_all_unmatched() {
+        let mut r = ConnectionIpRestrictionRules {
+            deny: Some(vec!["1.2.3.4".to_string()]),
+            default_action: DefaultAction::Deny,
+            ..Default::default()
+        };
+        r.validate_and_init().unwrap();
+        assert!(!r.check_ip(&"1.2.3.4".parse().unwrap())); // in deny list
+        assert!(!r.check_ip(&"8.8.8.8".parse().unwrap())); // not in deny, default Deny
+    }
+
+    #[test]
+    fn ipv6_allow_and_deny_work() {
+        let mut r = ConnectionIpRestrictionRules {
+            allow: Some(vec!["2001:db8::/32".to_string()]),
+            deny: Some(vec!["2001:db8:dead::/48".to_string()]),
+            ..Default::default()
+        };
+        r.validate_and_init().unwrap();
+        assert!(r.check_ip(&"2001:db8::1".parse().unwrap())); // in allow
+        assert!(!r.check_ip(&"2001:db8:dead::1".parse().unwrap())); // in deny (wins)
+        assert!(!r.check_ip(&"2001:db9::1".parse().unwrap())); // outside allow
+    }
 }
