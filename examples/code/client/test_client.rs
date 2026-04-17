@@ -117,6 +117,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "security" => "Gateway/Security".to_string(),
             "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
             "tcp-stream-plugins" | "tcpstreamplugins" => "TCPRoute/StreamPlugins".to_string(),
+            "tcp-gcir" | "tcpgcir" | "tcp-global-connection-ip-restriction" => {
+                "TCPRoute/GlobalConnectionIpRestriction".to_string()
+            }
             "tls" | "tls-route" | "tlsroute" => "TLSRoute/Basic".to_string(),
             "tls-pp2" | "tlspp2" | "tls-proxy-protocol" => "TLSRoute/ProxyProtocol".to_string(),
             "tls-stream-plugins" | "tlsstreamplugins" => "TLSRoute/StreamPlugins".to_string(),
@@ -200,6 +203,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
+        "TCPRoute/GlobalConnectionIpRestriction" => "TCPRoute/GlobalConnectionIpRestriction",
         // TLSRoute
         "TLSRoute/Basic" | "TLSRoute" => "TLSRoute/Basic",
         "TLSRoute/ProxyProtocol" => "TLSRoute/ProxyProtocol",
@@ -491,6 +495,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TcpStreamPluginsTestSuite));
+        }
+        "TCPRoute/GlobalConnectionIpRestriction" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/GlobalConnectionIpRestriction tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GcirEnforcementTestSuite));
         }
         // TLSRoute
         "TLSRoute" | "TLSRoute/Basic" => {

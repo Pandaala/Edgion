@@ -181,6 +181,9 @@
     },
     "Gateway/TLS/MisdirectedRequest": {
       "https": 31337
+    },
+    "TCPRoute/GlobalConnectionIpRestriction": {
+      "tcp": 31296
     }
   }
 }
