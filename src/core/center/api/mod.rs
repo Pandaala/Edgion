@@ -14,10 +14,14 @@
 //!   POST /api/v1/center/service-region-routes/failover             → fan-out failover to all online controllers (new-URL path)
 //!   GET  /api/v1/center/cluster-region-routes/consistency          → consistency detection across controllers
 //!   GET  /api/v1/center/service-region-routes/consistency          → consistency detection across controllers
-//!   GET  /api/v1/center/global-connection-ip-restrictions            → aggregated GlobalConnectionIpRestriction list from MetaDataStore
-//!   POST /api/v1/center/global-connection-ip-restrictions            → create/upsert GlobalConnectionIpRestriction (fan-out PUT to target controllers)
-//!   GET  /api/v1/center/global-connection-ip-restrictions/{ns}/{name} → single GlobalConnectionIpRestriction detail
-//!   GET  /api/v1/center/global-connection-ip-restrictions/consistency → consistency detection across controllers
+//!   GET    /api/v1/center/global-connection-ip-restrictions                        → aggregated GlobalConnectionIpRestriction list from MetaDataStore
+//!   POST   /api/v1/center/global-connection-ip-restrictions                        → create/upsert GlobalConnectionIpRestriction (fan-out PUT to target controllers)
+//!   GET    /api/v1/center/global-connection-ip-restrictions/{ns}/{name}            → single GlobalConnectionIpRestriction detail
+//!   PUT    /api/v1/center/global-connection-ip-restrictions/{ns}/{name}            → update GlobalConnectionIpRestriction (fan-out PUT to target controllers)
+//!   DELETE /api/v1/center/global-connection-ip-restrictions/{ns}/{name}            → delete GlobalConnectionIpRestriction (fan-out DELETE to target controllers)
+//!   PATCH  /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/enable     → flip enable flag (read-modify-write per controller)
+//!   PATCH  /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/active-profile → switch active profile (read-modify-write per controller)
+//!   GET    /api/v1/center/global-connection-ip-restrictions/consistency            → consistency detection across controllers
 //!   GET  /api/v1/center/admin/watch-status                          → watch cache sync status per controller
 //!   GET  /api/v1/center/admin/metadata-store                         → metadata store key summary
 //!   ANY  /api/v1/proxy/{controller_id}/*rest                       → proxy HTTP request to controller
@@ -26,7 +30,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{any, delete, get, post},
+    routing::{any, delete, get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -111,7 +115,17 @@ pub fn router(state: ApiState) -> Router {
         )
         .route(
             "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}",
-            get(global_connection_ip_restriction_handlers::get_global_ip_restriction),
+            get(global_connection_ip_restriction_handlers::get_global_ip_restriction)
+                .put(global_connection_ip_restriction_handlers::update_global_ip_restriction)
+                .delete(global_connection_ip_restriction_handlers::delete_global_ip_restriction),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}/enable",
+            patch(global_connection_ip_restriction_handlers::patch_enable),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}/active-profile",
+            patch(global_connection_ip_restriction_handlers::patch_active_profile),
         )
         .route(
             "/api/v1/center/global-connection-ip-restrictions/consistency",
