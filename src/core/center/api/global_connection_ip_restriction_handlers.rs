@@ -508,3 +508,79 @@ pub async fn patch_active_profile(
     let (success, failed) = partition(results);
     Json(ApiResponse::success(FanOutResponse { success, failed, warnings }))
 }
+
+// =====================================================================
+// POST /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/sync
+// =====================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncRequest {
+    pub source_controller: String,
+    pub target_controllers: Vec<String>,
+}
+
+/// `POST /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/sync`
+///
+/// Copy a PM's current state from `source_controller` to `target_controllers`.
+/// `target_controllers: ["all"]` expands to all online controllers except the source.
+pub async fn sync_global_ip_restriction(
+    State(state): State<ApiState>,
+    Path((ns, name)): Path<(String, String)>,
+    Json(req): Json<SyncRequest>,
+) -> Json<ApiResponse<FanOutResponse>> {
+    let pm_key = format!("{}/{}", ns, name);
+    let per_ctrl = match state.metadata_store.get_global_ip_restriction(&pm_key) {
+        Some(m) => m,
+        None => {
+            return Json(ApiResponse::success(FanOutResponse {
+                success: vec![],
+                failed: vec![ControllerOpResult {
+                    controller_id: "<lookup>".to_string(),
+                    detail: None,
+                    error: Some("PM not found".to_string()),
+                    status_code: Some(404),
+                }],
+                warnings: vec![],
+            }));
+        }
+    };
+
+    let Some(source_entry) = per_ctrl.get(&req.source_controller) else {
+        return Json(ApiResponse::success(FanOutResponse {
+            success: vec![],
+            failed: vec![ControllerOpResult {
+                controller_id: req.source_controller.clone(),
+                detail: None,
+                error: Some("source controller does not have this PM".to_string()),
+                status_code: Some(404),
+            }],
+            warnings: vec![],
+        }));
+    };
+
+    // Resolve targets: "all" = all online except source.
+    let (targets, warnings) = if req.target_controllers.len() == 1 && req.target_controllers[0] == "all" {
+        let online = online_controllers(&state);
+        let targets: Vec<_> = online
+            .into_iter()
+            .filter(|cid| cid != &req.source_controller)
+            .collect();
+        (targets, vec![])
+    } else {
+        (req.target_controllers.clone(), vec![])
+    };
+
+    // Reconstruct the PM data from the source ControllerPmEntry.
+    let data = GlobalConnectionIpRestrictionData {
+        enable: source_entry.enable,
+        active_profile: source_entry.active_profile.clone(),
+        profiles: source_entry.profiles.clone(),
+        description: source_entry.description.clone(),
+    };
+    let body = build_pm_json(&ns, &name, &data).into_bytes();
+    let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
+    let results = fan_out_http(&state, targets, "PUT", path, body).await;
+    let (success, failed) = partition(results);
+    Json(ApiResponse::success(FanOutResponse { success, failed, warnings }))
+}

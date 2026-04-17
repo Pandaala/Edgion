@@ -21,6 +21,7 @@
 //!   DELETE /api/v1/center/global-connection-ip-restrictions/{ns}/{name}            → delete GlobalConnectionIpRestriction (fan-out DELETE to target controllers)
 //!   PATCH  /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/enable     → flip enable flag (read-modify-write per controller)
 //!   PATCH  /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/active-profile → switch active profile (read-modify-write per controller)
+//!   POST   /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/sync       → copy PM state from source controller to target controllers
 //!   GET    /api/v1/center/global-connection-ip-restrictions/consistency            → consistency detection across controllers
 //!   GET  /api/v1/center/admin/watch-status                          → watch cache sync status per controller
 //!   GET  /api/v1/center/admin/metadata-store                         → metadata store key summary
@@ -126,6 +127,10 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}/active-profile",
             patch(global_connection_ip_restriction_handlers::patch_active_profile),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}/sync",
+            post(global_connection_ip_restriction_handlers::sync_global_ip_restriction),
         )
         .route(
             "/api/v1/center/global-connection-ip-restrictions/consistency",
