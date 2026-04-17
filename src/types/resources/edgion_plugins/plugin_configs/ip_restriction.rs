@@ -136,6 +136,8 @@ impl IpRestrictionConfig {
 
     /// Validate configuration and initialize runtime matchers
     pub fn validate_and_init(&mut self) -> Result<(), String> {
+        use crate::core::common::matcher::ip_cidr_helpers::build_radix_matcher;
+
         // Validation: must have at least one of allow or deny
         if self.allow.is_none() && self.deny.is_none() {
             return Err("At least one of 'allow' or 'deny' must be specified".to_string());
@@ -146,112 +148,23 @@ impl IpRestrictionConfig {
             return Err(format!("Invalid status code: {}", self.status));
         }
 
-        // Build allow matcher from allow list
+        // Build allow matcher
         if let Some(ref allow_list) = self.allow {
             if allow_list.is_empty() {
                 return Err("'allow' list cannot be empty".to_string());
             }
-
-            let mut builder = IpRadixMatcher::builder();
-            for ip_str in allow_list {
-                // Validate IP/CIDR format
-                Self::validate_ip_or_cidr(ip_str)?;
-
-                // Convert single IP to CIDR format if needed
-                let cidr_str = Self::to_cidr_format(ip_str)?;
-
-                builder
-                    .insert(&cidr_str, true)
-                    .map_err(|e| format!("Invalid IP/CIDR in allow list '{}': {}", ip_str, e))?;
-            }
-
-            self.allow_matcher = Some(
-                builder
-                    .build()
-                    .map_err(|e| format!("Failed to build allow matcher: {}", e))?,
-            );
+            self.allow_matcher = Some(build_radix_matcher(allow_list)?);
         }
 
-        // Build deny matcher from deny list
+        // Build deny matcher
         if let Some(ref deny_list) = self.deny {
             if deny_list.is_empty() {
                 return Err("'deny' list cannot be empty".to_string());
             }
-
-            let mut builder = IpRadixMatcher::builder();
-            for ip_str in deny_list {
-                // Validate IP/CIDR format
-                Self::validate_ip_or_cidr(ip_str)?;
-
-                // Convert single IP to CIDR format if needed
-                let cidr_str = Self::to_cidr_format(ip_str)?;
-
-                builder
-                    .insert(&cidr_str, true)
-                    .map_err(|e| format!("Invalid IP/CIDR in deny list '{}': {}", ip_str, e))?;
-            }
-
-            self.deny_matcher = Some(
-                builder
-                    .build()
-                    .map_err(|e| format!("Failed to build deny matcher: {}", e))?,
-            );
+            self.deny_matcher = Some(build_radix_matcher(deny_list)?);
         }
 
         Ok(())
-    }
-
-    /// Validate IP address or CIDR range format
-    fn validate_ip_or_cidr(ip_str: &str) -> Result<(), String> {
-        // Check if it's a CIDR range
-        if ip_str.contains('/') {
-            let parts: Vec<&str> = ip_str.split('/').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid CIDR format: {}", ip_str));
-            }
-
-            // Validate IP part
-            if parts[0].parse::<IpAddr>().is_err() {
-                return Err(format!("Invalid IP address in CIDR: {}", parts[0]));
-            }
-
-            // Validate prefix length
-            let prefix_len: u8 = parts[1]
-                .parse()
-                .map_err(|_| format!("Invalid prefix length in CIDR: {}", parts[1]))?;
-
-            // Check prefix length bounds (0-32 for IPv4, 0-128 for IPv6)
-            let ip: IpAddr = parts[0].parse().unwrap();
-            let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
-            if prefix_len > max_prefix {
-                return Err(format!(
-                    "Prefix length {} exceeds maximum {} for {:?}",
-                    prefix_len, max_prefix, ip
-                ));
-            }
-        } else {
-            // Validate single IP address
-            if ip_str.parse::<IpAddr>().is_err() {
-                return Err(format!("Invalid IP address: {}", ip_str));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Convert IP address to CIDR format if it's not already
-    /// Single IPv4 becomes /32, single IPv6 becomes /128
-    fn to_cidr_format(ip_str: &str) -> Result<String, String> {
-        if ip_str.contains('/') {
-            // Already in CIDR format
-            Ok(ip_str.to_string())
-        } else {
-            // Single IP address - convert to CIDR
-            let ip: IpAddr = ip_str.parse().map_err(|_| format!("Invalid IP address: {}", ip_str))?;
-
-            let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
-            Ok(format!("{}/{}", ip_str, prefix_len))
-        }
     }
 
     /// Check if an IP address should be allowed or denied
