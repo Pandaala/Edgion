@@ -14,6 +14,9 @@
 //!   POST /api/v1/center/service-region-routes/failover             → fan-out failover to all online controllers (new-URL path)
 //!   GET  /api/v1/center/cluster-region-routes/consistency          → consistency detection across controllers
 //!   GET  /api/v1/center/service-region-routes/consistency          → consistency detection across controllers
+//!   GET  /api/v1/center/global-connection-ip-restrictions            → aggregated GlobalConnectionIpRestriction list from MetaDataStore
+//!   GET  /api/v1/center/global-connection-ip-restrictions/{ns}/{name} → single GlobalConnectionIpRestriction detail
+//!   GET  /api/v1/center/global-connection-ip-restrictions/consistency → consistency detection across controllers
 //!   GET  /api/v1/center/admin/watch-status                          → watch cache sync status per controller
 //!   GET  /api/v1/center/admin/metadata-store                         → metadata store key summary
 //!   ANY  /api/v1/proxy/{controller_id}/*rest                       → proxy HTTP request to controller

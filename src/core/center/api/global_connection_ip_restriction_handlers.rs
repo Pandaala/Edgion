@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::core::center::api::ApiState;
 use crate::core::center::metadata_store::ControllerPmEntry;
+use crate::core::common::api::ApiResponse;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,24 +23,12 @@ pub struct CenterGlobalIpRestrictionView {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ListResponse {
-    pub items: Vec<CenterGlobalIpRestrictionView>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ConsistencyResult {
     pub namespace: String,
     pub name: String,
     pub consistent: bool,
     pub controller_count: usize,
     pub conflicts: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConsistencyResponse {
-    pub items: Vec<ConsistencyResult>,
 }
 
 fn split_pm_key(key: &str) -> (String, String) {
@@ -60,7 +49,9 @@ fn online_controllers(state: &ApiState) -> Vec<String> {
 }
 
 /// `GET /api/v1/center/global-connection-ip-restrictions`
-pub async fn list_global_ip_restrictions(State(state): State<ApiState>) -> Json<ListResponse> {
+pub async fn list_global_ip_restrictions(
+    State(state): State<ApiState>,
+) -> Json<ApiResponse<Vec<CenterGlobalIpRestrictionView>>> {
     let raw = state.metadata_store.list_global_ip_restrictions();
     let online = online_controllers(&state);
     let items: Vec<_> = raw
@@ -75,31 +66,37 @@ pub async fn list_global_ip_restrictions(State(state): State<ApiState>) -> Json<
             }
         })
         .collect();
-    Json(ListResponse { items })
+    Json(ApiResponse::success(items))
 }
 
 /// `GET /api/v1/center/global-connection-ip-restrictions/{ns}/{name}`
 pub async fn get_global_ip_restriction(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
-) -> Result<Json<CenterGlobalIpRestrictionView>, StatusCode> {
+) -> Result<Json<ApiResponse<CenterGlobalIpRestrictionView>>, (StatusCode, Json<ApiResponse<()>>)> {
     let pm_key = format!("{}/{}", ns, name);
     let Some(per_ctrl) = state.metadata_store.get_global_ip_restriction(&pm_key) else {
-        return Err(StatusCode::NOT_FOUND);
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::error(format!(
+                "GlobalConnectionIpRestriction {}/{} not found",
+                ns, name
+            ))),
+        ));
     };
     let online = online_controllers(&state);
-    Ok(Json(CenterGlobalIpRestrictionView {
+    Ok(Json(ApiResponse::success(CenterGlobalIpRestrictionView {
         namespace: ns,
         name,
         controllers: per_ctrl,
         online_controller_ids: online,
-    }))
+    })))
 }
 
 /// `GET /api/v1/center/global-connection-ip-restrictions/consistency`
 pub async fn global_ip_restrictions_consistency(
     State(state): State<ApiState>,
-) -> Json<ConsistencyResponse> {
+) -> Json<ApiResponse<Vec<ConsistencyResult>>> {
     let raw = state.metadata_store.list_global_ip_restrictions();
     let items: Vec<_> = raw
         .into_iter()
@@ -119,5 +116,5 @@ pub async fn global_ip_restrictions_consistency(
             }
         })
         .collect();
-    Json(ConsistencyResponse { items })
+    Json(ApiResponse::success(items))
 }
