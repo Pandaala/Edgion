@@ -7,6 +7,7 @@
 //! - `IpList`: IP address / CIDR list (for IP-based filtering)
 //! - `ClusterRegionRoute`: Full region topology and routing rules
 //! - `ServiceRegionRoute`: Per-service failover overrides referencing a ClusterRegionRoute
+//! - `GlobalConnectionIpRestriction`: L4 TCP connection-phase IP restriction with profile switching
 
 pub mod global_connection_ip_restriction;
 pub mod ip_list;
@@ -70,6 +71,9 @@ pub enum MetaDataEntry {
     /// Service-level RegionRoute: failover overrides with clusterRef.
     /// Created by administrator.
     ServiceRegionRoute(ServiceRegionRouteConfig),
+
+    /// L4 TCP connection-phase IP restriction with profile switching. Center-managed.
+    GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionData),
 }
 
 impl PluginMetaData {
@@ -80,6 +84,7 @@ impl PluginMetaData {
             MetaDataEntry::IpList(_) => "IpList",
             MetaDataEntry::ClusterRegionRoute(_) => "ClusterRegionRoute",
             MetaDataEntry::ServiceRegionRoute(_) => "ServiceRegionRoute",
+            MetaDataEntry::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
         }
     }
 
@@ -110,6 +115,16 @@ impl PluginMetaData {
                             );
                         }
                     }
+                }
+            }
+            MetaDataEntry::GlobalConnectionIpRestriction(data) => {
+                // Early validation: clone and run full validate_and_init to surface errors in logs.
+                let mut cloned = data.clone();
+                if let Err(e) = cloned.validate_and_init() {
+                    tracing::warn!(
+                        "PluginMetaData {}: GlobalConnectionIpRestriction invalid: {}",
+                        key_name, e
+                    );
                 }
             }
             // RegionRoute variants: no additional validation needed at pre-parse

@@ -149,6 +149,9 @@ impl PluginMetaDataGatewayStore {
                 MetaDataEntry::IpList(cfg) => {
                     ip_lists.insert(key.clone(), Arc::new(cfg.clone()));
                 }
+                MetaDataEntry::GlobalConnectionIpRestriction(_) => {
+                    // Placeholder — gateway-side store wired in Task 8
+                }
             }
         }
 
