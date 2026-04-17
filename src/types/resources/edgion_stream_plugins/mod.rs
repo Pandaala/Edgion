@@ -22,11 +22,11 @@ pub mod tls_route_plugins;
 // Re-exports from edgion_plugins
 pub use crate::types::resources::edgion_plugins::PluginEntry;
 pub use connection_ip_restriction_rules::ConnectionIpRestrictionRules;
-pub use stream_plugins::EdgionStreamPlugin;
+pub use stream_plugins::{EdgionStreamPlugin, GlobalConnectionIpRestrictionEntry};
 pub use tls_route_plugins::TlsRouteStreamPlugin;
 
 // Re-export plugin configs
-pub use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
+pub use crate::types::resources::edgion_plugins::DefaultAction;
 
 /// API group for EdgionStreamPlugins
 pub const EDGION_STREAM_PLUGINS_GROUP: &str = "edgion.io";

@@ -1,6 +1,5 @@
 //! Stream plugin runtime for executing stream plugins
 
-use super::ip_restriction::StreamIpRestriction;
 use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
 use std::sync::Arc;
@@ -34,7 +33,7 @@ impl StreamPluginRuntime {
 
     /// Create runtime from stream plugin entries
     pub fn from_stream_plugins(entries: &[StreamPluginEntry]) -> Self {
-        let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
+        let plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
 
         for entry in entries {
             // Skip disabled plugins
@@ -43,13 +42,17 @@ impl StreamPluginRuntime {
                 continue;
             }
 
-            // Create plugin based on type
-            let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(config) => Arc::new(StreamIpRestriction::new(config)),
-            };
-
-            tracing::debug!(plugin_name = plugin.name(), "Added stream plugin to runtime");
-            plugins.push(plugin);
+            // Dispatch to plugin constructor by type.
+            // TODO(Task 10): build StreamIpRestriction from ConnectionIpRestrictionRules
+            // TODO(Task 9/11): implement GlobalConnectionIpRestrictionPlugin
+            match &entry.plugin {
+                EdgionStreamPlugin::IpRestriction(_rules) => {
+                    tracing::warn!("IpRestriction stream plugin reshape pending (Task 10)");
+                }
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(_entry) => {
+                    tracing::warn!("GlobalConnectionIpRestriction stream plugin pending (Task 9/11)");
+                }
+            }
         }
 
         Self { plugins }

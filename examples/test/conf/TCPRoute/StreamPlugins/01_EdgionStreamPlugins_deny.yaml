@@ -10,4 +10,3 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: deny
-        message: "Blocked by TCPRoute stream plugin"

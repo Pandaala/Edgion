@@ -14,6 +14,10 @@
 //! - No HTTP response needed - connection is simply closed
 //! - More efficient for TCP/UDP protocols
 //! - Uses same IpRestrictionConfig for consistency
+//!
+//! NOTE: Task 10 will rewire this to use `ConnectionIpRestrictionRules` instead of
+//! `IpRestrictionConfig`. Dead-code allowed until then.
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 
