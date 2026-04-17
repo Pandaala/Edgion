@@ -1,8 +1,8 @@
-//! IP Restriction plugin for TLS route stage.
+//! IP Restriction plugin for TLS route stage (Stage 2, post-handshake).
 //!
-//! Same logic as StreamIpRestriction but implements the TlsRoutePlugin trait,
-//! giving it access to TlsRouteContext (SNI, route info, etc.).
-//! The IP check itself is identical — delegating to IpRestrictionConfig::check_ip_access.
+//! Uses the HTTP-layer `IpRestrictionConfig` (with protocol-level `message`/`status` support),
+//! distinct from the L4 `StreamIpRestriction` which uses `ConnectionIpRestrictionRules`.
+//! Applied post-TLS handshake, so it has access to SNI-routed context.
 
 use async_trait::async_trait;
 

@@ -20,5 +20,3 @@ pub use stream_plugin_store::{create_stream_plugin_handler, get_global_stream_pl
 pub use stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 pub use tls_route::{TlsRouteContext, TlsRoutePlugin, TlsRoutePluginRuntime};
 
-// Re-export plugin configs from types
-pub use crate::types::resources::edgion_plugins::IpRestrictionConfig;
