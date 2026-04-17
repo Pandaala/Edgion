@@ -15,6 +15,7 @@
 //!   GET  /api/v1/center/cluster-region-routes/consistency          → consistency detection across controllers
 //!   GET  /api/v1/center/service-region-routes/consistency          → consistency detection across controllers
 //!   GET  /api/v1/center/global-connection-ip-restrictions            → aggregated GlobalConnectionIpRestriction list from MetaDataStore
+//!   POST /api/v1/center/global-connection-ip-restrictions            → create/upsert GlobalConnectionIpRestriction (fan-out PUT to target controllers)
 //!   GET  /api/v1/center/global-connection-ip-restrictions/{ns}/{name} → single GlobalConnectionIpRestriction detail
 //!   GET  /api/v1/center/global-connection-ip-restrictions/consistency → consistency detection across controllers
 //!   GET  /api/v1/center/admin/watch-status                          → watch cache sync status per controller
@@ -105,7 +106,8 @@ pub fn router(state: ApiState) -> Router {
         // GlobalConnectionIpRestriction endpoints
         .route(
             "/api/v1/center/global-connection-ip-restrictions",
-            get(global_connection_ip_restriction_handlers::list_global_ip_restrictions),
+            get(global_connection_ip_restriction_handlers::list_global_ip_restrictions)
+                .post(global_connection_ip_restriction_handlers::create_global_ip_restriction),
         )
         .route(
             "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}",

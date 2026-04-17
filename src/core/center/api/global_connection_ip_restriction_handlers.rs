@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::core::center::api::ApiState;
@@ -135,7 +135,6 @@ pub struct ControllerOpResult {
     pub status_code: Option<u16>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FanOutResponse {
@@ -146,7 +145,6 @@ pub struct FanOutResponse {
 
 /// Resolve `controllers: ["all"]` or `["ctrl-a","ctrl-b"]` into (targets, warnings).
 /// `["all"]` → all online controllers. Offline explicit IDs stay in targets (the write will fail them).
-#[allow(dead_code)]
 fn resolve_targets(state: &ApiState, requested: &[String]) -> (Vec<String>, Vec<String>) {
     if requested.len() == 1 && requested[0] == "all" {
         let online = online_controllers(state);
@@ -167,7 +165,6 @@ fn resolve_targets(state: &ApiState, requested: &[String]) -> (Vec<String>, Vec<
 ///
 /// Note: `proxy.forward` returns `Result<HttpProxyResponse, (StatusCode, String)>`.
 /// `HttpProxyResponse.status_code` is `u32` (from proto uint32).
-#[allow(dead_code)]
 async fn fan_out_http(
     state: &ApiState,
     controllers: Vec<String>,
@@ -208,8 +205,78 @@ async fn fan_out_http(
     futures::future::join_all(futs).await
 }
 
-#[allow(dead_code)]
 fn partition(results: Vec<ControllerOpResult>) -> (Vec<ControllerOpResult>, Vec<ControllerOpResult>) {
     let (success, failed): (Vec<_>, Vec<_>) = results.into_iter().partition(|r| r.error.is_none());
     (success, failed)
+}
+
+// =====================================================================
+// POST /api/v1/center/global-connection-ip-restrictions
+// =====================================================================
+
+use crate::types::resources::plugin_metadata::GlobalConnectionIpRestrictionData;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRequest {
+    pub namespace: String,
+    pub name: String,
+    pub controllers: Vec<String>,
+    pub data: GlobalConnectionIpRestrictionData,
+}
+
+/// `POST /api/v1/center/global-connection-ip-restrictions`
+pub async fn create_global_ip_restriction(
+    State(state): State<ApiState>,
+    Json(req): Json<CreateRequest>,
+) -> Json<ApiResponse<FanOutResponse>> {
+    // Early validation: catch malformed data before fan-out.
+    {
+        let mut cloned = req.data.clone();
+        if let Err(e) = cloned.validate_and_init() {
+            let single = ControllerOpResult {
+                controller_id: "<validation>".to_string(),
+                detail: None,
+                error: Some(format!("invalid PM data: {}", e)),
+                status_code: Some(400),
+            };
+            return Json(ApiResponse::success(FanOutResponse {
+                success: vec![],
+                failed: vec![single],
+                warnings: vec![],
+            }));
+        }
+    }
+
+    let (targets, warnings) = resolve_targets(&state, &req.controllers);
+
+    let pm_json = build_pm_json(&req.namespace, &req.name, &req.data);
+    let body = pm_json.into_bytes();
+    // PUT /api/v1/namespaced/pluginmetadata/{namespace}/{name} — upsert on Controller
+    let path = format!(
+        "/api/v1/namespaced/pluginmetadata/{}/{}",
+        req.namespace, req.name
+    );
+    let results = fan_out_http(&state, targets, "PUT", path, body).await;
+    let (success, failed) = partition(results);
+    Json(ApiResponse::success(FanOutResponse {
+        success,
+        failed,
+        warnings,
+    }))
+}
+
+fn build_pm_json(ns: &str, name: &str, data: &GlobalConnectionIpRestrictionData) -> String {
+    let doc = serde_json::json!({
+        "apiVersion": "edgion.io/v1",
+        "kind": "PluginMetaData",
+        "metadata": { "name": name, "namespace": ns },
+        "spec": {
+            "metadata": {
+                "type": "GlobalConnectionIpRestriction",
+                "config": data
+            }
+        }
+    });
+    serde_json::to_string(&doc).expect("serde_json serialize")
 }
