@@ -15,9 +15,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_
 };
 use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
 use crate::types::resources::plugin_metadata::PluginMetaData;
-#[allow(unused_imports)]
 use crate::types::resources::plugin_metadata::{
-    GlobalConnectionIpRestrictionData, ProfileRules,
+    GlobalConnectionIpRestrictionData, MetaDataEntry, ProfileRules,
 };
 
 /// View of aggregated ClusterRegionRoute entries from all controllers for a single pm_key.
@@ -46,7 +45,6 @@ pub struct CenterServiceRouteView {
 /// edgion_stream_plugins — that one is the stream-plugin ref carrier.)
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct ControllerPmEntry {
     pub pm_namespace: String,
     pub pm_name: String,
@@ -172,6 +170,7 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
         // Classify all PMs first (no locks needed)
         let mut new_cluster: HashMap<String, ClusterRegionRouteEntry> = HashMap::new();
         let mut new_service: HashMap<String, ServiceRegionRouteEntry> = HashMap::new();
+        let mut new_gir: HashMap<String, ControllerPmEntry> = HashMap::new();
 
         for (pm_key, pm) in data {
             match parse_region_route(pm) {
@@ -182,6 +181,21 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                     new_service.insert(pm_key.clone(), entry);
                 }
                 ParsedRegionRoute::Other => {}
+            }
+            if let MetaDataEntry::GlobalConnectionIpRestriction(ref gir_data) = pm.spec.metadata {
+                let ns = pm.metadata.namespace.clone().unwrap_or_default();
+                let name = pm.metadata.name.clone().unwrap_or_default();
+                let entry = ControllerPmEntry {
+                    pm_namespace: ns,
+                    pm_name: name,
+                    enable: gir_data.enable,
+                    active_profile: gir_data.active_profile.clone(),
+                    profiles: gir_data.profiles.clone(),
+                    description: gir_data.description.clone(),
+                    content_hash: canonical_hash(gir_data),
+                    last_modified: chrono::Utc::now().timestamp_millis(),
+                };
+                new_gir.insert(pm_key.clone(), entry);
             }
         }
 
@@ -214,6 +228,20 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                     .insert(controller_id.to_string(), entry);
             }
         }
+
+        // Single lock acquisition for global_ip_restrictions
+        {
+            let mut gir = self.global_ip_restrictions.write();
+            gir.retain(|_, controllers| {
+                controllers.remove(controller_id);
+                !controllers.is_empty()
+            });
+            for (pm_key, entry) in new_gir {
+                gir.entry(pm_key)
+                    .or_default()
+                    .insert(controller_id.to_string(), entry);
+            }
+        }
     }
 
     fn partial_update(
@@ -226,6 +254,7 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
         // Classify add+update (no locks needed)
         let mut cluster_upserts: HashMap<String, ClusterRegionRouteEntry> = HashMap::new();
         let mut service_upserts: HashMap<String, ServiceRegionRouteEntry> = HashMap::new();
+        let mut gir_upserts: HashMap<String, ControllerPmEntry> = HashMap::new();
 
         for (pm_key, pm) in add.iter().chain(update.iter()) {
             match parse_region_route(pm) {
@@ -236,6 +265,21 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                     service_upserts.insert(pm_key.clone(), entry);
                 }
                 ParsedRegionRoute::Other => {}
+            }
+            if let MetaDataEntry::GlobalConnectionIpRestriction(ref gir_data) = pm.spec.metadata {
+                let ns = pm.metadata.namespace.clone().unwrap_or_default();
+                let name = pm.metadata.name.clone().unwrap_or_default();
+                let entry = ControllerPmEntry {
+                    pm_namespace: ns,
+                    pm_name: name,
+                    enable: gir_data.enable,
+                    active_profile: gir_data.active_profile.clone(),
+                    profiles: gir_data.profiles.clone(),
+                    description: gir_data.description.clone(),
+                    content_hash: canonical_hash(gir_data),
+                    last_modified: chrono::Utc::now().timestamp_millis(),
+                };
+                gir_upserts.insert(pm_key.clone(), entry);
             }
         }
 
@@ -276,6 +320,24 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                     .insert(controller_id.to_string(), entry);
             }
         }
+
+        // Apply global_ip_restrictions changes in one lock
+        {
+            let mut gir = self.global_ip_restrictions.write();
+            for pm_key in &remove {
+                if let Some(controllers) = gir.get_mut(pm_key.as_str()) {
+                    controllers.remove(controller_id);
+                    if controllers.is_empty() {
+                        gir.remove(pm_key.as_str());
+                    }
+                }
+            }
+            for (pm_key, entry) in gir_upserts {
+                gir.entry(pm_key)
+                    .or_default()
+                    .insert(controller_id.to_string(), entry);
+            }
+        }
     }
 
     fn controller_offline(&self, _controller_id: &str) {
@@ -294,6 +356,37 @@ fn split_pm_key(pm_key: &str) -> (String, String) {
         Some((ns, name)) => (ns.to_string(), name.to_string()),
         None => (String::new(), pm_key.to_string()),
     }
+}
+
+/// Compute a deterministic SHA-256 hex digest over the canonical JSON of a
+/// [`GlobalConnectionIpRestrictionData`].  Profile map keys are sorted before
+/// serialization so that insertion order cannot affect the output.
+///
+/// The hash is used for UI freshness/consistency display only — crypto strength
+/// is not required, but **determinism is**.
+fn canonical_hash(data: &GlobalConnectionIpRestrictionData) -> String {
+    use sha2::{Digest, Sha256};
+
+    // Sort profile entries for a deterministic iteration order.
+    let mut profile_pairs: Vec<(&String, &ProfileRules)> = data.profiles.iter().collect();
+    profile_pairs.sort_by(|a, b| a.0.cmp(b.0));
+
+    // serde_json::json! serializes ProfileRules via its Serialize impl which
+    // already skips `allow_matcher` / `deny_matcher` (#[serde(skip)]), so the
+    // hash input never contains runtime-only fields.
+    let canon = serde_json::json!({
+        "enable": data.enable,
+        "activeProfile": data.active_profile,
+        "description": data.description,
+        "profiles": profile_pairs
+            .iter()
+            .map(|(k, v)| (k, v))
+            .collect::<Vec<_>>(),
+    });
+
+    let mut hasher = Sha256::new();
+    hasher.update(canon.to_string().as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 #[cfg(test)]
@@ -436,5 +529,167 @@ mod tests {
             store.list_service_routes().is_empty(),
             "service route should be removed"
         );
+    }
+
+    // ── GlobalConnectionIpRestriction helpers ──────────────────────────────────
+
+    fn make_gir_pm(namespace: &str, name: &str) -> PluginMetaData {
+        use crate::types::resources::edgion_plugins::DefaultAction;
+        use crate::types::resources::plugin_metadata::{IpGroup, ProfileRules};
+
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileRules {
+                allow: Some(vec![IpGroup {
+                    name: "internal".to_string(),
+                    description: None,
+                    cidrs: vec!["10.0.0.0/8".to_string()],
+                }]),
+                deny: None,
+                default_action: DefaultAction::Deny,
+                allow_matcher: None,
+                deny_matcher: None,
+            },
+        );
+        let spec = PluginMetaDataSpec {
+            metadata: MetaDataEntry::GlobalConnectionIpRestriction(
+                GlobalConnectionIpRestrictionData {
+                    enable: true,
+                    active_profile: "default".to_string(),
+                    profiles,
+                    description: None,
+                },
+            ),
+        };
+        let mut pm = PluginMetaData::new(name, spec);
+        pm.metadata.namespace = Some(namespace.to_string());
+        pm
+    }
+
+    #[test]
+    fn full_set_populates_global_ip_restrictions() {
+        let store = CenterMetaDataStore::new();
+        let pm = make_gir_pm("prod", "global-ip");
+        let data = make_full_set(vec![("prod/global-ip", pm)]);
+        store.full_set("ctrl-1", &data);
+
+        let result = store.list_global_ip_restrictions();
+        assert_eq!(result.len(), 1);
+        let inner = result.get("prod/global-ip").expect("should have pm_key");
+        assert!(inner.contains_key("ctrl-1"));
+        let entry = &inner["ctrl-1"];
+        assert_eq!(entry.pm_namespace, "prod");
+        assert_eq!(entry.pm_name, "global-ip");
+        assert!(entry.enable);
+        assert_eq!(entry.active_profile, "default");
+        assert!(!entry.content_hash.is_empty());
+    }
+
+    #[test]
+    fn full_set_replaces_gir_for_same_controller() {
+        let store = CenterMetaDataStore::new();
+
+        let pm1 = make_gir_pm("prod", "gir-old");
+        let data1 = make_full_set(vec![("prod/gir-old", pm1)]);
+        store.full_set("ctrl-1", &data1);
+        assert_eq!(store.list_global_ip_restrictions().len(), 1);
+
+        let pm2 = make_gir_pm("prod", "gir-new");
+        let data2 = make_full_set(vec![("prod/gir-new", pm2)]);
+        store.full_set("ctrl-1", &data2);
+
+        let result = store.list_global_ip_restrictions();
+        assert_eq!(result.len(), 1, "old entry should be gone");
+        assert!(result.contains_key("prod/gir-new"));
+        assert!(!result.contains_key("prod/gir-old"));
+    }
+
+    #[test]
+    fn multi_controller_gir_aggregation() {
+        let store = CenterMetaDataStore::new();
+
+        let pm1 = make_gir_pm("prod", "shared-gir");
+        let data1 = make_full_set(vec![("prod/shared-gir", pm1)]);
+        store.full_set("ctrl-1", &data1);
+
+        let pm2 = make_gir_pm("prod", "shared-gir");
+        let data2 = make_full_set(vec![("prod/shared-gir", pm2)]);
+        store.full_set("ctrl-2", &data2);
+
+        let result = store.list_global_ip_restrictions();
+        assert_eq!(result.len(), 1, "same pm_key → one outer entry");
+        let inner = &result["prod/shared-gir"];
+        assert_eq!(inner.len(), 2, "two controllers");
+        assert!(inner.contains_key("ctrl-1"));
+        assert!(inner.contains_key("ctrl-2"));
+    }
+
+    #[test]
+    fn partial_update_upserts_and_removes_gir() {
+        let store = CenterMetaDataStore::new();
+
+        // Seed via full_set
+        let pm = make_gir_pm("prod", "gir-a");
+        let data = make_full_set(vec![("prod/gir-a", pm)]);
+        store.full_set("ctrl-1", &data);
+        assert_eq!(store.list_global_ip_restrictions().len(), 1);
+
+        // Add a second GIR via partial_update
+        let pm_b = make_gir_pm("prod", "gir-b");
+        let add = make_full_set(vec![("prod/gir-b", pm_b)]);
+        store.partial_update("ctrl-1", add, HashMap::new(), HashSet::new());
+        assert_eq!(store.list_global_ip_restrictions().len(), 2);
+
+        // Remove the first via partial_update
+        let remove: HashSet<String> = ["prod/gir-a".to_string()].into_iter().collect();
+        store.partial_update("ctrl-1", HashMap::new(), HashMap::new(), remove);
+        let result = store.list_global_ip_restrictions();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key("prod/gir-b"));
+    }
+
+    #[test]
+    fn canonical_hash_stable_across_profile_insert_order() {
+        use crate::types::resources::edgion_plugins::DefaultAction;
+        use crate::types::resources::plugin_metadata::{IpGroup, ProfileRules};
+
+        fn mk_profile() -> ProfileRules {
+            ProfileRules {
+                allow: Some(vec![IpGroup {
+                    name: "g".into(),
+                    description: None,
+                    cidrs: vec!["10.0.0.0/8".into()],
+                }]),
+                deny: None,
+                default_action: DefaultAction::Deny,
+                allow_matcher: None,
+                deny_matcher: None,
+            }
+        }
+
+        let d1 = GlobalConnectionIpRestrictionData {
+            enable: true,
+            active_profile: "a".to_string(),
+            profiles: {
+                let mut m = HashMap::new();
+                m.insert("a".to_string(), mk_profile());
+                m.insert("b".to_string(), mk_profile());
+                m
+            },
+            description: None,
+        };
+        let d2 = GlobalConnectionIpRestrictionData {
+            enable: true,
+            active_profile: "a".to_string(),
+            profiles: {
+                let mut m = HashMap::new();
+                m.insert("b".to_string(), mk_profile()); // reverse order
+                m.insert("a".to_string(), mk_profile());
+                m
+            },
+            description: None,
+        };
+        assert_eq!(canonical_hash(&d1), canonical_hash(&d2));
     }
 }
