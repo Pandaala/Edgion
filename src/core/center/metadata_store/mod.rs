@@ -52,7 +52,7 @@ pub struct ControllerPmEntry {
     pub pm_name: String,
     pub enable: bool,
     pub active_profile: String,
-    pub profiles: std::collections::HashMap<String, ProfileRules>,
+    pub profiles: HashMap<String, ProfileRules>,
     pub description: Option<String>,
     /// sha256 over canonical JSON of the PM data; used for consistency/freshness display.
     pub content_hash: String,
@@ -121,7 +121,7 @@ impl CenterMetaDataStore {
     #[allow(dead_code)]
     pub fn list_global_ip_restrictions(
         &self,
-    ) -> std::collections::HashMap<String, std::collections::HashMap<String, ControllerPmEntry>> {
+    ) -> HashMap<String, HashMap<String, ControllerPmEntry>> {
         self.global_ip_restrictions.read().clone()
     }
 
@@ -130,7 +130,7 @@ impl CenterMetaDataStore {
     pub fn get_global_ip_restriction(
         &self,
         pm_key: &str,
-    ) -> Option<std::collections::HashMap<String, ControllerPmEntry>> {
+    ) -> Option<HashMap<String, ControllerPmEntry>> {
         self.global_ip_restrictions.read().get(pm_key).cloned()
     }
 
@@ -147,6 +147,13 @@ impl CenterMetaDataStore {
         {
             let mut service = self.service_routes.write();
             service.retain(|_, inner| {
+                inner.remove(controller_id);
+                !inner.is_empty()
+            });
+        }
+        {
+            let mut gir = self.global_ip_restrictions.write();
+            gir.retain(|_, inner| {
                 inner.remove(controller_id);
                 !inner.is_empty()
             });
