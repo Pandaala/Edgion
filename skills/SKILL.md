@@ -25,18 +25,12 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 
 | 你想了解… | 直接入口 |
 |-----------|---------|
-| **架构全貌** — Controller/Gateway/Ctl 三 bin 关系 | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
-| **Controller 内部** — ConfCenter、Workqueue、ResourceProcessor、Requeue | [01-architecture/01-controller/](01-architecture/01-controller/SKILL.md) |
-| **Gateway 内部** — Pingora 生命周期、路由匹配、插件执行、负载均衡 | [01-architecture/02-gateway/](01-architecture/02-gateway/SKILL.md) |
-| **Controller↔Gateway 配置同步** — gRPC Watch/List | [01-architecture/03-controller-gateway-link/](01-architecture/03-controller-gateway-link/SKILL.md) |
-| **某种资源的处理链路** — 20 种资源的架构 | [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) |
+| **系统架构** — Controller/Gateway/Ctl 三 bin 关系、内部模块、开发指南 | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
 | **二进制启动与部署** — CLI 参数、部署模式 | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
 | **TOML 配置 Schema** — Controller/Gateway 配置 | [02-features/02-config/](02-features/02-config/SKILL.md) |
 | **资源功能 Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
 | **可观测性** — Access Log、Metrics、协议日志 | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
 | **注解参考** — 所有 edgion.io/* 键 | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
-| **开发新资源/插件** — 添加 CRD、插件、连接器 | [01-architecture/01-controller/09-add-new-resource/](01-architecture/01-controller/09-add-new-resource/00-guide.md) |
-| **路由匹配规则** — 各引擎匹配逻辑 | [01-architecture/02-gateway/03-routes/00-route-matching.md](01-architecture/02-gateway/03-routes/00-route-matching.md) |
 | **编码规范** — 日志 ID、日志安全、可观测性 | [03-coding/SKILL.md](03-coding/SKILL.md) |
 | **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 | **全局 Review** — 安全/正确性/可观测性检查清单 + 已关闭误报条目 | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
@@ -45,6 +39,8 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **Center 联邦持久化** — SQLite `controllers` 表、CenterDb、database 配置（PM 数据已改用反向 Watch，无 SQLite 缓存） | [09-misc/center-db.md](09-misc/center-db.md) |
 | **Center 反向 Watch 架构** — CenterWatchCache、CenterMetaDataStore、federation gRPC 双向流 PM 数据流 | [09-misc/center-db.md#pluginmetadata-数据流反向-watch-架构](09-misc/center-db.md) |
 | **开发部署热替换** — 原生镜像 + shell loop + 交叉编译 + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
+
+> 架构内部细粒度定位（Controller/Gateway/Link/资源/插件开发/路由匹配等）见 [01-architecture/SKILL.md](01-architecture/SKILL.md)。
 
 ## 关键约束（必读，违反会引入运行时 bug）
 

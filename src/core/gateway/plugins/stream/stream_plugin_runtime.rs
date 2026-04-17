@@ -47,9 +47,7 @@ impl StreamPluginRuntime {
             }
 
             let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(rules) => {
-                    Arc::new(StreamIpRestriction::new(rules))
-                }
+                EdgionStreamPlugin::IpRestriction(rules) => Arc::new(StreamIpRestriction::new(rules)),
                 EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
                     Arc::new(GlobalConnectionIpRestrictionPlugin::new(
                         gcir.plugin_metadata_ref.clone(),

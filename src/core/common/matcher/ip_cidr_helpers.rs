@@ -39,9 +39,7 @@ pub fn to_cidr_format(ip_str: &str) -> Result<String, String> {
     if ip_str.contains('/') {
         Ok(ip_str.to_string())
     } else {
-        let ip: IpAddr = ip_str
-            .parse()
-            .map_err(|_| format!("Invalid IP address: {}", ip_str))?;
+        let ip: IpAddr = ip_str.parse().map_err(|_| format!("Invalid IP address: {}", ip_str))?;
         let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
         Ok(format!("{}/{}", ip_str, prefix_len))
     }
@@ -110,11 +108,7 @@ mod tests {
 
     #[test]
     fn build_matcher_hits_and_misses() {
-        let m = build_radix_matcher(&[
-            "192.168.1.0/24".to_string(),
-            "10.0.0.1".to_string(),
-        ])
-        .unwrap();
+        let m = build_radix_matcher(&["192.168.1.0/24".to_string(), "10.0.0.1".to_string()]).unwrap();
         assert_eq!(m.match_ip(&"192.168.1.50".parse().unwrap()), Some(true));
         assert_eq!(m.match_ip(&"10.0.0.1".parse().unwrap()), Some(true));
         assert_eq!(m.match_ip(&"8.8.8.8".parse().unwrap()), None);

@@ -89,7 +89,8 @@ API Handler（直接读内存，无 SQLite）
 | `DELETE` | `/api/v1/center/admin/controllers/{id}` | 删除指定 controller 记录及其所有关联数据 |
 | `GET` | `/api/v1/center/cluster-region-routes` | 实时聚合的集群维度 RegionRoute PM（来自内存，非 SQLite） |
 | `GET` | `/api/v1/center/service-region-routes` | 实时聚合的服务维度 RegionRoute PM（来自内存，非 SQLite） |
-| `GET` | `/api/v1/center/consistency` | 一致性检查端点 |
+| `GET` | `/api/v1/center/cluster-region-routes/consistency` | 集群维度 RegionRoute 一致性检查 |
+| `GET` | `/api/v1/center/service-region-routes/consistency` | 服务维度 RegionRoute 一致性检查 |
 
 **典型运维场景：**
 - Controller 永久下线 → `DELETE /admin/controllers/{id}` 清除其持久化记录

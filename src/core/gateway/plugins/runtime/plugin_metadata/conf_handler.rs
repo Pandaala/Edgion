@@ -16,8 +16,8 @@ use std::sync::LazyLock;
 
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::plugin_metadata::{
-    ClusterRegionRouteConfig, GlobalConnectionIpRestrictionData, IpListData, KeyListData, MetaDataEntry, PluginMetaData,
-    ServiceRegionRouteConfig,
+    ClusterRegionRouteConfig, GlobalConnectionIpRestrictionData, IpListData, KeyListData, MetaDataEntry,
+    PluginMetaData, ServiceRegionRouteConfig,
 };
 
 static GLOBAL_PLUGIN_METADATA_STORE: LazyLock<Arc<PluginMetaDataGatewayStore>> =

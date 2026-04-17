@@ -28,10 +28,6 @@ Gateway (Admin :5900)              Test Script (bash)
 | **Port allocation** | `ports.json` (Gateway listener ports) | Docker port mapping (e.g. `16379:6379`) |
 | **Config scope** | `EdgionPlugins` + `HTTPRoute` + `Gateway` | `LinkSys` CRD only |
 
-### Why Bash Instead of Rust test_client?
-
-LinkSys tests verify **the runtime client itself**, not request routing. The Gateway Admin API exposes testing endpoints under `/api/v1/testing/link-sys/<type>/` that let us exercise every operation (PING, GET, SET, HSET, LOCK, etc.) directly. Bash + curl + jq is the simplest, most transparent way to call these endpoints and assert results — no need for a compiled binary.
-
 ## Test Execution Flow
 
 ```

@@ -15,9 +15,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_
 };
 use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
 use crate::types::resources::plugin_metadata::PluginMetaData;
-use crate::types::resources::plugin_metadata::{
-    GlobalConnectionIpRestrictionData, MetaDataEntry, ProfileRules,
-};
+use crate::types::resources::plugin_metadata::{GlobalConnectionIpRestrictionData, MetaDataEntry, ProfileRules};
 
 /// View of aggregated ClusterRegionRoute entries from all controllers for a single pm_key.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -116,17 +114,12 @@ impl CenterMetaDataStore {
 
     /// List all GlobalConnectionIpRestriction PMs aggregated across Controllers.
     /// Returns `pm_key → { controller_id → entry }`.
-    pub fn list_global_ip_restrictions(
-        &self,
-    ) -> HashMap<String, HashMap<String, ControllerPmEntry>> {
+    pub fn list_global_ip_restrictions(&self) -> HashMap<String, HashMap<String, ControllerPmEntry>> {
         self.global_ip_restrictions.read().clone()
     }
 
     /// Get a single PM's entries across Controllers.
-    pub fn get_global_ip_restriction(
-        &self,
-        pm_key: &str,
-    ) -> Option<HashMap<String, ControllerPmEntry>> {
+    pub fn get_global_ip_restriction(&self, pm_key: &str) -> Option<HashMap<String, ControllerPmEntry>> {
         self.global_ip_restrictions.read().get(pm_key).cloned()
     }
 
@@ -235,9 +228,7 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                 !controllers.is_empty()
             });
             for (pm_key, entry) in new_gir {
-                gir.entry(pm_key)
-                    .or_default()
-                    .insert(controller_id.to_string(), entry);
+                gir.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
             }
         }
     }
@@ -331,9 +322,7 @@ impl CenterConfHandler<PluginMetaData> for CenterMetaDataStore {
                 }
             }
             for (pm_key, entry) in gir_upserts {
-                gir.entry(pm_key)
-                    .or_default()
-                    .insert(controller_id.to_string(), entry);
+                gir.entry(pm_key).or_default().insert(controller_id.to_string(), entry);
             }
         }
     }
@@ -551,14 +540,12 @@ mod tests {
             },
         );
         let spec = PluginMetaDataSpec {
-            metadata: MetaDataEntry::GlobalConnectionIpRestriction(
-                GlobalConnectionIpRestrictionData {
-                    enable: true,
-                    active_profile: "default".to_string(),
-                    profiles,
-                    description: None,
-                },
-            ),
+            metadata: MetaDataEntry::GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionData {
+                enable: true,
+                active_profile: "default".to_string(),
+                profiles,
+                description: None,
+            }),
         };
         let mut pm = PluginMetaData::new(name, spec);
         pm.metadata.namespace = Some(namespace.to_string());

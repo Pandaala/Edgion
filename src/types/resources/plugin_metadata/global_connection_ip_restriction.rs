@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn validate_allow_some_empty_errs_cleanly() {
         let p = ProfileRules {
-            allow: Some(vec![]),  // Some but empty
+            allow: Some(vec![]), // Some but empty
             deny: Some(vec![group("bad", &["1.2.3.4"])]),
             default_action: DefaultAction::Deny,
             allow_matcher: None,

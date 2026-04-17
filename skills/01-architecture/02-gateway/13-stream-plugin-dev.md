@@ -249,4 +249,5 @@ metadata:
 
 - [00-annotations-overview.md](../../02-features/05-annotations/00-annotations-overview.md)
 - [11-conf-handler-guidelines.md](11-conf-handler-guidelines.md)
+- [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md)
 - [01-integration-testing.md](../../05-testing/01-integration-testing.md)

@@ -6,7 +6,7 @@
 - 调整 Redis / Etcd / Elasticsearch / Webhook 的运行时接线
 - 排查 “LinkSys YAML 已同步，但 gateway 侧 runtime client / webhook manager 没更新”
 
-先读这些真实入口：
+## 先读这些真实入口
 
 - [../../../src/types/resources/link_sys/mod.rs](../../../src/types/resources/link_sys/mod.rs)
 - [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
@@ -14,7 +14,6 @@
 - [../../../src/core/gateway/link_sys/runtime/conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
 - [../../../src/core/gateway/link_sys/runtime/store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
 - [../../../src/core/gateway/link_sys/providers/webhook/mod.rs](../../../src/core/gateway/link_sys/providers/webhook/mod.rs)
-- [03-link-sys-testing.md](../../05-testing/03-link-sys-testing.md)
 
 ## 先分清你改的是哪一类东西
 
@@ -245,3 +244,8 @@ cargo check
 ```bash
 make check-agent-docs
 ```
+
+## 相关
+
+- [03-link-sys-testing.md](../../05-testing/03-link-sys-testing.md)
+- [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md)

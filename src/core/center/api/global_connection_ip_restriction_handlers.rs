@@ -102,11 +102,14 @@ pub async fn global_ip_restrictions_consistency(
         .into_iter()
         .map(|(pm_key, per_ctrl)| {
             let (namespace, name) = split_pm_key(&pm_key);
-            let hashes: HashSet<String> =
-                per_ctrl.values().map(|e| e.content_hash.clone()).collect();
+            let hashes: HashSet<String> = per_ctrl.values().map(|e| e.content_hash.clone()).collect();
             let consistent = hashes.len() <= 1;
             // v1: report whole-entry mismatch; per-field conflicts left to v2
-            let conflicts = if consistent { Vec::new() } else { vec!["contentHash".to_string()] };
+            let conflicts = if consistent {
+                Vec::new()
+            } else {
+                vec!["contentHash".to_string()]
+            };
             ConsistencyResult {
                 namespace,
                 name,
@@ -253,10 +256,7 @@ pub async fn create_global_ip_restriction(
     let pm_json = build_pm_json(&req.namespace, &req.name, &req.data);
     let body = pm_json.into_bytes();
     // PUT /api/v1/namespaced/pluginmetadata/{namespace}/{name} — upsert on Controller
-    let path = format!(
-        "/api/v1/namespaced/pluginmetadata/{}/{}",
-        req.namespace, req.name
-    );
+    let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", req.namespace, req.name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
     Json(ApiResponse::success(FanOutResponse {
@@ -318,7 +318,11 @@ pub async fn update_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse { success, failed, warnings }))
+    Json(ApiResponse::success(FanOutResponse {
+        success,
+        failed,
+        warnings,
+    }))
 }
 
 // =====================================================================
@@ -341,7 +345,11 @@ pub async fn delete_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "DELETE", path, vec![]).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse { success, failed, warnings }))
+    Json(ApiResponse::success(FanOutResponse {
+        success,
+        failed,
+        warnings,
+    }))
 }
 
 // =====================================================================
@@ -418,7 +426,11 @@ pub async fn patch_enable(
     });
     let results = futures::future::join_all(futs).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse { success, failed, warnings }))
+    Json(ApiResponse::success(FanOutResponse {
+        success,
+        failed,
+        warnings,
+    }))
 }
 
 // =====================================================================
@@ -466,10 +478,7 @@ pub async fn patch_active_profile(
                 return ControllerOpResult {
                     controller_id: cid,
                     detail: None,
-                    error: Some(format!(
-                        "profile '{}' not found on this controller",
-                        active_profile
-                    )),
+                    error: Some(format!("profile '{}' not found on this controller", active_profile)),
                     status_code: Some(400),
                 };
             }
@@ -506,7 +515,11 @@ pub async fn patch_active_profile(
     });
     let results = futures::future::join_all(futs).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse { success, failed, warnings }))
+    Json(ApiResponse::success(FanOutResponse {
+        success,
+        failed,
+        warnings,
+    }))
 }
 
 // =====================================================================
@@ -562,10 +575,7 @@ pub async fn sync_global_ip_restriction(
     // Resolve targets: "all" = all online except source.
     let (targets, warnings) = if req.target_controllers.len() == 1 && req.target_controllers[0] == "all" {
         let online = online_controllers(&state);
-        let targets: Vec<_> = online
-            .into_iter()
-            .filter(|cid| cid != &req.source_controller)
-            .collect();
+        let targets: Vec<_> = online.into_iter().filter(|cid| cid != &req.source_controller).collect();
         (targets, vec![])
     } else {
         (req.target_controllers.clone(), vec![])
@@ -582,5 +592,9 @@ pub async fn sync_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse { success, failed, warnings }))
+    Json(ApiResponse::success(FanOutResponse {
+        success,
+        failed,
+        warnings,
+    }))
 }

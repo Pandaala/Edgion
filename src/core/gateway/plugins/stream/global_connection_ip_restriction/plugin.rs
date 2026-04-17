@@ -3,9 +3,7 @@
 use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
-use crate::core::gateway::plugins::stream::stream_plugin_trait::{
-    StreamContext, StreamPlugin, StreamPluginResult,
-};
+use crate::core::gateway::plugins::stream::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 use crate::types::resources::edgion_gateway_config::PluginReference;
 
 const PLUGIN_NAME: &str = "GlobalConnectionIpRestriction";
@@ -41,10 +39,8 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
         let store = get_global_plugin_metadata_store();
         // Getter signature: (namespace, name)
-        let Some(pm) = store.get_global_connection_ip_restriction(
-            self.ref_namespace(),
-            &self.plugin_metadata_ref.name,
-        ) else {
+        let Some(pm) = store.get_global_connection_ip_restriction(self.ref_namespace(), &self.plugin_metadata_ref.name)
+        else {
             tracing::debug!(
                 ref_ns = self.ref_namespace(),
                 ref_name = %self.plugin_metadata_ref.name,

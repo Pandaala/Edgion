@@ -3,9 +3,7 @@
 use async_trait::async_trait;
 use std::net::IpAddr;
 
-use crate::core::gateway::plugins::stream::stream_plugin_trait::{
-    StreamContext, StreamPlugin, StreamPluginResult,
-};
+use crate::core::gateway::plugins::stream::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 use crate::types::resources::edgion_stream_plugins::ConnectionIpRestrictionRules;
 
 const PLUGIN_NAME: &str = "StreamIpRestriction";
@@ -54,10 +52,7 @@ pub struct StreamIpRestriction {
 impl StreamIpRestriction {
     pub fn new(rules: &ConnectionIpRestrictionRules) -> Self {
         let (rules, init_failed) = init_ip_restriction(rules, "stream plugin");
-        Self {
-            rules,
-            init_failed,
-        }
+        Self { rules, init_failed }
     }
 }
 

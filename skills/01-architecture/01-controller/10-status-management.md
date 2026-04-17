@@ -1,5 +1,7 @@
 # Status Management — update_status 实现规范
 
+> 各资源状态字段的位置见 [05-resources/SKILL.md](../05-resources/SKILL.md)；本文只讲状态写入流程、字段规范、测试要点。
+>
 > ProcessorHandler::update_status() 的正确实现方式、已知陷阱和审查清单。
 > 本文档面向需要实现或修改 CRD status 的开发者。
 

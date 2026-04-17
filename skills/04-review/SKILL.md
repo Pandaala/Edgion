@@ -21,6 +21,7 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
 - 审查 TLS/SSL 客户端配置时，先看 [ssl/tonic-domain-name-false-positive.md](ssl/tonic-domain-name-false-positive.md)
 - 审查 OpenSSL/rustls 后端缺口时，跳过 — 已知限制，BoringSSL 是唯一生产后端，详见 `tasks/todo/multi-tls-backend-gaps.md`
 - 审查 ctx_set 模板/变量设计时，先看 [ctx-set/ctx-set-design-decisions.md](ctx-set/ctx-set-design-decisions.md)
+- 审查 LB/BackendSelector 并发（ArcSwap TOCTOU、init 幂等）时，先看 [concurrency/lb-false-positives.md](concurrency/lb-false-positives.md)
 
 使用原则：
 

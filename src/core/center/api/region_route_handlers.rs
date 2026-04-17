@@ -94,10 +94,7 @@ pub async fn cluster_region_route_sync(
     Json(body): Json<SyncRequest>,
 ) -> Json<serde_json::Value> {
     // 1. Read source PM via proxy
-    let source_path = format!(
-        "/api/v1/namespaced/pluginmetadata/{}/{}",
-        body.namespace, body.name
-    );
+    let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
     let source_pm = match state
         .proxy
         .forward(
@@ -109,22 +106,30 @@ pub async fn cluster_region_route_sync(
         )
         .await
     {
-        Ok(r) if r.status_code == 200 => {
-            match serde_json::from_slice::<serde_json::Value>(&r.body) {
-                Ok(v) => match v.get("data") {
-                    Some(data) => data.clone(),
-                    None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
-                },
-                Err(e) => return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") })),
+        Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
+            Ok(v) => match v.get("data") {
+                Some(data) => data.clone(),
+                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+            },
+            Err(e) => {
+                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
             }
+        },
+        Ok(r) => {
+            return Json(
+                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            )
         }
-        Ok(r) => return Json(serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) })),
-        Err((status, msg)) => return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") })),
+        Err((status, msg)) => {
+            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+        }
     };
 
     // 2. Get each controller's myRegion from MetaDataStore
     let routes = state.metadata_store.list_cluster_routes();
-    let route = routes.iter().find(|r| r.namespace == body.namespace && r.name == body.name);
+    let route = routes
+        .iter()
+        .find(|r| r.namespace == body.namespace && r.name == body.name);
     let my_region_map: HashMap<String, String> = match route {
         Some(r) => r
             .controllers
@@ -141,10 +146,7 @@ pub async fn cluster_region_route_sync(
         .filter(|s| s.online && s.controller_id != body.source_controller_id)
         .collect();
 
-    let put_path = format!(
-        "/api/v1/namespaced/pluginmetadata/{}/{}",
-        body.namespace, body.name
-    );
+    let put_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
 
     let futs = targets.iter().map(|s| {
         let proxy = state.proxy.clone();
@@ -175,7 +177,10 @@ pub async fn cluster_region_route_sync(
             };
             let mut headers = HashMap::new();
             headers.insert("content-type".to_string(), "application/json".to_string());
-            match proxy.forward(&controller_id, "PUT".to_string(), put_path, headers, content).await {
+            match proxy
+                .forward(&controller_id, "PUT".to_string(), put_path, headers, content)
+                .await
+            {
                 Ok(r) if r.status_code == 200 => true,
                 _ => {
                     tracing::warn!(component = "center", controller_id = %controller_id, "Sync PUT failed");
@@ -203,10 +208,7 @@ pub async fn service_region_route_sync(
     Json(body): Json<SyncRequest>,
 ) -> Json<serde_json::Value> {
     // 1. Read source PM via proxy
-    let source_path = format!(
-        "/api/v1/namespaced/pluginmetadata/{}/{}",
-        body.namespace, body.name
-    );
+    let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
     let source_pm = match state
         .proxy
         .forward(
@@ -218,17 +220,23 @@ pub async fn service_region_route_sync(
         )
         .await
     {
-        Ok(r) if r.status_code == 200 => {
-            match serde_json::from_slice::<serde_json::Value>(&r.body) {
-                Ok(v) => match v.get("data") {
-                    Some(data) => data.clone(),
-                    None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
-                },
-                Err(e) => return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") })),
+        Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
+            Ok(v) => match v.get("data") {
+                Some(data) => data.clone(),
+                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+            },
+            Err(e) => {
+                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
             }
+        },
+        Ok(r) => {
+            return Json(
+                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            )
         }
-        Ok(r) => return Json(serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) })),
-        Err((status, msg)) => return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") })),
+        Err((status, msg)) => {
+            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+        }
     };
 
     // 2. Fan-out PUT to all online controllers (except source)
@@ -238,10 +246,7 @@ pub async fn service_region_route_sync(
         .filter(|s| s.online && s.controller_id != body.source_controller_id)
         .collect();
 
-    let put_path = format!(
-        "/api/v1/namespaced/pluginmetadata/{}/{}",
-        body.namespace, body.name
-    );
+    let put_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
 
     let futs = targets.iter().map(|s| {
         let proxy = state.proxy.clone();
@@ -256,7 +261,10 @@ pub async fn service_region_route_sync(
             };
             let mut headers = HashMap::new();
             headers.insert("content-type".to_string(), "application/json".to_string());
-            match proxy.forward(&controller_id, "PUT".to_string(), put_path, headers, content).await {
+            match proxy
+                .forward(&controller_id, "PUT".to_string(), put_path, headers, content)
+                .await
+            {
                 Ok(r) if r.status_code == 200 => true,
                 _ => {
                     tracing::warn!(component = "center", controller_id = %controller_id, "Service sync PUT failed");
