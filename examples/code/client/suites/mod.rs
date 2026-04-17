@@ -52,11 +52,12 @@ pub use edgion_plugins::{
     AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, BasicAuthTestSuite,
     CorsPluginTestSuite, CtxSetTestSuite, DirectEndpointTestSuite, DslDynamicInitialTestSuite,
     DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite,
-    DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
-    JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
-    PluginConditionTestSuite, PluginLogsTestSuite, PluginMetaDataManagedTestSuite, ProxyRewriteTestSuite,
-    RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite,
-    RequestRestrictionTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite, GlobalConnectionIpRestrictionTestSuite,
+    HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite,
+    LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
+    PluginMetaDataManagedTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
+    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite,
+    WebhookKeyGetTestSuite,
 };
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)

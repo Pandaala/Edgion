@@ -14,6 +14,7 @@ mod dsl;
 mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
 mod forward_auth;
+mod global_connection_ip_restriction;
 mod header_cert_auth;
 mod hmac_auth;
 mod jwe_decrypt;
@@ -43,6 +44,7 @@ pub use dsl::{DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErro
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::DynamicInternalUpstreamTestSuite;
 pub use forward_auth::ForwardAuthTestSuite;
+pub use global_connection_ip_restriction::GlobalConnectionIpRestrictionTestSuite;
 pub use header_cert_auth::HeaderCertAuthTestSuite;
 pub use hmac_auth::HmacAuthTestSuite;
 pub use jwe_decrypt::JweDecryptTestSuite;
