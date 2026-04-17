@@ -1,0 +1,44 @@
+# GlobalConnectionIpRestriction integration test — Gateway + EdgionStreamPlugins + TCPRoute
+#
+# EdgionStreamPlugins references the gcir-test PM via pluginMetadataRef.
+# Gateway listens on TCP port 18801 with the stream plugins annotation.
+# TCPRoute routes to echo-backend:80.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: gcir-stream-plugins
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: GlobalConnectionIpRestriction
+      config:
+        pluginMetadataRef:
+          namespace: edgion-test
+          name: gcir-test
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gcir-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/gcir-stream-plugins"
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: tcp
+      port: 18801
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: gcir-tcp
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: gcir-gateway
+  rules:
+    - backendRefs:
+        - name: echo-backend
+          port: 80
