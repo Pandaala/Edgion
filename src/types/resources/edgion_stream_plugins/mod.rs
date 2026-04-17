@@ -166,7 +166,8 @@ impl EdgionStreamPlugins {
     /// Initialize Stage 1 (ConnectionFilter) plugin runtime from `plugins`.
     pub fn init_stream_plugin_runtime(&mut self) {
         if let Some(plugins) = &self.spec.plugins {
-            self.spec.stream_plugin_runtime = Arc::new(StreamPluginRuntime::from_stream_plugins(plugins));
+            let ns = self.metadata.namespace.as_deref().unwrap_or("default");
+            self.spec.stream_plugin_runtime = Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns));
         }
     }
 

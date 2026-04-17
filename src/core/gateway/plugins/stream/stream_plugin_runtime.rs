@@ -1,6 +1,7 @@
 //! Stream plugin runtime for executing stream plugins
 
 use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
+use crate::core::gateway::plugins::stream::{GlobalConnectionIpRestrictionPlugin, StreamIpRestriction};
 use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
 use std::sync::Arc;
 
@@ -31,9 +32,12 @@ impl StreamPluginRuntime {
         Self { plugins: Vec::new() }
     }
 
-    /// Create runtime from stream plugin entries
-    pub fn from_stream_plugins(entries: &[StreamPluginEntry]) -> Self {
-        let plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
+    /// Create runtime from stream plugin entries.
+    ///
+    /// `parent_namespace` is the namespace of the owning `EdgionStreamPlugins` resource,
+    /// used by `GlobalConnectionIpRestrictionPlugin` to resolve refs with no explicit namespace.
+    pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str) -> Self {
+        let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
 
         for entry in entries {
             // Skip disabled plugins
@@ -42,17 +46,20 @@ impl StreamPluginRuntime {
                 continue;
             }
 
-            // Dispatch to plugin constructor by type.
-            // TODO(Task 10): build StreamIpRestriction from ConnectionIpRestrictionRules
-            // TODO(Task 9/11): implement GlobalConnectionIpRestrictionPlugin
-            match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(_rules) => {
-                    tracing::warn!("IpRestriction stream plugin reshape pending (Task 10)");
+            let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
+                EdgionStreamPlugin::IpRestriction(rules) => {
+                    Arc::new(StreamIpRestriction::new(rules))
                 }
-                EdgionStreamPlugin::GlobalConnectionIpRestriction(_entry) => {
-                    tracing::warn!("GlobalConnectionIpRestriction stream plugin pending (Task 9/11)");
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
+                    Arc::new(GlobalConnectionIpRestrictionPlugin::new(
+                        gcir.plugin_metadata_ref.clone(),
+                        parent_namespace.to_string(),
+                    ))
                 }
-            }
+            };
+
+            tracing::debug!(plugin_name = plugin.name(), "Added stream plugin to runtime");
+            plugins.push(plugin);
         }
 
         Self { plugins }
