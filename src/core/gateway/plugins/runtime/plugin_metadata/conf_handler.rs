@@ -16,7 +16,8 @@ use std::sync::LazyLock;
 
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::plugin_metadata::{
-    ClusterRegionRouteConfig, IpListData, KeyListData, MetaDataEntry, PluginMetaData, ServiceRegionRouteConfig,
+    ClusterRegionRouteConfig, GlobalConnectionIpRestrictionData, IpListData, KeyListData, MetaDataEntry, PluginMetaData,
+    ServiceRegionRouteConfig,
 };
 
 static GLOBAL_PLUGIN_METADATA_STORE: LazyLock<Arc<PluginMetaDataGatewayStore>> =
@@ -38,6 +39,7 @@ type ClusterRegionRouteConfigMap = HashMap<String, Arc<ClusterRegionRouteConfig>
 type ServiceRegionRouteConfigMap = HashMap<String, Arc<ServiceRegionRouteConfig>>;
 type KeyListConfigMap = HashMap<String, Arc<KeyListData>>;
 type IpListConfigMap = HashMap<String, Arc<IpListData>>;
+type GlobalConnectionIpRestrictionMap = HashMap<String, Arc<GlobalConnectionIpRestrictionData>>;
 
 /// All typed indexes bundled into a single struct so they can be swapped atomically.
 struct TypedIndexes {
@@ -45,6 +47,7 @@ struct TypedIndexes {
     service_region_route_configs: ServiceRegionRouteConfigMap,
     key_list_configs: KeyListConfigMap,
     ip_list_configs: IpListConfigMap,
+    global_connection_ip_restrictions: GlobalConnectionIpRestrictionMap,
 }
 
 pub struct PluginMetaDataGatewayStore {
@@ -72,6 +75,7 @@ impl PluginMetaDataGatewayStore {
                 service_region_route_configs: HashMap::new(),
                 key_list_configs: HashMap::new(),
                 ip_list_configs: HashMap::new(),
+                global_connection_ip_restrictions: HashMap::new(),
             }),
         }
     }
@@ -115,6 +119,26 @@ impl PluginMetaDataGatewayStore {
         indexes.ip_list_configs.get(&format!("{}/{}", namespace, name)).cloned()
     }
 
+    pub fn get_global_connection_ip_restriction(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Option<Arc<GlobalConnectionIpRestrictionData>> {
+        let indexes = self.indexes.load();
+        indexes
+            .global_connection_ip_restrictions
+            .get(&format!("{}/{}", namespace, name))
+            .cloned()
+    }
+
+    pub fn get_global_connection_ip_restriction_by_key(
+        &self,
+        key: &str,
+    ) -> Option<Arc<GlobalConnectionIpRestrictionData>> {
+        let indexes = self.indexes.load();
+        indexes.global_connection_ip_restrictions.get(key).cloned()
+    }
+
     pub fn get_service_region_route_config_by_key(&self, key: &str) -> Option<Arc<ServiceRegionRouteConfig>> {
         let indexes = self.indexes.load();
         indexes.service_region_route_configs.get(key).cloned()
@@ -134,6 +158,7 @@ impl PluginMetaDataGatewayStore {
         let mut service_rr = ServiceRegionRouteConfigMap::new();
         let mut key_lists = KeyListConfigMap::new();
         let mut ip_lists = IpListConfigMap::new();
+        let mut global_ip_restrictions = GlobalConnectionIpRestrictionMap::new();
 
         for (key, pm) in raw {
             match &pm.spec.metadata {
@@ -149,8 +174,20 @@ impl PluginMetaDataGatewayStore {
                 MetaDataEntry::IpList(cfg) => {
                     ip_lists.insert(key.clone(), Arc::new(cfg.clone()));
                 }
-                MetaDataEntry::GlobalConnectionIpRestriction(_) => {
-                    // Placeholder — gateway-side store wired in Task 8
+                MetaDataEntry::GlobalConnectionIpRestriction(data) => {
+                    let mut cloned = data.clone();
+                    match cloned.validate_and_init() {
+                        Ok(()) => {
+                            global_ip_restrictions.insert(key.clone(), Arc::new(cloned));
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                pm_key = %key,
+                                error = %e,
+                                "GlobalConnectionIpRestriction PM rejected during index rebuild; skipping",
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -160,6 +197,7 @@ impl PluginMetaDataGatewayStore {
             service_region_route_configs: service_rr,
             key_list_configs: key_lists,
             ip_list_configs: ip_lists,
+            global_connection_ip_restrictions: global_ip_restrictions,
         }));
     }
 
