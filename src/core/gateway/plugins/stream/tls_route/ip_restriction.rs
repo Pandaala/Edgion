@@ -7,36 +7,52 @@
 use async_trait::async_trait;
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
-use crate::core::gateway::plugins::stream::ip_restriction::stream_ip_restriction::{
-    check_ip_access, init_ip_restriction,
-};
 use crate::core::gateway::plugins::stream::StreamPluginResult;
 use crate::types::resources::edgion_plugins::IpRestrictionConfig;
 
+const PLUGIN_NAME: &str = "TlsRouteIpRestriction";
+
 pub struct TlsRouteIpRestriction {
-    name: String,
     config: IpRestrictionConfig,
     init_failed: bool,
 }
 
 impl TlsRouteIpRestriction {
     pub fn new(config: &IpRestrictionConfig) -> Self {
-        let (config, init_failed) = init_ip_restriction(config, "TLS route plugin");
-        Self {
-            name: "TlsRouteIpRestriction".to_string(),
-            config,
-            init_failed,
-        }
+        let mut config = config.clone();
+        let init_failed = if let Err(e) = config.validate_and_init() {
+            tracing::error!(
+                error = %e,
+                label = "TLS route plugin",
+                "Failed to initialize IpRestrictionConfig; all connections will be denied",
+            );
+            true
+        } else {
+            false
+        };
+        Self { config, init_failed }
     }
 }
 
 #[async_trait]
 impl TlsRoutePlugin for TlsRouteIpRestriction {
     fn name(&self) -> &str {
-        &self.name
+        PLUGIN_NAME
     }
 
     async fn on_tls_route(&self, ctx: &TlsRouteContext) -> StreamPluginResult {
-        check_ip_access(&self.config, self.init_failed, &ctx.client_ip)
+        if self.init_failed {
+            return StreamPluginResult::Deny("IP restriction plugin initialization failed".to_string());
+        }
+        if !self.config.check_ip_access(&ctx.client_ip) {
+            let reason = self
+                .config
+                .message
+                .as_deref()
+                .unwrap_or("IP address not allowed")
+                .to_string();
+            return StreamPluginResult::Deny(reason);
+        }
+        StreamPluginResult::Allow
     }
 }
