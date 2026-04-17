@@ -116,7 +116,6 @@ impl CenterMetaDataStore {
 
     /// List all GlobalConnectionIpRestriction PMs aggregated across Controllers.
     /// Returns `pm_key → { controller_id → entry }`.
-    #[allow(dead_code)]
     pub fn list_global_ip_restrictions(
         &self,
     ) -> HashMap<String, HashMap<String, ControllerPmEntry>> {
@@ -124,7 +123,6 @@ impl CenterMetaDataStore {
     }
 
     /// Get a single PM's entries across Controllers.
-    #[allow(dead_code)]
     pub fn get_global_ip_restriction(
         &self,
         pm_key: &str,

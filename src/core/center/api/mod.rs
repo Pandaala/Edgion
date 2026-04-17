@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 mod consistency_handlers;
+mod global_connection_ip_restriction_handlers;
 mod region_route_handlers;
 
 use crate::core::center::aggregator::ResourceAggregator;
@@ -97,6 +98,19 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/center/service-region-routes/consistency",
             get(consistency_handlers::service_region_routes_consistency),
+        )
+        // GlobalConnectionIpRestriction endpoints
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions",
+            get(global_connection_ip_restriction_handlers::list_global_ip_restrictions),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}",
+            get(global_connection_ip_restriction_handlers::get_global_ip_restriction),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/consistency",
+            get(global_connection_ip_restriction_handlers::global_ip_restrictions_consistency),
         )
         // Admin endpoints (DB-backed)
         .route("/api/v1/center/admin/controllers", get(list_admin_controllers))
