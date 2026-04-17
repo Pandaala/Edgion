@@ -92,13 +92,15 @@ spec:
                   properties:
                     type:
                       type: string
-                      description: "Plugin type identifier (ClusterRegionRoute or ServiceRegionRoute)"
+                      description: "Plugin type identifier (ClusterRegionRoute, ServiceRegionRoute, or GlobalConnectionIpRestriction)"
                       enum:
                         - ClusterRegionRoute
                         - ServiceRegionRoute
+                        - GlobalConnectionIpRestriction
                     config:
                       type: object
-                      description: "Plugin-specific configuration"
+                      description: "Plugin-specific configuration (shape depends on type)"
+                      x-kubernetes-preserve-unknown-fields: true
                       properties:
                         regions:
                           type: array

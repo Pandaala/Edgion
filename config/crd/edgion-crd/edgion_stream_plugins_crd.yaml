@@ -45,6 +45,7 @@ spec:
                       description: Plugin type
                       enum:
                       - IpRestriction
+                      - GlobalConnectionIpRestriction
                     config:
                       type: object
                       description: Plugin configuration
