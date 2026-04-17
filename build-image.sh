@@ -25,7 +25,7 @@ set -eo pipefail
 # Configuration  (edit these variables to customise the build)
 # =============================================================================
 
-DEFAULT_VERSION="0.1.19"
+DEFAULT_VERSION="0.1.21"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
@@ -324,11 +324,13 @@ compile_binaries() {
     fi
 
     # Run compilation in Docker
+    # Use named volume for rustup to persist toolchain downloads across runs
     docker run --rm \
         --platform "${platform}" \
         -v "${PROJECT_DIR}":/project \
         -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
         -w /project \
         "${builder_tag}" \
         bash -c "${build_cmd}"
@@ -375,6 +377,7 @@ compile_examples() {
         -v "${PROJECT_DIR}":/project \
         -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
         -w /project \
         "${builder_tag}" \
         bash -c "${build_cmd}"
@@ -468,7 +471,6 @@ build_example_images() {
 
         # test_client image should include debug/test tools.
         if [[ "${example}" == "test_client" ]]; then
-            runtime_base="ubuntu:24.04"
             extra_packages="curl bash"
         fi
 
@@ -745,6 +747,7 @@ compile_all_in_one_binaries() {
         -v "${PROJECT_DIR}":/project \
         -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
         -w /project \
         "${builder_tag}" \
         bash -c "${build_cmd}"
