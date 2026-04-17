@@ -8,10 +8,14 @@
 //! - `ClusterRegionRoute`: Full region topology and routing rules
 //! - `ServiceRegionRoute`: Per-service failover overrides referencing a ClusterRegionRoute
 
+pub mod global_connection_ip_restriction;
 pub mod ip_list;
 pub mod key_list;
 pub mod region_route;
 
+pub use global_connection_ip_restriction::{
+    GlobalConnectionIpRestrictionData, IpGroup, ProfileRules,
+};
 pub use ip_list::IpListData;
 pub use key_list::{KeyListData, KeyMatchMode, MetaDataItem};
 pub use region_route::{ClusterRegionRouteConfig, RouteByKeyConfMatchMeta, ServiceRegionDef, ServiceRegionRouteConfig};
