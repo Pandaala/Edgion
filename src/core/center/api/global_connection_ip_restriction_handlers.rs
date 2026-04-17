@@ -118,3 +118,98 @@ pub async fn global_ip_restrictions_consistency(
         .collect();
     Json(ApiResponse::success(items))
 }
+
+// =====================================================================
+// Write endpoints: fan-out helpers and request/response types
+// =====================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerOpResult {
+    pub controller_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FanOutResponse {
+    pub success: Vec<ControllerOpResult>,
+    pub failed: Vec<ControllerOpResult>,
+    pub warnings: Vec<String>,
+}
+
+/// Resolve `controllers: ["all"]` or `["ctrl-a","ctrl-b"]` into (targets, warnings).
+/// `["all"]` → all online controllers. Offline explicit IDs stay in targets (the write will fail them).
+#[allow(dead_code)]
+fn resolve_targets(state: &ApiState, requested: &[String]) -> (Vec<String>, Vec<String>) {
+    if requested.len() == 1 && requested[0] == "all" {
+        let online = online_controllers(state);
+        let warnings: Vec<String> = state
+            .aggregator
+            .controller_summaries()
+            .into_iter()
+            .filter(|s| !s.online)
+            .map(|s| format!("{} offline, skipped", s.controller_id))
+            .collect();
+        (online, warnings)
+    } else {
+        (requested.to_vec(), Vec::new())
+    }
+}
+
+/// Fan-out a HTTP op to N controllers in parallel, collecting per-controller outcomes.
+///
+/// Note: `proxy.forward` returns `Result<HttpProxyResponse, (StatusCode, String)>`.
+/// `HttpProxyResponse.status_code` is `u32` (from proto uint32).
+#[allow(dead_code)]
+async fn fan_out_http(
+    state: &ApiState,
+    controllers: Vec<String>,
+    method: &str,
+    path: String,
+    body: Vec<u8>,
+) -> Vec<ControllerOpResult> {
+    let futs = controllers.into_iter().map(|cid| {
+        let proxy = state.proxy.clone();
+        let method = method.to_string();
+        let path = path.clone();
+        let body = body.clone();
+        async move {
+            let mut headers = HashMap::new();
+            headers.insert("content-type".to_string(), "application/json".to_string());
+            match proxy.forward(&cid, method, path, headers, body).await {
+                Ok(r) if r.status_code >= 200 && r.status_code < 300 => ControllerOpResult {
+                    controller_id: cid,
+                    detail: Some(format!("status {}", r.status_code)),
+                    error: None,
+                    status_code: Some(r.status_code as u16),
+                },
+                Ok(r) => ControllerOpResult {
+                    controller_id: cid,
+                    detail: None,
+                    error: Some(format!("HTTP {}", r.status_code)),
+                    status_code: Some(r.status_code as u16),
+                },
+                Err((status, msg)) => ControllerOpResult {
+                    controller_id: cid,
+                    detail: None,
+                    error: Some(msg),
+                    status_code: Some(status.as_u16()),
+                },
+            }
+        }
+    });
+    futures::future::join_all(futs).await
+}
+
+#[allow(dead_code)]
+fn partition(results: Vec<ControllerOpResult>) -> (Vec<ControllerOpResult>, Vec<ControllerOpResult>) {
+    let (success, failed): (Vec<_>, Vec<_>) = results.into_iter().partition(|r| r.error.is_none());
+    (success, failed)
+}
