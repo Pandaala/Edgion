@@ -15,11 +15,13 @@ use std::sync::Arc;
 use crate::core::gateway::plugins::{StreamPluginRuntime, TlsRoutePluginRuntime};
 
 // Submodules
+pub mod connection_ip_restriction_rules;
 pub mod stream_plugins;
 pub mod tls_route_plugins;
 
 // Re-exports from edgion_plugins
 pub use crate::types::resources::edgion_plugins::PluginEntry;
+pub use connection_ip_restriction_rules::ConnectionIpRestrictionRules;
 pub use stream_plugins::EdgionStreamPlugin;
 pub use tls_route_plugins::TlsRouteStreamPlugin;
 
