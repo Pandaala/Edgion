@@ -19,9 +19,6 @@ pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // Event storage
     store: Arc<RwLock<EventStore<T>>>,
 
-    // pending watch requests
-    watchers: RwLock<Vec<WatchClient<T>>>,
-
     // shared notify for broadcasting events to all watchers
     notify: Arc<Notify>,
 }
@@ -34,7 +31,6 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         Self {
             ready: RwLock::new(false),
             store: Arc::new(RwLock::new(EventStore::new(capacity as usize))),
-            watchers: RwLock::new(Vec::new()),
             notify: Arc::new(Notify::new()),
         }
     }
@@ -213,17 +209,12 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     where
         T: Clone + Send + Sync + 'static,
     {
-        let watchers_len = {
-            let watchers = self.watchers.read();
-            watchers.len()
-        };
         tracing::info!(
             component = "cache_server",
             client_id = %client_id,
             client_name = %client_name,
             from_version = from_version,
             ready = *self.ready.read(),
-            pending_watchers = watchers_len,
             "New watch request"
         );
         // Use bounded channel for data to provide backpressure
@@ -243,36 +234,9 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             last_send_time: Arc::new(parking_lot::RwLock::new(None)),
         };
 
-        let watcher_clone = watcher.clone();
-        {
-            let mut watchers = self.watchers.write();
-
-            // Lazy cleanup: remove watchers whose receivers have been dropped
-            // TODO: need more check on this lazy cleanup logic
-            let len_before = watchers.len();
-            watchers.retain(|w| !w.sender.is_closed());
-            let len_after = watchers.len();
-
-            if len_before > len_after {
-                tracing::info!(
-                    component = "cache_server",
-                    cleaned_count = len_before - len_after,
-                    len_before = len_before,
-                    len_after = len_after,
-                    "Cleaned up disconnected watchers"
-                );
-            }
-
-            watchers.push(watcher_clone.clone());
-        }
-
         tracing::info!(
             component = "cache_server",
             client_id = %watcher.client_id,
-            total_watchers = {
-                let watchers = self.watchers.read();
-                watchers.len()
-            },
             "Watcher registered"
         );
 
