@@ -72,10 +72,7 @@ impl GcirEnforcementTestSuite {
 
                     // Ensure PM is in allow-local state
                     if let Err(e) = ctx.apply_yaml(&pm_yaml_with("allow-local", true)).await {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Failed to apply PM (allow-local): {}", e),
-                        );
+                        return TestResult::failed(start.elapsed(), format!("Failed to apply PM (allow-local): {}", e));
                     }
 
                     // Brief pause for the Gateway to pick up the updated configuration
@@ -143,10 +140,7 @@ impl GcirEnforcementTestSuite {
 
                     // Switch PM to block-local
                     if let Err(e) = ctx.apply_yaml(&pm_yaml_with("block-local", true)).await {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Failed to apply PM (block-local): {}", e),
-                        );
+                        return TestResult::failed(start.elapsed(), format!("Failed to apply PM (block-local): {}", e));
                     }
 
                     // Wait for the config sync to propagate to the Gateway
@@ -169,10 +163,7 @@ impl GcirEnforcementTestSuite {
                                 ),
                                 Ok(Ok(n)) => TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "Expected denial but received {} bytes — block-local not enforced",
-                                        n
-                                    ),
+                                    format!("Expected denial but received {} bytes — block-local not enforced", n),
                                 ),
                                 Ok(Err(_)) => TestResult::passed_with_message(
                                     start.elapsed(),
@@ -235,10 +226,7 @@ impl GcirEnforcementTestSuite {
                             match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
                                 Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!(
-                                        "TCP echo succeeded ({} bytes) — disabled GCIR correctly fails open",
-                                        n
-                                    ),
+                                    format!("TCP echo succeeded ({} bytes) — disabled GCIR correctly fails open", n),
                                 ),
                                 Ok(Ok(_)) => TestResult::failed(
                                     start.elapsed(),
