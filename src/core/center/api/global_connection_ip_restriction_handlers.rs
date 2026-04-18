@@ -255,9 +255,10 @@ pub async fn create_global_ip_restriction(
 
     let pm_json = build_pm_json(&req.namespace, &req.name, &req.data);
     let body = pm_json.into_bytes();
-    // PUT /api/v1/namespaced/pluginmetadata/{namespace}/{name} — upsert on Controller
-    let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", req.namespace, req.name);
-    let results = fan_out_http(&state, targets, "PUT", path, body).await;
+    // POST /api/v1/namespaced/pluginmetadata/{namespace} — create on Controller.
+    // Name is embedded in the JSON body; POST path does not include the name segment.
+    let path = format!("/api/v1/namespaced/pluginmetadata/{}", req.namespace);
+    let results = fan_out_http(&state, targets, "POST", path, body).await;
     let (success, failed) = partition(results);
     Json(ApiResponse::success(FanOutResponse {
         success,

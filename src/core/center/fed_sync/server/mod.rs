@@ -144,7 +144,9 @@ impl FederationSync for FederationGrpcServer {
             "Controller registered"
         );
 
-        // 2. Register in registry
+        // 2. Register in registry + aggregator (aggregator drives online_controllers() in fan-out)
+        self.aggregator
+            .set_controller_info(&controller_id, register_req.clone());
         self.registry.register(
             controller_id.clone(),
             register_req,
