@@ -207,6 +207,26 @@ impl UnifiedAuthState {
 // Middleware
 // ---------------------------------------------------------------------------
 
+/// Build a 503 Service Unavailable response used when `require_auth` is true
+/// but no provider is currently ready (e.g. during Secret fetch retry).
+///
+/// Returns:
+/// - Status 503
+/// - Header `Retry-After: 10` (seconds)
+/// - Body `ApiResponse::error("authentication subsystem initializing, retry later")`
+fn initializing_response() -> Response {
+    use axum::http::HeaderValue;
+    let body = axum::Json(
+        crate::core::common::api::ApiResponse::<()>::error(
+            "authentication subsystem initializing, retry later".to_string(),
+        ),
+    );
+    let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+    resp.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
+    resp
+}
+
 /// Unified Axum middleware that tries OIDC auth first, then falls back to local.
 ///
 /// # Skip rules
@@ -229,24 +249,40 @@ pub async fn unified_auth_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    // Take a snapshot of the local auth state for this request.
-    let local_snapshot: Option<Arc<LocalAuthState>> = state.local.load_full();
-
-    // If neither provider is configured, pass through (no-auth mode).
-    if state.oidc.is_none() && local_snapshot.is_none() {
-        return next.run(request).await;
-    }
-
     let path = request.uri().path().to_string();
 
-    // Skip authentication for configured paths (health/ready probes, etc.).
+    // Skip authentication for configured paths (health/ready probes, /metrics, etc.).
     if state.skip_paths.contains(&path) {
         return next.run(request).await;
     }
-
-    // Skip authentication for public auth endpoints only.
-    if path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || path == "/api/v1/auth/status" {
+    // Skip auth sub-paths — they are public by contract (login handler itself
+    // enforces 503 during init via its own snapshot of state.local).
+    if path == "/api/v1/auth/login"
+        || path == "/api/v1/auth/logout"
+        || path == "/api/v1/auth/status"
+    {
         return next.run(request).await;
+    }
+    if path.starts_with("/configserver/") {
+        return next.run(request).await;
+    }
+
+    // Operator did not configure authentication — legitimate no-auth mode.
+    if !state.require_auth {
+        return next.run(request).await;
+    }
+
+    // Snapshot local provider state. ArcSwapOption → Option<Arc<LocalAuthState>>.
+    let local_snapshot: Option<Arc<LocalAuthState>> = state.local.load_full();
+
+    // Fail-close: operator wants auth but no provider is ready yet.
+    if state.oidc.is_none() && local_snapshot.is_none() {
+        tracing::warn!(
+            component = "unified_auth",
+            path = %path,
+            "auth required but no provider ready — returning 503"
+        );
+        return initializing_response();
     }
 
     // Extract Bearer token, falling back to httpOnly cookie (browser auth).
@@ -559,5 +595,67 @@ mod tests {
 
         let state_yes = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         assert!(state_yes.require_auth);
+    }
+
+    use axum::body::to_bytes;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn router_with_state(state: Arc<UnifiedAuthState>) -> axum::Router {
+        use axum::{middleware, routing::get};
+        axum::Router::new()
+            .route("/test", get(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(state, unified_auth_middleware))
+    }
+
+    #[tokio::test]
+    async fn middleware_returns_503_when_require_auth_and_no_provider() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let app = router_with_state(state);
+        let resp = app
+            .oneshot(Request::builder().method(Method::GET).uri("/test").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let retry = resp.headers().get("retry-after").expect("Retry-After header");
+        assert_eq!(retry.to_str().unwrap(), "10");
+    }
+
+    #[tokio::test]
+    async fn middleware_passthrough_when_require_auth_false() {
+        let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
+        let app = router_with_state(state);
+        let resp = app
+            .oneshot(Request::builder().method(Method::GET).uri("/test").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn middleware_503_body_is_json_error() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let app = router_with_state(state);
+        let resp = app
+            .oneshot(Request::builder().method(Method::GET).uri("/test").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v.get("message").is_some() || v.get("error").is_some());
+    }
+
+    #[tokio::test]
+    async fn middleware_health_path_bypasses_503() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let app = axum::Router::new()
+            .route("/health", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(state, unified_auth_middleware));
+        let resp = app
+            .oneshot(Request::builder().uri("/health").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
