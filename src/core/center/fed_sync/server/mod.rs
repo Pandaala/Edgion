@@ -157,7 +157,9 @@ impl FederationSync for FederationGrpcServer {
         // Send RegisterAck
         let _ = inner_tx
             .send(CenterMessage {
-                payload: Some(CenterPayload::RegisterAck(RegisterAck { session_id })),
+                payload: Some(CenterPayload::RegisterAck(RegisterAck {
+                    session_id: session_id.clone(),
+                })),
             })
             .await;
 
@@ -242,6 +244,7 @@ impl FederationSync for FederationGrpcServer {
             let registry = registry.clone();
             let aggregator_for_offline = aggregator.clone();
             let cid = cid.clone();
+            let sid = session_id.clone();
             let self_pending_proxies = pending_proxies.clone();
             let pm_cache = pm_cache.clone();
             let inner_tx = inner_tx.clone();
@@ -264,7 +267,7 @@ impl FederationSync for FederationGrpcServer {
                                 controller_id = %cid,
                                 "Heartbeat timeout, marking offline"
                             );
-                            registry.mark_offline(&cid);
+                            registry.mark_offline(&cid, &sid);
                             aggregator_for_offline.mark_offline(&cid);
                             sync_client.plugin_metadata.mark_offline(&cid);
                             break;
@@ -276,7 +279,7 @@ impl FederationSync for FederationGrpcServer {
                                 error = %e,
                                 "Stream error"
                             );
-                            registry.mark_offline(&cid);
+                            registry.mark_offline(&cid, &sid);
                             aggregator_for_offline.mark_offline(&cid);
                             sync_client.plugin_metadata.mark_offline(&cid);
                             break;
@@ -287,7 +290,7 @@ impl FederationSync for FederationGrpcServer {
                                 controller_id = %cid,
                                 "Stream closed"
                             );
-                            registry.mark_offline(&cid);
+                            registry.mark_offline(&cid, &sid);
                             aggregator_for_offline.mark_offline(&cid);
                             sync_client.plugin_metadata.mark_offline(&cid);
                             break;

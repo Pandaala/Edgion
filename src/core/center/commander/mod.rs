@@ -36,9 +36,10 @@ impl Commander {
             .get_session(controller_id)
             .ok_or_else(|| anyhow!("Controller {} not found or offline", controller_id))?;
 
-        if session.offline_since.is_some() {
-            return Err(anyhow!("Controller {} is offline", controller_id));
-        }
+        let stream_tx = session
+            .stream_tx
+            .as_ref()
+            .ok_or_else(|| anyhow!("Controller {} is offline", controller_id))?;
 
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel::<CommandResponse>();
@@ -51,7 +52,7 @@ impl Commander {
             })),
         };
 
-        session.stream_tx.send(msg).await.map_err(|_| {
+        stream_tx.send(msg).await.map_err(|_| {
             self.pending.lock().remove(&request_id);
             anyhow!("Failed to send command: stream closed")
         })?;
