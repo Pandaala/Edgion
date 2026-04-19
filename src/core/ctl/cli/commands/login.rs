@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
+use zeroize::Zeroizing;
 
 use crate::core::ctl::cli::token::save_token;
 
@@ -18,17 +19,14 @@ pub async fn login(base_url: &str, username: Option<&str>, password: Option<&str
         }
     };
 
-    // Resolve password: use flag value or prompt interactively (visible, no rpassword dep)
-    let password = match password {
-        Some(p) => p.to_string(),
-        None => {
-            eprint!("Password: ");
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_line(&mut buf)
-                .context("Failed to read password")?;
-            buf.trim().to_string()
-        }
+    // Resolve password: use flag value or prompt with no echo.
+    //
+    // NOTE: passing the password via `-p` / `--password` puts it in argv where it
+    // is visible to other local users (ps / /proc). Prefer interactive prompt or
+    // stdin pipe; `-p` is retained for backwards compatibility only.
+    let password: Zeroizing<String> = match password {
+        Some(p) => Zeroizing::new(p.to_string()),
+        None => Zeroizing::new(rpassword::prompt_password("Password: ").context("Failed to read password")?),
     };
 
     if username.is_empty() {
@@ -42,7 +40,7 @@ pub async fn login(base_url: &str, username: Option<&str>, password: Option<&str
     let url = format!("{}/api/v1/auth/login", base_url);
     let payload = serde_json::json!({
         "username": username,
-        "password": password,
+        "password": password.as_str(),
     });
 
     // Send request (no token needed for login)
@@ -78,11 +76,13 @@ pub async fn login(base_url: &str, username: Option<&str>, password: Option<&str
     // Parse success response: {"success": true, "data": {"token": "...", "expires_in": 86400}}
     let json: Value = serde_json::from_str(&body).context("Failed to parse login response")?;
 
-    let token = json
-        .get("data")
-        .and_then(|d| d.get("token"))
-        .and_then(|t| t.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Login response missing 'data.token' field"))?;
+    let token = Zeroizing::new(
+        json.get("data")
+            .and_then(|d| d.get("token"))
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Login response missing 'data.token' field"))?
+            .to_string(),
+    );
 
     let expires_in = json
         .get("data")
@@ -90,7 +90,7 @@ pub async fn login(base_url: &str, username: Option<&str>, password: Option<&str
         .and_then(|e| e.as_u64());
 
     // Save token to ~/.edgion/token
-    save_token(token).context("Failed to save token")?;
+    save_token(token.as_str()).context("Failed to save token")?;
 
     // Print success message
     if let Some(secs) = expires_in {

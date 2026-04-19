@@ -4,7 +4,7 @@
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
 use metrics::{counter, gauge, histogram, Counter, Gauge};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 /// Metric names as constants for consistency
 pub mod names {
@@ -43,6 +43,14 @@ pub mod names {
     pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
     pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
     pub const CB_REJECTIONS_TOTAL: &str = "edgion_circuit_breaker_rejections_total";
+    // ACME HTTP-01 challenge lookup metrics
+    pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
+    // Stream plugin: GlobalConnectionIpRestriction decision events
+    pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
+    // RoundRobin selector: backend count > u16::MAX truncation
+    pub const RR_SELECTOR_TRUNCATED_TOTAL: &str = "edgion_rr_selector_truncated_total";
+    // Elasticsearch DataSender: per-send outcome (ok / failed_fallback / failed_no_cache)
+    pub const LINK_SYS_ES_SEND_TOTAL: &str = "edgion_link_sys_es_send_total";
 }
 
 /// Global metrics singleton
@@ -57,67 +65,79 @@ pub fn global_metrics() -> &'static GatewayMetrics {
 ///
 /// Provides high-performance, thread-safe metrics using sharded counters.
 /// All metrics are automatically exported via the metrics facade.
+///
+/// Registration policy (hybrid):
+/// - **Hot per-request** handles are eagerly registered in `new()` for zero
+///   per-call overhead; they become non-zero within the first request so the
+///   brief zero-value window is not observable in practice.
+/// - **Cold / failure-path** handles are `OnceLock`-wrapped and registered on
+///   first call, so metrics that are never touched do not appear in `/metrics`
+///   as zero-value noise (cleaner scrape, smaller bandwidth).
 pub struct GatewayMetrics {
+    // --- Hot per-request handles (eager registration) ---
     /// Total contexts created (requests received)
     ctx_created: Counter,
     /// Currently active contexts
     ctx_active: Gauge,
-    /// Total requests processed
-    requests_total: Counter,
-    /// Total failed requests
-    requests_failed: Counter,
-    /// Total access logs dropped (channel full)
-    access_log_dropped: Counter,
-    /// Total SSL logs dropped (channel full)
-    ssl_log_dropped: Counter,
-    /// Total TCP logs dropped (channel full)
-    tcp_log_dropped: Counter,
-    /// Total TLS access logs dropped (channel full)
-    tls_log_dropped: Counter,
-    /// Total UDP logs dropped (channel full)
-    udp_log_dropped: Counter,
-    /// Total K8s status updates attempted
-    status_update_total: Counter,
-    /// Total K8s status update failures
-    status_update_failed: Counter,
-    /// Total K8s status updates skipped (no change)
-    status_update_skipped: Counter,
-    /// Total reload signals received from controller
-    config_reload_signals: Counter,
-    /// Total config relist operations
-    config_relist_total: Counter,
     /// Total gateway request bytes proxied (downstream → upstream)
     gateway_request_bytes: Counter,
     /// Total gateway response bytes proxied (upstream → downstream)
     gateway_response_bytes: Counter,
-    /// Currently connected gateway instances (gRPC WatchServerMeta)
-    controller_connected_gateways: Gauge,
-    /// Total schema validation errors from Admin API (non-K8s mode)
-    schema_validation_errors: Counter,
+
+    // --- Cold / rare-event handles (lazy registration via OnceLock) ---
+    requests_total: OnceLock<Counter>,
+    requests_failed: OnceLock<Counter>,
+    access_log_dropped: OnceLock<Counter>,
+    ssl_log_dropped: OnceLock<Counter>,
+    tcp_log_dropped: OnceLock<Counter>,
+    tls_log_dropped: OnceLock<Counter>,
+    udp_log_dropped: OnceLock<Counter>,
+    status_update_total: OnceLock<Counter>,
+    status_update_failed: OnceLock<Counter>,
+    status_update_skipped: OnceLock<Counter>,
+    config_reload_signals: OnceLock<Counter>,
+    config_relist_total: OnceLock<Counter>,
+    controller_connected_gateways: OnceLock<Gauge>,
+    schema_validation_errors: OnceLock<Counter>,
+}
+
+#[inline]
+fn get_or_register_counter<'a>(slot: &'a OnceLock<Counter>, name: &'static str) -> &'a Counter {
+    slot.get_or_init(|| counter!(name))
+}
+
+#[inline]
+fn get_or_register_gauge<'a>(slot: &'a OnceLock<Gauge>, name: &'static str) -> &'a Gauge {
+    slot.get_or_init(|| gauge!(name))
 }
 
 impl GatewayMetrics {
-    /// Create a new GatewayMetrics instance
+    /// Create a new GatewayMetrics instance.
+    ///
+    /// Hot per-request handles register immediately; cold handles stay
+    /// uninitialized until their first `record_*` call.
     fn new() -> Self {
         Self {
+            // Hot handles: eager
             ctx_created: counter!(names::CTX_CREATED),
             ctx_active: gauge!(names::CTX_ACTIVE),
-            requests_total: counter!(names::REQUESTS_TOTAL),
-            requests_failed: counter!(names::REQUESTS_FAILED),
-            access_log_dropped: counter!(names::ACCESS_LOG_DROPPED),
-            ssl_log_dropped: counter!(names::SSL_LOG_DROPPED),
-            tcp_log_dropped: counter!(names::TCP_LOG_DROPPED),
-            tls_log_dropped: counter!(names::TLS_LOG_DROPPED),
-            udp_log_dropped: counter!(names::UDP_LOG_DROPPED),
-            status_update_total: counter!(names::STATUS_UPDATE_TOTAL),
-            status_update_failed: counter!(names::STATUS_UPDATE_FAILED),
-            status_update_skipped: counter!(names::STATUS_UPDATE_SKIPPED),
-            config_reload_signals: counter!(names::CONFIG_RELOAD_SIGNALS),
-            config_relist_total: counter!(names::CONFIG_RELIST_TOTAL),
             gateway_request_bytes: counter!(names::GATEWAY_REQUEST_BYTES),
             gateway_response_bytes: counter!(names::GATEWAY_RESPONSE_BYTES),
-            controller_connected_gateways: gauge!(names::CONTROLLER_CONNECTED_GATEWAYS),
-            schema_validation_errors: counter!(names::SCHEMA_VALIDATION_ERRORS),
+            // Cold handles: lazy
+            requests_total: OnceLock::new(),
+            requests_failed: OnceLock::new(),
+            access_log_dropped: OnceLock::new(),
+            ssl_log_dropped: OnceLock::new(),
+            tcp_log_dropped: OnceLock::new(),
+            tls_log_dropped: OnceLock::new(),
+            udp_log_dropped: OnceLock::new(),
+            status_update_total: OnceLock::new(),
+            status_update_failed: OnceLock::new(),
+            status_update_skipped: OnceLock::new(),
+            config_reload_signals: OnceLock::new(),
+            config_relist_total: OnceLock::new(),
+            controller_connected_gateways: OnceLock::new(),
+            schema_validation_errors: OnceLock::new(),
         }
     }
 
@@ -137,75 +157,75 @@ impl GatewayMetrics {
     /// Record a successful request
     #[inline]
     pub fn request_success(&self) {
-        self.requests_total.increment(1);
+        get_or_register_counter(&self.requests_total, names::REQUESTS_TOTAL).increment(1);
     }
 
     /// Record a failed request
     #[inline]
     pub fn request_failed(&self) {
-        self.requests_total.increment(1);
-        self.requests_failed.increment(1);
+        get_or_register_counter(&self.requests_total, names::REQUESTS_TOTAL).increment(1);
+        get_or_register_counter(&self.requests_failed, names::REQUESTS_FAILED).increment(1);
     }
 
     /// Record a dropped access log entry
     #[inline]
     pub fn access_log_dropped(&self) {
-        self.access_log_dropped.increment(1);
+        get_or_register_counter(&self.access_log_dropped, names::ACCESS_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped SSL log entry
     #[inline]
     pub fn ssl_log_dropped(&self) {
-        self.ssl_log_dropped.increment(1);
+        get_or_register_counter(&self.ssl_log_dropped, names::SSL_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped TCP log entry
     #[inline]
     pub fn tcp_log_dropped(&self) {
-        self.tcp_log_dropped.increment(1);
+        get_or_register_counter(&self.tcp_log_dropped, names::TCP_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped TLS access log entry
     #[inline]
     pub fn tls_log_dropped(&self) {
-        self.tls_log_dropped.increment(1);
+        get_or_register_counter(&self.tls_log_dropped, names::TLS_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped UDP log entry
     #[inline]
     pub fn udp_log_dropped(&self) {
-        self.udp_log_dropped.increment(1);
+        get_or_register_counter(&self.udp_log_dropped, names::UDP_LOG_DROPPED).increment(1);
     }
 
     /// Record a successful K8s status update
     #[inline]
     pub fn status_update_success(&self) {
-        self.status_update_total.increment(1);
+        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
     }
 
     /// Record a failed K8s status update
     #[inline]
     pub fn status_update_failed(&self) {
-        self.status_update_total.increment(1);
-        self.status_update_failed.increment(1);
+        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
+        get_or_register_counter(&self.status_update_failed, names::STATUS_UPDATE_FAILED).increment(1);
     }
 
     /// Record a skipped K8s status update (no change needed)
     #[inline]
     pub fn status_update_skipped(&self) {
-        self.status_update_skipped.increment(1);
+        get_or_register_counter(&self.status_update_skipped, names::STATUS_UPDATE_SKIPPED).increment(1);
     }
 
     /// Record a reload signal received from controller
     #[inline]
     pub fn config_reload_signal(&self) {
-        self.config_reload_signals.increment(1);
+        get_or_register_counter(&self.config_reload_signals, names::CONFIG_RELOAD_SIGNALS).increment(1);
     }
 
     /// Record a config relist operation
     #[inline]
     pub fn config_relist(&self) {
-        self.config_relist_total.increment(1);
+        get_or_register_counter(&self.config_relist_total, names::CONFIG_RELIST_TOTAL).increment(1);
     }
 
     /// Record proxied request bytes (downstream → upstream body)
@@ -223,19 +243,27 @@ impl GatewayMetrics {
     /// Record a gateway instance connected to controller via gRPC
     #[inline]
     pub fn gateway_connected(&self) {
-        self.controller_connected_gateways.increment(1.0);
+        get_or_register_gauge(
+            &self.controller_connected_gateways,
+            names::CONTROLLER_CONNECTED_GATEWAYS,
+        )
+        .increment(1.0);
     }
 
     /// Record a gateway instance disconnected from controller
     #[inline]
     pub fn gateway_disconnected(&self) {
-        self.controller_connected_gateways.decrement(1.0);
+        get_or_register_gauge(
+            &self.controller_connected_gateways,
+            names::CONTROLLER_CONNECTED_GATEWAYS,
+        )
+        .decrement(1.0);
     }
 
     /// Record a schema validation error from Admin API (non-K8s mode)
     #[inline]
     pub fn schema_validation_error(&self) {
-        self.schema_validation_errors.increment(1);
+        get_or_register_counter(&self.schema_validation_errors, names::SCHEMA_VALIDATION_ERRORS).increment(1);
     }
 }
 
@@ -402,4 +430,112 @@ pub fn record_cb_recovery(service_key: &str) {
 /// Record a circuit breaker rejection (request blocked by ejected backend)
 pub fn record_cb_rejection(service_key: &str) {
     counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
+}
+
+/// Record an ACME HTTP-01 challenge token lookup event.
+///
+/// `result` must be one of: `"hit"`, `"expired"`, `"domain_mismatch"`, `"not_found"`.
+/// Low, fixed cardinality — safe as a label.
+pub fn record_acme_challenge_lookup(result: &'static str) {
+    counter!(names::ACME_CHALLENGE_LOOKUP_TOTAL, "result" => result).increment(1);
+}
+
+/// Record a `GlobalConnectionIpRestriction` stream plugin decision event.
+///
+/// `result` must be one of:
+/// - `"fail_open_pm_missing"` — referenced PluginMetadata not found; connection allowed
+/// - `"fail_open_profile_missing"` — active profile not present in PM; connection allowed
+/// - `"denied"` — client IP blocked by active profile rules
+///
+/// Low, fixed cardinality — safe as a label.
+pub fn record_conn_ip_restriction_event(result: &'static str) {
+    counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
+}
+
+/// Record the outcome of an Elasticsearch DataSender send attempt.
+///
+/// `result` must be one of:
+/// - `"ok"` — shipped directly to ES
+/// - `"failed_fallback"` — ES unavailable, successfully routed to `FailedCache`
+/// - `"failed_no_cache"` — ES unavailable and no `FailedCache` configured (log dropped)
+///
+/// Fixed cardinality — safe as a label.
+pub fn record_link_sys_es_send(result: &'static str) {
+    counter!(names::LINK_SYS_ES_SEND_TOTAL, "result" => result).increment(1);
+}
+
+/// Record a `RoundRobinSelector` backend-count truncation.
+///
+/// Fires every time a selector is built with more than `u16::MAX` backends
+/// (an extreme configuration anomaly). No labels — identifying the exact
+/// route is best done via logs; the counter exists purely as an alarm signal
+/// so operators can detect silent truncation.
+pub fn record_rr_selector_truncated() {
+    counter!(names::RR_SELECTOR_TRUNCATED_TOTAL).increment(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metrics_exporter_prometheus::PrometheusBuilder;
+
+    /// Verifies the hybrid registration policy:
+    /// - Hot per-request handles register in `new()` and appear immediately (with value 0).
+    /// - Cold / failure-path handles stay absent until their record method is called.
+    #[test]
+    fn gateway_metrics_registration_policy() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            // `new()` must run inside with_local_recorder so eager counter!/gauge!
+            // macros bind to the prometheus test recorder (not the noop global).
+            let m = GatewayMetrics::new();
+
+            // --- Before any record call ---
+            let rendered = handle.render();
+            // Hot handles: eagerly registered, should be visible (value 0).
+            assert!(
+                rendered.contains("edgion_ctx_created_total"),
+                "hot counter ctx_created must register eagerly, got:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("edgion_ctx_active"),
+                "hot gauge ctx_active must register eagerly, got:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("edgion_gateway_request_bytes_total"),
+                "hot counter request_bytes must register eagerly, got:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("edgion_gateway_response_bytes_total"),
+                "hot counter response_bytes must register eagerly, got:\n{rendered}"
+            );
+            // Cold handles: absent until called.
+            assert!(
+                !rendered.contains("edgion_access_log_dropped_total"),
+                "cold counter access_log_dropped must not appear before first call, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_ssl_log_dropped_total"),
+                "cold counter ssl_log_dropped must not appear before first call, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_controller_schema_validation_errors_total"),
+                "cold counter schema_validation_errors must not appear before first call, got:\n{rendered}"
+            );
+
+            // --- After touching one cold counter ---
+            m.access_log_dropped();
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_access_log_dropped_total"),
+                "touched cold counter must appear, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_ssl_log_dropped_total"),
+                "still-untouched cold counter must remain absent, got:\n{rendered}"
+            );
+        });
+    }
 }

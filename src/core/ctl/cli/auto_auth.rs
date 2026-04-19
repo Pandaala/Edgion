@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use zeroize::Zeroizing;
 
 /// Minimal struct to deserialize auth-related sections from controller config.
 #[derive(Debug, Deserialize, Default)]
@@ -52,11 +53,12 @@ const DEFAULT_CONFIG_PATHS: &[&str] = &[
 /// 2. EDGION_CONTROLLER_CONFIG env var
 /// 3. Default paths (CWD/config/, /usr/local/edgion/config/, /etc/edgion/)
 ///
-/// Returns (username, password) if local_auth is configured and enabled.
+/// Returns (username, password) if local_auth is configured and enabled. The password
+/// is wrapped in `Zeroizing` so its buffer is wiped on drop.
 ///
 /// Mirrors the controller's logic: when neither `[auth]` (OIDC) nor `[local_auth]`
 /// is present, default local_auth credentials (admin/edgion1234) are used.
-pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, String)> {
+pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, Zeroizing<String>)> {
     let config_path = resolve_config_path(explicit_path)?;
 
     let content = std::fs::read_to_string(&config_path).ok()?;
@@ -68,7 +70,7 @@ pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, String
             return None;
         }
         if !local_auth.password.is_empty() {
-            return Some((local_auth.username, local_auth.password));
+            return Some((local_auth.username, Zeroizing::new(local_auth.password)));
         }
         // [local_auth] exists but password is empty — credentials were auto-generated
         return read_generated_credentials(&content, &config_path);
@@ -107,7 +109,7 @@ struct PartialConfig {
     conf_center: Option<ConfCenterSection>,
 }
 
-fn read_generated_credentials(config_content: &str, config_path: &Path) -> Option<(String, String)> {
+fn read_generated_credentials(config_content: &str, config_path: &Path) -> Option<(String, Zeroizing<String>)> {
     let partial: PartialConfig = serde_yaml::from_str(config_content).ok()?;
 
     // Resolve conf_dir with same priority as the controller:
@@ -146,7 +148,7 @@ fn read_generated_credentials(config_content: &str, config_path: &Path) -> Optio
 }
 
 /// Extract username and password from a K8s Secret YAML (stringData format).
-fn parse_secret_credentials(yaml: &str) -> Option<(String, String)> {
+fn parse_secret_credentials(yaml: &str) -> Option<(String, Zeroizing<String>)> {
     // Simple line-based parsing for stringData fields
     // Format:
     // stringData:
@@ -182,7 +184,7 @@ fn parse_secret_credentials(yaml: &str) -> Option<(String, String)> {
     }
 
     match (username, password) {
-        (Some(u), Some(p)) if !p.is_empty() => Some((u, p)),
+        (Some(u), Some(p)) if !p.is_empty() => Some((u, Zeroizing::new(p))),
         _ => None,
     }
 }

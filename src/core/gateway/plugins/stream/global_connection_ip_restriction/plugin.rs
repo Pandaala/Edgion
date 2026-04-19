@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 
+use crate::core::gateway::observe::metrics::record_conn_ip_restriction_event;
 use crate::core::gateway::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
 use crate::core::gateway::plugins::stream::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 use crate::types::resources::edgion_gateway_config::PluginReference;
@@ -41,11 +42,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         // Getter signature: (namespace, name)
         let Some(pm) = store.get_global_connection_ip_restriction(self.ref_namespace(), &self.plugin_metadata_ref.name)
         else {
-            tracing::debug!(
-                ref_ns = self.ref_namespace(),
-                ref_name = %self.plugin_metadata_ref.name,
-                "GlobalConnectionIpRestriction PM not found, fail-open",
-            );
+            record_conn_ip_restriction_event("fail_open_pm_missing");
             return StreamPluginResult::Allow;
         };
 
@@ -54,27 +51,14 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         }
 
         let Some(profile) = pm.profiles.get(&pm.active_profile) else {
-            tracing::warn!(
-                ref_ns = self.ref_namespace(),
-                ref_name = %self.plugin_metadata_ref.name,
-                active_profile = %pm.active_profile,
-                "Active profile not found in PM, fail-open",
-            );
+            record_conn_ip_restriction_event("fail_open_profile_missing");
             return StreamPluginResult::Allow;
         };
 
         if profile.check_ip(&ctx.client_ip) {
             StreamPluginResult::Allow
         } else {
-            // Future: structured access log. For now, trace-level only.
-            tracing::trace!(
-                ip = %ctx.client_ip,
-                port = ctx.listener_port,
-                ref_ns = self.ref_namespace(),
-                ref_name = %self.plugin_metadata_ref.name,
-                profile = %pm.active_profile,
-                "Connection rejected by GlobalConnectionIpRestriction",
-            );
+            record_conn_ip_restriction_event("denied");
             StreamPluginResult::Deny("blocked by global connection ip restriction".to_string())
         }
     }

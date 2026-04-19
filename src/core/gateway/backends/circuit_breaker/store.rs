@@ -111,16 +111,13 @@ impl CircuitBreakerStore {
         };
 
         // Step 1: increment failure count (short-lived lock)
-        let (should_eject, failures) = {
+        let should_eject = {
             let mut ep = svc.endpoints.entry(backend_hash).or_default();
             if ep.ejected_at.is_some() {
                 return;
             }
             ep.consecutive_failures += 1;
-            (
-                ep.consecutive_failures >= svc.config.consecutive_errors,
-                ep.consecutive_failures,
-            )
+            ep.consecutive_failures >= svc.config.consecutive_errors
         }; // entry lock released here
 
         if !should_eject {
@@ -139,14 +136,6 @@ impl CircuitBreakerStore {
         // Step 3: actually eject (re-acquire lock)
         if let Some(mut ep) = svc.endpoints.get_mut(&backend_hash) {
             ep.ejected_at = Some(Instant::now());
-            tracing::warn!(
-                component = "circuit_breaker",
-                service = service_key,
-                backend_hash = backend_hash,
-                consecutive_failures = failures,
-                ejection_seconds = svc.config.ejection_seconds,
-                "Backend endpoint ejected"
-            );
             crate::core::gateway::observe::metrics::record_cb_ejection(service_key);
         };
     }

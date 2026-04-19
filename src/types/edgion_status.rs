@@ -99,6 +99,9 @@ pub enum EdgionStatus {
     /// Cross-namespace reference denied (no matching ReferenceGrant)
     RefDenied = 503_12,
 
+    /// Link-local / cloud-metadata backend rejected (SSRF defense: `169.254.0.0/16`, `fe80::/10`)
+    BackendAddrLinkLocalNotAllowed = 503_13,
+
     /// Backend kind not supported (Gateway API conformance: return 500)
     BackendUnsupportedKind = 500_15,
 

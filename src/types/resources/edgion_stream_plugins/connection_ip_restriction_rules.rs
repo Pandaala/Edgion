@@ -5,14 +5,23 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 
 use crate::core::common::matcher::ip_cidr_helpers::build_radix_matcher;
 use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::types::resources::edgion_plugins::DefaultAction;
 
+/// Legacy HTTP-layer field names that must be flagged when found on L4 configs.
+///
+/// These belonged to the pre-`ec4e000` HTTP `IpRestrictionConfig` schema. Detecting them
+/// at preparse-time lets the Controller surface a `LegacySchemaDeprecated` status condition
+/// instead of failing the whole CR deserialization at the watcher level (which would silently
+/// bypass the L4 enforcement and give operators no migration hint).
+const LEGACY_HTTP_FIELDS: &[&str] = &["ipSource", "message", "status"];
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectionIpRestrictionRules {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
@@ -22,6 +31,14 @@ pub struct ConnectionIpRestrictionRules {
 
     #[serde(default)]
     pub default_action: DefaultAction,
+
+    /// Catch-all for any field not recognized by the struct. Populated by serde during
+    /// deserialization so the Controller's preparse can identify legacy HTTP fields
+    /// (`ipSource`/`message`/`status`) from the old schema and emit a migration status
+    /// condition. Never written back to K8s (Controller only patches `/status`).
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(skip)]
+    unknown_fields: BTreeMap<String, serde_json::Value>,
 
     #[serde(skip)]
     #[schemars(skip)]
@@ -37,6 +54,7 @@ impl Default for ConnectionIpRestrictionRules {
             allow: None,
             deny: None,
             default_action: DefaultAction::default(),
+            unknown_fields: BTreeMap::new(),
             allow_matcher: None,
             deny_matcher: None,
         }
@@ -44,6 +62,17 @@ impl Default for ConnectionIpRestrictionRules {
 }
 
 impl ConnectionIpRestrictionRules {
+    /// Return any legacy HTTP-layer field names (`ipSource`/`message`/`status`) captured
+    /// during deserialization. Non-empty result means the YAML predates the `ec4e000`
+    /// schema reshape and the operator must migrate.
+    pub fn legacy_http_fields(&self) -> Vec<&'static str> {
+        LEGACY_HTTP_FIELDS
+            .iter()
+            .filter(|name| self.unknown_fields.contains_key(**name))
+            .copied()
+            .collect()
+    }
+
     pub fn validate_and_init(&mut self) -> Result<(), String> {
         if self.allow.is_none() && self.deny.is_none() {
             return Err("At least one of 'allow' or 'deny' must be specified".to_string());
@@ -115,14 +144,45 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_rejected() {
-        // deny_unknown_fields prevents silent drops of ip_source / message / status from old configs.
+    fn legacy_http_fields_captured_for_preparse() {
+        // Old schema (pre-ec4e000) HTTP-layer fields must round-trip into `unknown_fields`
+        // so the Controller's preparse step can emit a `LegacySchemaDeprecated` condition
+        // rather than failing the whole CR decode upstream at the watcher.
         let json = r#"{
             "allow": ["192.168.1.0/24"],
-            "message": "blocked"
+            "ipSource": "RemoteAddr",
+            "message": "blocked",
+            "status": 403
         }"#;
-        let result: Result<ConnectionIpRestrictionRules, _> = serde_json::from_str(json);
-        assert!(result.is_err(), "should reject unknown 'message' field");
+        let rules: ConnectionIpRestrictionRules =
+            serde_json::from_str(json).expect("legacy fields should now parse (detection moved to preparse)");
+        let mut legacy = rules.legacy_http_fields();
+        legacy.sort();
+        assert_eq!(legacy, vec!["ipSource", "message", "status"]);
+    }
+
+    #[test]
+    fn clean_config_has_no_unknown_fields() {
+        let json = r#"{
+            "allow": ["192.168.1.0/24"],
+            "defaultAction": "deny"
+        }"#;
+        let rules: ConnectionIpRestrictionRules = serde_json::from_str(json).unwrap();
+        assert!(rules.legacy_http_fields().is_empty());
+        assert!(rules.unknown_fields.is_empty());
+    }
+
+    #[test]
+    fn non_legacy_unknown_field_does_not_trigger_legacy_detection() {
+        // A stray (non-legacy) field must not masquerade as a legacy-schema violation;
+        // preparse only cares about the three HTTP fields from the pre-ec4e000 schema.
+        let json = r#"{
+            "allow": ["192.168.1.0/24"],
+            "typoedField": "oops"
+        }"#;
+        let rules: ConnectionIpRestrictionRules = serde_json::from_str(json).unwrap();
+        assert!(rules.legacy_http_fields().is_empty());
+        assert!(rules.unknown_fields.contains_key("typoedField"));
     }
 
     #[test]

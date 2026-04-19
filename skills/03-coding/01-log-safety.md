@@ -99,6 +99,73 @@ tracing::info!(backend = ?backend_ref, "Selected backend");  // 包含 IP/Port
 3. **信息重复**：access log / ssl log / tcp log 已经覆盖请求/连接维度信息
 4. **关联性**：tracing log 无法关联到具体请求，access log 可以
 
+### 数据面入口清单（判定边界）
+
+> **判定法则**：从下表任一入口出发的调用链**全部**是数据面热路径，tracing 一律禁止（仅 ctx/access log/metrics）。
+> 入口之外的代码（构造、装配、同步、启动、后台 worker）按各自上下文判断，多数可用 tracing。
+
+**HTTP 请求路径** — `impl ProxyHttp for EdgionHttpProxy` (`gateway/routes/http/proxy_http/mod.rs`)
+
+| 回调 | 分派文件 |
+|------|----------|
+| `new_ctx` / `init_downstream_modules` | `pg_new_ctx.rs` / `pg_init_downstream_modules.rs` |
+| `early_request_filter` / `request_filter` / `request_body_filter` | `pg_early_request_filter.rs` / `pg_request_filter.rs` / `pg_request_body_filter.rs` |
+| `upstream_peer` / `connected_to_upstream` | `pg_upstream_peer.rs` / `pg_connected_to_upstream.rs` |
+| `upstream_response_filter` / `upstream_response_body_filter` / `response_filter` | `pg_upstream_response_filter.rs` / `pg_upstream_response_body_filter.rs` / `pg_response_filter.rs` |
+| `fail_to_connect` / `error_while_proxy` / `fail_to_proxy` / `logging` | `pg_fail_to_connect.rs` / `pg_error_while_proxy.rs` / `pg_fail_to_proxy.rs` / `pg_logging.rs` |
+
+HTTP→HTTPS redirect 服务（`routes/http/redirect_http.rs` 的 `ProxyHttp` impl）同等。
+
+**TCP/TLS 连接路径** — `impl ServerApp` 的 `process_new`
+
+| 文件 | 场景 |
+|------|------|
+| `gateway/routes/tcp/edgion_tcp.rs` | TCP |
+| `gateway/routes/tls/passthrough_proxy.rs` | TLS 透传 |
+| `gateway/routes/tls/proxy.rs` | TLS 卸载 + TCP 转发 |
+
+**UDP 连接路径**（**非** Pingora trait，自建循环，每 packet 入口）— `gateway/routes/udp/edgion_udp.rs`
+- `EdgionUdpProxy::serve()` 的 `recv_from` 循环
+- `handle_client_packet` / `handle_upstream_packets`（tokio::spawn 起的 per-session 处理）
+
+**TLS 握手回调** — `impl TlsAccept for TlsCallback` (`gateway/tls/runtime/gateway/tls_pingora.rs`)
+含 `certificate_callback` / `handshake_complete_callback`。
+
+**BoringSSL 底层回调**（TLS 握手同步调用链内）：
+- `tls/boringssl/mtls_verify_callback.rs` 的 `extern "C" fn verify_callback` / `verify_callback_impl`（mTLS 白名单校验，每握手触发）
+- `tls/runtime/backend/cert_extractor.rs`（`handshake_complete_callback` 中提取客户端证书）
+
+**插件派发**（作为上述回调的延伸，全部算数据面）：
+- `plugins/runtime/plugin_runtime.rs` 中 `run_*_plugins`
+- `plugins/runtime/traits/**` 下 `RequestFilter` / `UpstreamResponse*` 实现
+- `plugins/runtime/conditional_filter.rs`、`plugins/runtime/session_adapter.rs`、`plugins/runtime/gateway_api_filters/**`
+- `plugins/http/**/plugin.rs` 的 `filter` / `apply` / `on_request` 方法
+- `plugins/stream/stream_plugin_runtime.rs`、`plugins/stream/connection_filter_bridge.rs`（`impl ConnectionFilter`）、`plugins/stream/*/plugin.rs`（`impl StreamPlugin`）
+- `plugins/stream/tls_route/tls_route_plugin_runtime.rs`、`plugins/stream/tls_route/*.rs`（`impl TlsRoutePlugin`，TLS 握手后的路由插件）
+
+**从回调链进入的共享模块**（调用时=数据面，仅配置/启动时调用的不是）：
+- `routes/http/match_engine/{radix_route_match,regex_routes_engine}.rs`、`routes/http/match_unit.rs`（HTTP 路由匹配，`request_filter` 调用）
+- `routes/grpc/{match_engine,match_unit,integration}.rs`（gRPC 匹配，沿用 HTTP proxy 的 `request_filter`）
+- `routes/http/session_persistence.rs`（`upstream_peer` 粘性会话）
+- `lb/selection/{round_robin,least_conn,ewma,consistent_hash}.rs`、`lb/runtime_state/mod.rs`（`upstream_peer` 每次选 backend）
+- `backends/mod.rs` peer 选择、`backends/validation.rs` SSRF 校验、`backends/circuit_breaker/store.rs` 熔断判定、`backends/policy/` 每请求策略
+- `cache/**` 每请求 lookup
+- `tls/store/cert_matcher.rs` 的 SNI→证书匹配（被 `certificate_callback` 调用）
+- `runtime/server/error_response.rs`（`fail_to_proxy`/`request_filter` 拒绝时生成响应）
+
+#### 明确**不是**数据面（即使在 `gateway/` 目录下）
+
+| 位置 | 原因 |
+|------|------|
+| `plugins/**/conf_handler_impl.rs`、`PluginRuntime::build_*` | 配置/同步期构造插件，一次性 |
+| `plugins/**::new()` / `::from_config()` | 构造器，非请求路径 |
+| `conf_sync/**`、`link_sys/**` | Controller↔Gateway gRPC，与请求无关 |
+| `api/**` | Admin API（控制面） |
+| `runtime/server/**` 启动/关停 | 一次性事件 |
+| `observe/metrics/registry.rs` 注册 | 启动期 |
+| `services/acme/**` 后台任务、`backends/health/` 健康探测 loop、`backends/discovery/` 周期任务 | 后台 worker，按 job 频率而非 QPS |
+| `tls/store/**` 证书加载、`tls/validation/` 解析 | 配置加载 |
+
 ### 例外
 
 | 场景 | 允许 | 原因 |
@@ -107,6 +174,8 @@ tracing::info!(backend = ?backend_ref, "Selected backend");  // 包含 IP/Port
 | 数据面启动/关闭（进程级 `once_cell` 初始化） | `tracing::info!` | 一次性事件 |
 | 致命错误（panic 前） | `tracing::error!` | 极端情况需要立即可见 |
 | `pg_logging.rs` 中 access log 发送失败 | `tracing::warn!` | log store 问题需要系统级可见性 |
+| `mtls_verify_callback.rs` 的 `catch_unwind` panic 捕获分支 | `tracing::error!` | C callback 内 Rust panic 会 UB，必须立即可见 |
+| `proxy_http/parse_timeout.rs`（`ParsedTimeouts::from_config`） | `tracing::warn!` | 仅在 listener 构建期解析 `EdgionGatewayConfig.httpTimeout` 字符串时调用，每次 reload 一次；文件虽在 `proxy_http/` 目录下，但不在请求路径 |
 
 ### 代码示例
 
@@ -139,6 +208,69 @@ tracing::info!("Selected backend: {:?}", backend_ref);  // 泄漏 + 性能
 - [ ] 如果资源已同步到数据面，access log 中是否有 `sv`？
 - [ ] `ctx_map` 中新增的 key 是否可能包含敏感信息？如果是，需要做过滤
 - [ ] 插件 stage_logs 中是否记录了完整 username / token？应只记录前缀
+
+---
+
+## 定期维护（每季度或每次改「数据面入口清单」后执行）
+
+**1. 扫描数据面入口文件是否混入新 tracing**（注意：只点**入口文件本身**，目录里那些 `conf_handler_impl.rs` / `routes_mgr.rs` / `conf_handler.rs` 是配置期，不要整目录扫）：
+
+```bash
+rg -n 'tracing::' \
+  src/core/gateway/routes/http/proxy_http/ \
+  src/core/gateway/routes/http/match_engine/ \
+  src/core/gateway/routes/http/match_unit.rs \
+  src/core/gateway/routes/http/session_persistence.rs \
+  src/core/gateway/routes/http/redirect_http.rs \
+  src/core/gateway/routes/tcp/edgion_tcp.rs \
+  src/core/gateway/routes/tls/passthrough_proxy.rs \
+  src/core/gateway/routes/tls/proxy.rs \
+  src/core/gateway/routes/udp/edgion_udp.rs \
+  src/core/gateway/routes/grpc/match_engine.rs \
+  src/core/gateway/routes/grpc/match_unit.rs \
+  src/core/gateway/routes/grpc/integration.rs \
+  src/core/gateway/tls/runtime/gateway/tls_pingora.rs \
+  src/core/gateway/tls/runtime/backend/backend_api.rs \
+  src/core/gateway/tls/runtime/backend/cert_extractor.rs \
+  src/core/gateway/tls/boringssl/mtls_verify_callback.rs \
+  src/core/gateway/tls/store/cert_matcher.rs \
+  src/core/gateway/plugins/stream/stream_plugin_runtime.rs \
+  src/core/gateway/plugins/stream/connection_filter_bridge.rs \
+  src/core/gateway/plugins/stream/tls_route/ \
+  src/core/gateway/plugins/stream/ip_restriction/ \
+  src/core/gateway/plugins/stream/global_connection_ip_restriction/ \
+  src/core/gateway/plugins/runtime/plugin_runtime.rs \
+  src/core/gateway/plugins/runtime/conditional_filter.rs \
+  src/core/gateway/plugins/runtime/session_adapter.rs \
+  src/core/gateway/plugins/runtime/gateway_api_filters/ \
+  src/core/gateway/plugins/http/*/plugin.rs \
+  src/core/gateway/plugins/http/*/request_filter_impl.rs \
+  src/core/gateway/lb/selection/ \
+  src/core/gateway/lb/runtime_state/ \
+  src/core/gateway/backends/mod.rs \
+  src/core/gateway/backends/validation.rs \
+  src/core/gateway/backends/circuit_breaker/store.rs \
+  src/core/gateway/backends/policy/ \
+  src/core/gateway/cache/ \
+  src/core/gateway/runtime/server/error_response.rs
+```
+
+**预期**：只剩下例外表登记的豁免项（`pg_logging.rs` 的 access log 失败 warn、`mtls_verify_callback.rs` 的 panic 捕获 error 等）。任何新命中必须：
+- 改为 ctx-based log / access log / PluginLog / metrics，**或**
+- 评审后补入例外表并注明原因。
+
+> **当前基线**（2026-04-19）：Wave 4 工单 #03–#13 尚未执行完，上面命令**预期**会命中 `pg_*.rs` / `mtls_verify_callback.rs` init log / `lb/runtime_state/mod.rs` / `lb/selection/round_robin.rs` / `match_engine/radix_*.rs` 等位置。这些属于存量债务，应通过 Wave 4 清空，而非新豁免。
+> `parse_timeout.rs` 是配置加载路径（`ParsedTimeouts::from_config` 仅 listener 构建时调用），已登记到上面的例外表，保留合理。
+
+**2. 核对 Pingora / 插件 trait impl 有没有新增没登记的入口**：
+
+```bash
+# 数据面 trait impl —— 每个结果的文件路径必须能在"数据面入口清单"表或"插件派发"小节里对得上
+rg -n 'impl (ProxyHttp|ServerApp|TlsAccept|ConnectionFilter|StreamPlugin|TlsRoutePlugin|RequestFilter|UpstreamResponseFilter|UpstreamResponseBodyFilter|UpstreamResponse) for ' \
+  src/core/gateway/
+```
+
+**预期**：每条命中都能在本规则的"HTTP 请求路径 / TCP/TLS 连接路径 / UDP 连接路径 / TLS 握手回调 / 插件派发"这几节里找到覆盖。新增 trait impl 必须同步更新上面表格，否则下次 review 工单判定会漏。
 
 ---
 

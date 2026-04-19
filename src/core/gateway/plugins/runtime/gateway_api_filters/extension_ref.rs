@@ -5,6 +5,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use pingora_http::ResponseHeader;
 
 use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::plugins::runtime::log::EdgionPluginsLogToken;
@@ -15,6 +17,31 @@ use crate::core::gateway::plugins::runtime::traits::{
 use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::types::filters::{PluginRunningResult, PluginRunningStage};
 use crate::types::resources::LocalObjectReference;
+
+/// Error response body written when an ExtensionRef cannot be resolved
+/// (cycle, depth exceeded, referenced EdgionPlugins not found).
+const EXTENSION_REF_ERROR_BODY: &[u8] = br#"{"message":"plugin reference error"}"#;
+
+/// Write a 500 response with a diagnostic JSON body for an async stage that
+/// hit a prepare-execution error. Called from `run_extension_async`'s `Err`
+/// arm so clients don't see a naked 502 with no log context.
+async fn write_extension_ref_error_response(session: &mut dyn PluginSession) {
+    match ResponseHeader::build(500, None) {
+        Ok(mut hdr) => {
+            let _ = hdr.insert_header("Content-Type", "application/json");
+            if session.write_response_header(Box::new(hdr), false).await.is_ok() {
+                let _ = session
+                    .write_response_body(Some(Bytes::from_static(EXTENSION_REF_ERROR_BODY)), true)
+                    .await;
+            }
+        }
+        Err(_) => {
+            // ResponseHeader::build(500, ...) cannot fail in practice.
+            // If the session is already broken, fall through to ErrTerminateRequest
+            // and let the runtime surface the termination.
+        }
+    }
+}
 
 /// Default maximum allowed nested plugin references to avoid infinite loops
 pub const DEFAULT_PLUGIN_REF_DEPTH: usize = 5;
@@ -148,7 +175,14 @@ impl ExtensionRefFilter {
         let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
             Ok(Some(res)) => res,
             Ok(None) => return PluginRunningResult::GoodNext,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
+            Err(_) => {
+                // Without writing a response here, ErrTerminateRequest would surface
+                // as a naked 502 (no plugin name in access log, no body) — practically
+                // impossible to triage. Write a 500 + JSON body so the terminated
+                // request is diagnosable from the client side too.
+                write_extension_ref_error_response(session).await;
+                return PluginRunningResult::ErrTerminateRequest;
+            }
         };
 
         match stage {
@@ -390,5 +424,42 @@ mod tests {
         // Verify refer_to is set (now just the name string)
         assert!(log.refer_to.is_some());
         assert_eq!(log.refer_to.as_ref().unwrap(), "p1");
+    }
+
+    /// Regression test for #15: the async Request stage must write a 500 body
+    /// when a cycle is detected, instead of returning a naked ErrTerminateRequest
+    /// that surfaces as a blank 502 to the client.
+    #[tokio::test]
+    async fn test_cycle_writes_500_body_in_request_stage() {
+        let mut session = MockPluginSession::new();
+        session.expect_has_plugin_ref().with(eq("ns/p1")).return_const(true);
+        // The new Err branch must call write_response_header + write_response_body.
+        session.expect_write_response_header().times(1).returning(|_, _| Ok(()));
+        session
+            .expect_write_response_body()
+            .times(1)
+            .withf(|body, end| {
+                end == &true
+                    && body
+                        .as_ref()
+                        .map(|b| b.as_ref() == EXTENSION_REF_ERROR_BODY)
+                        .unwrap_or(false)
+            })
+            .returning(|_, _| Ok(()));
+
+        let filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "".into(),
+                kind: "EdgionPlugins".into(),
+                name: "p1".into(),
+            },
+            DEFAULT_PLUGIN_REF_DEPTH,
+        );
+        let mut log = PluginLog::new("test");
+        let result = filter
+            .run_extension_async(PluginRunningStage::Request, &mut session, &mut log)
+            .await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     }
 }

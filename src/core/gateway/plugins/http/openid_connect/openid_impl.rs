@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::common::http_util::fetch_json_limited;
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay as auth_delay;
@@ -765,7 +766,10 @@ impl OpenidConnect {
             return Err(format!("OIDC discovery request failed with status {}", resp.status()).into());
         }
 
-        let doc: DiscoveryDocument = resp.json().await?;
+        let doc: DiscoveryDocument =
+            fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery")
+                .await
+                .map_err(OidcError::from)?;
         if doc.issuer.is_empty() {
             return Err("OIDC discovery document missing issuer".into());
         }
@@ -817,17 +821,18 @@ impl OpenidConnect {
             return None;
         }
 
-        let value: Value = match resp.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    plugin = "OpenidConnect",
-                    error = %e,
-                    "Failed to parse userinfo response as JSON"
-                );
-                return None;
-            }
-        };
+        let value: Value =
+            match fetch_json_limited(resp, self.config.userinfo_max_response_bytes, "OIDC userinfo").await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        plugin = "OpenidConnect",
+                        error = %e,
+                        "Failed to parse userinfo response as JSON"
+                    );
+                    return None;
+                }
+            };
         serde_json::to_string(&value).ok()
     }
 
@@ -876,7 +881,9 @@ impl OpenidConnect {
             if !resp.status().is_success() {
                 return Err(format!("JWKS request failed with status {}", resp.status()).into());
             }
-            let jwks: JwkSet = resp.json().await?;
+            let jwks: JwkSet = fetch_json_limited(resp, self.config.jwks_max_response_bytes, "JWKS")
+                .await
+                .map_err(OidcError::from)?;
             if jwks.keys.is_empty() {
                 return Err("JWKS endpoint returned empty keys".into());
             }

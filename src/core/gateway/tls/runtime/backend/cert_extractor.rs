@@ -84,17 +84,11 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
                         // SAFETY: We've verified length is 16 before converting to array
                         let octets: [u8; 16] = match ip_bytes.try_into() {
                             Ok(arr) => arr,
-                            Err(_) => {
-                                tracing::error!("Failed to convert IPv6 bytes to array, length: {}", ip_bytes.len());
-                                continue;
-                            }
+                            Err(_) => continue,
                         };
                         std::net::Ipv6Addr::from(octets).to_string()
                     }
-                    _ => {
-                        tracing::warn!("Invalid IP address length in SAN: {}", ip_bytes.len());
-                        continue;
-                    }
+                    _ => continue,
                 };
                 sans.push(format!("IP:{}", ip_str));
             }

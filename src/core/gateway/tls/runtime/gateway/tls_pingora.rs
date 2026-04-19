@@ -517,12 +517,6 @@ impl TlsCallback {
         // Apply frontend validation mTLS if configured
         if gateway_tls.frontend_validation.is_some() {
             if let Err(e) = self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
-                tracing::error!(
-                    gateway = %gateway_tls.gateway_name,
-                    listener = %gateway_tls.listener_name,
-                    error = %e,
-                    "Failed to configure frontendValidation mTLS"
-                );
                 ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e));
             } else {
                 ssl_ctx.meta.is_mtls = true;
@@ -694,14 +688,6 @@ impl TlsCallback {
         {
             ssl.set_verify_depth(10);
         }
-
-        tracing::debug!(
-            port = self.port,
-            gateway_ns = %gateway_tls.gateway_namespace,
-            gateway = %gateway_tls.gateway_name,
-            listener = %gateway_tls.listener_name,
-            "Configured Gateway frontendValidation mTLS"
-        );
 
         Ok(())
     }

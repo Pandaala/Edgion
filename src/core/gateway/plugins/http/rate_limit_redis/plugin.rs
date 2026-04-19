@@ -489,11 +489,16 @@ impl RequestFilter for RateLimitRedis {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        // PluginLog must stay short (≤40B) and must never contain the resolved
+        // limit_key, the redis_ref config value, or raw Redis error text — they
+        // can carry user-identifying values or deployment details. Detailed
+        // diagnostics go to tracing / metrics instead.
+
         // 1. Validate config
         if !self.config.is_valid() {
             let err = self.config.get_validation_error().unwrap_or("Unknown error");
             tracing::error!(plugin = "RateLimitRedis", error = err, "Config invalid — fail-close");
-            plugin_log.push(&format!("Config error (fail-close): {}; ", err));
+            plugin_log.push("rl:err:cfg; ");
             let resp = Box::new(
                 ResponseHeader::build(500, None)
                     .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
@@ -518,16 +523,16 @@ impl RequestFilter for RateLimitRedis {
             }
             if parts.is_empty() {
                 if let Some(ref dk) = self.config.default_key {
-                    plugin_log.push(&format!("Using default key: {}; ", dk));
+                    plugin_log.push("rl:dflt; ");
                     dk.clone()
                 } else {
                     match self.config.on_missing_key {
                         OnMissingKey::Allow => {
-                            plugin_log.push("No limit key, allowing (fail-open); ");
+                            plugin_log.push("rl:nok:a; ");
                             return PluginRunningResult::GoodNext;
                         }
                         OnMissingKey::Deny => {
-                            plugin_log.push("No limit key, denying; ");
+                            plugin_log.push("rl:nok:d; ");
                             return self.reject_request(session, Duration::ZERO, None).await;
                         }
                     }
@@ -537,14 +542,13 @@ impl RequestFilter for RateLimitRedis {
             }
         };
 
+        let kl = limit_key.len();
+
         // 3. Get Redis client
         let client: Arc<RedisLinkClient> = match get_redis_client(&self.config.redis_ref) {
             Some(c) => c,
             None => {
-                plugin_log.push(&format!(
-                    "Redis '{}' not found in LinkSys store; ",
-                    self.config.redis_ref
-                ));
+                plugin_log.push("rl:err:redis_ref; ");
                 return self.apply_redis_failure_policy(session).await;
             }
         };
@@ -553,16 +557,16 @@ impl RequestFilter for RateLimitRedis {
         match self.check_rate_limit(&client, &limit_key).await {
             Ok(result) if result.allowed => {
                 self.add_headers(session, result.remaining, result.limit);
-                plugin_log.push(&format!("Allowed (remaining: {}); ", result.remaining));
+                plugin_log.push(&format!("rl:ok,kl={},r={}; ", kl, result.remaining));
                 PluginRunningResult::GoodNext
             }
             Ok(result) => {
                 let retry_after = Duration::from_millis(result.retry_ms.max(0) as u64);
-                plugin_log.push(&format!("Rate limited (retry_ms: {}); ", result.retry_ms));
+                plugin_log.push(&format!("rl:lim,kl={},rms={}; ", kl, result.retry_ms));
                 self.reject_request(session, retry_after, Some(&result)).await
             }
-            Err(e) => {
-                plugin_log.push(&format!("Redis error ({}): {}; ", self.config.redis_ref, e));
+            Err(_e) => {
+                plugin_log.push("rl:err:redis; ");
                 self.apply_redis_failure_policy(session).await
             }
         }

@@ -212,17 +212,16 @@ fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) ->
 }
 
 /// Log mTLS verification failure to ssl.log with connection context from SslCtx ex_data.
-/// Falls back to tracing::warn if SslCtx is not available (should not happen in normal flow).
+///
+/// If ssl_ptr is null or SslCtx is unavailable, the failure is silently dropped — those paths
+/// indicate the SSL lifecycle is already broken (store_ssl_ctx would have emitted ssl.log earlier).
 unsafe fn log_mtls_failure(ssl_ptr: *mut boring_sys::SSL, reason: &str) {
     if ssl_ptr.is_null() {
-        tracing::warn!("{}", reason);
         return;
     }
     if let Some(mut meta) = peek_tls_conn_meta(ssl_ptr) {
         meta.err_log = Some(reason.to_string());
         log_ssl(&meta);
-    } else {
-        tracing::warn!("{}", reason);
     }
 }
 
@@ -263,18 +262,9 @@ pub fn set_verify_callback_with_whitelist(
         // Get raw SSL pointer
         let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
 
-        // Check if ex_data already exists (indicates repeated call)
-        let existing_ptr = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
-        if !existing_ptr.is_null() {
-            tracing::warn!(
-                "SSL ex_data already set for mTLS verification. \
-                This indicates set_verify_callback_with_whitelist was called multiple times. \
-                The old context will be freed automatically."
-            );
-            // BoringSSL will automatically call free_verify_context for the old data
-        }
-
         // Create context - only Arc clone (cheap reference counting)
+        // If ex_data is already set (repeated call), BoringSSL will auto-invoke free_verify_context
+        // for the old data before swapping in the new pointer.
         let context = Box::new(VerifyContext {
             edgion_tls: edgion_tls.clone(),
         });

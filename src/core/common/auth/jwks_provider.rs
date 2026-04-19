@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
 use super::config::AdminAuthConfig;
+use crate::core::common::http_util::fetch_json_limited;
 
 /// Lightweight discovery document — we only need issuer + jwks_uri.
 #[derive(Debug, Clone, Deserialize)]
@@ -129,7 +130,7 @@ impl JwksProvider {
             return Err(format!("JWKS endpoint returned status {}", resp.status()));
         }
 
-        let jwks: JwkSet = resp.json().await.map_err(|e| format!("Failed to parse JWKS: {}", e))?;
+        let jwks: JwkSet = fetch_json_limited(resp, self.config.jwks_max_response_bytes, "JWKS").await?;
 
         tracing::info!(
             component = "admin_auth",
@@ -178,10 +179,8 @@ impl JwksProvider {
             return Err(format!("Discovery endpoint returned status {}", resp.status()));
         }
 
-        let doc: DiscoveryDocument = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse discovery document: {}", e))?;
+        let doc: DiscoveryDocument =
+            fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery").await?;
 
         if doc.issuer.is_empty() {
             return Err("Discovery document missing issuer".to_string());

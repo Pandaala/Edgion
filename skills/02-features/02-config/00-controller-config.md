@@ -188,6 +188,36 @@ CLI 特例：
 | `blocked_annotations` | `Vec<String>` | kubectl/helm 常见大注解 | 进入内存前移除的注解 |
 | `remove_managed_fields` | `bool` | `true` | 减少对象体积 |
 
+## `[auth]` — OIDC 认证（Admin API）
+
+启用后 Admin API 需要 OIDC JWT Bearer token。定义在 `src/core/common/auth/config.rs::AdminAuthConfig`，挂载逻辑在 `src/core/common/api/mod.rs` 的 `apply_auth_layer`。
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `enabled` | `bool` | `true`（存在 section 即启用） | 启用 OIDC |
+| `discovery` | `String` | — | **必填**。OIDC discovery URL（`/.well-known/openid-configuration`） |
+| `audiences` | `Vec<String>` | `[]` | JWT `aud` claim 期望值；空数组跳过校验 |
+| `issuers` | `Vec<String>` | `[]` | JWT `iss` 期望值；空数组时与 discovery document 的 issuer 校验 |
+| `allowed_algorithms` | `Vec<String>` | `[RS256, RS384, RS512, ES256, ES384]` | 允许的签名算法 |
+| `clock_skew_seconds` | `u64` | `120` | JWT 时间戳容差（秒） |
+| `jwks_cache_ttl` | `u64` | `300` | JWKS 缓存 TTL（秒） |
+| `jwks_min_refresh_interval` | `u64` | `10` | JWKS 刷新最小间隔（秒），防抖动 |
+| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | 跳过认证的路径前缀 |
+| `ssl_verify` | `bool` | `true` | 拉 discovery/JWKS 时是否校验 TLS 证书；生产必须 `true` |
+| `discovery_max_response_bytes` | `usize` | `65536` (64 KB) | OIDC discovery 响应体上限；防 DoS，合规 IdP 典型 < 4 KB |
+| `jwks_max_response_bytes` | `usize` | `1048576` (1 MB) | JWKS 响应体上限；典型 JWKS < 10 KB |
+
+```yaml
+auth:
+  discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
+  audiences: [edgion-admin]
+  # 默认值足够绝大多数场景，下面两行通常不用配
+  # discovery_max_response_bytes: 65536
+  # jwks_max_response_bytes: 1048576
+```
+
+> `[auth]` 与 `[local_auth]` 可同时存在；请求按 unified_auth 中间件顺序尝试（OIDC → local）。详见 `skills/01-architecture/01-controller/02-admin-api.md`。
+
 ## `[local_auth]` — 本地认证
 
 内置用户名/密码认证，签发 HS256 JWT。不配置时自动生成随机凭据存入 Secret。

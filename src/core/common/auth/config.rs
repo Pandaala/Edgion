@@ -63,6 +63,20 @@ pub struct AdminAuthConfig {
     /// Default: true. Set to false only for development.
     #[serde(default = "default_true")]
     pub ssl_verify: bool,
+
+    /// Max response body size accepted for the OIDC discovery document.
+    /// Default: 65 536 bytes (64 KB). Raise only if your IdP returns an
+    /// unusually large discovery document — the typical document is < 4 KB.
+    /// A misconfigured or malicious endpoint returning a body larger than this
+    /// is cut off mid-stream, so peak memory is bounded.
+    #[serde(default = "default_discovery_max_response_bytes")]
+    pub discovery_max_response_bytes: usize,
+
+    /// Max response body size accepted for the JWKS document. Default:
+    /// 1 048 576 bytes (1 MB). Typical JWKS is < 10 KB; raise only if your
+    /// IdP publishes an unusually large key set.
+    #[serde(default = "default_jwks_max_response_bytes")]
+    pub jwks_max_response_bytes: usize,
 }
 
 impl Default for AdminAuthConfig {
@@ -78,6 +92,8 @@ impl Default for AdminAuthConfig {
             jwks_min_refresh_interval: default_jwks_min_refresh_interval(),
             skip_paths: default_skip_paths(),
             ssl_verify: true,
+            discovery_max_response_bytes: default_discovery_max_response_bytes(),
+            jwks_max_response_bytes: default_jwks_max_response_bytes(),
         }
     }
 }
@@ -99,6 +115,12 @@ impl AdminAuthConfig {
         }
         if self.jwks_min_refresh_interval == 0 {
             return Some("auth.jwks_min_refresh_interval must be greater than 0");
+        }
+        if self.discovery_max_response_bytes == 0 {
+            return Some("auth.discovery_max_response_bytes must be greater than 0");
+        }
+        if self.jwks_max_response_bytes == 0 {
+            return Some("auth.jwks_max_response_bytes must be greater than 0");
         }
         None
     }
@@ -123,6 +145,14 @@ fn default_jwks_min_refresh_interval() -> u64 {
 
 fn default_skip_paths() -> Vec<String> {
     vec!["/health".to_string(), "/ready".to_string()]
+}
+
+fn default_discovery_max_response_bytes() -> usize {
+    65_536
+}
+
+fn default_jwks_max_response_bytes() -> usize {
+    1_048_576
 }
 
 fn default_true() -> bool {
@@ -197,5 +227,35 @@ clock_skew_seconds: 60
         assert_eq!(config.audiences, vec!["edgion-admin"]);
         assert_eq!(config.clock_skew_seconds, 60);
         assert_eq!(config.jwks_cache_ttl, 300); // default
+    }
+
+    #[test]
+    fn body_limit_defaults_and_override() {
+        // Defaults when fields are omitted — backward compatible with existing configs.
+        let default = AdminAuthConfig::default();
+        assert_eq!(default.discovery_max_response_bytes, 65_536);
+        assert_eq!(default.jwks_max_response_bytes, 1_048_576);
+
+        // Overrides from YAML.
+        let yaml = r#"
+discovery: "https://idp.example.com/.well-known/openid-configuration"
+discovery_max_response_bytes: 16384
+jwks_max_response_bytes: 524288
+"#;
+        let config: AdminAuthConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.discovery_max_response_bytes, 16_384);
+        assert_eq!(config.jwks_max_response_bytes, 524_288);
+        assert!(config.validate().is_none());
+
+        // Zero is rejected.
+        let bad = AdminAuthConfig {
+            discovery: "https://idp.example.com/.well-known/openid-configuration".into(),
+            jwks_max_response_bytes: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.validate(),
+            Some("auth.jwks_max_response_bytes must be greater than 0")
+        );
     }
 }

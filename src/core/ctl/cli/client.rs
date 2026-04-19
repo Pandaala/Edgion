@@ -3,6 +3,7 @@ use reqwest::{Client, Response};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 use super::TargetType;
 
@@ -18,7 +19,7 @@ pub struct EdgionClient {
     target: TargetType,
     #[allow(dead_code)]
     socket_path: Option<PathBuf>,
-    token: Option<String>,
+    token: Option<Zeroizing<String>>,
     controller_config: Option<String>, // for auto-login on 401
 }
 
@@ -104,9 +105,9 @@ impl EdgionClient {
             // Try auto-detect credentials from controller config
             if let Some((username, password)) = super::auto_auth::detect_credentials(self.controller_config.as_deref())
             {
-                match self.do_login(&username, &password).await {
+                match self.do_login(&username, password.as_str()).await {
                     Ok(token) => {
-                        super::token::save_token(&token)?;
+                        super::token::save_token(token.as_str())?;
                         self.token = Some(token);
                         eprintln!("Auto-login successful (credentials from controller config).");
                         return Ok(());
@@ -124,8 +125,9 @@ impl EdgionClient {
         Ok(())
     }
 
-    /// Perform login and return the token.
-    async fn do_login(&self, username: &str, password: &str) -> Result<String> {
+    /// Perform login and return the token wrapped in `Zeroizing` so its buffer is
+    /// wiped on drop.
+    async fn do_login(&self, username: &str, password: &str) -> Result<Zeroizing<String>> {
         let url = format!("{}/api/v1/auth/login", self.base_url);
         let body = serde_json::json!({
             "username": username,
@@ -150,7 +152,7 @@ impl EdgionClient {
             .ok_or_else(|| anyhow::anyhow!("Invalid login response: missing token"))?
             .to_string();
 
-        Ok(token)
+        Ok(Zeroizing::new(token))
     }
 
     /// Get the target type
@@ -171,7 +173,9 @@ impl EdgionClient {
     /// Send HTTP request with detailed error handling
     async fn send_request(&self, mut request: reqwest::RequestBuilder, url: &str) -> Result<Response> {
         if let Some(ref token) = self.token {
-            request = request.header("Authorization", format!("Bearer {}", token));
+            // Borrow through Zeroizing<String> → &str; the formatted header String lives
+            // only for this call, so the credential is not pinned in a long-lived field.
+            request = request.header("Authorization", format!("Bearer {}", token.as_str()));
         }
         request.send().await.map_err(|e| {
             let error_msg = format_request_error(url, &e, self.target);

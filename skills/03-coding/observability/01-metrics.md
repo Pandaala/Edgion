@@ -1,6 +1,6 @@
 # Metrics 规范
 
-> Metrics 核心原则：Gateway **数据面**避免 metrics 爆炸（无 Histogram + 严控 Label 基数 + 统一 `GatewayMetrics` 管理）；Controller / Center **控制面**规则较松但按"新增指标前先问"节制。细节观测走 access log 聚合，不在 Prometheus 里扩指标。
+> Metrics 核心原则：Gateway **数据面**避免 metrics 爆炸（无 Histogram + 严控 Label 基数 + 统一 `GatewayMetrics` 管理），数据面异常不单独加 counter/tracing，走 access log (`AccessLogEntry.errors` + `EdgionStatus`) 统一承接；Controller / Center **控制面**同样主动克制新增 metric，控制面事件优先 `tracing::{info,warn,error}!` + status condition，只有"作为秒级告警阈值"或"Grafana 长期趋势核心 SLI"的场景才加 metric。细节观测 → access log / 结构化 tracing 日志聚合，不在 Prometheus 里扩指标。
 
 ## 核心原则
 
@@ -8,7 +8,14 @@
   - **作用域**：`src/core/gateway/` 下每请求 hot-path 的所有 metric。因为数据面每请求都走，histogram bucket × 多 label 的笛卡尔积极易爆炸（单条 histogram 发出 `N_bucket × 高基数` 条时序），Prometheus 存储和 scrape 都扛不住。
   - **唯一存量例外**：`edgion_gateway_request_duration_ms` — Gateway 端到端请求时延，核心 SLI（p50/p95/p99 是生产告警的主要依据）。Gateway 数据面仅此一条 histogram，通过 `MetricsConfig::request_duration` 配置项默认关闭、需显式 `enabled=true` 才写入，bucket 由 `set_buckets_for_metric` 显式注入（见 `gateway/observe/metrics/api.rs`），label 也是 per-label toggle 按需开启。
   - **如果要在 Gateway 数据面加第二条 histogram**：先改本条规则 + 附理由（为什么 counter/gauge 表达不出，为什么 access log 聚合不够），在 code review 里作为明确议题
-- **Controller / Center 控制面规则较松但仍节制**：作用域 `src/core/controller/`、`src/core/center/`、`src/core/common/observe/fed_metrics.rs` 等。这些地方的 metric 触发频率低（几秒到分钟级事件），label 基数由部署规模决定而非请求流量决定，histogram 爆炸风险小。**技术上允许** histogram，但按"新增指标前先问"原则仍应优先 counter/gauge + access log 聚合 —— 只在分布形态（非"最近一次"）是核心决策依据时才加 histogram，且要显式文档化。目前控制面 0 条 histogram（见 `edgion_fed_*`、`edgion_controller_*` 家族）。
+- **Controller / Center 控制面主动克制新增 metric**：作用域 `src/core/controller/`、`src/core/center/`、`src/core/common/observe/fed_metrics.rs` 等。虽然控制面 cardinality 风险小（触发频率低、label 由部署规模决定），但"容易加"不是"应该加"的理由 —— 控制面事件**默认走 `tracing::{info,warn,error}!` 结构化日志 + K8s status condition（`Accepted/Ready/Programmed`）**，由日志采集侧聚合回答"某类事件发生多少次 / 哪些资源有问题"。只有当事件同时满足以下条件之一，才考虑加 metric：
+  - **需要作为秒级告警阈值**（如 `edgion_fed_watch_errors_total` 触发 Prometheus 告警）
+  - **Grafana 长期趋势核心 SLI**（低维度、高价值的健康度指标，如 `edgion_fed_connected_controllers`）
+  - **跨进程聚合**（单实例日志里看不到全貌，需要 Prometheus 做 sum/rate）
+  
+  **默认不加 histogram**：控制面目前 0 条 histogram，继续保持。如果要加，需：(a) 说明为什么 `_seconds_last` gauge / `_total` counter 表达不出分布；(b) 说明为什么日志聚合不够；(c) bucket 显式设置避免 `+Inf` 陷阱（参见原 `MIRROR_DURATION_MS` 事故）。
+  
+  **默认不加 counter/gauge**：validate 拒绝、资源冲突、配置非法等离散事件用 `tracing::warn!(ns, name, field, reason, "...")` + status condition 已经足够；不要"顺手"加 `edgion_controller_validate_rejected_total{reason}` 这类 counter —— 每个 reason 都是一次 cardinality 决策，容易无序扩张。
 - **更细的观测走 access log 聚合，不扩指标**：大部分"这一次请求发生了什么/耗时多少/发给哪个 backend"类问题，原始数据已经在 access/mirror/ssl/tls/tcp/udp access log 里（JSON 结构化字段），查询时用 Loki / Elasticsearch / ClickHouse 聚合就能得到任意维度的 percentile / rate / 分布。Prometheus 负责 **秒级告警 + 低基数聚合**；access log 负责 **高基数细节回放**。两者分工清楚：
   - 问 "gateway 现在出错率怎么样？" → Prometheus counter（`edgion_requests_failed_total`）
   - 问 "刚才那个 5xx 请求具体发生了什么？x-trace-id 是 abc123" → access log
@@ -156,7 +163,22 @@ counter!(
 
 ## Controller / Center Metrics
 
-Controller 和 Center 是控制面，不跑在数据面 hot-path 上。相较 Gateway 的严规，**histogram 技术上允许**（cardinality 风险小），但目前选择仍只用 Counter / Gauge，作为"能用 counter/gauge + access log 表达就不加 histogram"的节制实践。实施规则：
+Controller 和 Center 是控制面，不跑在数据面 hot-path 上。虽然 cardinality 风险小，但**主动克制新增 metric**（不仅是 histogram，counter/gauge 也一样）—— 控制面事件默认走 `tracing` 结构化日志 + status condition，日志采集侧聚合即可回答大部分"发生了多少次/哪些资源有问题"的问题。
+
+### 控制面加 metric 的决策门槛
+
+新增控制面 metric 前，问自己三个问题，**任一"否"就应该用 tracing/status 替代**：
+
+1. **这个信号要作为秒级告警阈值吗？** 比如 `edgion_fed_watch_errors_total > 0` 触发 oncall —— 是 → 加 counter；否 → `tracing::warn!` + 日志告警
+2. **这是 Grafana 长期趋势的核心 SLI 吗？** 比如"联邦连上的 controller 数量" —— 是 → 加 gauge；否 → 查询时直接数 K8s 资源 / `kubectl get` 就能拿到
+3. **单实例日志里看不到全貌吗？** 比如需要聚合所有 controller 的某类事件总数 —— 是 → 加 metric；否 → 用结构化日志字段查询
+
+**不应该加 metric 的典型信号**（用 tracing + status condition 替代）：
+- validate 拒绝类事件（非法 match_type、未知 allowedRoutes.from、schema 字段错配等）→ `tracing::warn!(ns, name, field, reason)` + Accepted:False condition，日志侧 `{reason="UnsupportedMatchType"}` 聚合就够
+- 资源 parse / reconcile 失败的具体原因分类 → 已经在 status condition 里了，不要再用 counter 复述
+- "某种配置组合被用了多少次" → 日志 debug/info 记录，查询时聚合
+
+实施规则：
 
 1. **统一入口**：全局 `PrometheusRecorder` 安装走 `src/core/common/observe/metrics_api.rs::install_global_recorder(RecorderConfig)`。两个二进制在 `run()` 入口附近各调一次（参数 `service: "edgion-controller"` / `"edgion-center"`）
 2. **`/metrics` 复用 admin router**：调用 `crate::core::common::observe::metrics_api::metrics_handler` 挂到各自 axum Router 的 `/metrics` path，不另开端口
