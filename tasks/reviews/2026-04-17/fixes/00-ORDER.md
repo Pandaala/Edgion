@@ -87,18 +87,18 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 ## Wave 4 — 数据面 Tracing 大扫除（按目录分批 PR）
 
 > 每个工单独立 PR，内部可并行。**#14 先完成再动这批**。
+>
+> **基建状态（2026-04-19）**：`PluginLog::push_err(kind: &'static str)` + `u_push_err` 已就绪（`src/core/gateway/observe/logs/buffer.rs` + `src/core/gateway/plugins/runtime/log.rs`），规范落 `skills/03-coding/observability/00-access-log.md` 「错误条目 API 约束」+ `skills/03-coding/01-log-safety.md`。**#10/#11/#12/#13 开工时直接用 `push_err("<static kind>")`**，不要自拼 `<plugin>:err:<kind>` 前缀，也不要 `push(&format!("err: {}", e))`。
+>
+> **legacy 存量并入 Wave 4 统一迁移**：`region_route/plugin.rs`（2 处 `err:failoverTo invalid; `）+ `rate_limit/plugin.rs`（1 处 `rl:err:cfg; `）+ `rate_limit_redis/plugin.rs`（3 处 `rl:err:*; `）—— 共 6 处旧无空格 `err:` 写法，在 #10~#13 对应插件被触达的那一把顺手改成 `push_err`。不单独开工单。
 
 - [x] **#03** — Gateway HTTP proxy 回调 tracing（`pg_*.rs` 3 文件）— **S**
 - [x] **#04** — TLS 握手 tracing（`tls/**` 4 文件）— **M** — 按用户决定不加 `edgion_tls_mtls_verify_total` / `edgion_tls_backend_cert_parse_total` 两个新 metric，ssl.log 的 `err_log` 已覆盖失败路径；顺带把 `parse_timeout.rs` 登记为配置期豁免（见 `skills/03-coding/01-log-safety.md` 例外表）
-<<<<<<< Updated upstream
-- [ ] **#06** — backends/mod.rs tracing + SSRF（单文件 P0+P1 一次做）— **M**
-=======
 - [x] **#06** — backends/mod.rs tracing + SSRF（单文件 P0+P1 一次做）— **M** — 删 7 处 tracing（L302/322/376/386/771/975/980）+ L335 SAFETY 注释；SSRF 防御扩展：`classify_backend_addr` 覆盖 loopback + link-local（含 metadata `169.254.169.254` + IPv6 `fe80::/10`），明确不 block RFC1918；新增 `EdgionStatus::BackendAddrLinkLocalNotAllowed = 503_13` + 5 个新单测。按用户立场不加 `edgion_backend_port_resolve_total` / `edgion_backend_addr_rejected_total` / `edgion_backend_unsupported_kind_total` 三个 counter。遗留：`L573/L599` 的 `#[cfg(not(feature = "boringssl"))]` mTLS warn 未动（rustls 构建才触发，非默认，范围外）
->>>>>>> Stashed changes
 - [ ] **#05** — 路由匹配 tracing + Controller validate 协同 — **M**
   - 注意：涉及 Controller validate 改动，可以和 Controller 侧 owner 协同
 - [ ] **#10** — OIDC 插件 tracing（33 处）— **M**
-- [ ] **#11** — JWT/JWE/Basic/HeaderCert/ForwardAuth tracing（10 处）— **M**
+- [x] **#11** — JWT/JWE/Basic/HeaderCert/ForwardAuth tracing（10 处）— **M** — 删 10 处 tracing；JWT 按 `jsonwebtoken::errors::ErrorKind` 分 `jwt:expired / invalid-sig / malformed / bad-alg / ...` 等短标签（`verify_token` 接 `&mut PluginLog`），hide_credentials 限制改 `jwt:hide-skip-q / -c`；BasicAuth 统一 `basic:auth-fail;` 防 log-grep 枚举（timing 侧由 `auth_failure_delay_ms` 部署层缓解）；HeaderCert `hca:fail:<detail>` 带 static detail；ForwardAuth 新增 `EdgionStatus::ForwardAuthServiceUnreachable = 503_14` + PluginSession 窄接口 `add_error(EdgionStatus)` 双写 access log errors + `fa:unreachable(-degraded);` 标签。按用户立场不加 `edgion_auth_plugin_errors_total` counter。顺带：basic_auth 配置期 warn/info、header_cert_auth CA 加载 warn 登记到 `skills/03-coding/01-log-safety.md` 例外表。
 - [ ] **#12** — LDAP 命中率反模式 + tracing — **S**
 - [ ] **#13** — 其他插件 tracing 杂项（17 处）— **M**
   - ⚠️ 同文件协同：**`ctx_set/plugin.rs:230` 若 #16 还未做就一起改**；**`rate_limit_redis/plugin.rs` 若 #17 还未做就一起改**
@@ -138,15 +138,9 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 - Wave 1：10 / 10 ✅
 - Wave 2：4 / 4 ✅（#24 拆为 #24a + #24b，两个子工单皆已落盘）
 - Wave 3：3 / 5
-<<<<<<< Updated upstream
-- Wave 4：2 / 8
+- Wave 4：4 / 8
 - Wave 5：2 / 2 ✅（#21 改条件 push，#22 以删代修）
-- **总计：21 / 29**
-=======
-- Wave 4：3 / 8
-- Wave 5：2 / 2 ✅（#21 改条件 push，#22 以删代修）
-- **总计：22 / 29**
->>>>>>> Stashed changes
+- **总计：23 / 29**
 
 ---
 

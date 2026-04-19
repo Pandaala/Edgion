@@ -522,4 +522,37 @@ mod tests {
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("jwe:bad-alg"));
     }
+
+    /// Covers fix #11: `load_key()` failure path (unresolvable credential) emits
+    /// `jwe:no-key` via the existing `reject` call site — verifies the deleted
+    /// `tracing::debug!` at the former L345 is fully replaced by the PluginLog tag.
+    #[tokio::test]
+    async fn test_load_key_failure_emits_no_key_tag() {
+        // resolved_credential = None → load_key() returns Err.
+        let config = JweDecryptConfig {
+            strip_prefix: Some("Bearer ".to_string()),
+            forward_header: "x-decrypted-auth".to_string(),
+            resolved_credential: None,
+            ..Default::default()
+        };
+        let plugin = JweDecrypt::new(&config, "default".to_string());
+
+        // Any syntactically parseable JWE-ish token passes extract_token + size check.
+        let token = encrypt_compact_jwe(r#"{"uid":"1"}"#, &test_key(), "A256GCM");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("JweDecrypt");
+
+        let header_value = format!("Bearer {}", token);
+        session
+            .expect_header_value()
+            .with(mockall::predicate::eq("authorization"))
+            .returning(move |_| Some(header_value.clone()));
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("jwe:no-key"));
+    }
 }
