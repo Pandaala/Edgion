@@ -168,21 +168,15 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
 ///
 /// Returns the authenticated user's info, extracted from the JWT claims inserted
 /// by the unified auth middleware.
+///
+/// This handler does NOT guard on `state.local` readiness: readiness is enforced
+/// by the middleware (which returns 503 before an unauthenticated request ever
+/// reaches here). A valid OIDC token may legitimately reach this handler even
+/// when local auth is still `None` — guarding here would spuriously 503 those
+/// requests.
 pub async fn me_handler(
-    State(state): State<Arc<UnifiedAuthState>>,
     axum::Extension(claims): axum::Extension<crate::core::common::unified_auth::UnifiedAuthClaims>,
 ) -> Response {
-    // Return 503 when the local auth provider is not yet populated.
-    let Some(_local_state) = state.local.load_full() else {
-        use axum::http::HeaderValue;
-        let body: Json<ApiResponse<()>> = Json(ApiResponse::error(
-            "authentication subsystem initializing, retry later".to_string(),
-        ));
-        let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
-        resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
-        return resp;
-    };
-
     Json(ApiResponse::success(MeResponse {
         username: claims.sub.unwrap_or_default(),
     }))
@@ -191,19 +185,9 @@ pub async fn me_handler(
 
 /// POST /api/v1/auth/logout
 ///
-/// Clears the httpOnly auth cookie by setting Max-Age=0.
-pub async fn logout_handler(State(state): State<Arc<UnifiedAuthState>>) -> Response {
-    // Return 503 when the local auth provider is not yet populated.
-    let Some(_local_state) = state.local.load_full() else {
-        use axum::http::HeaderValue;
-        let body: Json<ApiResponse<()>> = Json(ApiResponse::error(
-            "authentication subsystem initializing, retry later".to_string(),
-        ));
-        let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
-        resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
-        return resp;
-    };
-
+/// Clears the httpOnly auth cookie by setting Max-Age=0. Stateless — does not
+/// consult `LocalAuthState`, so no readiness guard is needed.
+pub async fn logout_handler() -> Response {
     let cookie_value = "edgion_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
     let mut resp = Json(ApiResponse::<()>::success(())).into_response();
     resp.headers_mut()

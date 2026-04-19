@@ -22,8 +22,9 @@
 //! let state = UnifiedAuthState::from_configs(
 //!     config.auth.as_ref(),
 //!     config.local_auth.as_ref(),
+//!     /* require_auth = */ true,
 //!     "controller",
-//! );
+//! )?;
 //! let auth_layer = middleware::from_fn_with_state(state, unified_auth_middleware);
 //! router = router.layer(auth_layer);
 //! ```
