@@ -143,18 +143,25 @@ fn build_auth_status(
 ) -> crate::core::common::local_auth::AuthStatusResponse {
     use crate::core::common::local_auth::{AuthStatus, AuthStatusResponse};
 
-    let mut providers = Vec::new();
-    if state.oidc.is_some() {
-        providers.push("oidc".to_string());
-    }
-    if state.local.load().is_some() {
-        providers.push("local".to_string());
-    }
-
-    let status = match (state.require_auth, providers.is_empty()) {
-        (false, _) => AuthStatus::Disabled,
-        (true, true) => AuthStatus::Initializing,
-        (true, false) => AuthStatus::Ready,
+    let (status, providers) = if !state.require_auth {
+        // Disabled mode: honor the struct-level invariant that
+        // `active_providers` is empty when `status == Disabled`, regardless
+        // of what providers may have been eagerly assembled.
+        (AuthStatus::Disabled, Vec::new())
+    } else {
+        let mut providers = Vec::new();
+        if state.oidc.is_some() {
+            providers.push("oidc".to_string());
+        }
+        if state.local.load().is_some() {
+            providers.push("local".to_string());
+        }
+        let status = if providers.is_empty() {
+            AuthStatus::Initializing
+        } else {
+            AuthStatus::Ready
+        };
+        (status, providers)
     };
 
     AuthStatusResponse {
