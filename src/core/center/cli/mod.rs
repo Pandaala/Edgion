@@ -30,6 +30,24 @@ impl EdgionCenterCli {
     }
 
     pub async fn run(&self) -> Result<()> {
+        // Install the process-wide Prometheus recorder before anything emits
+        // metrics. Idempotent, so tests and combined modes do not panic on
+        // re-install.
+        if let Err(e) = crate::core::common::observe::metrics_api::install_global_recorder(
+            crate::core::common::observe::metrics_api::RecorderConfig {
+                service: "edgion-center",
+                idle_timeout_secs: 0,
+                histogram_buckets: &[],
+            },
+        ) {
+            tracing::error!(
+                component = "center",
+                event = "metrics_recorder_install_failed",
+                error = %e,
+                "Failed to install Prometheus recorder; /metrics will return 500"
+            );
+        }
+
         let content = match std::fs::read_to_string(&self.config_file) {
             Ok(c) => c,
             Err(e) => {

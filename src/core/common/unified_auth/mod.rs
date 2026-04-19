@@ -105,9 +105,12 @@ impl UnifiedAuthState {
         component: &str,
     ) -> Arc<Self> {
         let mut skip_paths = HashSet::new();
-        // Always skip health/ready probes.
+        // Always skip health/ready probes and the Prometheus scrape endpoint.
+        // `/metrics` follows the K8s controller-manager convention of being
+        // unauthenticated: scrapers usually cannot send bearer tokens.
         skip_paths.insert("/health".to_string());
         skip_paths.insert("/ready".to_string());
+        skip_paths.insert("/metrics".to_string());
 
         let oidc = match auth_config {
             Some(cfg) if cfg.enabled => {

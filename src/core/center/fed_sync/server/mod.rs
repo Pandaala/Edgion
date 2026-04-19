@@ -25,8 +25,15 @@ use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_server::FederationSync, CenterMessage, ControllerMessage, FedWatchRequest, Ping, RegisterAck,
 };
+use crate::core::common::observe::fed_metrics;
 use crate::types::resource::meta::ResourceMeta;
 use crate::types::resources::plugin_metadata::PluginMetaData;
+
+/// Label value used on fed-sync metrics whose `kind` dimension is
+/// currently hardcoded. The federation server only streams PluginMetaData
+/// today; when new kinds are added, each call site should pass its own
+/// kind instead of this constant.
+const PLUGIN_METADATA_KIND: &str = "PluginMetaData";
 
 /// Typed representation of a single watch event from the controller.
 #[derive(serde::Deserialize)]
@@ -164,7 +171,7 @@ impl FederationSync for FederationGrpcServer {
             let env = register_req.env.clone();
             let tag = register_req.tag.clone();
             tokio::task::spawn_blocking(move || {
-                if let Err(e) = db.upsert_controller(&cid, &cluster, &env, &tag, /*online=*/ true) {
+                if let Err(e) = db.upsert_controller(&cid, &cluster, &env, &tag, true) {
                     tracing::warn!(
                         component = "fed_server",
                         controller_id = %cid,
@@ -180,6 +187,14 @@ impl FederationSync for FederationGrpcServer {
             inner_tx.clone(),
             session_id.clone(),
         );
+
+        // Federation connection metrics: record the connect event and refresh
+        // the active-sessions gauge. `online_len` captures the number of
+        // controllers with a live `stream_tx`, so it naturally drops on
+        // mark_offline without us counting in two places.
+        fed_metrics::record_connection_event(fed_metrics::labels::role::CENTER, fed_metrics::labels::event::CONNECTED);
+        fed_metrics::set_connections_active(fed_metrics::labels::role::CENTER, self.registry.online_len() as u64);
+        let session_started_at = std::time::Instant::now();
 
         // Send RegisterAck
         let _ = inner_tx
@@ -281,8 +296,11 @@ impl FederationSync for FederationGrpcServer {
                 // Centralize the three disconnect cleanups (timeout / stream error / stream closed).
                 // Each branch must propagate offline to all four state holders, which previously
                 // diverged easily when new state was added; this closure keeps them in lockstep.
-                let mark_offline_all = || {
-                    registry.mark_offline(&cid, &sid);
+                // The `reason` carries through to `edgion_fed_mark_offline_total{reason}` and
+                // gates metric emission so repeated calls (e.g., race between heartbeat timeout
+                // and stream close) do not double-count.
+                let mark_offline_all = |reason: &'static str| {
+                    let transitioned = registry.mark_offline(&cid, &sid);
                     aggregator_for_offline.mark_offline(&cid);
                     sync_client.plugin_metadata.mark_offline(&cid);
                     if let Some(db) = &db_for_offline {
@@ -298,6 +316,21 @@ impl FederationSync for FederationGrpcServer {
                                 );
                             }
                         });
+                    }
+                    if transitioned {
+                        fed_metrics::record_mark_offline(reason);
+                        fed_metrics::record_connection_event(
+                            fed_metrics::labels::role::CENTER,
+                            fed_metrics::labels::event::DISCONNECTED,
+                        );
+                        fed_metrics::record_connection_duration(
+                            fed_metrics::labels::role::CENTER,
+                            session_started_at.elapsed().as_secs_f64(),
+                        );
+                        fed_metrics::set_connections_active(
+                            fed_metrics::labels::role::CENTER,
+                            registry.online_len() as u64,
+                        );
                     }
                 };
 
@@ -319,7 +352,7 @@ impl FederationSync for FederationGrpcServer {
                                 controller_id = %cid,
                                 "Heartbeat timeout, marking offline"
                             );
-                            mark_offline_all();
+                            mark_offline_all(fed_metrics::labels::offline_reason::HEARTBEAT);
                             break;
                         }
                         Ok(Err(e)) => {
@@ -329,7 +362,7 @@ impl FederationSync for FederationGrpcServer {
                                 error = %e,
                                 "Stream error"
                             );
-                            mark_offline_all();
+                            mark_offline_all(fed_metrics::labels::offline_reason::DISCONNECT);
                             break;
                         }
                         Ok(Ok(None)) => {
@@ -338,7 +371,7 @@ impl FederationSync for FederationGrpcServer {
                                 controller_id = %cid,
                                 "Stream closed"
                             );
-                            mark_offline_all();
+                            mark_offline_all(fed_metrics::labels::offline_reason::DISCONNECT);
                             break;
                         }
                         Ok(Ok(Some(msg))) => {
@@ -384,6 +417,10 @@ impl FederationSync for FederationGrpcServer {
                                             pm_cache.replace_all(keyed, resp.sync_version, resp.server_id.clone());
                                             pm_watch.server_id = Some(resp.server_id);
                                             pm_watch.consecutive_errors = 0;
+                                            fed_metrics::record_watch_list(
+                                                PLUGIN_METADATA_KIND,
+                                                fed_metrics::labels::watch_list_result::OK,
+                                            );
                                             tracing::debug!(
                                                 component = "fed_server",
                                                 controller_id = %cid,
@@ -392,6 +429,10 @@ impl FederationSync for FederationGrpcServer {
                                             );
                                         }
                                         Err(e) => {
+                                            fed_metrics::record_watch_list(
+                                                PLUGIN_METADATA_KIND,
+                                                fed_metrics::labels::watch_list_result::PARSE_ERROR,
+                                            );
                                             tracing::warn!(
                                                 component = "fed_server",
                                                 controller_id = %cid,
@@ -413,8 +454,19 @@ impl FederationSync for FederationGrpcServer {
                                         continue;
                                     }
 
+                                    // Watch event delivered to Center (direction = recv from the
+                                    // Center's point of view: events flow Controller → Center).
+                                    fed_metrics::record_watch_event(
+                                        PLUGIN_METADATA_KIND,
+                                        fed_metrics::labels::direction::RECV,
+                                    );
+
                                     // Error → backoff then re-watch from 0
                                     if !resp.error.is_empty() {
+                                        fed_metrics::record_watch_error(
+                                            PLUGIN_METADATA_KIND,
+                                            fed_metrics::labels::watch_error_reason::RECV_ERROR,
+                                        );
                                         pm_watch.consecutive_errors += 1;
                                         if pm_watch.consecutive_errors == 1 {
                                             // First error is normal during startup/reload
@@ -454,6 +506,10 @@ impl FederationSync for FederationGrpcServer {
                                     // Server restart detection → re-watch from 0
                                     if let Some(ref expected_sid) = pm_watch.server_id {
                                         if *expected_sid != resp.server_id {
+                                            fed_metrics::record_watch_list(
+                                                PLUGIN_METADATA_KIND,
+                                                fed_metrics::labels::watch_list_result::VERSION_TOO_OLD,
+                                            );
                                             tracing::warn!(
                                                 component = "fed_server",
                                                 controller_id = %cid,
@@ -522,6 +578,10 @@ impl FederationSync for FederationGrpcServer {
                                             );
                                         }
                                         Err(e) => {
+                                            fed_metrics::record_watch_error(
+                                                PLUGIN_METADATA_KIND,
+                                                fed_metrics::labels::watch_error_reason::PARSE_ERROR,
+                                            );
                                             tracing::warn!(
                                                 component = "fed_server",
                                                 controller_id = %cid,

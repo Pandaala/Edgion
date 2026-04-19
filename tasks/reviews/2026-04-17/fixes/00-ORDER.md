@@ -1,0 +1,147 @@
+# Fixes 执行索引 & 进度跟踪
+
+> **这是唯一的 index 文件。修完一个工单就**勾选 + 删 fix 文件**，两件事一起做才算闭环。**
+
+## 使用规范（每修一个工单必走）
+
+1. **开工前** — 在本文件找到工单编号，确认：
+   - 左边 checkbox 是 `- [ ]`（未修）
+   - **依赖**列为空，或所列依赖都已 `- [x]`
+   - **同文件协同**列若有其他工单编号，考虑合并做（或等另一侧先做）
+2. **修代码** — 打开 `NN-*.md` 按工单步骤改
+3. **验证** — `cargo check --all-targets` + `cargo clippy --all-targets` + 相关测试
+4. **闭环三件套**（**必须一起做**）：
+   ```
+   a. git commit 代码  # message 带 "fixes #NN"
+   b. rm tasks/reviews/2026-04-17/fixes/NN-*.md
+   c. 本文件对应行 [ ] → [x]
+   ```
+5. **提交闭环** — `git add tasks/reviews/2026-04-17/fixes/` + commit（可合进 a）
+
+## 防重复检查（每次修文件前 10 秒查一次）
+
+```bash
+# 查某个代码文件还被哪些未修工单涉及（避免同文件反复改）
+rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
+```
+
+如果命中 2+ 个工单，**合并一次改**（commit message 写 `fixes #N1, #N2`）。
+
+---
+
+## Wave 1 — 零依赖小修复（快速清 10 个）
+
+> 任意顺序可并行，推荐按从小到大。**可以一天清完。**
+
+- [x] **#02** — Secret 请求体 tracing 泄漏（`controller/api/namespaced_handlers.rs:104`）— **XS** — 删一行
+- [x] **#18** — Federation aggregator 一行修复（`center/fed_sync/server/mod.rs:148`）— **XS** — 已在 commit ad14749（GCIR 集成测试）中预先修复，本次仅档案闭环
+- [x] **#25** — ServerCache.watchers 删除字段 — **S**
+- [x] **#26** — JWKS body 大小限制（C 方案：`fetch_json_limited` helper = Content-Length 预检 + `bytes_stream()` 累加截断；覆盖 admin auth 2 处 + plugin OIDC 3 处；`AdminAuthConfig` + `OpenidConnectConfig` 各加可配置字段 64KB/1MB/128KB，向后兼容）— **S**
+- [x] **#07** — ACME/CB/redirect tracing（3 处同类删除 + ACME lookup counter `edgion_acme_challenge_lookup_total{result}` 增补）— **S**
+- [x] **#23** — RR u16 截断补 counter `edgion_rr_selector_truncated_total`（无 label，全局 `Once` 去重 warn）— **S**
+- [x] **#17** — RateLimit PluginLog 不含 API key（格式收敛为 `rl:<verdict>,kl=<len>,...` ≤14B；同文件 `rate_limit_redis/plugin.rs` 已一起改，#13 再动此文件时行级无重叠）— **S**
+- [x] **#08** — ES DataSender 状态机（`AtomicBool` CAS 去重 info，per-record warn 移除；构造期一次性警告 `failed_cache.is_none()`；counter `edgion_link_sys_es_send_total{result=ok|failed_fallback|failed_no_cache}`）— **S**
+- [x] **#09** — GlobalConnectionIpRestriction tracing（3 处删除 + `edgion_conn_ip_restriction_events_total{result}` counter 增补）— **S**
+- [x] **#15** — ExtensionRef 错误响应体（async Request stage 写 500 + JSON body；`PluginRunningResult::ErrTerminateRequest` 定义处加约定注释；sync `UpstreamResponseFilter` stage 因无 await 保留原样）— **S**
+
+---
+
+## Wave 2 — Federation 生命周期链（**必须按顺序**）
+
+- [x] **#19** — Federation offline 资源泄漏 — 路线 Y 简化版（`mark_offline` 释放 `stream_tx` + session_id race 守卫 + 删 evict_stale/offline_evict_hours 死代码）。commits: `c37519d` + `1e7c79f` + `8e1a42d` + `e17f53a`。**M**
+  - 依赖：— （Wave 1 的 #18 建议先做，同文件 `server/mod.rs`）
+  - 同文件协同：`center/fed_sync/server/mod.rs`（#18/#20）、`registry/mod.rs`（#20）
+- [x] **#20** — CenterDb 写路径 + Admin DELETE 级联 — 补齐 `upsert_controller` 调用（register + 3 个 offline 分支），新增 `CenterDb::mark_offline` narrow UPDATE（不覆盖 cluster/env/tag），Admin DELETE 5 路级联（registry+aggregator+watch_cache+metadata_store 经 handler 链间接+DB），`list_resources` 过滤 offline keys。commits: `f1b9316` + `be7804c` + `419561c`。**M**
+  - 依赖：**#19**（需要 remove 方法）
+  - 同文件协同：`server/mod.rs`（#18/#19 已完成）、`registry/mod.rs`（#19 已完成）、`api/mod.rs`（#01 并行安全）
+- [x] **#24a** — Center/Controller `/metrics` 端点 infra（admin router 挂载 + auth skip + 共享 `common/observe/metrics_api`）— **S**
+  - 依赖：无
+  - 变更：新建 `src/core/common/observe/metrics_api.rs`；Gateway `observe/metrics/api.rs` 改薄壳 re-export；Controller/Center `run()` 早调 `install_global_recorder`；`unified_auth` skip_paths 加 `/metrics`
+- [x] **#24b** — Federation metrics baseline（14 条，已在此分支落盘）— **M**
+  - 依赖：**#19 + #20 + #24a**
+  - 变更（相较原 ticket）：4 条 histogram → 2 条 `_seconds_last` gauge + 2 条 drop（违反项目"无 Histogram"硬规）；`controller_id` label 去掉换成 `watch_errors_total{kind,reason}` counter；`stream_tx_channel_size` 换成 `stream_tx_drops_total`，但 fed_sync 当前无 `try_send` 路径故本工单不落盘该条（共 14 条实际落盘）
+  - 实现：`src/core/common/observe/fed_metrics.rs`（定义 + labels 子模块）+ 注入点在 `center/fed_sync/{registry,server}`、`center/aggregator`、`center/api/{consistency_handlers,global_connection_ip_restriction_handlers}`、`controller/fed_sync/fed_client`
+  - 与 Wave 5 #21/#22/#23 的 Gateway metrics 整改独立
+
+---
+
+## Wave 3 — 认证 & 敏感数据（设计性改动）
+
+- [x] **#14** — Plugin Entry 阶段错配 → 认证绕过 — **M**
+  - 依赖：—
+  - **为什么先做**：让插件错配在 status 中暴露，后续插件改动更安全
+  - 同文件协同：`plugins/runtime/plugin_runtime.rs`（Wave 4 的 #13 也碰，**先 #14 后 #13**）
+- [ ] **#01** — Admin API 认证 fail-open 全链路 — **L**
+  - 依赖：—
+  - 跨 4 文件（unified_auth + controller/cli + controller/api + ctl/cli/client）
+- [ ] **#16** — ctx_map 敏感数据 + denylist append — **L**（短期 S）
+  - 依赖：—
+  - 同文件协同：`ctx_set/plugin.rs:230` 也是 Wave 4 #13 的删除点，**#16 里一起删**
+- [x] **#28** — CLI token 权限 + 密码擦除 — **S**
+  - 依赖：—
+- [x] **#27** — IpRestriction schema 迁移保护 — **M**
+  - 依赖：—
+
+---
+
+## Wave 4 — 数据面 Tracing 大扫除（按目录分批 PR）
+
+> 每个工单独立 PR，内部可并行。**#14 先完成再动这批**。
+
+- [ ] **#03** — Gateway HTTP proxy 回调 tracing（`pg_*.rs` 3 文件）— **S**
+- [ ] **#04** — TLS 握手 tracing（`tls/**` 4 文件）— **M**
+- [ ] **#06** — backends/mod.rs tracing + SSRF（单文件 P0+P1 一次做）— **M**
+- [ ] **#05** — 路由匹配 tracing + Controller validate 协同 — **M**
+  - 注意：涉及 Controller validate 改动，可以和 Controller 侧 owner 协同
+- [ ] **#10** — OIDC 插件 tracing（33 处）— **M**
+- [ ] **#11** — JWT/JWE/Basic/HeaderCert/ForwardAuth tracing（10 处）— **M**
+- [ ] **#12** — LDAP 命中率反模式 + tracing — **S**
+- [ ] **#13** — 其他插件 tracing 杂项（17 处）— **M**
+  - ⚠️ 同文件协同：**`ctx_set/plugin.rs:230` 若 #16 还未做就一起改**；**`rate_limit_redis/plugin.rs` 若 #17 还未做就一起改**
+  - 依赖：**#14 先完成**
+
+---
+
+## Wave 5 — Metrics 整改
+
+- [ ] **#21** — BACKEND_REQUESTS_TOTAL label 爆炸 — **M**
+- [ ] **#22** — MIRROR_DURATION 单位不匹配 + buckets — **S**
+  - 同文件协同：#21/#22/#23 都在 `gateway/observe/metrics/registry.rs`，**建议一次性提交到同一分支**
+
+---
+
+## 同文件协同速查表
+
+| 文件 | 涉及工单 | 建议 |
+|------|---------|------|
+| `gateway/plugins/http/ctx_set/plugin.rs:230` | #13 + #16 | #16 先做（含删 L230），#13 跳过该行 |
+| `gateway/plugins/http/rate_limit_redis/plugin.rs` | ~~#17~~ + #13 | #17 已完成；#13 剩余 tracing 行 L193/L495 删除，与 #17 改过的 L491-571 PluginLog 无重叠 |
+| `gateway/plugins/runtime/plugin_runtime.rs` | #13 + #14 | **#14 必须先** |
+| `center/fed_sync/server/mod.rs` | #18 + #19 + #20 | 顺序 #18 → #19 → #20 |
+| `center/fed_sync/registry/mod.rs` | #19 + #20 | 顺序 #19 → #20 |
+| `gateway/observe/metrics/registry.rs` | #21 + #22 + ~~#23~~ | #23 已完成（新增 `RR_SELECTOR_TRUNCATED_TOTAL` const + `record_rr_selector_truncated()`）；#21/#22 可合并 |
+| `center/api/mod.rs` | #01 + #20 | 不同函数，并行安全 |
+
+---
+
+## 进度汇总（可选：每次勾选后手动更新）
+
+- Wave 1：10 / 10 ✅
+- Wave 2：4 / 4 ✅（#24 拆为 #24a + #24b，两个子工单皆已落盘）
+- Wave 3：3 / 5
+- Wave 4：0 / 8
+- Wave 5：0 / 2
+- **总计：17 / 29**（#24 拆分后总数变 29）
+
+---
+
+## 遇到问题怎么办
+
+- **工单步骤不清楚** → 打开对应 `NN-*.md` 看详细步骤
+- **想查证据 / 触发条件** → 工单里"溯源" 列的 ID 可查对应报告（`01-controller-core.md` 等），但这些报告可能已在本地被删，需从 git history 恢复：
+  ```bash
+  git log --all --oneline -- tasks/reviews/2026-04-17/01-controller-core.md
+  git show <commit>:tasks/reviews/2026-04-17/01-controller-core.md
+  ```
+- **发现新问题 / 工单过时** → 直接改对应 fix 文件，不要开新 issue（保持单一索引）
+- **工单描述错误** → 标记为 `- [~]`（skip）并注明原因，不要直接删 checkbox

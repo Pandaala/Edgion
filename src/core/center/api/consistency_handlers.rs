@@ -12,6 +12,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::Serialize;
 
+use crate::core::common::observe::fed_metrics;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
     ClusterRegionRouteEntry, ServiceRegionRouteEntry,
 };
@@ -76,13 +77,17 @@ pub async fn cluster_region_routes_consistency(State(state): State<ApiState>) ->
                 conflicts.push(c);
             }
 
-            ConsistencyReport {
+            let report = ConsistencyReport {
                 namespace: route.namespace,
                 name: route.name,
                 consistent: conflicts.is_empty(),
                 controller_count: route.controllers.len(),
                 conflicts,
+            };
+            if !report.consistent {
+                fed_metrics::record_consistency_mismatch();
             }
+            report
         })
         .collect();
 
@@ -129,13 +134,17 @@ pub async fn service_region_routes_consistency(State(state): State<ApiState>) ->
                 }
             }
 
-            ConsistencyReport {
+            let report = ConsistencyReport {
                 namespace: route.namespace,
                 name: route.name,
                 consistent: conflicts.is_empty(),
                 controller_count: route.controllers.len(),
                 conflicts,
+            };
+            if !report.consistent {
+                fed_metrics::record_consistency_mismatch();
             }
+            report
         })
         .collect();
 

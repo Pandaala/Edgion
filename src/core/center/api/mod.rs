@@ -71,6 +71,11 @@ pub fn router(state: ApiState) -> Router {
         // Health/ready (no /api/v1 prefix, consistent with controller)
         .route("/health", get(health_check))
         .route("/ready", get(ready_check))
+        // Prometheus scrape endpoint (auth-skipped, K8s controller-manager convention)
+        .route(
+            "/metrics",
+            get(crate::core::common::observe::metrics_api::metrics_handler),
+        )
         // Center-specific endpoints
         .route("/api/v1/server-info", get(server_info))
         .route("/api/v1/controllers", get(list_controllers))
@@ -267,6 +272,19 @@ struct AdminControllerDto {
     last_seen_at: i64,
 }
 
+impl From<crate::core::center::db::DbController> for AdminControllerDto {
+    fn from(r: crate::core::center::db::DbController) -> Self {
+        Self {
+            controller_id: r.controller_id,
+            cluster: r.cluster,
+            env: r.env,
+            tag: r.tag,
+            online: r.online,
+            last_seen_at: r.last_seen_at,
+        }
+    }
+}
+
 async fn list_admin_controllers(State(state): State<ApiState>) -> impl IntoResponse {
     let Some(db) = &state.db else {
         return (
@@ -280,17 +298,7 @@ async fn list_admin_controllers(State(state): State<ApiState>) -> impl IntoRespo
     let db2 = db.clone();
     match tokio::task::spawn_blocking(move || db2.list_controllers()).await {
         Ok(Ok(rows)) => {
-            let dtos: Vec<AdminControllerDto> = rows
-                .into_iter()
-                .map(|r| AdminControllerDto {
-                    controller_id: r.controller_id,
-                    cluster: r.cluster,
-                    env: r.env,
-                    tag: r.tag,
-                    online: r.online,
-                    last_seen_at: r.last_seen_at,
-                })
-                .collect();
+            let dtos: Vec<AdminControllerDto> = rows.into_iter().map(AdminControllerDto::from).collect();
             Json(ListResponse::success(dtos)).into_response()
         }
         Ok(Err(e)) => (

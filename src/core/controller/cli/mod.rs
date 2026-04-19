@@ -288,6 +288,25 @@ impl EdgionControllerCli {
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;
 
+        // 1b. Install the process-wide Prometheus recorder so any metric emitted
+        // during startup (ConfMgr init, federation client connect, etc.) is
+        // captured. The recorder is idempotent, so tests and combined modes
+        // do not panic on re-install.
+        if let Err(e) = crate::core::common::observe::metrics_api::install_global_recorder(
+            crate::core::common::observe::metrics_api::RecorderConfig {
+                service: "edgion-controller",
+                idle_timeout_secs: 0,
+                histogram_buckets: &[],
+            },
+        ) {
+            tracing::error!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "metrics_recorder_install_failed",
+                error = %e,
+                "Failed to install Prometheus recorder; /metrics will return 500"
+            );
+        }
+
         // 2. Log ConfMgr configuration
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,

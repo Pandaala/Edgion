@@ -11,6 +11,22 @@ use std::collections::{HashMap, HashSet};
 use crate::core::center::api::ApiState;
 use crate::core::center::metadata_store::ControllerPmEntry;
 use crate::core::common::api::ApiResponse;
+use crate::core::common::observe::fed_metrics;
+
+/// Classify a fan-out outcome into the `result` label value emitted on
+/// `edgion_fed_fanout_total{op,result}`. "ok" means every target
+/// succeeded, "fail" means every target failed, "partial" is the mixed
+/// case. Zero-target calls are treated as "ok" since there is nothing
+/// that could have failed.
+fn fanout_result_label(success_count: usize, failed_count: usize) -> &'static str {
+    if failed_count == 0 {
+        fed_metrics::labels::fanout_result::OK
+    } else if success_count == 0 {
+        fed_metrics::labels::fanout_result::FAIL
+    } else {
+        fed_metrics::labels::fanout_result::PARTIAL
+    }
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -427,6 +443,10 @@ pub async fn patch_enable(
     });
     let results = futures::future::join_all(futs).await;
     let (success, failed) = partition(results);
+    fed_metrics::record_fanout(
+        fed_metrics::labels::fanout_op::PATCH_ENABLE,
+        fanout_result_label(success.len(), failed.len()),
+    );
     Json(ApiResponse::success(FanOutResponse {
         success,
         failed,
@@ -516,6 +536,10 @@ pub async fn patch_active_profile(
     });
     let results = futures::future::join_all(futs).await;
     let (success, failed) = partition(results);
+    fed_metrics::record_fanout(
+        fed_metrics::labels::fanout_op::PATCH_PROFILE,
+        fanout_result_label(success.len(), failed.len()),
+    );
     Json(ApiResponse::success(FanOutResponse {
         success,
         failed,

@@ -1,6 +1,7 @@
 //! ControllerRegistry: manages per-controller sessions and stream handles.
 
 use crate::core::common::fed_sync::proto::{CenterMessage, RegisterRequest};
+use crate::core::common::observe::fed_metrics;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,7 +51,14 @@ impl ControllerRegistry {
             last_seen: Instant::now(),
             offline_since: None,
         };
-        self.inner.write().insert(controller_id, session);
+        let mut guard = self.inner.write();
+        // Detect same controller_id re-registering while a session entry still
+        // exists — a signal for reconnect storms / session races. Covers both
+        // the online→online case and the offline→online (recovered) case.
+        if guard.contains_key(&controller_id) {
+            fed_metrics::record_session_reentry();
+        }
+        guard.insert(controller_id, session);
     }
 
     pub fn get_session(&self, controller_id: &str) -> Option<SessionView> {
@@ -128,7 +136,26 @@ impl ControllerRegistry {
     /// Returns true if an entry was removed. Unlike `mark_offline`, this
     /// drops the session record itself (used by Admin DELETE cascade).
     pub fn remove(&self, controller_id: &str) -> bool {
-        self.inner.write().remove(controller_id).is_some()
+        let removed = self.inner.write().remove(controller_id).is_some();
+        if removed {
+            fed_metrics::record_evict_stale(fed_metrics::labels::evict_source::REGISTRY);
+        }
+        removed
+    }
+
+    /// Current number of registered controller sessions (online + offline).
+    pub fn len(&self) -> usize {
+        self.inner.read().len()
+    }
+
+    /// True when no controller sessions are registered.
+    pub fn is_empty(&self) -> bool {
+        self.inner.read().is_empty()
+    }
+
+    /// Number of currently online controller sessions.
+    pub fn online_len(&self) -> usize {
+        self.inner.read().values().filter(|s| s.is_online()).count()
     }
 }
 

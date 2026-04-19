@@ -6,6 +6,10 @@
 
 - **不引入 Histogram 类型**（无 `_bucket` / `_sum` / `_count` 三元组）
 - **严格控制 label 的 cardinality**：label 的值域必须有限且可预测（namespace、name、status group 等）。**绝不使用** path、user_id、trace_id 等高基数值作为 label
+- **混合注册策略**：`GatewayMetrics` 的 handle 按"调用热度"分成两类
+  - **Hot（每请求路径）** → `Counter`/`Gauge` 直存，`new()` 中用 `counter!()/gauge!()` 急注册。per-call 零开销；首请求前短暂 0 值可接受（ctx_created、ctx_active、gateway_request_bytes、gateway_response_bytes）
+  - **Cold / 失败路径 / 控制面低频** → `OnceLock<Counter>/<Gauge>` 保存，首次 record 调用才注册。未被触发的指标不会出现在 `/metrics`，避免零值噪声与 scrape 浪费
+  - 带 label 的 free function（`record_backend_request` / `record_cb_*` / `record_mirror_*` / `record_acme_*`）天然懒注册——label 组合未命中就不存在时序
 - **新增指标前先问**：现有指标能否表达？能计算出来的不要额外存
 - **命名规范**：`edgion_<component>_<what>_<unit>_total / _active`，全小写下划线
 
@@ -23,36 +27,50 @@ pub mod names {
 }
 ```
 
-**2. 在 `GatewayMetrics` struct 中添加字段**
+**2. 先判定 Hot 还是 Cold，字段类型跟着分**
+
+判定标准：**每请求路径 = Hot**（几秒内必然非 0）；**失败/低频/可能永不触发 = Cold**。
 
 ```rust
 pub struct GatewayMetrics {
-    // ...
-    /// Brief description of what this tracks
-    my_new_counter: Counter,   // Counter / Gauge only — no Histogram
+    // --- Hot per-request handles (eager registration) ---
+    my_hot_counter: Counter,              // Counter / Gauge only — no Histogram
+
+    // --- Cold / rare-event handles (lazy registration via OnceLock) ---
+    my_cold_counter: OnceLock<Counter>,
 }
 ```
 
-**3. 在 `GatewayMetrics::new()` 中初始化**
+**3. 在 `GatewayMetrics::new()` 按类别初始化**
 
 ```rust
 fn new() -> Self {
     Self {
-        // ...
-        my_new_counter: counter!(names::MY_NEW_COUNTER),
+        // Hot: eager
+        my_hot_counter: counter!(names::MY_HOT_COUNTER),
+        // Cold: lazy
+        my_cold_counter: OnceLock::new(),
     }
 }
 ```
 
-**4. 添加 `#[inline]` 方法**
+**4. 添加 `#[inline]` record 方法**
 
 ```rust
-/// Record a foo event
+// Hot: 直接 .increment()，零额外开销
 #[inline]
-pub fn my_event(&self) {
-    self.my_new_counter.increment(1);
+pub fn my_hot_event(&self) {
+    self.my_hot_counter.increment(1);
+}
+
+// Cold: 走 get_or_register_counter / get_or_register_gauge helper
+#[inline]
+pub fn my_cold_event(&self) {
+    get_or_register_counter(&self.my_cold_counter, names::MY_COLD_COUNTER).increment(1);
 }
 ```
+
+> **Gauge 对称性**：Cold gauge 的 decrement 前必须先有对应 increment 触发注册，否则会出现 -1 漂移。参考 `controller_connected_gateways` 的 `gateway_connected` / `gateway_disconnected` 配对。Hot gauge 不受此影响（启动即注册为 0）。
 
 **5. 在调用点使用**
 
@@ -113,6 +131,16 @@ counter!(
 对 Gauge 操作建议在 `Drop` 实现或明确的 RAII guard 中保证对称性（参考 `ctx_active` Gauge 的 `Drop for EdgionHttpContext` 实现）。
 
 ---
+
+## Controller / Center Metrics
+
+Controller 和 Center 不像 Gateway 那样跑在热路径上，并且都只使用 Counter / Gauge。实施规则：
+
+1. **统一入口**：全局 `PrometheusRecorder` 安装走 `src/core/common/observe/metrics_api.rs::install_global_recorder(RecorderConfig)`。两个二进制在 `run()` 入口附近各调一次（参数 `service: "edgion-controller"` / `"edgion-center"`）
+2. **`/metrics` 复用 admin router**：调用 `crate::core::common::observe::metrics_api::metrics_handler` 挂到各自 axum Router 的 `/metrics` path，不另开端口
+3. **Auth skip**：`/metrics` 已在 `src/core/common/unified_auth/mod.rs` 的 `skip_paths` 里写死，与 `/health`、`/ready` 一起免 auth。新增敏感路由不要改这个 skip 列表
+4. **注册风格**：沿用 `src/core/controller/conf_mgr/sync_runtime/metrics.rs` 的风格——直接 `counter!/gauge!` 宏，不用 `OnceLock` lazy 封装（controlplane 调用频次低，急注册即可）
+5. **Federation 指标**：全部走 `src/core/common/observe/fed_metrics.rs`（`edgion_fed_*` 前缀），Center/Controller 共用。Label 值域**必须**是 `labels::` 子模块里的 `&'static str` 常量，禁止直接拼字符串
 
 ## Test Metrics 例外
 

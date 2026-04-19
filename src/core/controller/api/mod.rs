@@ -176,6 +176,11 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .route("/health", get(health_check))
         // Readiness check (ready to serve traffic - ConfigServer ready)
         .route("/ready", get(readiness_check))
+        // Prometheus scrape endpoint (auth-skipped, K8s controller-manager convention)
+        .route(
+            "/metrics",
+            get(crate::core::common::observe::metrics_api::metrics_handler),
+        )
         // Cross-namespace query - List all resources of a kind
         .route(
             "/api/v1/namespaced/{kind}",

@@ -20,6 +20,7 @@ use crate::core::common::fed_sync::proto::{
     federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
     FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, ListResponse, Pong, RegisterRequest,
 };
+use crate::core::common::observe::fed_metrics;
 use crate::core::controller::conf_mgr::conf_center::traits::CenterApi;
 use crate::core::controller::conf_mgr::ConfMgr;
 use crate::core::controller::fed_sync::resource_collector;
@@ -81,10 +82,14 @@ pub async fn run(
         component = "fed_client",
         "Waiting for ConfigSyncServer to be ready before connecting to Center"
     );
+    let ready_wait_start = std::time::Instant::now();
     loop {
         if conf_mgr.is_ready() {
+            let elapsed = ready_wait_start.elapsed().as_secs_f64();
+            fed_metrics::record_ready_gate_wait(elapsed);
             tracing::info!(
                 component = "fed_client",
+                elapsed_secs = elapsed,
                 "ConfigSyncServer is ready, proceeding to connect"
             );
             break;
@@ -209,6 +214,13 @@ async fn connect_and_run(
     let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
     let mut inbound = client.sync(outbound).await?.into_inner();
 
+    fed_metrics::record_connection_event(
+        fed_metrics::labels::role::CONTROLLER,
+        fed_metrics::labels::event::CONNECTED,
+    );
+    fed_metrics::set_connections_active(fed_metrics::labels::role::CONTROLLER, 1);
+    let session_started_at = std::time::Instant::now();
+
     tracing::info!(
         component = "fed_client",
         controller_id = %config.controller_id(),
@@ -257,6 +269,19 @@ async fn connect_and_run(
     if let Some(prev) = active_watch_cancel.take() {
         prev.cancel();
     }
+
+    // Record session end metrics. This runs whether the loop broke with
+    // Ok(()) (clean close) or Err(..) (stream error); both count as a
+    // disconnect event on the Controller side.
+    fed_metrics::record_connection_event(
+        fed_metrics::labels::role::CONTROLLER,
+        fed_metrics::labels::event::DISCONNECTED,
+    );
+    fed_metrics::record_connection_duration(
+        fed_metrics::labels::role::CONTROLLER,
+        session_started_at.elapsed().as_secs_f64(),
+    );
+    fed_metrics::set_connections_active(fed_metrics::labels::role::CONTROLLER, 0);
 
     result
 }
@@ -554,6 +579,7 @@ async fn handle_center_message(
 
                     let tx = tx.clone();
                     let request_id = req.request_id.clone();
+                    let watch_kind = req.kind.clone();
                     let initial_server_id = css.server_id();
                     let reload_conf_mgr = conf_mgr.clone();
                     tokio::spawn(async move {
@@ -575,6 +601,10 @@ async fn handle_center_message(
                                                     error: event.err.unwrap_or_default(),
                                                 })),
                                             };
+                                            fed_metrics::record_watch_event(
+                                                &watch_kind,
+                                                fed_metrics::labels::direction::SENT,
+                                            );
                                             if tx.send(msg).await.is_err() {
                                                 break; // federation stream closed
                                             }
