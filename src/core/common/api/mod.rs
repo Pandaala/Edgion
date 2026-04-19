@@ -131,46 +131,32 @@ pub fn apply_local_auth_layer(
     ))
 }
 
-/// Add local auth login/me routes to the router.
+/// Add local auth login/me/logout routes to the router using the shared
+/// `UnifiedAuthState`. Handlers read the local provider state through the
+/// state's `ArcSwapOption`, so routes stay valid even before the Secret
+/// is fetched — they return 503 until the state is populated.
 ///
-/// Only adds routes when `local_auth_config` is `Some` and `enabled`.
-/// Routes added:
-/// - `POST /api/v1/auth/login` — validate credentials, return JWT
-/// - `GET  /api/v1/auth/me`   — return current user info (requires valid JWT)
-///
-/// The login/me routes are built as a separate sub-router with `LocalAuthState`
-/// and then merged into the main router, which allows the two routers to have
-/// different state types.
+/// Routes are only added when the operator intends local auth to be enabled
+/// (i.e. `[local_auth].enabled = true` or auto-generate fallback). When the
+/// operator explicitly disabled local auth, the routes are omitted.
 pub fn add_local_auth_routes(
     router: Router,
-    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    unified_state: std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
+    local_auth_intent: bool,
 ) -> Router {
-    let Some(local_auth_cfg) = local_auth_config else {
-        return router;
-    };
-
-    if !local_auth_cfg.enabled {
+    if !local_auth_intent {
         return router;
     }
 
-    use crate::core::common::local_auth::LocalAuthState;
-    use std::sync::Arc;
+    use crate::core::common::local_auth::{login_handler, logout_handler, me_handler};
 
-    let local_auth_state = LocalAuthState::from_config(local_auth_cfg);
+    let auth_router: Router<
+        std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
+    > = Router::new()
+        .route("/api/v1/auth/login", post(login_handler))
+        .route("/api/v1/auth/logout", post(logout_handler))
+        .route("/api/v1/auth/me", get(me_handler));
 
-    // Build a separate sub-router with its own state, then merge it.
-    let auth_router: Router<Arc<LocalAuthState>> = Router::new()
-        .route(
-            "/api/v1/auth/login",
-            post(crate::core::common::local_auth::login_handler),
-        )
-        .route(
-            "/api/v1/auth/logout",
-            post(crate::core::common::local_auth::logout_handler),
-        )
-        .route("/api/v1/auth/me", get(crate::core::common::local_auth::me_handler));
-
-    // `with_state` produces a `Router<()>` that can be merged into the main router.
-    let auth_router_with_state: Router<()> = auth_router.with_state(local_auth_state);
+    let auth_router_with_state: Router<()> = auth_router.with_state(unified_state);
     router.merge(auth_router_with_state)
 }

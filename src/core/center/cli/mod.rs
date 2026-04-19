@@ -180,17 +180,17 @@ impl EdgionCenterCli {
         });
         let http_handle = tokio::spawn(async move {
             let base_router = router(api_state);
-            let app = crate::core::common::api::add_local_auth_routes(base_router, local_auth_config.as_ref());
-            let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
-                || local_auth_config.as_ref().is_some_and(|c| c.enabled);
-            let (app, _auth_state) = crate::core::common::api::apply_unified_auth_layer(
-                app,
+            let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
+            let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled) || local_auth_intent;
+            let (app, auth_state) = crate::core::common::api::apply_unified_auth_layer(
+                base_router,
                 auth_config.as_ref(),
                 local_auth_config.as_ref(),
                 require_auth,
                 "center",
             )
             .expect("center auth layer build failed");
+            let app = crate::core::common::api::add_local_auth_routes(app, auth_state.clone(), local_auth_intent);
             let app = crate::core::common::api::apply_cors_layer(app);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();

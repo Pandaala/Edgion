@@ -263,16 +263,13 @@ pub async fn serve(
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
 ) -> anyhow::Result<()> {
     let base_router = create_admin_router(conf_mgr, schema_validator);
-    // Add local auth login/me endpoints (before auth middleware so login is accessible)
-    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
-    // Apply unified auth middleware (tries OIDC first, falls back to local)
-    // TODO(fix-01 task 5): replace this temporary derivation with `derive_require_auth`
-    // (intent-based, includes auto-generate fallback).
-    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
-        || local_auth_config.as_ref().is_some_and(|c| c.enabled);
+    // Build unified auth state first, then add login/me/logout routes using that state.
+    let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
+    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled) || local_auth_intent;
     let (router_with_auth, auth_state) =
-        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, require_auth, "admin_api")?;
-    let app = api::apply_cors_layer(router_with_auth);
+        api::apply_unified_auth_layer(base_router, auth_config, local_auth_config, require_auth, "admin_api")?;
+    let app = api::add_local_auth_routes(router_with_auth, auth_state.clone(), local_auth_intent);
+    let app = api::apply_cors_layer(app);
 
     // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
     // transitions after background Secret retry become visible to clients.
@@ -309,16 +306,13 @@ pub async fn serve_with_shutdown(
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let base_router = create_admin_router(conf_mgr, schema_validator);
-    // Add local auth login/me endpoints (before auth middleware so login is accessible)
-    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
-    // Apply unified auth middleware (tries OIDC first, falls back to local)
-    // TODO(fix-01 task 5): replace this temporary derivation with `derive_require_auth`
-    // (intent-based, includes auto-generate fallback).
-    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
-        || local_auth_config.as_ref().is_some_and(|c| c.enabled);
+    // Build unified auth state first, then add login/me/logout routes using that state.
+    let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
+    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled) || local_auth_intent;
     let (router_with_auth, auth_state) =
-        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, require_auth, "admin_api")?;
-    let app = api::apply_cors_layer(router_with_auth);
+        api::apply_unified_auth_layer(base_router, auth_config, local_auth_config, require_auth, "admin_api")?;
+    let app = api::add_local_auth_routes(router_with_auth, auth_state.clone(), local_auth_intent);
+    let app = api::apply_cors_layer(app);
 
     // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
     // transitions after background Secret retry become visible to clients.

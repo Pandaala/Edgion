@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::common::api::ApiResponse;
-
-use super::middleware::LocalAuthState;
+use crate::core::common::unified_auth::UnifiedAuthState;
 
 /// JWT claims used by local auth tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,9 +84,20 @@ pub struct AuthStatusResponse {
 /// POST /api/v1/auth/login
 ///
 /// Validates username + password against the stored config and returns a signed JWT.
-pub async fn login_handler(State(state): State<Arc<LocalAuthState>>, Json(req): Json<LoginRequest>) -> Response {
+pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req): Json<LoginRequest>) -> Response {
+    // Return 503 when the local auth provider is not yet populated.
+    let Some(local_state) = state.local.load_full() else {
+        use axum::http::HeaderValue;
+        let body: Json<ApiResponse<()>> = Json(ApiResponse::error(
+            "authentication subsystem initializing, retry later".to_string(),
+        ));
+        let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+        resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
+        return resp;
+    };
+
     // Validate username
-    if req.username != state.username {
+    if req.username != local_state.username {
         tracing::debug!(component = "local_auth", "Login failed: unknown username");
         let body: Json<ApiResponse<LoginResponse>> =
             Json(ApiResponse::error("Invalid username or password".to_string()));
@@ -95,7 +105,7 @@ pub async fn login_handler(State(state): State<Arc<LocalAuthState>>, Json(req): 
     }
 
     // Validate password using bcrypt
-    match bcrypt::verify(&req.password, &state.password_hash) {
+    match bcrypt::verify(&req.password, &local_state.password_hash) {
         Ok(true) => {}
         Ok(false) => {
             tracing::debug!(component = "local_auth", "Login failed: wrong password");
@@ -116,20 +126,20 @@ pub async fn login_handler(State(state): State<Arc<LocalAuthState>>, Json(req): 
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as usize;
-    let expiry_secs = state.jwt_expiry_hours * 3600;
+    let expiry_secs = local_state.jwt_expiry_hours * 3600;
     let claims = LocalAuthClaims {
-        sub: state.username.clone(),
+        sub: local_state.username.clone(),
         iat: now,
         exp: now + expiry_secs as usize,
     };
 
     // Encode JWT
-    let encoding_key = EncodingKey::from_secret(state.jwt_secret.as_bytes());
+    let encoding_key = EncodingKey::from_secret(local_state.jwt_secret.as_bytes());
     match encode(&Header::new(jsonwebtoken::Algorithm::HS256), &claims, &encoding_key) {
         Ok(token) => {
             tracing::info!(
                 component = "local_auth",
-                username = %state.username,
+                username = %local_state.username,
                 "Login successful"
             );
             let cookie_value = format!(
@@ -159,20 +169,117 @@ pub async fn login_handler(State(state): State<Arc<LocalAuthState>>, Json(req): 
 /// Returns the authenticated user's info, extracted from the JWT claims inserted
 /// by the unified auth middleware.
 pub async fn me_handler(
+    State(state): State<Arc<UnifiedAuthState>>,
     axum::Extension(claims): axum::Extension<crate::core::common::unified_auth::UnifiedAuthClaims>,
-) -> Json<ApiResponse<MeResponse>> {
+) -> Response {
+    // Return 503 when the local auth provider is not yet populated.
+    let Some(_local_state) = state.local.load_full() else {
+        use axum::http::HeaderValue;
+        let body: Json<ApiResponse<()>> = Json(ApiResponse::error(
+            "authentication subsystem initializing, retry later".to_string(),
+        ));
+        let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+        resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
+        return resp;
+    };
+
     Json(ApiResponse::success(MeResponse {
         username: claims.sub.unwrap_or_default(),
     }))
+    .into_response()
 }
 
 /// POST /api/v1/auth/logout
 ///
 /// Clears the httpOnly auth cookie by setting Max-Age=0.
-pub async fn logout_handler() -> Response {
+pub async fn logout_handler(State(state): State<Arc<UnifiedAuthState>>) -> Response {
+    // Return 503 when the local auth provider is not yet populated.
+    let Some(_local_state) = state.local.load_full() else {
+        use axum::http::HeaderValue;
+        let body: Json<ApiResponse<()>> = Json(ApiResponse::error(
+            "authentication subsystem initializing, retry later".to_string(),
+        ));
+        let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+        resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
+        return resp;
+    };
+
     let cookie_value = "edgion_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
     let mut resp = Json(ApiResponse::<()>::success(())).into_response();
     resp.headers_mut()
         .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
     resp
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::*;
+    use crate::core::common::local_auth::middleware::LocalAuthState;
+    use crate::core::common::unified_auth::UnifiedAuthState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    fn valid_local() -> crate::core::common::local_auth::LocalAuthConfig {
+        let mut c = crate::core::common::local_auth::LocalAuthConfig::default();
+        c.enabled = true;
+        c.username = "admin".to_string();
+        c.password = "a_long_enough_password_123".to_string();
+        c.jwt_secret = "a_long_enough_jwt_secret_value_abcdef".to_string();
+        c
+    }
+
+    fn app_with_unified(state: Arc<UnifiedAuthState>) -> axum::Router {
+        use axum::routing::{get, post};
+        axum::Router::new()
+            .route("/api/v1/auth/login", post(login_handler))
+            .route("/api/v1/auth/logout", post(logout_handler))
+            .route("/api/v1/auth/me", get(me_handler))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn login_returns_503_when_local_not_ready() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let app = app_with_unified(state);
+        let body = serde_json::json!({"username":"admin","password":"x"}).to_string();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let retry = resp.headers().get("retry-after").expect("Retry-After header");
+        assert_eq!(retry.to_str().unwrap(), "10");
+    }
+
+    #[tokio::test]
+    async fn login_succeeds_after_update_local() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        state.update_local(LocalAuthState::from_config(&valid_local()));
+        let app = app_with_unified(state);
+        let body = serde_json::json!({
+            "username":"admin",
+            "password":"a_long_enough_password_123"
+        }).to_string();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }
