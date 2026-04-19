@@ -132,33 +132,35 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
 
 // ============= Auth Status Helpers =============
 
-/// Build the pre-computed auth status based on the active auth configuration.
+/// Derive the pre-computed auth status from the live `UnifiedAuthState`.
 ///
-/// When both OIDC and local auth are enabled, `auth_method` is "oidc+local".
+/// Unlike the previous implementation, this reads from the actual assembled
+/// state (not from the original TOML config) — so transient states like
+/// "configured but Secret not yet fetched" are reported as `Initializing`
+/// instead of claiming `Ready`.
 fn build_auth_status(
-    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
-    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+    state: &crate::core::common::unified_auth::UnifiedAuthState,
 ) -> crate::core::common::local_auth::AuthStatusResponse {
-    use crate::core::common::local_auth::AuthStatusResponse;
-    let oidc_enabled = auth_config.map_or(false, |c| c.enabled);
-    let local_enabled = local_auth_config.map_or(false, |c| c.enabled);
-    match (oidc_enabled, local_enabled) {
-        (true, true) => AuthStatusResponse {
-            auth_required: true,
-            auth_method: "oidc+local".to_string(),
-        },
-        (true, false) => AuthStatusResponse {
-            auth_required: true,
-            auth_method: "oidc".to_string(),
-        },
-        (false, true) => AuthStatusResponse {
-            auth_required: true,
-            auth_method: "local".to_string(),
-        },
-        (false, false) => AuthStatusResponse {
-            auth_required: false,
-            auth_method: "none".to_string(),
-        },
+    use crate::core::common::local_auth::{AuthStatus, AuthStatusResponse};
+
+    let mut providers = Vec::new();
+    if state.oidc.is_some() {
+        providers.push("oidc".to_string());
+    }
+    if state.local.load().is_some() {
+        providers.push("local".to_string());
+    }
+
+    let status = match (state.require_auth, providers.is_empty()) {
+        (false, _) => AuthStatus::Disabled,
+        (true, true) => AuthStatus::Initializing,
+        (true, false) => AuthStatus::Ready,
+    };
+
+    AuthStatusResponse {
+        auth_required: state.require_auth,
+        active_providers: providers,
+        status,
     }
 }
 
@@ -258,21 +260,21 @@ pub async fn serve(
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
     // TODO(fix-01 task 5): replace this temporary derivation with `derive_require_auth`
-    // (intent-based, includes auto-generate fallback). _auth_state is discarded here but
-    // will be wired into handlers by tasks 3/4 (status endpoint) and task 6 (retry loop).
+    // (intent-based, includes auto-generate fallback).
     let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
         || local_auth_config.as_ref().is_some_and(|c| c.enabled);
-    let (router_with_auth, _auth_state) =
+    let (router_with_auth, auth_state) =
         api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, require_auth, "admin_api")?;
     let app = api::apply_cors_layer(router_with_auth);
 
-    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
-    let auth_status = build_auth_status(local_auth_config, auth_config);
+    // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
+    // transitions after background Secret retry become visible to clients.
+    let auth_state_for_status = auth_state.clone();
     let status_router = Router::new().route(
         "/api/v1/auth/status",
         get(move || {
-            let status = auth_status.clone();
-            async move { axum::Json(ApiResponse::success(status)) }
+            let state = auth_state_for_status.clone();
+            async move { axum::Json(ApiResponse::success(build_auth_status(&state))) }
         }),
     );
     let app = app.merge(status_router);
@@ -304,21 +306,21 @@ pub async fn serve_with_shutdown(
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
     // TODO(fix-01 task 5): replace this temporary derivation with `derive_require_auth`
-    // (intent-based, includes auto-generate fallback). _auth_state is discarded here but
-    // will be wired into handlers by tasks 3/4 (status endpoint) and task 6 (retry loop).
+    // (intent-based, includes auto-generate fallback).
     let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
         || local_auth_config.as_ref().is_some_and(|c| c.enabled);
-    let (router_with_auth, _auth_state) =
+    let (router_with_auth, auth_state) =
         api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, require_auth, "admin_api")?;
     let app = api::apply_cors_layer(router_with_auth);
 
-    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
-    let auth_status = build_auth_status(local_auth_config, auth_config);
+    // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
+    // transitions after background Secret retry become visible to clients.
+    let auth_state_for_status = auth_state.clone();
     let status_router = Router::new().route(
         "/api/v1/auth/status",
         get(move || {
-            let status = auth_status.clone();
-            async move { axum::Json(ApiResponse::success(status)) }
+            let state = auth_state_for_status.clone();
+            async move { axum::Json(ApiResponse::success(build_auth_status(&state))) }
         }),
     );
     let app = app.merge(status_router);
@@ -336,4 +338,56 @@ pub async fn serve_with_shutdown(
 
     tracing::info!(component = "admin_api", "Admin API server stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod auth_status_tests {
+    use super::*;
+    use crate::core::common::local_auth::{AuthStatus, LocalAuthConfig, LocalAuthState};
+    use crate::core::common::unified_auth::UnifiedAuthState;
+
+    fn valid_local() -> LocalAuthConfig {
+        let mut c = LocalAuthConfig::default();
+        c.enabled = true;
+        c.username = "admin".to_string();
+        c.password = "a_long_enough_password_123".to_string();
+        c.jwt_secret = "a_long_enough_jwt_secret_value_abcdef".to_string();
+        c
+    }
+
+    #[test]
+    fn build_auth_status_disabled_when_not_required() {
+        let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
+        let resp = build_auth_status(&state);
+        assert!(!resp.auth_required);
+        assert!(resp.active_providers.is_empty());
+        assert_eq!(resp.status, AuthStatus::Disabled);
+    }
+
+    #[test]
+    fn build_auth_status_initializing_when_required_but_no_provider() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let resp = build_auth_status(&state);
+        assert!(resp.auth_required);
+        assert!(resp.active_providers.is_empty());
+        assert_eq!(resp.status, AuthStatus::Initializing);
+    }
+
+    #[test]
+    fn build_auth_status_ready_with_local() {
+        let cfg = valid_local();
+        let state = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test").unwrap();
+        let resp = build_auth_status(&state);
+        assert!(resp.auth_required);
+        assert_eq!(resp.active_providers, vec!["local".to_string()]);
+        assert_eq!(resp.status, AuthStatus::Ready);
+    }
+
+    #[test]
+    fn build_auth_status_ready_after_update_local() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        assert_eq!(build_auth_status(&state).status, AuthStatus::Initializing);
+        state.update_local(LocalAuthState::from_config(&valid_local()));
+        assert_eq!(build_auth_status(&state).status, AuthStatus::Ready);
+    }
 }

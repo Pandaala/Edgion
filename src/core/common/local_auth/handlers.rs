@@ -51,13 +51,35 @@ pub struct MeResponse {
     pub username: String,
 }
 
-/// Auth status response — tells clients what authentication is required.
-#[derive(Debug, Clone, Serialize)]
+/// High-level auth configuration state of the controller.
+///
+/// Consumed by CLI / dashboard to decide how to authenticate without guessing
+/// from a free-form `auth_method` string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthStatus {
+    /// At least one auth provider is ready to validate requests.
+    Ready,
+    /// Operator requires auth but no provider has been installed yet
+    /// (typically the K8s Secret is still being fetched). Admin API
+    /// requests currently return 503 Service Unavailable.
+    Initializing,
+    /// Operator did not configure authentication and does not expect it.
+    Disabled,
+}
+
+/// Auth status response — tells clients what authentication the controller
+/// expects and which providers are currently ready.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatusResponse {
-    /// Whether authentication is required for API access.
+    /// Whether the operator expects authentication to be enforced.
     pub auth_required: bool,
-    /// Authentication method: "local", "oidc", or "none".
-    pub auth_method: String,
+    /// Providers currently ready to validate requests. Possible values:
+    /// `"oidc"`, `"local"`. Empty when `status = initializing` or `disabled`.
+    pub active_providers: Vec<String>,
+    /// High-level readiness status. CLIs should dispatch on this, not on
+    /// `active_providers` alone.
+    pub status: AuthStatus,
 }
 
 /// POST /api/v1/auth/login
