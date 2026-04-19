@@ -1,5 +1,5 @@
 use super::EdgionHttpProxy;
-use crate::core::gateway::cli::config::get_request_duration_config;
+use crate::core::gateway::cli::config::{get_backend_requests_config, get_request_duration_config};
 use crate::core::gateway::observe::metrics::{
     global_metrics, record_backend_request, record_request_duration, status_group, TestData, TestType,
 };
@@ -52,10 +52,6 @@ pub async fn logging(
     // Create access log entry
     let entry = AccessLogEntry::from_context(ctx);
     let entry_json = entry.to_json();
-
-    if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
-        tracing::debug!(access_log = %entry_json, "Access log");
-    }
 
     // Clone only when integration testing needs the log stored; production path is zero-copy.
     let entry_json_for_store = if crate::core::common::config::is_integration_testing_mode() {
@@ -155,6 +151,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     // Record the metric
     let status = status_group(ctx.request_info.status);
     record_backend_request(
+        &get_backend_requests_config().labels,
         gateway_ns,
         gateway_name,
         route_ns,

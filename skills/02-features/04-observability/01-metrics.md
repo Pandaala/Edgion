@@ -17,22 +17,67 @@ description: Prometheus Metrics 端点和可用指标。
 
 ## 指标规范
 
-Edgion 的 Metrics 设计原则：
+Edgion 的 Metrics 设计原则（Gateway 数据面严规，控制面较松但按"新增前先问"节制）：
 
-1. **无 Histogram**：避免高基数问题，只使用 Counter 和 Gauge
-2. **Label 基数有限**：每个 Label 的值域 ≤ 数十个
-3. **通过 GatewayMetrics struct 管理**：不直接使用 `metrics::counter!()` 宏
-4. **Gauge 平衡**：所有 +1 路径都有对应的 -1
-5. **混合注册策略**：Hot 每请求路径（ctx_created / gateway_request_bytes 等）`Counter`/`Gauge` 直存、`new()` 急注册；Cold 失败/低频路径用 `OnceLock<Counter>/<Gauge>`，首次 record 才注册——未触发的指标不会出现在 `/metrics`，零值不占带宽
+1. **Gateway 数据面无 Histogram**：数据面每请求路径上 histogram × 多 label 笛卡尔积易爆炸，只用 Counter 和 Gauge。**唯一存量例外**：`edgion_gateway_request_duration_ms`（核心 SLI，默认关闭、需显式启用，bucket 显式配置）。新增 histogram 被禁止——如果认为必须加，请先改 `skills/03-coding/observability/01-metrics.md` 的规则并在 code review 里说明理由。
+2. **Controller / Center 控制面允许 histogram 但节制**：控制面触发频率低、label 基数受部署规模约束，cardinality 风险小，**技术上允许** histogram。但按"新增指标前先问"原则仍应优先 counter/gauge + access log 聚合，只在分布形态（非"最近一次"）是核心决策依据时才加 histogram。目前控制面 0 条 histogram（`edgion_fed_*` / `edgion_controller_*` 家族全是 counter + gauge）。
+3. **Label 基数有限**：每个 Label 的值域 ≤ 数十个（数据面 + 控制面都适用）
+4. **通过 GatewayMetrics struct 管理**：不直接使用 `metrics::counter!()` 宏（Gateway 侧；Controller/Center 参见 `common/observe/fed_metrics.rs`，控制面可直接用宏）
+5. **Gauge 平衡**：所有 +1 路径都有对应的 -1
+6. **混合注册策略**：Hot 每请求路径（ctx_created / gateway_request_bytes 等）`Counter`/`Gauge` 直存、`new()` 急注册；Cold 失败/低频路径用 `OnceLock<Counter>/<Gauge>`，首次 record 才注册——未触发的指标不会出现在 `/metrics`，零值不占带宽
+7. **细粒度观测走 access log 聚合**：Prometheus 只承担**低基数告警 + 秒级聚合**。更细的问题（per-request 时延、per-target 分布、trace-level 回放）原始数据在 access log（以及 `mirror_log` / `ssl_log` / `tls_log` / `tcp_log` / `udp_log`）里，用 Loki / Elasticsearch / ClickHouse 查询时聚合即可得到任意维度的 rate / percentile。不要为"想看更细"的需求扩 Prometheus 指标。
+
+### 观测分工速查
+
+| 问题 | 看哪里 |
+|------|--------|
+| "gateway 现在错误率多少？要不要告警？" | Prometheus counter（`edgion_requests_failed_total` / `edgion_backend_requests_total{status="5xx"}` 等） |
+| "x-trace-id=abc 这条请求发生了什么？" | access log |
+| "mirror 当前是否跟上主流量？" | Prometheus counter `edgion_mirror_requests_total{status="channel_full"\|"timeout"}` |
+| "mirror 的 p99 耗时分布？" | mirror access log 的 `et` 字段聚合（不加 histogram） |
+| "某 backend 最近 5 分钟 503 比例？" | Prometheus counter `rate()` |
+| "某一次 5xx 的 upstream 响应头是什么？" | access log |
 
 ### 常见指标
 
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| `backend_requests_total` | Counter | 后端请求总数 |
-| `active_connections` | Gauge | 活跃连接数 |
+| `edgion_requests_total` | Counter | 总请求数 |
+| `edgion_requests_failed_total` | Counter | 失败请求数 |
+| `edgion_backend_requests_total` | Counter | 后端请求总数。Label **可配置**（见下方"backend_requests label 配置"），默认仅 `gateway_namespace` + `gateway_name` + `protocol` + `status`；需要 `route_*` / `backend_*` drill-down 时在 `[metrics.backend_requests.labels]` 里开启。⚠️ `test_key` / `test_data` 仅在 `--integration-testing-mode` 下且 Gateway annotation 显式 opt-in 才会出现；`test_data` 会随请求变化（含 ip / latency_ms 等），**绝不要在生产开启此 flag** |
+| `edgion_ctx_active` | Gauge | 当前活跃请求上下文 |
+| `edgion_gateway_request_duration_ms` | **Histogram（Gateway 数据面唯一例外）** | 端到端请求时延，核心 SLI。默认关闭；启用后 bucket 由 `MetricsConfig::request_duration` 配置 |
+| `edgion_mirror_requests_total{status}` | Counter | Request mirror 插件每次 mirror 的结果，`status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`（**mirror latency 不再有 histogram，查 mirror_log 的 `et` 字段**） |
 | `edgion_rr_selector_truncated_total` | Counter | RoundRobin 后端数 > `u16::MAX` 的截断事件（极罕见配置异常告警用，无 label） |
 | `edgion_link_sys_es_send_total{result}` | Counter | Elasticsearch DataSender 每次 send 的结果，`result` ∈ `ok` / `failed_fallback` / `failed_no_cache` |
+
+### `backend_requests` label 配置
+
+`edgion_backend_requests_total` 的 label 完全由 `[metrics.backend_requests.labels]` 控制，改变默认行为需要重启（OnceLock 不支持热更）。默认保守：
+
+```toml
+[metrics.backend_requests.labels]
+gateway  = true    # 开启 gateway_namespace + gateway_name 两条 label
+route    = false   # 开启 route_namespace + route_name
+backend  = false   # 开启 backend_namespace + backend_name
+protocol = true    # 有限枚举（http/grpc/websocket），cardinality 成本几乎为零
+status   = true    # 有限枚举（2xx/3xx/4xx/5xx/failed），同上
+```
+
+设计原则：
+
+- 每个 `gateway` / `route` / `backend` 开关控制一对 `*_namespace` + `*_name` label——K8s 资源身份天然成对，拆开配置没意义
+- 默认 15 条时序（1 gateway × 1 gateway × 3 protocol × 5 status）足够撑起 "错误率/流量比例" 类告警
+- 需要 "per-backend 错误率" / "per-route 流量" 时显式打开 `backend = true` / `route = true`，**明知 cardinality 代价**再开
+- per-request 细节回放查 access log，不要靠扩 Prometheus label 解决
+
+cardinality 放大系数参考（单 Gateway 部署）：
+
+| 默认状态 | 开 `backend` | 开 `backend` + `route` |
+|---------|------------|----------------------|
+| 15 时序 | 15 × N_backend | 15 × N_backend × N_route |
+
+N_backend / N_route 由集群规模决定；生产环境建议默认 + `backend = true` 起步，观察 Prometheus `{__name__="edgion_backend_requests_total"}` 时序数后再决定是否开 `route`。
 
 ### Federation Metrics（Center + Controller）
 

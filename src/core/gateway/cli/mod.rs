@@ -264,6 +264,7 @@ impl EdgionGatewayCli {
 
         // 5.2 Initialize metrics configuration (global OnceLock for hot-path access)
         config::init_request_duration_config(config.metrics.request_duration.clone());
+        config::init_backend_requests_config(config.metrics.backend_requests.clone());
 
         // 6. Start auxiliary services
         // Create shutdown channel for auxiliary services

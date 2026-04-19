@@ -88,9 +88,13 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 
 > 每个工单独立 PR，内部可并行。**#14 先完成再动这批**。
 
-- [ ] **#03** — Gateway HTTP proxy 回调 tracing（`pg_*.rs` 3 文件）— **S**
-- [ ] **#04** — TLS 握手 tracing（`tls/**` 4 文件）— **M**
+- [x] **#03** — Gateway HTTP proxy 回调 tracing（`pg_*.rs` 3 文件）— **S**
+- [x] **#04** — TLS 握手 tracing（`tls/**` 4 文件）— **M** — 按用户决定不加 `edgion_tls_mtls_verify_total` / `edgion_tls_backend_cert_parse_total` 两个新 metric，ssl.log 的 `err_log` 已覆盖失败路径；顺带把 `parse_timeout.rs` 登记为配置期豁免（见 `skills/03-coding/01-log-safety.md` 例外表）
+<<<<<<< Updated upstream
 - [ ] **#06** — backends/mod.rs tracing + SSRF（单文件 P0+P1 一次做）— **M**
+=======
+- [x] **#06** — backends/mod.rs tracing + SSRF（单文件 P0+P1 一次做）— **M** — 删 7 处 tracing（L302/322/376/386/771/975/980）+ L335 SAFETY 注释；SSRF 防御扩展：`classify_backend_addr` 覆盖 loopback + link-local（含 metadata `169.254.169.254` + IPv6 `fe80::/10`），明确不 block RFC1918；新增 `EdgionStatus::BackendAddrLinkLocalNotAllowed = 503_13` + 5 个新单测。按用户立场不加 `edgion_backend_port_resolve_total` / `edgion_backend_addr_rejected_total` / `edgion_backend_unsupported_kind_total` 三个 counter。遗留：`L573/L599` 的 `#[cfg(not(feature = "boringssl"))]` mTLS warn 未动（rustls 构建才触发，非默认，范围外）
+>>>>>>> Stashed changes
 - [ ] **#05** — 路由匹配 tracing + Controller validate 协同 — **M**
   - 注意：涉及 Controller validate 改动，可以和 Controller 侧 owner 协同
 - [ ] **#10** — OIDC 插件 tracing（33 处）— **M**
@@ -104,9 +108,14 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 
 ## Wave 5 — Metrics 整改
 
-- [ ] **#21** — BACKEND_REQUESTS_TOTAL label 爆炸 — **M**
-- [ ] **#22** — MIRROR_DURATION 单位不匹配 + buckets — **S**
-  - 同文件协同：#21/#22/#23 都在 `gateway/observe/metrics/registry.rs`，**建议一次性提交到同一分支**
+- [x] **#21** — BACKEND_REQUESTS_TOTAL label 可配置 + 默认极简 — **S**
+  - 决策：引入 `MetricsConfig::backend_requests.labels` 开关（`gateway` / `route` / `backend` / `protocol` / `status` 五档，`*_namespace` + `*_name` 一对共用一个开关），默认仅 `gateway + protocol + status`（≈15 时序），`route` / `backend` 默认关，运维显式开启 drill-down。test_key / test_data 保留条件 push（非空才 push），并把 `init_integration_testing_mode` 的 `info!` 升级为 `warn!` 带生产 cardinality 警告。不走原 ticket 的 Cargo feature gate（逆项目运行时 flag 架构）
+  - 变更：`gateway/cli/config.rs` 新增 `BackendRequestsConfig` + `BackendRequestsLabels` + `init_backend_requests_config` / `get_backend_requests_config`；`gateway/observe/metrics/registry.rs::record_backend_request` 改条件 push（签名加 `cfg: &BackendRequestsLabels`）；`routes/http/proxy_http/pg_logging.rs:153` 调用点同步；`gateway/cli/mod.rs:266` 启动初始化；`common/config/mod.rs::init_integration_testing_mode` 改 warn!
+  - 文档：`skills/02-features/04-observability/01-metrics.md` 新增 "backend_requests label 配置" 小节 + cardinality 放大系数参考；`skills/03-coding/observability/01-metrics.md` 新增"带多维资源 label 的 counter：用配置项 + 条件 push"通用规则
+- [x] **#22** — MIRROR_DURATION histogram 删除（以删代修）— **XS**
+  - 决策：原 ticket 三个子问题（单位 ms vs 秒 bucket / enabled 复用 / 缺 set_buckets）都只影响 `MIRROR_DURATION_MS` 这一条 histogram，而该 histogram 自仓库诞生起单位就错、样本永远落 `+Inf`，生产上从未提供有效数据。mirror 是 fire-and-forget，tail latency 不影响用户流量；失败信号由 `MIRROR_REQUESTS_TOTAL{status="channel_full"|"timeout"}` counter 已经覆盖，per-request 时延 mirror access log 的 `et` 字段也有。直接删除比修复更正确
+  - 变更：`registry.rs` 删 `MIRROR_DURATION_MS` const + `record_mirror_metric` 去掉 `duration_ms` 参数 + 删 histogram! 行；`plugins/http/request_mirror/plugin.rs:294` 调用点同步；`skills/03-coding/observability/01-metrics.md` 明文化"无 Histogram"规则的唯一例外（`edgion_gateway_request_duration_ms`）+ 补"细粒度观测走 access log 聚合"原则；`skills/02-features/04-observability/01-metrics.md` 指标表加 mirror counter 条目 + 观测分工速查表
+  - 同文件协同：#21 仍在 `gateway/observe/metrics/registry.rs` 未做
 
 ---
 
@@ -119,7 +128,7 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 | `gateway/plugins/runtime/plugin_runtime.rs` | #13 + #14 | **#14 必须先** |
 | `center/fed_sync/server/mod.rs` | #18 + #19 + #20 | 顺序 #18 → #19 → #20 |
 | `center/fed_sync/registry/mod.rs` | #19 + #20 | 顺序 #19 → #20 |
-| `gateway/observe/metrics/registry.rs` | #21 + #22 + ~~#23~~ | #23 已完成（新增 `RR_SELECTOR_TRUNCATED_TOTAL` const + `record_rr_selector_truncated()`）；#21/#22 可合并 |
+| `gateway/observe/metrics/registry.rs` | ~~#21~~ + ~~#22~~ + ~~#23~~ | 全部完成（#21 改条件 push + 5 档 label 开关，#22 以删代修，#23 新增 truncated counter） |
 | `center/api/mod.rs` | #01 + #20 | 不同函数，并行安全 |
 
 ---
@@ -129,9 +138,15 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 - Wave 1：10 / 10 ✅
 - Wave 2：4 / 4 ✅（#24 拆为 #24a + #24b，两个子工单皆已落盘）
 - Wave 3：3 / 5
-- Wave 4：0 / 8
-- Wave 5：0 / 2
-- **总计：17 / 29**（#24 拆分后总数变 29）
+<<<<<<< Updated upstream
+- Wave 4：2 / 8
+- Wave 5：2 / 2 ✅（#21 改条件 push，#22 以删代修）
+- **总计：21 / 29**
+=======
+- Wave 4：3 / 8
+- Wave 5：2 / 2 ✅（#21 改条件 push，#22 以删代修）
+- **总计：22 / 29**
+>>>>>>> Stashed changes
 
 ---
 

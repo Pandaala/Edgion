@@ -425,7 +425,8 @@ Edgion 定义了 21 个 Prometheus 指标，覆盖 Google SRE 四大黄金信号
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
 | `edgion_gateway_request_duration_ms` | Histogram | 端到端请求延迟直方图，支持可配置 label（gateway/route/backend/protocol/status），可按需关闭特定维度以降低基数 |
-| `edgion_mirror_duration_ms` | Histogram | 镜像请求延迟直方图 |
+
+> 镜像请求只暴露 counter（`edgion_mirror_requests_total{status}`）；per-request 延迟记录在 mirror access log 的 `et` 字段而非 histogram——mirror 是 fire-and-forget，tail latency 不影响用户流量。
 
 `edgion_gateway_request_duration_ms` 的 label 由 `RequestDurationConfig.labels` 配置驱动，每个 label 维度可独立启用或禁用。未启用的 label 不会写入（而非写入空字符串），从根源上控制时间序列基数。直方图的 bucket 边界同样支持自定义配置，并通过 `idle_timeout` 自动清理冷时间序列。
 

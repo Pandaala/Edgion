@@ -422,7 +422,8 @@ Edgion defines 21 Prometheus metrics covering Google SRE's Four Golden Signals (
 | Metric Name | Type | Description |
 |-------------|------|-------------|
 | `edgion_gateway_request_duration_ms` | Histogram | End-to-end request latency histogram, supporting configurable labels (gateway/route/backend/protocol/status); specific dimensions can be disabled as needed to reduce cardinality |
-| `edgion_mirror_duration_ms` | Histogram | Mirror request latency histogram |
+
+> Mirror requests expose only a counter (`edgion_mirror_requests_total{status}`); per-request latency is recorded in the mirror access log (`et` field) rather than as a histogram — mirror is fire-and-forget and its tail latency does not affect user traffic.
 
 The labels for `edgion_gateway_request_duration_ms` are driven by the `RequestDurationConfig.labels` configuration; each label dimension can be independently enabled or disabled. Labels that are not enabled are not written (rather than written as empty strings), controlling time-series cardinality at the source. Histogram bucket boundaries also support custom configuration and cold time series are automatically cleaned up via `idle_timeout`.
 

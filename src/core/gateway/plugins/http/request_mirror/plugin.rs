@@ -291,7 +291,7 @@ impl RequestFilter for RequestMirrorPlugin {
                 emit_mirror_log(entry).await;
             }
 
-            record_mirror_metric(status, begin.elapsed().as_millis() as f64);
+            record_mirror_metric(status);
         });
 
         session.set_mirror_state(MirrorState::Streaming {

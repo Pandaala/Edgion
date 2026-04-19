@@ -251,6 +251,8 @@ pub struct MetricsConfig {
     pub listen: String,
     /// Request duration histogram configuration
     pub request_duration: RequestDurationConfig,
+    /// `edgion_backend_requests_total` per-label toggles
+    pub backend_requests: BackendRequestsConfig,
 }
 
 impl Default for MetricsConfig {
@@ -258,6 +260,7 @@ impl Default for MetricsConfig {
         Self {
             listen: "0.0.0.0:5901".to_string(),
             request_duration: RequestDurationConfig::default(),
+            backend_requests: BackendRequestsConfig::default(),
         }
     }
 }
@@ -338,6 +341,79 @@ pub fn get_request_duration_config() -> &'static RequestDurationConfig {
     REQUEST_DURATION_CONFIG
         .get()
         .expect("RequestDurationConfig not initialized")
+}
+
+// ============================================
+// Backend Requests Counter Configuration
+// ============================================
+
+/// `edgion_backend_requests_total` configuration (`[metrics.backend_requests]` in TOML).
+///
+/// The counter itself is always on; this struct controls **which labels** get
+/// emitted, so operators can trade observability depth for Prometheus
+/// cardinality. Splitting each resource into `_namespace` + `_name` would be
+/// redundant — you almost always want both or neither — so the toggles group
+/// them by Kubernetes identity (gateway / route / backend).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackendRequestsConfig {
+    /// Per-label toggles.
+    pub labels: BackendRequestsLabels,
+}
+
+/// Per-label toggles for `edgion_backend_requests_total`.
+///
+/// Each `gateway` / `route` / `backend` toggle controls **both** the
+/// `*_namespace` and `*_name` labels for that resource. Default picks the
+/// minimal set that still supports basic SLI / alerting: `gateway` identity
+/// (so multi-gateway deployments can be told apart) + `protocol` + `status`
+/// (bounded enums, effectively free). For per-route or per-backend drill-down
+/// (typical dashboard layer), prefer access log aggregation — see
+/// `skills/02-features/04-observability/01-metrics.md` for the metric-vs-log
+/// division of responsibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackendRequestsLabels {
+    /// Emit `gateway_namespace` and `gateway_name`.
+    pub gateway: bool,
+    /// Emit `route_namespace` and `route_name`.
+    pub route: bool,
+    /// Emit `backend_namespace` and `backend_name`.
+    pub backend: bool,
+    /// Emit `protocol` (bounded enum: http / grpc / websocket).
+    pub protocol: bool,
+    /// Emit `status` (bounded enum: 2xx / 3xx / 4xx / 5xx / failed).
+    pub status: bool,
+}
+
+impl Default for BackendRequestsLabels {
+    fn default() -> Self {
+        Self {
+            gateway: true,
+            route: false,
+            backend: false,
+            protocol: true,
+            status: true,
+        }
+    }
+}
+
+/// Global backend-requests config, initialized once at startup.
+static BACKEND_REQUESTS_CONFIG: OnceLock<BackendRequestsConfig> = OnceLock::new();
+
+/// Initialize the global backend-requests config (call once at startup).
+pub fn init_backend_requests_config(config: BackendRequestsConfig) {
+    let _ = BACKEND_REQUESTS_CONFIG.set(config);
+}
+
+/// Get the global backend-requests config (zero-cost after init).
+///
+/// Returns the default config if `init_backend_requests_config` was not
+/// called (e.g., in unit tests that don't boot the full Gateway). Production
+/// paths always initialize before first request.
+#[inline]
+pub fn get_backend_requests_config() -> &'static BackendRequestsConfig {
+    BACKEND_REQUESTS_CONFIG.get_or_init(BackendRequestsConfig::default)
 }
 
 // ============================================

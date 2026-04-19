@@ -29,9 +29,10 @@ pub mod names {
     // Gateway traffic byte counters
     pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
     pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
-    // Request mirror metrics
+    // Request mirror metrics (counter only — per-request latency is captured
+    // in the mirror access log `et` field; mirror is fire-and-forget and its
+    // tail latency does not affect user traffic, so no histogram is carried).
     pub const MIRROR_REQUESTS_TOTAL: &str = "edgion_mirror_requests_total";
-    pub const MIRROR_DURATION_MS: &str = "edgion_mirror_duration_ms";
     // End-to-end request duration histogram
     pub const GATEWAY_REQUEST_DURATION_MS: &str = "edgion_gateway_request_duration_ms";
     // Controller: number of gateway instances connected via gRPC long-poll
@@ -238,25 +239,27 @@ impl GatewayMetrics {
     }
 }
 
-/// Record a backend request metric
+/// Record a backend request metric.
 ///
-/// This function records detailed metrics for each backend request,
-/// useful for monitoring request distribution and verifying LB behavior.
+/// Labels are pushed conditionally based on `BackendRequestsLabels`, so
+/// `/metrics` only carries the dimensions operators explicitly asked for.
+/// `test_key` / `test_data` are also conditional on non-empty: they are
+/// populated only when `integration-testing-mode` is on AND a Gateway
+/// annotation opts in (see `pg_logging::record_request_metrics`), so in
+/// production neither label appears in any time series.
 ///
 /// # Arguments
-/// * `gateway_ns` - Gateway namespace
-/// * `gateway_name` - Gateway name
-/// * `route_ns` - Matched route namespace
-/// * `route_name` - Matched route name
-/// * `backend_ns` - Backend service namespace
-/// * `backend_name` - Backend service name
-/// * `protocol` - Protocol (http/grpc/websocket, from discover_protocol)
-/// * `status` - Status group (2xx/3xx/4xx/5xx/failed)
-/// * `test_key` - Test identifier (from Gateway annotation, empty in production)
-/// * `test_data` - JSON test data (from TestData::to_json(), empty in production)
+/// * `cfg` - Per-label toggles from `MetricsConfig::backend_requests.labels`
+/// * `gateway_ns` / `gateway_name` - Emitted when `cfg.gateway = true`
+/// * `route_ns` / `route_name` - Emitted when `cfg.route = true`
+/// * `backend_ns` / `backend_name` - Emitted when `cfg.backend = true`
+/// * `protocol` - Protocol (http/grpc/websocket), emitted when `cfg.protocol = true`
+/// * `status` - Status group (2xx/3xx/4xx/5xx/failed), emitted when `cfg.status = true`
+/// * `test_key` / `test_data` - Emitted only when non-empty
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn record_backend_request(
+    cfg: &crate::core::gateway::cli::config::BackendRequestsLabels,
     gateway_ns: &str,
     gateway_name: &str,
     route_ns: &str,
@@ -268,20 +271,33 @@ pub fn record_backend_request(
     test_key: &str,
     test_data: &str,
 ) {
-    counter!(
-        names::BACKEND_REQUESTS_TOTAL,
-        "gateway_namespace" => gateway_ns.to_string(),
-        "gateway_name" => gateway_name.to_string(),
-        "route_namespace" => route_ns.to_string(),
-        "route_name" => route_name.to_string(),
-        "backend_namespace" => backend_ns.to_string(),
-        "backend_name" => backend_name.to_string(),
-        "protocol" => protocol.to_string(),
-        "status" => status.to_string(),
-        "test_key" => test_key.to_string(),
-        "test_data" => test_data.to_string(),
-    )
-    .increment(1);
+    // Pre-size: up to 6 resource labels + protocol + status + 2 test labels.
+    let mut labels: Vec<(&'static str, String)> = Vec::with_capacity(10);
+    if cfg.gateway {
+        labels.push(("gateway_namespace", gateway_ns.to_string()));
+        labels.push(("gateway_name", gateway_name.to_string()));
+    }
+    if cfg.route {
+        labels.push(("route_namespace", route_ns.to_string()));
+        labels.push(("route_name", route_name.to_string()));
+    }
+    if cfg.backend {
+        labels.push(("backend_namespace", backend_ns.to_string()));
+        labels.push(("backend_name", backend_name.to_string()));
+    }
+    if cfg.protocol {
+        labels.push(("protocol", protocol.to_string()));
+    }
+    if cfg.status {
+        labels.push(("status", status.to_string()));
+    }
+    if !test_key.is_empty() {
+        labels.push(("test_key", test_key.to_string()));
+    }
+    if !test_data.is_empty() {
+        labels.push(("test_data", test_data.to_string()));
+    }
+    counter!(names::BACKEND_REQUESTS_TOTAL, &labels[..]).increment(1);
 }
 
 /// Convert HTTP status code to status group
@@ -298,17 +314,25 @@ pub fn status_group(status: Option<u16>) -> &'static str {
     }
 }
 
-/// Record mirror request counters and duration histogram.
+/// Record a mirror request outcome.
+///
+/// Per-request latency used to be captured here as a `MIRROR_DURATION_MS`
+/// histogram, but the histogram was broken since the initial commit
+/// (record path recorded milliseconds into Prometheus's default
+/// second-range buckets → every sample landed in `+Inf`). It has been
+/// removed on the grounds that (a) mirror is fire-and-forget and its
+/// tail latency does not affect user traffic; (b) the `channel_full`
+/// and `timeout` statuses on this counter are a sharper "mirror
+/// falling behind" signal than a latency percentile; (c) per-request
+/// latency is still recorded in the mirror access log (`et` field) when
+/// `mirror_log` is enabled, for any finer-grained investigation.
 #[inline]
-pub fn record_mirror_metric(status: &'static str, duration_ms: f64) {
+pub fn record_mirror_metric(status: &'static str) {
     counter!(
         names::MIRROR_REQUESTS_TOTAL,
         "status" => status.to_string(),
     )
     .increment(1);
-    if crate::core::gateway::cli::config::get_request_duration_config().enabled {
-        histogram!(names::MIRROR_DURATION_MS).record(duration_ms);
-    }
 }
 
 /// Record end-to-end request duration histogram.

@@ -43,9 +43,12 @@ pub fn is_test_mode() -> bool {
 pub fn init_integration_testing_mode(enabled: bool) {
     GLOBAL_INTEGRATION_TESTING_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
     if enabled {
-        tracing::info!(
+        tracing::warn!(
             component = "integration_testing",
-            "Integration testing mode enabled: Access Log Store + Metrics Test Data active"
+            "Integration testing mode enabled: Access Log Store + Metrics Test Data active. \
+             DO NOT enable in production — `edgion_backend_requests_total` will carry \
+             per-request `test_data` labels (e.g., backend IP, latency_ms) when Gateway \
+             annotations opt in, causing Prometheus cardinality to scale with request count."
         );
     }
 }
