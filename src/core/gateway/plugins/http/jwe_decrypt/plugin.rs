@@ -341,8 +341,7 @@ impl RequestFilter for JweDecrypt {
 
         let key = match self.load_key() {
             Ok(key) => key,
-            Err(err) => {
-                tracing::debug!("JweDecrypt: failed to load key: {}", err);
+            Err(_) => {
                 return self.reject(session, plugin_log, JweFailure::NoKey).await;
             }
         };

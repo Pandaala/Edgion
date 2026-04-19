@@ -26,6 +26,9 @@ impl LogBuffer {
         }
     }
 
+    /// Push a plain log entry. For error entries, use [`LogBuffer::push_err`] —
+    /// it enforces a `&'static str` argument and unified `"err: "` prefix to
+    /// block accidental token/claim leakage via `format!` or error `Display`.
     #[inline]
     pub fn push(&mut self, log: &str) -> bool {
         if self.positions.len() >= MAX_LOG_ENTRIES {
@@ -36,6 +39,27 @@ impl LogBuffer {
         }
 
         self.buffer.extend_from_slice(log.as_bytes());
+        self.positions.push(self.buffer.len());
+        true
+    }
+
+    /// Push an error entry with unified `"err: "` prefix and `"; "` suffix.
+    /// `kind` is `&'static str` — enforces compile-time literal, blocks accidental
+    /// token / claim / user-input leakage via `format!` or error `Display`.
+    #[inline]
+    pub fn push_err(&mut self, kind: &'static str) -> bool {
+        const PREFIX: &[u8] = b"err: ";
+        const SUFFIX: &[u8] = b"; ";
+        if self.positions.len() >= MAX_LOG_ENTRIES {
+            return false;
+        }
+        let total = PREFIX.len() + kind.len() + SUFFIX.len();
+        if self.buffer.len() + total > BUFFER_CAPACITY {
+            return false;
+        }
+        self.buffer.extend_from_slice(PREFIX);
+        self.buffer.extend_from_slice(kind.as_bytes());
+        self.buffer.extend_from_slice(SUFFIX);
         self.positions.push(self.buffer.len());
         true
     }
@@ -88,12 +112,31 @@ impl ULogBuffer {
         }
     }
 
+    /// Push a plain log entry. For error entries, use [`ULogBuffer::push_err`];
+    /// see [`LogBuffer::push_err`] for rationale.
     #[inline]
     pub fn push(&mut self, log: &str) -> bool {
         if self.buffer.len() + log.len() > ULOG_MAX_BUFFER {
             return false;
         }
         self.buffer.push_str(log);
+        self.positions.push(self.buffer.len());
+        true
+    }
+
+    /// Push an error entry with unified `"err: "` prefix and `"; "` suffix.
+    /// See [`LogBuffer::push_err`] for rationale.
+    #[inline]
+    pub fn push_err(&mut self, kind: &'static str) -> bool {
+        const PREFIX: &str = "err: ";
+        const SUFFIX: &str = "; ";
+        let total = PREFIX.len() + kind.len() + SUFFIX.len();
+        if self.buffer.len() + total > ULOG_MAX_BUFFER {
+            return false;
+        }
+        self.buffer.push_str(PREFIX);
+        self.buffer.push_str(kind);
+        self.buffer.push_str(SUFFIX);
         self.positions.push(self.buffer.len());
         true
     }

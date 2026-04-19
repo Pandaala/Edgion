@@ -56,7 +56,11 @@ impl PluginLog {
         }
     }
 
-    /// Push to fixed buffer (recommended for most plugins)
+    /// Push to fixed buffer (recommended for non-error paths).
+    ///
+    /// For error entries, use [`PluginLog::push_err`] — it enforces a
+    /// `&'static str` argument and unified `"err: "` prefix, blocking
+    /// accidental token/claim leakage via `format!` or error `Display`.
     #[inline]
     pub fn push(&mut self, log: &str) -> bool {
         let result = self.log.get_or_insert_with(LogBuffer::new).push(log);
@@ -67,10 +71,41 @@ impl PluginLog {
         result
     }
 
+    /// Push an error entry with unified `"err: "` prefix.
+    ///
+    /// `kind` is `&'static str` so the compiler rejects `format!` / `err.to_string()`
+    /// at the call site — the only way to include dynamic detail is via `ctx.err_log`
+    /// (access log) after explicit redaction. This is the required API for all new
+    /// plugin error logging; `push(&format!("...: {}", err))` is forbidden for error
+    /// paths because error `Display` may carry tokens, claims, or raw user input.
+    ///
+    /// Serialized entry: `"err: <kind>; "`. Plugin identity comes from
+    /// [`PluginLog::name`], so `kind` should be the event only (e.g.
+    /// `"token refresh fail"`), not `"<plugin>:<event>"`.
+    ///
+    /// Format spec + examples: `skills/03-coding/observability/00-access-log.md`
+    /// (section "错误条目 API 约束"). Safety rationale: `skills/03-coding/01-log-safety.md`.
+    #[inline]
+    pub fn push_err(&mut self, kind: &'static str) -> bool {
+        let result = self.log.get_or_insert_with(LogBuffer::new).push_err(kind);
+        if !result {
+            self.log_full = Some(true);
+        }
+        result
+    }
+
     /// Push to unbounded buffer (for debug/trace plugins). Returns false if buffer limit reached.
+    ///
+    /// For error entries, use [`PluginLog::u_push_err`] — see [`PluginLog::push_err`] for rationale.
     #[inline]
     pub fn u_push(&mut self, log: &str) -> bool {
         self.ulog.get_or_insert_with(ULogBuffer::new).push(log)
+    }
+
+    /// Unbounded-buffer counterpart of [`PluginLog::push_err`].
+    #[inline]
+    pub fn u_push_err(&mut self, kind: &'static str) -> bool {
+        self.ulog.get_or_insert_with(ULogBuffer::new).push_err(kind)
     }
 
     /// Helper method for tests: checks if log buffer contains a substring
@@ -191,6 +226,79 @@ mod tests {
         assert_eq!(parsed["log"][1], "bbb; ");
         assert!(parsed.get("ulog").is_none());
         assert!(parsed.get("log_full").is_none()); // false doesn't serialize
+    }
+
+    #[test]
+    fn test_push_err_prefix_and_suffix() {
+        let mut log = PluginLog::new("openid_connect");
+        assert!(log.push_err("token refresh fail"));
+        assert!(log.push_err("jwt expired"));
+
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["name"], "openid_connect");
+        let entries = parsed["log"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], "err: token refresh fail; ");
+        assert_eq!(entries[1], "err: jwt expired; ");
+    }
+
+    #[test]
+    fn test_push_err_capacity_limit_marks_truncated() {
+        let mut log = PluginLog::new("t");
+        // 100B buffer; each "err: xx; " = ~10B. Push until rejection.
+        let mut ok_count = 0;
+        for _ in 0..30 {
+            if log.push_err("xx") {
+                ok_count += 1;
+            }
+        }
+        assert!(ok_count < 30);
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["log_full"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_u_push_err_format() {
+        let mut log = PluginLog::new("dbg");
+        assert!(log.u_push_err("discovery fail"));
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["ulog"][0], "err: discovery fail; ");
+    }
+
+    #[test]
+    fn test_mixed_push_and_push_err_order_preserved() {
+        let mut log = PluginLog::new("mixed");
+        assert!(log.push("OK u=alice; "));
+        assert!(log.push_err("token refresh fail"));
+        assert!(log.push("retry scheduled; "));
+
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let entries = parsed["log"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0], "OK u=alice; ");
+        assert_eq!(entries[1], "err: token refresh fail; ");
+        assert_eq!(entries[2], "retry scheduled; ");
+    }
+
+    #[test]
+    fn test_push_err_exact_byte_cap_boundary() {
+        // 100B buffer, "err: xx; " = 9B each. 11 entries = 99B fits,
+        // 12th (+9B => 108B) must fail and mark log_full.
+        let mut log = PluginLog::new("b");
+        for i in 0..11 {
+            assert!(log.push_err("xx"), "entry {} should fit", i);
+        }
+        assert!(!log.push_err("xx"));
+        assert_eq!(log.log_full, Some(true));
+        // Further pushes (err or plain) also rejected.
+        assert!(!log.push_err("x"));
+        assert!(!log.push("y; "));
     }
 
     #[test]

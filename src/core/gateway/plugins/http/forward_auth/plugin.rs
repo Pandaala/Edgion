@@ -281,22 +281,17 @@ impl RequestFilter for ForwardAuth {
             .await
         {
             Ok(resp) => resp,
-            Err(e) => {
-                // Auth service unreachable or timeout
-                tracing::warn!(
-                    plugin = "ForwardAuth",
-                    uri = %self.config.uri,
-                    error = %e,
-                    "Auth service request failed"
-                );
-
+            Err(_) => {
+                // Auth service unreachable (connection refused / DNS fail / timeout).
+                // Surface in access log `errors` for gateway-level visibility; PluginLog
+                // short tag captures the per-request plugin-side detail.
+                session.add_error(crate::types::EdgionStatus::ForwardAuthServiceUnreachable);
                 if self.config.allow_degradation {
-                    // Degraded mode: skip authentication and forward to upstream
-                    plugin_log.push("Auth service unavailable, degraded mode: skipping auth; ");
+                    plugin_log.push("fa:unreachable-degraded; ");
                     return PluginRunningResult::GoodNext;
                 }
 
-                plugin_log.push("Auth service unavailable; ");
+                plugin_log.push("fa:unreachable; ");
                 return self
                     .send_error_response(
                         session,
@@ -578,5 +573,64 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("Config error"));
+    }
+
+    // ========== Fix #11: fa:* tags on auth service unreachable ==========
+
+    fn setup_mock_for_build_auth_headers(mock: &mut MockPluginSession) {
+        mock.expect_request_headers().returning(Vec::new);
+        mock.expect_header_value().returning(|_| None);
+        mock.expect_get_path().return_const("/x".to_string());
+        mock.expect_get_method().return_const("GET".to_string());
+        mock.expect_get_query().return_const(None);
+        mock.expect_add_error()
+            .with(mockall::predicate::eq(
+                crate::types::EdgionStatus::ForwardAuthServiceUnreachable,
+            ))
+            .times(1)
+            .returning(|_| {});
+    }
+
+    #[tokio::test]
+    async fn test_fa_unreachable_tag_non_degraded() {
+        // Connect to a refused port so reqwest returns an error quickly.
+        let config = ForwardAuthConfig {
+            uri: "http://127.0.0.1:1/verify".to_string(),
+            timeout_ms: 500,
+            status_on_error: 502,
+            ..Default::default()
+        };
+        let plugin = ForwardAuth::new(&config);
+
+        let mut mock = MockPluginSession::new();
+        setup_mock_for_build_auth_headers(&mut mock);
+        mock.expect_write_response_header().returning(|_, _| Ok(()));
+        mock.expect_write_response_body().returning(|_, _| Ok(()));
+        mock.expect_shutdown().returning(|| {});
+
+        let mut log = PluginLog::new("ForwardAuth");
+        let r = plugin.run_request(&mut mock, &mut log).await;
+        assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("fa:unreachable"));
+        assert!(!log.contains("fa:unreachable-degraded"));
+    }
+
+    #[tokio::test]
+    async fn test_fa_unreachable_tag_degraded() {
+        let config = ForwardAuthConfig {
+            uri: "http://127.0.0.1:1/verify".to_string(),
+            timeout_ms: 500,
+            allow_degradation: true,
+            ..Default::default()
+        };
+        let plugin = ForwardAuth::new(&config);
+
+        let mut mock = MockPluginSession::new();
+        setup_mock_for_build_auth_headers(&mut mock);
+
+        let mut log = PluginLog::new("ForwardAuth");
+        let r = plugin.run_request(&mut mock, &mut log).await;
+        assert_eq!(r, PluginRunningResult::GoodNext);
+        assert!(log.contains("fa:unreachable-degraded"));
     }
 }

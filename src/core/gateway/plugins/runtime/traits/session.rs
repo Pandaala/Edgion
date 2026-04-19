@@ -3,6 +3,7 @@
 use crate::core::gateway::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::ctx::ClientCertInfo;
+use crate::types::EdgionStatus;
 use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -161,6 +162,11 @@ pub trait PluginSession: Send + Sync {
 
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
+
+    /// Append an EdgionStatus error to the gateway context so it surfaces in the
+    /// access log `errors` array. Narrow interface — plugins cannot mutate other
+    /// ctx fields; only the error list.
+    fn add_error(&mut self, status: EdgionStatus);
 
     /// Track nested plugin references to prevent cycles
     fn push_plugin_ref(&mut self, key: String);

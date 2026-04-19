@@ -107,4 +107,9 @@ pub enum EdgionStatus {
 
     /// Backend TLS certificate SAN validation failed
     BackendTlsSanValidationFailed = 502_01,
+
+    /// ForwardAuth plugin could not reach the configured auth service
+    /// (connection refused, DNS failure, or timeout). Emitted both when the
+    /// plugin rejects the request and when `allow_degradation` lets it pass.
+    ForwardAuthServiceUnreachable = 503_14,
 }

@@ -76,16 +76,66 @@
 - 以 `; ` 结尾（方便 grep / 拼接）
 - **结果前缀统一约定**：
 
-| 前缀 | 含义 | 示例 |
-|------|------|------|
-| `OK` | 正常放行 | `OK u=jack; ` |
-| `Deny` | 业务级拒绝（认证失败、限流等） | `Deny no-key; ` |
-| `Skip` | 条件不满足，跳过执行 | `Skip; ` |
-| `Rate` | 限流触发 | `Rate 429; ` |
-| `err:` | **配置类错误**，插件继续工作但该规则降级 | `err:failoverTo invalid; ` |
+| 前缀 | 含义 | 写入 API | 示例 |
+|------|------|---------|------|
+| `OK` | 正常放行 | `plugin_log.push("OK ...; ")` | `OK u=jack; ` |
+| `Deny` | 业务级拒绝（认证失败、限流等） | `plugin_log.push("Deny ...; ")` | `Deny no-key; ` |
+| `Skip` | 条件不满足，跳过执行 | `plugin_log.push("Skip; ")` 或 `set_cond_skip` | `Skip; ` |
+| `Rate` | 限流触发 | `plugin_log.push("Rate ...; ")` | `Rate 429; ` |
+| **`err: `** | **异常 / 配置降级** —— 替代数据面 `tracing::warn!`；带空格冒号分隔 | **`plugin_log.push_err("...")`**（见下） | `err: token refresh fail; ` |
 
 - 关键参数用 `k=v` 格式，多个参数空格分隔
-- `err:` 前缀专用于**配置异常但不阻断插件**的场景：插件对该条规则做降级处理（如 skip redirect），同时通过 pluginLog 记录异常，便于 grep 排查
+- 存量代码里存在无空格旧写法 `"err:failoverTo invalid; "` / `"rl:err:cfg; "`（region_route + rate_limit 共 6 处），**属于 legacy**，由对应 wave 工单逐步迁移到 `push_err`，新代码一律走 `push_err`
+
+### 错误条目 API 约束：必须用 `push_err`
+
+> **权威来源**：本节同时是 `skills/03-coding/01-log-safety.md` 铁律 1 的一部分；此处讲"在 access log 里长什么样"，log-safety.md 讲"为什么这么约束 + 安全规则"。
+
+**API**：
+
+```rust
+// 定义：src/core/gateway/plugins/runtime/log.rs
+impl PluginLog {
+    pub fn push_err(&mut self, kind: &'static str) -> bool;   // 固定 buffer
+    pub fn u_push_err(&mut self, kind: &'static str) -> bool; // 调试 buffer
+}
+```
+
+**调用样子**：
+
+```rust
+// ✅ 正确 —— kind 是字面量，不带 plugin 前缀（plugin 身份由 PluginLog.name 承担）
+plugin_log.push_err("token refresh fail");    // → "err: token refresh fail; "
+plugin_log.push_err("jwks fetch timeout");    // → "err: jwks fetch timeout; "
+plugin_log.push_err("cfg invalid");           // → "err: cfg invalid; "
+
+// ✅ bounded enum 错误 —— 手动映射成静态标签
+match jwt_err.kind() {
+    ErrorKind::InvalidSignature => plugin_log.push_err("jwt sig invalid"),
+    ErrorKind::ExpiredSignature => plugin_log.push_err("jwt expired"),
+    _                           => plugin_log.push_err("jwt other"),
+};
+
+// ❌ 编译不过 —— &'static str 签名拦住所有动态字符串
+plugin_log.push_err(&format!("oidc: {}", e));
+plugin_log.push_err(&err.to_string());
+plugin_log.push_err(dynamic_kind.as_str());
+
+// ❌ 即使能编译，也禁止走 push 绕过 push_err 写错误（泄漏风险）
+plugin_log.push(&format!("Config error: {}; ", err));       // Display 可能含 token / claim
+plugin_log.push(&format!("Auth failed for user {}", name)); // PII 入 PluginLog
+```
+
+**`kind` 字面量约定**：
+
+- 小写单词 + **空格**分隔（不用下划线），≤ 20 字节
+- 只写"发生了什么"（事件名），**不带 plugin 前缀**（`PluginLog.name` 已经承担）
+- 不含动态值（token / claim / URL / header / 错误 Display）
+- 不含冒号（避免和 `err: ` 前缀的冒号混淆）
+
+**何时用 `push_err` vs 继续写到 `ctx.err_log`**：`push_err` 做**分类**；`ctx.err_log` 留给**该错误必须保留的脱敏详情**（如后端地址）。同一错误只选一处记录，不要双写。
+
+**安全背景**：完整的 `&'static str` 约束理由、`Box::leak` 逃逸注意点、安全清单 → `skills/03-coding/01-log-safety.md` 的「PluginLog 错误条目：必须用 `push_err`」小节。
 
 ### 好的 PluginLog 示例
 
@@ -111,8 +161,14 @@ log.push(&format!("-> {} {}; ", code, location));
 // DirectEndpoint — 强制指定了 endpoint
 log.push(&format!("Direct {}:{}; ", ip, port));
 
-// RegionRoute — failoverTo 配置了无效目标（插件正常工作，该 region 跳过 redirect）
-log.push("err:failoverTo invalid; ");
+// OIDC — token refresh 失败（错误分类，替代 tracing::warn!）
+log.push_err("token refresh fail");
+
+// RegionRoute — failoverTo 配置无效（插件降级，该 region 跳过 redirect）
+//   新代码：
+log.push_err("failover to invalid");
+//   旧代码 legacy 写法（`region_route/plugin.rs` 尚未迁移）：
+//   log.push("err:failoverTo invalid; ");
 ```
 
 ### 不好的 PluginLog 示例
@@ -128,6 +184,10 @@ log.push("Window size = 60s");
 
 // ❌ 应该用 tracing::debug! 的内容
 log.push(&format!("token_claims = {:?}", claims));
+
+// ❌ 错误路径走 push + format! —— 泄漏风险 + 绕过 push_err 约束
+log.push(&format!("OIDC token refresh failed: {}", jwt_err));
+log.push(&format!("Auth failed for user {}", username));
 ```
 
 ### Buffer 限制

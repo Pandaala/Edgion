@@ -37,6 +37,24 @@ tracing::info!(token = %full_token, "ACME challenge token");
 log.push(&format!("OK token={}; ", full_jwt_token));
 ```
 
+### PluginLog 错误条目：必须用 `push_err`
+
+> **API 规范 + 示例**在 [`observability/00-access-log.md`](observability/00-access-log.md) 的「错误条目 API 约束」小节（权威来源）。本节只讲**为什么这么约束**。
+
+**强制规则**：插件错误路径一律走 `plugin_log.push_err(kind: &'static str)` 或 `u_push_err`，**禁止** `plugin_log.push(&format!("...", err))` / `push(&err.to_string())` / `push(any_dynamic_string)`。
+
+**为什么 `&'static str` 签名**：
+
+1. **编译期拦截 `format!` / `to_string()` / 局部 `&str`** —— 绝大多数泄漏路径（`jsonwebtoken::Error` 的 Display 可能带 token 片段、`reqwest::Error` 可能带完整 URL、claim 值可能被 format 进字符串）在 call site 就过不了编译，不需要靠 review 肉眼抓。
+
+2. **只允许字面量和 `const`**（技术上 `Box::leak(format!(...).into_boxed_str())` 也通过，但这种写法在 review 时 grep 一眼能抓；不构成实际威胁）。
+
+3. **强迫开发者先 `match` 再写标签**：`jwt_err.kind()` → 一组固定的静态字符串。分类动作被前置到代码里，从源头保证 kind 是 bounded set，也方便后续 access log 聚合按 kind 聚类。
+
+4. **零堆分配**：LogBuffer 是 100B SmallVec，`push_err` 通过 3 段 `extend_from_slice(&'static [u8])` 写入，没有中间 String 分配 —— 数据面热路径可用。
+
+**禁止同时双写**：同一错误只在 `push_err`（分类）或 `ctx.err_log`（脱敏后的详情）二选一。两者都写等于复制敏感内容两份。
+
 ---
 
 ## 铁律 2：配置不泄漏到日志
@@ -176,6 +194,9 @@ HTTP→HTTPS redirect 服务（`routes/http/redirect_http.rs` 的 `ProxyHttp` im
 | `pg_logging.rs` 中 access log 发送失败 | `tracing::warn!` | log store 问题需要系统级可见性 |
 | `mtls_verify_callback.rs` 的 `catch_unwind` panic 捕获分支 | `tracing::error!` | C callback 内 Rust panic 会 UB，必须立即可见 |
 | `proxy_http/parse_timeout.rs`（`ParsedTimeouts::from_config`） | `tracing::warn!` | 仅在 listener 构建期解析 `EdgionGatewayConfig.httpTimeout` 字符串时调用，每次 reload 一次；文件虽在 `proxy_http/` 目录下，但不在请求路径 |
+| `plugins/http/basic_auth/plugin.rs`（`load_users` warn + 构造器 Loaded info） | `tracing::warn!` / `tracing::info!` | 仅 `BasicAuth::new` 调用的 htpasswd 解析 / 重复 username 去重 / Loaded 汇总，只在配置加载期触发 |
+| `plugins/http/basic_auth/plugin.rs`（bcrypt `spawn_blocking` panic 捕获分支） | `tracing::warn!` | tokio JoinError 极低频，类比 `mtls_verify_callback` 的 panic 捕获；不在每请求热路径 |
+| `plugins/http/header_cert_auth/plugin.rs`（`load_ca_certs` 的 drop expired / unparseable CA） | `tracing::warn!` | CA 信任池仅在插件构造期装配，drop 决策不参与每请求验证路径 |
 
 ### 代码示例
 

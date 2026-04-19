@@ -24,7 +24,7 @@ type BasicAuthResult<T> = Result<T, BasicAuthError>;
 #[derive(Debug)]
 enum AuthFailure {
     MissingHeader,
-    BadCredentials(Box<dyn std::error::Error + Send + Sync>),
+    BadCredentials,
 }
 
 /// Basic Authentication plugin
@@ -188,13 +188,13 @@ impl BasicAuth {
         // Decode credentials
         let (username, password) = self
             .extract_credentials(&auth_header_value)
-            .map_err(AuthFailure::BadCredentials)?;
+            .map_err(|_| AuthFailure::BadCredentials)?;
 
         // Look up stored hash
         let stored_hash = self
             .user_passwords
             .get(&username)
-            .ok_or_else(|| AuthFailure::BadCredentials("Invalid username or password".into()))?
+            .ok_or(AuthFailure::BadCredentials)?
             .clone();
 
         // Bcrypt hashes start with "$2" — only these are expensive enough to warrant singleflight
@@ -230,11 +230,11 @@ impl BasicAuth {
             let pw = password.clone();
             tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
                 .await
-                .map_err(|e| AuthFailure::BadCredentials(format!("Task failed: {}", e).into()))?
+                .map_err(|_| AuthFailure::BadCredentials)?
         };
 
         if !is_valid {
-            return Err(AuthFailure::BadCredentials("Invalid username or password".into()));
+            return Err(AuthFailure::BadCredentials);
         }
 
         // Cache success only — failures are never stored
@@ -330,9 +330,13 @@ impl RequestFilter for BasicAuth {
                 let _ = self.auth_failed_return(session).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
-            Err(AuthFailure::BadCredentials(e)) => {
-                tracing::debug!("BasicAuth credentials rejected: {}", e);
-                plugin_log.push("Auth failed; ");
+            Err(AuthFailure::BadCredentials) => {
+                // Unified PluginLog tag blocks log-grep-based enumeration (unknown user vs
+                // wrong password look identical in access log). Timing-side enumeration is
+                // a separate concern — bcrypt verify only runs when the user exists, so a
+                // sub-ms fast path still reveals user existence. Mitigate via
+                // `auth_failure_delay_ms` at the deployment layer.
+                plugin_log.push("basic:auth-fail; ");
                 // Credentials present but invalid — always reject, never anonymous
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session).await;
@@ -653,5 +657,55 @@ mod tests {
         let mut log = PluginLog::new("BasicAuth");
         let result = auth.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    // ========== Fix #11: Unified `basic:auth-fail;` tag to prevent user enumeration ==========
+
+    async fn run_auth_and_capture_log(auth: BasicAuth, auth_header: String) -> PluginLog {
+        let mut session = MockPluginSession::new();
+        session.expect_method().returning(|| "GET".to_string());
+        session
+            .expect_header_value()
+            .returning(move |_| Some(auth_header.clone()));
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+        let mut log = PluginLog::new("BasicAuth");
+        let r = auth.run_request(&mut session, &mut log).await;
+        assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
+        log
+    }
+
+    #[tokio::test]
+    async fn test_auth_fail_tag_unknown_user() {
+        let auth = create_basic_auth_with_users(); // users: { testuser: testpass }
+        let log = run_auth_and_capture_log(auth, encode_credentials("nobody", "whatever")).await;
+        assert!(log.contains("basic:auth-fail"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_fail_tag_wrong_password() {
+        let auth = create_basic_auth_with_users(); // users: { testuser: testpass }
+        let log = run_auth_and_capture_log(auth, encode_credentials("testuser", "wrongpass")).await;
+        assert!(log.contains("basic:auth-fail"));
+    }
+
+    /// Verifies the two BadCredentials paths emit identical tags so an attacker cannot
+    /// distinguish "unknown user" from "wrong password" via log-grep. Does NOT claim to
+    /// mitigate timing-side enumeration — see the comment at `run_request` for that.
+    #[tokio::test]
+    async fn test_auth_fail_tag_unified_in_log() {
+        let auth_unknown = create_basic_auth_with_users();
+        let log_unknown = run_auth_and_capture_log(auth_unknown, encode_credentials("ghost", "x")).await;
+        let auth_wrong = create_basic_auth_with_users();
+        let log_wrong = run_auth_and_capture_log(auth_wrong, encode_credentials("testuser", "bad")).await;
+
+        let unknown_json = serde_json::to_string(&log_unknown).unwrap();
+        let wrong_json = serde_json::to_string(&log_wrong).unwrap();
+        assert!(unknown_json.contains("basic:auth-fail"));
+        assert!(wrong_json.contains("basic:auth-fail"));
+        assert!(!unknown_json.contains("unknown"));
+        assert!(!unknown_json.contains("pw"));
+        assert!(!wrong_json.contains("pw"));
     }
 }

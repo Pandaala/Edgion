@@ -26,7 +26,6 @@ use crate::types::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, 
 pub struct HeaderCertAuth {
     name: String,
     config: HeaderCertAuthConfig,
-    plugin_namespace: String,
     ca_certs_der: Vec<Vec<u8>>,
 }
 
@@ -37,7 +36,6 @@ impl HeaderCertAuth {
         Self {
             name: "HeaderCertAuth".to_string(),
             config: config.clone(),
-            plugin_namespace,
             ca_certs_der,
         }
     }
@@ -329,13 +327,7 @@ impl HeaderCertAuth {
         plugin_log: &mut PluginLog,
         detail: &str,
     ) -> PluginRunningResult {
-        tracing::debug!(
-            detail = detail,
-            mode = ?self.config.mode,
-            namespace = %self.plugin_namespace,
-            "HeaderCertAuth authentication failed"
-        );
-        plugin_log.push("hca:fail");
+        plugin_log.push(&format!("hca:fail:{}", detail));
         self.apply_auth_failure_delay().await;
         let _ = send_auth_error_response(
             session,

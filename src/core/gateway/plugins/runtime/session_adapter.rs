@@ -500,6 +500,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
+    fn add_error(&mut self, status: crate::types::EdgionStatus) {
+        self.ctx.add_error(status);
+    }
+
     fn discover_protocol(&self) -> String {
         self.ctx.request_info.discover_protocol.clone().unwrap_or_else(|| {
             if self.ctx.request_info.is_grpc_request {
