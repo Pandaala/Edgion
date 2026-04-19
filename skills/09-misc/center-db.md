@@ -96,6 +96,14 @@ API Handler（直接读内存，无 SQLite）
 - Controller 永久下线 → `DELETE /admin/controllers/{id}` 清除其持久化记录
 - 查看当前实时 PM 数据 → `GET /cluster-region-routes` 或 `/service-region-routes`（内存数据，实时）
 
+**离线/上线标记（持久化，2026-04 #20 补齐）：**
+- Controller register → `controllers` 表 `upsert(online=true, last_seen_at=now, cluster/env/tag)`
+- Heartbeat 超时 / stream error / stream closed → `UPDATE online=0, last_seen_at=now`（narrow update，不碰 cluster/env/tag）
+- 写入异步（`tokio::spawn_blocking`），DB 失败只打 warn 日志，不阻塞联邦流
+- `GET /api/v1/resources` 聚合视图过滤 offline controller 的 keys（防陈旧数据误导）；`GET /admin/controllers` 列出所有历史（含 offline）
+- `DELETE /admin/controllers/{id}` **5 路级联**：`ControllerRegistry` + `ResourceAggregator` + `CenterWatchCacheRegistry` + `CenterMetaDataStore`（经 `controller_removed` handler 链间接清理）+ DB 行
+- Center 进程重启后 Admin API 能从 DB 恢复 controller 历史列表；内存结构靠 Controller 重连驱动重建
+
 ## Docker 构建注意事项
 
 `rusqlite bundled` 在 **编译期** 完成所有工作：
