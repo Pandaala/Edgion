@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::config::CenterSyncConfig;
+use crate::core::center::db::CenterDb;
 use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::proxy::PendingProxyMap;
 use crate::core::center::watch_cache::{CenterSyncClient, WatchEventSimple};
@@ -90,6 +91,9 @@ pub struct FederationGrpcServer {
     pub pending_proxies: PendingProxyMap,
     pub sync_config: CenterSyncConfig,
     pub sync_client: Arc<CenterSyncClient>,
+    /// Optional — Center only persists controller registration when
+    /// `database.enabled=true`. Absent DB means upsert/mark_offline are skipped.
+    pub db: Option<Arc<CenterDb>>,
 }
 
 impl FederationGrpcServer {
@@ -99,6 +103,7 @@ impl FederationGrpcServer {
         pending_proxies: PendingProxyMap,
         sync_config: CenterSyncConfig,
         sync_client: Arc<CenterSyncClient>,
+        db: Option<Arc<CenterDb>>,
     ) -> Self {
         Self {
             registry,
@@ -108,6 +113,7 @@ impl FederationGrpcServer {
             pending_proxies,
             sync_config,
             sync_client,
+            db,
         }
     }
 }
@@ -147,6 +153,27 @@ impl FederationSync for FederationGrpcServer {
         // 2. Register in registry + aggregator (aggregator drives online_controllers() in fan-out)
         self.aggregator
             .set_controller_info(&controller_id, register_req.clone());
+        // Persist registration to SQLite (best-effort, isolated from the hot path).
+        // Any failure here is logged and swallowed — we refuse to block fed-sync
+        // registration on DB availability, since the controller is already live
+        // in-memory and remains operational without persistence.
+        if let Some(db) = &self.db {
+            let db = db.clone();
+            let cid = controller_id.clone();
+            let cluster = register_req.cluster.clone();
+            let env = register_req.env.clone();
+            let tag = register_req.tag.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = db.upsert_controller(&cid, &cluster, &env, &tag, /*online=*/ true) {
+                    tracing::warn!(
+                        component = "fed_server",
+                        controller_id = %cid,
+                        error = %e,
+                        "Failed to upsert controller on register"
+                    );
+                }
+            });
+        }
         self.registry.register(
             controller_id.clone(),
             register_req,
@@ -192,6 +219,7 @@ impl FederationSync for FederationGrpcServer {
         let pending_commands = self.pending_commands.clone();
         let pending_proxies = self.pending_proxies.clone();
         let sync_client = self.sync_client.clone();
+        let db_for_offline = self.db.clone();
         let ping_interval = Duration::from_secs(self.sync_config.ping_interval_secs);
         let heartbeat_timeout = ping_interval * 3;
         let cid = controller_id.clone();
@@ -248,7 +276,31 @@ impl FederationSync for FederationGrpcServer {
             let self_pending_proxies = pending_proxies.clone();
             let pm_cache = pm_cache.clone();
             let inner_tx = inner_tx.clone();
+            let db_for_offline = db_for_offline.clone();
             async move {
+                // Centralize the three disconnect cleanups (timeout / stream error / stream closed).
+                // Each branch must propagate offline to all four state holders, which previously
+                // diverged easily when new state was added; this closure keeps them in lockstep.
+                let mark_offline_all = || {
+                    registry.mark_offline(&cid, &sid);
+                    aggregator_for_offline.mark_offline(&cid);
+                    sync_client.plugin_metadata.mark_offline(&cid);
+                    if let Some(db) = &db_for_offline {
+                        let db = db.clone();
+                        let cid_db = cid.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if let Err(e) = db.mark_offline(&cid_db) {
+                                tracing::warn!(
+                                    component = "fed_server",
+                                    controller_id = %cid_db,
+                                    error = %e,
+                                    "Failed to mark controller offline in DB"
+                                );
+                            }
+                        });
+                    }
+                };
+
                 // Watch state tracking (local to this session)
                 let mut pm_watch = FedWatchState::new(watch_request_id, {
                     let sid = pm_cache.get_server_id();
@@ -267,9 +319,7 @@ impl FederationSync for FederationGrpcServer {
                                 controller_id = %cid,
                                 "Heartbeat timeout, marking offline"
                             );
-                            registry.mark_offline(&cid, &sid);
-                            aggregator_for_offline.mark_offline(&cid);
-                            sync_client.plugin_metadata.mark_offline(&cid);
+                            mark_offline_all();
                             break;
                         }
                         Ok(Err(e)) => {
@@ -279,9 +329,7 @@ impl FederationSync for FederationGrpcServer {
                                 error = %e,
                                 "Stream error"
                             );
-                            registry.mark_offline(&cid, &sid);
-                            aggregator_for_offline.mark_offline(&cid);
-                            sync_client.plugin_metadata.mark_offline(&cid);
+                            mark_offline_all();
                             break;
                         }
                         Ok(Ok(None)) => {
@@ -290,9 +338,7 @@ impl FederationSync for FederationGrpcServer {
                                 controller_id = %cid,
                                 "Stream closed"
                             );
-                            registry.mark_offline(&cid, &sid);
-                            aggregator_for_offline.mark_offline(&cid);
-                            sync_client.plugin_metadata.mark_offline(&cid);
+                            mark_offline_all();
                             break;
                         }
                         Ok(Ok(Some(msg))) => {

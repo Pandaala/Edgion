@@ -44,6 +44,7 @@ mod region_route_handlers;
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::commander::Commander;
 use crate::core::center::db::CenterDb;
+use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::metadata_store::CenterMetaDataStore;
 use crate::core::center::proxy::ProxyForwarder;
 use crate::core::center::watch_cache::CenterSyncClient;
@@ -59,6 +60,10 @@ pub struct ApiState {
     pub db: Option<Arc<CenterDb>>,
     pub metadata_store: Arc<CenterMetaDataStore>,
     pub sync_client: Arc<CenterSyncClient>,
+    /// Needed by Admin DELETE to cascade eviction into the fed-sync registry.
+    /// MetaDataStore is cleaned via `sync_client.plugin_metadata.remove_controller`
+    /// (triggers `CenterConfHandler::controller_removed`), not directly.
+    pub registry: ControllerRegistry,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -210,9 +215,12 @@ impl From<crate::core::common::fed_sync::proto::ResourceKey> for ResourceKeyDto 
 }
 
 async fn list_resources(State(state): State<ApiState>, Query(params): Query<ResourceQuery>) -> impl IntoResponse {
+    // Default view excludes offline controllers: their snapshots are stale and
+    // would mislead consumers into thinking the resources are still live.
+    // Operators wanting the raw persisted record can hit `GET /api/v1/center/admin/controllers`.
     let keys = match &params.cluster {
-        Some(c) => state.aggregator.list_keys_by_cluster(c),
-        None => state.aggregator.list_all_keys(),
+        Some(c) => state.aggregator.list_online_keys_by_cluster(c),
+        None => state.aggregator.list_online_keys(),
     };
     let keys: Vec<ResourceKeyDto> = match &params.kind {
         Some(k) => keys
@@ -307,8 +315,27 @@ async fn delete_admin_controller(State(state): State<ApiState>, Path(id_raw): Pa
             .into_response();
     };
     let id = id_raw.replace('~', "/");
+
+    // Cascade in-memory eviction BEFORE the DB row is deleted. Memory first so
+    // a mid-operation crash doesn't leave the DB clean while in-memory state
+    // still holds stale entries. `sync_client.plugin_metadata.remove_controller`
+    // additionally invokes `CenterConfHandler::controller_removed` on the
+    // metadata store, clearing its cluster_routes / service_routes /
+    // global_ip_restrictions entries for this controller.
+    let removed_registry = state.registry.remove(&id);
+    let removed_aggregator = state.aggregator.remove(&id);
+    state.sync_client.plugin_metadata.remove_controller(&id);
+    tracing::info!(
+        component = "admin_api",
+        controller_id = %id,
+        registry_had_entry = removed_registry,
+        aggregator_had_entry = removed_aggregator,
+        "DELETE /admin/controllers: evicted in-memory state; proceeding to DB delete"
+    );
+
     let db2 = db.clone();
-    match tokio::task::spawn_blocking(move || db2.delete_controller(&id)).await {
+    let id_for_db = id.clone();
+    match tokio::task::spawn_blocking(move || db2.delete_controller(&id_for_db)).await {
         Ok(Ok(())) => Json(ApiResponse::success("ok".to_string())).into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,

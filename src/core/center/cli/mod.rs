@@ -69,12 +69,28 @@ impl EdgionCenterCli {
             plugin_metadata: CenterWatchCacheRegistry::new(metadata_store.clone()),
         });
 
+        let db: Option<Arc<crate::core::center::db::CenterDb>> = if config.database.enabled {
+            match crate::core::center::db::CenterDb::open(&config.database.sqlite_path) {
+                Ok(d) => {
+                    tracing::info!(component = "center", path = %config.database.sqlite_path, "SQLite DB opened");
+                    Some(Arc::new(d))
+                }
+                Err(e) => {
+                    tracing::error!(component = "center", error = %e, "Failed to open SQLite DB, running without persistence");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let grpc_server = FederationGrpcServer::new(
             registry.clone(),
             aggregator.clone(),
             pending_proxies.clone(),
             config.sync.clone(),
             sync_client.clone(),
+            db.clone(),
         );
         let pending_lists = grpc_server.pending_lists.clone();
         let pending_commands = grpc_server.pending_commands.clone();
@@ -91,21 +107,6 @@ impl EdgionCenterCli {
             config.sync.command_timeout_secs,
         ));
 
-        let db: Option<Arc<crate::core::center::db::CenterDb>> = if config.database.enabled {
-            match crate::core::center::db::CenterDb::open(&config.database.sqlite_path) {
-                Ok(d) => {
-                    tracing::info!(component = "center", path = %config.database.sqlite_path, "SQLite DB opened");
-                    Some(Arc::new(d))
-                }
-                Err(e) => {
-                    tracing::error!(component = "center", error = %e, "Failed to open SQLite DB, running without persistence");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let api_state = ApiState {
             aggregator: aggregator.clone(),
             commander,
@@ -113,6 +114,7 @@ impl EdgionCenterCli {
             db: db.clone(),
             metadata_store: metadata_store.clone(),
             sync_client,
+            registry: registry.clone(),
         };
         let http_addr: std::net::SocketAddr = config.server.http_addr.parse()?;
         let grpc_addr: std::net::SocketAddr = config.server.grpc_addr.parse()?;
