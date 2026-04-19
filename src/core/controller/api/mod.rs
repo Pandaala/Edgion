@@ -257,6 +257,9 @@ pub async fn serve(
     // Add local auth login/me endpoints (before auth middleware so login is accessible)
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
+    // TODO(fix-01 task 5): replace this temporary derivation with `derive_require_auth`
+    // (intent-based, includes auto-generate fallback). _auth_state is discarded here but
+    // will be wired into handlers by tasks 3/4 (status endpoint) and task 6 (retry loop).
     let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
         || local_auth_config.as_ref().is_some_and(|c| c.enabled);
     let (router_with_auth, _auth_state) =
@@ -300,6 +303,9 @@ pub async fn serve_with_shutdown(
     // Add local auth login/me endpoints (before auth middleware so login is accessible)
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
+    // TODO(fix-01 task 5): replace this temporary derivation with `derive_require_auth`
+    // (intent-based, includes auto-generate fallback). _auth_state is discarded here but
+    // will be wired into handlers by tasks 3/4 (status endpoint) and task 6 (retry loop).
     let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
         || local_auth_config.as_ref().is_some_and(|c| c.enabled);
     let (router_with_auth, _auth_state) =

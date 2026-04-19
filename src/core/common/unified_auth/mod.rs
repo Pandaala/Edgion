@@ -289,7 +289,7 @@ pub async fn unified_auth_middleware(
 
     // Fall back to local validation.
     let mut local_error: Option<String> = None;
-    if let Some(ref local_state) = local_snapshot.as_ref() {
+    if let Some(local_state) = local_snapshot.as_ref() {
         match try_local_validation(local_state, &token) {
             Ok(claims) => {
                 tracing::debug!(
