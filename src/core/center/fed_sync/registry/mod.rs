@@ -4,7 +4,7 @@ use crate::core::common::fed_sync::proto::{CenterMessage, RegisterRequest};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -122,23 +122,6 @@ impl ControllerRegistry {
             .values()
             .filter_map(|s| s.stream_tx.as_ref().map(|tx| (s.controller_id.clone(), tx.clone())))
             .collect()
-    }
-
-    pub fn evict_stale(&self, hours: u64) {
-        let threshold = Duration::from_secs(hours * 3600);
-        self.inner.write().retain(|id, session| {
-            if let Some(since) = session.offline_since {
-                if since.elapsed() > threshold {
-                    tracing::info!(
-                        component = "registry",
-                        controller_id = %id,
-                        "Evicting stale offline controller"
-                    );
-                    return false;
-                }
-            }
-            true
-        });
     }
 }
 

@@ -90,8 +90,6 @@ pub struct CenterSyncConfig {
     pub command_timeout_secs: u64,
     /// Heartbeat ping interval sent to controllers (seconds, default: 30)
     pub ping_interval_secs: u64,
-    /// Hours before offline controller data is evicted (default: 24)
-    pub offline_evict_hours: u64,
 }
 
 impl Default for CenterSyncConfig {
@@ -101,7 +99,6 @@ impl Default for CenterSyncConfig {
             list_timeout_secs: 30,
             command_timeout_secs: 30,
             ping_interval_secs: 30,
-            offline_evict_hours: 24,
         }
     }
 }
@@ -119,7 +116,6 @@ mod tests {
         assert_eq!(config.sync.ping_interval_secs, 30);
         assert_eq!(config.sync.list_timeout_secs, 30);
         assert_eq!(config.sync.command_timeout_secs, 30);
-        assert_eq!(config.sync.offline_evict_hours, 24);
     }
 
     #[test]

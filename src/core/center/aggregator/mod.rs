@@ -1,13 +1,14 @@
 //! In-memory resource key aggregator.
 //!
 //! Stores per-controller snapshots. Snapshots are replaced on each ListResponse.
-//! Offline entries are retained for `offline_evict_hours` before being dropped.
+//! Offline entries are retained in memory and must be removed explicitly via
+//! the Admin DELETE API (see ticket #20).
 
 use crate::core::common::fed_sync::proto::{RegisterRequest, ResourceKey};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Debug)]
 struct ControllerSnapshot {
@@ -74,14 +75,6 @@ impl ResourceAggregator {
                 snap.offline_since = Some(Instant::now());
             }
         }
-    }
-
-    /// Evict controllers offline for longer than `hours`.
-    pub fn evict_stale(&self, hours: u64) {
-        let threshold = Duration::from_secs(hours * 3600);
-        self.inner
-            .write()
-            .retain(|_, snap| snap.offline_since.map(|s| s.elapsed() <= threshold).unwrap_or(true));
     }
 
     /// All resource keys across all controllers (online + offline).
@@ -155,13 +148,13 @@ mod tests {
     }
 
     #[test]
-    fn test_offline_data_retained_and_evicted() {
+    fn test_offline_data_retained_until_manual_remove() {
         let agg = ResourceAggregator::new();
         agg.update_snapshot("ctrl-1", vec![make_key("Gateway", "g1")]);
         agg.mark_offline("ctrl-1");
-        assert_eq!(agg.list_all_keys().len(), 1); // still there
-        agg.evict_stale(0); // evict immediately
-        assert_eq!(agg.list_all_keys().len(), 0);
+        // Without scheduler-driven eviction, offline snapshot stays in memory
+        // until an explicit Admin DELETE (ticket #20) removes it.
+        assert_eq!(agg.list_all_keys().len(), 1);
     }
 
     #[test]
