@@ -8,24 +8,35 @@ use axum::{
 };
 use tower_http::cors::{Any, CorsLayer};
 
-/// Apply unified auth middleware (OIDC + local) to a router.
+/// Build a `UnifiedAuthState` and wrap the router with the unified auth layer.
 ///
-/// Creates a single middleware layer that tries OIDC validation first and falls
-/// back to local validation. When both providers are configured, tokens from
-/// either provider are accepted. When neither is configured, requests pass
-/// through without authentication.
+/// Returns both the wrapped router and the `Arc<UnifiedAuthState>` so the caller
+/// can (a) pass it as sub-state to handlers that need runtime access to the
+/// provider state (e.g. `build_auth_status`, login handlers) and (b) hand it to
+/// a background task for lazy credential installation via `update_local`.
+///
+/// # Errors
+///
+/// Returns `Err` if any `enabled = true` provider's config fails validation —
+/// callers should propagate the error so the process exits with non-zero status.
 pub fn apply_unified_auth_layer(
     router: Router,
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    require_auth: bool,
     component: &str,
-) -> Router {
-    let state =
-        crate::core::common::unified_auth::UnifiedAuthState::from_configs(auth_config, local_auth_config, component);
-    router.layer(axum::middleware::from_fn_with_state(
-        state,
+) -> anyhow::Result<(Router, std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>)> {
+    let state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
+        auth_config,
+        local_auth_config,
+        require_auth,
+        component,
+    )?;
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
         crate::core::common::unified_auth::unified_auth_middleware,
-    ))
+    ));
+    Ok((router, state))
 }
 
 /// Apply a permissive CORS layer to an Axum router.

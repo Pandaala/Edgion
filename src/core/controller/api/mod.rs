@@ -257,8 +257,10 @@ pub async fn serve(
     // Add local auth login/me endpoints (before auth middleware so login is accessible)
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
-    let router_with_auth =
-        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
+        || local_auth_config.as_ref().is_some_and(|c| c.enabled);
+    let (router_with_auth, _auth_state) =
+        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, require_auth, "admin_api")?;
     let app = api::apply_cors_layer(router_with_auth);
 
     // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
@@ -298,8 +300,10 @@ pub async fn serve_with_shutdown(
     // Add local auth login/me endpoints (before auth middleware so login is accessible)
     let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
     // Apply unified auth middleware (tries OIDC first, falls back to local)
-    let router_with_auth =
-        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
+    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled)
+        || local_auth_config.as_ref().is_some_and(|c| c.enabled);
+    let (router_with_auth, _auth_state) =
+        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, require_auth, "admin_api")?;
     let app = api::apply_cors_layer(router_with_auth);
 
     // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)

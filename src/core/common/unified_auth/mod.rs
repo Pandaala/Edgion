@@ -28,6 +28,7 @@
 //! router = router.layer(auth_layer);
 //! ```
 
+use arc_swap::ArcSwapOption;
 use axum::{
     body::Body,
     extract::Request,
@@ -87,27 +88,41 @@ pub struct UnifiedAuthClaims {
 pub struct UnifiedAuthState {
     /// OIDC auth state (None when OIDC is not configured or disabled).
     pub oidc: Option<Arc<AuthMiddlewareState>>,
-    /// Local auth state (None when local auth is not configured or disabled).
-    pub local: Option<Arc<LocalAuthState>>,
+    /// Local auth state. `ArcSwapOption` supports lazy population by
+    /// the background Secret retry task (Controller auto-generate path).
+    /// At startup it may be `None` even when `require_auth = true`;
+    /// middleware returns 503 in that case until the value is populated.
+    pub local: ArcSwapOption<LocalAuthState>,
     /// Paths that bypass authentication (union of both providers' skip_paths).
     pub skip_paths: HashSet<String>,
+    /// Whether the operator *expects* authentication to be enforced.
+    /// Derived at startup from the intended configuration (including
+    /// auto-generate fallback), not from whether providers are currently ready.
+    /// Middleware uses this + provider readiness to decide pass-through vs 503.
+    pub require_auth: bool,
 }
 
 impl UnifiedAuthState {
     /// Build a `UnifiedAuthState` from optional OIDC and local auth configs.
     ///
-    /// Each provider is independently validated and enabled/disabled. The
-    /// `skip_paths` sets from both configs are merged together with the
-    /// mandatory `/health` and `/ready` paths.
+    /// # Errors
+    ///
+    /// Returns `Err` if any `enabled = true` provider fails `validate()`.
+    /// Callers are expected to propagate the error to `main()` so the process
+    /// exits with a non-zero code — never silently start with a half-disabled
+    /// auth stack.
+    ///
+    /// `require_auth` must be supplied by the caller. It expresses operator
+    /// *intent* (e.g. Controller's auto-generate fallback sets it true even
+    /// when `local_auth_config` is `None`), independent of whether providers
+    /// are currently ready.
     pub fn from_configs(
         auth_config: Option<&AdminAuthConfig>,
         local_auth_config: Option<&LocalAuthConfig>,
+        require_auth: bool,
         component: &str,
-    ) -> Arc<Self> {
+    ) -> anyhow::Result<Arc<Self>> {
         let mut skip_paths = HashSet::new();
-        // Always skip health/ready probes and the Prometheus scrape endpoint.
-        // `/metrics` follows the K8s controller-manager convention of being
-        // unauthenticated: scrapers usually cannot send bearer tokens.
         skip_paths.insert("/health".to_string());
         skip_paths.insert("/ready".to_string());
         skip_paths.insert("/metrics".to_string());
@@ -115,23 +130,21 @@ impl UnifiedAuthState {
         let oidc = match auth_config {
             Some(cfg) if cfg.enabled => {
                 if let Some(err) = cfg.validate() {
-                    tracing::error!(
-                        component = component,
-                        error = err,
-                        "Invalid auth config, skipping OIDC auth"
-                    );
-                    None
-                } else {
-                    for p in &cfg.skip_paths {
-                        skip_paths.insert(p.clone());
-                    }
-                    tracing::info!(
-                        component = component,
-                        discovery = %cfg.discovery,
-                        "OIDC authentication enabled"
-                    );
-                    Some(AuthMiddlewareState::from_config(cfg))
+                    return Err(anyhow::anyhow!(
+                        "invalid [auth] config (component={}): {}",
+                        component,
+                        err
+                    ));
                 }
+                for p in &cfg.skip_paths {
+                    skip_paths.insert(p.clone());
+                }
+                tracing::info!(
+                    component = component,
+                    discovery = %cfg.discovery,
+                    "OIDC authentication enabled"
+                );
+                Some(AuthMiddlewareState::from_config(cfg))
             }
             Some(_) => {
                 tracing::info!(component = component, "OIDC authentication disabled by config");
@@ -143,26 +156,24 @@ impl UnifiedAuthState {
             }
         };
 
-        let local = match local_auth_config {
+        let local_initial = match local_auth_config {
             Some(cfg) if cfg.enabled => {
                 if let Some(err) = cfg.validate() {
-                    tracing::error!(
-                        component = component,
-                        error = err,
-                        "Invalid local_auth config, skipping local auth"
-                    );
-                    None
-                } else {
-                    for p in &cfg.skip_paths {
-                        skip_paths.insert(p.clone());
-                    }
-                    tracing::info!(
-                        component = component,
-                        username = %cfg.username,
-                        "Local authentication enabled"
-                    );
-                    Some(LocalAuthState::from_config(cfg))
+                    return Err(anyhow::anyhow!(
+                        "invalid [local_auth] config (component={}): {}",
+                        component,
+                        err
+                    ));
                 }
+                for p in &cfg.skip_paths {
+                    skip_paths.insert(p.clone());
+                }
+                tracing::info!(
+                    component = component,
+                    username = %cfg.username,
+                    "Local authentication enabled"
+                );
+                Some(LocalAuthState::from_config(cfg))
             }
             Some(_) => {
                 tracing::info!(component = component, "Local authentication disabled by config");
@@ -174,11 +185,21 @@ impl UnifiedAuthState {
             }
         };
 
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             oidc,
-            local,
+            local: ArcSwapOption::from(local_initial),
             skip_paths,
-        })
+            require_auth,
+        }))
+    }
+
+    /// Install a freshly built `LocalAuthState` produced after an asynchronous
+    /// credential fetch (e.g. K8s Secret retry loop).
+    ///
+    /// Uses an atomic pointer swap so concurrent middleware reads see the new
+    /// value on their next `.load()` without blocking.
+    pub fn update_local(&self, state: Arc<LocalAuthState>) {
+        self.local.store(Some(state));
     }
 }
 
@@ -208,8 +229,11 @@ pub async fn unified_auth_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    // Take a snapshot of the local auth state for this request.
+    let local_snapshot: Option<Arc<LocalAuthState>> = state.local.load_full();
+
     // If neither provider is configured, pass through (no-auth mode).
-    if state.oidc.is_none() && state.local.is_none() {
+    if state.oidc.is_none() && local_snapshot.is_none() {
         return next.run(request).await;
     }
 
@@ -265,7 +289,7 @@ pub async fn unified_auth_middleware(
 
     // Fall back to local validation.
     let mut local_error: Option<String> = None;
-    if let Some(ref local_state) = state.local {
+    if let Some(ref local_state) = local_snapshot.as_ref() {
         match try_local_validation(local_state, &token) {
             Ok(claims) => {
                 tracing::debug!(
@@ -463,4 +487,77 @@ fn extract_cookie_token(request: &Request<Body>) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::common::auth::AdminAuthConfig;
+    use crate::core::common::local_auth::LocalAuthConfig;
+
+    fn invalid_oidc_cfg() -> AdminAuthConfig {
+        let mut c = AdminAuthConfig::default();
+        c.enabled = true;
+        c.discovery = String::new();
+        c
+    }
+
+    fn invalid_local_cfg() -> LocalAuthConfig {
+        let mut c = LocalAuthConfig::default();
+        c.enabled = true;
+        c.username = String::new();
+        c.password = String::new();
+        c
+    }
+
+    fn valid_local_cfg() -> LocalAuthConfig {
+        let mut c = LocalAuthConfig::default();
+        c.enabled = true;
+        c.username = "admin".to_string();
+        c.password = "a_long_enough_password_123".to_string();
+        c.jwt_secret = "a_long_enough_jwt_secret_value_abcdef".to_string();
+        c
+    }
+
+    #[test]
+    fn from_configs_returns_err_on_oidc_validate_failure() {
+        let cfg = invalid_oidc_cfg();
+        let r = UnifiedAuthState::from_configs(Some(&cfg), None, true, "test");
+        assert!(r.is_err(), "expected Err for invalid OIDC config, got Ok");
+    }
+
+    #[test]
+    fn from_configs_returns_err_on_local_validate_failure() {
+        let cfg = invalid_local_cfg();
+        let r = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test");
+        assert!(r.is_err(), "expected Err for invalid local config, got Ok");
+    }
+
+    #[test]
+    fn from_configs_ok_when_only_local_valid() {
+        let cfg = valid_local_cfg();
+        let r = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test");
+        let state = r.expect("valid local cfg should build state");
+        assert!(state.oidc.is_none());
+        assert!(state.local.load().is_some());
+        assert!(state.require_auth);
+    }
+
+    #[test]
+    fn update_local_visible_on_next_load() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        assert!(state.local.load().is_none());
+        let cfg = valid_local_cfg();
+        state.update_local(LocalAuthState::from_config(&cfg));
+        assert!(state.local.load().is_some());
+    }
+
+    #[test]
+    fn require_auth_flag_propagates() {
+        let state_no = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
+        assert!(!state_no.require_auth);
+
+        let state_yes = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        assert!(state_yes.require_auth);
+    }
 }
