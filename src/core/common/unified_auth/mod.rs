@@ -232,10 +232,17 @@ fn initializing_response() -> Response {
 /// # Skip rules
 ///
 /// The following requests bypass authentication entirely:
-/// - Paths in `state.skip_paths` (health/ready probes, etc.)
-/// - Paths starting with `/api/v1/auth/` (login endpoint)
+/// - Paths in `state.skip_paths` (health/ready probes, `/metrics`, etc.)
+/// - The three public auth endpoints `/api/v1/auth/login`, `/api/v1/auth/logout`,
+///   and `/api/v1/auth/status` (exact match; note: `/api/v1/auth/me` is NOT
+///   skipped — it requires a valid token)
 /// - Paths starting with `/configserver/` (edgion-cli compatibility)
-/// - When neither OIDC nor local auth is configured (no-auth mode)
+/// - When `state.require_auth == false` (operator did not configure auth)
+///
+/// # Fail-close behavior
+///
+/// When `state.require_auth == true` but neither provider is currently ready
+/// (e.g. Secret fetch still in flight), returns 503 with `Retry-After: 10`.
 ///
 /// # Validation order
 ///
@@ -255,8 +262,11 @@ pub async fn unified_auth_middleware(
     if state.skip_paths.contains(&path) {
         return next.run(request).await;
     }
-    // Skip auth sub-paths — they are public by contract (login handler itself
-    // enforces 503 during init via its own snapshot of state.local).
+    // The three public auth endpoints must stay reachable regardless of
+    // provider readiness: login so clients can authenticate, logout so they
+    // can clear a session, status so UIs can surface the init state.
+    // `/api/v1/auth/me` is intentionally NOT in this list — it requires
+    // a valid token.
     if path == "/api/v1/auth/login"
         || path == "/api/v1/auth/logout"
         || path == "/api/v1/auth/status"
@@ -530,6 +540,9 @@ mod tests {
     use super::*;
     use crate::core::common::auth::AdminAuthConfig;
     use crate::core::common::local_auth::LocalAuthConfig;
+    use axum::body::to_bytes;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
 
     fn invalid_oidc_cfg() -> AdminAuthConfig {
         let mut c = AdminAuthConfig::default();
@@ -597,10 +610,6 @@ mod tests {
         assert!(state_yes.require_auth);
     }
 
-    use axum::body::to_bytes;
-    use axum::http::{Method, Request, StatusCode};
-    use tower::ServiceExt;
-
     fn router_with_state(state: Arc<UnifiedAuthState>) -> axum::Router {
         use axum::{middleware, routing::get};
         axum::Router::new()
@@ -643,7 +652,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = to_bytes(resp.into_body(), 1024).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(v.get("message").is_some() || v.get("error").is_some());
+        assert_eq!(v.get("success").and_then(|x| x.as_bool()), Some(false));
+        let err = v.get("error").and_then(|x| x.as_str()).expect("error field");
+        assert!(err.contains("initializ"), "error message unexpected: {err}");
     }
 
     #[tokio::test]
