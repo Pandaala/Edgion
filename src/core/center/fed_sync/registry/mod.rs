@@ -123,6 +123,13 @@ impl ControllerRegistry {
             .filter_map(|s| s.stream_tx.as_ref().map(|tx| (s.controller_id.clone(), tx.clone())))
             .collect()
     }
+
+    /// Remove a controller entry from the registry entirely.
+    /// Returns true if an entry was removed. Unlike `mark_offline`, this
+    /// drops the session record itself (used by Admin DELETE cascade).
+    pub fn remove(&self, controller_id: &str) -> bool {
+        self.inner.write().remove(controller_id).is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -225,5 +232,15 @@ mod tests {
         let senders = registry.online_senders();
         assert_eq!(senders.len(), 1);
         assert_eq!(senders[0].0, "c1");
+    }
+
+    #[test]
+    fn test_remove_drops_entry_and_is_idempotent() {
+        let registry = ControllerRegistry::new();
+        let (tx, _rx) = mpsc::channel(8);
+        registry.register("cid".to_string(), mock_info("cid"), tx, "s1".to_string());
+        assert!(registry.remove("cid"));
+        assert!(registry.get_session("cid").is_none());
+        assert!(!registry.remove("cid"));
     }
 }

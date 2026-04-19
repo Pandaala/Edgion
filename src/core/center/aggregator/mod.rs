@@ -77,6 +77,33 @@ impl ResourceAggregator {
         }
     }
 
+    /// Remove a controller's snapshot entirely. Used by Admin DELETE cascade.
+    pub fn remove(&self, controller_id: &str) -> bool {
+        self.inner.write().remove(controller_id).is_some()
+    }
+
+    /// All resource keys across online controllers only.
+    /// Offline snapshots are retained in memory (for Admin API access)
+    /// but excluded from the aggregate view consumed by `GET /api/v1/resources`.
+    pub fn list_online_keys(&self) -> Vec<ResourceKey> {
+        self.inner
+            .read()
+            .values()
+            .filter(|s| s.offline_since.is_none())
+            .flat_map(|s| s.keys.clone())
+            .collect()
+    }
+
+    /// Online-only variant of `list_keys_by_cluster`.
+    pub fn list_online_keys_by_cluster(&self, cluster: &str) -> Vec<ResourceKey> {
+        self.inner
+            .read()
+            .values()
+            .filter(|s| s.offline_since.is_none() && s.info.cluster == cluster)
+            .flat_map(|s| s.keys.clone())
+            .collect()
+    }
+
     /// All resource keys across all controllers (online + offline).
     pub fn list_all_keys(&self) -> Vec<ResourceKey> {
         self.inner.read().values().flat_map(|s| s.keys.clone()).collect()
@@ -138,6 +165,16 @@ mod tests {
         }
     }
 
+    fn mock_register_info(cid: &str, cluster: &str) -> RegisterRequest {
+        RegisterRequest {
+            controller_id: cid.to_string(),
+            cluster: cluster.to_string(),
+            env: vec![],
+            tag: vec![],
+            supported_kinds: vec![],
+        }
+    }
+
     #[test]
     fn test_update_and_query() {
         let agg = ResourceAggregator::new();
@@ -181,5 +218,34 @@ mod tests {
         let cluster_a = agg.list_keys_by_cluster("cluster-a");
         assert_eq!(cluster_a.len(), 1);
         assert_eq!(cluster_a[0].name, "r1");
+    }
+
+    #[test]
+    fn test_remove_drops_snapshot() {
+        let agg = ResourceAggregator::new();
+        agg.update_snapshot("ctrl-1", vec![make_key("Gateway", "g1")]);
+        assert!(agg.remove("ctrl-1"));
+        assert_eq!(agg.list_all_keys().len(), 0);
+        assert!(!agg.remove("ctrl-1"));
+    }
+
+    #[test]
+    fn test_list_online_keys_excludes_offline() {
+        let agg = ResourceAggregator::new();
+        agg.set_controller_info("c-on", mock_register_info("c-on", "cluster-a"));
+        agg.update_snapshot("c-on", vec![make_key("Gateway", "g-on")]);
+        agg.set_controller_info("c-off", mock_register_info("c-off", "cluster-a"));
+        agg.update_snapshot("c-off", vec![make_key("Gateway", "g-off")]);
+        agg.mark_offline("c-off");
+
+        let online = agg.list_online_keys();
+        assert_eq!(online.len(), 1);
+        assert_eq!(online[0].name, "g-on");
+
+        // list_all_keys unchanged (still returns both)
+        assert_eq!(agg.list_all_keys().len(), 2);
+
+        let by_cluster = agg.list_online_keys_by_cluster("cluster-a");
+        assert_eq!(by_cluster.len(), 1);
     }
 }
