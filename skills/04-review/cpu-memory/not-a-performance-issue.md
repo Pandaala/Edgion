@@ -81,8 +81,10 @@ pub const WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES: usize = 16384;  // 16KB 硬上限
 
 ## 离线 Controller 数据保留是业务需求
 
-**误判场景**：`ControllerRegistry` / `ResourceAggregator` 有 `evict_stale(hours)` 方法但从未被定期调用，被标记为"内存泄漏"。
+**误判场景**：`ControllerRegistry` / `ResourceAggregator` 中离线 Controller 的条目不被定期清理，被标记为"内存泄漏"。
 
-**实际情况**：离线 Controller 的注册信息和资源快照是**需要持久保留的业务数据**——Admin API 需要展示离线状态，运维人员需要查看离线前的资源快照。`evict_stale()` 适合作为未来手动运维 API 的底层实现，不应自动定时执行（会意外清除有用的历史数据）。
+**实际情况**：离线 Controller 的注册信息和资源快照是**需要持久保留的业务数据**——Admin API 需要展示离线状态，运维人员需要查看离线前的资源快照。清理走显式运维路径：`DELETE /api/v1/center/admin/controllers/{id}` 级联删除四个内存结构 + DB 行（见 `skills/09-misc/center-db.md` 的 Admin API 表）。活资源（`stream_tx` / forwarding task / tonic HTTP/2 stream）则在 `mark_offline` 时立即释放，不等 DELETE。
 
-**判定**：非内存泄漏，是业务语义保留，不应自动清理。
+> 历史注意：早期有 `evict_stale(hours)` 方法 + `offline_evict_hours` 配置，但从未被 scheduler 调用，是死代码。已在 2026-04 的 fix #19 中移除；当前语义即"离线数据无 TTL，仅通过 Admin DELETE 清理，但活资源离线瞬间就释放"。
+
+**判定**：非内存泄漏，是业务语义保留；活资源已即时释放，保留的只是静态注册快照。
