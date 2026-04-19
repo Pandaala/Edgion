@@ -185,7 +185,6 @@ sync:
   list_timeout_secs: 10
   command_timeout_secs: 10
   ping_interval_secs: 5
-  offline_evict_hours: 24
 
 database:
   enabled: false

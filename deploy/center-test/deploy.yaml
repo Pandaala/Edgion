@@ -89,7 +89,6 @@ data:
       list_timeout_secs: 10
       command_timeout_secs: 30
       ping_interval_secs: 5
-      offline_evict_hours: 1
 
     local_auth:
       enabled: true
