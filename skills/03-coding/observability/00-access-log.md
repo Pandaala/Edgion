@@ -128,10 +128,10 @@ plugin_log.push(&format!("Auth failed for user {}", name)); // PII 入 PluginLog
 
 **`kind` 字面量约定**：
 
-- 小写单词 + **空格**分隔（不用下划线），≤ 20 字节
+- 小写单词 + **空格**分隔（不用下划线），15-40 字节
 - 只写"发生了什么"（事件名），**不带 plugin 前缀**（`PluginLog.name` 已经承担）
 - 不含动态值（token / claim / URL / header / 错误 Display）
-- 不含冒号（避免和 `err: ` 前缀的冒号混淆）
+- 允许 `<event>:<action>` 两段冒号语法（两段都是完整词），详见下文「PluginLog 条目措辞规范」§1 rule 4
 
 **何时用 `push_err` vs 继续写到 `ctx.err_log`**：`push_err` 做**分类**；`ctx.err_log` 留给**该错误必须保留的脱敏详情**（如后端地址）。同一错误只选一处记录，不要双写。
 
@@ -233,3 +233,72 @@ log.push(&format!("Rewrite -> {}; ", new_path));
 - `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
 - `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`
 - `src/core/gateway/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (100-byte SmallVec)
+
+---
+
+## PluginLog 条目措辞规范
+
+### 1. 条目字面量风格（push 与 push_err 共用）
+
+1. 全小写英文单词 + 空格分词；每条 15-40 字节，≤ 4 个词（含动作词）
+2. 禁缩写。白名单（不展开）：ip, tls, http, https, tcp, udp, sni, id, url,
+   dns, jwt, jwks, cors, csrf
+3. 允许数字字面量：rate 429, retry 2, size 1024
+4. 事件+动作用冒号连接（两段都完整词，无空格粘连）：
+   `"key miss:allow; "`、`"jwks refresh:stale; "`、`"upstream select:failover; "`
+   单段信息不加冒号：
+   `"upstream b selected; "`、`"OK user jack; "`
+   （尾部 "; " 见 rule 8）
+5. 保留前缀动作词（不可改名）：OK / Deny / Rate / Allow / Skip
+6. **敏感动态值禁止**。push / push_err 的字符串中不得出现：token、claim 值、
+   raw header value、cookie、email、secrets（API key、password、session id）、
+   request/response body。
+   **允许的非敏感动态值**（仅 push 可用；push_err 参数已是 &'static str 编译期强制）：
+   - `ip`, `port`, `path`, `http status code`, `method`
+   - 数值（count, duration_ms, size, retry_n）
+   - user 身份（username, user_id）—— access log 已携带，一致性优先
+   - 闭集 tag（region name, upstream group name，代码层面的静态标签）
+   **错误路径永远走 push_err**（&'static str），绝不用 `push(&format!("...{}", err))`
+   拼错误信息 —— Display 可能泄漏 token/claim。
+7. 插件名不写入条目（已在 PluginLog.name 字段）。修正示例：
+   "rl:nok:a" → "key miss:allow"
+8. **末尾 "; " 分隔**：push 条目手动加 "; " 结尾，与 push_err 自动添加的 "; " 保持一致。
+   示例：`log.push("OK user jack; ")`、`log.push(&format!("Direct {}:{}; ", ip, port))`。
+
+### 2. push vs push_err 判别
+
+- push：正常决策、分支命中、业务语义的 allow/deny、限流结果、降级但请求继续
+  例：`"OK user jack; "` / `"Deny bad credential; "` / `"Rate 429; "` / `"key miss:allow; "`
+- push_err：per-request 异常（config 读不出、远程调用失败、解码失败、内部
+  unreachable 分支）
+  例：`"token refresh fail"` / `"cache load fail"` / `"jwks fetch:timeout"`
+  （push_err 的 kind **不带** "; "，运行时自动补 `"err: <kind>; "`）
+kind 形如 `"<action> fail"` 或 `"<action>:<reason>"`。同一插件内两者可各自多次调用，
+最终 log 序列化为数组：
+`log: ["OK user jack; ", "err: jwks fetch:timeout; ", "OK fallback; "]`。
+
+### 3. 关键节点筛选
+
+应加（删掉该条后，读 access log 看不出请求走向）：
+- 选了哪个 upstream / endpoint / region / failover
+- 选了哪条 auth 算法或 key 来源
+- 限流命中哪个 key/bucket、结果是 allow/throttle/deny
+- 缓存命中/未命中、是否走降级
+- 匹配到了哪条 rule/header/pattern
+- 所有能进入 PluginRunningResult::ErrTerminateRequest 的分支（必须 push_err 留痕）
+
+不加：
+- 进入/离开函数、header 拆分、config 读取
+- 循环内部每次迭代
+- wrapper 层 run_if/skip_if（已由 conditional_filter.rs 自动 set_cond_skip）
+- 异常已有 push_err 就别再加一条 push("failed") 复述
+
+### 4. tracing 边界（硬规则）
+
+per-request 调用链（filter 入口同步调用栈）范围内：
+- 错误 → push_err
+- 决策 → push
+- 禁止 tracing::{error,warn,info,debug,trace}!
+
+允许保留 tracing::*! 的位置：插件构造函数 / new() / config load / 后台任务
+（JWKS 轮换、cache refresh timer、Redis reconnect）/ 模块初始化。
