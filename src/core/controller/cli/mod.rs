@@ -234,7 +234,6 @@ impl EdgionControllerCli {
         auth_config: Option<crate::core::common::auth::AdminAuthConfig>,
         local_auth_config: Option<crate::core::common::local_auth::LocalAuthConfig>,
         require_auth: bool,
-        #[allow(unused_variables)] // Task 6 will consume this to spawn secret_retry_loop
         needs_retry: bool,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
@@ -301,6 +300,7 @@ impl EdgionControllerCli {
                     auth_config.as_ref(),
                     local_auth_config.as_ref(),
                     require_auth,
+                    needs_retry,
                     admin_shutdown
                 )
             )

@@ -13,6 +13,7 @@
 pub mod config;
 pub mod handlers;
 pub mod middleware;
+pub mod retry;
 pub mod secret;
 
 pub use config::LocalAuthConfig;

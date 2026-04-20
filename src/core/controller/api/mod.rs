@@ -262,8 +262,9 @@ pub async fn serve(
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     require_auth: bool,
+    needs_retry: bool,
 ) -> anyhow::Result<()> {
-    let base_router = create_admin_router(conf_mgr, schema_validator);
+    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
     // Build unified auth state first, then add login/me/logout routes using that state.
     // require_auth is passed in by the Controller cli layer (derive_require_auth) — intent-based.
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
@@ -283,6 +284,31 @@ pub async fn serve(
         }),
     );
     let app = app.merge(status_router);
+
+    if needs_retry {
+        let auth_state_for_retry = auth_state.clone();
+        let conf_mgr_for_retry = conf_mgr.clone();
+        let fetch: crate::core::common::local_auth::retry::FetchFn = Box::new(move || {
+            let cm = conf_mgr_for_retry.clone();
+            Box::pin(async move {
+                crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await
+            })
+        });
+        let exit: crate::core::common::local_auth::retry::ExitFn =
+            Box::new(|| std::process::exit(1));
+        // Create a dedicated broadcast channel so shutdown of the retry task is
+        // decoupled from the main serve shutdown flow. The retry task has its own
+        // hard 10min deadline and will self-terminate via process::exit(1) if
+        // Secret never arrives — no need to wire into the main shutdown signal.
+        let (_retry_shutdown_tx, retry_shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
+            auth_state_for_retry,
+            fetch,
+            std::time::Duration::from_secs(600),
+            exit,
+            retry_shutdown_rx,
+        ));
+    }
 
     tracing::info!(
         component = "unified_api",
@@ -305,9 +331,10 @@ pub async fn serve_with_shutdown(
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     require_auth: bool,
+    needs_retry: bool,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let base_router = create_admin_router(conf_mgr, schema_validator);
+    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
     // Build unified auth state first, then add login/me/logout routes using that state.
     // require_auth is passed in by the Controller cli layer (derive_require_auth) — intent-based.
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
@@ -327,6 +354,31 @@ pub async fn serve_with_shutdown(
         }),
     );
     let app = app.merge(status_router);
+
+    if needs_retry {
+        let auth_state_for_retry = auth_state.clone();
+        let conf_mgr_for_retry = conf_mgr.clone();
+        let fetch: crate::core::common::local_auth::retry::FetchFn = Box::new(move || {
+            let cm = conf_mgr_for_retry.clone();
+            Box::pin(async move {
+                crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await
+            })
+        });
+        let exit: crate::core::common::local_auth::retry::ExitFn =
+            Box::new(|| std::process::exit(1));
+        // Create a dedicated broadcast channel so shutdown of the retry task is
+        // decoupled from the main serve shutdown flow. The retry task has its own
+        // hard 10min deadline and will self-terminate via process::exit(1) if
+        // Secret never arrives — no need to wire into the main shutdown signal.
+        let (_retry_shutdown_tx, retry_shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
+            auth_state_for_retry,
+            fetch,
+            std::time::Duration::from_secs(600),
+            exit,
+            retry_shutdown_rx,
+        ));
+    }
 
     tracing::info!(
         component = "admin_api",
