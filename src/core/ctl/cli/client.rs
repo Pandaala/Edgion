@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use reqwest::{Client, Response};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -64,7 +64,6 @@ impl EdgionClient {
     /// Ensure we have a valid token. Called before first API request.
     /// Flow: (1) query auth/status, (2) dispatch on AuthStatus, (3) auto-login if needed.
     pub async fn ensure_auth(&mut self) -> Result<()> {
-        use anyhow::{bail, Context};
         use crate::core::common::local_auth::{AuthStatus, AuthStatusResponse};
 
         let status_url = format!("{}/api/v1/auth/status", self.base_url);
@@ -463,6 +462,37 @@ mod ensure_auth_tests {
         let mut client = make_client(server.uri());
         let r = client.ensure_auth().await;
         assert!(r.is_err(), "404 must bail, got {:?}", r);
+        let msg = format!("{:?}", r.unwrap_err());
+        assert!(
+            msg.contains("404") || msg.contains("过老") || msg.contains("too old"),
+            "err message should mention 404/版本过老: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_bails_on_ready_with_empty_providers() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "success": true,
+            "data": {
+                "auth_required": true,
+                "active_providers": [],
+                "status": "ready",
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        let r = client.ensure_auth().await;
+        assert!(r.is_err());
+        let msg = format!("{:?}", r.unwrap_err());
+        assert!(
+            msg.contains("no known provider"),
+            "err message should mention unknown provider: {msg}"
+        );
     }
 
     #[tokio::test]
