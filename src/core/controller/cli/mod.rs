@@ -391,6 +391,24 @@ impl EdgionControllerCli {
             );
         }
 
+        // Start the resource-abnormal metrics snapshot loop.
+        // Runs independently of the Prometheus recorder (renders its own
+        // text block appended to /metrics). The loop body is panic-safe;
+        // the first snapshot runs immediately after renderers are
+        // registered downstream (resource controllers do that during
+        // ConfMgr.start).
+        let abn_cfg = &config.metrics.resource_abnormal;
+        if abn_cfg.enabled {
+            crate::core::controller::observe::status_metrics::spawn_snapshot_loop(
+                abn_cfg.tick_secs,
+            );
+        } else {
+            tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                "metrics.resource_abnormal.enabled=false; skipping snapshot loop"
+            );
+        }
+
         // 2. Log ConfMgr configuration
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
