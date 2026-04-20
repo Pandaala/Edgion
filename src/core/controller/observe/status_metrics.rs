@@ -19,7 +19,9 @@
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 
 pub const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
 pub const METRIC_HELP: &str =
@@ -277,6 +279,70 @@ fn append_escaped(out: &mut String, s: &str) {
     }
 }
 
+/// Scan one kind's store and push any abnormal resources into `out`.
+///
+/// Expects K to serialize to JSON with at least:
+/// - `.metadata.namespace` (string; "" for cluster-scoped resources)
+/// - `.metadata.name` (string)
+/// - `.status.conditions[]` or nested variants (handled by
+///   [`scan_conditions`])
+///
+/// Any resource that fails to serialize is skipped with a single
+/// `tracing::warn!`; we do not propagate the failure.
+pub fn render_kind<K>(kind: &'static str, store: &dyn RawStore<K>, out: &mut Vec<Entry>)
+where
+    K: serde::Serialize,
+{
+    for obj in store.snapshot() {
+        let json = match serde_json::to_value(&*obj) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    component = "status_metrics",
+                    kind = kind,
+                    error = %e,
+                    "serialize failed; skipping resource in snapshot"
+                );
+                continue;
+            }
+        };
+
+        let (ns, name) = extract_identity(&json);
+        let conds = scan_conditions(&json);
+        if let Some(ty) = classify(&conds) {
+            out.push(Entry { kind, namespace: ns, name, ty });
+        }
+    }
+}
+
+fn extract_identity(json: &serde_json::Value) -> (String, String) {
+    let meta = json.get("metadata");
+    let ns = meta
+        .and_then(|m| m.get("namespace"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let name = meta
+        .and_then(|m| m.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (ns, name)
+}
+
+/// Register a per-kind renderer with the global registry. Called by each
+/// resource_controller's startup path, right after it wires its
+/// `RawStore` into the processor.
+pub fn register_status_renderer<K>(kind: &'static str, store: Arc<dyn RawStore<K>>)
+where
+    K: serde::Serialize + Send + Sync + 'static,
+{
+    let renderer: Renderer = Box::new(move |buf: &mut Vec<Entry>| {
+        render_kind(kind, store.as_ref(), buf);
+    });
+    renderers_slot().lock().push(renderer);
+}
+
 #[cfg(test)]
 mod scan_conditions_tests {
     use super::*;
@@ -417,5 +483,66 @@ edgion_controller_resource_abnormal{kind=\"HTTPRoute\",namespace=\"ns-b\",name=\
         let out = render_snapshot(&entries);
         assert!(out.contains(r#"namespace="n\"s""#));
         assert!(out.contains(r#"name="back\\slash""#));
+    }
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::{
+        LocalRawStore, RawStore,
+    };
+    use serde::Serialize;
+    use std::sync::Arc;
+
+    #[derive(Clone, Debug, Serialize)]
+    struct FakeRoute {
+        metadata: FakeMeta,
+        status: FakeStatus,
+    }
+    #[derive(Clone, Debug, Serialize)]
+    struct FakeMeta {
+        namespace: String,
+        name: String,
+    }
+    #[derive(Clone, Debug, Serialize)]
+    struct FakeStatus {
+        conditions: Vec<FakeCond>,
+    }
+    #[derive(Clone, Debug, Serialize)]
+    struct FakeCond {
+        #[serde(rename = "type")]
+        type_: String,
+        status: String,
+    }
+
+    fn mk(ns: &str, name: &str, type_: &str, status: &str) -> Arc<FakeRoute> {
+        Arc::new(FakeRoute {
+            metadata: FakeMeta { namespace: ns.into(), name: name.into() },
+            status: FakeStatus {
+                conditions: vec![FakeCond { type_: type_.into(), status: status.into() }],
+            },
+        })
+    }
+
+    #[test]
+    fn render_kind_emits_entries_only_for_abnormal_resources() {
+        let store: Arc<dyn RawStore<FakeRoute>> = Arc::new({
+            let s = LocalRawStore::<FakeRoute>::new();
+            s.upsert("default/bad".into(), mk("default", "bad", "Accepted", "False"));
+            s.upsert("default/good".into(), mk("default", "good", "Accepted", "True"));
+            s.upsert("default/warn".into(), mk("default", "warn", "Ready", "False"));
+            s
+        });
+
+        let mut buf: Vec<Entry> = Vec::new();
+        render_kind("FakeRoute", store.as_ref(), &mut buf);
+
+        assert_eq!(buf.len(), 2);
+        let bad = buf.iter().find(|e| e.name == "bad").unwrap();
+        assert_eq!(bad.ty, Kind::Err);
+        assert_eq!(bad.kind, "FakeRoute");
+        let warn = buf.iter().find(|e| e.name == "warn").unwrap();
+        assert_eq!(warn.ty, Kind::Warn);
     }
 }
