@@ -23,6 +23,25 @@ pub type FetchFn = Box<dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<Lo
 /// `|| std::process::exit(1)`; tests pass a flag-setting closure.
 pub type ExitFn = Box<dyn FnOnce() + Send + Sync>;
 
+/// Returns a future that resolves only on an explicit `Ok(())` broadcast.
+///
+/// `Err(Closed)` is returned synchronously and repeatedly once all senders
+/// drop — we don't want that to race against the sleep arm of the retry
+/// loop's `select!`, so in that case we block forever. `Err(Lagged)` just
+/// means we missed some signals; try again.
+async fn wait_for_shutdown(shutdown: &mut broadcast::Receiver<()>) {
+    loop {
+        match shutdown.recv().await {
+            Ok(()) => return,
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => {
+                std::future::pending::<()>().await;
+                unreachable!();
+            }
+        }
+    }
+}
+
 /// Run the retry loop: exponential backoff (1s → 2s → 4s → 8s → 16s → 30s cap),
 /// approximate deadline `timeout` wall-clock from call time.
 ///
@@ -56,7 +75,14 @@ pub async fn secret_retry_loop(
 
     loop {
         tokio::select! {
-            _ = shutdown.recv() => {
+            // Only a real `Ok(())` broadcast counts as a shutdown signal.
+            // `broadcast::Receiver::recv()` returns `Err(Closed)` immediately
+            // and repeatedly once all `Sender`s are dropped, which production
+            // callers do since the retry task is time-bounded. Without the
+            // pending-on-closed wrapper below, `select!` would match the
+            // Err every iteration and the task would exit on its first poll
+            // without attempting a single fetch.
+            _ = wait_for_shutdown(&mut shutdown) => {
                 tracing::info!(component = component, "retry loop received shutdown, exiting");
                 return;
             }
@@ -199,5 +225,55 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         tx.send(()).unwrap();
         handle.await.unwrap();
+    }
+
+    /// Regression guard: if the caller drops the broadcast `Sender` immediately
+    /// after spawning (which `serve`/`serve_with_shutdown` did in the initial
+    /// fix #01 wiring), `broadcast::Receiver::recv()` returns `Err(Closed)` on
+    /// the first poll. `tokio::select!`'s `_ = shutdown.recv() =>` arm pattern
+    /// matches any resolved value — including `Err` — so the task would exit
+    /// on its first iteration, never attempting a single fetch.
+    ///
+    /// After the fix, the loop must tolerate a dropped `Sender` and continue
+    /// retrying until success or deadline.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn retry_loop_keeps_running_when_shutdown_tx_dropped() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let attempt = Arc::new(AtomicU32::new(0));
+        let attempt_clone = attempt.clone();
+        let fetch: FetchFn = Box::new(move || {
+            let a = attempt_clone.clone();
+            Box::pin(async move {
+                let n = a.fetch_add(1, Ordering::SeqCst) + 1;
+                if n < 2 {
+                    Err(anyhow::anyhow!("transient"))
+                } else {
+                    Ok(valid_local())
+                }
+            })
+        });
+        let exit: ExitFn = Box::new(|| panic!("on_timeout should not fire"));
+        // Production pattern: tx is dropped immediately; only rx is kept.
+        let (tx, rx) = broadcast::channel::<()>(1);
+        drop(tx);
+
+        let handle = tokio::spawn(secret_retry_loop(
+            state.clone(),
+            fetch,
+            Duration::from_secs(600),
+            exit,
+            rx,
+        ));
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        handle.await.unwrap();
+        assert!(
+            attempt.load(Ordering::SeqCst) >= 2,
+            "retry loop exited without attempting fetches; attempt = {}",
+            attempt.load(Ordering::SeqCst)
+        );
+        assert!(
+            state.local.load().is_some(),
+            "state should have been populated on the 2nd attempt"
+        );
     }
 }
