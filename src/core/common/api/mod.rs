@@ -1,5 +1,7 @@
+pub mod compose;
 mod types;
 
+pub use compose::compose_admin_routes;
 pub use types::{ApiResponse, ListResponse};
 
 use axum::{
@@ -16,7 +18,7 @@ use tower_http::cors::{Any, CorsLayer};
 /// Call this BEFORE `wrap_with_unified_auth_layer` so the status path exists
 /// when the middleware layer wraps the whole router (the middleware then
 /// exact-match bypasses the path for the client contract).
-pub fn add_auth_status_route(
+pub(crate) fn add_auth_status_route(
     router: Router,
     unified_state: std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
 ) -> Router {
@@ -47,7 +49,7 @@ pub fn add_auth_status_route(
 /// let app = app.merge(status_router);                           // /auth/status (reads state)
 /// let app = wrap_with_unified_auth_layer(app, state.clone());   // now layer protects everything
 /// ```
-pub fn wrap_with_unified_auth_layer(
+pub(crate) fn wrap_with_unified_auth_layer(
     router: Router,
     state: std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
 ) -> Router {
@@ -61,7 +63,7 @@ pub fn wrap_with_unified_auth_layer(
 ///
 /// Allows any origin, method, and header. Suitable for development and
 /// scenarios where the Admin API is behind a gateway that enforces stricter policies.
-pub fn apply_cors_layer(router: Router) -> Router {
+pub(crate) fn apply_cors_layer(router: Router) -> Router {
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
     router.layer(cors)
 }
@@ -157,7 +159,7 @@ pub fn apply_local_auth_layer(
 /// Routes are only added when the operator intends local auth to be enabled
 /// (i.e. `[local_auth].enabled = true` or auto-generate fallback). When the
 /// operator explicitly disabled local auth, the routes are omitted.
-pub fn add_local_auth_routes(
+pub(crate) fn add_local_auth_routes(
     router: Router,
     unified_state: std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
     local_auth_intent: bool,
