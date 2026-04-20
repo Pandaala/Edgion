@@ -688,4 +688,70 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
+
+    /// Documents an axum gotcha that caused a bug during fix #01:
+    /// `router.layer(L).merge(other)` does NOT apply `L` to routes brought in
+    /// via `merge`. Guard against re-introducing this pattern.
+    #[tokio::test]
+    async fn layer_before_merge_does_not_protect_merged_routes() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let base: axum::Router = axum::Router::new()
+            .route("/base", axum::routing::get(|| async { "base-ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                unified_auth_middleware,
+            ));
+        let after_router: axum::Router =
+            axum::Router::new().route("/after", axum::routing::get(|| async { "after-ok" }));
+        let app = base.merge(after_router);
+
+        // /base was in the router when .layer() ran → gated (503 since no provider).
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri("/base").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // /after was merged AFTER .layer() → NOT gated. This is the axum behavior
+        // we have to work around: merge first, layer last.
+        let resp = app
+            .oneshot(Request::builder().uri("/after").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "axum does not retroactively layer merged routes; if this ever changes, update the comment"
+        );
+    }
+
+    /// The correct pattern the Controller/Center actually use: merge all routes
+    /// FIRST, then wrap with `.layer()` via `wrap_with_unified_auth_layer`.
+    /// Guards fix #01: `/api/v1/auth/me` must be behind the middleware.
+    #[tokio::test]
+    async fn merge_before_layer_protects_all_routes() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let base: axum::Router = axum::Router::new().route("/base", axum::routing::get(|| async { "base-ok" }));
+        let merged_in: axum::Router =
+            axum::Router::new().route("/merged", axum::routing::get(|| async { "merged-ok" }));
+        let app = base.merge(merged_in);
+        let app = app.layer(axum::middleware::from_fn_with_state(
+            state,
+            unified_auth_middleware,
+        ));
+
+        for path in ["/base", "/merged"] {
+            let resp = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{path} must be gated"
+            );
+        }
+    }
 }

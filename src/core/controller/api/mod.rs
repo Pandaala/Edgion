@@ -264,14 +264,19 @@ pub async fn serve(
     require_auth: bool,
     needs_retry: bool,
 ) -> anyhow::Result<()> {
-    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
-    // Build unified auth state first, then add login/me/logout routes using that state.
-    // require_auth is passed in by the Controller cli layer (derive_require_auth) — intent-based.
+    // Build state first, wire routes, then wrap with the unified auth layer LAST.
+    // axum's `.layer()` only protects routes already in the router at call time;
+    // merging routes after `.layer()` would silently bypass auth.
+    let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
+        auth_config,
+        local_auth_config,
+        require_auth,
+        "admin_api",
+    )?;
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
-    let (router_with_auth, auth_state) =
-        api::apply_unified_auth_layer(base_router, auth_config, local_auth_config, require_auth, "admin_api")?;
-    let app = api::add_local_auth_routes(router_with_auth, auth_state.clone(), local_auth_intent);
-    let app = api::apply_cors_layer(app);
+
+    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
+    let app = api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
 
     // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
     // transitions after background Secret retry become visible to clients.
@@ -284,6 +289,11 @@ pub async fn serve(
         }),
     );
     let app = app.merge(status_router);
+
+    // Now that ALL auth-relevant routes (including /api/v1/auth/me which must
+    // be gated) are merged in, wrap the whole router with the auth middleware.
+    let app = api::wrap_with_unified_auth_layer(app, auth_state.clone());
+    let app = api::apply_cors_layer(app);
 
     if needs_retry {
         let auth_state_for_retry = auth_state.clone();
@@ -335,14 +345,19 @@ pub async fn serve_with_shutdown(
     needs_retry: bool,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
-    // Build unified auth state first, then add login/me/logout routes using that state.
-    // require_auth is passed in by the Controller cli layer (derive_require_auth) — intent-based.
+    // Build state first, wire routes, then wrap with the unified auth layer LAST.
+    // axum's `.layer()` only protects routes already in the router at call time;
+    // merging routes after `.layer()` would silently bypass auth.
+    let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
+        auth_config,
+        local_auth_config,
+        require_auth,
+        "admin_api",
+    )?;
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
-    let (router_with_auth, auth_state) =
-        api::apply_unified_auth_layer(base_router, auth_config, local_auth_config, require_auth, "admin_api")?;
-    let app = api::add_local_auth_routes(router_with_auth, auth_state.clone(), local_auth_intent);
-    let app = api::apply_cors_layer(app);
+
+    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
+    let app = api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
 
     // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
     // transitions after background Secret retry become visible to clients.
@@ -355,6 +370,10 @@ pub async fn serve_with_shutdown(
         }),
     );
     let app = app.merge(status_router);
+
+    // Wrap the fully-merged router with the auth middleware. See `serve` for rationale.
+    let app = api::wrap_with_unified_auth_layer(app, auth_state.clone());
+    let app = api::apply_cors_layer(app);
 
     if needs_retry {
         let auth_state_for_retry = auth_state.clone();

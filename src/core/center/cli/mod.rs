@@ -191,18 +191,23 @@ impl EdgionCenterCli {
             })
         });
         let http_handle = tokio::spawn(async move {
-            let base_router = router(api_state);
+            // Build state first, wire routes, wrap with auth layer LAST. See
+            // `common::api::wrap_with_unified_auth_layer` docs: `.layer()` only
+            // protects routes present at the time of the call, so anything
+            // merged after would silently bypass auth.
             let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
             let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled) || local_auth_intent;
-            let (app, auth_state) = crate::core::common::api::apply_unified_auth_layer(
-                base_router,
+            let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
                 auth_config.as_ref(),
                 local_auth_config.as_ref(),
                 require_auth,
                 "center",
             )
-            .expect("center auth layer build failed");
-            let app = crate::core::common::api::add_local_auth_routes(app, auth_state.clone(), local_auth_intent);
+            .expect("center auth state build failed");
+            let base_router = router(api_state);
+            let app =
+                crate::core::common::api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
+            let app = crate::core::common::api::wrap_with_unified_auth_layer(app, auth_state);
             let app = crate::core::common::api::apply_cors_layer(app);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();

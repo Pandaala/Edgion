@@ -35,11 +35,35 @@ pub fn apply_unified_auth_layer(
         require_auth,
         component,
     )?;
-    let router = router.layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::core::common::unified_auth::unified_auth_middleware,
-    ));
+    let router = wrap_with_unified_auth_layer(router, state.clone());
     Ok((router, state))
+}
+
+/// Wrap an already-built router with the unified auth middleware using a
+/// pre-constructed `UnifiedAuthState`.
+///
+/// **Call this AFTER all `.merge()` of auth-gated sub-routers** — axum's
+/// `.layer()` only wraps routes already present in the router at call time;
+/// sub-routes merged in later would otherwise bypass the middleware and
+/// silently serve unauthenticated.
+///
+/// The typical pattern is:
+///
+/// ```ignore
+/// let state = UnifiedAuthState::from_configs(...)?;
+/// let app = base_router;
+/// let app = add_local_auth_routes(app, state.clone(), intent); // /auth/login, /auth/logout, /auth/me
+/// let app = app.merge(status_router);                           // /auth/status (reads state)
+/// let app = wrap_with_unified_auth_layer(app, state.clone());   // now layer protects everything
+/// ```
+pub fn wrap_with_unified_auth_layer(
+    router: Router,
+    state: std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
+) -> Router {
+    router.layer(axum::middleware::from_fn_with_state(
+        state,
+        crate::core::common::unified_auth::unified_auth_middleware,
+    ))
 }
 
 /// Apply a permissive CORS layer to an Axum router.
