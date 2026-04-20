@@ -401,7 +401,6 @@ impl RequestFilter for HeaderCertAuth {
         }
 
         plugin_log.push("cert verify:ok");
-        plugin_log.push("OK");
         PluginRunningResult::GoodNext
     }
 }
