@@ -71,13 +71,13 @@ impl Csrf {
                     .build();
 
                 if let Err(_e) = session.set_response_header("Set-Cookie", &cookie.to_string()) {
-                    plugin_log.push("Token set failed; ");
+                    plugin_log.push("Token set failed");
                 } else {
-                    plugin_log.push("Token set; ");
+                    plugin_log.push("Token set");
                 }
             }
             Err(_e) => {
-                plugin_log.push("Token encode failed; ");
+                plugin_log.push("Token encode failed");
             }
         }
     }
@@ -94,7 +94,7 @@ impl RequestFilter for Csrf {
 
         // For safe methods, skip validation but set cookie for future use
         if SAFE_METHODS.contains(&method.as_str()) {
-            plugin_log.push("Skip safe method; ");
+            plugin_log.push("Skip safe method");
             self.set_csrf_cookie(session, plugin_log);
             return PluginRunningResult::GoodNext;
         }
@@ -103,7 +103,7 @@ impl RequestFilter for Csrf {
         let header_token = match session.header_value(&self.config.name) {
             Some(token) if !token.is_empty() => token,
             _ => {
-                plugin_log.push("Deny missing token; ");
+                plugin_log.push("Deny missing token");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"no csrf token in headers"}"#.to_string()),
@@ -115,7 +115,7 @@ impl RequestFilter for Csrf {
         let cookie_token = match self.get_cookie_value(session, &self.config.name) {
             Some(token) => token,
             None => {
-                plugin_log.push("Deny missing token; ");
+                plugin_log.push("Deny missing token");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"no csrf cookie"}"#.to_string()),
@@ -125,7 +125,7 @@ impl RequestFilter for Csrf {
 
         // 3. Tokens must MATCH (Double Submit Cookie Pattern)
         if header_token != cookie_token {
-            plugin_log.push("Deny bad token; ");
+            plugin_log.push("Deny bad token");
             return PluginRunningResult::ErrResponse {
                 status: 401,
                 body: Some(r#"{"error_msg":"csrf token mismatch"}"#.to_string()),
@@ -136,10 +136,10 @@ impl RequestFilter for Csrf {
         match CsrfToken::decode(&cookie_token) {
             Ok(token) => {
                 if token.verify(&self.config.key, self.config.expires) {
-                    plugin_log.push("OK; ");
+                    plugin_log.push("OK");
                     PluginRunningResult::GoodNext
                 } else {
-                    plugin_log.push("Deny bad token; ");
+                    plugin_log.push("Deny bad token");
                     PluginRunningResult::ErrResponse {
                         status: 401,
                         body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),
@@ -147,7 +147,7 @@ impl RequestFilter for Csrf {
                 }
             }
             Err(_e) => {
-                plugin_log.push("Deny bad token; ");
+                plugin_log.push("Deny bad token");
                 PluginRunningResult::ErrResponse {
                     status: 401,
                     body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),

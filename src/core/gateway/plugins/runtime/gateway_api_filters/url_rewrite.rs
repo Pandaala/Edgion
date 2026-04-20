@@ -74,9 +74,9 @@ impl URLRewriteFilter {
         };
 
         if let Err(e) = session.set_upstream_uri(&final_uri) {
-            plugin_log.push(&format!("URLRewrite path failed: {}; ", e));
+            plugin_log.push(&format!("URLRewrite path failed: {}", e));
         } else {
-            plugin_log.push(&format!("URLRewrite path: {} -> {}; ", original_path, rewritten_path));
+            plugin_log.push(&format!("URLRewrite path: {} -> {}", original_path, rewritten_path));
         }
     }
 
@@ -88,14 +88,14 @@ impl URLRewriteFilter {
         let mut ok = true;
         if let Err(e) = session.set_upstream_host(hostname) {
             ok = false;
-            plugin_log.push(&format!("URLRewrite host failed: {}; ", e));
+            plugin_log.push(&format!("URLRewrite host failed: {}", e));
         }
 
         // Keep :authority in sync for HTTP/2 style requests.
         let _ = session.set_request_header(":authority", hostname);
 
         if ok {
-            plugin_log.push(&format!("URLRewrite host -> {}; ", hostname));
+            plugin_log.push(&format!("URLRewrite host -> {}", hostname));
         }
     }
 }

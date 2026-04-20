@@ -243,7 +243,7 @@ impl ProxyRewrite {
             if let Err(_e) = session.set_upstream_method(method_str) {
                 plugin_log.push_err("method rewrite fail");
             } else {
-                plugin_log.push(&format!("method rewrite {}; ", method_str));
+                plugin_log.push(&format!("method rewrite {}", method_str));
             }
         }
     }

@@ -227,7 +227,7 @@ impl RequestFilter for GapiCorsFilter {
         };
 
         if !self.is_origin_allowed(&origin) {
-            plugin_log.push("CORS: origin rejected; ");
+            plugin_log.push("CORS: origin rejected");
             // For preflight with non-matching origin, return 204 directly
             // to avoid forwarding a useless OPTIONS request to the backend.
             if self.is_preflight(session) {
@@ -235,7 +235,7 @@ impl RequestFilter for GapiCorsFilter {
                     let _ = session.write_response_header(Box::new(resp), true).await;
                     let _ = session.write_response_body(Some(Bytes::new()), true).await;
                 }
-                plugin_log.push("CORS: preflight rejected; ");
+                plugin_log.push("CORS: preflight rejected");
                 return PluginRunningResult::ErrTerminateRequest;
             }
             // Simple request: allow through without CORS headers
@@ -251,13 +251,13 @@ impl RequestFilter for GapiCorsFilter {
                 let _ = session.write_response_body(Some(Bytes::new()), true).await;
             }
 
-            plugin_log.push("CORS: preflight handled; ");
+            plugin_log.push("CORS: preflight handled");
             return PluginRunningResult::ErrTerminateRequest;
         }
 
         // Normal CORS request: queue headers for application during upstream response phase
         self.set_cors_headers_via_session(session, &origin);
-        plugin_log.push("CORS: headers set; ");
+        plugin_log.push("CORS: headers set");
         PluginRunningResult::GoodNext
     }
 }

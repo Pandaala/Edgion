@@ -153,7 +153,7 @@ impl RequestFilter for KeyAuth {
             None => {
                 // No key provided - check anonymous access
                 if let Some(ref anon_user) = self.config.anonymous {
-                    plugin_log.push("Allow anon; ");
+                    plugin_log.push("Allow anon");
 
                     // Set anonymous consumer header if in whitelist
                     if self
@@ -169,7 +169,7 @@ impl RequestFilter for KeyAuth {
                     return PluginRunningResult::GoodNext;
                 }
 
-                plugin_log.push("Deny no key; ");
+                plugin_log.push("Deny no key");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Missing API key").await;
             }
@@ -179,7 +179,7 @@ impl RequestFilter for KeyAuth {
         let metadata = match self.validate_key(&key) {
             Some(m) => m,
             None => {
-                plugin_log.push("Deny bad key; ");
+                plugin_log.push("Deny bad key");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Invalid API key").await;
             }
@@ -187,20 +187,20 @@ impl RequestFilter for KeyAuth {
 
         // Log key source (header / query / cookie / etc.)
         let key_source_label = match &used_source {
-            KeyGet::Header { .. } => "key header; ",
-            KeyGet::Query { .. } => "key query; ",
-            KeyGet::Cookie { .. } => "key cookie; ",
-            KeyGet::Ctx { .. } => "key ctx; ",
-            KeyGet::Webhook { .. } => "key webhook; ",
-            _ => "key other; ",
+            KeyGet::Header { .. } => "key header",
+            KeyGet::Query { .. } => "key query",
+            KeyGet::Cookie { .. } => "key cookie",
+            KeyGet::Ctx { .. } => "key ctx",
+            KeyGet::Webhook { .. } => "key webhook",
+            _ => "key other",
         };
         plugin_log.push(key_source_label);
 
         // Log OK with username if available
         if let Some(username) = metadata.headers.get("X-Consumer-Username") {
-            plugin_log.push(&format!("OK user {}; ", username));
+            plugin_log.push(&format!("OK user {}", username));
         } else {
-            plugin_log.push("OK; ");
+            plugin_log.push("OK");
         }
 
         // 3. Set upstream headers (from whitelist)

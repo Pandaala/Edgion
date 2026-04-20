@@ -554,12 +554,12 @@ impl RequestFilter for RateLimitRedis {
         match self.check_rate_limit(&client, &limit_key).await {
             Ok(result) if result.allowed => {
                 self.add_headers(session, result.remaining, result.limit);
-                plugin_log.push(&format!("rl:ok,kl={},r={}; ", kl, result.remaining));
+                plugin_log.push(&format!("rl:ok,kl={},r={}", kl, result.remaining));
                 PluginRunningResult::GoodNext
             }
             Ok(result) => {
                 let retry_after = Duration::from_millis(result.retry_ms.max(0) as u64);
-                plugin_log.push(&format!("rl:lim,kl={},rms={}; ", kl, result.retry_ms));
+                plugin_log.push(&format!("rl:lim,kl={},rms={}", kl, result.retry_ms));
                 self.reject_request(session, retry_after, Some(&result)).await
             }
             Err(_e) => {

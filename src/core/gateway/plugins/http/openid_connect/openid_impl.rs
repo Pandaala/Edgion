@@ -1764,7 +1764,7 @@ impl OpenidConnect {
             .send_redirect_with_cookies(session, &redirect_target, &cookies)
             .await;
 
-        plugin_log.push("OIDC callback exchanged code and established session; ");
+        plugin_log.push("OIDC callback exchanged code and established session");
         PluginRunningResult::ErrTerminateRequest
     }
 }

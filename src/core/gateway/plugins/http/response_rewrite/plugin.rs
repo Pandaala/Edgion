@@ -34,7 +34,7 @@ impl ResponseRewrite {
             if let Err(_e) = session.set_response_status(status_code) {
                 plugin_log.push_err("status rewrite fail");
             } else {
-                plugin_log.push(&format!("status rewrite {}; ", status_code));
+                plugin_log.push(&format!("status rewrite {}", status_code));
             }
         }
     }

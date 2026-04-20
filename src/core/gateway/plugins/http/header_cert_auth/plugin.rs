@@ -343,9 +343,9 @@ impl HeaderCertAuth {
     fn push_cert_deny(plugin_log: &mut PluginLog, detail: &'static str) {
         // Decode / load errors (push_err only); known deny labels get a push entry.
         let label = match detail {
-            "expired-leaf-cert" => Some("Deny cert expired; "),
-            "ca-verification-failed" => Some("Deny cert untrusted; "),
-            "missing-cert-header" | "no-client-cert" => Some("Deny missing cert; "),
+            "expired-leaf-cert" => Some("Deny cert expired"),
+            "ca-verification-failed" => Some("Deny cert untrusted"),
+            "missing-cert-header" | "no-client-cert" => Some("Deny missing cert"),
             // Decode / load failures: push_err in reject() is sufficient.
             _ => None,
         };
@@ -375,7 +375,7 @@ impl RequestFilter for HeaderCertAuth {
                     if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {
                         let _ = session.remove_request_header(&self.config.certificate_header_name);
                     }
-                    plugin_log.push("Allow anonymous; ");
+                    plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
                 }
                 Self::push_cert_deny(plugin_log, detail);
@@ -389,7 +389,7 @@ impl RequestFilter for HeaderCertAuth {
                 if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {
                     let _ = session.remove_request_header(&self.config.certificate_header_name);
                 }
-                plugin_log.push("Allow anonymous; ");
+                plugin_log.push("Allow anonymous");
                 return PluginRunningResult::GoodNext;
             }
             Self::push_cert_deny(plugin_log, detail);
@@ -400,8 +400,8 @@ impl RequestFilter for HeaderCertAuth {
             let _ = session.remove_request_header(&self.config.certificate_header_name);
         }
 
-        plugin_log.push("cert verify:ok; ");
-        plugin_log.push("OK; ");
+        plugin_log.push("cert verify:ok");
+        plugin_log.push("OK");
         PluginRunningResult::GoodNext
     }
 }
@@ -439,7 +439,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK; "));
+        assert!(log.contains("OK"));
     }
 
     #[tokio::test]
@@ -459,6 +459,6 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("Allow anonymous; "));
+        assert!(log.contains("Allow anonymous"));
     }
 }

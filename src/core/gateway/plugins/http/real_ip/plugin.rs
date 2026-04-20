@@ -63,10 +63,10 @@ impl RequestFilter for RealIp {
 
         // Push which header is configured
         match extractor.real_ip_header().to_ascii_lowercase().as_str() {
-            "x-forwarded-for" => plugin_log.push("header xff; "),
-            "x-real-ip" => plugin_log.push("header real-ip; "),
-            "forwarded" => plugin_log.push("header forwarded; "),
-            _ => plugin_log.push("header custom; "),
+            "x-forwarded-for" => plugin_log.push("header xff"),
+            "x-real-ip" => plugin_log.push("header real-ip"),
+            "forwarded" => plugin_log.push("header forwarded"),
+            _ => plugin_log.push("header custom"),
         };
 
         // Check if client addr is a trusted proxy
@@ -78,9 +78,9 @@ impl RequestFilter for RealIp {
             .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
         if extractor.is_trusted_proxy(&client_ip) {
-            plugin_log.push("trusted proxy:match; ");
+            plugin_log.push("trusted proxy:match");
         } else {
-            plugin_log.push("trusted proxy:miss; ");
+            plugin_log.push("trusted proxy:miss");
         }
 
         // Get current remote_addr (clone to avoid borrow conflicts)
@@ -100,9 +100,9 @@ impl RequestFilter for RealIp {
                 return PluginRunningResult::GoodNext;
             }
 
-            plugin_log.push(&format!("ip updated: {}; ", new_remote_addr));
+            plugin_log.push(&format!("ip updated: {}", new_remote_addr));
         } else {
-            plugin_log.push("ip unchanged; ");
+            plugin_log.push("ip unchanged");
         }
 
         PluginRunningResult::GoodNext

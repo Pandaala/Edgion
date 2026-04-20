@@ -393,7 +393,7 @@ impl RequestFilter for JweDecrypt {
             let _ = session.remove_request_header(&self.config.header);
         }
 
-        plugin_log.push("OK; ");
+        plugin_log.push("OK");
         PluginRunningResult::GoodNext
     }
 }
@@ -465,7 +465,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK; "));
+        assert!(log.contains("OK"));
     }
 
     #[tokio::test]

@@ -381,7 +381,7 @@ impl RequestFilter for HmacAuth {
             None => {
                 if let Some(anonymous) = &self.config.anonymous {
                     self.set_anonymous_headers(session, anonymous);
-                    plugin_log.push("Allow anonymous; ");
+                    plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
                 }
                 return self
@@ -390,7 +390,7 @@ impl RequestFilter for HmacAuth {
                         plugin_log,
                         401,
                         "Missing Authorization header",
-                        "Deny missing auth; ",
+                        "Deny missing auth",
                     )
                     .await;
             }
@@ -413,7 +413,7 @@ impl RequestFilter for HmacAuth {
                         plugin_log,
                         401,
                         "Invalid HMAC authorization format",
-                        "Deny bad format; ",
+                        "Deny bad format",
                     )
                     .await;
             }
@@ -426,7 +426,7 @@ impl RequestFilter for HmacAuth {
                     plugin_log,
                     401,
                     "Algorithm not allowed",
-                    "Deny bad algorithm; ",
+                    "Deny bad algorithm",
                 )
                 .await;
         }
@@ -435,7 +435,7 @@ impl RequestFilter for HmacAuth {
             Some(v) => v,
             None => {
                 return self
-                    .reject(session, plugin_log, 401, "Invalid credentials", "Deny missing key; ")
+                    .reject(session, plugin_log, 401, "Invalid credentials", "Deny missing key")
                     .await;
             }
         };
@@ -449,20 +449,20 @@ impl RequestFilter for HmacAuth {
                         plugin_log,
                         401,
                         "Missing required signed header: date or x-date",
-                        "Deny missing date signed; ",
+                        "Deny missing date signed",
                     )
                     .await;
             }
         };
         if let Err(message) = Self::validate_clock_skew(session, self.config.clock_skew, signed_date) {
             return self
-                .reject(session, plugin_log, 401, message, "Deny bad timestamp; ")
+                .reject(session, plugin_log, 401, message, "Deny bad timestamp")
                 .await;
         }
 
         if let Err(message) = self.validate_enforce_headers(&params.headers) {
             return self
-                .reject(session, plugin_log, 401, &message, "Deny missing required header; ")
+                .reject(session, plugin_log, 401, &message, "Deny missing required header")
                 .await;
         }
 
@@ -470,21 +470,21 @@ impl RequestFilter for HmacAuth {
             Ok(v) => v,
             Err(message) => {
                 return self
-                    .reject(session, plugin_log, 401, message, "Deny missing header; ")
+                    .reject(session, plugin_log, 401, message, "Deny missing header")
                     .await;
             }
         };
 
         if !Self::verify_signature(params.algorithm, &credential.secret, &signing_string, &params.signature) {
             return self
-                .reject(session, plugin_log, 401, "Invalid signature", "Deny bad signature; ")
+                .reject(session, plugin_log, 401, "Invalid signature", "Deny bad signature")
                 .await;
         }
 
         self.set_upstream_headers(session, credential);
         self.hide_credentials(session);
 
-        plugin_log.push(&format!("OK user {}; ", params.username));
+        plugin_log.push(&format!("OK user {}", params.username));
         PluginRunningResult::GoodNext
     }
 }
@@ -575,7 +575,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("Allow anonymous; "));
+        assert!(log.contains("Allow anonymous"));
     }
 
     #[tokio::test]
@@ -607,7 +607,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK user alice; "));
+        assert!(log.contains("OK user alice"));
     }
 
     #[tokio::test]
@@ -637,7 +637,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("Deny bad signature; "));
+        assert!(log.contains("Deny bad signature"));
     }
 
     #[tokio::test]
@@ -663,6 +663,6 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("Deny missing date signed; "));
+        assert!(log.contains("Deny missing date signed"));
     }
 }

@@ -181,13 +181,13 @@ impl RequestFilter for RequestRestriction {
 
         if denied {
             let deny_msg = match denied_source {
-                Some(RestrictionSource::Method) => "Deny method; ",
-                Some(RestrictionSource::Path) => "Deny path; ",
-                Some(RestrictionSource::Header) => "Deny header; ",
-                Some(RestrictionSource::Cookie) => "Deny cookie; ",
-                Some(RestrictionSource::Query) => "Deny query; ",
-                Some(RestrictionSource::Referer) => "Deny referer; ",
-                None => "Deny rule; ",
+                Some(RestrictionSource::Method) => "Deny method",
+                Some(RestrictionSource::Path) => "Deny path",
+                Some(RestrictionSource::Header) => "Deny header",
+                Some(RestrictionSource::Cookie) => "Deny cookie",
+                Some(RestrictionSource::Query) => "Deny query",
+                Some(RestrictionSource::Referer) => "Deny referer",
+                None => "Deny rule",
             };
             plugin_log.push(deny_msg);
 
@@ -220,7 +220,7 @@ impl RequestFilter for RequestRestriction {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        plugin_log.push("Allow; ");
+        plugin_log.push("Allow");
         PluginRunningResult::GoodNext
     }
 }

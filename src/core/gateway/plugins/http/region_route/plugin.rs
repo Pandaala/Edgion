@@ -72,7 +72,7 @@ impl RegionRoute {
         log: &mut PluginLog,
     ) -> Option<(Arc<ClusterRegionRouteConfig>, Arc<ServiceRegionRouteConfig>)> {
         if self.service_ref_name.is_empty() {
-            log.push("config invalid, pass; ");
+            log.push("config invalid, pass");
             return None;
         }
 
@@ -81,7 +81,7 @@ impl RegionRoute {
         let svc = match store.get_service_region_route_config_by_key(&self.service_lookup_key) {
             Some(s) => s,
             None => {
-                log.push("config invalid, pass; ");
+                log.push("config invalid, pass");
                 return None;
             }
         };
@@ -89,7 +89,7 @@ impl RegionRoute {
         let cluster_ref = match &svc.cluster_ref {
             Some(r) => r,
             None => {
-                log.push("config invalid, pass; ");
+                log.push("config invalid, pass");
                 return None;
             }
         };
@@ -99,7 +99,7 @@ impl RegionRoute {
         let cluster = match store.get_cluster_region_route_config_by_key(&cluster_key) {
             Some(g) => g,
             None => {
-                log.push("config invalid, pass; ");
+                log.push("config invalid, pass");
                 return None;
             }
         };
@@ -165,7 +165,7 @@ impl RegionRoute {
 
         match regions.iter().enumerate().find(|(_, r)| r.name == target_name) {
             Some((target_idx, target_region)) => {
-                log.push(&format!("redirect {}→{}; ", region.name, target_region.name));
+                log.push(&format!("redirect {}→{}", region.name, target_region.name));
                 (target_idx, target_region)
             }
             None => {
@@ -185,7 +185,7 @@ impl RegionRoute {
     ) -> PluginRunningResult {
         // myRegion check: pass through if this is the local region
         if !cluster.my_region.is_empty() && cluster.my_region == region.name {
-            log.push("local, pass; ");
+            log.push("local, pass");
             return PluginRunningResult::GoodNext;
         }
 
@@ -199,8 +199,8 @@ impl RegionRoute {
             .unwrap_or_default()
             .to_string();
 
-        log.push("proxy pass; ");
-        log.push(&format!("→{} {}:{}; ", region.name, host, port));
+        log.push("proxy pass");
+        log.push(&format!("→{} {}:{}", region.name, host, port));
 
         session.set_external_jump(ExternalJumpPreset {
             domain: host.to_string(),
@@ -225,7 +225,7 @@ impl RegionRoute {
             if let Some((raw, src)) = self.extract_first(session, hkg).await {
                 if let Ok(v) = raw.parse::<u16>() {
                     if v < modulo {
-                        log.push(&format!("hash_pass={} from:{}; ", v, src.as_log_str()));
+                        log.push(&format!("hash_pass={} from:{}", v, src.as_log_str()));
                         return Self::lookup_region(&cluster.regions, v);
                     }
                 }
@@ -235,26 +235,26 @@ impl RegionRoute {
         let calc = match cluster.hash_calc.as_ref() {
             Some(c) => c,
             None => {
-                log.push("no hashCalc, pass; ");
+                log.push("no hashCalc, pass");
                 return None;
             }
         };
 
         if cluster.key_get.is_empty() {
-            log.push("no keyGet, pass; ");
+            log.push("no keyGet, pass");
             return None;
         }
 
         let (key, src) = match self.extract_first(session, &cluster.key_get).await {
             Some(v) => v,
             None => {
-                log.push("key missing, pass; ");
+                log.push("key missing, pass");
                 return None;
             }
         };
 
         let hash_val = compute_hash(&key, &calc.algorithm, calc.modulo);
-        log.push(&format!("key={} hash={}; ", src.as_log_str(), hash_val));
+        log.push(&format!("key={} hash={}", src.as_log_str(), hash_val));
 
         if !calc.write_back.is_empty() {
             let mut targets = String::new();
@@ -265,12 +265,12 @@ impl RegionRoute {
                 }
                 targets.push_str(&wb.as_log_str());
             }
-            log.push(&format!("wb→{}; ", targets));
+            log.push(&format!("wb→{}", targets));
         }
 
         let result = Self::lookup_region(&cluster.regions, hash_val);
         if result.is_none() {
-            log.push(&format!("hash={} no_range, pass; ", hash_val));
+            log.push(&format!("hash={} no_range, pass", hash_val));
         }
         result
     }
@@ -306,12 +306,12 @@ impl RequestFilter for RegionRoute {
                     };
                     match Self::find_region(&cluster.regions, &name) {
                         Some((idx, region)) => {
-                            log.push(&format!("direct={}(from:{}); ", name, src.as_log_str()));
+                            log.push(&format!("direct={}(from:{})", name, src.as_log_str()));
                             let (_, region) = Self::apply_redirect(&cluster.regions, idx, region, &svc, log);
                             return self.route_to(session, region, &cluster, log).await;
                         }
                         None => {
-                            log.push(&format!("direct unknown '{}', fallthrough; ", name));
+                            log.push(&format!("direct unknown '{}', fallthrough", name));
                             continue;
                         }
                     }
@@ -327,17 +327,17 @@ impl RequestFilter for RegionRoute {
                     match effective_map.get(&value) {
                         Some(region_name) => match Self::find_region(&cluster.regions, region_name) {
                             Some((idx, region)) => {
-                                log.push(&format!("match={}→{}; ", src.as_log_str(), region.name));
+                                log.push(&format!("match={}→{}", src.as_log_str(), region.name));
                                 let (_, region) = Self::apply_redirect(&cluster.regions, idx, region, &svc, log);
                                 return self.route_to(session, region, &cluster, log).await;
                             }
                             None => {
-                                log.push(&format!("match={}→{} unknown; ", src.as_log_str(), region_name));
+                                log.push(&format!("match={}→{} unknown", src.as_log_str(), region_name));
                                 continue;
                             }
                         },
                         None => {
-                            log.push(&format!("match={} no conf; ", src.as_log_str()));
+                            log.push(&format!("match={} no conf", src.as_log_str()));
                             continue;
                         }
                     }

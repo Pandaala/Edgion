@@ -228,11 +228,11 @@ impl RequestFilter for Cors {
         let allowed_origin = match self.get_validated_origin(session) {
             Some(origin) => origin,
             None => {
-                plugin_log.push("origin match:deny; ");
+                plugin_log.push("origin match:deny");
                 // For preflight with non-matching origin, return 204 directly
                 // to avoid forwarding a useless OPTIONS request to the backend.
                 if self.is_preflight_request(session) {
-                    plugin_log.push("cors preflight; ");
+                    plugin_log.push("cors preflight");
                     if let Ok(resp) = ResponseHeader::build(204, None) {
                         let _ = session.write_response_header(Box::new(resp), true).await;
                         let _ = session.write_response_body(Some(Bytes::new()), true).await;
@@ -246,13 +246,13 @@ impl RequestFilter for Cors {
 
         // Check if this is a preflight request
         if self.is_preflight_request(session) {
-            plugin_log.push("cors preflight; ");
+            plugin_log.push("cors preflight");
             if let Err(_e) = self.handle_preflight(session, &allowed_origin).await {
-                plugin_log.push("origin match:deny; ");
+                plugin_log.push("origin match:deny");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
-            plugin_log.push("origin match:allow; ");
+            plugin_log.push("origin match:allow");
 
             // If preflight_continue is true, continue to upstream
             if self.config.preflight_continue {
@@ -264,11 +264,11 @@ impl RequestFilter for Cors {
         }
 
         // Normal CORS request - set response headers
-        plugin_log.push("cors actual; ");
+        plugin_log.push("cors actual");
         if let Err(_e) = self.handle_normal_request(session, &allowed_origin) {
-            plugin_log.push("origin match:deny; ");
+            plugin_log.push("origin match:deny");
         } else {
-            plugin_log.push("origin match:allow; ");
+            plugin_log.push("origin match:allow");
         }
 
         // Continue processing

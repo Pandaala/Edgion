@@ -289,7 +289,7 @@ impl BasicAuth {
 
     fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
-            plugin_log.push("Allow anonymous; ");
+            plugin_log.push("Allow anonymous");
             let _ = session.set_request_header("X-Consumer-Username", anonymous);
             let _ = session.set_request_header("X-Anonymous-Consumer", "true");
             return true;
@@ -322,7 +322,7 @@ impl RequestFilter for BasicAuth {
                 if self.handle_anonymous_access(session, plugin_log) {
                     return PluginRunningResult::GoodNext;
                 }
-                plugin_log.push("Deny no credential; ");
+                plugin_log.push("Deny no credential");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session).await;
                 return PluginRunningResult::ErrTerminateRequest;
@@ -333,7 +333,7 @@ impl RequestFilter for BasicAuth {
                 // a separate concern — bcrypt verify only runs when the user exists, so a
                 // sub-ms fast path still reveals user existence. Mitigate via
                 // `auth_failure_delay_ms` at the deployment layer.
-                plugin_log.push("Deny bad credential; ");
+                plugin_log.push("Deny bad credential");
                 // Credentials present but invalid — always reject, never anonymous
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session).await;
@@ -341,7 +341,7 @@ impl RequestFilter for BasicAuth {
             }
         };
 
-        plugin_log.push(&format!("OK user {}; ", username));
+        plugin_log.push(&format!("OK user {}", username));
 
         // Set consumer headers for upstream
         let _ = self.set_consumer_headers(session, &username);
