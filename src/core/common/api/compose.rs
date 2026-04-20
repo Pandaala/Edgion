@@ -35,6 +35,11 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 /// - `auth_state`: 共享认证状态，来自 `UnifiedAuthState::from_configs`。
 /// - `local_auth_intent`: 是否意图启用 local auth。`true` 时挂载
 ///   `/auth/{login,logout,me}`；`false` 时省略（OIDC-only 或显式禁用）。
+///   注：此参数不从 `auth_state` 派生。原因是 Controller 的 K8s Secret 自动
+///   生成路径允许"意图启用但 provider 尚未就绪"（`auth_state.local` 为 `None`
+///   但 intent 为 `true`），这种状态下仍应挂载路由（handler 返回 503 直到
+///   Secret 就绪）。`auth_state.local.load().is_some()` 无法区分这种情况
+///   和"显式禁用"，所以保留独立的 intent 参数。
 pub fn compose_admin_routes(business: Router, auth_state: Arc<UnifiedAuthState>, local_auth_intent: bool) -> Router {
     let with_auth_routes = add_local_auth_routes(business, auth_state.clone(), local_auth_intent);
     let with_status = add_auth_status_route(with_auth_routes, auth_state.clone());
@@ -56,12 +61,12 @@ mod tests {
     use crate::core::common::local_auth::LocalAuthConfig;
 
     fn valid_local() -> LocalAuthConfig {
-        let mut c = LocalAuthConfig::default();
-        c.enabled = true;
-        c.username = "admin".to_string();
-        c.password = "a_long_enough_password_123".to_string();
-        c.jwt_secret = "a_long_enough_jwt_secret_value_abcdef".to_string();
-        c
+        LocalAuthConfig {
+            username: "admin".to_string(),
+            password: "a_long_enough_password_123".to_string(),
+            jwt_secret: "a_long_enough_jwt_secret_value_abcdef".to_string(),
+            ..LocalAuthConfig::default()
+        }
     }
 
     fn new_state_with_local() -> Arc<UnifiedAuthState> {
