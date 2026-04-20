@@ -30,12 +30,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 
 
 ### Fixed
-- 
+
+- `secret_retry_loop` shutdown signal now uses `tokio_util::sync::CancellationToken`
+  instead of `tokio::sync::broadcast::Receiver<()>`; tolerates a dropped handle
+  without spuriously exiting on first poll. Fixes fix #01 round 3 P0 regression
+  class. (`src/core/common/local_auth/secret.rs`)
+
+### Internal
+
+- `common::api::compose_admin_routes` — new shared admin router composition
+  helper used by both Controller (`src/core/controller/api/mod.rs`) and Center
+  (`src/core/center/cli/mod.rs`). Enforces correct assembly order of business
+  routes + `/api/v1/auth/{login,logout,me,status}` + `unified_auth` middleware
+  + CORS; the returned `Router` is considered terminal. Fixes fix #01
+  round 2/4 P0 bug classes structurally.
+- `common::api::{add_local_auth_routes, add_auth_status_route,
+  wrap_with_unified_auth_layer, apply_cors_layer}` downgraded from
+  `pub` to `pub(crate)`. External crate callers are no longer supported;
+  use `compose_admin_routes` as the single entry point.
+- New integration regression `examples/test/scripts/integration/test_center_no_auth.sh`
+  wired into `run_integration.sh` default sweep.
 
 ### Removed
 - 
 
 ### Breaking Changes
+
+- **Center**: Removed `admin/edgion1234` default credential fallback.
+  Center now requires explicit `local_auth:` or `auth:` configuration in
+  its YAML. Deployments depending on the default must add a `local_auth:`
+  section (see `skills/02-features/02-config/03-auth-bootstrap.md`). When
+  neither is configured, Center still starts but rejects all admin
+  business endpoints with `503 Service Unavailable` (fail-close via
+  `unified_auth_middleware`'s initializing branch); `/health`, `/ready`,
+  `/metrics`, `/api/v1/auth/status` remain accessible. Startup logs a WARN
+  describing the required action.
 
 - **`EdgionStreamPlugin::IpRestriction`** — now uses `ConnectionIpRestrictionRules` (L4-only) instead of
   the HTTP `IpRestrictionConfig`. The following fields have been **removed** and will cause deserialization

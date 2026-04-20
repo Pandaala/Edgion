@@ -220,7 +220,8 @@ auth:
 
 ## `[local_auth]` — 本地认证
 
-内置用户名/密码认证，签发 HS256 JWT。不配置时自动生成随机凭据存入 Secret。
+内置用户名/密码认证，签发 HS256 JWT。**Controller** 不配置时自动生成随机凭据存入 Secret
+（Center 行为不同，见下方引用）。
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -240,15 +241,20 @@ local_auth:
   jwt_expiry_hours: 24
 ```
 
-### 自动生成凭据
+### 自动生成凭据（仅 Controller）
 
-当无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
+当 Controller 无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
 
 1. Controller 启动时通过 CenterApi 检查 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
 2. 不存在 → 生成随机 20 位密码 + 32 位 JWT secret → 创建 Secret
 3. 已存在 → 读取凭据继续启动
 4. FileSystem 模式：`{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
 5. K8s 模式：通过 K8s API 创建真正的 Secret
+
+> **Center 行为不同**：Center 没有 Secret 自动生成路径。无 `[local_auth]` + 无 `[auth]`
+> 时 Center 启动，但所有业务路由以 503 拒绝（fail-close via
+> `unified_auth_middleware` 的 initializing 分支）。详见
+> `skills/02-features/02-config/03-auth-bootstrap.md`。
 
 ## 当前项目里最常见的 Controller 配置改动
 

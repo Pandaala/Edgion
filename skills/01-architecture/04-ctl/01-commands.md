@@ -290,6 +290,21 @@ edgion-cli 在执行命令前自动检测认证状态，无需手动 login：
 4. 从配置推断 conf_dir → 读取 Secret `edgion-admin-credentials` → 自动登录
 5. 检测失败 → 提示手动 `edgion-cli login`
 
+### Controller vs Center 非对称性
+
+- **Controller**：Step 4 总会命中——Controller 启动时会自动生成 Secret
+  `edgion-admin-credentials`，`ensure_auth` 直接读取即可
+- **Center**：没有 Secret 自动生成路径。operator 必须在 Center YAML 中
+  显式配置 `[local_auth]` 或 `[auth]`；未配置时 Center 所有业务路由返回 503，
+  CLI 无法 auto-login（需手动 `edgion-cli login` 并自带凭证）。
+  详见 `skills/02-features/02-config/03-auth-bootstrap.md`
+
+### `/api/v1/auth/status` 永远可达
+
+`/api/v1/auth/status` 端点在 `compose_admin_routes` 中无条件挂载（Controller 与 Center
+共享同一装配入口；fix #01 round 3 回归点）。即便 Center 在零配置下所有业务路由 503，
+`/api/v1/auth/status` 仍返回 200，CLI `ensure_auth` 可以正常查询认证模式。
+
 ### 配置文件自动检测路径
 
 | 优先级 | 来源 |
