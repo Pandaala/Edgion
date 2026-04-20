@@ -444,6 +444,18 @@ impl PluginMetaDataStatusTestSuite {
                                             ),
                                         );
                                     }
+                                    let msg = r["message"].as_str().unwrap_or("");
+                                    // Fixture points at pm-status-gcir-valid (a GCIR) so the
+                                    // message must identify the target PM and the expected type.
+                                    if !msg.contains("pm-status-gcir-valid") || !msg.contains("ClusterRegionRoute") {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            format!(
+                                                "ResolvedRefs message should identify wrong-type ref target: '{}'",
+                                                msg
+                                            ),
+                                        );
+                                    }
                                     TestResult::passed_with_message(
                                         start.elapsed(),
                                         "ResolvedRefs=False/InvalidPluginMetaDataRef for wrong-type clusterRef"

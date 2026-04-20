@@ -46,8 +46,17 @@ EdgionAcme 是 Edgion 的自定义扩展资源，实现 ACME 协议（Automatic 
 
 ### update_status
 
-- 若有 validation_errors，设置 `last_failure_reason`
-- Status 包含 ACME 生命周期状态（phase、证书信息、最后成功/失败时间等）
+处理器侧（`EdgionAcmeHandler::update_status`）**只**管理 Gateway API 风格的 `Accepted` condition：
+
+- validation_errors 空 → `Accepted=True/Accepted`
+- validation_errors 非空 → `Accepted=False/Invalid`，message 是错误拼接
+- 同时保留 `last_failure_reason` 文本字段供仍读它的老工具使用
+
+**phase 及其他 ACME 生命周期字段**（`certificate_serial`、`last_renewal_time`、`secret_name` 等）不由 handler 写，而是由后台 `AcmeService` 通过 Server-Side Apply（field manager `edgion-acme-controller`）独立更新。两者的字段所有权不重叠：
+- Handler 写 `status.conditions`
+- AcmeService 写 `status.phase` 及相关字段（SSA patch 中 `conditions` 因 `skip_serializing_if = "Vec::is_empty"` 被忽略，不会清空 handler 写的 condition）
+
+SSA + handler Merge Patch 混写存在理论上的"processor 处理事件时 watch 尚未反映 AcmeService 最新 phase"的短暂回滚窗口，但下一次 watch event 会触发自愈，无持久状态丢失。
 
 ## ACME Service
 

@@ -7,10 +7,11 @@ description: PluginMetaData 资源：插件体系（类 EdgionPlugins），支�
 
 > **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
 
-PluginMetaData 是 Edgion 的自定义扩展资源，支持两种用途：
+PluginMetaData 是 Edgion 的自定义扩展资源，承载一个 `MetaDataEntry` 变体（tagged union，判别字段 `spec.metadata.type`）。当前共 **5 种**变体：
 
-1. **数据列表**（StringList / IpList / RegexList）：插件共享的静态数据
-2. **Plugin 体系**（`spec.plugins` 数组）：类 EdgionPlugins 的扩展配置，当前支持 RegionRoute，未来可扩展 StreamRegionRoute 等
+1. **数据列表**：`KeyList`（统一了旧的 StringList + RegexList，按 `matchMode: Exact|Regex` 区分）、`IpList`（CIDR 列表）
+2. **RegionRoute 体系**：`ClusterRegionRoute`（完整拓扑 + 路由规则）、`ServiceRegionRoute`（服务级 failover，通过 `clusterRef` 引用 ClusterRegionRoute PM）
+3. **L4 连接限制**：`GlobalConnectionIpRestriction`（被 EdgionStreamPlugins 通过 `pluginMetadataRef` 引用）
 
 ## 源码位置
 
@@ -49,12 +50,15 @@ spec:
         regions: [...]
 ```
 
-### MetaDataPlugin 枚举
+### MetaDataEntry 枚举（5 变体）
 
-| 变体 | 用途 |
-|------|------|
-| `ClusterRegionRoute` | 集群拓扑 + 路由规则 + matchMap（运维/Center 管理） |
-| `ServiceRegionRoute` | 服务级 failover + clusterRef 引用（管理员预建） |
+| 变体 | 用途 | 外部引用 |
+|------|------|---------|
+| `KeyList` | 键值列表，支持 `Exact` / `Regex` 匹配模式（被 KeyAuth、IpRestriction 等插件间接消费）| 无 |
+| `IpList` | CIDR 列表（IP 黑白名单类插件）| 无 |
+| `ClusterRegionRoute` | 集群拓扑 + 路由规则 + matchMap（运维/Center 管理） | 无 |
+| `ServiceRegionRoute` | 服务级 failover + `clusterRef` 引用一个 ClusterRegionRoute PM | `clusterRef` → ClusterRegionRoute PM |
+| `GlobalConnectionIpRestriction` | L4 连接阶段 IP 限制，带 profile 切换能力（Center-managed，被 EdgionStreamPlugins 消费）| 无 |
 
 ## RegionRoute 两层架构
 
@@ -194,30 +198,53 @@ Gateway 不缓存解析结果，每次请求通过 `PluginMetaDataGatewayStore` 
 
 ## Controller 侧处理
 
+### preparse
+
+- 调 `PluginMetaData::validate_pre_parse()` 收集 per-variant 校验错误（invalid CIDR、invalid regex、GCIR 的 `validate_and_init()` 失败等），返回 `Vec<String>`，作为 `Accepted=False/Invalid` 的依据
+
 ### parse
 
-- 更新 `PluginMetaDataStore`（供 EdgionPlugins handler 验证时查找）
-- 更新 `RegionRouteClusterTable`（ClusterRegionRoute 变体）或 `RegionRouteServiceTable`（ServiceRegionRoute 变体）
+- 更新 `PluginMetaDataStore`（供 EdgionPlugins、EdgionStreamPlugins handler 解析跨 PM 引用时查找）
+- 更新 `RegionRouteClusterTable`（`ClusterRegionRoute` 变体）或 `RegionRouteServiceTable`（`ServiceRegionRoute` 变体）
+- **Cross-PM ref 注册**：对 `ServiceRegionRoute` 变体，将 `cluster_ref` 注册到 `plugin_metadata_refs`，key 格式 `"<cluster_ns>/<cluster_name>"`，value 为 `"PluginMetaData:<this_ns>/<this_name>"`。先 `clear_refs_from` 本资源再重新注册，防止 spec 更新后旧 ref 残留
 
 ### on_change
 
-- 通过 `plugin_metadata_refs`（`PluginMetaDataRefManager`）查找引用此 PluginMetaData 的 EdgionPlugins → requeue（用于更新 status conditions；Gateway 不依赖此 requeue 即可正确路由）
+- 通过 `plugin_metadata_refs`（`PluginMetaDataRefManager`）查找引用此 PluginMetaData 的资源并 requeue。消费方包括：
+  - EdgionPlugins（通过 `serviceRegionRouteRef` → ServiceRegionRoute PM → `clusterRef` → ClusterRegionRoute PM 的链）
+  - EdgionStreamPlugins（通过 `GlobalConnectionIpRestriction.pluginMetadataRef` → GCIR PM）
+  - **其它 PluginMetaData**（ServiceRegionRoute → ClusterRegionRoute，新增的 PM→PM 反向 requeue）
+- requeue 通过 `ep_key.split_once(':')` 按 `<Kind>:<ns>/<name>` 约定分发到对应 processor
 
 ### on_delete
 
 - 从 `PluginMetaDataStore` 移除
 - 从 `RegionRouteClusterTable` / `RegionRouteServiceTable` 移除
-- Requeue 依赖资源
+- `clear_refs_from` 清除本资源注册的 cross-PM 出向引用
+- Requeue 所有依赖此 PM 的资源（让它们的 `ResolvedRefs` 重新计算为 False）
+
+### update_status
+
+PluginMetaData 的 status 遵循 Gateway API 约定，写两个 condition（使用 `k8s_openapi::Condition` 类型）：
+
+| Condition | 语义 | 驱动 |
+|-----------|------|------|
+| `Accepted` | spec 是否通过 preparse 校验 | preparse 返回的 validation_errors；空 → `True`/`Accepted`，非空 → `False`/`Invalid` |
+| `ResolvedRefs` | 外部引用是否解析成功 | 仅 `ServiceRegionRoute.clusterRef` 有意义；其他变体恒 `True`。找不到或目标类型不是 ClusterRegionRoute → `False`/`InvalidPluginMetaDataRef`（`ResolvedRefsError::PluginMetaDataNotFound` 变体） |
+
+`last_transition_time` 仅在 status 值变化时刷新。
 
 ## EdgionPlugins 侧验证逻辑
 
-Controller **不会**将路由配置复制进 EdgionPlugins，也**不会**自动创建 ServiceRegionRoute PluginMetaData。它只做存在性校验，验证结果写入 status conditions：
+Controller **不会**将路由配置复制进 EdgionPlugins，也**不会**自动创建 ServiceRegionRoute PluginMetaData。EdgionPlugins handler 做一次**整链**校验（`serviceRegionRouteRef` → ServiceRegionRoute PM → `clusterRef` → ClusterRegionRoute PM），结果写入 `EdgionPlugins.status.conditions[Accepted]`：
 
-1. 检查 `serviceRegionRouteRef` 是否设置（未设置则在 `validation_error` 中写入错误）
-2. 从 `PluginMetaDataStore` 查找 ServiceRegionRoute PluginMetaData（未找到则写入 `validation_error`）
-3. 检查找到的 PluginMetaData 是否包含 `ServiceRegionRoute` 变体，以及其 `clusterRef` 是否存在
+1. 检查 `serviceRegionRouteRef` 是否设置（未设置则记录 validation error）
+2. 从 `PluginMetaDataStore` 查找 ServiceRegionRoute PluginMetaData（未找到则记录）
+3. 检查找到的 PM 是否包含 `ServiceRegionRoute` 变体，以及其 `clusterRef` 能否解析到一个 ClusterRegionRoute PM
 
-`validation_error` 是 `RegionRouteConfig` 上的 `#[serde(skip)]` 字段，仅在 Controller 内存中存在，不写入 K8s 资源。错误会体现在 `EdgionPlugins.status.conditions[Accepted]` 中。
+与此同时，PluginMetaData 自己的 status 也会独立反映**直接**引用的解析情况（`ServiceRegionRoute.clusterRef` → ClusterRegionRoute PM，见上文 update_status 表）。这是一个**健康的双层重复**：
+- PM 层 `ResolvedRefs` 回答"这个 ServiceRegionRoute PM 自己的直接引用能否解析"
+- EP 层 `Accepted` 回答"整条 EP → PM → PM 链能否打通"
 
 **ServiceRegionRoute PluginMetaData 必须由管理员预先创建**，Controller 不会自动生成。
 
@@ -225,6 +252,7 @@ Controller **不会**将路由配置复制进 EdgionPlugins，也**不会**自�
 
 | 关联方向 | 目标资源 | 关联机制 | 说明 |
 |---------|---------|---------|------|
-| ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData | PluginMetaData | `clusterRef` 字段 | Service PluginMetaData 链接集群 PluginMetaData |
-| PluginMetaData ← EdgionPlugins | EdgionPlugins | `serviceRegionRouteRef` | EP 引用 ServiceRegionRoute PluginMetaData |
-| PluginMetaData → EdgionPlugins | EdgionPlugins | `plugin_metadata_refs` | PluginMetaData 变更触发 EP requeue |
+| ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData | PluginMetaData | `clusterRef` 字段 | Service PM 链接集群 PM；PM 自己的 `ResolvedRefs` condition 反映解析结果 |
+| PluginMetaData ← EdgionPlugins | EdgionPlugins | `serviceRegionRouteRef` | EP 引用 ServiceRegionRoute PM |
+| PluginMetaData ← EdgionStreamPlugins | EdgionStreamPlugins | `GlobalConnectionIpRestriction.pluginMetadataRef` | ESP 引用 GCIR PM，ESP 自己的 `ResolvedRefs` 反映解析结果 |
+| PluginMetaData → {EdgionPlugins, EdgionStreamPlugins, PluginMetaData} | 多种 | `plugin_metadata_refs` | PM 变更触发消费方 requeue；ClusterRegionRoute PM 变更会 requeue 依赖它的 ServiceRegionRoute PM（新增的 PM→PM 反向 requeue） |

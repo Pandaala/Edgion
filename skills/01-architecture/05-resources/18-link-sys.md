@@ -16,13 +16,19 @@ LinkSys 是 Edgion 的自定义扩展资源，定义外部系统连接器。通�
 
 ## Controller 侧处理
 
+### preparse
+
+- 调 `LinkSys::validate_config()` 收集 per-provider 校验错误（Redis/Etcd/Elasticsearch endpoints 为空、Sentinel/Cluster 模式配置缺失、Webhook URI 为空等），返回 `Vec<String>` 作为 `Accepted=False/Invalid` 的依据
+- 未实现的 provider（当前如 Kafka 是 placeholder）**不**产生 error，保持 `Accepted=True`（它们在 spec 层面是结构合法的，只是 Gateway 后端没接入）
+
 ### parse
 
-无特殊处理逻辑，直接透传。LinkSys 的配置校验由类型层面的预解析（preparse）处理。
+无特殊处理逻辑，直接透传。
 
 ### update_status
 
 - `Accepted`：无 validation_errors 时为 True（reason=Accepted），有错误时为 False（reason=Invalid）
+- 使用内部 `types::resources::common::Condition` 类型（通过 `status_utils` 的 `accepted_condition` / `condition_false` / `update_condition` helpers）
 
 ## 支持的 Provider 类型
 

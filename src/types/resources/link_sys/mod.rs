@@ -171,12 +171,11 @@ impl LinkSys {
                     errors.push(format!("Webhook configuration error: {}", err));
                 }
             }
-            other => {
-                errors.push(format!(
-                    "System type {:?} is not yet fully implemented",
-                    other.system_type()
-                ));
-            }
+            // Placeholder variants (e.g. Kafka) are not validated as failures — the spec is
+            // structurally fine; the backend just isn't wired up yet. Keeping them as
+            // `Accepted=True` matches the original warn-only behaviour and avoids
+            // regressing any existing resources on upgrade.
+            _ => {}
         }
         errors
     }

@@ -38,7 +38,12 @@ EdgionPluginsHandler 的 parse 阶段执行大量 Secret 引用解析，为认�
 
 ### update_status
 
-- `Accepted`：无 validation_errors 时为 True，有错误时为 False
+Gateway API 风格两个 condition（`k8s_openapi::Condition` 类型）：
+
+- **`Accepted`**：无 validation_errors 时为 True（reason=Accepted），有错误时为 False（reason=Invalid）
+- **`ResolvedRefs`**：通过 `SecretRefManager::get_dependencies(ep_key)` 聚合此 EP 在 parse 阶段注册的**全部** Secret 引用，逐一检查 `secret_store.get(ns, name)`。任何 Secret 未解析 → `ResolvedRefsError::SecretNotFound`（reason 映射为 `BackendNotFound`），message 列出所有缺失的 `ns/name`。所有引用都解析 → True
+
+注意：`ResolvedRefs` 目前只检查 Secret **存在性**，不检查 Secret 内字段是否有需要的 key（如 BasicAuth 的 Secret 缺少 `username` 字段）。后者在 parse 阶段仅 `tracing::warn!`，不反映到 condition。
 
 ## Gateway 侧处理
 

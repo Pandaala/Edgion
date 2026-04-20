@@ -178,6 +178,11 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
 
     fn update_status(&self, acme: &mut EdgionAcme, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = acme.metadata.generation;
+        // `get_or_insert_with` pulls the current status (including `phase` / timestamps that
+        // AcmeService owns via SSA) from the in-memory object, so the Controller's subsequent
+        // Merge Patch preserves those fields. The two writers share the status field but only
+        // intersect on conditions here — AcmeService's SSA patch omits `conditions` when empty
+        // (`skip_serializing_if = "Vec::is_empty"`), so it never clears what we write.
         let status = acme.status.get_or_insert_with(EdgionAcmeStatus::default);
 
         // Accepted condition: reflects spec validation. phase / issuance status is
