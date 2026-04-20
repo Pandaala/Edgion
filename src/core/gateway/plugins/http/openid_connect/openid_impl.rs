@@ -252,11 +252,6 @@ impl OpenidConnect {
             if let Some(ref params) = self.config.authorization_params {
                 for (key, value) in params {
                     if Self::is_reserved_authorization_param(key) {
-                        tracing::warn!(
-                            plugin = "OpenidConnect",
-                            key = key,
-                            "Skipped reserved authorization parameter override"
-                        );
                         continue;
                     }
                     qp.append_pair(key, value);
@@ -659,22 +654,14 @@ impl OpenidConnect {
         let max_total = self.config.max_total_header_bytes as usize;
 
         if !Self::is_header_value_safe(header_value) {
-            tracing::warn!(header = header_name, "Skipped unsafe OIDC header value");
             return;
         }
         if header_value.len() > max_value {
-            tracing::warn!(
-                header = header_name,
-                len = header_value.len(),
-                max = max_value,
-                "Skipped OIDC header: value too large"
-            );
             return;
         }
 
         let add = header_name.len() + header_value.len();
         if total_added_bytes.saturating_add(add) > max_total {
-            tracing::warn!(max = max_total, "Stopped OIDC header mapping: total size limit reached");
             return;
         }
 
@@ -787,10 +774,7 @@ impl OpenidConnect {
         }
         let discovery = match self.get_or_fetch_discovery().await {
             Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(plugin = "OpenidConnect", error = %e, "Failed to load discovery for userinfo");
-                return None;
-            }
+            Err(_) => return None,
         };
         let userinfo_endpoint = match discovery.userinfo_endpoint.as_deref().filter(|v| !v.is_empty()) {
             Some(v) => v,
@@ -807,31 +791,16 @@ impl OpenidConnect {
             .await
         {
             Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(plugin = "OpenidConnect", error = %e, "Userinfo request failed");
-                return None;
-            }
+            Err(_) => return None,
         };
         if !resp.status().is_success() {
-            tracing::warn!(
-                plugin = "OpenidConnect",
-                status = resp.status().as_u16(),
-                "Userinfo request returned non-success status"
-            );
             return None;
         }
 
         let value: Value =
             match fetch_json_limited(resp, self.config.userinfo_max_response_bytes, "OIDC userinfo").await {
                 Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        plugin = "OpenidConnect",
-                        error = %e,
-                        "Failed to parse userinfo response as JSON"
-                    );
-                    return None;
-                }
+                Err(_) => return None,
             };
         serde_json::to_string(&value).ok()
     }
@@ -902,7 +871,10 @@ impl OpenidConnect {
             }
             Err(err) => {
                 if let Some(ref cached) = state.set {
-                    tracing::warn!(error = %err, "JWKS refresh failed, using stale cache");
+                    // Stale-cache fallback: JWKS endpoint unreachable but a prior set exists.
+                    // Log once per refresh cycle (rate-limited by JWKS TTL) so operators can
+                    // detect sustained key-endpoint outages before a key rotation breaks auth.
+                    tracing::info!(error = %err, "JWKS refresh failed; serving stale key set");
                     Ok(cached.clone())
                 } else {
                     Err(err)
@@ -1098,14 +1070,7 @@ impl OpenidConnect {
 
         let mut end_session_url = match Url::parse(&end_session_endpoint) {
             Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    plugin = "OpenidConnect",
-                    error = %e,
-                    "Invalid end_session_endpoint URL; falling back to local logout redirect target"
-                );
-                return fallback_target;
-            }
+            Err(_) => return fallback_target,
         };
         if let Some(post_logout_redirect_uri) = post_logout_redirect_uri {
             end_session_url
@@ -1268,17 +1233,11 @@ impl OpenidConnect {
 
         let session_secret = match self.resolve_session_secret() {
             Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(plugin = "OpenidConnect", error = %e, "Failed to resolve session secret");
-                return;
-            }
+            Err(_) => return,
         };
         let value = match self.encode_signed_cookie_payload(&persisted_payload, &session_secret) {
             Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(plugin = "OpenidConnect", error = %e, "Failed to encode session cookie");
-                return;
-            }
+            Err(_) => return,
         };
         let cookie = format!(
             "{}={}{}",
@@ -1286,12 +1245,7 @@ impl OpenidConnect {
             value,
             self.build_cookie_attr_suffix(session, self.config.session_lifetime, "/")
         );
-        if let Err(e) = self.ensure_session_cookie_size_limit(&cookie) {
-            tracing::warn!(
-                plugin = "OpenidConnect",
-                error = %e,
-                "Skipped updating session cookie due to size limit"
-            );
+        if self.ensure_session_cookie_size_limit(&cookie).is_err() {
             return;
         }
         let _ = session.set_response_header("Set-Cookie", &cookie);
@@ -1431,65 +1385,32 @@ impl OpenidConnect {
 
         let discovery = match self.cached_discovery_doc().await {
             Some(v) => v,
-            None => {
-                tracing::warn!(
-                    plugin = "OpenidConnect",
-                    "No cached discovery document for token revocation; skip token revocation"
-                );
-                return;
-            }
+            None => return,
         };
         let Some(revocation_endpoint) = discovery.revocation_endpoint.as_deref().filter(|v| !v.is_empty()) else {
-            tracing::warn!(
-                plugin = "OpenidConnect",
-                "Discovery document missing revocation_endpoint; skip token revocation"
-            );
             return;
         };
 
         let client_secret = match self.resolve_client_secret() {
             Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    plugin = "OpenidConnect",
-                    error = %e,
-                    "Missing client secret for token revocation"
-                );
-                return;
-            }
+            Err(_) => return,
         };
 
         if let Some(token) = refresh_token {
-            if let Err(e) = self
+            let _ = self
                 .revoke_token(
                     revocation_endpoint,
                     client_secret.as_str(),
                     token,
                     Some("refresh_token"),
                 )
-                .await
-            {
-                tracing::warn!(
-                    plugin = "OpenidConnect",
-                    error = %e,
-                    token_type = "refresh_token",
-                    "OIDC token revocation failed"
-                );
-            }
+                .await;
         }
 
         if let Some(token) = access_token {
-            if let Err(e) = self
+            let _ = self
                 .revoke_token(revocation_endpoint, client_secret.as_str(), token, Some("access_token"))
-                .await
-            {
-                tracing::warn!(
-                    plugin = "OpenidConnect",
-                    error = %e,
-                    token_type = "access_token",
-                    "OIDC token revocation failed"
-                );
-            }
+                .await;
         }
     }
 
@@ -1816,12 +1737,7 @@ impl OpenidConnect {
             session_cookie_value,
             self.build_cookie_attr_suffix(session, self.config.session_lifetime, "/")
         );
-        if let Err(e) = self.ensure_session_cookie_size_limit(&session_cookie) {
-            tracing::warn!(
-                plugin = "OpenidConnect",
-                error = %e,
-                "OIDC callback aborted due to oversized session cookie"
-            );
+        if self.ensure_session_cookie_size_limit(&session_cookie).is_err() {
             let _ = self
                 .send_plain_error(session, 500, "Session cookie exceeds configured size limit")
                 .await;

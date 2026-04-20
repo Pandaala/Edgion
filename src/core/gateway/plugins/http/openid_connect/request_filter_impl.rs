@@ -7,13 +7,8 @@ impl RequestFilter for OpenidConnect {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        if let Some(err) = self.config.get_validation_error() {
-            plugin_log.push("Config invalid; ");
-            tracing::warn!(
-                plugin = "OpenidConnect",
-                error = err,
-                "Invalid OpenID Connect configuration"
-            );
+        if self.config.get_validation_error().is_some() {
+            plugin_log.push_err("cfg invalid");
             let _ = self
                 .send_unauthorized(session, "Unauthorized - Invalid OpenID Connect configuration")
                 .await;
@@ -26,12 +21,8 @@ impl RequestFilter for OpenidConnect {
             let session_cookie = match self.extract_session_cookie_from_request(session) {
                 Ok(Some((payload, _))) => Some(payload),
                 Ok(None) => None,
-                Err((_, message)) => {
-                    tracing::warn!(
-                        plugin = "OpenidConnect",
-                        error = %message,
-                        "Failed to decode session cookie for logout context"
-                    );
+                Err((_, _)) => {
+                    plugin_log.push_err("session decode fail");
                     None
                 }
             };
@@ -102,13 +93,8 @@ impl RequestFilter for OpenidConnect {
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("OIDC session token refreshed (cache miss); ");
                             }
-                            Err((status, message)) => {
-                                tracing::warn!(
-                                    plugin = "OpenidConnect",
-                                    status = status,
-                                    error = message,
-                                    "OIDC cache miss refresh failed; falling back to unauth_action"
-                                );
+                            Err((_, _)) => {
+                                plugin_log.push_err("token refresh fail");
                             }
                         }
                     }
@@ -123,22 +109,14 @@ impl RequestFilter for OpenidConnect {
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("OIDC session token refreshed (preemptive); ");
                             }
-                            Err((status, message)) => {
-                                tracing::warn!(
-                                    plugin = "OpenidConnect",
-                                    status = status,
-                                    error = message,
-                                    "OIDC preemptive refresh failed; trying current token"
-                                );
+                            Err((_, _)) => {
+                                plugin_log.push_err("token refresh fail");
                             }
                         }
                     }
 
                     if token.is_empty() {
-                        tracing::warn!(
-                            plugin = "OpenidConnect",
-                            "OIDC session has no usable access token after cache/refresh; falling back to unauth_action"
-                        );
+                        plugin_log.push_err("session no token");
                     } else {
                         match self.verify_token(&token).await {
                             Ok(claims) => {
@@ -178,13 +156,8 @@ impl RequestFilter for OpenidConnect {
                                                 plugin_log.push("OIDC session token refreshed; ");
                                                 return PluginRunningResult::GoodNext;
                                             }
-                                            Err((s2, m2)) => {
-                                                tracing::warn!(
-                                                    plugin = "OpenidConnect",
-                                                    status = s2,
-                                                    error = m2,
-                                                    "OIDC refreshed token verification failed; falling back to unauth_action"
-                                                );
+                                            Err((_, _)) => {
+                                                plugin_log.push_err("token verify fail");
                                             }
                                         },
                                         Err((s2, m2)) => {
@@ -209,21 +182,11 @@ impl RequestFilter for OpenidConnect {
                                                     Err(_) => {}
                                                 }
                                             }
-                                            tracing::warn!(
-                                                plugin = "OpenidConnect",
-                                                status = s2,
-                                                error = m2,
-                                                "OIDC token refresh failed; falling back to unauth_action"
-                                            );
+                                            plugin_log.push_err("token refresh fail");
                                         }
                                     }
                                 } else {
-                                    tracing::warn!(
-                                        plugin = "OpenidConnect",
-                                        status = status,
-                                        error = message,
-                                        "OIDC session token verification failed; falling back to unauth_action"
-                                    );
+                                    plugin_log.push_err("token verify fail");
                                 }
                             }
                         }

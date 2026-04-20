@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
+use crate::core::gateway::observe::metrics::registry::{record_ldap_auth_error, set_ldap_cache_hit_rate};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -28,9 +29,9 @@ pub struct LdapAuth {
 #[derive(Debug)]
 enum LdapAuthError {
     InvalidCredentials,
-    ConnectionFailed(String),
+    ConnectionFailed,
     Timeout,
-    BindFailed(String),
+    BindFailed,
 }
 
 #[derive(Debug, PartialEq)]
@@ -60,11 +61,45 @@ impl LdapAuth {
         } else {
             get_default_lru_cache_shards()
         };
+        let auth_cache = Arc::new(ShardedLruCache::new(capacity, shards));
+
+        // Background hit-ratio monitor: runs every 30 s, logs only on transitions.
+        // Uses a Weak reference so the task exits automatically when the plugin is dropped.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let cache_monitor = Arc::downgrade(&auth_cache);
+            handle.spawn(async move {
+                const LOW_RATIO: f64 = 0.5;
+                const MIN_SAMPLES: u64 = 100;
+                let mut was_low = false;
+                loop {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    let Some(cache) = cache_monitor.upgrade() else {
+                        break;
+                    };
+                    let stats = cache.stats();
+                    let total = stats.hits + stats.misses + stats.expirations;
+                    if total < MIN_SAMPLES {
+                        continue;
+                    }
+                    let ratio = stats.hit_ratio();
+                    set_ldap_cache_hit_rate(ratio);
+                    let is_low = ratio < LOW_RATIO;
+                    if is_low && !was_low {
+                        tracing::info!(hit_ratio = ratio, "LDAP cache hit ratio low; possible brute-force");
+                        was_low = true;
+                    } else if !is_low && was_low {
+                        tracing::info!(hit_ratio = ratio, "LDAP cache hit ratio recovered");
+                        was_low = false;
+                    }
+                }
+            });
+        }
+
         Self {
             name: "LdapAuth".to_string(),
             config: config.clone(),
             ldap_url,
-            auth_cache: Arc::new(ShardedLruCache::new(capacity, shards)),
+            auth_cache,
         }
     }
 
@@ -134,20 +169,6 @@ impl LdapAuth {
             username.to_string(),
             Some(Duration::from_secs(self.config.cache_ttl)),
         );
-
-        // Anomaly detection: very low hit ratio after enough samples may indicate brute-force
-        const LOW_HIT_RATIO_WARN_THRESHOLD: f64 = 0.5;
-        const MIN_SAMPLE_SIZE: u64 = 100;
-        let stats = self.auth_cache.stats();
-        let total = stats.hits + stats.misses + stats.expirations;
-        if total >= MIN_SAMPLE_SIZE && stats.hit_ratio() < LOW_HIT_RATIO_WARN_THRESHOLD {
-            tracing::warn!(
-                hit_ratio = stats.hit_ratio(),
-                hits = stats.hits,
-                misses = stats.misses,
-                "LdapAuth cache hit ratio low — possible brute-force attack"
-            );
-        }
     }
 
     fn build_bind_dn(&self, username: &str) -> Result<String, &'static str> {
@@ -181,14 +202,14 @@ impl LdapAuth {
         let (conn, mut ldap) = tokio::time::timeout(timeout, LdapConnAsync::with_settings(settings, &self.ldap_url))
             .await
             .map_err(|_| LdapAuthError::Timeout)?
-            .map_err(|e| LdapAuthError::ConnectionFailed(e.to_string()))?;
+            .map_err(|_| LdapAuthError::ConnectionFailed)?;
 
         ldap3::drive!(conn);
 
         let bind_result = tokio::time::timeout(timeout, ldap.simple_bind(bind_dn, password))
             .await
             .map_err(|_| LdapAuthError::Timeout)?
-            .map_err(|e| LdapAuthError::BindFailed(e.to_string()))?;
+            .map_err(|_| LdapAuthError::BindFailed)?;
 
         let _ = ldap.unbind().await;
 
@@ -197,10 +218,7 @@ impl LdapAuth {
         } else if bind_result.rc == 49 {
             Err(LdapAuthError::InvalidCredentials)
         } else {
-            Err(LdapAuthError::BindFailed(format!(
-                "server returned rc={}",
-                bind_result.rc
-            )))
+            Err(LdapAuthError::BindFailed)
         }
     }
 
@@ -305,19 +323,19 @@ impl RequestFilter for LdapAuth {
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 self.unauthorized(session).await
             }
-            Err(LdapAuthError::ConnectionFailed(e)) => {
-                tracing::warn!(error = %e, ldap_url = %self.ldap_url, "LdapAuth connection failed");
-                plugin_log.push("LDAP unavailable; ");
+            Err(LdapAuthError::ConnectionFailed) => {
+                plugin_log.push_err("ldap unreachable");
+                record_ldap_auth_error("unreachable");
                 self.service_unavailable(session).await
             }
             Err(LdapAuthError::Timeout) => {
-                tracing::warn!(ldap_url = %self.ldap_url, "LdapAuth timeout");
-                plugin_log.push("LDAP timeout; ");
+                plugin_log.push_err("ldap timeout");
+                record_ldap_auth_error("timeout");
                 self.service_unavailable(session).await
             }
-            Err(LdapAuthError::BindFailed(e)) => {
-                tracing::warn!(error = %e, ldap_url = %self.ldap_url, "LdapAuth bind failed");
-                plugin_log.push("LDAP unavailable; ");
+            Err(LdapAuthError::BindFailed) => {
+                plugin_log.push_err("ldap bind fail");
+                record_ldap_auth_error("bind_fail");
                 self.service_unavailable(session).await
             }
         }

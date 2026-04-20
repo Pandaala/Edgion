@@ -51,6 +51,10 @@ pub mod names {
     pub const RR_SELECTOR_TRUNCATED_TOTAL: &str = "edgion_rr_selector_truncated_total";
     // Elasticsearch DataSender: per-send outcome (ok / failed_fallback / failed_no_cache)
     pub const LINK_SYS_ES_SEND_TOTAL: &str = "edgion_link_sys_es_send_total";
+    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail)
+    pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
+    // LDAP auth plugin: cache hit ratio gauge (0.0–1.0), updated every 30 s
+    pub const LDAP_CACHE_HIT_RATE: &str = "edgion_ldap_cache_hit_rate";
 }
 
 /// Global metrics singleton
@@ -472,6 +476,25 @@ pub fn record_link_sys_es_send(result: &'static str) {
 /// so operators can detect silent truncation.
 pub fn record_rr_selector_truncated() {
     counter!(names::RR_SELECTOR_TRUNCATED_TOTAL).increment(1);
+}
+
+/// Record a LDAP auth plugin error event.
+///
+/// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`.
+/// Fixed cardinality — safe as a label.
+pub fn record_ldap_auth_error(kind: &'static str) {
+    counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
+}
+
+/// Set the LDAP auth cache hit rate gauge (0.0–1.0).
+///
+/// Called from a per-plugin background task every 30 s; not on the hot path.
+///
+/// Note: this gauge has no instance label. When multiple LDAP plugin instances are
+/// active, each background task writes to the same gauge and the last writer wins.
+/// The metric is only interpretable when a single LDAP plugin instance is running.
+pub fn set_ldap_cache_hit_rate(ratio: f64) {
+    gauge!(names::LDAP_CACHE_HIT_RATE).set(ratio);
 }
 
 #[cfg(test)]
