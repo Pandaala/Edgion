@@ -77,7 +77,11 @@ impl RequestMirrorPlugin {
             }
             let mut rng = rand::rng();
             let sample: i32 = rng.random_range(0..denominator);
-            return if sample < fraction.numerator { None } else { Some("mirror sampled:skip") };
+            return if sample < fraction.numerator {
+                None
+            } else {
+                Some("mirror sampled:skip")
+            };
         }
         if let Some(pct) = self.config.percentage {
             if pct <= 0 {
@@ -88,7 +92,11 @@ impl RequestMirrorPlugin {
             }
             let mut rng = rand::rng();
             let sample: i32 = rng.random_range(0..100);
-            return if sample < pct { None } else { Some("mirror sampled:skip") };
+            return if sample < pct {
+                None
+            } else {
+                Some("mirror sampled:skip")
+            };
         }
         None
     }

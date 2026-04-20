@@ -51,7 +51,10 @@ pub(crate) fn check_ip_access(
         };
     }
     // No allow list: default action decides.
-    if matches!(rules.default_action, crate::types::resources::edgion_plugins::DefaultAction::Allow) {
+    if matches!(
+        rules.default_action,
+        crate::types::resources::edgion_plugins::DefaultAction::Allow
+    ) {
         StreamPluginResult::Allow // ip allow
     } else {
         StreamPluginResult::Deny("ip deny".to_string())

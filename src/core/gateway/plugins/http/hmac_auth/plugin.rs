@@ -365,7 +365,14 @@ impl RequestFilter for HmacAuth {
         if self.config.validate_request_body {
             plugin_log.push_err("body not supported");
             self.apply_auth_failure_delay().await;
-            let _ = send_auth_error_response(session, 500, "hmac", &self.config.realm, "validateRequestBody is not supported yet").await;
+            let _ = send_auth_error_response(
+                session,
+                500,
+                "hmac",
+                &self.config.realm,
+                "validateRequestBody is not supported yet",
+            )
+            .await;
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -378,7 +385,13 @@ impl RequestFilter for HmacAuth {
                     return PluginRunningResult::GoodNext;
                 }
                 return self
-                    .reject(session, plugin_log, 401, "Missing Authorization header", "Deny missing auth; ")
+                    .reject(
+                        session,
+                        plugin_log,
+                        401,
+                        "Missing Authorization header",
+                        "Deny missing auth; ",
+                    )
                     .await;
             }
         };
@@ -386,7 +399,8 @@ impl RequestFilter for HmacAuth {
         if self.credentials.is_empty() {
             plugin_log.push_err("no creds configured");
             self.apply_auth_failure_delay().await;
-            let _ = send_auth_error_response(session, 500, "hmac", &self.config.realm, "No credentials configured").await;
+            let _ =
+                send_auth_error_response(session, 500, "hmac", &self.config.realm, "No credentials configured").await;
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -407,7 +421,13 @@ impl RequestFilter for HmacAuth {
 
         if !self.config.algorithms.contains(&params.algorithm) {
             return self
-                .reject(session, plugin_log, 401, "Algorithm not allowed", "Deny bad algorithm; ")
+                .reject(
+                    session,
+                    plugin_log,
+                    401,
+                    "Algorithm not allowed",
+                    "Deny bad algorithm; ",
+                )
                 .await;
         }
 
@@ -435,7 +455,9 @@ impl RequestFilter for HmacAuth {
             }
         };
         if let Err(message) = Self::validate_clock_skew(session, self.config.clock_skew, signed_date) {
-            return self.reject(session, plugin_log, 401, message, "Deny bad timestamp; ").await;
+            return self
+                .reject(session, plugin_log, 401, message, "Deny bad timestamp; ")
+                .await;
         }
 
         if let Err(message) = self.validate_enforce_headers(&params.headers) {
