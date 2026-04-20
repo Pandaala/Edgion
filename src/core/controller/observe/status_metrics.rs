@@ -183,3 +183,136 @@ mod classify_tests {
         assert_eq!(classify(&[c("Accepted", "Unknown")]), None);
     }
 }
+
+/// Recursively walk a JSON value and collect every entry in any
+/// `"conditions": [ ... ]` array into a flat `Vec<Condition>`.
+///
+/// Covers:
+/// - resource-level `.status.conditions`
+/// - per-parent `.status.parents[*].conditions`
+/// - per-listener `.status.listeners[*].conditions`
+/// - any other future nesting with the `conditions` key + array value
+///
+/// Malformed entries (missing `type` or non-string `status`) are skipped
+/// silently.
+pub fn scan_conditions(value: &serde_json::Value) -> Vec<Condition> {
+    let mut out = Vec::new();
+    walk(value, &mut out);
+    out
+}
+
+fn walk(value: &serde_json::Value, out: &mut Vec<Condition>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                if k == "conditions" {
+                    if let serde_json::Value::Array(arr) = v {
+                        for item in arr {
+                            if let Some(cond) = extract_condition(item) {
+                                out.push(cond);
+                            }
+                        }
+                    }
+                } else {
+                    walk(v, out);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                walk(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_condition(v: &serde_json::Value) -> Option<Condition> {
+    let obj = v.as_object()?;
+    let type_ = obj.get("type")?.as_str()?.to_string();
+    let status = obj.get("status")?.as_str()?.to_string();
+    Some(Condition { type_, status })
+}
+
+#[cfg(test)]
+mod scan_conditions_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resource_level_conditions() {
+        let j = json!({
+            "status": {
+                "conditions": [
+                    {"type": "Accepted", "status": "False", "reason": "Invalid"}
+                ]
+            }
+        });
+        let conds = scan_conditions(&j);
+        assert_eq!(conds.len(), 1);
+        assert_eq!(conds[0].type_, "Accepted");
+        assert_eq!(conds[0].status, "False");
+    }
+
+    #[test]
+    fn nested_parents_conditions() {
+        let j = json!({
+            "status": {
+                "parents": [
+                    {"conditions": [{"type": "Accepted", "status": "True"}]},
+                    {"conditions": [{"type": "ResolvedRefs", "status": "False"}]}
+                ]
+            }
+        });
+        let conds = scan_conditions(&j);
+        assert_eq!(conds.len(), 2);
+    }
+
+    #[test]
+    fn gateway_top_level_plus_listeners() {
+        let j = json!({
+            "status": {
+                "conditions": [{"type": "Accepted", "status": "True"}],
+                "listeners": [
+                    {"name": "http", "conditions": [
+                        {"type": "Programmed", "status": "False"},
+                        {"type": "Conflicted", "status": "True"}
+                    ]}
+                ]
+            }
+        });
+        let conds = scan_conditions(&j);
+        assert_eq!(conds.len(), 3);
+        let types: Vec<&str> = conds.iter().map(|c| c.type_.as_str()).collect();
+        assert!(types.contains(&"Accepted"));
+        assert!(types.contains(&"Programmed"));
+        assert!(types.contains(&"Conflicted"));
+    }
+
+    #[test]
+    fn malformed_condition_missing_type_is_skipped() {
+        let j = json!({
+            "status": {
+                "conditions": [
+                    {"status": "False"},
+                    {"type": "Accepted", "status": "False"}
+                ]
+            }
+        });
+        let conds = scan_conditions(&j);
+        assert_eq!(conds.len(), 1);
+        assert_eq!(conds[0].type_, "Accepted");
+    }
+
+    #[test]
+    fn no_conditions_anywhere_yields_empty() {
+        let j = json!({"spec": {"x": 1}, "status": {"ready": true}});
+        assert!(scan_conditions(&j).is_empty());
+    }
+
+    #[test]
+    fn conditions_at_top_level_object_not_array_is_ignored() {
+        let j = json!({"conditions": {"not": "an array"}});
+        assert!(scan_conditions(&j).is_empty());
+    }
+}
