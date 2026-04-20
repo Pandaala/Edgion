@@ -90,8 +90,8 @@ impl EdgionClient {
             .get("data")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("/auth/status missing `data` field"))?;
-        let status: AuthStatusResponse = serde_json::from_value(data)
-            .context("/auth/status schema unrecognized — CLI/controller 版本不匹配")?;
+        let status: AuthStatusResponse =
+            serde_json::from_value(data).context("/auth/status schema unrecognized — CLI/controller 版本不匹配")?;
 
         match status.status {
             AuthStatus::Disabled => return Ok(()),
@@ -140,9 +140,7 @@ impl EdgionClient {
 
     /// Attempt auto-login using local credentials detected from the controller config file.
     async fn auto_login_local(&mut self) -> Result<()> {
-        if let Some((username, password)) =
-            super::auto_auth::detect_credentials(self.controller_config.as_deref())
-        {
+        if let Some((username, password)) = super::auto_auth::detect_credentials(self.controller_config.as_deref()) {
             match self.do_login(&username, password.as_str()).await {
                 Ok(token) => {
                     super::token::save_token(token.as_str())?;

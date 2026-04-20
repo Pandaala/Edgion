@@ -25,7 +25,10 @@ pub fn apply_unified_auth_layer(
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     require_auth: bool,
     component: &str,
-) -> anyhow::Result<(Router, std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>)> {
+) -> anyhow::Result<(
+    Router,
+    std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
+)> {
     let state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
         auth_config,
         local_auth_config,
@@ -150,9 +153,7 @@ pub fn add_local_auth_routes(
 
     use crate::core::common::local_auth::{login_handler, logout_handler, me_handler};
 
-    let auth_router: Router<
-        std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
-    > = Router::new()
+    let auth_router: Router<std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>> = Router::new()
         .route("/api/v1/auth/login", post(login_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
         .route("/api/v1/auth/me", get(me_handler));

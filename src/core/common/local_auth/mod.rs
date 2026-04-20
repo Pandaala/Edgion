@@ -17,5 +17,7 @@ pub mod retry;
 pub mod secret;
 
 pub use config::LocalAuthConfig;
-pub use handlers::{login_handler, logout_handler, me_handler, AuthStatus, AuthStatusResponse, LoginRequest, LoginResponse};
+pub use handlers::{
+    login_handler, logout_handler, me_handler, AuthStatus, AuthStatusResponse, LoginRequest, LoginResponse,
+};
 pub use middleware::{local_auth_middleware, LocalAuthState};

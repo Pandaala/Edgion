@@ -78,19 +78,17 @@ pub(crate) async fn resolve_local_config(
         // (c) explicit [local_auth] + enabled=false → caller did not want local auth
         (Some(_), _) => (None, false),
         // (d) neither [auth] nor [local_auth] → auto-generate fallback
-        (None, false) => {
-            match crate::core::common::local_auth::secret::ensure_admin_credentials(conf_mgr).await {
-                Ok(generated) => (Some(generated), false),
-                Err(e) => {
-                    tracing::warn!(
-                        component = COMPONENT_EDGION_CONTROLLER,
-                        error = %e,
-                        "initial admin credentials Secret fetch failed (auto-generate fallback); controller booting with require_auth=true; background retry task will install credentials"
-                    );
-                    (None, true)
-                }
+        (None, false) => match crate::core::common::local_auth::secret::ensure_admin_credentials(conf_mgr).await {
+            Ok(generated) => (Some(generated), false),
+            Err(e) => {
+                tracing::warn!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    error = %e,
+                    "initial admin credentials Secret fetch failed (auto-generate fallback); controller booting with require_auth=true; background retry task will install credentials"
+                );
+                (None, true)
             }
-        }
+        },
         // (e) OIDC-only (no [local_auth])
         (None, true) => (None, false),
     }
@@ -488,8 +486,8 @@ impl EdgionControllerCli {
             security,
             auth_config,
             local_auth_config,
-            require_auth,        // from derive_require_auth (intent-based, not post-resolve)
-            needs_retry,         // consumed by serve/serve_with_shutdown → spawns secret_retry_loop
+            require_auth, // from derive_require_auth (intent-based, not post-resolve)
+            needs_retry,  // consumed by serve/serve_with_shutdown → spawns secret_retry_loop
             shutdown_handle,
         )
         .await

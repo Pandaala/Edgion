@@ -92,7 +92,8 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
             "authentication subsystem initializing, retry later".to_string(),
         ));
         let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
-        resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
+        resp.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
         return resp;
     };
 
@@ -252,7 +253,8 @@ mod handler_tests {
         let body = serde_json::json!({
             "username":"admin",
             "password":"a_long_enough_password_123"
-        }).to_string();
+        })
+        .to_string();
         let resp = app
             .oneshot(
                 Request::builder()

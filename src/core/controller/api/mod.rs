@@ -290,12 +290,9 @@ pub async fn serve(
         let conf_mgr_for_retry = conf_mgr.clone();
         let fetch: crate::core::common::local_auth::retry::FetchFn = Box::new(move || {
             let cm = conf_mgr_for_retry.clone();
-            Box::pin(async move {
-                crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await
-            })
+            Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
         });
-        let exit: crate::core::common::local_auth::retry::ExitFn =
-            Box::new(|| std::process::exit(1));
+        let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
         // Dedicated broadcast channel: shutdown of the retry task is decoupled
         // from the main serve shutdown flow. The retry task has its own hard
         // 10min deadline and will self-terminate via process::exit(1) if the
@@ -364,12 +361,9 @@ pub async fn serve_with_shutdown(
         let conf_mgr_for_retry = conf_mgr.clone();
         let fetch: crate::core::common::local_auth::retry::FetchFn = Box::new(move || {
             let cm = conf_mgr_for_retry.clone();
-            Box::pin(async move {
-                crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await
-            })
+            Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
         });
-        let exit: crate::core::common::local_auth::retry::ExitFn =
-            Box::new(|| std::process::exit(1));
+        let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
         // Dedicated broadcast channel: shutdown of the retry task is decoupled
         // from the main serve shutdown flow. The retry task has its own hard
         // 10min deadline and will self-terminate via process::exit(1) if the

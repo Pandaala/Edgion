@@ -217,11 +217,9 @@ impl UnifiedAuthState {
 /// - Body `ApiResponse::error("authentication subsystem initializing, retry later")`
 fn initializing_response() -> Response {
     use axum::http::HeaderValue;
-    let body = axum::Json(
-        crate::core::common::api::ApiResponse::<()>::error(
-            "authentication subsystem initializing, retry later".to_string(),
-        ),
-    );
+    let body = axum::Json(crate::core::common::api::ApiResponse::<()>::error(
+        "authentication subsystem initializing, retry later".to_string(),
+    ));
     let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
     resp.headers_mut()
         .insert(header::RETRY_AFTER, HeaderValue::from_static("10"));
@@ -268,10 +266,7 @@ pub async fn unified_auth_middleware(
     // can clear a session, status so UIs can surface the init state.
     // `/api/v1/auth/me` is intentionally NOT in this list — it requires
     // a valid token.
-    if path == "/api/v1/auth/login"
-        || path == "/api/v1/auth/logout"
-        || path == "/api/v1/auth/status"
-    {
+    if path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || path == "/api/v1/auth/status" {
         return next.run(request).await;
     }
     if path.starts_with("/configserver/") {
@@ -623,7 +618,13 @@ mod tests {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         let app = router_with_state(state);
         let resp = app
-            .oneshot(Request::builder().method(Method::GET).uri("/test").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/test")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -636,7 +637,13 @@ mod tests {
         let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
         let app = router_with_state(state);
         let resp = app
-            .oneshot(Request::builder().method(Method::GET).uri("/test").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/test")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -647,7 +654,13 @@ mod tests {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         let app = router_with_state(state);
         let resp = app
-            .oneshot(Request::builder().method(Method::GET).uri("/test").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/test")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -665,7 +678,12 @@ mod tests {
             .route("/health", axum::routing::get(|| async { "ok" }))
             .layer(axum::middleware::from_fn_with_state(state, unified_auth_middleware));
         let resp = app
-            .oneshot(Request::builder().uri("/health").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);

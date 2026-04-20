@@ -71,9 +71,7 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
   - 依赖：—
   - **为什么先做**：让插件错配在 status 中暴露，后续插件改动更安全
   - 同文件协同：`plugins/runtime/plugin_runtime.rs`（Wave 4 的 #13 也碰，**先 #14 后 #13**）
-- [ ] **#01** — Admin API 认证 fail-open 全链路 — **L**
-  - 依赖：—
-  - 跨 4 文件（unified_auth + controller/cli + controller/api + ctl/cli/client）
+- [x] **#01** — Admin API 认证 fail-open 全链路 — **L** — commits `c013d88`/`ab5ace3`/`b07fb92`/`00b8ac1`/`3783247`/`6b02b77`/`e79bd5b`/`c7fc43b`/`15d2b33`/`2cb3546`/`4a1d637`/`fcf9947`/`4e36487`（Tasks 1–7 functional + 6 style）。`UnifiedAuthState` 引入 `require_auth`+`ArcSwapOption<LocalAuthState>`+`update_local`；`from_configs` validate 失败返 Err；middleware `require_auth && 两 provider 都 None` 返 503+Retry-After:10+ApiResponse JSON；新 `AuthStatus` 枚举（`Ready`/`Initializing`/`Disabled`）+ `active_providers: Vec<String>`（`AuthStatusResponse` 删 `auth_method`）；login/me/logout handler 改用共享 `Arc<UnifiedAuthState>`，login 预检 local 未就绪返 503；Controller startup 引入 `derive_require_auth`（intent-based）+ `resolve_local_config`（tolerant, returns needs_retry）；`secret_retry_loop` 指数退避 1→30s cap、10min 硬 timeout、`process::exit(1)`、`update_local` 成功回写；CLI `ensure_auth` 严格分类（404/5xx/TLS/JSON 全部 bail，`AuthStatus::{Disabled→Ok, Initializing→bail, Ready→continue}`，`active_providers` 选 provider）。Task 8 集成测试降级为 unit test 覆盖（`from_configs` validate-Err + `main()->Result<()>` 无需 shell scaffolding 验证退出码；已记入设计 doc §7.2 Path C）。
 - [ ] **#16** — ctx_map 敏感数据 + denylist append — **L**（短期 S）
   - 依赖：—
   - 同文件协同：`ctx_set/plugin.rs:230` 也是 Wave 4 #13 的删除点，**#16 里一起删**
@@ -97,9 +95,9 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 - [x] **#06** — backends/mod.rs tracing + SSRF（单文件 P0+P1 一次做）— **M** — 删 7 处 tracing（L302/322/376/386/771/975/980）+ L335 SAFETY 注释；SSRF 防御扩展：`classify_backend_addr` 覆盖 loopback + link-local（含 metadata `169.254.169.254` + IPv6 `fe80::/10`），明确不 block RFC1918；新增 `EdgionStatus::BackendAddrLinkLocalNotAllowed = 503_13` + 5 个新单测。按用户立场不加 `edgion_backend_port_resolve_total` / `edgion_backend_addr_rejected_total` / `edgion_backend_unsupported_kind_total` 三个 counter。遗留：`L573/L599` 的 `#[cfg(not(feature = "boringssl"))]` mTLS warn 未动（rustls 构建才触发，非默认，范围外）
 - [ ] **#05** — 路由匹配 tracing + Controller validate 协同 — **M**
   - 注意：涉及 Controller validate 改动，可以和 Controller 侧 owner 协同
-- [ ] **#10** — OIDC 插件 tracing（33 处）— **M**
+- [x] **#10** — OIDC 插件 tracing（33 处）— **M**
 - [x] **#11** — JWT/JWE/Basic/HeaderCert/ForwardAuth tracing（10 处）— **M** — 删 10 处 tracing；JWT 按 `jsonwebtoken::errors::ErrorKind` 分 `jwt:expired / invalid-sig / malformed / bad-alg / ...` 等短标签（`verify_token` 接 `&mut PluginLog`），hide_credentials 限制改 `jwt:hide-skip-q / -c`；BasicAuth 统一 `basic:auth-fail;` 防 log-grep 枚举（timing 侧由 `auth_failure_delay_ms` 部署层缓解）；HeaderCert `hca:fail:<detail>` 带 static detail；ForwardAuth 新增 `EdgionStatus::ForwardAuthServiceUnreachable = 503_14` + PluginSession 窄接口 `add_error(EdgionStatus)` 双写 access log errors + `fa:unreachable(-degraded);` 标签。按用户立场不加 `edgion_auth_plugin_errors_total` counter。顺带：basic_auth 配置期 warn/info、header_cert_auth CA 加载 warn 登记到 `skills/03-coding/01-log-safety.md` 例外表。
-- [ ] **#12** — LDAP 命中率反模式 + tracing — **S**
+- [x] **#12** — LDAP 命中率反模式 + tracing — **S**
 - [ ] **#13** — 其他插件 tracing 杂项（17 处）— **M**
   - ⚠️ 同文件协同：**`ctx_set/plugin.rs:230` 若 #16 还未做就一起改**；**`rate_limit_redis/plugin.rs` 若 #17 还未做就一起改**
   - 依赖：**#14 先完成**
@@ -137,10 +135,10 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 
 - Wave 1：10 / 10 ✅
 - Wave 2：4 / 4 ✅（#24 拆为 #24a + #24b，两个子工单皆已落盘）
-- Wave 3：3 / 5
-- Wave 4：4 / 8
+- Wave 3：4 / 5
+- Wave 4：6 / 8
 - Wave 5：2 / 2 ✅（#21 改条件 push，#22 以删代修）
-- **总计：23 / 29**
+- **总计：26 / 29**
 
 ---
 

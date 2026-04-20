@@ -17,11 +17,7 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 
 /// Abstraction over "fetch the Secret". Production wiring uses
 /// `ensure_admin_credentials(conf_mgr)`; tests pass a stub.
-pub type FetchFn = Box<
-    dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<LocalAuthConfig>> + Send>>
-        + Send
-        + Sync,
->;
+pub type FetchFn = Box<dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<LocalAuthConfig>> + Send>> + Send + Sync>;
 
 /// Abstraction over "exit the process on hard timeout". Production passes
 /// `|| std::process::exit(1)`; tests pass a flag-setting closure.
@@ -147,7 +143,10 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(8)).await;
         handle.await.unwrap();
         assert_eq!(attempt.load(Ordering::SeqCst), 3);
-        assert!(state.local.load().is_some(), "state should be updated after successful fetch");
+        assert!(
+            state.local.load().is_some(),
+            "state should be updated after successful fetch"
+        );
         assert_eq!(timed_out.load(Ordering::SeqCst), 0);
     }
 
@@ -190,7 +189,13 @@ mod tests {
         let fetch: FetchFn = Box::new(|| Box::pin(async move { Err(anyhow::anyhow!("never used")) }));
         let exit: ExitFn = Box::new(|| panic!("on_timeout should not fire"));
         let (tx, rx) = broadcast::channel(1);
-        let handle = tokio::spawn(secret_retry_loop(state.clone(), fetch, Duration::from_secs(600), exit, rx));
+        let handle = tokio::spawn(secret_retry_loop(
+            state.clone(),
+            fetch,
+            Duration::from_secs(600),
+            exit,
+            rx,
+        ));
         tokio::time::sleep(Duration::from_millis(100)).await;
         tx.send(()).unwrap();
         handle.await.unwrap();
