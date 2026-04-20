@@ -169,32 +169,23 @@ impl EdgionCenterCli {
                 .serve(grpc_addr),
         );
 
-        // HTTP Admin API — unified auth supports both OIDC and local auth
+        // HTTP Admin API — unified auth supports both OIDC and local auth.
+        // Center 不走 Controller 的 Secret 自动生成路径，凭证只来自 operator 配置。
         let auth_config = config.auth.clone();
-        // If the operator did not supply `[local_auth]`, fall back to the documented
-        // dev-default (admin/edgion1234) with a per-boot random JWT secret so existing
-        // tokens become invalid on restart. Previously the fallback was
-        // `LocalAuthConfig::default()`, which has empty password+jwt_secret; after
-        // fix #01's stricter validation that fallback would panic at startup.
-        let local_auth_config = config.local_auth.clone().or_else(|| {
-            tracing::info!(
+        let local_auth_config = config.local_auth.clone();
+
+        // 两者都没配时：不 panic、不 exit。Server 照常启动，所有 admin 路由
+        // 会被 unified_auth middleware 以 401 拒绝（fail-close 通过 middleware
+        // 实现，而非通过启动失败）。operator 看到 WARN 日志后补配即可。
+        if local_auth_config.is_none() && auth_config.is_none() {
+            tracing::warn!(
                 component = "center",
-                "No local_auth configured, enabling default local auth (admin/edgion1234); JWT secret is random per boot"
+                "No authentication configured. All admin endpoints will reject \
+                 requests with 401. Configure [local_auth] or [auth] in your TOML."
             );
-            Some(crate::core::common::local_auth::LocalAuthConfig {
-                enabled: true,
-                username: "admin".to_string(),
-                password: "edgion1234".to_string(),
-                jwt_secret: crate::core::common::local_auth::secret::generate_random_string(32),
-                jwt_expiry_hours: 24,
-                skip_paths: vec!["/health".to_string(), "/ready".to_string()],
-            })
-        });
+        }
+
         let http_handle = tokio::spawn(async move {
-            // Build state first, wire routes, wrap with auth layer LAST. See
-            // `common::api::wrap_with_unified_auth_layer` docs: `.layer()` only
-            // protects routes present at the time of the call, so anything
-            // merged after would silently bypass auth.
             let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
             let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled) || local_auth_intent;
             let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
@@ -205,11 +196,9 @@ impl EdgionCenterCli {
             )
             .expect("center auth state build failed");
             let base_router = router(api_state);
-            let app =
-                crate::core::common::api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
-            let app = crate::core::common::api::add_auth_status_route(app, auth_state.clone());
-            let app = crate::core::common::api::wrap_with_unified_auth_layer(app, auth_state);
-            let app = crate::core::common::api::apply_cors_layer(app);
+            // compose 内部固定装配顺序：业务路由 + auth 路由 + middleware + CORS。
+            // 返回的 app 视为终态，不可再 .route() / .layer()——见函数 doc。
+            let app = crate::core::common::api::compose_admin_routes(base_router, auth_state, local_auth_intent);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();
         });
@@ -234,5 +223,47 @@ impl EdgionCenterCli {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::center::config::CenterConfig;
+    use crate::core::common::unified_auth::UnifiedAuthState;
+
+    /// Center 在 local_auth 和 auth 都为 None 时应能成功构造 UnifiedAuthState，
+    /// 不应 panic。这是 fix #01 round 2 的结构性回归：老代码的 or_else
+    /// fallback 会造一个 admin/edgion1234 的 LocalAuthConfig，走进 validate
+    /// 分支后因 hash 或其它字段不满足 fix #01 加强的校验而 panic。删掉
+    /// fallback 以后 local 直接传 None，根本不走 validate。
+    #[test]
+    fn center_boot_with_no_auth_config_does_not_panic() {
+        let auth_config: Option<&crate::core::common::auth::AdminAuthConfig> = None;
+        let local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig> = None;
+
+        let local_auth_intent = local_auth_config.is_some_and(|c| c.enabled);
+        let require_auth = auth_config.is_some_and(|c| c.enabled) || local_auth_intent;
+
+        let state = UnifiedAuthState::from_configs(auth_config, local_auth_config, require_auth, "test")
+            .expect("from_configs must succeed with no auth configs (Center no-auth scenario)");
+        assert!(
+            !state.require_auth,
+            "require_auth should be false when neither provider is configured"
+        );
+    }
+
+    /// CenterConfig::default() 应该不带任何 admin 凭证，确保 fix #01 删除
+    /// edgion1234 fallback 后没有遗漏的默认注入路径。
+    #[test]
+    fn center_default_config_yields_no_auth_config() {
+        let config = CenterConfig::default();
+        assert!(
+            config.local_auth.is_none(),
+            "default CenterConfig should not inject edgion1234 via local_auth"
+        );
+        assert!(
+            config.auth.as_ref().is_none_or(|a| !a.enabled),
+            "default CenterConfig should not enable OIDC auth"
+        );
     }
 }
