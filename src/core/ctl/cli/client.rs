@@ -62,29 +62,60 @@ impl EdgionClient {
     }
 
     /// Ensure we have a valid token. Called before first API request.
-    /// Flow: (1) check auth/status, (2) if token cached → validate it, (3) auto-login if needed.
+    /// Flow: (1) query auth/status, (2) dispatch on AuthStatus, (3) auto-login if needed.
     pub async fn ensure_auth(&mut self) -> Result<()> {
-        // Check if auth is required by querying the status endpoint
-        let status_url = format!("{}/api/v1/auth/status", self.base_url);
-        let (auth_required, auth_method) = match self.client.get(&status_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(body) = resp.json::<serde_json::Value>().await {
-                    let required = body["data"]["auth_required"].as_bool().unwrap_or(false);
-                    let method = body["data"]["auth_method"].as_str().unwrap_or("none").to_string();
-                    (required, method)
-                } else {
-                    (false, "none".to_string())
-                }
-            }
-            // Status endpoint not available (old controller?) — just continue without auth
-            _ => return Ok(()),
-        };
+        use anyhow::{bail, Context};
+        use crate::core::common::local_auth::{AuthStatus, AuthStatusResponse};
 
-        if !auth_required {
+        let status_url = format!("{}/api/v1/auth/status", self.base_url);
+        let resp = self
+            .client
+            .get(&status_url)
+            .send()
+            .await
+            .with_context(|| format!("cannot reach controller at {} (network/TLS error)", self.base_url))?;
+
+        let status_code = resp.status();
+        if !status_code.is_success() {
+            bail!(
+                "/auth/status returned HTTP {} — controller 版本过老或配置异常",
+                status_code
+            );
+        }
+
+        let wrapper: serde_json::Value = resp
+            .json()
+            .await
+            .context("/auth/status response is not valid JSON (schema unrecognized)")?;
+        let data = wrapper
+            .get("data")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("/auth/status missing `data` field"))?;
+        let status: AuthStatusResponse = serde_json::from_value(data)
+            .context("/auth/status schema unrecognized — CLI/controller 版本不匹配")?;
+
+        match status.status {
+            AuthStatus::Disabled => return Ok(()),
+            AuthStatus::Initializing => {
+                bail!("controller authentication subsystem initializing, please retry later");
+            }
+            AuthStatus::Ready => {}
+        }
+
+        if !status.auth_required {
             return Ok(());
         }
 
-        // If we have a cached token, validate it — it may be stale if the controller restarted
+        let has_local = status.active_providers.iter().any(|p| p == "local");
+        let has_oidc = status.active_providers.iter().any(|p| p == "oidc");
+        if !has_local && !has_oidc {
+            bail!(
+                "/auth/status reported Ready but no known provider in active_providers: {:?}",
+                status.active_providers
+            );
+        }
+
+        // If we have a cached token, validate it — it may be stale if the controller restarted.
         if self.token.is_some() {
             let me_url = format!("{}/api/v1/auth/me", self.base_url);
             let still_valid = self
@@ -101,28 +132,40 @@ impl EdgionClient {
             super::token::delete_token();
         }
 
-        if auth_method == "local" {
-            // Try auto-detect credentials from controller config
-            if let Some((username, password)) = super::auto_auth::detect_credentials(self.controller_config.as_deref())
-            {
-                match self.do_login(&username, password.as_str()).await {
-                    Ok(token) => {
-                        super::token::save_token(token.as_str())?;
-                        self.token = Some(token);
-                        eprintln!("Auto-login successful (credentials from controller config).");
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        tracing::debug!("Auto-login failed: {}", e);
-                    }
+        if has_local {
+            self.auto_login_local().await
+        } else {
+            self.auto_login_oidc().await
+        }
+    }
+
+    /// Attempt auto-login using local credentials detected from the controller config file.
+    async fn auto_login_local(&mut self) -> Result<()> {
+        if let Some((username, password)) =
+            super::auto_auth::detect_credentials(self.controller_config.as_deref())
+        {
+            match self.do_login(&username, password.as_str()).await {
+                Ok(token) => {
+                    super::token::save_token(token.as_str())?;
+                    self.token = Some(token);
+                    eprintln!("Auto-login successful (credentials from controller config).");
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::debug!("Auto-login failed: {}", e);
                 }
             }
-
-            // Config not found or login failed — inform user
-            anyhow::bail!("Authentication required. Please run: edgion-cli login -u <username> -p <password>");
         }
 
-        Ok(())
+        anyhow::bail!("Authentication required. Please run: edgion-cli login -u <username> -p <password>");
+    }
+
+    /// Attempt auto-login via OIDC (not yet supported — inform the user).
+    async fn auto_login_oidc(&mut self) -> Result<()> {
+        anyhow::bail!(
+            "Authentication required. OIDC login is not supported in the CLI. \
+             Please configure local auth or use a valid bearer token."
+        );
     }
 
     /// Perform login and return the token wrapped in `Zeroizing` so its buffer is
@@ -384,4 +427,119 @@ pub async fn parse_json_response(resp: Response) -> Result<Value> {
     }
 
     serde_json::from_str(&body).context("Failed to parse JSON response")
+}
+
+#[cfg(test)]
+mod ensure_auth_tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Build an `EdgionClient` pointed at `base_url` with no cached token.
+    fn make_client(base_url: String) -> EdgionClient {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("reqwest client");
+        EdgionClient {
+            client,
+            base_url,
+            target: crate::core::ctl::cli::TargetType::Center,
+            socket_path: None,
+            token: None,
+            controller_config: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_bails_on_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        let r = client.ensure_auth().await;
+        assert!(r.is_err(), "404 must bail, got {:?}", r);
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_bails_on_5xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        assert!(client.ensure_auth().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_bails_on_initializing() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "success": true,
+            "data": {
+                "auth_required": true,
+                "active_providers": [],
+                "status": "initializing"
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        let r = client.ensure_auth().await;
+        assert!(r.is_err());
+        let msg = format!("{:?}", r.unwrap_err());
+        assert!(
+            msg.to_lowercase().contains("initializ"),
+            "expected 'initializing' in err: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_continues_on_disabled() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "success": true,
+            "data": {
+                "auth_required": false,
+                "active_providers": [],
+                "status": "disabled"
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        let r = client.ensure_auth().await;
+        assert!(r.is_ok(), "disabled should continue, got {:?}", r);
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_bails_on_malformed_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        assert!(client.ensure_auth().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_bails_on_unreachable() {
+        let mut client = make_client("http://127.0.0.1:1".to_string());
+        assert!(client.ensure_auth().await.is_err());
+    }
 }
