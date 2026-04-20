@@ -52,11 +52,6 @@ impl DirectEndpoint {
             match validate_endpoint_in_route(&target_ip, extracted_port.or(self.config.port), backend_refs, route_ns) {
                 Ok(result) => result,
                 Err(reason) => {
-                    tracing::warn!(
-                        target_ip = %target_ip,
-                        reason = %reason,
-                        "DirectEndpoint: endpoint validation failed"
-                    );
                     return Err(ResolutionError::Invalid(reason)); // Becomes Deny
                 }
             };

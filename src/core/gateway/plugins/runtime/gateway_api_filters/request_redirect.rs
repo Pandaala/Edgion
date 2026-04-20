@@ -143,22 +143,19 @@ impl RequestFilter for RequestRedirectFilter {
         // Build redirect response
         let mut resp = match ResponseHeader::build(status, None) {
             Ok(r) => r,
-            Err(e) => {
-                tracing::error!("Failed to build redirect response: {:?}", e);
+            Err(_) => {
                 return PluginRunningResult::ErrTerminateRequest;
             }
         };
 
-        if let Err(e) = resp.insert_header("Location", &location) {
-            tracing::error!("Failed to insert Location header: {:?}", e);
+        if resp.insert_header("Location", &location).is_err() {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
         let _ = resp.insert_header("Content-Length", "0");
 
         // Send response and terminate request
-        if let Err(e) = session.write_response_header(Box::new(resp), true).await {
-            tracing::error!("Failed to write redirect response: {:?}", e);
+        if session.write_response_header(Box::new(resp), true).await.is_err() {
             return PluginRunningResult::ErrTerminateRequest;
         }
 

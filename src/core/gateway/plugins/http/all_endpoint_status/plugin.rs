@@ -459,14 +459,7 @@ async fn fan_out_with_wall_timeout(
             }
             _ = &mut deadline => {
                 let remaining = unordered.len();
-                if remaining > 0 {
-                    tracing::warn!(
-                        completed = results.len(),
-                        cancelled = remaining,
-                        wall_timeout_ms = wall_timeout.as_millis() as u64,
-                        "AllEndpointStatus wall timeout: partial results returned"
-                    );
-                }
+                let _ = remaining;
                 return (results, remaining > 0);
             }
             else => break,
@@ -697,8 +690,7 @@ impl RequestFilter for AllEndpointStatus {
 
         let json_body = match serde_json::to_string(&response) {
             Ok(j) => j,
-            Err(e) => {
-                tracing::error!("AllEndpointStatus: failed to serialize response: {}", e);
+            Err(_) => {
                 log.push("FAIL serialize; ");
                 return self
                     .send_json_response(session, 500, r#"{"error":"internal serialization error"}"#)

@@ -31,8 +31,7 @@ fn checked_value_opt_str(s: Option<String>, limit: usize) -> Result<Value, Runti
     }
 }
 
-fn api_error(function: &'static str, err: impl std::fmt::Display) -> RuntimeError {
-    tracing::debug!("DSL builtin '{}' API detail: {}", function, err);
+fn api_error(function: &'static str, _err: impl std::fmt::Display) -> RuntimeError {
     RuntimeError::ApiError {
         function: function.into(),
         message: "plugin session operation failed".into(),
@@ -673,13 +672,11 @@ impl Vm {
             }
             BuiltinId::LogWarn => {
                 let msg = state.pop()?.into_string();
-                tracing::warn!("DSL plugin: {}", msg);
                 log.push(&format!("warn:{}", msg));
                 Ok(Value::Nil)
             }
             BuiltinId::LogError => {
                 let msg = state.pop()?.into_string();
-                tracing::error!("DSL plugin: {}", msg);
                 log.push(&format!("error:{}", msg));
                 Ok(Value::Nil)
             }

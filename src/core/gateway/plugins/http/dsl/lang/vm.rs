@@ -673,7 +673,6 @@ impl Vm {
                         Value::Int(n) => {
                             let code = *n;
                             if !(100..=599).contains(&code) {
-                                tracing::warn!("DSL deny status {} out of valid range, using 500", code);
                                 500u16
                             } else {
                                 code as u16
@@ -700,10 +699,6 @@ impl Vm {
                         Value::Int(n) => {
                             let c = *n;
                             if !(0..=16).contains(&c) {
-                                tracing::warn!(
-                                    "DSL grpc_error code {} out of valid range (0-16), using 13 (INTERNAL)",
-                                    c
-                                );
                                 13u16
                             } else {
                                 c as u16
@@ -743,12 +738,10 @@ pub fn execute_safe(
         Ok(Ok(running_result)) => running_result,
         Ok(Err(runtime_err)) => {
             log.push(&format!("dsl:err:{}", runtime_err));
-            tracing::warn!("DSL runtime error: {}", runtime_err);
             apply_error_policy(error_policy)
         }
         Err(_panic) => {
             log.push("dsl:panic; ");
-            tracing::error!("DSL VM panic caught by catch_unwind");
             apply_error_policy(error_policy)
         }
     }

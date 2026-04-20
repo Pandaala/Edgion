@@ -27,9 +27,7 @@ impl DebugAccessLogToHeaderFilter {
         let json = entry.to_json();
 
         // Set the debug header
-        if let Err(e) = session.set_response_header("X-Debug-Access-Log", &json) {
-            tracing::error!("Failed to set X-Debug-Access-Log header: {:?}", e);
-        }
+        let _ = session.set_response_header("X-Debug-Access-Log", &json);
 
         PluginRunningResult::GoodNext
     }

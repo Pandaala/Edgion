@@ -619,12 +619,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                     Some(format!("{}:{}", ip, self.get_path()))
                 }
             }
-            KeyGet::Webhook { .. } => {
-                tracing::warn!(
-                    "key_get_local called with Webhook variant; returning None (use key_get for async resolution)"
-                );
-                None
-            }
+            KeyGet::Webhook { .. } => None,
         }
     }
 

@@ -162,11 +162,6 @@ impl RequestFilter for RequestRestriction {
         // Check for configuration errors
         if !self.config.is_valid() {
             let error = self.config.get_validation_error().unwrap_or("Unknown error");
-            tracing::error!(
-                plugin = "RequestRestriction",
-                error = error,
-                "Config invalid — fail-close"
-            );
             plugin_log.push(&format!("Config error (fail-close): {}; ", error));
             let resp = Box::new(
                 ResponseHeader::build(500, None)

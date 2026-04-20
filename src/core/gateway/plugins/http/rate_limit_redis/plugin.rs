@@ -190,7 +190,6 @@ impl RateLimitRedis {
             Ok(result) => Ok(result),
             Err(ref e) if e.details().contains("NOSCRIPT") => {
                 // Redis restarted or SCRIPT FLUSH — fall back to EVAL (sends full script body)
-                tracing::debug!("EVALSHA NOSCRIPT for hash {}, falling back to EVAL", hash);
                 client
                     .pool()
                     .eval(script, keys, args)
@@ -496,8 +495,6 @@ impl RequestFilter for RateLimitRedis {
 
         // 1. Validate config
         if !self.config.is_valid() {
-            let err = self.config.get_validation_error().unwrap_or("Unknown error");
-            tracing::error!(plugin = "RateLimitRedis", error = err, "Config invalid — fail-close");
             plugin_log.push("rl:err:cfg; ");
             let resp = Box::new(
                 ResponseHeader::build(500, None)

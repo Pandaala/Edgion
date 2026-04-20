@@ -21,7 +21,6 @@
 
 use async_trait::async_trait;
 use regex::Regex;
-use tracing::debug;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -115,10 +114,6 @@ impl CtxSet {
                 value = match self.apply_extract(&value, regex, rule.extract.as_ref().unwrap().group) {
                     Some(extracted) => extracted,
                     None => {
-                        debug!(
-                            "CtxSet: extract regex did not match for var '{}', using default",
-                            rule.name
-                        );
                         return rule.default.clone();
                     }
                 };
@@ -131,7 +126,6 @@ impl CtxSet {
             value = match self.apply_transform(&value, transform, compiled_replace) {
                 Some(transformed) => transformed,
                 None => {
-                    debug!("CtxSet: transform failed for var '{}', using default", rule.name);
                     return rule.default.clone();
                 }
             };
@@ -227,12 +221,10 @@ impl RequestFilter for CtxSet {
                         plugin_log.push(&format!("Failed to set ctx '{}': {}; ", rule.name, e));
                     } else {
                         set_count += 1;
-                        debug!("CtxSet: set ctx '{}' = '{}'", rule.name, v);
                     }
                 }
                 None => {
                     skip_count += 1;
-                    debug!("CtxSet: skipped ctx '{}' (no value, no default)", rule.name);
                 }
             }
         }
