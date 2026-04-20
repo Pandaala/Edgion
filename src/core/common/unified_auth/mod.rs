@@ -697,10 +697,7 @@ mod tests {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         let base: axum::Router = axum::Router::new()
             .route("/base", axum::routing::get(|| async { "base-ok" }))
-            .layer(axum::middleware::from_fn_with_state(
-                state,
-                unified_auth_middleware,
-            ));
+            .layer(axum::middleware::from_fn_with_state(state, unified_auth_middleware));
         let after_router: axum::Router =
             axum::Router::new().route("/after", axum::routing::get(|| async { "after-ok" }));
         let app = base.merge(after_router);
@@ -716,7 +713,12 @@ mod tests {
         // /after was merged AFTER .layer() → NOT gated. This is the axum behavior
         // we have to work around: merge first, layer last.
         let resp = app
-            .oneshot(Request::builder().uri("/after").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/after")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -736,10 +738,7 @@ mod tests {
         let merged_in: axum::Router =
             axum::Router::new().route("/merged", axum::routing::get(|| async { "merged-ok" }));
         let app = base.merge(merged_in);
-        let app = app.layer(axum::middleware::from_fn_with_state(
-            state,
-            unified_auth_middleware,
-        ));
+        let app = app.layer(axum::middleware::from_fn_with_state(state, unified_auth_middleware));
 
         for path in ["/base", "/merged"] {
             let resp = app
@@ -747,11 +746,7 @@ mod tests {
                 .oneshot(Request::builder().uri(path).body(axum::body::Body::empty()).unwrap())
                 .await
                 .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::SERVICE_UNAVAILABLE,
-                "{path} must be gated"
-            );
+            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{path} must be gated");
         }
     }
 }
