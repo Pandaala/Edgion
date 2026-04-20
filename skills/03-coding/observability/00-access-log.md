@@ -245,10 +245,9 @@ log.push(&format!("Rewrite -> {}; ", new_path));
    dns, jwt, jwks, cors, csrf
 3. 允许数字字面量：rate 429, retry 2, size 1024
 4. 事件+动作用冒号连接（两段都完整词，无空格粘连）：
-   `"key miss:allow; "`、`"jwks refresh:stale; "`、`"upstream select:failover; "`
+   `"key miss:allow"`、`"jwks refresh:stale"`、`"upstream select:failover"`
    单段信息不加冒号：
-   `"upstream b selected; "`、`"OK user jack; "`
-   （尾部 "; " 见 rule 8）
+   `"upstream b selected"`、`"OK user jack"`
 5. 保留前缀动作词（不可改名）：OK / Deny / Rate / Allow / Skip
 6. **敏感动态值禁止**。push / push_err 的字符串中不得出现：token、claim 值、
    raw header value、cookie、email、secrets（API key、password、session id）、
@@ -262,20 +261,22 @@ log.push(&format!("Rewrite -> {}; ", new_path));
    拼错误信息 —— Display 可能泄漏 token/claim。
 7. 插件名不写入条目（已在 PluginLog.name 字段）。修正示例：
    "rl:nok:a" → "key miss:allow"
-8. **末尾 "; " 分隔**：push 条目手动加 "; " 结尾，与 push_err 自动添加的 "; " 保持一致。
-   示例：`log.push("OK user jack; ")`、`log.push(&format!("Direct {}:{}; ", ip, port))`。
+8. **末尾 "; " 不要求**：push 条目无需手动加 "; " 结尾（JSON 数组序列化时每条本就是独立元素）。
+   push_err 的运行时仍然自动加 `"err: <kind>; "`（buffer.rs 内置行为），这部分不变。
+   建议示例：`log.push("OK user jack")`、`log.push(&format!("Direct {}:{}", ip, port))`。
+   （历史遗留的 "; " 条目先保留，后续审查统一整理。）
 
 ### 2. push vs push_err 判别
 
 - push：正常决策、分支命中、业务语义的 allow/deny、限流结果、降级但请求继续
-  例：`"OK user jack; "` / `"Deny bad credential; "` / `"Rate 429; "` / `"key miss:allow; "`
+  例：`"OK user jack"` / `"Deny bad credential"` / `"Rate 429"` / `"key miss:allow"`
 - push_err：per-request 异常（config 读不出、远程调用失败、解码失败、内部
   unreachable 分支）
   例：`"token refresh fail"` / `"cache load fail"` / `"jwks fetch:timeout"`
   （push_err 的 kind **不带** "; "，运行时自动补 `"err: <kind>; "`）
 kind 形如 `"<action> fail"` 或 `"<action>:<reason>"`。同一插件内两者可各自多次调用，
 最终 log 序列化为数组：
-`log: ["OK user jack; ", "err: jwks fetch:timeout; ", "OK fallback; "]`。
+`log: ["OK user jack", "err: jwks fetch:timeout; ", "OK fallback"]`。
 
 ### 3. 关键节点筛选
 
