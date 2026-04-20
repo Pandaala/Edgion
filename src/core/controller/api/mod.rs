@@ -261,11 +261,12 @@ pub async fn serve(
     addr: std::net::SocketAddr,
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    require_auth: bool,
 ) -> anyhow::Result<()> {
     let base_router = create_admin_router(conf_mgr, schema_validator);
     // Build unified auth state first, then add login/me/logout routes using that state.
+    // require_auth is passed in by the Controller cli layer (derive_require_auth) — intent-based.
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
-    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled) || local_auth_intent;
     let (router_with_auth, auth_state) =
         api::apply_unified_auth_layer(base_router, auth_config, local_auth_config, require_auth, "admin_api")?;
     let app = api::add_local_auth_routes(router_with_auth, auth_state.clone(), local_auth_intent);
@@ -303,12 +304,13 @@ pub async fn serve_with_shutdown(
     addr: std::net::SocketAddr,
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    require_auth: bool,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let base_router = create_admin_router(conf_mgr, schema_validator);
     // Build unified auth state first, then add login/me/logout routes using that state.
+    // require_auth is passed in by the Controller cli layer (derive_require_auth) — intent-based.
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
-    let require_auth = auth_config.as_ref().is_some_and(|c| c.enabled) || local_auth_intent;
     let (router_with_auth, auth_state) =
         api::apply_unified_auth_layer(base_router, auth_config, local_auth_config, require_auth, "admin_api")?;
     let app = api::add_local_auth_routes(router_with_auth, auth_state.clone(), local_auth_intent);
