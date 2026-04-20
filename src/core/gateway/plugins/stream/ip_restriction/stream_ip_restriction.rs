@@ -35,12 +35,27 @@ pub(crate) fn check_ip_access(
     ip: &IpAddr,
 ) -> StreamPluginResult {
     if init_failed {
-        return StreamPluginResult::Deny("IP restriction plugin initialization failed".to_string());
+        return StreamPluginResult::Deny("ip init fail".to_string());
     }
-    if !rules.check_ip(ip) {
-        return StreamPluginResult::Deny("IP address not allowed".to_string());
+    // Priority: deny list > allow list > default action (mirrors ConnectionIpRestrictionRules::check_ip).
+    if let Some(deny) = &rules.deny_matcher {
+        if deny.match_ip(ip).is_some() {
+            return StreamPluginResult::Deny("ip match:deny".to_string());
+        }
     }
-    StreamPluginResult::Allow
+    if let Some(allow) = &rules.allow_matcher {
+        return if allow.match_ip(ip).is_some() {
+            StreamPluginResult::Allow // ip match:allow
+        } else {
+            StreamPluginResult::Deny("ip deny".to_string())
+        };
+    }
+    // No allow list: default action decides.
+    if matches!(rules.default_action, crate::types::resources::edgion_plugins::DefaultAction::Allow) {
+        StreamPluginResult::Allow // ip allow
+    } else {
+        StreamPluginResult::Deny("ip deny".to_string())
+    }
 }
 
 /// Stream IP Restriction plugin
