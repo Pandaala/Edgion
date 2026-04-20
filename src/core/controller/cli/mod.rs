@@ -489,7 +489,7 @@ impl EdgionControllerCli {
             auth_config,
             local_auth_config,
             require_auth,        // from derive_require_auth (intent-based, not post-resolve)
-            needs_retry,         // Task 6 will consume this to spawn secret_retry_loop
+            needs_retry,         // consumed by serve/serve_with_shutdown → spawns secret_retry_loop
             shutdown_handle,
         )
         .await

@@ -28,7 +28,12 @@ pub type FetchFn = Box<
 pub type ExitFn = Box<dyn FnOnce() + Send + Sync>;
 
 /// Run the retry loop: exponential backoff (1s → 2s → 4s → 8s → 16s → 30s cap),
-/// hard deadline `timeout` wall-clock from call time.
+/// approximate deadline `timeout` wall-clock from call time.
+///
+/// The deadline is checked after each sleep, before the next fetch. If a
+/// fetch is already in-flight when the deadline passes, the loop lets it
+/// complete before enforcing the deadline — effective exit time is
+/// `deadline + fetch_latency`, typically at most a few seconds.
 ///
 /// - On fetch success: builds `LocalAuthState`, calls `auth_state.update_local`,
 ///   logs `info!`, returns.

@@ -296,10 +296,14 @@ pub async fn serve(
         });
         let exit: crate::core::common::local_auth::retry::ExitFn =
             Box::new(|| std::process::exit(1));
-        // Create a dedicated broadcast channel so shutdown of the retry task is
-        // decoupled from the main serve shutdown flow. The retry task has its own
-        // hard 10min deadline and will self-terminate via process::exit(1) if
-        // Secret never arrives — no need to wire into the main shutdown signal.
+        // Dedicated broadcast channel: shutdown of the retry task is decoupled
+        // from the main serve shutdown flow. The retry task has its own hard
+        // 10min deadline and will self-terminate via process::exit(1) if the
+        // Secret never arrives. The 10min window greatly exceeds K8s default
+        // terminationGracePeriodSeconds (30s), so a graceful SIGTERM during
+        // retry will not race against deadline-exit in practice.
+        // tx is dropped intentionally: production never cancels the retry task;
+        // tests construct their own channel.
         let (_retry_shutdown_tx, retry_shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
         tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
             auth_state_for_retry,
@@ -366,10 +370,14 @@ pub async fn serve_with_shutdown(
         });
         let exit: crate::core::common::local_auth::retry::ExitFn =
             Box::new(|| std::process::exit(1));
-        // Create a dedicated broadcast channel so shutdown of the retry task is
-        // decoupled from the main serve shutdown flow. The retry task has its own
-        // hard 10min deadline and will self-terminate via process::exit(1) if
-        // Secret never arrives — no need to wire into the main shutdown signal.
+        // Dedicated broadcast channel: shutdown of the retry task is decoupled
+        // from the main serve shutdown flow. The retry task has its own hard
+        // 10min deadline and will self-terminate via process::exit(1) if the
+        // Secret never arrives. The 10min window greatly exceeds K8s default
+        // terminationGracePeriodSeconds (30s), so a graceful SIGTERM during
+        // retry will not race against deadline-exit in practice.
+        // tx is dropped intentionally: production never cancels the retry task;
+        // tests construct their own channel.
         let (_retry_shutdown_tx, retry_shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
         tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
             auth_state_for_retry,
