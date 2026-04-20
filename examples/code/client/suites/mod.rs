@@ -5,6 +5,7 @@ pub mod edgion_tls;
 pub mod gateway;
 pub mod grpc_route;
 pub mod http_route;
+pub mod link_sys;
 pub mod services;
 pub mod status;
 pub mod tcp_route;
@@ -55,10 +56,13 @@ pub use edgion_plugins::{
     DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite, GlobalConnectionIpRestrictionTestSuite,
     HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite,
     LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
-    PluginMetaDataManagedTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
-    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResponseRewriteTestSuite,
-    WebhookKeyGetTestSuite,
+    PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite,
+    RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
+    ResolvedRefsTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
+
+// LinkSys tests
+pub use link_sys::LinkSysStatusTestSuite;
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
 pub use status::BackendTlsStatusTestSuite;

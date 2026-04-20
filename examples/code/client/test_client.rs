@@ -151,6 +151,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }
+            "resolved-refs" | "resolvedrefs" | "ep-resolved-refs" => "EdgionPlugins/ResolvedRefs".to_string(),
+            "linksys-status" | "linksysstatus" | "ls-status" => "LinkSys/Status".to_string(),
             "ref-grant-status" => "Status/RefGrant".to_string(),
             "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
             "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
@@ -250,7 +252,10 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/PluginMetaDataManaged" | "EdgionPlugins/plugin-metadata-managed" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
+        "EdgionPlugins/PluginMetaDataStatus" => "EdgionPlugins",
+        "EdgionPlugins/ResolvedRefs" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
+        "LinkSys/Status" => "EdgionPlugins",
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
@@ -804,6 +809,27 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GlobalConnectionIpRestrictionTestSuite));
+        }
+        "EdgionPlugins/PluginMetaDataStatus" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginMetaDataStatus tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PluginMetaDataStatusTestSuite));
+        }
+        "EdgionPlugins/ResolvedRefs" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/ResolvedRefs tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ResolvedRefsTestSuite));
+        }
+        "LinkSys/Status" => {
+            if !gateway {
+                eprintln!("Error: LinkSys/Status tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LinkSysStatusTestSuite));
         }
         "EdgionPlugins/AllEndpointStatus" => {
             if !gateway {

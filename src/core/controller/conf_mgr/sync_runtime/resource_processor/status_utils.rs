@@ -70,6 +70,11 @@ pub mod condition_reasons {
     /// CACertificateRef cannot be resolved (resource not found or misconfigured).
     pub const INVALID_CA_CERTIFICATE_REF: &str = "InvalidCACertificateRef";
 
+    /// Referenced PluginMetaData not found or has an unexpected variant type
+    /// (Edgion-specific, e.g. ServiceRegionRoute.clusterRef pointing at a non-existent
+    /// or non-ClusterRegionRoute PluginMetaData).
+    pub const INVALID_PLUGIN_METADATA_REF: &str = "InvalidPluginMetaDataRef";
+
     // Programmed reasons (for listener Programmed condition)
     pub const PROGRAMMED: &str = "Programmed";
     pub const INVALID_LISTENER: &str = "Invalid";
@@ -146,6 +151,14 @@ pub enum ResolvedRefsError {
         target_namespace: String,
         target_name: String,
     },
+    /// Referenced PluginMetaData not found, or found but its metadata variant
+    /// type doesn't match what the referrer requires (e.g. ServiceRegionRoute.clusterRef
+    /// expects a PluginMetaData of type ClusterRegionRoute).
+    PluginMetaDataNotFound {
+        namespace: String,
+        name: String,
+        expected_type: String,
+    },
 }
 
 impl ResolvedRefsError {
@@ -155,6 +168,7 @@ impl ResolvedRefsError {
             Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::SecretNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
+            Self::PluginMetaDataNotFound { .. } => condition_reasons::INVALID_PLUGIN_METADATA_REF,
         }
     }
 
@@ -176,6 +190,16 @@ impl ResolvedRefsError {
                 format!(
                     "Cross-namespace reference to {}/{} not allowed by ReferenceGrant",
                     target_namespace, target_name
+                )
+            }
+            Self::PluginMetaDataNotFound {
+                namespace,
+                name,
+                expected_type,
+            } => {
+                format!(
+                    "PluginMetaData '{}/{}' (expected type={}) not found",
+                    namespace, name, expected_type
                 )
             }
         }
@@ -287,7 +311,7 @@ pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation
 /// Priority order (matching Gateway API spec precedence):
 /// 1. InvalidKind — fundamentally wrong backend type
 /// 2. RefNotPermitted — policy denial
-/// 3. BackendNotFound — missing backend
+/// 3. BackendNotFound / SecretNotFound / PluginMetaDataNotFound — missing target
 fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'static str {
     if errors
         .iter()
@@ -300,6 +324,12 @@ fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'static str {
         .any(|e| matches!(e, ResolvedRefsError::RefNotPermitted { .. }))
     {
         return condition_reasons::REF_NOT_PERMITTED;
+    }
+    if errors
+        .iter()
+        .any(|e| matches!(e, ResolvedRefsError::PluginMetaDataNotFound { .. }))
+    {
+        return condition_reasons::INVALID_PLUGIN_METADATA_REF;
     }
     if errors.iter().any(|e| {
         matches!(

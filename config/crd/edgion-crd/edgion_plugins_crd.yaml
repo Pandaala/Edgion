@@ -248,6 +248,9 @@ spec:
                       lastTransitionTime:
                         type: string
                         format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64
 
       subresources:
         status: {}

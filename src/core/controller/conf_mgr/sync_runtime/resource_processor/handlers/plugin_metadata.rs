@@ -5,23 +5,45 @@
 //! Responsibilities:
 //! - Maintain PluginMetaDataStore in ControllerRuntime (parse + on_delete)
 //! - Maintain RegionRoute tables (global + service) on change/delete
-//! - On change: requeue referencing EdgionPlugins/EdgionStreamPlugins so they
-//!   pick up updated failover / match_map from the PluginMetaData.
+//! - Register cross-PM references (ServiceRegionRoute.clusterRef → ClusterRegionRoute PM)
+//!   so a change to a ClusterRegionRoute PM requeues the dependent ServiceRegionRoute PMs.
+//! - On change: requeue referencing EdgionPlugins/EdgionStreamPlugins (and dependent
+//!   ServiceRegionRoute PMs) so they pick up updated failover / match_map.
+//! - On update_status: set `Accepted` (from preparse errors) and `ResolvedRefs`
+//!   (from ServiceRegionRoute.clusterRef resolution) conditions per Gateway API conventions.
+
+use chrono::Utc;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
     ClusterRegionRouteEntry, ServiceRegionRouteEntry,
+};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
+    condition_reasons, condition_types, ResolvedRefsError,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
 use crate::types::prelude_resources::PluginMetaData;
-use crate::types::resources::plugin_metadata::MetaDataEntry;
+use crate::types::resources::plugin_metadata::{MetaDataEntry, PluginMetaDataStatus};
+
+/// Kind string used when a PluginMetaData registers a cross-PM reference in the shared
+/// `plugin_metadata_refs` manager. The existing `requeue_pm_referrers` splits refs on `:`
+/// and uses the prefix as the kind for `ctx.requeue`, which matches the PluginMetaData
+/// processor registered in the processor registry.
+const SELF_KIND: &str = "PluginMetaData";
 
 pub struct PluginMetadataHandler;
 
 impl PluginMetadataHandler {
     pub fn new() -> Self {
         Self
+    }
+
+    fn self_ref_key(pm: &PluginMetaData) -> String {
+        let ns = pm.metadata.namespace.as_deref().unwrap_or("");
+        let name = pm.metadata.name.as_deref().unwrap_or("");
+        format!("{}:{}/{}", SELF_KIND, ns, name)
     }
 }
 
@@ -82,7 +104,29 @@ fn remove_from_region_route_tables(pm: &PluginMetaData, ctx: &HandlerContext) {
     ctx.runtime().service_region_route_table.remove(&pm_key);
 }
 
-/// Requeue all EdgionPlugins/EdgionStreamPlugins that reference the given PluginMetaData.
+/// Register this PM's cross-PM references in the shared `plugin_metadata_refs` manager.
+///
+/// Currently only `ServiceRegionRoute.clusterRef → ClusterRegionRoute PM` is tracked.
+/// Entry stored: `cluster_pm_key -> {"PluginMetaData:ns/service_pm_name", ...}`.
+/// When the cluster PM changes, `requeue_pm_referrers` picks the service PM back up
+/// and re-runs its `update_status`, refreshing `ResolvedRefs`.
+fn register_cross_pm_refs(pm: &PluginMetaData, ctx: &HandlerContext) {
+    if let MetaDataEntry::ServiceRegionRoute(cfg) = &pm.spec.metadata {
+        if let Some(cref) = &cfg.cluster_ref {
+            let pm_ns = pm.metadata.namespace.as_deref().unwrap_or("");
+            let cluster_ns = cref.namespace.as_deref().unwrap_or(pm_ns);
+            let cluster_pm_key = format!("{}/{}", cluster_ns, cref.name);
+            ctx.runtime()
+                .plugin_metadata_refs
+                .add_ref(cluster_pm_key, PluginMetadataHandler::self_ref_key(pm));
+        }
+    }
+}
+
+/// Requeue resources that reference this PluginMetaData.
+///
+/// Historically: EdgionPlugins / EdgionStreamPlugins referencing regions, etc.
+/// Newly: other PluginMetaData (ServiceRegionRoute whose clusterRef points here).
 async fn requeue_pm_referrers(pm: &PluginMetaData, ctx: &HandlerContext) {
     let ns = pm.metadata.namespace.as_deref().unwrap_or("");
     let name = pm.metadata.name.as_deref().unwrap_or("");
@@ -98,6 +142,10 @@ async fn requeue_pm_referrers(pm: &PluginMetaData, ctx: &HandlerContext) {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
+    fn preparse(&self, pm: &mut PluginMetaData, _ctx: &HandlerContext) -> Vec<String> {
+        pm.validate_pre_parse()
+    }
+
     async fn parse(&self, pm: PluginMetaData, ctx: &HandlerContext) -> ProcessResult<PluginMetaData> {
         let key = PluginMetaDataStore::make_key(
             pm.metadata.namespace.as_deref(),
@@ -108,6 +156,13 @@ impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
             .update([(key, pm.clone())].into_iter().collect(), &Default::default());
 
         update_region_route_tables(&pm, ctx);
+
+        // Rebuild this PM's outgoing cross-PM refs from scratch (covers the case where
+        // a ServiceRegionRoute's clusterRef was edited between revisions).
+        ctx.runtime()
+            .plugin_metadata_refs
+            .clear_refs_from(&Self::self_ref_key(&pm));
+        register_cross_pm_refs(&pm, ctx);
 
         ProcessResult::Continue(pm)
     }
@@ -126,6 +181,120 @@ impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
             .update(Default::default(), &[key].into_iter().collect());
 
         remove_from_region_route_tables(pm, ctx);
+        ctx.runtime()
+            .plugin_metadata_refs
+            .clear_refs_from(&Self::self_ref_key(pm));
         requeue_pm_referrers(pm, ctx).await;
+    }
+
+    fn update_status(&self, pm: &mut PluginMetaData, ctx: &HandlerContext, validation_errors: &[String]) {
+        let generation = pm.metadata.generation;
+
+        // Compute both conditions first (both need immutable access to `pm` / `ctx`),
+        // then apply them in a single mutable-borrow scope on `pm.status`.
+        let accepted = if validation_errors.is_empty() {
+            k8s_condition_true(
+                condition_types::ACCEPTED,
+                condition_reasons::ACCEPTED,
+                "Resource accepted",
+                generation,
+            )
+        } else {
+            k8s_condition_false(
+                condition_types::ACCEPTED,
+                condition_reasons::INVALID,
+                &validation_errors.join("; "),
+                generation,
+            )
+        };
+
+        let resolved_errors = resolve_refs(pm, ctx);
+        let resolved_refs = if resolved_errors.is_empty() {
+            k8s_condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "All references resolved",
+                generation,
+            )
+        } else {
+            let reason = resolved_errors[0].reason();
+            let message = resolved_errors
+                .iter()
+                .map(|e| e.message())
+                .collect::<Vec<_>>()
+                .join("; ");
+            k8s_condition_false(condition_types::RESOLVED_REFS, reason, &message, generation)
+        };
+
+        let status = pm.status.get_or_insert_with(PluginMetaDataStatus::default);
+        update_k8s_condition(&mut status.conditions, accepted);
+        update_k8s_condition(&mut status.conditions, resolved_refs);
+    }
+}
+
+/// Resolve cross-PM references.
+///
+/// Today: only `ServiceRegionRoute.clusterRef` must point at an existing
+/// `ClusterRegionRoute` PluginMetaData. Returns an empty vec for variants without
+/// external refs.
+fn resolve_refs(pm: &PluginMetaData, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let mut errors = Vec::new();
+    if let MetaDataEntry::ServiceRegionRoute(cfg) = &pm.spec.metadata {
+        if let Some(cref) = &cfg.cluster_ref {
+            let pm_ns = pm.metadata.namespace.as_deref().unwrap_or("");
+            let cluster_ns = cref.namespace.as_deref().unwrap_or(pm_ns);
+            let target = ctx.runtime().plugin_metadata_store.get(Some(cluster_ns), &cref.name);
+            let resolved = target
+                .as_ref()
+                .is_some_and(|t| matches!(&t.spec.metadata, MetaDataEntry::ClusterRegionRoute(_)));
+            if !resolved {
+                errors.push(ResolvedRefsError::PluginMetaDataNotFound {
+                    namespace: cluster_ns.to_string(),
+                    name: cref.name.clone(),
+                    expected_type: "ClusterRegionRoute".to_string(),
+                });
+            }
+        }
+    }
+    errors
+}
+
+/// Create a k8s_openapi Condition with True status
+fn k8s_condition_true(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
+    Condition {
+        type_: type_.to_string(),
+        status: "True".to_string(),
+        reason: reason.to_string(),
+        message: message.to_string(),
+        last_transition_time: Time(Utc::now()),
+        observed_generation,
+    }
+}
+
+/// Create a k8s_openapi Condition with False status
+fn k8s_condition_false(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
+    Condition {
+        type_: type_.to_string(),
+        status: "False".to_string(),
+        reason: reason.to_string(),
+        message: message.to_string(),
+        last_transition_time: Time(Utc::now()),
+        observed_generation,
+    }
+}
+
+/// Update or insert a k8s_openapi Condition (only bump `last_transition_time` on status flip).
+fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Condition) {
+    if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
+        let status_changed = existing.status != new_condition.status;
+        existing.status = new_condition.status;
+        existing.reason = new_condition.reason;
+        existing.message = new_condition.message;
+        existing.observed_generation = new_condition.observed_generation;
+        if status_changed {
+            existing.last_transition_time = new_condition.last_transition_time;
+        }
+    } else {
+        conditions.push(new_condition);
     }
 }

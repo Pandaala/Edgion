@@ -26,6 +26,10 @@ impl Default for LinkSysHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<LinkSys> for LinkSysHandler {
+    fn preparse(&self, ls: &mut LinkSys, _ctx: &HandlerContext) -> Vec<String> {
+        ls.validate_config()
+    }
+
     async fn parse(&self, ls: LinkSys, _ctx: &HandlerContext) -> ProcessResult<LinkSys> {
         ProcessResult::Continue(ls)
     }

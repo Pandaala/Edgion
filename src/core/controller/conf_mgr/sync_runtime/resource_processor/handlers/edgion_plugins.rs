@@ -8,6 +8,9 @@
 //! - on_delete: Clear SecretRefManager references
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::RefPluginEntry;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
+    condition_reasons, ResolvedRefsError,
+};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, format_secret_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
@@ -888,28 +891,81 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         );
     }
 
-    fn update_status(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, ep: &mut EdgionPlugins, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = ep.metadata.generation;
 
-        // Note: validation_errors already includes preparse errors (merged by processor)
-
-        // Initialize status if not present
-        let status = ep
-            .status
-            .get_or_insert_with(|| EdgionPluginsStatus { conditions: vec![] });
-
-        // Set Accepted condition
+        // Accepted reflects preparse + validate errors (already merged by processor).
         let accepted = if validation_errors.is_empty() {
-            k8s_condition_true(condition_types::ACCEPTED, "Accepted", "Resource accepted", generation)
+            k8s_condition_true(
+                condition_types::ACCEPTED,
+                condition_reasons::ACCEPTED,
+                "Resource accepted",
+                generation,
+            )
         } else {
             k8s_condition_false(
                 condition_types::ACCEPTED,
-                "Invalid",
+                condition_reasons::INVALID,
                 &validation_errors.join("; "),
                 generation,
             )
         };
+
+        // ResolvedRefs aggregates the Secret references registered during parse().
+        // parse() always adds refs before resolution, so any unresolved Secret appears
+        // in the ref manager's dependency list but not in secret_store.
+        let resolved_errors = Self::resolve_secret_refs(ep, ctx);
+        let resolved_refs = if resolved_errors.is_empty() {
+            k8s_condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "All references resolved",
+                generation,
+            )
+        } else {
+            let reason = resolved_errors[0].reason();
+            let message = resolved_errors
+                .iter()
+                .map(|e| e.message())
+                .collect::<Vec<_>>()
+                .join("; ");
+            k8s_condition_false(condition_types::RESOLVED_REFS, reason, &message, generation)
+        };
+
+        let status = ep
+            .status
+            .get_or_insert_with(|| EdgionPluginsStatus { conditions: vec![] });
         update_k8s_condition(&mut status.conditions, accepted);
+        update_k8s_condition(&mut status.conditions, resolved_refs);
+    }
+}
+
+impl EdgionPluginsHandler {
+    /// Inspect every Secret this EdgionPlugins depends on (tracked in `SecretRefManager`
+    /// by the `parse()` resolvers) and flag any that aren't present in the Secret store.
+    fn resolve_secret_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+        let resource_ref = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            ep.metadata.namespace.clone(),
+            ep.metadata.name.clone().unwrap_or_default(),
+        );
+
+        let mut errors = Vec::new();
+        for dep_key in ctx.secret_ref_manager().get_dependencies(&resource_ref.key()) {
+            // dep_key is "<ns>/<name>" (or just "<name>" if namespace-less, per format_secret_key).
+            let (ns, name) = match dep_key.split_once('/') {
+                Some((ns, name)) => (ns.to_string(), name.to_string()),
+                None => (String::new(), dep_key.clone()),
+            };
+            let ns_opt = if ns.is_empty() { None } else { Some(ns.as_str()) };
+            if ctx.runtime().secret_store.get(ns_opt, &name).is_none() {
+                errors.push(ResolvedRefsError::SecretNotFound {
+                    namespace: if ns.is_empty() { "default".to_string() } else { ns },
+                    name,
+                });
+            }
+        }
+        errors
     }
 }
 

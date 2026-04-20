@@ -180,6 +180,32 @@ spec:
                             slowLogThreshold:
                               type: integer
                               format: int64
+            status:
+              type: object
+              description: "Status of LinkSys"
+              properties:
+                conditions:
+                  type: array
+                  description: "Gateway-API-style conditions (Accepted reflects spec validation)."
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+      subresources:
+        status: {}
       additionalPrinterColumns:
         - name: Type
           type: string
@@ -189,6 +215,9 @@ spec:
           type: string
           jsonPath: .spec.config.endpoints[0]
           description: "First endpoint"
+        - name: Accepted
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Accepted')].status
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

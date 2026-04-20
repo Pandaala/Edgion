@@ -124,6 +124,29 @@ spec:
               type: object
               description: "EdgionAcme resource status"
               properties:
+                conditions:
+                  type: array
+                  description: |
+                    Gateway-API-style conditions. `Accepted` reflects spec validation;
+                    asynchronous issuance / renewal status lives in `phase` and the timestamp
+                    fields below.
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
                 phase:
                   type: string
                   description: "Current phase of the ACME certificate lifecycle"

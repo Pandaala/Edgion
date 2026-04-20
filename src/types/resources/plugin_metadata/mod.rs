@@ -19,6 +19,7 @@ pub use ip_list::IpListData;
 pub use key_list::{KeyListData, KeyMatchMode, MetaDataItem};
 pub use region_route::{ClusterRegionRouteConfig, RouteByKeyConfMatchMeta, ServiceRegionDef, ServiceRegionRouteConfig};
 
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,13 +34,28 @@ pub const PLUGIN_METADATA_KIND: &str = "PluginMetaData";
     version = "v1",
     kind = "PluginMetaData",
     plural = "pluginmetadata",
-    namespaced
+    namespaced,
+    status = "PluginMetaDataStatus"
 )]
 #[serde(rename_all = "camelCase")]
 pub struct PluginMetaDataSpec {
     /// The metadata entry. Each PluginMetaData contains exactly one entry,
     /// discriminated by the `type` tag.
     pub metadata: MetaDataEntry,
+}
+
+/// Status of PluginMetaData.
+///
+/// Conditions follow Gateway API conventions:
+/// - `Accepted`: spec is syntactically and semantically valid (per-variant validation passed).
+/// - `ResolvedRefs`: cross-resource references resolve. Currently only meaningful for the
+///   `ServiceRegionRoute` variant (its `clusterRef` must point at an existing
+///   `ClusterRegionRoute` PluginMetaData). All other variants always report `True`
+///   since they carry no external references.
+#[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
+pub struct PluginMetaDataStatus {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
 }
 
 /// A single metadata entry — the core payload of a PluginMetaData resource.
@@ -86,10 +102,13 @@ impl PluginMetaData {
         }
     }
 
-    /// Validate and pre-parse the metadata (called during pre_parse).
-    pub fn validate_pre_parse(&self) {
-        let key_name = self.key_name_str();
-
+    /// Validate the metadata payload and return a list of human-readable error messages.
+    ///
+    /// An empty result means "no problems found". Errors are suitable for inclusion in an
+    /// `Accepted=False/reason=Invalid` status condition by the Controller, and are also
+    /// emitted as warnings by the data-plane `pre_parse` hook (see `impl_resource_meta!`).
+    pub fn validate_pre_parse(&self) -> Vec<String> {
+        let mut errors = Vec::new();
         match &self.spec.metadata {
             MetaDataEntry::IpList(ip_list) => {
                 for cidr in &ip_list.items {
@@ -97,7 +116,7 @@ impl PluginMetaData {
                         && !cidr.contains(':')
                         && !cidr.chars().all(|c| c.is_ascii_digit() || c == '.')
                     {
-                        tracing::warn!("PluginMetaData {}: Invalid IP/CIDR format: {}", key_name, cidr);
+                        errors.push(format!("Invalid IP/CIDR format: {}", cidr));
                     }
                 }
             }
@@ -105,34 +124,28 @@ impl PluginMetaData {
                 if matches!(key_list.match_mode, KeyMatchMode::Regex) {
                     for item in &key_list.items {
                         if let Err(e) = regex::Regex::new(&item.key) {
-                            tracing::warn!(
-                                "PluginMetaData {}: Invalid regex pattern '{}': {}",
-                                key_name,
-                                item.key,
-                                e
-                            );
+                            errors.push(format!("Invalid regex pattern '{}': {}", item.key, e));
                         }
                     }
                 }
             }
             MetaDataEntry::GlobalConnectionIpRestriction(data) => {
-                // Early validation: clone and run full validate_and_init to surface errors in logs.
+                // Early validation: clone and run full validate_and_init to surface errors.
                 let mut cloned = data.clone();
                 if let Err(e) = cloned.validate_and_init() {
-                    tracing::warn!(
-                        "PluginMetaData {}: GlobalConnectionIpRestriction invalid: {}",
-                        key_name,
-                        e
-                    );
+                    errors.push(format!("GlobalConnectionIpRestriction invalid: {}", e));
                 }
             }
-            // RegionRoute variants: no additional validation needed at pre-parse
+            // RegionRoute variants: no additional validation at pre-parse (cross-PM
+            // reference checks live in the Controller handler's update_status via
+            // ResolvedRefs, not here).
             MetaDataEntry::ClusterRegionRoute(_) | MetaDataEntry::ServiceRegionRoute(_) => {}
         }
+        errors
     }
 
-    /// Get key name string (namespace/name format)
-    fn key_name_str(&self) -> String {
+    /// Return the namespace/name key string for this resource ("name" if cluster-scoped).
+    pub fn key_name_str(&self) -> String {
         if let Some(namespace) = &self.metadata.namespace {
             format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
         } else {

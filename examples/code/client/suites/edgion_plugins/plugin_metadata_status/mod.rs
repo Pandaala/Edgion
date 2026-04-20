@@ -1,0 +1,2 @@
+mod plugin_metadata_status;
+pub use plugin_metadata_status::PluginMetaDataStatusTestSuite;

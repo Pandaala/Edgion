@@ -5,6 +5,7 @@
 
 use super::common::ParentReference;
 use super::gateway::SecretObjectReference;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -321,6 +322,12 @@ pub enum AcmeCertPhase {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionAcmeStatus {
+    /// Gateway-API-style conditions. `Accepted` reflects spec validation.
+    /// The `phase` field and timestamps below track the asynchronous ACME lifecycle
+    /// (issuance / renewal) and are updated by the background AcmeService, not here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+
     /// Current phase of the ACME certificate lifecycle
     #[serde(default)]
     pub phase: AcmeCertPhase,

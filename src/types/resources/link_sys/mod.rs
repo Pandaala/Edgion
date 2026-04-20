@@ -126,33 +126,30 @@ pub enum SystemType {
 }
 
 impl LinkSys {
-    /// Validate configuration based on system type (called during pre_parse)
-    pub fn validate_config(&self) {
-        let key_name = self.key_name_str();
+    /// Validate the configuration based on system type, returning a list of error messages.
+    ///
+    /// An empty result means "no problems found". Errors are suitable for inclusion in an
+    /// `Accepted=False/reason=Invalid` status condition by the Controller, and are also
+    /// logged as warnings by the data-plane `pre_parse` hook (see `impl_resource_meta!`).
+    pub fn validate_config(&self) -> Vec<String> {
+        let mut errors = Vec::new();
         match &self.spec.config {
             SystemConfig::Redis(redis_config) => {
-                // Validate endpoints
                 if redis_config.endpoints.is_empty() {
-                    tracing::warn!("LinkSys {}: Redis configuration has no endpoints", key_name);
+                    errors.push("Redis configuration has no endpoints".to_string());
                 }
 
-                // Validate topology consistency
+                // Topology consistency
                 if let Some(topology) = &redis_config.topology {
                     match topology.mode {
                         redis::RedisTopologyMode::Sentinel => {
                             if topology.sentinel.is_none() {
-                                tracing::warn!(
-                                    "LinkSys {}: Sentinel mode specified but sentinel config is missing",
-                                    key_name
-                                );
+                                errors.push("Sentinel mode specified but sentinel config is missing".to_string());
                             }
                         }
                         redis::RedisTopologyMode::Cluster => {
                             if topology.cluster.is_none() {
-                                tracing::warn!(
-                                    "LinkSys {}: Cluster mode specified but cluster config is missing",
-                                    key_name
-                                );
+                                errors.push("Cluster mode specified but cluster config is missing".to_string());
                             }
                         }
                         _ => {}
@@ -160,34 +157,32 @@ impl LinkSys {
                 }
             }
             SystemConfig::Etcd(etcd_config) => {
-                // Validate endpoints
                 if etcd_config.endpoints.is_empty() {
-                    tracing::warn!("LinkSys {}: Etcd configuration has no endpoints", key_name);
+                    errors.push("Etcd configuration has no endpoints".to_string());
                 }
             }
             SystemConfig::Elasticsearch(es_config) => {
-                // Validate endpoints
                 if es_config.endpoints.is_empty() {
-                    tracing::warn!("LinkSys {}: Elasticsearch configuration has no endpoints", key_name);
+                    errors.push("Elasticsearch configuration has no endpoints".to_string());
                 }
             }
             SystemConfig::Webhook(webhook_config) => {
                 if let Some(err) = webhook_config.get_validation_error() {
-                    tracing::warn!("LinkSys {}: Webhook configuration error: {}", key_name, err);
+                    errors.push(format!("Webhook configuration error: {}", err));
                 }
             }
-            _ => {
-                tracing::warn!(
-                    "LinkSys {}: System type {:?} is not yet fully implemented",
-                    key_name,
-                    self.spec.config.system_type()
-                );
+            other => {
+                errors.push(format!(
+                    "System type {:?} is not yet fully implemented",
+                    other.system_type()
+                ));
             }
         }
+        errors
     }
 
-    /// Get key name string (namespace/name format)
-    fn key_name_str(&self) -> String {
+    /// Return the namespace/name key string for this resource.
+    pub fn key_name_str(&self) -> String {
         if let Some(namespace) = &self.metadata.namespace {
             format!("{}/{}", namespace, self.metadata.name.as_deref().unwrap_or(""))
         } else {

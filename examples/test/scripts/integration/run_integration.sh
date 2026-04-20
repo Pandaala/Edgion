@@ -642,6 +642,8 @@ run_all_tests() {
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
                     run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
+                    run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+                    run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
                     run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
                     run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
@@ -683,6 +685,14 @@ run_all_tests() {
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "Status_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            "LinkSys")
+                if [ -z "$G_ITEM" ]; then
+                    run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+                else
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "LinkSys_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             *)
@@ -789,6 +799,8 @@ run_all_tests() {
         run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
         run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
         run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
+        run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+        run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
         run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
         run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
         run_test "EdgionPlugins_DslGrpcError" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
@@ -823,7 +835,8 @@ run_all_tests() {
         run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
         run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
         run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
-        
+        run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+
         # Gateway Dynamic Tests (if enabled)
         if $G_DYNAMIC_TEST; then
             run_dynamic_tests $G_DYNAMIC_STAGE

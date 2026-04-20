@@ -2,14 +2,20 @@
 //!
 //! Handles EdgionStreamPlugins resources with Gateway API standard status management.
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, HandlerContext, ProcessResult, ProcessorHandler,
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
+    condition_reasons, ResolvedRefsError,
 };
-use crate::types::prelude_resources::EdgionStreamPlugins;
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
+};
+use crate::types::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
 use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, EdgionStreamPluginsStatus};
+use crate::types::resources::plugin_metadata::MetaDataEntry;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::chrono::Utc;
+
+const SELF_KIND: &str = "EdgionStreamPlugins";
 
 /// Prefix used to mark preparse errors that indicate a legacy-schema upgrade issue.
 /// When present, `update_status` maps the condition reason to `LegacySchemaDeprecated`
@@ -30,6 +36,33 @@ pub struct EdgionStreamPluginsHandler;
 impl EdgionStreamPluginsHandler {
     pub fn new() -> Self {
         Self
+    }
+
+    fn self_ref_key(esp: &EdgionStreamPlugins) -> String {
+        let ns = esp.metadata.namespace.as_deref().unwrap_or("");
+        let name = esp.metadata.name.as_deref().unwrap_or("");
+        format!("{}:{}/{}", SELF_KIND, ns, name)
+    }
+
+    /// Iterate each GlobalConnectionIpRestriction plugin and yield (pm_namespace, pm_name).
+    fn iter_gcir_refs<'a>(esp: &'a EdgionStreamPlugins) -> impl Iterator<Item = (String, String)> + 'a {
+        let esp_ns = esp.metadata.namespace.as_deref().unwrap_or("").to_string();
+        esp.spec
+            .plugins
+            .as_ref()
+            .into_iter()
+            .flat_map(|v| v.iter())
+            .filter_map(move |entry| match &entry.plugin {
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
+                    let pm_ns = gcir
+                        .plugin_metadata_ref
+                        .namespace
+                        .clone()
+                        .unwrap_or_else(|| esp_ns.clone());
+                    Some((pm_ns, gcir.plugin_metadata_ref.name.clone()))
+                }
+                EdgionStreamPlugin::IpRestriction(_) => None,
+            })
     }
 }
 
@@ -62,27 +95,41 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         errors
     }
 
-    async fn parse(&self, esp: EdgionStreamPlugins, _ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
+    async fn parse(&self, esp: EdgionStreamPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
+        // Rebuild outgoing PluginMetaData refs from scratch so that an edit that removes
+        // a GCIR entry correctly drops its old ref.
+        let self_ref = Self::self_ref_key(&esp);
+        ctx.runtime().plugin_metadata_refs.clear_refs_from(&self_ref);
+        for (pm_ns, pm_name) in Self::iter_gcir_refs(&esp) {
+            let pm_key = PluginMetaDataStore::make_key(Some(&pm_ns), &pm_name);
+            ctx.runtime().plugin_metadata_refs.add_ref(pm_key, self_ref.clone());
+        }
         ProcessResult::Continue(esp)
     }
 
-    fn update_status(&self, esp: &mut EdgionStreamPlugins, _ctx: &HandlerContext, validation_errors: &[String]) {
+    async fn on_delete(&self, esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
+        ctx.runtime()
+            .plugin_metadata_refs
+            .clear_refs_from(&Self::self_ref_key(esp));
+    }
+
+    fn update_status(&self, esp: &mut EdgionStreamPlugins, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = esp.metadata.generation;
 
-        // Initialize status if not present
-        let status = esp
-            .status
-            .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
-
-        // Set Accepted condition
+        // Accepted: preparse/validate errors (with legacy-schema reason mapping).
         let accepted = if validation_errors.is_empty() {
-            k8s_condition_true(condition_types::ACCEPTED, "Accepted", "Resource accepted", generation)
+            k8s_condition_true(
+                condition_types::ACCEPTED,
+                condition_reasons::ACCEPTED,
+                "Resource accepted",
+                generation,
+            )
         } else {
             let has_legacy = validation_errors.iter().any(|e| e.starts_with(LEGACY_SCHEMA_MARKER));
             let reason = if has_legacy {
                 REASON_LEGACY_SCHEMA_DEPRECATED
             } else {
-                "Invalid"
+                condition_reasons::INVALID
             };
             let message = validation_errors
                 .iter()
@@ -91,8 +138,53 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 .join("; ");
             k8s_condition_false(condition_types::ACCEPTED, reason, &message, generation)
         };
+
+        // ResolvedRefs: each GlobalConnectionIpRestriction plugin_metadata_ref must
+        // resolve to an existing PluginMetaData of the matching variant type.
+        let resolved_errors = resolve_refs(esp, ctx);
+        let resolved_refs = if resolved_errors.is_empty() {
+            k8s_condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "All references resolved",
+                generation,
+            )
+        } else {
+            let reason = resolved_errors[0].reason();
+            let message = resolved_errors
+                .iter()
+                .map(|e| e.message())
+                .collect::<Vec<_>>()
+                .join("; ");
+            k8s_condition_false(condition_types::RESOLVED_REFS, reason, &message, generation)
+        };
+
+        let status = esp
+            .status
+            .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
         update_k8s_condition(&mut status.conditions, accepted);
+        update_k8s_condition(&mut status.conditions, resolved_refs);
     }
+}
+
+/// Resolve each GCIR plugin_metadata_ref against the PluginMetaData store.
+/// Returns one `PluginMetaDataNotFound` error per unresolved / wrong-type reference.
+fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let mut errors = Vec::new();
+    for (pm_ns, pm_name) in EdgionStreamPluginsHandler::iter_gcir_refs(esp) {
+        let target: Option<PluginMetaData> = ctx.runtime().plugin_metadata_store.get(Some(&pm_ns), &pm_name);
+        let resolved = target
+            .as_ref()
+            .is_some_and(|t| matches!(&t.spec.metadata, MetaDataEntry::GlobalConnectionIpRestriction(_)));
+        if !resolved {
+            errors.push(ResolvedRefsError::PluginMetaDataNotFound {
+                namespace: pm_ns,
+                name: pm_name,
+                expected_type: "GlobalConnectionIpRestriction".to_string(),
+            });
+        }
+    }
+    errors
 }
 
 /// Create a k8s_openapi Condition with True status
