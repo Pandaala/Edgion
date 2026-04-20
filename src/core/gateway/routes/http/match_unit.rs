@@ -273,13 +273,7 @@ impl HttpRouteRuleUnit {
                     .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
                 Ok(re.is_match(header_value))
             }
-            _ => {
-                tracing::warn!(
-                    match_type = %match_type,
-                    "Unsupported header match type, defaulting to Exact"
-                );
-                Ok(header_value == header_match.value)
-            }
+            _ => Ok(false),
         }
     }
 
@@ -307,13 +301,7 @@ impl HttpRouteRuleUnit {
                     .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
                 Ok(re.is_match(param_value))
             }
-            _ => {
-                tracing::warn!(
-                    match_type = %match_type,
-                    "Unsupported query param match type, defaulting to Exact"
-                );
-                Ok(param_value == &query_param_match.value)
-            }
+            _ => Ok(false),
         }
     }
 

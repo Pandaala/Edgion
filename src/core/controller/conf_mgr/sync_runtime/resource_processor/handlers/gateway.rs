@@ -165,6 +165,34 @@ impl GatewayHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<Gateway> for GatewayHandler {
+    fn validate(&self, g: &Gateway, _ctx: &HandlerContext) -> Vec<String> {
+        let mut errors = Vec::new();
+        for listener in g.spec.listeners.as_deref().unwrap_or_default() {
+            if let Some(from) = listener
+                .allowed_routes
+                .as_ref()
+                .and_then(|ar| ar.namespaces.as_ref())
+                .and_then(|ns| ns.from.as_deref())
+            {
+                if from != "All" && from != "Same" && from != "Selector" {
+                    tracing::warn!(
+                        ns = g.metadata.namespace.as_deref().unwrap_or(""),
+                        name = g.metadata.name.as_deref().unwrap_or(""),
+                        kind = "Gateway",
+                        field = "allowedRoutes.namespaces.from",
+                        value = %from,
+                        "Unsupported enum value, rejecting resource"
+                    );
+                    errors.push(format!(
+                        "Unsupported allowedRoutes.namespaces.from value '{}' on listener '{}' (allowed: All, Same, Selector)",
+                        from, listener.name
+                    ));
+                }
+            }
+        }
+        errors
+    }
+
     fn filter(&self, g: &Gateway) -> bool {
         match &self.gateway_class_name {
             Some(class_name) => g.spec.gateway_class_name == *class_name,

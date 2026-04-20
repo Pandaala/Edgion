@@ -161,8 +161,49 @@ pub fn is_cross_ns_ref_allowed(
 /// They are handled by parse() (sets ref_denied on each backend) and update_status()
 /// (sets ResolvedRefs=False). Returning them here would cause Accepted=False, which
 /// violates Gateway API spec — ref_denied routes must remain Accepted=True.
-pub fn validate_http_route_if_enabled(_route: &crate::types::resources::HTTPRoute) -> Vec<String> {
-    Vec::new()
+pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute) -> Vec<String> {
+    let mut errors = Vec::new();
+    let rules = route.spec.rules.as_deref().unwrap_or_default();
+    for rule in rules {
+        let matches = rule.matches.as_deref().unwrap_or_default();
+        for m in matches {
+            for h in m.headers.as_deref().unwrap_or_default() {
+                let mt = h.match_type.as_deref().unwrap_or("Exact");
+                if mt != "Exact" && mt != "RegularExpression" {
+                    tracing::warn!(
+                        ns = route.metadata.namespace.as_deref().unwrap_or(""),
+                        name = route.metadata.name.as_deref().unwrap_or(""),
+                        kind = "HTTPRoute",
+                        field = "match_type",
+                        value = %mt,
+                        "Unsupported enum value, rejecting resource"
+                    );
+                    errors.push(format!(
+                        "Unsupported HTTPRoute header match type '{}' (allowed: Exact, RegularExpression)",
+                        mt
+                    ));
+                }
+            }
+            for q in m.query_params.as_deref().unwrap_or_default() {
+                let mt = q.match_type.as_deref().unwrap_or("Exact");
+                if mt != "Exact" && mt != "RegularExpression" {
+                    tracing::warn!(
+                        ns = route.metadata.namespace.as_deref().unwrap_or(""),
+                        name = route.metadata.name.as_deref().unwrap_or(""),
+                        kind = "HTTPRoute",
+                        field = "match_type",
+                        value = %mt,
+                        "Unsupported enum value, rejecting resource"
+                    );
+                    errors.push(format!(
+                        "Unsupported HTTPRoute query param match type '{}' (allowed: Exact, RegularExpression)",
+                        mt
+                    ));
+                }
+            }
+        }
+    }
+    errors
 }
 
 /// Validate GRPCRoute with ReferenceGrant if validation is enabled.
@@ -171,8 +212,32 @@ pub fn validate_http_route_if_enabled(_route: &crate::types::resources::HTTPRout
 /// They are handled by parse() (sets ref_denied on each backend) and update_status()
 /// (sets ResolvedRefs=False). Returning them here would cause Accepted=False, which
 /// violates Gateway API spec — ref_denied routes must remain Accepted=True.
-pub fn validate_grpc_route_if_enabled(_route: &crate::types::resources::GRPCRoute) -> Vec<String> {
-    Vec::new()
+pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute) -> Vec<String> {
+    let mut errors = Vec::new();
+    let rules = route.spec.rules.as_deref().unwrap_or_default();
+    for rule in rules {
+        let matches = rule.matches.as_deref().unwrap_or_default();
+        for m in matches {
+            for h in m.headers.as_deref().unwrap_or_default() {
+                let mt = h.match_type.as_deref().unwrap_or("Exact");
+                if mt != "Exact" && mt != "RegularExpression" {
+                    tracing::warn!(
+                        ns = route.metadata.namespace.as_deref().unwrap_or(""),
+                        name = route.metadata.name.as_deref().unwrap_or(""),
+                        kind = "GRPCRoute",
+                        field = "match_type",
+                        value = %mt,
+                        "Unsupported enum value, rejecting resource"
+                    );
+                    errors.push(format!(
+                        "Unsupported GRPCRoute header match type '{}' (allowed: Exact, RegularExpression)",
+                        mt
+                    ));
+                }
+            }
+        }
+    }
+    errors
 }
 
 /// Validate TCPRoute with ReferenceGrant if validation is enabled.
