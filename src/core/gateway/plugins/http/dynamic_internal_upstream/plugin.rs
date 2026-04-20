@@ -52,7 +52,6 @@ impl RequestFilter for DynamicInternalUpstream {
                         PluginRunningResult::GoodNext
                     }
                     DynUpstreamOnMissing::Reject => {
-                        log.push("upstream miss");
                         log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
                             status: 400,
@@ -69,9 +68,11 @@ impl RequestFilter for DynamicInternalUpstream {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
                     Some(m) => m.as_str().to_string(),
                     None => {
-                        log.push("upstream miss");
                         return match self.config.on_missing {
-                            DynUpstreamOnMissing::Fallback => PluginRunningResult::GoodNext,
+                            DynUpstreamOnMissing::Fallback => {
+                                log.push("upstream miss");
+                                PluginRunningResult::GoodNext
+                            }
                             DynUpstreamOnMissing::Reject => {
                                 log.push_err("regex extract fail");
                                 PluginRunningResult::ErrResponse {
@@ -94,9 +95,11 @@ impl RequestFilter for DynamicInternalUpstream {
             Some((name, ns)) => (name.to_string(), ns.map(|s| s.to_string())),
             None => {
                 // Rules mode: no rule matched
-                log.push("upstream miss");
                 return match self.config.on_no_match {
-                    DynUpstreamOnNoMatch::Fallback => PluginRunningResult::GoodNext,
+                    DynUpstreamOnNoMatch::Fallback => {
+                        log.push("upstream miss");
+                        PluginRunningResult::GoodNext
+                    }
                     DynUpstreamOnNoMatch::Reject => {
                         log.push_err("no matching rule");
                         PluginRunningResult::ErrResponse {
@@ -140,7 +143,6 @@ impl RequestFilter for DynamicInternalUpstream {
         });
 
         if !found {
-            log.push("upstream miss");
             log.push_err("backend ref not found");
             return match self.config.on_invalid {
                 DynUpstreamOnInvalid::Reject => PluginRunningResult::ErrResponse {

@@ -93,10 +93,7 @@ impl ExtensionRefFilter {
         log: &mut PluginLog,
     ) -> Result<Option<(Arc<PluginRuntime>, EdgionPluginsLogToken)>, ()> {
         if !self.is_edgion_plugins() {
-            log.push(&format!(
-                "ExtensionRef kind '{}' not supported, skipping",
-                self.ext_ref.kind
-            ));
+            log.push_err("extension ref kind not supported");
             return Ok(None);
         }
 
@@ -105,21 +102,18 @@ impl ExtensionRefFilter {
         let key = self.plugin_key();
 
         if session.has_plugin_ref(&key) {
-            log.push(&format!("Detected cyclic plugin reference '{}'", key));
+            log.push_err("cyclic reference");
             return Err(());
         }
         if session.plugin_ref_depth() >= self.max_depth {
-            log.push(&format!(
-                "Plugin reference depth exceeded {} while resolving '{}'",
-                self.max_depth, key
-            ));
+            log.push_err("extension ref depth exceeded");
             return Err(());
         }
 
         session.push_plugin_ref(key.clone());
 
         let Some(plugin_runtime) = get_global_plugin_store().get_plugin_runtime(&key) else {
-            log.push(&format!("EdgionPlugins '{}' not found, returning 500", key));
+            log.push_err("extension ref not found");
             session.pop_plugin_ref();
             return Err(());
         };
@@ -143,7 +137,7 @@ impl ExtensionRefFilter {
 
         match stage {
             PluginRunningStage::Request => {
-                log.push("Warning: Request stage should use async path");
+                log.push_err("sync path used");
                 Self::finish(session, PluginRunningResult::GoodNext)
             }
             PluginRunningStage::UpstreamResponseFilter => {

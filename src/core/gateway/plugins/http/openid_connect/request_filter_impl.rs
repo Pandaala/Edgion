@@ -50,7 +50,7 @@ impl RequestFilter for OpenidConnect {
             let _ = self
                 .send_redirect_with_cookies(session, &logout_redirect_target, &cookies)
                 .await;
-            plugin_log.push("OIDC logout handled");
+            plugin_log.push("logout handled");
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -67,7 +67,7 @@ impl RequestFilter for OpenidConnect {
         let token = self.extract_bearer_token(session);
         if token.is_none() {
             if self.config.bearer_only {
-                plugin_log.push("No token (bearer_only)");
+                plugin_log.push("no token (bearer_only)");
                 self.apply_auth_failure_delay().await;
                 let _ = self
                     .send_unauthorized(session, "Unauthorized - Missing bearer token")
@@ -91,7 +91,7 @@ impl RequestFilter for OpenidConnect {
                             Ok(new_token) => {
                                 token = new_token;
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
-                                plugin_log.push("OIDC session token refreshed (cache miss)");
+                                plugin_log.push("token refresh miss");
                             }
                             Err((_, _)) => {
                                 plugin_log.push_err("token refresh fail");
@@ -107,7 +107,7 @@ impl RequestFilter for OpenidConnect {
                             Ok(new_token) => {
                                 token = new_token;
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
-                                plugin_log.push("OIDC session token refreshed (preemptive)");
+                                plugin_log.push("token refresh preemptive");
                             }
                             Err((_, _)) => {
                                 plugin_log.push_err("token refresh fail");
@@ -128,7 +128,7 @@ impl RequestFilter for OpenidConnect {
                                     userinfo_json.as_deref(),
                                     &claims,
                                 );
-                                plugin_log.push("OIDC session token verified");
+                                plugin_log.push("session token verified");
                                 return PluginRunningResult::GoodNext;
                             }
                             Err((status, message)) => {
@@ -153,7 +153,7 @@ impl RequestFilter for OpenidConnect {
                                                     userinfo_json.as_deref(),
                                                     &claims,
                                                 );
-                                                plugin_log.push("OIDC session token refreshed");
+                                                plugin_log.push("token refresh on expiry");
                                                 return PluginRunningResult::GoodNext;
                                             }
                                             Err((_, _)) => {
@@ -173,9 +173,7 @@ impl RequestFilter for OpenidConnect {
                                                             userinfo_json.as_deref(),
                                                             &claims,
                                                         );
-                                                        plugin_log.push(
-                                                            "OIDC refresh wait timeout; accepted stale token within leeway",
-                                                        );
+                                                        plugin_log.push("token refresh wait timeout; stale token within leeway");
                                                         return PluginRunningResult::GoodNext;
                                                     }
                                                     Ok(_) => {}
@@ -203,11 +201,11 @@ impl RequestFilter for OpenidConnect {
 
             match self.config.unauth_action {
                 UnauthAction::Pass => {
-                    plugin_log.push("No token; pass");
+                    plugin_log.push("no token; pass");
                     return PluginRunningResult::GoodNext;
                 }
                 UnauthAction::Deny => {
-                    plugin_log.push("No token; deny");
+                    plugin_log.push("no token; deny");
                     self.apply_auth_failure_delay().await;
                     let _ = self
                         .send_unauthorized(session, "Unauthorized - Authentication required")
@@ -215,7 +213,7 @@ impl RequestFilter for OpenidConnect {
                     return PluginRunningResult::ErrTerminateRequest;
                 }
                 UnauthAction::Auth => {
-                    plugin_log.push("No token; redirect to IdP");
+                    plugin_log.push("no token; redirect to idp");
                     let discovery = match self.get_or_fetch_discovery().await {
                         Ok(d) => d,
                         Err(e) => {
@@ -269,7 +267,7 @@ impl RequestFilter for OpenidConnect {
                 if !self.config.access_token_in_authorization_header {
                     self.hide_credentials_if_needed(session);
                 }
-                plugin_log.push("OIDC token verified");
+                plugin_log.push("token verified");
                 PluginRunningResult::GoodNext
             }
             Err((status, message)) => {

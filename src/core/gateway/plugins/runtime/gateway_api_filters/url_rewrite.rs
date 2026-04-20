@@ -73,10 +73,10 @@ impl URLRewriteFilter {
             _ => rewritten_path.clone(),
         };
 
-        if let Err(e) = session.set_upstream_uri(&final_uri) {
-            plugin_log.push(&format!("URLRewrite path failed: {}", e));
+        if let Err(_e) = session.set_upstream_uri(&final_uri) {
+            plugin_log.push_err("path rewrite fail");
         } else {
-            plugin_log.push(&format!("URLRewrite path: {} -> {}", original_path, rewritten_path));
+            plugin_log.push("path rewrite");
         }
     }
 
@@ -86,16 +86,16 @@ impl URLRewriteFilter {
         };
 
         let mut ok = true;
-        if let Err(e) = session.set_upstream_host(hostname) {
+        if let Err(_e) = session.set_upstream_host(hostname) {
             ok = false;
-            plugin_log.push(&format!("URLRewrite host failed: {}", e));
+            plugin_log.push_err("host rewrite fail");
         }
 
         // Keep :authority in sync for HTTP/2 style requests.
         let _ = session.set_request_header(":authority", hostname);
 
         if ok {
-            plugin_log.push(&format!("URLRewrite host -> {}", hostname));
+            plugin_log.push("host rewrite");
         }
     }
 }

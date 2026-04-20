@@ -974,11 +974,11 @@ fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut
     match result {
         PluginRunningResult::ErrTerminateRequest => true,
         PluginRunningResult::ErrResponse { status, .. } => {
-            plugin_log.push(&format!("Deny ErrResponse {}", status));
+            plugin_log.push(&format!("deny response {}", status));
             true
         }
         PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
-            plugin_log.push(&format!("Deny ErrGrpcError {}", grpc_status));
+            plugin_log.push(&format!("deny grpc {}", grpc_status));
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,

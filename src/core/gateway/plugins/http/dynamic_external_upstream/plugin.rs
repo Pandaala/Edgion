@@ -52,7 +52,6 @@ impl RequestFilter for DynamicExternalUpstream {
                         PluginRunningResult::GoodNext
                     }
                     ExtUpstreamOnMissing::Reject => {
-                        log.push("upstream miss");
                         log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
                             status: 400,
@@ -69,9 +68,11 @@ impl RequestFilter for DynamicExternalUpstream {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
                     Some(m) => m.as_str().to_string(),
                     None => {
-                        log.push("upstream miss");
                         return match self.config.on_missing {
-                            ExtUpstreamOnMissing::Skip => PluginRunningResult::GoodNext,
+                            ExtUpstreamOnMissing::Skip => {
+                                log.push("upstream miss");
+                                PluginRunningResult::GoodNext
+                            }
                             ExtUpstreamOnMissing::Reject => {
                                 log.push_err("regex extract fail");
                                 PluginRunningResult::ErrResponse {
@@ -99,7 +100,6 @@ impl RequestFilter for DynamicExternalUpstream {
                         PluginRunningResult::GoodNext
                     }
                     ExtUpstreamOnNoMatch::Reject => {
-                        log.push("upstream miss");
                         log.push_err("no upstream available");
                         PluginRunningResult::ErrResponse {
                             status: 400,

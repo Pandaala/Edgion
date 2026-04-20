@@ -243,8 +243,8 @@ impl RequestFilter for ForwardAuth {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Validate configuration
-        if let Some(error) = self.config.get_validation_error() {
-            plugin_log.push(&format!("Config error: {}", error));
+        if let Some(_error) = self.config.get_validation_error() {
+            plugin_log.push_err("cfg invalid");
             return self
                 .send_error_response(session, 500, r#"{"message":"ForwardAuth configuration error"}"#, None)
                 .await;
@@ -256,7 +256,7 @@ impl RequestFilter for ForwardAuth {
             if self.config.upstream_headers.is_empty() {
                 let key = Self::cache_key(session, &self.config.request_headers);
                 if let Some(cached_status) = cache.get(&key) {
-                    plugin_log.push(&format!("Auth cached (status: {})", cached_status));
+                    plugin_log.push(&format!("auth cached {}", cached_status));
                     if self.config.hide_credentials {
                         let _ = session.remove_request_header("authorization");
                     }
@@ -326,7 +326,7 @@ impl RequestFilter for ForwardAuth {
                     cache.insert(key, status, Some(Duration::from_secs(self.config.cache_ttl)));
                 }
             }
-            plugin_log.push(&format!("Auth passed (status: {})", status));
+            plugin_log.push(&format!("auth pass {}", status));
             PluginRunningResult::GoodNext
         } else {
             // Auth failed: collect client_headers from auth response to add to error response
@@ -359,7 +359,7 @@ impl RequestFilter for ForwardAuth {
                 String::from_utf8_lossy(&buf).into_owned()
             };
 
-            plugin_log.push(&format!("Auth failed (status: {})", status));
+            plugin_log.push(&format!("auth deny {}", status));
             apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
             self.send_error_response(session, status, &body, Some(&extra_headers))
                 .await
