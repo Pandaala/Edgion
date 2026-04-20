@@ -2,7 +2,8 @@
 //!
 //! Provides built-in username/password authentication with JWT for the Admin API.
 //! When no OIDC (`[auth]`) section is present in the controller config, this is
-//! automatically enabled with default credentials (admin / edgion1234).
+//! automatically enabled with auto-generated credentials persisted to a K8s
+//! Secret (`edgion-admin-credentials` in namespace `edgion-system`).
 //!
 //! ## Sub-modules
 //!

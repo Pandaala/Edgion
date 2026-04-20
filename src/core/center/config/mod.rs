@@ -38,8 +38,9 @@ pub struct CenterConfig {
     #[serde(default)]
     pub auth: Option<AdminAuthConfig>,
     /// Optional local Admin API authentication.
-    /// Omit to use default local auth (admin/edgion1234).
-    /// Both `auth` and `local_auth` can be enabled simultaneously.
+    /// Center does not inject any default credentials; omit this section only
+    /// when OIDC `auth` is configured, otherwise the Admin API will reject all
+    /// requests. Both `auth` and `local_auth` can be enabled simultaneously.
     #[serde(default)]
     pub local_auth: Option<LocalAuthConfig>,
     /// TLS config for the federation gRPC server.

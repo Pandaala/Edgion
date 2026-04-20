@@ -57,7 +57,8 @@ const DEFAULT_CONFIG_PATHS: &[&str] = &[
 /// is wrapped in `Zeroizing` so its buffer is wiped on drop.
 ///
 /// Mirrors the controller's logic: when neither `[auth]` (OIDC) nor `[local_auth]`
-/// is present, default local_auth credentials (admin/edgion1234) are used.
+/// is present, local_auth is auto-enabled with credentials auto-generated and
+/// persisted to a K8s Secret (`edgion-admin-credentials` in `edgion-system`).
 pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, Zeroizing<String>)> {
     let config_path = resolve_config_path(explicit_path)?;
 

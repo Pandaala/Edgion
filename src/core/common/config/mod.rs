@@ -185,8 +185,9 @@ pub struct EdgionControllerConfig {
     pub auth: Option<AdminAuthConfig>,
 
     /// Optional local authentication (built-in username/password).
-    /// When both `auth` (OIDC) and `local_auth` are absent, local_auth with
-    /// default credentials (admin/edgion1234) is used automatically.
+    /// When both `auth` (OIDC) and `local_auth` are absent, local_auth is
+    /// auto-enabled with credentials auto-generated and persisted to a K8s
+    /// Secret (`edgion-admin-credentials` in namespace `edgion-system`).
     #[arg(skip)]
     #[serde(default)]
     pub local_auth: Option<crate::core::common::local_auth::LocalAuthConfig>,

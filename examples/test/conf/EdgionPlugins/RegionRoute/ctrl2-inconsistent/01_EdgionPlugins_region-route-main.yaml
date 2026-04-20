@@ -8,7 +8,7 @@
 # Load into controller-2 to trigger conflict detection in the dashboard:
 #
 #   kubectl -n edgion-test port-forward controller-2 5802:5800 &
-#   edgion-cli --server http://localhost:5802 login -u admin -p edgion1234
+#   edgion-cli --server http://localhost:5802 login -u admin -p <your-password>
 #   edgion-cli --server http://localhost:5802 apply -f \
 #     examples/test/conf/EdgionPlugins/RegionRoute/ctrl2-inconsistent/
 apiVersion: edgion.io/v1

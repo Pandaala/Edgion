@@ -93,8 +93,11 @@ data:
     local_auth:
       enabled: true
       username: admin
-      password: edgion1234
-      jwt_secret: center-test-jwt-secret-key-2026
+      # test-only credential; production deployments should configure stronger
+      # passwords via Secret. Center no longer auto-injects default creds
+      # (fix #01 / Task 4), so an explicit password is required here.
+      password: test_password_123
+      jwt_secret: integration_test_jwt_secret_do_not_reuse_production_abc
       jwt_expiry_hours: 24
       skip_paths: [/health, /ready, /api/v1/server-info]
 
