@@ -920,7 +920,7 @@ center:
     fn metrics_resource_abnormal_defaults_are_applied_when_section_omitted() {
         let yaml = "work_dir: /tmp\n";
         let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(cfg.metrics.resource_abnormal.enabled, true);
+        assert!(cfg.metrics.resource_abnormal.enabled);
         assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 300);
     }
 
@@ -933,7 +933,7 @@ metrics:
     tick_secs: 60
 "#;
         let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(cfg.metrics.resource_abnormal.enabled, false);
+        assert!(!cfg.metrics.resource_abnormal.enabled);
         assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 60);
     }
 
