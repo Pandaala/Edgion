@@ -234,6 +234,49 @@ fn extract_condition(v: &serde_json::Value) -> Option<Condition> {
     Some(Condition { type_, status })
 }
 
+/// Render a sorted snapshot to Prometheus text format. Returns empty
+/// string on empty input so the wrapper handler can skip appending
+/// entirely.
+pub fn render_snapshot(entries: &[Entry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(128 + entries.len() * 96);
+    out.push_str("# HELP ");
+    out.push_str(METRIC_NAME);
+    out.push(' ');
+    out.push_str(METRIC_HELP);
+    out.push('\n');
+    out.push_str("# TYPE ");
+    out.push_str(METRIC_NAME);
+    out.push_str(" gauge\n");
+    for e in entries {
+        out.push_str(METRIC_NAME);
+        out.push_str("{kind=\"");
+        out.push_str(e.kind);
+        out.push_str("\",namespace=\"");
+        append_escaped(&mut out, &e.namespace);
+        out.push_str("\",name=\"");
+        append_escaped(&mut out, &e.name);
+        out.push_str("\",type=\"");
+        out.push_str(e.ty.as_label());
+        out.push_str("\"} 1\n");
+    }
+    out
+}
+
+/// Escape `\` and `"` per Prometheus text-format conventions.
+fn append_escaped(out: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            other => out.push(other),
+        }
+    }
+}
+
 #[cfg(test)]
 mod scan_conditions_tests {
     use super::*;
@@ -314,5 +357,65 @@ mod scan_conditions_tests {
     fn conditions_at_top_level_object_not_array_is_ignored() {
         let j = json!({"conditions": {"not": "an array"}});
         assert!(scan_conditions(&j).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    #[test]
+    fn empty_snapshot_renders_empty_string() {
+        let out = render_snapshot(&[]);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn non_empty_snapshot_has_help_type_and_sorted_lines() {
+        let entries = vec![
+            Entry {
+                kind: "HTTPRoute",
+                namespace: "ns-b".into(),
+                name: "route".into(),
+                ty: Kind::Err,
+            },
+            Entry {
+                kind: "HTTPRoute",
+                namespace: "ns-a".into(),
+                name: "route".into(),
+                ty: Kind::Warn,
+            },
+            Entry {
+                kind: "Gateway",
+                namespace: "ns-z".into(),
+                name: "gw".into(),
+                ty: Kind::Err,
+            },
+        ];
+        let mut sorted = entries.clone();
+        sorted.sort();
+
+        let out = render_snapshot(&sorted);
+        let expected = "\
+# HELP edgion_controller_resource_abnormal Resource currently has at least one False status condition. type=err for Accepted/ResolvedRefs/Programmed failures (or Conflicted/ListenersNotValid=True), type=warn for Ready:False or PartiallyInvalid:True.
+# TYPE edgion_controller_resource_abnormal gauge
+edgion_controller_resource_abnormal{kind=\"Gateway\",namespace=\"ns-z\",name=\"gw\",type=\"err\"} 1
+edgion_controller_resource_abnormal{kind=\"HTTPRoute\",namespace=\"ns-a\",name=\"route\",type=\"warn\"} 1
+edgion_controller_resource_abnormal{kind=\"HTTPRoute\",namespace=\"ns-b\",name=\"route\",type=\"err\"} 1
+";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn label_values_escape_backslash_and_quote() {
+        let entries = vec![Entry {
+            kind: "HTTPRoute",
+            namespace: "n\"s".into(),
+            name: "back\\slash".into(),
+            ty: Kind::Err,
+        }];
+        let out = render_snapshot(&entries);
+        assert!(out.contains(r#"namespace="n\"s""#));
+        assert!(out.contains(r#"name="back\\slash""#));
     }
 }
