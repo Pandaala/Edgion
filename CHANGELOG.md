@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secret_retry_loop` shutdown signal now uses `tokio_util::sync::CancellationToken`
   instead of `tokio::sync::broadcast::Receiver<()>`; tolerates a dropped handle
   without spuriously exiting on first poll. Fixes fix #01 round 3 P0 regression
-  class. (`src/core/common/local_auth/secret.rs`)
+  class. (`src/core/common/local_auth/retry.rs`)
 
 ### Internal
 
