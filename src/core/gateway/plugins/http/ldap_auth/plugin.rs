@@ -280,16 +280,16 @@ impl RequestFilter for LdapAuth {
                 if let Some(anon_user) = &self.config.anonymous {
                     self.apply_anonymous_headers(session, anon_user);
                     self.hide_credentials_if_needed(session);
-                    plugin_log.push("Anonymous; ");
+                    plugin_log.push("Allow anonymous; ");
                     return PluginRunningResult::GoodNext;
                 }
 
-                plugin_log.push("Auth failed; ");
+                plugin_log.push("Deny no credentials; ");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
             ParseAuthResult::Invalid => {
-                plugin_log.push("Auth failed; ");
+                plugin_log.push("Deny invalid header; ");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
@@ -298,14 +298,16 @@ impl RequestFilter for LdapAuth {
         if let Some(cached_username) = self.check_cache(&username, &password) {
             self.apply_authenticated_headers(session, &cached_username);
             self.hide_credentials_if_needed(session);
-            plugin_log.push(&format!("Auth cached user={}; ", cached_username));
+            plugin_log.push("cache hit; ");
             return PluginRunningResult::GoodNext;
         }
+
+        plugin_log.push("cache miss; ");
 
         let bind_dn = match self.build_bind_dn(&username) {
             Ok(dn) => dn,
             Err(_) => {
-                plugin_log.push("Auth failed; ");
+                plugin_log.push("Deny bad username; ");
                 return self.unauthorized(session).await;
             }
         };
@@ -315,11 +317,11 @@ impl RequestFilter for LdapAuth {
                 self.store_cache(&username, &password);
                 self.apply_authenticated_headers(session, &username);
                 self.hide_credentials_if_needed(session);
-                plugin_log.push(&format!("Auth user={}; ", username));
+                plugin_log.push(&format!("OK user {}; ", username));
                 PluginRunningResult::GoodNext
             }
             Err(LdapAuthError::InvalidCredentials) => {
-                plugin_log.push("Auth failed; ");
+                plugin_log.push("Deny bad password; ");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 self.unauthorized(session).await
             }
@@ -574,7 +576,7 @@ mod tests {
 
         let result = auth.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("Anonymous"));
+        assert!(log.contains("Allow anonymous"));
     }
 
     #[tokio::test]

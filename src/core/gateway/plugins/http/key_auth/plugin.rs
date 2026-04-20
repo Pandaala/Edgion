@@ -153,7 +153,7 @@ impl RequestFilter for KeyAuth {
             None => {
                 // No key provided - check anonymous access
                 if let Some(ref anon_user) = self.config.anonymous {
-                    plugin_log.push("Anonymous; ");
+                    plugin_log.push("Allow anon; ");
 
                     // Set anonymous consumer header if in whitelist
                     if self
@@ -169,7 +169,8 @@ impl RequestFilter for KeyAuth {
                     return PluginRunningResult::GoodNext;
                 }
 
-                plugin_log.push("No key; ");
+                plugin_log.push("Deny no key; ");
+                plugin_log.push_err("deny:no key");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Missing API key").await;
             }
@@ -179,13 +180,30 @@ impl RequestFilter for KeyAuth {
         let metadata = match self.validate_key(&key) {
             Some(m) => m,
             None => {
-                plugin_log.push("Invalid key; ");
+                plugin_log.push("Deny bad key; ");
+                plugin_log.push_err("deny:bad key");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Invalid API key").await;
             }
         };
 
-        plugin_log.push(&format!("Auth OK ({}); ", used_source.as_log_str()));
+        // Log key source (header / query / cookie / etc.)
+        let key_source_label = match &used_source {
+            KeyGet::Header { .. } => "key header; ",
+            KeyGet::Query { .. } => "key query; ",
+            KeyGet::Cookie { .. } => "key cookie; ",
+            KeyGet::Ctx { .. } => "key ctx; ",
+            KeyGet::Webhook { .. } => "key webhook; ",
+            _ => "key other; ",
+        };
+        plugin_log.push(key_source_label);
+
+        // Log OK with username if available
+        if let Some(username) = metadata.headers.get("X-Consumer-Username") {
+            plugin_log.push(&format!("OK user {}; ", username));
+        } else {
+            plugin_log.push("OK; ");
+        }
 
         // 3. Set upstream headers (from whitelist)
         self.set_upstream_headers(session, metadata);
@@ -389,7 +407,7 @@ mod tests {
 
         let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Auth OK"));
+        assert!(plugin_log.contains("OK"));
     }
 
     #[tokio::test]
@@ -406,7 +424,7 @@ mod tests {
 
         let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("No key"));
+        assert!(plugin_log.contains("Deny no key"));
     }
 
     #[tokio::test]
@@ -432,7 +450,7 @@ mod tests {
 
         let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Invalid key"));
+        assert!(plugin_log.contains("Deny bad key"));
     }
 
     #[tokio::test]
@@ -450,7 +468,7 @@ mod tests {
 
         let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Anonymous"));
+        assert!(plugin_log.contains("Allow anon"));
     }
 
     #[tokio::test]

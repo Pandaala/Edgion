@@ -287,11 +287,11 @@ impl RequestFilter for ForwardAuth {
                 // short tag captures the per-request plugin-side detail.
                 session.add_error(crate::types::EdgionStatus::ForwardAuthServiceUnreachable);
                 if self.config.allow_degradation {
-                    plugin_log.push("fa:unreachable-degraded; ");
+                    plugin_log.push_err("upstream unreachable:degraded");
                     return PluginRunningResult::GoodNext;
                 }
 
-                plugin_log.push("fa:unreachable; ");
+                plugin_log.push_err("upstream unreachable");
                 return self
                     .send_error_response(
                         session,
@@ -611,8 +611,8 @@ mod tests {
         let mut log = PluginLog::new("ForwardAuth");
         let r = plugin.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("fa:unreachable"));
-        assert!(!log.contains("fa:unreachable-degraded"));
+        assert!(log.contains("upstream unreachable"));
+        assert!(!log.contains("upstream unreachable:degraded"));
     }
 
     #[tokio::test]
@@ -631,6 +631,6 @@ mod tests {
         let mut log = PluginLog::new("ForwardAuth");
         let r = plugin.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::GoodNext);
-        assert!(log.contains("fa:unreachable-degraded"));
+        assert!(log.contains("upstream unreachable:degraded"));
     }
 }

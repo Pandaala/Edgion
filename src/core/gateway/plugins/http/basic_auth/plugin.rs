@@ -216,10 +216,7 @@ impl BasicAuth {
                 .work(&sf_key, async move {
                     let verified = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
                         .await
-                        .unwrap_or_else(|e| {
-                            tracing::warn!("BasicAuth: bcrypt spawn_blocking panicked: {}", e);
-                            false
-                        });
+                        .unwrap_or(false);
                     Ok::<bool, ()>(verified)
                 })
                 .await;
@@ -292,7 +289,7 @@ impl BasicAuth {
 
     fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
-            plugin_log.push("Anonymous; ");
+            plugin_log.push("Allow anonymous; ");
             let _ = session.set_request_header("X-Consumer-Username", anonymous);
             let _ = session.set_request_header("X-Anonymous-Consumer", "true");
             return true;
@@ -322,10 +319,10 @@ impl RequestFilter for BasicAuth {
         let username = match self.authenticate_request(session).await {
             Ok(user) => user,
             Err(AuthFailure::MissingHeader) => {
-                plugin_log.push("No credentials; ");
                 if self.handle_anonymous_access(session, plugin_log) {
                     return PluginRunningResult::GoodNext;
                 }
+                plugin_log.push("Deny no credential; ");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session).await;
                 return PluginRunningResult::ErrTerminateRequest;
@@ -336,7 +333,7 @@ impl RequestFilter for BasicAuth {
                 // a separate concern — bcrypt verify only runs when the user exists, so a
                 // sub-ms fast path still reveals user existence. Mitigate via
                 // `auth_failure_delay_ms` at the deployment layer.
-                plugin_log.push("basic:auth-fail; ");
+                plugin_log.push("Deny bad credential; ");
                 // Credentials present but invalid — always reject, never anonymous
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session).await;
@@ -344,7 +341,7 @@ impl RequestFilter for BasicAuth {
             }
         };
 
-        plugin_log.push("Auth success; ");
+        plugin_log.push(&format!("OK user {}; ", username));
 
         // Set consumer headers for upstream
         let _ = self.set_consumer_headers(session, &username);
@@ -455,7 +452,7 @@ mod tests {
         let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Anonymous"));
+        assert!(plugin_log.contains("Allow anonymous"));
     }
 
     #[tokio::test]
@@ -680,14 +677,14 @@ mod tests {
     async fn test_auth_fail_tag_unknown_user() {
         let auth = create_basic_auth_with_users(); // users: { testuser: testpass }
         let log = run_auth_and_capture_log(auth, encode_credentials("nobody", "whatever")).await;
-        assert!(log.contains("basic:auth-fail"));
+        assert!(log.contains("Deny bad credential"));
     }
 
     #[tokio::test]
     async fn test_auth_fail_tag_wrong_password() {
         let auth = create_basic_auth_with_users(); // users: { testuser: testpass }
         let log = run_auth_and_capture_log(auth, encode_credentials("testuser", "wrongpass")).await;
-        assert!(log.contains("basic:auth-fail"));
+        assert!(log.contains("Deny bad credential"));
     }
 
     /// Verifies the two BadCredentials paths emit identical tags so an attacker cannot
@@ -702,8 +699,8 @@ mod tests {
 
         let unknown_json = serde_json::to_string(&log_unknown).unwrap();
         let wrong_json = serde_json::to_string(&log_wrong).unwrap();
-        assert!(unknown_json.contains("basic:auth-fail"));
-        assert!(wrong_json.contains("basic:auth-fail"));
+        assert!(unknown_json.contains("Deny bad credential"));
+        assert!(wrong_json.contains("Deny bad credential"));
         assert!(!unknown_json.contains("unknown"));
         assert!(!unknown_json.contains("pw"));
         assert!(!wrong_json.contains("pw"));

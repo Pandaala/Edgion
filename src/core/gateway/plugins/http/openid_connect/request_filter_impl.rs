@@ -273,7 +273,17 @@ impl RequestFilter for OpenidConnect {
                 PluginRunningResult::GoodNext
             }
             Err((status, message)) => {
-                plugin_log.push("OIDC verify failed; ");
+                if status == 502 {
+                    if message.contains("JWKS") || message.contains("jwks") {
+                        plugin_log.push_err("jwks fetch fail");
+                    } else {
+                        plugin_log.push_err("introspect fail");
+                    }
+                } else if message == "Invalid token format" {
+                    plugin_log.push_err("token decode fail");
+                } else {
+                    plugin_log.push_err("token verify fail");
+                }
                 // Apply failure delay only for actual auth failures (401/403),
                 // not for upstream/infra errors (502).
                 if status != 502 {

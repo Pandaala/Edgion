@@ -58,13 +58,13 @@ impl JweFailure {
 
     fn log_code(self) -> &'static str {
         match self {
-            JweFailure::InvalidFormat => "jwe:invalid-format",
-            JweFailure::MissingHeader => "jwe:missing-header",
-            JweFailure::NoKey => "jwe:no-key",
-            JweFailure::KeyLenErr => "jwe:key-len-err",
-            JweFailure::DecryptFail => "jwe:decrypt-fail",
-            JweFailure::BadAlg => "jwe:bad-alg",
-            JweFailure::AlgDenied => "jwe:alg-denied",
+            JweFailure::InvalidFormat => "invalid format; ",
+            JweFailure::MissingHeader => "missing header; ",
+            JweFailure::NoKey => "no key; ",
+            JweFailure::KeyLenErr => "key len err; ",
+            JweFailure::DecryptFail => "decrypt fail; ",
+            JweFailure::BadAlg => "bad alg; ",
+            JweFailure::AlgDenied => "alg denied; ",
         }
     }
 }
@@ -133,7 +133,17 @@ impl JweDecrypt {
         plugin_log: &mut PluginLog,
         failure: JweFailure,
     ) -> PluginRunningResult {
-        plugin_log.push(failure.log_code());
+        match failure {
+            JweFailure::DecryptFail => {
+                plugin_log.push_err("decrypt fail");
+            }
+            JweFailure::KeyLenErr => {
+                plugin_log.push_err("key len err");
+            }
+            _ => {
+                plugin_log.push(failure.log_code());
+            }
+        }
         self.apply_auth_failure_delay().await;
         let _ = send_auth_error_response(session, failure.status(), "Bearer", "edgion", failure.message()).await;
         PluginRunningResult::ErrTerminateRequest
@@ -324,24 +334,25 @@ impl RequestFilter for JweDecrypt {
             Some(token) => token,
             None if self.config.strict => {
                 return self
-                    .reject_custom(session, plugin_log, 403, "JWE token required", "jwe:no-token")
+                    .reject_custom(session, plugin_log, 403, "JWE token required", "no token; ")
                     .await;
             }
             None => {
-                plugin_log.push("jwe:bypass");
+                plugin_log.push("bypass; ");
                 return PluginRunningResult::GoodNext;
             }
         };
 
         if token.len() > self.config.max_token_size {
             return self
-                .reject_custom(session, plugin_log, 400, "JWE token too large", "jwe:too-large")
+                .reject_custom(session, plugin_log, 400, "JWE token too large", "token too large; ")
                 .await;
         }
 
         let key = match self.load_key() {
             Ok(key) => key,
             Err(_) => {
+                plugin_log.push_err("key load fail");
                 return self.reject(session, plugin_log, JweFailure::NoKey).await;
             }
         };
@@ -382,7 +393,7 @@ impl RequestFilter for JweDecrypt {
             let _ = session.remove_request_header(&self.config.header);
         }
 
-        plugin_log.push("jwe:ok");
+        plugin_log.push("OK; ");
         PluginRunningResult::GoodNext
     }
 }
@@ -454,7 +465,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("jwe:ok"));
+        assert!(log.contains("OK; "));
     }
 
     #[tokio::test]
@@ -467,7 +478,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("jwe:bypass"));
+        assert!(log.contains("bypass; "));
     }
 
     #[tokio::test]
@@ -483,7 +494,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("jwe:no-token"));
+        assert!(log.contains("no token; "));
     }
 
     #[tokio::test]
@@ -500,7 +511,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("jwe:too-large"));
+        assert!(log.contains("token too large; "));
     }
 
     #[tokio::test]
@@ -520,12 +531,13 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("jwe:bad-alg"));
+        assert!(log.contains("bad alg; "));
     }
 
     /// Covers fix #11: `load_key()` failure path (unresolvable credential) emits
-    /// `jwe:no-key` via the existing `reject` call site — verifies the deleted
-    /// `tracing::debug!` at the former L345 is fully replaced by the PluginLog tag.
+    /// `err: key load fail; ` + `no key; ` via the existing `reject` call site —
+    /// verifies the deleted `tracing::debug!` at the former L345 is fully replaced
+    /// by the PluginLog tags.
     #[tokio::test]
     async fn test_load_key_failure_emits_no_key_tag() {
         // resolved_credential = None → load_key() returns Err.
@@ -553,6 +565,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("jwe:no-key"));
+        assert!(log.contains("key load fail"));
+        assert!(log.contains("no key; "));
     }
 }

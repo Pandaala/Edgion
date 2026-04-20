@@ -872,9 +872,7 @@ impl OpenidConnect {
             Err(err) => {
                 if let Some(ref cached) = state.set {
                     // Stale-cache fallback: JWKS endpoint unreachable but a prior set exists.
-                    // Log once per refresh cycle (rate-limited by JWKS TTL) so operators can
-                    // detect sustained key-endpoint outages before a key rotation breaks auth.
-                    tracing::info!(error = %err, "JWKS refresh failed; serving stale key set");
+                    // Per-request logging is handled via plugin_log at the call site.
                     Ok(cached.clone())
                 } else {
                     Err(err)
@@ -1653,6 +1651,7 @@ impl OpenidConnect {
         {
             Ok(v) => v,
             Err((status, message)) => {
+                plugin_log.push_err("token exchange fail");
                 if status == 502 {
                     let _ = self.send_plain_error(session, 502, &message).await;
                 } else {
@@ -1678,6 +1677,7 @@ impl OpenidConnect {
                 }
             };
             if let Err((status, message)) = self.validate_id_token_nonce(id_token, expected_nonce).await {
+                plugin_log.push_err("token verify fail");
                 if status == 502 {
                     let _ = self.send_plain_error(session, 502, &message).await;
                 } else {
@@ -1691,8 +1691,17 @@ impl OpenidConnect {
             Ok(v) => v,
             Err((status, message)) => {
                 if status == 502 {
+                    if message.contains("JWKS") || message.contains("jwks") {
+                        plugin_log.push_err("jwks fetch fail");
+                    } else {
+                        plugin_log.push_err("introspect fail");
+                    }
                     let _ = self.send_plain_error(session, 502, &message).await;
+                } else if message == "Invalid token format" {
+                    plugin_log.push_err("token decode fail");
+                    let _ = self.send_unauthorized(session, &message).await;
                 } else {
+                    plugin_log.push_err("token verify fail");
                     let _ = self.send_unauthorized(session, &message).await;
                 }
                 return PluginRunningResult::ErrTerminateRequest;

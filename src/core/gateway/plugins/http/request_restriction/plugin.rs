@@ -99,10 +99,10 @@ impl RequestRestriction {
     }
 
     /// Evaluate all rules and determine if request should be denied
-    /// Returns: (denied: bool, rule_name: Option<String>)
-    fn evaluate_rules(&self, session: &dyn PluginSession) -> (bool, Option<String>) {
+    /// Returns: (denied: bool, denied_source: Option<RestrictionSource>)
+    fn evaluate_rules(&self, session: &dyn PluginSession) -> (bool, Option<RestrictionSource>) {
         let mut denied_count = 0;
-        let mut denied_rule_name = None;
+        let mut denied_source = None;
         let total_rules = self.config.rules.len();
 
         for rule in &self.config.rules {
@@ -113,13 +113,13 @@ impl RequestRestriction {
                 Some(true) => {
                     // Rule triggered denial
                     denied_count += 1;
-                    if denied_rule_name.is_none() {
-                        denied_rule_name = Some(rule.display_name());
+                    if denied_source.is_none() {
+                        denied_source = Some(rule.source.clone());
                     }
 
                     // For "Any" mode, we can short-circuit on first denial
                     if self.config.match_mode == RuleMatchMode::Any {
-                        return (true, denied_rule_name);
+                        return (true, denied_source);
                     }
                 }
                 Some(false) => {
@@ -146,7 +146,7 @@ impl RequestRestriction {
                 // Deny only if ALL rules denied
                 // If any rule allowed, we already returned above
                 // If we're here, check if all (non-skipped) rules denied
-                (denied_count > 0 && denied_count == total_rules, denied_rule_name)
+                (denied_count > 0 && denied_count == total_rules, denied_source)
             }
         }
     }
@@ -161,8 +161,7 @@ impl RequestFilter for RequestRestriction {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check for configuration errors
         if !self.config.is_valid() {
-            let error = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push(&format!("Config error (fail-close): {}; ", error));
+            plugin_log.push_err("restriction config invalid");
             let resp = Box::new(
                 ResponseHeader::build(500, None)
                     .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
@@ -178,11 +177,19 @@ impl RequestFilter for RequestRestriction {
         }
 
         // Evaluate all rules
-        let (denied, rule_name) = self.evaluate_rules(session);
+        let (denied, denied_source) = self.evaluate_rules(session);
 
         if denied {
-            let rule_info = rule_name.unwrap_or_else(|| "unknown".to_string());
-            plugin_log.push(&format!("Denied by {}; ", rule_info));
+            let deny_msg = match denied_source {
+                Some(RestrictionSource::Method) => "Deny method; ",
+                Some(RestrictionSource::Path) => "Deny path; ",
+                Some(RestrictionSource::Header) => "Deny header; ",
+                Some(RestrictionSource::Cookie) => "Deny cookie; ",
+                Some(RestrictionSource::Query) => "Deny query; ",
+                Some(RestrictionSource::Referer) => "Deny referer; ",
+                None => "Deny rule; ",
+            };
+            plugin_log.push(deny_msg);
 
             let message = self
                 .config
@@ -201,17 +208,19 @@ impl RequestFilter for RequestRestriction {
 
             // Write response
             if let Err(_e) = session.write_response_header(resp, false).await {
+                plugin_log.push_err("write response header failed");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             if let Err(_e) = session.write_response_body(Some(body), true).await {
+                plugin_log.push_err("write response body failed");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        plugin_log.push("Allowed; ");
+        plugin_log.push("Allow; ");
         PluginRunningResult::GoodNext
     }
 }
@@ -284,7 +293,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 
     #[tokio::test]
@@ -302,7 +311,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow"));
     }
 
     #[tokio::test]
@@ -319,7 +328,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 
     #[tokio::test]
@@ -334,7 +343,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow"));
     }
 
     #[tokio::test]
@@ -349,7 +358,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow"));
     }
 
     #[tokio::test]
@@ -366,7 +375,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 
     #[tokio::test]
@@ -381,7 +390,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow"));
     }
 
     #[tokio::test]
@@ -399,7 +408,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow"));
     }
 
     #[tokio::test]
@@ -431,7 +440,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 
     #[tokio::test]
@@ -474,7 +483,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 
     #[tokio::test]
@@ -505,7 +514,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 
     #[tokio::test]
@@ -536,7 +545,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 
     #[tokio::test]
@@ -567,6 +576,6 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny"));
     }
 }

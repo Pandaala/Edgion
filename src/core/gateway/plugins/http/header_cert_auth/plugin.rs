@@ -325,9 +325,9 @@ impl HeaderCertAuth {
         &self,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
-        detail: &str,
+        detail: &'static str,
     ) -> PluginRunningResult {
-        plugin_log.push(&format!("hca:fail:{}", detail));
+        plugin_log.push_err(detail);
         self.apply_auth_failure_delay().await;
         let _ = send_auth_error_response(
             session,
@@ -338,6 +338,20 @@ impl HeaderCertAuth {
         )
         .await;
         PluginRunningResult::ErrTerminateRequest
+    }
+
+    fn push_cert_deny(plugin_log: &mut PluginLog, detail: &'static str) {
+        // Decode / load errors (push_err only); known deny labels get a push entry.
+        let label = match detail {
+            "expired-leaf-cert" => Some("Deny cert expired; "),
+            "ca-verification-failed" => Some("Deny cert untrusted; "),
+            "missing-cert-header" | "no-client-cert" => Some("Deny missing cert; "),
+            // Decode / load failures: push_err in reject() is sufficient.
+            _ => None,
+        };
+        if let Some(l) = label {
+            plugin_log.push(l);
+        }
     }
 }
 
@@ -361,9 +375,10 @@ impl RequestFilter for HeaderCertAuth {
                     if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {
                         let _ = session.remove_request_header(&self.config.certificate_header_name);
                     }
-                    plugin_log.push("hca:anonymous");
+                    plugin_log.push("Allow anonymous; ");
                     return PluginRunningResult::GoodNext;
                 }
+                Self::push_cert_deny(plugin_log, detail);
                 return self.reject(session, plugin_log, detail).await;
             }
         };
@@ -374,9 +389,10 @@ impl RequestFilter for HeaderCertAuth {
                 if self.config.mode == CertSourceMode::Header && self.config.hide_credentials {
                     let _ = session.remove_request_header(&self.config.certificate_header_name);
                 }
-                plugin_log.push("hca:anonymous");
+                plugin_log.push("Allow anonymous; ");
                 return PluginRunningResult::GoodNext;
             }
+            Self::push_cert_deny(plugin_log, detail);
             return self.reject(session, plugin_log, detail).await;
         }
 
@@ -384,7 +400,8 @@ impl RequestFilter for HeaderCertAuth {
             let _ = session.remove_request_header(&self.config.certificate_header_name);
         }
 
-        plugin_log.push("hca:ok");
+        plugin_log.push("cert verify:ok; ");
+        plugin_log.push("OK; ");
         PluginRunningResult::GoodNext
     }
 }
@@ -422,7 +439,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("hca:ok"));
+        assert!(log.contains("OK; "));
     }
 
     #[tokio::test]
@@ -442,6 +459,6 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("hca:anonymous"));
+        assert!(log.contains("Allow anonymous; "));
     }
 }
