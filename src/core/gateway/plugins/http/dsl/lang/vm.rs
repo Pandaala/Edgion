@@ -690,7 +690,7 @@ impl Vm {
                     });
                 }
                 OpCode::ReturnTerminate => {
-                    log.push_err("terminate request");
+                    log.push("Deny dsl terminate");
                     return Ok(PluginRunningResult::ErrTerminateRequest);
                 }
                 OpCode::ReturnGrpcError => {

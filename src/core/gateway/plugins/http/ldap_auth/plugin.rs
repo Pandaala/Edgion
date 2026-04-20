@@ -299,6 +299,7 @@ impl RequestFilter for LdapAuth {
             self.apply_authenticated_headers(session, &cached_username);
             self.hide_credentials_if_needed(session);
             plugin_log.push("cache hit; ");
+            plugin_log.push(&format!("OK user {}; ", cached_username));
             return PluginRunningResult::GoodNext;
         }
 

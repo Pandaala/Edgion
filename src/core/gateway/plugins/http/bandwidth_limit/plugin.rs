@@ -60,7 +60,7 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
         log: &mut PluginLog,
     ) -> Option<Duration> {
         if self.rate_bps == 0 {
-            log.push("Allow bandwidth");
+            log.push("Skip bandwidth zero");
             return None;
         }
 

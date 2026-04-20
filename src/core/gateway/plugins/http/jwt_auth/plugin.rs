@@ -594,7 +594,6 @@ impl RequestFilter for JwtAuth {
             }
             Err(_) => {
                 // Specific `Deny <kind>; ` or `err: <kind>; ` tag was already pushed inside verify_token.
-                plugin_log.push("FAIL; ");
                 // Token present but invalid/expired — always reject, never allow anonymous
                 self.apply_auth_failure_delay().await;
                 let _ = self.auth_failed_return(session).await;

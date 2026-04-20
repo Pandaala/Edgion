@@ -170,7 +170,6 @@ impl RequestFilter for KeyAuth {
                 }
 
                 plugin_log.push("Deny no key; ");
-                plugin_log.push_err("deny:no key");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Missing API key").await;
             }
@@ -181,7 +180,6 @@ impl RequestFilter for KeyAuth {
             Some(m) => m,
             None => {
                 plugin_log.push("Deny bad key; ");
-                plugin_log.push_err("deny:bad key");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 return self.unauthorized(session, "Invalid API key").await;
             }

@@ -102,11 +102,11 @@ impl RequestFilter for DirectEndpoint {
             Some(v) if !v.is_empty() => v,
             _ => match self.config.on_missing {
                 DirectEndpointOnMissing::Fallback => {
-                    log.push("no val fallback");
+                    log.push("no value fallback");
                     return PluginRunningResult::GoodNext;
                 }
                 DirectEndpointOnMissing::Reject => {
-                    log.push("no val 400");
+                    log.push("no value 400");
                     return PluginRunningResult::ErrResponse {
                         status: 400,
                         body: Some("Missing target endpoint".to_string()),

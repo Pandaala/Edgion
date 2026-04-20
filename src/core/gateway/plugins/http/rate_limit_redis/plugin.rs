@@ -529,7 +529,7 @@ impl RequestFilter for RateLimitRedis {
                             return PluginRunningResult::GoodNext;
                         }
                         OnMissingKey::Deny => {
-                            plugin_log.push("deny rate limit");
+                            plugin_log.push("Deny rate limit");
                             return self.reject_request(session, Duration::ZERO, None).await;
                         }
                     }

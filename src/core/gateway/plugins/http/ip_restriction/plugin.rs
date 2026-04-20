@@ -150,12 +150,12 @@ impl RequestFilter for IpRestriction {
             let body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
             if let Err(_e) = session.write_response_header(resp, false).await {
-                plugin_log.push_err("write response header fail; ");
+                plugin_log.push_err("write response header fail");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             if let Err(_e) = session.write_response_body(Some(body), true).await {
-                plugin_log.push_err("write response body fail; ");
+                plugin_log.push_err("write response body fail");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 

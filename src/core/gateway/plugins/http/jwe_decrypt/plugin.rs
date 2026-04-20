@@ -58,13 +58,13 @@ impl JweFailure {
 
     fn log_code(self) -> &'static str {
         match self {
-            JweFailure::InvalidFormat => "invalid format; ",
-            JweFailure::MissingHeader => "missing header; ",
-            JweFailure::NoKey => "no key; ",
-            JweFailure::KeyLenErr => "key len err; ",
-            JweFailure::DecryptFail => "decrypt fail; ",
-            JweFailure::BadAlg => "bad alg; ",
-            JweFailure::AlgDenied => "alg denied; ",
+            JweFailure::InvalidFormat => "invalid format",
+            JweFailure::MissingHeader => "missing header",
+            JweFailure::NoKey => "no key",
+            JweFailure::KeyLenErr => "key len err",
+            JweFailure::DecryptFail => "decrypt fail",
+            JweFailure::BadAlg => "bad alg",
+            JweFailure::AlgDenied => "alg denied",
         }
     }
 }
@@ -334,18 +334,18 @@ impl RequestFilter for JweDecrypt {
             Some(token) => token,
             None if self.config.strict => {
                 return self
-                    .reject_custom(session, plugin_log, 403, "JWE token required", "no token; ")
+                    .reject_custom(session, plugin_log, 403, "JWE token required", "no token")
                     .await;
             }
             None => {
-                plugin_log.push("bypass; ");
+                plugin_log.push("bypass");
                 return PluginRunningResult::GoodNext;
             }
         };
 
         if token.len() > self.config.max_token_size {
             return self
-                .reject_custom(session, plugin_log, 400, "JWE token too large", "token too large; ")
+                .reject_custom(session, plugin_log, 400, "JWE token too large", "token too large")
                 .await;
         }
 
@@ -478,7 +478,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("bypass; "));
+        assert!(log.contains("bypass"));
     }
 
     #[tokio::test]
@@ -494,7 +494,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("no token; "));
+        assert!(log.contains("no token"));
     }
 
     #[tokio::test]
@@ -511,7 +511,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("token too large; "));
+        assert!(log.contains("token too large"));
     }
 
     #[tokio::test]
@@ -531,7 +531,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("bad alg; "));
+        assert!(log.contains("bad alg"));
     }
 
     /// Covers fix #11: `load_key()` failure path (unresolvable credential) emits
@@ -566,6 +566,6 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("key load fail"));
-        assert!(log.contains("no key; "));
+        assert!(log.contains("no key"));
     }
 }

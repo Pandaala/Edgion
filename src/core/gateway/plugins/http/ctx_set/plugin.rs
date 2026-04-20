@@ -201,8 +201,8 @@ impl RequestFilter for CtxSet {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check for configuration errors
         if !self.config.is_valid() {
-            let error = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push(&format!("config error: {}", error));
+            let _error = self.config.get_validation_error().unwrap_or("Unknown error");
+            plugin_log.push_err("config validation fail");
             // Fail-open: allow request to proceed on config error
             return PluginRunningResult::GoodNext;
         }
@@ -602,7 +602,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("config error"));
+        assert!(plugin_log.contains("config validation fail"));
     }
 
     #[tokio::test]

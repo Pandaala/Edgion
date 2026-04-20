@@ -64,7 +64,7 @@ impl RequestFilter for RealIp {
         // Push which header is configured
         match extractor.real_ip_header().to_ascii_lowercase().as_str() {
             "x-forwarded-for" => plugin_log.push("header xff; "),
-            "x-real-ip" => plugin_log.push("header xrealip; "),
+            "x-real-ip" => plugin_log.push("header real-ip; "),
             "forwarded" => plugin_log.push("header forwarded; "),
             _ => plugin_log.push("header custom; "),
         };
