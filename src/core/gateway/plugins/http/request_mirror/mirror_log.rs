@@ -24,7 +24,7 @@ pub async fn emit_mirror_log(entry: MirrorLogEntry) {
     if let Some(logger) = get_access_logger() {
         match serde_json::to_string(&entry) {
             Ok(data) => logger.send(data).await,
-            Err(_) => {},
+            Err(_) => {}
         }
     }
 }

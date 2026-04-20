@@ -19,10 +19,10 @@
 
 | 类别 | 风险 | 建议 |
 |------|------|------|
-| `ctx_map` (access log) | 插件可能存入 `jwt_claims`, `oidc_claims` 等 | 序列化前做 key 过滤/allowlist |
+| `ctx_map` (access log) | 插件可能存入 `jwt_claims`, `oidc_claims` 等 | 暂缓：access log 为管理员级别访问，脱敏必要性待评估 |
 | `client_cert_info` | subject / SAN 可能包含 PII | mTLS 场景下审查 access log 输出 |
 | `X-Forwarded-For` | 客户端真实 IP | 视合规要求决定是否保留 |
-| plugin `stage_logs` | 可能包含 username | 插件应只记录 `u=<prefix>***` |
+| plugin `stage_logs` | 可能包含 username | 暂缓：同 ctx_map，管理员访问，脱敏必要性待评估 |
 
 ### 代码示例
 
@@ -227,8 +227,8 @@ tracing::info!("Selected backend: {:?}", backend_ref);  // 泄漏 + 性能
 - [ ] 日志中是否包含完整的 resource spec / backend 地址？如果是，降级到 debug
 - [ ] 控制面新增日志是否包含 `kind` + `name/namespace` + `rv`？（在 span 内可省略，由 span 自动提供）
 - [ ] 如果资源已同步到数据面，access log 中是否有 `sv`？
-- [ ] `ctx_map` 中新增的 key 是否可能包含敏感信息？如果是，需要做过滤
-- [ ] 插件 stage_logs 中是否记录了完整 username / token？应只记录前缀
+- [ ] `ctx_map` 中新增的 key 是否可能包含敏感信息？（暂缓：日志为管理员级别访问，不作为 review 阻塞项）
+- [ ] 插件 stage_logs 中是否记录了完整 username / token？（暂缓：同上）
 
 ---
 
@@ -309,5 +309,5 @@ rg -n 'impl (ProxyHttp|ServerApp|TlsAccept|ConnectionFilter|StreamPlugin|TlsRout
 | ~~`connection_filter_bridge.rs`~~ | ~~连接过滤 debug/info~~ | ~~全部删除~~ | ✅ 已修复 |
 | ~~`grpc/match_unit.rs`~~ | ~~请求级 warn~~ | ~~删除~~ | ✅ 已修复 |
 | ~~`preflight_handler.rs`~~ | ~~preflight debug~~ | ~~删除~~ | ✅ 已修复 |
-| access log `ctx_map` | 完整 ctx_map 序列化，可能含 JWT/OIDC/JWE claims | 增加 key allowlist/blocklist（中期任务） | 待处理 |
-| LDAP/JWT auth plugin | username 进入 stage_logs | 改为 `u=<prefix>***` 格式 | 待处理 |
+| access log `ctx_map` | 完整 ctx_map 序列化，可能含 JWT/OIDC/JWE claims | 暂缓：管理员访问级别，脱敏必要性待评估 | ⏸ 搁置 |
+| LDAP/JWT auth plugin | username 进入 stage_logs | 暂缓：同上 | ⏸ 搁置 |
