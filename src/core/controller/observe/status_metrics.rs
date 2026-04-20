@@ -546,3 +546,164 @@ mod registration_tests {
         assert_eq!(warn.ty, Kind::Warn);
     }
 }
+
+#[cfg(test)]
+mod snapshot_loop_tests {
+    use super::*;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::LocalRawStore;
+    use serde::Serialize;
+    use std::sync::Arc;
+
+    #[derive(Clone, Serialize)]
+    struct Dummy {
+        metadata: Meta,
+        status: St,
+    }
+    #[derive(Clone, Serialize)]
+    struct Meta {
+        namespace: String,
+        name: String,
+    }
+    #[derive(Clone, Serialize)]
+    struct St {
+        conditions: Vec<Cond>,
+    }
+    #[derive(Clone, Serialize)]
+    struct Cond {
+        #[serde(rename = "type")]
+        type_: String,
+        status: String,
+    }
+
+    fn reset() {
+        let mut g = renderers_slot().lock();
+        g.clear();
+        snapshot_slot().store(Arc::new(Vec::new()));
+    }
+
+    fn new_dummy(ns: &str, name: &str, type_: &str, status: &str) -> Arc<Dummy> {
+        Arc::new(Dummy {
+            metadata: Meta { namespace: ns.into(), name: name.into() },
+            status: St { conditions: vec![Cond { type_: type_.into(), status: status.into() }] },
+        })
+    }
+
+    #[test]
+    fn snapshot_once_populates_from_registered_renderers_sorted() {
+        reset();
+        let store = Arc::new(LocalRawStore::<Dummy>::new());
+        store.upsert("a/b".into(), new_dummy("a", "b", "Accepted", "False"));
+        store.upsert("a/a".into(), new_dummy("a", "a", "Ready", "False"));
+        register_status_renderer::<Dummy>("Dummy", store.clone());
+
+        snapshot_once();
+        let snap = snapshot_slot().load();
+        assert_eq!(snap.len(), 2);
+        // Sorted by (kind, ns, name): a/a before a/b
+        assert_eq!(snap[0].name, "a");
+        assert_eq!(snap[0].ty, Kind::Warn);
+        assert_eq!(snap[1].name, "b");
+        assert_eq!(snap[1].ty, Kind::Err);
+    }
+
+    #[test]
+    fn snapshot_once_truncates_beyond_hard_cap() {
+        reset();
+        let store = Arc::new(LocalRawStore::<Dummy>::new());
+        let overflow_count = SNAPSHOT_ENTRY_HARD_CAP + 5;
+        for i in 0..overflow_count {
+            store.upsert(
+                format!("ns/{}", i),
+                new_dummy("ns", &format!("r{}", i), "Accepted", "False"),
+            );
+        }
+        register_status_renderer::<Dummy>("Dummy", store.clone());
+
+        snapshot_once();
+        let snap = snapshot_slot().load();
+        assert_eq!(snap.len(), SNAPSHOT_ENTRY_HARD_CAP);
+    }
+
+    #[test]
+    fn snapshot_once_survives_panicking_renderer() {
+        reset();
+        let store = Arc::new(LocalRawStore::<Dummy>::new());
+        store.upsert("a/b".into(), new_dummy("a", "b", "Accepted", "False"));
+        register_status_renderer::<Dummy>("Dummy", store.clone());
+
+        renderers_slot().lock().push(Box::new(|_buf: &mut Vec<Entry>| {
+            panic!("synthetic panic");
+        }));
+
+        snapshot_once();
+        let snap = snapshot_slot().load();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].name, "b");
+    }
+}
+
+use std::panic::AssertUnwindSafe;
+use std::time::Duration;
+
+/// Build one fresh snapshot and atomically publish it. Exposed so tests
+/// can drive a tick synchronously.
+pub fn snapshot_once() {
+    let mut buf: Vec<Entry> = Vec::new();
+    {
+        let guard = renderers_slot().lock();
+        for renderer in guard.iter() {
+            let r = AssertUnwindSafe(|| renderer(&mut buf));
+            if let Err(payload) = std::panic::catch_unwind(r) {
+                let msg = panic_message(&payload);
+                tracing::warn!(
+                    component = "status_metrics",
+                    error = %msg,
+                    "renderer panicked during snapshot; skipping this kind for this tick"
+                );
+            }
+        }
+    }
+    buf.sort();
+
+    if buf.len() > SNAPSHOT_ENTRY_HARD_CAP {
+        tracing::error!(
+            component = "status_metrics",
+            count = buf.len(),
+            cap = SNAPSHOT_ENTRY_HARD_CAP,
+            "abnormal-resource snapshot exceeds hard cap; truncating"
+        );
+        buf.truncate(SNAPSHOT_ENTRY_HARD_CAP);
+    }
+
+    snapshot_slot().store(Arc::new(buf));
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Spawn the background snapshot loop. Called once from controller CLI
+/// startup when `config.metrics.resource_abnormal.enabled` is true.
+pub fn spawn_snapshot_loop(tick_secs: u64) {
+    let tick = Duration::from_secs(tick_secs);
+    tokio::spawn(async move {
+        let _ = std::panic::catch_unwind(AssertUnwindSafe(snapshot_once));
+
+        loop {
+            tokio::time::sleep(tick).await;
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(snapshot_once));
+        }
+    });
+
+    tracing::info!(
+        component = "status_metrics",
+        tick_secs = tick_secs,
+        "resource-abnormal snapshot loop started"
+    );
+}
