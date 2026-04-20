@@ -268,4 +268,52 @@ mod handler_tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
+
+    /// Pin the wire format of `AuthStatus`. CLI bails on serde parse failure,
+    /// so silent casing drift (e.g. accidentally dropping `rename_all` or
+    /// changing it to `lowercase`) would break every CLI command end-to-end.
+    #[test]
+    fn auth_status_serde_wire_format_snake_case() {
+        assert_eq!(serde_json::to_string(&AuthStatus::Ready).unwrap(), "\"ready\"");
+        assert_eq!(
+            serde_json::to_string(&AuthStatus::Initializing).unwrap(),
+            "\"initializing\""
+        );
+        assert_eq!(serde_json::to_string(&AuthStatus::Disabled).unwrap(), "\"disabled\"");
+        // And round-trip from wire:
+        let r: AuthStatus = serde_json::from_str("\"ready\"").unwrap();
+        assert_eq!(r, AuthStatus::Ready);
+        let i: AuthStatus = serde_json::from_str("\"initializing\"").unwrap();
+        assert_eq!(i, AuthStatus::Initializing);
+        let d: AuthStatus = serde_json::from_str("\"disabled\"").unwrap();
+        assert_eq!(d, AuthStatus::Disabled);
+    }
+
+    #[tokio::test]
+    async fn logout_sets_cookie_max_age_zero() {
+        use axum::routing::post;
+        // Logout is stateless — build a minimal router with just the logout route.
+        let app: axum::Router = axum::Router::new().route("/api/v1/auth/logout", post(logout_handler));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/auth/logout")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let cookie = resp
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .expect("logout must set a cookie")
+            .to_str()
+            .unwrap();
+        assert!(
+            cookie.contains("Max-Age=0"),
+            "logout cookie should carry Max-Age=0 to clear client state: {cookie}"
+        );
+    }
 }

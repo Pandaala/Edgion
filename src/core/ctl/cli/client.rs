@@ -506,6 +506,33 @@ mod ensure_auth_tests {
     }
 
     #[tokio::test]
+    async fn ensure_auth_bails_on_oidc_only_ready() {
+        // CLI can't do OIDC login interactively — must bail with an actionable message.
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "success": true,
+            "data": {
+                "auth_required": true,
+                "active_providers": ["oidc"],
+                "status": "ready"
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        let r = client.ensure_auth().await;
+        assert!(r.is_err(), "OIDC-only Ready should bail in CLI");
+        let msg = format!("{:?}", r.unwrap_err()).to_lowercase();
+        assert!(
+            msg.contains("oidc") || msg.contains("bearer token"),
+            "err should mention OIDC limitation: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn ensure_auth_bails_on_initializing() {
         let server = MockServer::start().await;
         let body = serde_json::json!({

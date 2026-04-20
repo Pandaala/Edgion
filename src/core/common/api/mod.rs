@@ -8,6 +8,28 @@ use axum::{
 };
 use tower_http::cors::{Any, CorsLayer};
 
+/// Merge `GET /api/v1/auth/status` into the router, computed per-request
+/// from the shared `UnifiedAuthState`. The handler re-reads `ArcSwapOption`
+/// each call so post-init transitions (Initializing → Ready) become visible
+/// to clients without a server restart.
+///
+/// Call this BEFORE `wrap_with_unified_auth_layer` so the status path exists
+/// when the middleware layer wraps the whole router (the middleware then
+/// exact-match bypasses the path for the client contract).
+pub fn add_auth_status_route(
+    router: Router,
+    unified_state: std::sync::Arc<crate::core::common::unified_auth::UnifiedAuthState>,
+) -> Router {
+    let status_router: Router = Router::new().route(
+        "/api/v1/auth/status",
+        axum::routing::get(move || {
+            let state = unified_state.clone();
+            async move { axum::Json(ApiResponse::success(state.build_status())) }
+        }),
+    );
+    router.merge(status_router)
+}
+
 /// Wrap an already-built router with the unified auth middleware using a
 /// pre-constructed `UnifiedAuthState`.
 ///

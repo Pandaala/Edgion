@@ -130,47 +130,6 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
     Json(ApiResponse::success(format!("ACME check triggered for {}", key)))
 }
 
-// ============= Auth Status Helpers =============
-
-/// Derive the pre-computed auth status from the live `UnifiedAuthState`.
-///
-/// Unlike the previous implementation, this reads from the actual assembled
-/// state (not from the original TOML config) — so transient states like
-/// "configured but Secret not yet fetched" are reported as `Initializing`
-/// instead of claiming `Ready`.
-fn build_auth_status(
-    state: &crate::core::common::unified_auth::UnifiedAuthState,
-) -> crate::core::common::local_auth::AuthStatusResponse {
-    use crate::core::common::local_auth::{AuthStatus, AuthStatusResponse};
-
-    let (status, providers) = if !state.require_auth {
-        // Disabled mode: honor the struct-level invariant that
-        // `active_providers` is empty when `status == Disabled`, regardless
-        // of what providers may have been eagerly assembled.
-        (AuthStatus::Disabled, Vec::new())
-    } else {
-        let mut providers = Vec::new();
-        if state.oidc.is_some() {
-            providers.push("oidc".to_string());
-        }
-        if state.local.load().is_some() {
-            providers.push("local".to_string());
-        }
-        let status = if providers.is_empty() {
-            AuthStatus::Initializing
-        } else {
-            AuthStatus::Ready
-        };
-        (status, providers)
-    };
-
-    AuthStatusResponse {
-        auth_required: state.require_auth,
-        active_providers: providers,
-        status,
-    }
-}
-
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
@@ -278,17 +237,7 @@ pub async fn serve(
     let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
     let app = api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
 
-    // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
-    // transitions after background Secret retry become visible to clients.
-    let auth_state_for_status = auth_state.clone();
-    let status_router = Router::new().route(
-        "/api/v1/auth/status",
-        get(move || {
-            let state = auth_state_for_status.clone();
-            async move { axum::Json(ApiResponse::success(build_auth_status(&state))) }
-        }),
-    );
-    let app = app.merge(status_router);
+    let app = api::add_auth_status_route(app, auth_state.clone());
 
     // Now that ALL auth-relevant routes (including /api/v1/auth/me which must
     // be gated) are merged in, wrap the whole router with the auth middleware.
@@ -359,17 +308,7 @@ pub async fn serve_with_shutdown(
     let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
     let app = api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
 
-    // Add GET /api/v1/auth/status — computed per-request so Initializing → Ready
-    // transitions after background Secret retry become visible to clients.
-    let auth_state_for_status = auth_state.clone();
-    let status_router = Router::new().route(
-        "/api/v1/auth/status",
-        get(move || {
-            let state = auth_state_for_status.clone();
-            async move { axum::Json(ApiResponse::success(build_auth_status(&state))) }
-        }),
-    );
-    let app = app.merge(status_router);
+    let app = api::add_auth_status_route(app, auth_state.clone());
 
     // Wrap the fully-merged router with the auth middleware. See `serve` for rationale.
     let app = api::wrap_with_unified_auth_layer(app, auth_state.clone());
@@ -418,7 +357,6 @@ pub async fn serve_with_shutdown(
 
 #[cfg(test)]
 mod auth_status_tests {
-    use super::*;
     use crate::core::common::local_auth::{AuthStatus, LocalAuthConfig, LocalAuthState};
     use crate::core::common::unified_auth::UnifiedAuthState;
 
@@ -434,7 +372,7 @@ mod auth_status_tests {
     #[test]
     fn build_auth_status_disabled_when_not_required() {
         let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
-        let resp = build_auth_status(&state);
+        let resp = state.build_status();
         assert!(!resp.auth_required);
         assert!(resp.active_providers.is_empty());
         assert_eq!(resp.status, AuthStatus::Disabled);
@@ -443,7 +381,7 @@ mod auth_status_tests {
     #[test]
     fn build_auth_status_initializing_when_required_but_no_provider() {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
-        let resp = build_auth_status(&state);
+        let resp = state.build_status();
         assert!(resp.auth_required);
         assert!(resp.active_providers.is_empty());
         assert_eq!(resp.status, AuthStatus::Initializing);
@@ -453,7 +391,7 @@ mod auth_status_tests {
     fn build_auth_status_ready_with_local() {
         let cfg = valid_local();
         let state = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test").unwrap();
-        let resp = build_auth_status(&state);
+        let resp = state.build_status();
         assert!(resp.auth_required);
         assert_eq!(resp.active_providers, vec!["local".to_string()]);
         assert_eq!(resp.status, AuthStatus::Ready);
@@ -462,8 +400,8 @@ mod auth_status_tests {
     #[test]
     fn build_auth_status_ready_after_update_local() {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
-        assert_eq!(build_auth_status(&state).status, AuthStatus::Initializing);
+        assert_eq!(state.build_status().status, AuthStatus::Initializing);
         state.update_local(LocalAuthState::from_config(&valid_local()));
-        assert_eq!(build_auth_status(&state).status, AuthStatus::Ready);
+        assert_eq!(state.build_status().status, AuthStatus::Ready);
     }
 }

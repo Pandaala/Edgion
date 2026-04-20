@@ -202,6 +202,41 @@ impl UnifiedAuthState {
     pub fn update_local(&self, state: Arc<LocalAuthState>) {
         self.local.store(Some(state));
     }
+
+    /// Derive the pre-computed auth status from the live state.
+    ///
+    /// Reads from the actual assembled state (not TOML intent) — so transient
+    /// states like "configured but Secret not yet fetched" are reported as
+    /// `Initializing` instead of claiming `Ready`. Intended to be called
+    /// per-request from the `/api/v1/auth/status` handler.
+    pub fn build_status(&self) -> super::local_auth::AuthStatusResponse {
+        use super::local_auth::{AuthStatus, AuthStatusResponse};
+        let (status, providers) = if !self.require_auth {
+            // Disabled mode: honor the struct-level invariant that
+            // `active_providers` is empty when `status == Disabled`, regardless
+            // of what providers may have been eagerly assembled.
+            (AuthStatus::Disabled, Vec::new())
+        } else {
+            let mut providers = Vec::new();
+            if self.oidc.is_some() {
+                providers.push("oidc".to_string());
+            }
+            if self.local.load().is_some() {
+                providers.push("local".to_string());
+            }
+            let status = if providers.is_empty() {
+                AuthStatus::Initializing
+            } else {
+                AuthStatus::Ready
+            };
+            (status, providers)
+        };
+        AuthStatusResponse {
+            auth_required: self.require_auth,
+            active_providers: providers,
+            status,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

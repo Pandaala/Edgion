@@ -207,6 +207,7 @@ impl EdgionCenterCli {
             let base_router = router(api_state);
             let app =
                 crate::core::common::api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
+            let app = crate::core::common::api::add_auth_status_route(app, auth_state.clone());
             let app = crate::core::common::api::wrap_with_unified_auth_layer(app, auth_state);
             let app = crate::core::common::api::apply_cors_layer(app);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
