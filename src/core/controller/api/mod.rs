@@ -235,14 +235,9 @@ pub async fn serve(
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
 
     let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
-    let app = api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
-
-    let app = api::add_auth_status_route(app, auth_state.clone());
-
-    // Now that ALL auth-relevant routes (including /api/v1/auth/me which must
-    // be gated) are merged in, wrap the whole router with the auth middleware.
-    let app = api::wrap_with_unified_auth_layer(app, auth_state.clone());
-    let app = api::apply_cors_layer(app);
+    // 所有 admin 路由装配 + middleware + CORS 由 compose_admin_routes 内部按
+    // 固定顺序完成，防止 fix #01 round 2 类"顺序错"bug。
+    let app = api::compose_admin_routes(base_router, auth_state.clone(), local_auth_intent);
 
     if needs_retry {
         let auth_state_for_retry = auth_state.clone();
@@ -252,21 +247,20 @@ pub async fn serve(
             Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
         });
         let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
-        // Dedicated broadcast channel: shutdown of the retry task is decoupled
-        // from the main serve shutdown flow. The retry task has its own hard
-        // 10min deadline and will self-terminate via process::exit(1) if the
-        // Secret never arrives. The 10min window greatly exceeds K8s default
-        // terminationGracePeriodSeconds (30s), so a graceful SIGTERM during
-        // retry will not race against deadline-exit in practice.
-        // tx is dropped intentionally: production never cancels the retry task;
-        // tests construct their own channel.
-        let (_retry_shutdown_tx, retry_shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        // 关停信号：生产从不 cancel retry 任务（它有自己的 10min 硬超时 +
+        // process::exit(1)），所以传一个永远不会被 cancel 的 token。retry 任务
+        // 拿到的是它独占的 token，外层没有 cancel 路径，相当于 "never-cancelled"。
+        // 这跟旧版 broadcast::channel + drop(tx) 的效果等价，但语义上安全：
+        // CancellationToken 被 drop 而非 cancel 时 .cancelled() 永不 resolve，
+        // 避免 fix #01 round 3 的 P0 bug（broadcast Sender drop 会让 Receiver
+        // 立即返回 Err(Closed) 从而让 retry loop 首次 poll 就退出）。
+        let retry_shutdown = tokio_util::sync::CancellationToken::new();
         tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
             auth_state_for_retry,
             fetch,
             std::time::Duration::from_secs(600),
             exit,
-            retry_shutdown_rx,
+            retry_shutdown,
         ));
     }
 
@@ -306,13 +300,9 @@ pub async fn serve_with_shutdown(
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
 
     let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
-    let app = api::add_local_auth_routes(base_router, auth_state.clone(), local_auth_intent);
-
-    let app = api::add_auth_status_route(app, auth_state.clone());
-
-    // Wrap the fully-merged router with the auth middleware. See `serve` for rationale.
-    let app = api::wrap_with_unified_auth_layer(app, auth_state.clone());
-    let app = api::apply_cors_layer(app);
+    // 所有 admin 路由装配 + middleware + CORS 由 compose_admin_routes 内部按
+    // 固定顺序完成，防止 fix #01 round 2 类"顺序错"bug。
+    let app = api::compose_admin_routes(base_router, auth_state.clone(), local_auth_intent);
 
     if needs_retry {
         let auth_state_for_retry = auth_state.clone();
@@ -322,21 +312,20 @@ pub async fn serve_with_shutdown(
             Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
         });
         let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
-        // Dedicated broadcast channel: shutdown of the retry task is decoupled
-        // from the main serve shutdown flow. The retry task has its own hard
-        // 10min deadline and will self-terminate via process::exit(1) if the
-        // Secret never arrives. The 10min window greatly exceeds K8s default
-        // terminationGracePeriodSeconds (30s), so a graceful SIGTERM during
-        // retry will not race against deadline-exit in practice.
-        // tx is dropped intentionally: production never cancels the retry task;
-        // tests construct their own channel.
-        let (_retry_shutdown_tx, retry_shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        // 关停信号：生产从不 cancel retry 任务（它有自己的 10min 硬超时 +
+        // process::exit(1)），所以传一个永远不会被 cancel 的 token。retry 任务
+        // 拿到的是它独占的 token，外层没有 cancel 路径，相当于 "never-cancelled"。
+        // 这跟旧版 broadcast::channel + drop(tx) 的效果等价，但语义上安全：
+        // CancellationToken 被 drop 而非 cancel 时 .cancelled() 永不 resolve，
+        // 避免 fix #01 round 3 的 P0 bug（broadcast Sender drop 会让 Receiver
+        // 立即返回 Err(Closed) 从而让 retry loop 首次 poll 就退出）。
+        let retry_shutdown = tokio_util::sync::CancellationToken::new();
         tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
             auth_state_for_retry,
             fetch,
             std::time::Duration::from_secs(600),
             exit,
-            retry_shutdown_rx,
+            retry_shutdown,
         ));
     }
 
