@@ -174,27 +174,35 @@ impl EdgionCenterCli {
         let auth_config = config.auth.clone();
         let local_auth_config = config.local_auth.clone();
 
-        // 两者都没配时：不 panic、不 exit。Server 照常启动，require_auth
-        // 被强制设为 true（safe default），middleware 走 503 分支（不是
-        // 401——middleware 的 401 分支需要 provider ready 但 token 缺失）。
-        // operator 看到 WARN 日志后补配 [local_auth] 或 [auth] 再重启。
-        if local_auth_config.is_none() && auth_config.is_none() {
-            tracing::warn!(
-                component = "center",
-                "No authentication configured. Admin endpoints will return 503 \
-                 until you configure [local_auth] or [auth] in your TOML."
-            );
-        }
-
         let http_handle = tokio::spawn(async move {
-            let local_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
+            let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
             let oidc_intent = auth_config.as_ref().is_some_and(|c| c.enabled);
             // Safe default：只要 operator 没有显式 opt out（enabled=false），就要求 auth。
             // nothing_configured 场景下 require_auth=true 让 middleware 走 503 分支
             // （而非 passthrough），防止"什么都不配"= 管理 API 裸奔。
             let nothing_configured = local_auth_config.is_none() && auth_config.is_none();
-            let require_auth = local_intent || oidc_intent || nothing_configured;
-            let local_auth_intent = local_intent; // keep existing name for downstream compose_admin_routes call
+            let require_auth = local_auth_intent || oidc_intent || nothing_configured;
+
+            // Defensive observability：两种"管理 API 没被 token 保护"的场景都要 WARN。
+            // 场景 1：什么都没配——middleware 走 503 fail-close 分支
+            // 场景 2：operator 显式 enabled=false 关掉了所有 provider——middleware 直通
+            //         （这是合法 no-auth 模式，但容易误操作，所以 WARN 不等于错误）
+            if nothing_configured {
+                tracing::warn!(
+                    component = "center",
+                    "No authentication configured. Admin endpoints will return 503 \
+                     until you configure [local_auth] or [auth] in your YAML."
+                );
+            } else if !require_auth {
+                tracing::warn!(
+                    component = "center",
+                    "Admin API is running in NO-AUTH mode: all configured providers \
+                     have enabled=false. Admin endpoints are OPEN to unauthenticated \
+                     requests. Set enabled=true on [local_auth] or [auth] to restore \
+                     authentication."
+                );
+            }
+
             let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
                 auth_config.as_ref(),
                 local_auth_config.as_ref(),

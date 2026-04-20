@@ -26,9 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   New frontend page: **"Global IP Restrictions"** in the Center sidebar.
 
-### Changed
-- 
-
 ### Fixed
 
 - `secret_retry_loop` shutdown signal now uses `tokio_util::sync::CancellationToken`
@@ -50,9 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `compose_admin_routes` as the single entry point.
 - New integration regression `examples/test/scripts/integration/test_center_no_auth.sh`
   wired into `run_integration.sh` default sweep.
-
-### Removed
-- 
 
 ### Breaking Changes
 

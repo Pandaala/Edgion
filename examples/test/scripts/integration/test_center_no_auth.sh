@@ -33,6 +33,15 @@ EOF
 
 cd "$REPO_ROOT"
 
+# 端口预检：避免上一次遗留进程或并行 CI 占用导致启动失败时报错不清晰。
+for port in 58100 58110; do
+    if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+        echo "FAIL: port $port already in use; stop the conflicting process or rerun later"
+        lsof -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -3
+        exit 1
+    fi
+done
+
 # 确保 edgion-center 已构建
 if [ ! -x "$REPO_ROOT/target/debug/edgion-center" ]; then
     echo "Building edgion-center..."

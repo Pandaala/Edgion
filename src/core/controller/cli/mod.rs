@@ -559,4 +559,20 @@ mod require_auth_tests {
         let oidc = oidc_enabled();
         assert!(derive_require_auth(Some(&oidc), None));
     }
+
+    fn oidc_disabled() -> AdminAuthConfig {
+        let mut c = AdminAuthConfig::default();
+        c.enabled = false;
+        c
+    }
+
+    /// 双显式 opt-out：operator 明确 disabled 两边。require_auth 应为 false
+    /// （respect 明示意图）。守护：未来若有人把"any None/disabled → true"简化
+    /// 进公式，会打破 no-auth 模式。
+    #[test]
+    fn require_auth_both_explicit_disabled_false() {
+        let oidc = oidc_disabled();
+        let local = local_disabled();
+        assert!(!derive_require_auth(Some(&oidc), Some(&local)));
+    }
 }

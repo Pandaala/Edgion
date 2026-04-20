@@ -213,7 +213,11 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .with_state(admin_state)
 }
 
-/// Serve the admin API on the specified address
+/// Serve the admin API on the specified address.
+///
+/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown
+/// future. Kept as a separate public entry point for callers that don't need
+/// graceful shutdown plumbing.
 pub async fn serve(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
@@ -223,53 +227,20 @@ pub async fn serve(
     require_auth: bool,
     needs_retry: bool,
 ) -> anyhow::Result<()> {
-    let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
+    serve_with_shutdown(
+        conf_mgr,
+        schema_validator,
+        addr,
         auth_config,
         local_auth_config,
         require_auth,
-        "admin_api",
-    )?;
-    let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
-
-    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
-    // 装配顺序由 compose_admin_routes 内部固定（见其 doc）。
-    let app = api::compose_admin_routes(base_router, auth_state.clone(), local_auth_intent);
-
-    if needs_retry {
-        let auth_state_for_retry = auth_state.clone();
-        let conf_mgr_for_retry = conf_mgr.clone();
-        let fetch: crate::core::common::local_auth::retry::FetchFn = Box::new(move || {
-            let cm = conf_mgr_for_retry.clone();
-            Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
-        });
-        let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
-        // 生产从不 cancel retry（它有自己的 10min 硬超时 + process::exit(1)），
-        // 传一个永不 cancel 的 token 即可。CancellationToken 的 drop-vs-cancel
-        // 语义细节见 `retry.rs` 模块 doc（fix #01 round 3 结构性修复）。
-        let retry_shutdown = tokio_util::sync::CancellationToken::new();
-        tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
-            auth_state_for_retry,
-            fetch,
-            std::time::Duration::from_secs(600),
-            exit,
-            retry_shutdown,
-        ));
-    }
-
-    tracing::info!(
-        component = "unified_api",
-        event = "server_starting",
-        addr = %addr,
-        "Controller Admin API server listening with unified K8s-style routes"
-    );
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
+        needs_retry,
+        std::future::pending::<()>(),
+    )
+    .await
 }
 
-/// Serve the admin API with graceful shutdown support
+/// Serve the admin API with graceful shutdown support.
 pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
@@ -316,7 +287,7 @@ pub async fn serve_with_shutdown(
     tracing::info!(
         component = "admin_api",
         addr = %addr,
-        "Starting Admin API server with graceful shutdown support"
+        "Controller Admin API server listening with unified K8s-style routes"
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

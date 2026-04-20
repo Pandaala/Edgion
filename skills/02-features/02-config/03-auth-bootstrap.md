@@ -77,6 +77,33 @@ Center 启动依然成功，但：
 
 operator 发现后补配后重启即可。
 
+### 显式关闭所有 provider 的后果（no-auth mode，**危险**）
+
+如果 operator **明确**把所有 provider 都设成 `enabled: false`，例如：
+
+```yaml
+local_auth:
+  enabled: false
+auth:
+  enabled: false
+```
+
+此时：
+- `require_auth = false`（respect operator 的 opt-out 意图）
+- `unified_auth_middleware` 直接 passthrough 所有请求
+- **所有 `/api/v1/*` 业务路径无需 token 即可访问**——admin API **完全开放**
+- 启动时 WARN：`Admin API is running in NO-AUTH mode: ...`（2026-04-20 起）
+
+这是合法的"纯无认证模式"（例如内网隔离 + 其它网关层做认证），但**非常容易被误操作触发**（比如 operator 想"临时关掉 local_auth 只用 OIDC"却同时关错了两个）。如果你的部署真的要走这条路径，请：
+
+1. 显式在部署文档写明"无认证模式，依赖 X 层做认证"
+2. 不要把这个 YAML 放到能被外网访问的 Center 上
+
+如果你只是想**切换**到 OIDC-only，正确做法是：
+- `local_auth` 段整个**删掉**（或只留一个 `enabled: false`）
+- `auth` 段配成 `enabled: true` + 有效 discovery
+- 这样 `oidc_intent = true`，`require_auth = true`，走正常 OIDC 流程
+
 ## K8s 部署：Secret 挂载 Center YAML
 
 推荐模式：将 Center YAML 配置（含 `local_auth:` 段）存为 K8s Secret，挂载到 Center Pod 作为主配置文件。
