@@ -156,6 +156,10 @@ pub struct EdgionControllerConfig {
     #[serde(default)]
     pub validation: ValidationConfig,
 
+    #[arg(skip)]
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+
     #[command(flatten)]
     #[serde(default)]
     pub conf_sync: ConfSyncConfig,
@@ -272,6 +276,31 @@ impl Default for ValidationConfig {
 
 fn default_reference_grant_validation() -> bool {
     true // Default: enabled
+}
+
+/// Top-level metrics configuration section.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct MetricsConfig {
+    pub resource_abnormal: ResourceAbnormalMetricsConfig,
+}
+
+/// Configuration for the resource-abnormal gauge
+/// (`edgion_controller_resource_abnormal`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResourceAbnormalMetricsConfig {
+    pub enabled: bool,
+    pub tick_secs: u64,
+}
+
+impl Default for ResourceAbnormalMetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tick_secs: 300,
+        }
+    }
 }
 
 /// Configuration synchronization configuration
@@ -556,7 +585,23 @@ impl EdgionControllerConfig {
         // Merge: CLI args override file config
         Self::merge(&mut file_config, &cli_config);
 
+        file_config.validate_metrics()?;
+
         Ok(file_config)
+    }
+
+    /// Validate the `metrics` section. When `resource_abnormal.enabled` is true,
+    /// `tick_secs` must fall within [10, 3600]. When disabled, the tick value
+    /// is ignored.
+    pub fn validate_metrics(&self) -> anyhow::Result<()> {
+        let cfg = &self.metrics.resource_abnormal;
+        if cfg.enabled && (cfg.tick_secs < 10 || cfg.tick_secs > 3600) {
+            anyhow::bail!(
+                "metrics.resource_abnormal.tick_secs must be in [10, 3600], got {}",
+                cfg.tick_secs
+            );
+        }
+        Ok(())
     }
 
     /// Merge CLI config into file config (CLI takes precedence)
@@ -869,5 +914,50 @@ center:
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("does not match any cert name"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_defaults_are_applied_when_section_omitted() {
+        let yaml = "work_dir: /tmp\n";
+        let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.metrics.resource_abnormal.enabled, true);
+        assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 300);
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_explicit_values_parse() {
+        let yaml = r#"
+metrics:
+  resource_abnormal:
+    enabled: false
+    tick_secs: 60
+"#;
+        let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.metrics.resource_abnormal.enabled, false);
+        assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 60);
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_too_small_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.tick_secs = 5;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("tick_secs"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_too_large_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.tick_secs = 3601;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("tick_secs"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_disabled_skips_range_check() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.enabled = false;
+        cfg.metrics.resource_abnormal.tick_secs = 0;
+        cfg.validate_metrics().unwrap();
     }
 }
