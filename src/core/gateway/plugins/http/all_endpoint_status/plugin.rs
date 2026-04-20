@@ -491,7 +491,7 @@ impl RequestFilter for AllEndpointStatus {
 
             if since_last < min_interval {
                 let retry_after_s = (min_interval - since_last).div_ceil(1000);
-                log.push("FAIL rate-limited; ");
+                log.push_err("rate limited");
                 let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
                 return self
                     .send_json_response_with_headers(
@@ -511,7 +511,7 @@ impl RequestFilter for AllEndpointStatus {
         let _global_permit = match tokio::time::timeout(Duration::from_secs(5), GLOBAL_CONCURRENCY.acquire()).await {
             Ok(Ok(permit)) => permit,
             _ => {
-                log.push("FAIL concurrency-limit; ");
+                log.push_err("concurrency limit");
                 return self
                     .send_json_response(
                         session,
@@ -529,7 +529,7 @@ impl RequestFilter for AllEndpointStatus {
         let route_unit = match ctx.route_unit.as_ref() {
             Some(unit) => unit.clone(),
             None => {
-                log.push("FAIL no-route; ");
+                log.push_err("no route");
                 return self
                     .send_json_response(session, 503, r#"{"error":"no route matched"}"#)
                     .await;
@@ -539,7 +539,7 @@ impl RequestFilter for AllEndpointStatus {
         let backend_refs = match route_unit.rule.backend_refs.as_ref() {
             Some(refs) if !refs.is_empty() => refs.clone(),
             _ => {
-                log.push("OK 0ep; ");
+                log.push("status served 0");
                 let empty = r#"{"summary":{"total_backends":0,"total_endpoints":0,"success_count":0,"failure_count":0,"truncated":false,"timeout_ms":0,"wall_timeout_ms":0,"total_latency_ms":0,"total_response_bytes":0,"wall_timeout_hit":false},"backends":[]}"#;
                 return self.send_json_response(session, 200, empty).await;
             }
@@ -585,7 +585,7 @@ impl RequestFilter for AllEndpointStatus {
         let total_endpoints = all_endpoints.len();
 
         if total_endpoints == 0 {
-            log.push("OK 0ep; ");
+            log.push("status served 0");
             let response = AggregatedResponse {
                 summary: Summary {
                     total_backends: all_backend_results.len(),
@@ -691,19 +691,14 @@ impl RequestFilter for AllEndpointStatus {
         let json_body = match serde_json::to_string(&response) {
             Ok(j) => j,
             Err(_) => {
-                log.push("FAIL serialize; ");
+                log.push_err("serialize fail");
                 return self
                     .send_json_response(session, 500, r#"{"error":"internal serialization error"}"#)
                     .await;
             }
         };
 
-        let fail_str = if failure_count > 0 {
-            format!(" {}fail", failure_count)
-        } else {
-            String::new()
-        };
-        log.push(&format!("OK {}ep{} {}ms; ", total_endpoints, fail_str, total_latency));
+        log.push(&format!("status served {}", total_endpoints));
 
         self.send_json_response(session, 200, &json_body).await
         // _global_permit is dropped here, releasing the concurrency slot

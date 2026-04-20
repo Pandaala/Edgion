@@ -32,13 +32,13 @@ impl RequestFilter for DynamicExternalUpstream {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // 0. Only supported for HTTP routes, skip for gRPC routes
         if session.ctx().is_grpc_route_matched {
-            log.push("Skip gRPC; ");
+            log.push("skip grpc");
             return PluginRunningResult::GoodNext;
         }
 
         // 1. Check config validation
-        if let Some(err) = self.config.get_validation_error() {
-            log.push(&format!("CfgErr {}; ", err));
+        if let Some(_err) = self.config.get_validation_error() {
+            log.push("config error");
             return PluginRunningResult::GoodNext; // Fail-open on config error
         }
 
@@ -48,11 +48,12 @@ impl RequestFilter for DynamicExternalUpstream {
             _ => {
                 return match self.config.on_missing {
                     ExtUpstreamOnMissing::Skip => {
-                        log.push("NoVal skip; ");
+                        log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
                     ExtUpstreamOnMissing::Reject => {
-                        log.push("NoVal 400; ");
+                        log.push("upstream miss");
+                        log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
                             status: 400,
                             body: Some("Missing routing key for external upstream".to_string()),
@@ -68,13 +69,16 @@ impl RequestFilter for DynamicExternalUpstream {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
                     Some(m) => m.as_str().to_string(),
                     None => {
-                        log.push("Regex miss; ");
+                        log.push("upstream miss");
                         return match self.config.on_missing {
                             ExtUpstreamOnMissing::Skip => PluginRunningResult::GoodNext,
-                            ExtUpstreamOnMissing::Reject => PluginRunningResult::ErrResponse {
-                                status: 400,
-                                body: Some("Routing key regex extraction failed".to_string()),
-                            },
+                            ExtUpstreamOnMissing::Reject => {
+                                log.push_err("regex extract fail");
+                                PluginRunningResult::ErrResponse {
+                                    status: 400,
+                                    body: Some("Routing key regex extraction failed".to_string()),
+                                }
+                            }
                         };
                     }
                 }
@@ -89,13 +93,19 @@ impl RequestFilter for DynamicExternalUpstream {
         let target = match self.config.lookup_domain(&routing_key) {
             Some(t) => t,
             None => {
-                log.push(&format!("NoMap '{}'; ", routing_key));
                 return match self.config.on_no_match {
-                    ExtUpstreamOnNoMatch::Skip => PluginRunningResult::GoodNext,
-                    ExtUpstreamOnNoMatch::Reject => PluginRunningResult::ErrResponse {
-                        status: 400,
-                        body: Some("No matching domain for routing key".to_string()),
-                    },
+                    ExtUpstreamOnNoMatch::Skip => {
+                        log.push("upstream miss");
+                        PluginRunningResult::GoodNext
+                    }
+                    ExtUpstreamOnNoMatch::Reject => {
+                        log.push("upstream miss");
+                        log.push_err("no upstream available");
+                        PluginRunningResult::ErrResponse {
+                            status: 400,
+                            body: Some("No matching domain for routing key".to_string()),
+                        }
+                    }
                 };
             }
         };
@@ -116,12 +126,7 @@ impl RequestFilter for DynamicExternalUpstream {
         };
         session.set_external_jump(info);
 
-        log.push(&format!(
-            "OK {}:{}{}; ",
-            target.domain,
-            target.effective_port(),
-            if target.tls { "/tls" } else { "" }
-        ));
+        log.push("upstream selected");
 
         // 7. Optionally set debug request header (sent to upstream for tracing)
         if self.config.debug_header {

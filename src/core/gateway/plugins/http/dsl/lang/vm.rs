@@ -690,6 +690,7 @@ impl Vm {
                     });
                 }
                 OpCode::ReturnTerminate => {
+                    log.push_err("terminate request");
                     return Ok(PluginRunningResult::ErrTerminateRequest);
                 }
                 OpCode::ReturnGrpcError => {
@@ -735,13 +736,30 @@ pub fn execute_safe(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.execute(session, log)));
 
     match result {
-        Ok(Ok(running_result)) => running_result,
+        Ok(Ok(running_result)) => {
+            log.push("dsl match");
+            running_result
+        }
         Ok(Err(runtime_err)) => {
-            log.push(&format!("dsl:err:{}", runtime_err));
+            let kind: &'static str = match &runtime_err {
+                RuntimeError::TypeError { .. } => "type error",
+                RuntimeError::DivisionByZero => "division by zero",
+                RuntimeError::IntegerOverflow { .. } => "integer overflow",
+                RuntimeError::StepLimitExceeded { .. } => "step limit exceeded",
+                RuntimeError::LoopLimitExceeded { .. } => "loop limit exceeded",
+                RuntimeError::CallLimitExceeded { .. } => "call limit exceeded",
+                RuntimeError::StackOverflow { .. } => "stack overflow",
+                RuntimeError::StringTooLong { .. } => "string too long",
+                RuntimeError::UndefinedLocal { .. } => "undefined local",
+                RuntimeError::ApiError { .. } => "api error",
+                RuntimeError::RegexError { .. } => "regex error",
+                RuntimeError::Internal { .. } => "internal error",
+            };
+            log.push_err(kind);
             apply_error_policy(error_policy)
         }
         Err(_panic) => {
-            log.push("dsl:panic; ");
+            log.push_err("vm panic");
             apply_error_policy(error_policy)
         }
     }

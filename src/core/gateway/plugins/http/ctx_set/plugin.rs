@@ -202,13 +202,12 @@ impl RequestFilter for CtxSet {
         // Check for configuration errors
         if !self.config.is_valid() {
             let error = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push(&format!("Config error: {}; ", error));
+            plugin_log.push(&format!("config error: {}", error));
             // Fail-open: allow request to proceed on config error
             return PluginRunningResult::GoodNext;
         }
 
         let mut set_count = 0;
-        let mut skip_count = 0;
 
         for (idx, rule) in self.config.vars.iter().enumerate() {
             // Process the rule to get the final value
@@ -217,19 +216,17 @@ impl RequestFilter for CtxSet {
             match value {
                 Some(v) => {
                     // Set the context variable
-                    if let Err(e) = session.set_ctx_var(&rule.name, &v) {
-                        plugin_log.push(&format!("Failed to set ctx '{}': {}; ", rule.name, e));
+                    if let Err(_) = session.set_ctx_var(&rule.name, &v) {
+                        plugin_log.push_err("ctx var set fail");
                     } else {
                         set_count += 1;
                     }
                 }
-                None => {
-                    skip_count += 1;
-                }
+                None => {}
             }
         }
 
-        plugin_log.push(&format!("Set {} vars, skipped {}; ", set_count, skip_count));
+        plugin_log.push(&format!("ctx set {}", set_count));
         PluginRunningResult::GoodNext
     }
 }
@@ -270,7 +267,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Set 1 vars"));
+        assert!(plugin_log.contains("ctx set 1"));
     }
 
     #[tokio::test]
@@ -605,7 +602,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Config error"));
+        assert!(plugin_log.contains("config error"));
     }
 
     #[tokio::test]
@@ -635,7 +632,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Set 2 vars"));
+        assert!(plugin_log.contains("ctx set 2"));
     }
 
     #[tokio::test]

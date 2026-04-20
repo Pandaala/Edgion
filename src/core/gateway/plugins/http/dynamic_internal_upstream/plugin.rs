@@ -32,13 +32,13 @@ impl RequestFilter for DynamicInternalUpstream {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // 0. Only supported for HTTP routes, skip for gRPC routes
         if session.ctx().is_grpc_route_matched {
-            log.push("Skip gRPC; ");
+            log.push("skip grpc");
             return PluginRunningResult::GoodNext;
         }
 
         // 1. Check config validation
-        if let Some(err) = self.config.get_validation_error() {
-            log.push(&format!("CfgErr {}; ", err));
+        if let Some(_err) = self.config.get_validation_error() {
+            log.push("config error");
             return PluginRunningResult::GoodNext; // Fail-open on config error
         }
 
@@ -48,11 +48,12 @@ impl RequestFilter for DynamicInternalUpstream {
             _ => {
                 return match self.config.on_missing {
                     DynUpstreamOnMissing::Fallback => {
-                        log.push("NoVal fallback; ");
+                        log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
                     DynUpstreamOnMissing::Reject => {
-                        log.push("NoVal 400; ");
+                        log.push("upstream miss");
+                        log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
                             status: 400,
                             body: Some("Missing routing key for backend selection".to_string()),
@@ -68,13 +69,16 @@ impl RequestFilter for DynamicInternalUpstream {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
                     Some(m) => m.as_str().to_string(),
                     None => {
-                        log.push("Regex miss; ");
+                        log.push("upstream miss");
                         return match self.config.on_missing {
                             DynUpstreamOnMissing::Fallback => PluginRunningResult::GoodNext,
-                            DynUpstreamOnMissing::Reject => PluginRunningResult::ErrResponse {
-                                status: 400,
-                                body: Some("Routing key regex extraction failed".to_string()),
-                            },
+                            DynUpstreamOnMissing::Reject => {
+                                log.push_err("regex extract fail");
+                                PluginRunningResult::ErrResponse {
+                                    status: 400,
+                                    body: Some("Routing key regex extraction failed".to_string()),
+                                }
+                            }
                         };
                     }
                 }
@@ -90,13 +94,16 @@ impl RequestFilter for DynamicInternalUpstream {
             Some((name, ns)) => (name.to_string(), ns.map(|s| s.to_string())),
             None => {
                 // Rules mode: no rule matched
-                log.push(&format!("NoMatch '{}'; ", routing_key));
+                log.push("upstream miss");
                 return match self.config.on_no_match {
                     DynUpstreamOnNoMatch::Fallback => PluginRunningResult::GoodNext,
-                    DynUpstreamOnNoMatch::Reject => PluginRunningResult::ErrResponse {
-                        status: 400,
-                        body: Some("No matching backend rule for routing key".to_string()),
-                    },
+                    DynUpstreamOnNoMatch::Reject => {
+                        log.push_err("no matching rule");
+                        PluginRunningResult::ErrResponse {
+                            status: 400,
+                            body: Some("No matching backend rule for routing key".to_string()),
+                        }
+                    }
                 };
             }
         };
@@ -106,7 +113,7 @@ impl RequestFilter for DynamicInternalUpstream {
         let route_unit = match ctx.route_unit.as_ref() {
             Some(unit) => unit,
             None => {
-                log.push("NoRoute; ");
+                log.push("no route");
                 return PluginRunningResult::GoodNext; // No route matched, skip
             }
         };
@@ -114,7 +121,7 @@ impl RequestFilter for DynamicInternalUpstream {
         let backend_refs = match route_unit.rule.backend_refs.as_ref() {
             Some(refs) if !refs.is_empty() => refs,
             _ => {
-                log.push("NoBkRefs; ");
+                log.push("no backend refs");
                 return PluginRunningResult::GoodNext; // No backend_refs, skip
             }
         };
@@ -133,12 +140,8 @@ impl RequestFilter for DynamicInternalUpstream {
         });
 
         if !found {
-            tracing::warn!(
-                target_name = %target_name,
-                target_namespace = ?target_namespace,
-                "DynamicInternalUpstream: backend_ref not found in route"
-            );
-            log.push("Deny; ");
+            log.push("upstream miss");
+            log.push_err("backend ref not found");
             return match self.config.on_invalid {
                 DynUpstreamOnInvalid::Reject => PluginRunningResult::ErrResponse {
                     status: 403,
@@ -155,14 +158,7 @@ impl RequestFilter for DynamicInternalUpstream {
         };
         session.set_internal_jump(info);
 
-        log.push(&format!(
-            "OK {}{}; ",
-            target_name,
-            target_namespace
-                .as_ref()
-                .map(|ns| format!("@{}", ns))
-                .unwrap_or_default()
-        ));
+        log.push("upstream selected");
 
         // 7. Optionally set debug request header (sent to upstream for tracing)
         if self.config.debug_header {

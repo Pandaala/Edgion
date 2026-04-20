@@ -495,7 +495,7 @@ impl RequestFilter for RateLimitRedis {
 
         // 1. Validate config
         if !self.config.is_valid() {
-            plugin_log.push("rl:err:cfg; ");
+            plugin_log.push_err("cfg load fail");
             let resp = Box::new(
                 ResponseHeader::build(500, None)
                     .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
@@ -520,16 +520,16 @@ impl RequestFilter for RateLimitRedis {
             }
             if parts.is_empty() {
                 if let Some(ref dk) = self.config.default_key {
-                    plugin_log.push("rl:dflt; ");
+                    plugin_log.push("key miss:allow");
                     dk.clone()
                 } else {
                     match self.config.on_missing_key {
                         OnMissingKey::Allow => {
-                            plugin_log.push("rl:nok:a; ");
+                            plugin_log.push("key miss:allow");
                             return PluginRunningResult::GoodNext;
                         }
                         OnMissingKey::Deny => {
-                            plugin_log.push("rl:nok:d; ");
+                            plugin_log.push("deny rate limit");
                             return self.reject_request(session, Duration::ZERO, None).await;
                         }
                     }
@@ -545,7 +545,7 @@ impl RequestFilter for RateLimitRedis {
         let client: Arc<RedisLinkClient> = match get_redis_client(&self.config.redis_ref) {
             Some(c) => c,
             None => {
-                plugin_log.push("rl:err:redis_ref; ");
+                plugin_log.push_err("redis ref load fail");
                 return self.apply_redis_failure_policy(session).await;
             }
         };
@@ -563,7 +563,7 @@ impl RequestFilter for RateLimitRedis {
                 self.reject_request(session, retry_after, Some(&result)).await
             }
             Err(_e) => {
-                plugin_log.push("rl:err:redis; ");
+                plugin_log.push_err("redis call fail");
                 self.apply_redis_failure_policy(session).await
             }
         }

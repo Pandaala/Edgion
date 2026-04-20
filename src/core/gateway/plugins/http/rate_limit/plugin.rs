@@ -227,7 +227,7 @@ impl RequestFilter for RateLimit {
         // limit_key — it can be a user-identifying value (API key, user_id).
         // Check for configuration errors
         if !self.config.is_valid() {
-            plugin_log.push("rl:err:cfg; ");
+            plugin_log.push_err("cfg load fail");
             // Allow request to proceed on config error (fail-open)
             return PluginRunningResult::GoodNext;
         }
@@ -245,17 +245,17 @@ impl RequestFilter for RateLimit {
             if parts.is_empty() {
                 // No keys resolved - check if we have a default key configured
                 if let Some(ref default_key) = self.config.default_key {
-                    plugin_log.push("rl:dflt; ");
+                    plugin_log.push("key miss:allow");
                     default_key.clone()
                 } else {
                     // No default key - check onMissingKey behavior
                     match self.config.on_missing_key {
                         OnMissingKey::Allow => {
-                            plugin_log.push("rl:nok:a; ");
+                            plugin_log.push("key miss:allow");
                             return PluginRunningResult::GoodNext;
                         }
                         OnMissingKey::Deny => {
-                            plugin_log.push("rl:nok:d; ");
+                            plugin_log.push("Deny key miss");
                             return self.reject_request(session, Duration::ZERO).await;
                         }
                     }
@@ -282,14 +282,14 @@ impl RequestFilter for RateLimit {
 
         // Check if rate limit exceeded
         if curr_count > rate_limit {
-            plugin_log.push(&format!("rl:lim,kl={},c={},l={}; ", kl, curr_count, rate_limit));
+            plugin_log.push(&format!("Deny rate limit kl={}", kl));
             // Use interval as retry_after since the window will reset after interval
             return self.reject_request(session, interval).await;
         }
 
         // Add rate limit headers
         self.add_headers(session, remaining, interval);
-        plugin_log.push(&format!("rl:ok,kl={},r={}; ", kl, remaining.max(0)));
+        plugin_log.push(&format!("Allow kl={} r={}", kl, remaining.max(0)));
         PluginRunningResult::GoodNext
     }
 }
@@ -388,7 +388,7 @@ mod tests {
 
             let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
             assert_eq!(result, PluginRunningResult::GoodNext, "Request {} should be allowed", i);
-            assert!(plugin_log.contains("rl:ok"));
+            assert!(plugin_log.contains("Allow kl="));
             // Must never contain the raw limit key value (would leak API key / user_id)
             assert!(!plugin_log.contains("test_basic_ip_"));
         }
@@ -419,7 +419,7 @@ mod tests {
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("rl:lim"));
+        assert!(plugin_log.contains("Deny rate limit"));
         // Key value must never appear in the log
         assert!(!plugin_log.contains(test_ip));
     }
@@ -436,7 +436,7 @@ mod tests {
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("rl:nok"));
+        assert!(plugin_log.contains("key miss:allow"));
     }
 
     #[tokio::test]
@@ -559,7 +559,7 @@ mod tests {
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("rl:err:cfg"));
+        assert!(plugin_log.contains("cfg load fail"));
     }
 
     #[tokio::test]
@@ -588,7 +588,7 @@ mod tests {
 
         let result = plugin2.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("rl:ok"));
+        assert!(plugin_log.contains("Allow kl="));
     }
 
     #[tokio::test]

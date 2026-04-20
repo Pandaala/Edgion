@@ -31,10 +31,10 @@ impl ResponseRewrite {
     /// Rewrite response status code
     fn rewrite_status_code(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
         if let Some(status_code) = self.config.status_code {
-            if let Err(e) = session.set_response_status(status_code) {
-                plugin_log.push(&format!("Status code rewrite failed: {}; ", e));
+            if let Err(_e) = session.set_response_status(status_code) {
+                plugin_log.push_err("status rewrite fail");
             } else {
-                plugin_log.push(&format!("Status -> {}; ", status_code));
+                plugin_log.push(&format!("status rewrite {}; ", status_code));
             }
         }
     }
@@ -54,8 +54,8 @@ impl ResponseRewrite {
                     // Get the value of the original header
                     if let Some(value) = session.get_response_header(&entry.from) {
                         // Set the new header with the same value
-                        if let Err(e) = session.set_response_header(&entry.to, &value) {
-                            plugin_log.push(&format!("Header rename {} -> {} failed: {}; ", entry.from, entry.to, e));
+                        if let Err(_e) = session.set_response_header(&entry.to, &value) {
+                            plugin_log.push_err("header rename fail");
                         } else {
                             // Remove the old header
                             let _ = session.remove_response_header(&entry.from);
@@ -68,8 +68,8 @@ impl ResponseRewrite {
             // 2. Add headers (append)
             if let Some(ref add_headers) = headers.add {
                 for entry in add_headers {
-                    if let Err(e) = session.append_response_header(&entry.name, &entry.value) {
-                        plugin_log.push(&format!("Header add {} failed: {}; ", entry.name, e));
+                    if let Err(_e) = session.append_response_header(&entry.name, &entry.value) {
+                        plugin_log.push_err("header add fail");
                     } else {
                         modified = true;
                     }
@@ -79,8 +79,8 @@ impl ResponseRewrite {
             // 3. Set headers (overwrite)
             if let Some(ref set_headers) = headers.set {
                 for entry in set_headers {
-                    if let Err(e) = session.set_response_header(&entry.name, &entry.value) {
-                        plugin_log.push(&format!("Header set {} failed: {}; ", entry.name, e));
+                    if let Err(_e) = session.set_response_header(&entry.name, &entry.value) {
+                        plugin_log.push_err("header set fail");
                     } else {
                         modified = true;
                     }
@@ -90,8 +90,8 @@ impl ResponseRewrite {
             // 4. Remove headers
             if let Some(ref remove_headers) = headers.remove {
                 for name in remove_headers {
-                    if let Err(e) = session.remove_response_header(name) {
-                        plugin_log.push(&format!("Header remove {} failed: {}; ", name, e));
+                    if let Err(_e) = session.remove_response_header(name) {
+                        plugin_log.push_err("header remove fail");
                     } else {
                         modified = true;
                     }
@@ -99,7 +99,7 @@ impl ResponseRewrite {
             }
 
             if modified {
-                plugin_log.push("Headers modified; ");
+                plugin_log.push("header rewrite");
             }
         }
     }
@@ -117,9 +117,7 @@ impl UpstreamResponseFilter for ResponseRewrite {
     ) -> PluginRunningResult {
         // Check if configuration is valid
         if !self.config.is_valid() {
-            if let Some(err) = self.config.get_validation_error() {
-                plugin_log.push(&format!("Config error: {}; ", err));
-            }
+            plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
         }
 
@@ -163,7 +161,7 @@ mod tests {
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Status -> 200"));
+        assert!(plugin_log.contains("status rewrite 200"));
     }
 
     #[test]
@@ -215,7 +213,7 @@ mod tests {
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[test]
@@ -245,7 +243,7 @@ mod tests {
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[test]
@@ -276,7 +274,7 @@ mod tests {
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[test]
@@ -322,7 +320,7 @@ mod tests {
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[test]
@@ -354,7 +352,7 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         // No modification since header doesn't exist
-        assert!(!plugin_log.contains("Headers modified"));
+        assert!(!plugin_log.contains("header rewrite"));
     }
 
     #[test]
@@ -426,8 +424,8 @@ mod tests {
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Status -> 201"));
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("status rewrite 201"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[test]
@@ -445,7 +443,7 @@ mod tests {
         let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Config error"));
+        assert!(plugin_log.contains("err: config invalid"));
     }
 
     #[test]

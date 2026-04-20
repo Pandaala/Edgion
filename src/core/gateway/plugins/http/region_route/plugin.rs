@@ -159,7 +159,7 @@ impl RegionRoute {
         };
 
         if target_name == region.name {
-            log.push("err:failoverTo invalid; ");
+            log.push_err("failover to invalid");
             return (idx, region);
         }
 
@@ -169,7 +169,7 @@ impl RegionRoute {
                 (target_idx, target_region)
             }
             None => {
-                log.push("err:failoverTo invalid; ");
+                log.push_err("failover to invalid");
                 (idx, region)
             }
         }
@@ -199,6 +199,7 @@ impl RegionRoute {
             .unwrap_or_default()
             .to_string();
 
+        log.push("proxy pass; ");
         log.push(&format!("→{} {}:{}; ", region.name, host, port));
 
         session.set_external_jump(ExternalJumpPreset {
