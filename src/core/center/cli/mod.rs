@@ -171,12 +171,24 @@ impl EdgionCenterCli {
 
         // HTTP Admin API — unified auth supports both OIDC and local auth
         let auth_config = config.auth.clone();
+        // If the operator did not supply `[local_auth]`, fall back to the documented
+        // dev-default (admin/edgion1234) with a per-boot random JWT secret so existing
+        // tokens become invalid on restart. Previously the fallback was
+        // `LocalAuthConfig::default()`, which has empty password+jwt_secret; after
+        // fix #01's stricter validation that fallback would panic at startup.
         let local_auth_config = config.local_auth.clone().or_else(|| {
             tracing::info!(
                 component = "center",
-                "No local_auth configured, enabling default local auth (admin/edgion1234)"
+                "No local_auth configured, enabling default local auth (admin/edgion1234); JWT secret is random per boot"
             );
-            Some(crate::core::common::local_auth::LocalAuthConfig::default())
+            Some(crate::core::common::local_auth::LocalAuthConfig {
+                enabled: true,
+                username: "admin".to_string(),
+                password: "edgion1234".to_string(),
+                jwt_secret: crate::core::common::local_auth::secret::generate_random_string(32),
+                jwt_expiry_hours: 24,
+                skip_paths: vec!["/health".to_string(), "/ready".to_string()],
+            })
         });
         let http_handle = tokio::spawn(async move {
             let base_router = router(api_state);

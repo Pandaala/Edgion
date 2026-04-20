@@ -138,7 +138,7 @@ stringData:
 }
 
 /// Generate a random alphanumeric string using /dev/urandom.
-fn generate_random_string(len: usize) -> String {
+pub(crate) fn generate_random_string(len: usize) -> String {
     use std::io::Read;
     let mut buf = vec![0u8; len];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
