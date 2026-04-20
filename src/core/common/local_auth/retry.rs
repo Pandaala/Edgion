@@ -113,12 +113,12 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     fn valid_local() -> LocalAuthConfig {
-        let mut c = LocalAuthConfig::default();
-        c.enabled = true;
-        c.username = "admin".to_string();
-        c.password = "a_long_enough_password_123".to_string();
-        c.jwt_secret = "a_long_enough_jwt_secret_value_abcdef".to_string();
-        c
+        LocalAuthConfig {
+            username: "admin".to_string(),
+            password: "a_long_enough_password_123".to_string(),
+            jwt_secret: "a_long_enough_jwt_secret_value_abcdef".to_string(),
+            ..LocalAuthConfig::default()
+        }
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]

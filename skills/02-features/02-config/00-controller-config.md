@@ -190,7 +190,7 @@ CLI 特例：
 
 ## `[auth]` — OIDC 认证（Admin API）
 
-启用后 Admin API 需要 OIDC JWT Bearer token。定义在 `src/core/common/auth/config.rs::AdminAuthConfig`，挂载逻辑在 `src/core/common/api/mod.rs` 的 `apply_auth_layer`。
+启用后 Admin API 需要 OIDC JWT Bearer token。定义在 `src/core/common/auth/config.rs::AdminAuthConfig`，由 `UnifiedAuthState::from_configs` 装进统一认证状态，最终通过 `common::api::compose_admin_routes` 挂载 `unified_auth_middleware` 生效。
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
