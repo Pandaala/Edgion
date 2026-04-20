@@ -3,14 +3,20 @@
 //!
 //! On success the loop calls `update_local` and returns. On hard timeout it
 //! calls the supplied `on_timeout` callback (production: `std::process::exit(1)`).
+//!
+//! Shutdown signaling uses `tokio_util::sync::CancellationToken`. Its semantics
+//! (resolve only on explicit `cancel()`, never on drop) are a structural fix
+//! for the fix #01 round 3 P0 bug where `broadcast::Receiver::recv()` would
+//! return `Err(Closed)` when the caller dropped the `Sender`, exiting the loop
+//! on its first poll.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::broadcast;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use crate::core::common::local_auth::{LocalAuthConfig, LocalAuthState};
 use crate::core::common::unified_auth::UnifiedAuthState;
@@ -22,25 +28,6 @@ pub type FetchFn = Box<dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<Lo
 /// Abstraction over "exit the process on hard timeout". Production passes
 /// `|| std::process::exit(1)`; tests pass a flag-setting closure.
 pub type ExitFn = Box<dyn FnOnce() + Send + Sync>;
-
-/// Returns a future that resolves only on an explicit `Ok(())` broadcast.
-///
-/// `Err(Closed)` is returned synchronously and repeatedly once all senders
-/// drop — we don't want that to race against the sleep arm of the retry
-/// loop's `select!`, so in that case we block forever. `Err(Lagged)` just
-/// means we missed some signals; try again.
-async fn wait_for_shutdown(shutdown: &mut broadcast::Receiver<()>) {
-    loop {
-        match shutdown.recv().await {
-            Ok(()) => return,
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(broadcast::error::RecvError::Closed) => {
-                std::future::pending::<()>().await;
-                unreachable!();
-            }
-        }
-    }
-}
 
 /// Run the retry loop: exponential backoff (1s → 2s → 4s → 8s → 16s → 30s cap),
 /// approximate deadline `timeout` wall-clock from call time.
@@ -60,7 +47,7 @@ pub async fn secret_retry_loop(
     fetch: FetchFn,
     timeout: Duration,
     on_timeout: ExitFn,
-    mut shutdown: broadcast::Receiver<()>,
+    shutdown: CancellationToken,
 ) {
     let component = "secret_retry";
     let deadline = Instant::now() + timeout;
@@ -75,14 +62,12 @@ pub async fn secret_retry_loop(
 
     loop {
         tokio::select! {
-            // Only a real `Ok(())` broadcast counts as a shutdown signal.
-            // `broadcast::Receiver::recv()` returns `Err(Closed)` immediately
-            // and repeatedly once all `Sender`s are dropped, which production
-            // callers do since the retry task is time-bounded. Without the
-            // pending-on-closed wrapper below, `select!` would match the
-            // Err every iteration and the task would exit on its first poll
-            // without attempting a single fetch.
-            _ = wait_for_shutdown(&mut shutdown) => {
+            // CancellationToken::cancelled() 的语义恰好匹配 retry loop 的意图：
+            // - token.cancel() 调用后 resolve → 正常关停
+            // - token 被 drop 但未 cancel → 永不 resolve（不会误触关停）
+            // 这与旧 broadcast::Receiver 语义（drop tx → Err(Closed) → 误退）形成对比，
+            // 是 fix #01 round 3 P0 bug 的结构性修复。
+            _ = shutdown.cancelled() => {
                 tracing::info!(component = component, "retry loop received shutdown, exiting");
                 return;
             }
@@ -157,14 +142,14 @@ mod tests {
         let exit: ExitFn = Box::new(move || {
             t.fetch_add(1, Ordering::SeqCst);
         });
-        let (_tx, rx) = broadcast::channel(1);
+        let shutdown = CancellationToken::new();
 
         let handle = tokio::spawn(secret_retry_loop(
             state.clone(),
             fetch,
             Duration::from_secs(600),
             exit,
-            rx,
+            shutdown.clone(),
         ));
         tokio::time::sleep(Duration::from_secs(8)).await;
         handle.await.unwrap();
@@ -193,14 +178,14 @@ mod tests {
         let exit: ExitFn = Box::new(move || {
             t.fetch_add(1, Ordering::SeqCst);
         });
-        let (_tx, rx) = broadcast::channel(1);
+        let shutdown = CancellationToken::new();
 
         let handle = tokio::spawn(secret_retry_loop(
             state.clone(),
             fetch,
             Duration::from_secs(600),
             exit,
-            rx,
+            shutdown.clone(),
         ));
         tokio::time::sleep(Duration::from_secs(601)).await;
         handle.await.unwrap();
@@ -214,16 +199,16 @@ mod tests {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         let fetch: FetchFn = Box::new(|| Box::pin(async move { Err(anyhow::anyhow!("never used")) }));
         let exit: ExitFn = Box::new(|| panic!("on_timeout should not fire"));
-        let (tx, rx) = broadcast::channel(1);
+        let shutdown = CancellationToken::new();
         let handle = tokio::spawn(secret_retry_loop(
             state.clone(),
             fetch,
             Duration::from_secs(600),
             exit,
-            rx,
+            shutdown.clone(),
         ));
         tokio::time::sleep(Duration::from_millis(100)).await;
-        tx.send(()).unwrap();
+        shutdown.cancel();
         handle.await.unwrap();
     }
 
@@ -253,16 +238,20 @@ mod tests {
             })
         });
         let exit: ExitFn = Box::new(|| panic!("on_timeout should not fire"));
-        // Production pattern: tx is dropped immediately; only rx is kept.
-        let (tx, rx) = broadcast::channel::<()>(1);
-        drop(tx);
+        // Production pattern: outer drops its token handle while only a clone remains
+        // in the retry task. Simulates "Sender dropped but cancel() never called";
+        // under CancellationToken semantics, shutdown.cancelled() should NOT resolve,
+        // so the retry loop must keep running until fetch succeeds or deadline hits.
+        let outer_token = CancellationToken::new();
+        let retry_shutdown = outer_token.clone();
+        drop(outer_token);
 
         let handle = tokio::spawn(secret_retry_loop(
             state.clone(),
             fetch,
             Duration::from_secs(600),
             exit,
-            rx,
+            retry_shutdown,
         ));
         tokio::time::sleep(Duration::from_secs(4)).await;
         handle.await.unwrap();
