@@ -98,7 +98,7 @@ rg "<file_path_or_key>" /Users/caohao/ws2/Edgion/tasks/reviews/2026-04-17/fixes/
 - [x] **#10** — OIDC 插件 tracing（33 处）— **M**
 - [x] **#11** — JWT/JWE/Basic/HeaderCert/ForwardAuth tracing（10 处）— **M** — 删 10 处 tracing；JWT 按 `jsonwebtoken::errors::ErrorKind` 分 `jwt:expired / invalid-sig / malformed / bad-alg / ...` 等短标签（`verify_token` 接 `&mut PluginLog`），hide_credentials 限制改 `jwt:hide-skip-q / -c`；BasicAuth 统一 `basic:auth-fail;` 防 log-grep 枚举（timing 侧由 `auth_failure_delay_ms` 部署层缓解）；HeaderCert `hca:fail:<detail>` 带 static detail；ForwardAuth 新增 `EdgionStatus::ForwardAuthServiceUnreachable = 503_14` + PluginSession 窄接口 `add_error(EdgionStatus)` 双写 access log errors + `fa:unreachable(-degraded);` 标签。按用户立场不加 `edgion_auth_plugin_errors_total` counter。顺带：basic_auth 配置期 warn/info、header_cert_auth CA 加载 warn 登记到 `skills/03-coding/01-log-safety.md` 例外表。
 - [x] **#12** — LDAP 命中率反模式 + tracing — **S**
-- [ ] **#13** — 其他插件 tracing 杂项（17 处）— **M**
+- [x] **#13** — 其他插件 tracing 杂项（17 处）— **M**
   - ⚠️ 同文件协同：**`ctx_set/plugin.rs:230` 若 #16 还未做就一起改**；**`rate_limit_redis/plugin.rs` 若 #17 还未做就一起改**
   - 依赖：**#14 先完成**
 
