@@ -208,7 +208,11 @@ where
         // InitApply events arrive (the store will be empty until reflector fills it,
         // which is fine — lookups return None during that window, same as before).
         let (store, writer) = reflector::store();
-        self.processor.set_raw_store(Arc::new(KubeRawStore::new(store.clone())));
+        let raw_store: std::sync::Arc<
+            dyn crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore<K>,
+        > = std::sync::Arc::new(KubeRawStore::new(store.clone()));
+        self.processor.set_raw_store(raw_store.clone());
+        crate::core::controller::observe::status_metrics::register_status_renderer::<K>(kind, raw_store);
         let watcher_stream = watcher(api, self.watcher_config.clone());
         let mut stream = Box::pin(reflector(writer, watcher_stream));
 

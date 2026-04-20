@@ -51,7 +51,9 @@ where
         event_rx: KindEventReceiver,
     ) -> Self {
         let fs_raw_store = Arc::new(LocalRawStore::new());
-        processor.set_raw_store(fs_raw_store.clone());
+        let raw_store: Arc<dyn RawStore<K>> = fs_raw_store.clone();
+        processor.set_raw_store(raw_store.clone());
+        crate::core::controller::observe::status_metrics::register_status_renderer::<K>(kind, raw_store);
         Self {
             kind,
             processor,
