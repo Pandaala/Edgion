@@ -688,6 +688,92 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+#[cfg(test)]
+mod metrics_handler_tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use std::sync::Arc;
+
+    fn ensure_recorder_installed() {
+        // Idempotent via install_global_recorder's own OnceLock guard.
+        let _ = crate::core::common::observe::metrics_api::install_global_recorder(
+            crate::core::common::observe::metrics_api::RecorderConfig {
+                service: "controller-test",
+                idle_timeout_secs: 0,
+                histogram_buckets: &[],
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_appends_nothing_when_snapshot_empty() {
+        ensure_recorder_installed();
+        snapshot_slot().store(Arc::new(Vec::new()));
+        let response = metrics_handler().await;
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let s = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!s.contains("edgion_controller_resource_abnormal"));
+    }
+
+    #[tokio::test]
+    async fn handler_appends_snapshot_block_when_non_empty() {
+        ensure_recorder_installed();
+        snapshot_slot().store(Arc::new(vec![Entry {
+            kind: "HTTPRoute",
+            namespace: "default".into(),
+            name: "x".into(),
+            ty: Kind::Err,
+        }]));
+        let response = metrics_handler().await;
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let s = String::from_utf8(body.to_vec()).unwrap();
+        assert!(s.contains("# TYPE edgion_controller_resource_abnormal gauge"));
+        assert!(s.contains(
+            r#"edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="x",type="err"} 1"#
+        ));
+    }
+}
+
+use axum::response::{IntoResponse, Response};
+use http::{header, StatusCode};
+
+/// Controller-side `/metrics` handler. Replaces the direct mount of
+/// `common::observe::metrics_api::metrics_handler` in the admin router
+/// by delegating to it first, then appending the resource-abnormal
+/// block when the snapshot is non-empty.
+pub async fn metrics_handler() -> Response {
+    let base = crate::core::common::observe::metrics_api::metrics_handler().await;
+    let (parts, body) = base.into_parts();
+    if parts.status != StatusCode::OK {
+        return Response::from_parts(parts, body);
+    }
+
+    let base_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to read base metrics body")
+                .into_response();
+        }
+    };
+    let mut text = String::from_utf8(base_bytes.to_vec()).unwrap_or_default();
+
+    let snap = snapshot_slot().load();
+    let block = render_snapshot(snap.as_ref());
+    if !block.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&block);
+    }
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        text,
+    )
+        .into_response()
+}
+
 /// Spawn the background snapshot loop. Called once from controller CLI
 /// startup when `config.metrics.resource_abnormal.enabled` is true.
 pub fn spawn_snapshot_loop(tick_secs: u64) {
