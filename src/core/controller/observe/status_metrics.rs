@@ -70,3 +70,116 @@ pub fn renderers_slot() -> &'static Mutex<Vec<Renderer>> {
     static RENDERERS: OnceLock<Mutex<Vec<Renderer>>> = OnceLock::new();
     RENDERERS.get_or_init(|| Mutex::new(Vec::new()))
 }
+
+/// A condition as observed from serialized resource JSON. Only the fields
+/// we actually classify on.
+#[derive(Debug, Clone)]
+pub struct Condition {
+    pub type_: String,
+    pub status: String,
+}
+
+/// Classify a resource's full set of conditions into err / warn / clean.
+///
+/// Returns `Some(Err)` if *any* condition triggers the err rule; `Some(Warn)`
+/// only if no err was present and at least one warn-trigger exists; `None`
+/// for an all-clean or empty set.
+///
+/// Err triggers:
+/// - `Accepted:False`, `ResolvedRefs:False`, `Programmed:False`
+/// - `Conflicted:True`, `ListenersNotValid:True` (inverse semantics —
+///   True is bad for these two)
+///
+/// Warn triggers:
+/// - `Ready:False`
+/// - `PartiallyInvalid:True` (inverse)
+pub fn classify(conditions: &[Condition]) -> Option<Kind> {
+    let mut warn_seen = false;
+    for c in conditions {
+        match (c.type_.as_str(), c.status.as_str()) {
+            ("Accepted", "False")
+            | ("ResolvedRefs", "False")
+            | ("Programmed", "False")
+            | ("Conflicted", "True")
+            | ("ListenersNotValid", "True") => return Some(Kind::Err),
+
+            ("Ready", "False") | ("PartiallyInvalid", "True") => {
+                warn_seen = true;
+            }
+            _ => {}
+        }
+    }
+    warn_seen.then_some(Kind::Warn)
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+
+    fn c(t: &str, s: &str) -> Condition {
+        Condition { type_: t.into(), status: s.into() }
+    }
+
+    #[test]
+    fn empty_is_clean() {
+        assert_eq!(classify(&[]), None);
+    }
+
+    #[test]
+    fn all_true_is_clean() {
+        let cs = vec![c("Accepted", "True"), c("ResolvedRefs", "True"), c("Programmed", "True")];
+        assert_eq!(classify(&cs), None);
+    }
+
+    #[test]
+    fn accepted_false_is_err() {
+        assert_eq!(classify(&[c("Accepted", "False")]), Some(Kind::Err));
+    }
+
+    #[test]
+    fn resolved_refs_false_is_err() {
+        assert_eq!(classify(&[c("ResolvedRefs", "False")]), Some(Kind::Err));
+    }
+
+    #[test]
+    fn programmed_false_is_err() {
+        assert_eq!(classify(&[c("Programmed", "False")]), Some(Kind::Err));
+    }
+
+    #[test]
+    fn conflicted_true_is_err() {
+        assert_eq!(classify(&[c("Conflicted", "True")]), Some(Kind::Err));
+    }
+
+    #[test]
+    fn listeners_not_valid_true_is_err() {
+        assert_eq!(classify(&[c("ListenersNotValid", "True")]), Some(Kind::Err));
+    }
+
+    #[test]
+    fn partially_invalid_true_is_warn() {
+        assert_eq!(classify(&[c("PartiallyInvalid", "True")]), Some(Kind::Warn));
+    }
+
+    #[test]
+    fn ready_false_is_warn() {
+        assert_eq!(classify(&[c("Ready", "False")]), Some(Kind::Warn));
+    }
+
+    #[test]
+    fn err_and_warn_together_swallow_warn() {
+        let cs = vec![c("Accepted", "False"), c("Ready", "False")];
+        assert_eq!(classify(&cs), Some(Kind::Err));
+    }
+
+    #[test]
+    fn unknown_type_is_ignored() {
+        let cs = vec![c("SomethingElse", "False"), c("Accepted", "True")];
+        assert_eq!(classify(&cs), None);
+    }
+
+    #[test]
+    fn unknown_status_is_ignored() {
+        assert_eq!(classify(&[c("Accepted", "Unknown")]), None);
+    }
+}
