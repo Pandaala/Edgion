@@ -591,7 +591,7 @@ impl EdgionControllerConfig {
     }
 
     /// Validate the `metrics` section. When `resource_abnormal.enabled` is true,
-    /// `tick_secs` must fall within [10, 3600]. When disabled, the tick value
+    /// `tick_secs` must fall within [30, 3600]. When disabled, the tick value
     /// is ignored.
     pub fn validate_metrics(&self) -> anyhow::Result<()> {
         let cfg = &self.metrics.resource_abnormal;
