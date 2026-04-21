@@ -221,8 +221,10 @@ wait_for_no_series() {
 
 # --- Test sequence ---
 log_section "Test 1: abnormal resource → err series appears"
+# err label is a JSON array string (escaped per Prom text format); non-empty
+# means at least one err-level trigger fired.
 wait_for_series \
-    'edgion_controller_resource_abnormal\{[^}]*name="abn-bad-route"[^}]*type="err"' \
+    'edgion_controller_resource_abnormal\{[^}]*name="abn-bad-route"[^}]*err="\[' \
     "abnormal-appears"
 
 log_section "Test 2: resource recovers → err series disappears"

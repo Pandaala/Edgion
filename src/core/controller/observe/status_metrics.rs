@@ -5,8 +5,8 @@
 //!
 //! * A background task rebuilds a fresh `Vec<Entry>` every `tick_secs` by
 //!   reading every registered `RawStore`, serializing each resource to JSON,
-//!   recursively scanning for `"conditions": [...]` arrays, and classifying
-//!   into `Err` / `Warn` based on condition type.
+//!   recursively scanning for `"conditions": [...]` arrays, and partitioning
+//!   the matching triggers into `err_conditions` / `warn_conditions`.
 //! * The snapshot is published atomically via `ArcSwap<Arc<Vec<Entry>>>`.
 //! * `/metrics` is read-only; it loads the current snapshot and appends
 //!   a text block to the common Prometheus handler output.
@@ -18,33 +18,23 @@
 
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
-use serde::Serialize;
 use std::sync::{Arc, OnceLock};
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 
 pub const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
-pub const METRIC_HELP: &str =
-    "Resource currently has at least one False status condition. type=err for Accepted/ResolvedRefs/Programmed failures (or Conflicted/ListenersNotValid=True), type=warn for Ready:False or PartiallyInvalid:True.";
+pub const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
 
 /// Safety ceiling: if a snapshot would exceed this, it is truncated and
 /// a single `tracing::error!` is emitted. Hard-coded — not a config knob.
 pub const SNAPSHOT_ENTRY_HARD_CAP: usize = 10_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum Kind {
-    Err,
-    Warn,
-}
-
-impl Kind {
-    #[inline]
-    pub fn as_label(self) -> &'static str {
-        match self {
-            Kind::Err => "err",
-            Kind::Warn => "warn",
-        }
-    }
+/// One condition trigger referenced in the `err` / `warn` label payload.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct ConditionRef {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,7 +43,8 @@ pub struct Entry {
     pub kind: &'static str,
     pub namespace: String,
     pub name: String,
-    pub ty: Kind,
+    pub err_conditions: Vec<ConditionRef>,
+    pub warn_conditions: Vec<ConditionRef>,
 }
 
 /// Renderer closure signature: pushes `Entry` values for one kind's store.
@@ -88,11 +79,12 @@ pub struct Condition {
     pub status: String,
 }
 
-/// Classify a resource's full set of conditions into err / warn / clean.
+/// Classify a resource's full set of conditions into (err_list, warn_list).
 ///
-/// Returns `Some(Err)` if *any* condition triggers the err rule; `Some(Warn)`
-/// only if no err was present and at least one warn-trigger exists; `None`
-/// for an all-clean or empty set.
+/// Returns `None` if the resource is all-clean (both lists would be empty).
+/// Otherwise returns `Some((err_list, warn_list))` where either list may be
+/// empty but not both — the two severities coexist on the same `Entry`
+/// rather than swallowing each other.
 ///
 /// Err triggers:
 /// - `Accepted:False`, `ResolvedRefs:False`, `Programmed:False`
@@ -102,23 +94,31 @@ pub struct Condition {
 /// Warn triggers:
 /// - `Ready:False`
 /// - `PartiallyInvalid:True` (inverse)
-pub fn classify(conditions: &[Condition]) -> Option<Kind> {
-    let mut warn_seen = false;
+pub fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, Vec<ConditionRef>)> {
+    let mut err_list = Vec::new();
+    let mut warn_list = Vec::new();
     for c in conditions {
         match (c.type_.as_str(), c.status.as_str()) {
             ("Accepted", "False")
             | ("ResolvedRefs", "False")
             | ("Programmed", "False")
             | ("Conflicted", "True")
-            | ("ListenersNotValid", "True") => return Some(Kind::Err),
-
-            ("Ready", "False") | ("PartiallyInvalid", "True") => {
-                warn_seen = true;
-            }
+            | ("ListenersNotValid", "True") => err_list.push(ConditionRef {
+                type_: c.type_.clone(),
+                status: c.status.clone(),
+            }),
+            ("Ready", "False") | ("PartiallyInvalid", "True") => warn_list.push(ConditionRef {
+                type_: c.type_.clone(),
+                status: c.status.clone(),
+            }),
             _ => {}
         }
     }
-    warn_seen.then_some(Kind::Warn)
+    if err_list.is_empty() && warn_list.is_empty() {
+        None
+    } else {
+        Some((err_list, warn_list))
+    }
 }
 
 #[cfg(test)]
@@ -134,7 +134,7 @@ mod classify_tests {
 
     #[test]
     fn empty_is_clean() {
-        assert_eq!(classify(&[]), None);
+        assert!(classify(&[]).is_none());
     }
 
     #[test]
@@ -144,59 +144,80 @@ mod classify_tests {
             c("ResolvedRefs", "True"),
             c("Programmed", "True"),
         ];
-        assert_eq!(classify(&cs), None);
+        assert!(classify(&cs).is_none());
     }
 
     #[test]
     fn accepted_false_is_err() {
-        assert_eq!(classify(&[c("Accepted", "False")]), Some(Kind::Err));
+        let (err, warn) = classify(&[c("Accepted", "False")]).unwrap();
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].type_, "Accepted");
+        assert_eq!(err[0].status, "False");
+        assert!(warn.is_empty());
     }
 
     #[test]
     fn resolved_refs_false_is_err() {
-        assert_eq!(classify(&[c("ResolvedRefs", "False")]), Some(Kind::Err));
+        let (err, warn) = classify(&[c("ResolvedRefs", "False")]).unwrap();
+        assert_eq!(err.len(), 1);
+        assert!(warn.is_empty());
     }
 
     #[test]
     fn programmed_false_is_err() {
-        assert_eq!(classify(&[c("Programmed", "False")]), Some(Kind::Err));
+        let (err, warn) = classify(&[c("Programmed", "False")]).unwrap();
+        assert_eq!(err.len(), 1);
+        assert!(warn.is_empty());
     }
 
     #[test]
     fn conflicted_true_is_err() {
-        assert_eq!(classify(&[c("Conflicted", "True")]), Some(Kind::Err));
+        let (err, warn) = classify(&[c("Conflicted", "True")]).unwrap();
+        assert_eq!(err.len(), 1);
+        assert!(warn.is_empty());
     }
 
     #[test]
     fn listeners_not_valid_true_is_err() {
-        assert_eq!(classify(&[c("ListenersNotValid", "True")]), Some(Kind::Err));
+        let (err, warn) = classify(&[c("ListenersNotValid", "True")]).unwrap();
+        assert_eq!(err.len(), 1);
+        assert!(warn.is_empty());
     }
 
     #[test]
     fn partially_invalid_true_is_warn() {
-        assert_eq!(classify(&[c("PartiallyInvalid", "True")]), Some(Kind::Warn));
+        let (err, warn) = classify(&[c("PartiallyInvalid", "True")]).unwrap();
+        assert!(err.is_empty());
+        assert_eq!(warn.len(), 1);
+        assert_eq!(warn[0].type_, "PartiallyInvalid");
     }
 
     #[test]
     fn ready_false_is_warn() {
-        assert_eq!(classify(&[c("Ready", "False")]), Some(Kind::Warn));
+        let (err, warn) = classify(&[c("Ready", "False")]).unwrap();
+        assert!(err.is_empty());
+        assert_eq!(warn.len(), 1);
     }
 
     #[test]
-    fn err_and_warn_together_swallow_warn() {
+    fn err_and_warn_coexist_both_preserved() {
         let cs = vec![c("Accepted", "False"), c("Ready", "False")];
-        assert_eq!(classify(&cs), Some(Kind::Err));
+        let (err, warn) = classify(&cs).unwrap();
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].type_, "Accepted");
+        assert_eq!(warn.len(), 1);
+        assert_eq!(warn[0].type_, "Ready");
     }
 
     #[test]
     fn unknown_type_is_ignored() {
         let cs = vec![c("SomethingElse", "False"), c("Accepted", "True")];
-        assert_eq!(classify(&cs), None);
+        assert!(classify(&cs).is_none());
     }
 
     #[test]
     fn unknown_status_is_ignored() {
-        assert_eq!(classify(&[c("Accepted", "Unknown")]), None);
+        assert!(classify(&[c("Accepted", "Unknown")]).is_none());
     }
 }
 
@@ -257,7 +278,7 @@ pub fn render_snapshot(entries: &[Entry]) -> String {
     if entries.is_empty() {
         return String::new();
     }
-    let mut out = String::with_capacity(128 + entries.len() * 96);
+    let mut out = String::with_capacity(128 + entries.len() * 128);
     out.push_str("# HELP ");
     out.push_str(METRIC_NAME);
     out.push(' ');
@@ -267,6 +288,16 @@ pub fn render_snapshot(entries: &[Entry]) -> String {
     out.push_str(METRIC_NAME);
     out.push_str(" gauge\n");
     for e in entries {
+        let err_json = if e.err_conditions.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&e.err_conditions).unwrap_or_default()
+        };
+        let warn_json = if e.warn_conditions.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&e.warn_conditions).unwrap_or_default()
+        };
         out.push_str(METRIC_NAME);
         out.push_str("{kind=\"");
         out.push_str(e.kind);
@@ -274,8 +305,10 @@ pub fn render_snapshot(entries: &[Entry]) -> String {
         append_escaped(&mut out, &e.namespace);
         out.push_str("\",name=\"");
         append_escaped(&mut out, &e.name);
-        out.push_str("\",type=\"");
-        out.push_str(e.ty.as_label());
+        out.push_str("\",err=\"");
+        append_escaped(&mut out, &err_json);
+        out.push_str("\",warn=\"");
+        append_escaped(&mut out, &warn_json);
         out.push_str("\"} 1\n");
     }
     out
@@ -323,12 +356,13 @@ where
 
         let (ns, name) = extract_identity(&json);
         let conds = scan_conditions(&json);
-        if let Some(ty) = classify(&conds) {
+        if let Some((err_conditions, warn_conditions)) = classify(&conds) {
             out.push(Entry {
                 kind,
                 namespace: ns,
                 name,
-                ty,
+                err_conditions,
+                warn_conditions,
             });
         }
     }
@@ -462,32 +496,45 @@ mod render_tests {
                 kind: "HTTPRoute",
                 namespace: "ns-b".into(),
                 name: "route".into(),
-                ty: Kind::Err,
+                err_conditions: vec![ConditionRef {
+                    type_: "Accepted".into(),
+                    status: "False".into(),
+                }],
+                warn_conditions: vec![],
             },
             Entry {
                 kind: "HTTPRoute",
                 namespace: "ns-a".into(),
                 name: "route".into(),
-                ty: Kind::Warn,
+                err_conditions: vec![],
+                warn_conditions: vec![ConditionRef {
+                    type_: "Ready".into(),
+                    status: "False".into(),
+                }],
             },
             Entry {
                 kind: "Gateway",
                 namespace: "ns-z".into(),
                 name: "gw".into(),
-                ty: Kind::Err,
+                err_conditions: vec![ConditionRef {
+                    type_: "Accepted".into(),
+                    status: "False".into(),
+                }],
+                warn_conditions: vec![],
             },
         ];
         let mut sorted = entries.clone();
         sorted.sort();
 
         let out = render_snapshot(&sorted);
-        let expected = "\
-# HELP edgion_controller_resource_abnormal Resource currently has at least one False status condition. type=err for Accepted/ResolvedRefs/Programmed failures (or Conflicted/ListenersNotValid=True), type=warn for Ready:False or PartiallyInvalid:True.
-# TYPE edgion_controller_resource_abnormal gauge
-edgion_controller_resource_abnormal{kind=\"Gateway\",namespace=\"ns-z\",name=\"gw\",type=\"err\"} 1
-edgion_controller_resource_abnormal{kind=\"HTTPRoute\",namespace=\"ns-a\",name=\"route\",type=\"warn\"} 1
-edgion_controller_resource_abnormal{kind=\"HTTPRoute\",namespace=\"ns-b\",name=\"route\",type=\"err\"} 1
-";
+        let expected = format!(
+            "# HELP edgion_controller_resource_abnormal {help}\n\
+# TYPE edgion_controller_resource_abnormal gauge\n\
+edgion_controller_resource_abnormal{{kind=\"Gateway\",namespace=\"ns-z\",name=\"gw\",err=\"[{{\\\"type\\\":\\\"Accepted\\\",\\\"status\\\":\\\"False\\\"}}]\",warn=\"\"}} 1\n\
+edgion_controller_resource_abnormal{{kind=\"HTTPRoute\",namespace=\"ns-a\",name=\"route\",err=\"\",warn=\"[{{\\\"type\\\":\\\"Ready\\\",\\\"status\\\":\\\"False\\\"}}]\"}} 1\n\
+edgion_controller_resource_abnormal{{kind=\"HTTPRoute\",namespace=\"ns-b\",name=\"route\",err=\"[{{\\\"type\\\":\\\"Accepted\\\",\\\"status\\\":\\\"False\\\"}}]\",warn=\"\"}} 1\n",
+            help = METRIC_HELP
+        );
         assert_eq!(out, expected);
     }
 
@@ -497,7 +544,11 @@ edgion_controller_resource_abnormal{kind=\"HTTPRoute\",namespace=\"ns-b\",name=\
             kind: "HTTPRoute",
             namespace: "n\"s".into(),
             name: "back\\slash".into(),
-            ty: Kind::Err,
+            err_conditions: vec![ConditionRef {
+                type_: "Accepted".into(),
+                status: "False".into(),
+            }],
+            warn_conditions: vec![],
         }];
         let out = render_snapshot(&entries);
         assert!(out.contains(r#"namespace="n\"s""#));
@@ -566,10 +617,14 @@ mod registration_tests {
 
         assert_eq!(buf.len(), 2);
         let bad = buf.iter().find(|e| e.name == "bad").unwrap();
-        assert_eq!(bad.ty, Kind::Err);
+        assert_eq!(bad.err_conditions.len(), 1);
+        assert_eq!(bad.err_conditions[0].type_, "Accepted");
+        assert!(bad.warn_conditions.is_empty());
         assert_eq!(bad.kind, "FakeRoute");
         let warn = buf.iter().find(|e| e.name == "warn").unwrap();
-        assert_eq!(warn.ty, Kind::Warn);
+        assert!(warn.err_conditions.is_empty());
+        assert_eq!(warn.warn_conditions.len(), 1);
+        assert_eq!(warn.warn_conditions[0].type_, "Ready");
     }
 }
 
@@ -636,9 +691,11 @@ mod snapshot_loop_tests {
         assert_eq!(snap.len(), 2);
         // Sorted by (kind, ns, name): a/a before a/b
         assert_eq!(snap[0].name, "a");
-        assert_eq!(snap[0].ty, Kind::Warn);
+        assert!(snap[0].err_conditions.is_empty());
+        assert_eq!(snap[0].warn_conditions.len(), 1);
         assert_eq!(snap[1].name, "b");
-        assert_eq!(snap[1].ty, Kind::Err);
+        assert_eq!(snap[1].err_conditions.len(), 1);
+        assert!(snap[1].warn_conditions.is_empty());
     }
 
     #[test]
@@ -767,14 +824,18 @@ mod metrics_handler_tests {
             kind: "HTTPRoute",
             namespace: "default".into(),
             name: "x".into(),
-            ty: Kind::Err,
+            err_conditions: vec![ConditionRef {
+                type_: "Accepted".into(),
+                status: "False".into(),
+            }],
+            warn_conditions: vec![],
         }]));
         let response = metrics_handler().await;
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let s = String::from_utf8(body.to_vec()).unwrap();
         assert!(s.contains("# TYPE edgion_controller_resource_abnormal gauge"));
         assert!(s.contains(
-            r#"edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="x",type="err"} 1"#
+            r#"edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="x",err="[{\"type\":\"Accepted\",\"status\":\"False\"}]",warn=""}"#
         ));
     }
 }

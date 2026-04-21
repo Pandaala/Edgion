@@ -11,16 +11,26 @@ Controller 暴露一条 Prometheus gauge `edgion_controller_resource_abnormal`�
   - `kind`：资源 K8s `.kind` 字段（PascalCase，例如 `HTTPRoute`、`EdgionPlugins`）
   - `namespace`：资源命名空间（cluster-scoped 为空字符串）
   - `name`：资源名
-  - `type`：`err` 或 `warn`
+  - `err`：JSON 数组字符串，记录所有 err 级触发 condition；空字符串表示该级别无触发
+  - `warn`：JSON 数组字符串，记录所有 warn 级触发 condition；空字符串表示该级别无触发
 
-## `type` 划分规则
+err / warn 两个级别在同一资源上**共存**（各自是独立的 label），不再互相吞并。
 
-| type | 触发 condition |
+## `err` / `warn` 划分规则
+
+| 级别 | 触发 condition |
 |------|---------------|
 | `err` | `Accepted:False` / `ResolvedRefs:False` / `Programmed:False`；或 `Conflicted:True` / `ListenersNotValid:True`（反向语义） |
 | `warn` | `Ready:False`；或 `PartiallyInvalid:True` |
 
-同一资源同时满足 err 和 warn 时，仅发 `err`（吞并）。
+每个 label 值是 JSON 数组：`[{"type":"...","status":"..."}, ...]`，按扫描顺序排列；若该级别无触发则 label 为空串 `""`。
+
+示例：
+
+```prometheus
+edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="bad",err="[{\"type\":\"ResolvedRefs\",\"status\":\"False\"}]",warn=""} 1
+edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="mixed",err="[{\"type\":\"Accepted\",\"status\":\"False\"}]",warn="[{\"type\":\"Ready\",\"status\":\"False\"}]"} 1
+```
 
 ## 刷新机制
 
@@ -48,21 +58,26 @@ metrics:
 
 ## 典型 Prometheus 告警规则
 
+新版 label 是 JSON 数组字符串，告警规则按 `err!=""` / `warn!=""` 过滤：
+
 ```yaml
 - alert: EdgionResourceError
-  expr: edgion_controller_resource_abnormal{type="err"} == 1
+  expr: edgion_controller_resource_abnormal{err!=""} == 1
   for: 5m
   labels:
     severity: critical
   annotations:
     summary: "Edgion {{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} is in error state"
-    description: "Status condition indicates configuration failure; see {{ $labels.namespace }}/{{ $labels.name }}.status.conditions"
+    description: "err-level triggers: {{ $labels.err }}"
 
 - alert: EdgionResourceWarn
-  expr: edgion_controller_resource_abnormal{type="warn"} == 1
+  expr: edgion_controller_resource_abnormal{warn!=""} == 1
   for: 15m
   labels:
     severity: warning
+  annotations:
+    summary: "Edgion {{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} has warnings"
+    description: "warn-level triggers: {{ $labels.warn }}"
 ```
 
 建议 `for:` 设为 `tick_secs` 的 1-2 倍，避免单次 tick 抖动误报。
@@ -76,7 +91,7 @@ metrics:
 ## 运行时内部机制（给 operator / dev 读）
 
 - 一个后台 `tokio::spawn` 任务每 `tick_secs` 轮询所有注册的 per-kind renderer
-- 每个 renderer 扫 `RawStore<K>::snapshot()`，序列化为 JSON，递归找所有 `conditions[]`，`classify` 后产生 `Entry`
+- 每个 renderer 扫 `RawStore<K>::snapshot()`，序列化为 JSON，递归找所有 `conditions[]`，`classify` 后产生 `Entry`（`err_conditions` + `warn_conditions` 两个列表）
 - 所有 `Entry` 排序后 `ArcSwap::store` 原子替换当前快照
 - `/metrics` 被 scrape 时读取当前快照并 append 到 common handler 输出后面
 - 任意 renderer panic 被 `catch_unwind` 隔离，不影响其他 kind
