@@ -1,8 +1,6 @@
 //! Key list metadata — unified StringList + RegexList
 //!
 //! A list of key-value metadata items with configurable match mode.
-//! `Exact` mode matches keys as literal strings (previously StringList).
-//! `Regex` mode matches keys as regular expressions (previously RegexList).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,10 +9,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum KeyMatchMode {
-    /// Exact string matching (equivalent to the legacy StringList).
     #[default]
     Exact,
-    /// Regular expression matching (equivalent to the legacy RegexList).
     Regex,
 }
 

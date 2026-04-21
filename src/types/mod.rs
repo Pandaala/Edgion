@@ -25,7 +25,6 @@ pub mod global_def {
 #[macro_use]
 pub mod resource;
 
-// Re-export from output module (previously link_sys)
 pub use self::output::{LocalFileWriterCfg, LocalFileWriterConfig, RotationConfig, RotationStrategy, StringOutput};
 
 // Backward compatibility: link_sys module alias for output types

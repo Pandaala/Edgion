@@ -724,9 +724,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    /// Documents an axum gotcha that caused a bug during fix #01:
-    /// `router.layer(L).merge(other)` does NOT apply `L` to routes brought in
-    /// via `merge`. Guard against re-introducing this pattern.
+    /// Documents an axum gotcha: `router.layer(L).merge(other)` does NOT apply
+    /// `L` to routes brought in via `merge`. Guard against re-introducing this pattern.
     #[tokio::test]
     async fn layer_before_merge_does_not_protect_merged_routes() {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
@@ -765,7 +764,7 @@ mod tests {
 
     /// The correct pattern the Controller/Center actually use: merge all routes
     /// FIRST, then wrap with `.layer()` via `wrap_with_unified_auth_layer`.
-    /// Guards fix #01: `/api/v1/auth/me` must be behind the middleware.
+    /// Guards that `/api/v1/auth/me` is behind the middleware.
     #[tokio::test]
     async fn merge_before_layer_protects_all_routes() {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();

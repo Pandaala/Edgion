@@ -33,7 +33,7 @@ pub enum PluginRunningResult {
     /// **Convention** (enforced by code review, not by the type system): any plugin
     /// that returns `ErrTerminateRequest` MUST have already written the response
     /// (header + body) to the session. Otherwise the client observes a naked 502
-    /// from Pingora with no diagnostic context — see issue #15.
+    /// from Pingora with no diagnostic context.
     ///
     /// If a plugin cannot write a response at its current stage (e.g. the sync
     /// `UpstreamResponseFilter` hook where `await` is unavailable), prefer

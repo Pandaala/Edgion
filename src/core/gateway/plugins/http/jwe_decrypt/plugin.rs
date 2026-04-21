@@ -534,10 +534,6 @@ mod tests {
         assert!(log.contains("bad alg"));
     }
 
-    /// Covers fix #11: `load_key()` failure path (unresolvable credential) emits
-    /// `err: key load fail; ` + `no key; ` via the existing `reject` call site —
-    /// verifies the deleted `tracing::debug!` at the former L345 is fully replaced
-    /// by the PluginLog tags.
     #[tokio::test]
     async fn test_load_key_failure_emits_no_key_tag() {
         // resolved_credential = None → load_key() returns Err.

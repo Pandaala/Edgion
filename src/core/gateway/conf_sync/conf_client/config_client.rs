@@ -327,11 +327,6 @@ impl ConfigClient {
         &self.edgion_gateway_configs
     }
 
-    // /// Get secrets cache for direct access
-    // pub fn secrets(&self) -> &ClientCache<Secret> {
-    //     &self.secrets
-    // }
-
     /// Get the DynClientCache for a given ResourceKind.
     ///
     /// Uses exhaustive match on ResourceKind to ensure compile-time completeness.
@@ -531,11 +526,6 @@ impl ConfigClient {
         // EdgionGatewayConfig is cluster-scoped (no namespace)
         self.edgion_gateway_configs.get(name)
     }
-
-    // /// List secrets
-    // pub fn list_secrets(&self) -> ListData<Secret> {
-    //     self.secrets.list_owned()
-    // }
 
     /// Trigger update event for an endpoint slice by key
     pub fn trigger_endpoint_slice_update_event(&self, key: &str) {

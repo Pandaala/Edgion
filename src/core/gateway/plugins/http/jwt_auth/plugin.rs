@@ -1390,8 +1390,6 @@ mod tests {
         assert!(log.contains("OK u=cookie-user"));
     }
 
-    // ========== Fix #11: PluginLog kind tags, no token leak ==========
-
     /// Assert that no base64url segment of the token appears verbatim in serialized log.
     fn assert_no_token_leak(log: &PluginLog, token: &str) {
         let serialized = serde_json::to_string(log).expect("PluginLog serialize");

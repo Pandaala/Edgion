@@ -248,7 +248,6 @@ mod tests {
 
     /// Center 在 local_auth 和 auth 都为 None 时：
     /// 1. 应能成功构造 UnifiedAuthState，不应 panic
-    ///    （fix #01 round 2 的 bug 1 回归——旧 or_else 会造 LocalAuthConfig 走 validate）
     /// 2. safe-default require_auth 推导结果应为 true
     ///    （保证 middleware 走 503 分支而非 passthrough，防止"什么都不配 = admin API 裸奔"）
     #[test]
@@ -275,8 +274,6 @@ mod tests {
     }
 
     /// HTTP 级回归：nothing_configured 场景下，业务路由应返回 503（不是 200 也不是 401）。
-    /// 这是 fix #01 follow-up 的语义回归——旧版 4fae592 用 require_auth=false
-    /// 导致 admin API 裸奔。
     #[tokio::test]
     async fn center_no_auth_config_admin_routes_return_503() {
         use axum::{body::Body, http::Request, routing::get, Router};
@@ -307,8 +304,7 @@ mod tests {
         );
     }
 
-    /// CenterConfig::default() 应该不带任何 admin 凭证，确保 fix #01 删除
-    /// edgion1234 fallback 后没有遗漏的默认注入路径。
+    /// CenterConfig::default() 应该不带任何 admin 凭证（无 local_auth，无 OIDC）。
     #[test]
     fn center_default_config_yields_no_auth_config() {
         let config = CenterConfig::default();

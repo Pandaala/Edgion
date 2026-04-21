@@ -575,8 +575,6 @@ mod tests {
         assert!(plugin_log.contains("Config error"));
     }
 
-    // ========== Fix #11: fa:* tags on auth service unreachable ==========
-
     fn setup_mock_for_build_auth_headers(mock: &mut MockPluginSession) {
         mock.expect_request_headers().returning(Vec::new);
         mock.expect_header_value().returning(|_| None);

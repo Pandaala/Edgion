@@ -4,11 +4,9 @@
 //! On success the loop calls `update_local` and returns. On hard timeout it
 //! calls the supplied `on_timeout` callback (production: `std::process::exit(1)`).
 //!
-//! Shutdown signaling uses `tokio_util::sync::CancellationToken`. Its semantics
-//! (resolve only on explicit `cancel()`, never on drop) are a structural fix
-//! for the fix #01 round 3 P0 bug where `broadcast::Receiver::recv()` would
-//! return `Err(Closed)` when the caller dropped the `Sender`, exiting the loop
-//! on its first poll.
+//! Shutdown signaling uses `tokio_util::sync::CancellationToken` rather than
+//! `broadcast::Receiver`: its semantics resolve only on explicit `cancel()`, never
+//! on drop, so the loop cannot exit prematurely when the caller drops the `Sender`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -65,8 +63,6 @@ pub async fn secret_retry_loop(
             // CancellationToken::cancelled() 的语义恰好匹配 retry loop 的意图：
             // - token.cancel() 调用后 resolve → 正常关停
             // - token 被 drop 但未 cancel → 永不 resolve（不会误触关停）
-            // 这与旧 broadcast::Receiver 语义（drop tx → Err(Closed) → 误退）形成对比，
-            // 是 fix #01 round 3 P0 bug 的结构性修复。
             _ = shutdown.cancelled() => {
                 tracing::info!(component = component, "retry loop received shutdown, exiting");
                 return;
@@ -212,15 +208,11 @@ mod tests {
         handle.await.unwrap();
     }
 
-    /// Regression guard: if the caller drops the broadcast `Sender` immediately
-    /// after spawning (which `serve`/`serve_with_shutdown` did in the initial
-    /// fix #01 wiring), `broadcast::Receiver::recv()` returns `Err(Closed)` on
-    /// the first poll. `tokio::select!`'s `_ = shutdown.recv() =>` arm pattern
-    /// matches any resolved value — including `Err` — so the task would exit
-    /// on its first iteration, never attempting a single fetch.
-    ///
-    /// After the fix, the loop must tolerate a dropped `Sender` and continue
-    /// retrying until success or deadline.
+    /// Regression guard: dropping the shutdown `Sender` immediately after spawning
+    /// must not cause the retry loop to exit on its first iteration.
+    /// `broadcast::Receiver::recv()` returns `Err(Closed)` when the sender is dropped,
+    /// and a naïve `_ = shutdown.recv() =>` arm would match that error and exit early —
+    /// the loop must tolerate a dropped sender and continue retrying until success or deadline.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn retry_loop_keeps_running_when_shutdown_tx_dropped() {
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();

@@ -656,8 +656,6 @@ mod tests {
         assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
-    // ========== Fix #11: Unified `basic:auth-fail;` tag to block log-grep enumeration ==========
-
     async fn run_auth_and_capture_log(auth: BasicAuth, auth_header: String) -> PluginLog {
         let mut session = MockPluginSession::new();
         session.expect_method().returning(|| "GET".to_string());

@@ -211,7 +211,7 @@ impl HttpRouteRuleUnit {
                 match std::str::from_utf8(buf) {
                     Ok(s) => out.push_str(s),
                     Err(_) => {
-                        // Invalid UTF-8: push each byte as Latin-1 char (preserves old behavior for ASCII)
+                        // Invalid UTF-8: push each byte as Latin-1 char
                         for &b in buf.iter() {
                             out.push(b as char);
                         }

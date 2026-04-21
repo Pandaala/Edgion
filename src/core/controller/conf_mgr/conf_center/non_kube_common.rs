@@ -355,10 +355,6 @@ pub trait LocalControllerBackend: Send + Sync {
 
 /// Create a `ResourceProcessor`, register it, subscribe to the backend, and
 /// launch the per-kind controller — all in one step.
-///
-/// This is the shared equivalent of the private `spawn()` free functions that
-/// previously existed in both `etcd/controller.rs` and
-/// `file_system/controller.rs`.
 pub async fn spawn<K, H, B>(
     kind: &'static str,
     handler: H,

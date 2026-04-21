@@ -420,9 +420,8 @@ mod tests {
         assert_eq!(log.refer_to.as_ref().unwrap(), "p1");
     }
 
-    /// Regression test for #15: the async Request stage must write a 500 body
-    /// when a cycle is detected, instead of returning a naked ErrTerminateRequest
-    /// that surfaces as a blank 502 to the client.
+    /// The async Request stage must write a 500 body when a cycle is detected,
+    /// instead of returning a naked `ErrTerminateRequest` that surfaces as a blank 502 to the client.
     #[tokio::test]
     async fn test_cycle_writes_500_body_in_request_stage() {
         let mut session = MockPluginSession::new();

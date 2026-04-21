@@ -147,15 +147,10 @@ fn test_edgion_plugin_type_name() {
     }
 }
 
-/// Regression test for stage-mismatch detection (fixes #14).
-///
 /// A `ResponseHeaderModifier` plugin placed under `requestPlugins` is a response-stage
-/// plugin mis-configured into the request stage. Before the fix, PluginRuntime silently
-/// dropped such entries, leaving `preparse_errors` empty and `status.conditions` reporting
-/// `Accepted: True` even though the plugin never ran (auth-bypass class bug).
-///
-/// After the fix, preparse must surface the mismatch in `preparse_errors` so the
-/// Controller writes it into `status.conditions`.
+/// plugin mis-configured into the request stage. `PluginRuntime` must surface the mismatch
+/// in `preparse_errors` so the Controller writes it into `status.conditions` — silently
+/// dropping it would leave `Accepted: True` even though the plugin never ran (auth-bypass class bug).
 #[test]
 fn test_preparse_flags_stage_mismatch() {
     // ResponseHeaderModifier → request stage (wrong stage)

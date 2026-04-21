@@ -273,7 +273,7 @@ pub async fn serve_with_shutdown(
         let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
         // 生产从不 cancel retry（它有自己的 10min 硬超时 + process::exit(1)），
         // 传一个永不 cancel 的 token 即可。CancellationToken 的 drop-vs-cancel
-        // 语义细节见 `retry.rs` 模块 doc（fix #01 round 3 结构性修复）。
+        // 语义细节见 `retry.rs` 模块 doc。
         let retry_shutdown = tokio_util::sync::CancellationToken::new();
         tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
             auth_state_for_retry,

@@ -19,13 +19,13 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 /// 1. `business`（各组件自己的业务路由）
 /// 2. `/api/v1/auth/{login, logout, me}`（共享 local_auth handler，
 ///    仅当 `local_auth_intent = true` 时挂载）
-/// 3. `/api/v1/auth/status`（fix #01 round 3 回归点，无条件挂载）
+/// 3. `/api/v1/auth/status`（无条件挂载）
 /// 4. `unified_auth` middleware（包所有路由；skip_paths 由 `auth_state` 提供）
 /// 5. CORS layer
 ///
 /// # 终态约定
 /// **返回的 `Router` 视为终态**。不要再 `.route()` / `.layer()`——任何追加
-/// 都会绕过 auth middleware，等价于 fix #01 round 2 的 P0 bug。新增 admin
+/// 都会绕过 auth middleware。新增 admin
 /// 路由应放入 `business` 参数后再调用本函数。
 ///
 /// # 参数

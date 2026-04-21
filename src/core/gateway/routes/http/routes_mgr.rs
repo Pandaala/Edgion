@@ -193,7 +193,7 @@ pub struct DomainRouteRules {
 
     /// Catch-all routes from HTTPRoutes with no spec.hostnames.
     /// Stored separately from exact_domain_map to avoid mixing fallback
-    /// semantics with exact-match semantics (previously used "*" sentinel key).
+    /// semantics with exact-match semantics.
     pub(crate) catch_all_routes: ArcSwap<Option<Arc<RouteRules>>>,
 }
 
