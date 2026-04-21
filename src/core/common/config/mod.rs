@@ -595,9 +595,9 @@ impl EdgionControllerConfig {
     /// is ignored.
     pub fn validate_metrics(&self) -> anyhow::Result<()> {
         let cfg = &self.metrics.resource_abnormal;
-        if cfg.enabled && (cfg.tick_secs < 10 || cfg.tick_secs > 3600) {
+        if cfg.enabled && (cfg.tick_secs < 30 || cfg.tick_secs > 3600) {
             anyhow::bail!(
-                "metrics.resource_abnormal.tick_secs must be in [10, 3600], got {}",
+                "metrics.resource_abnormal.tick_secs must be in [30, 3600], got {}",
                 cfg.tick_secs
             );
         }
@@ -940,9 +940,16 @@ metrics:
     #[test]
     fn metrics_resource_abnormal_tick_too_small_rejected() {
         let mut cfg = EdgionControllerConfig::default();
-        cfg.metrics.resource_abnormal.tick_secs = 5;
+        cfg.metrics.resource_abnormal.tick_secs = 29;
         let err = cfg.validate_metrics().unwrap_err();
         assert!(err.to_string().contains("tick_secs"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_minimum_30_accepted() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.tick_secs = 30;
+        cfg.validate_metrics().unwrap();
     }
 
     #[test]
