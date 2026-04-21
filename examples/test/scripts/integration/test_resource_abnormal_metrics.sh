@@ -33,7 +33,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-FIXTURE_DIR="${SCRIPT_DIR}/test_resource_abnormal_metrics_data"
+FIXTURE_DIR="${PROJECT_ROOT}/examples/test/conf/Status/ResourceAbnormalMetrics"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/integration_testing/resource_abnormal_metrics_${TIMESTAMP}"
