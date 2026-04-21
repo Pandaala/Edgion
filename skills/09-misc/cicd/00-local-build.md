@@ -62,7 +62,7 @@ cargo build --release --no-default-features --features "allocator-system,borings
 
 更详细的 feature 语义见：
 
-- [../02-features/01-binary-and-deployment/02-feature-flags.md](../02-features/01-binary-and-deployment/02-feature-flags.md)
+- [../../02-features/01-binary-and-deployment/02-feature-flags.md](../../02-features/01-binary-and-deployment/02-feature-flags.md)
 
 ## 编译产物在哪
 

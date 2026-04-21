@@ -101,5 +101,5 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 
 ## 相关文档
 
-- [过滤器总览](../overview.md)
-- [插件组合与引用](../plugin-composition.md)
+- [过滤器总览](../../overview.md)
+- [插件组合与引用](../../plugin-composition.md)

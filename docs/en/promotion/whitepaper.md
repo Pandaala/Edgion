@@ -627,4 +627,4 @@ Edgion is under active development. The following are key priorities for the nea
 
 Edgion is a continuously evolving open-source project. We believe that Rust's memory-safety guarantees, Pingora's production-grade networking engine, the Gateway API's standardized configuration model, and the safe programmability of the self-developed DSL engine together position Edgion to deliver an answer to cloud-native API gateway requirements that is secure, performant, and flexible.
 
-Return to [Edgion Promotion Home](./README.md) | [Detailed Introduction](./introduction.md) | [Project Home](../../../README.md)
+Return to [Edgion Promotion Home](./README.md) | [Project Home](../../../README.md)

@@ -177,7 +177,7 @@ requestPlugins:
         }
 ```
 
-完整的 DSL API 参考和高级用法请参见 [DSL 插件文档](../en/user-guide/http-route/filters/edgion-plugins/dsl.md)。
+完整的 DSL API 参考和高级用法请参见 [DSL 插件文档](../en/user-guide/http-route/filters/edgion-plugins/dsl/README.md)。
 
 ## 部署
 

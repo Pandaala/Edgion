@@ -420,35 +420,25 @@ impl RequestMirrorTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Access log not found: {}", e)),
                     };
 
-                    // Walk access log looking for the RequestMirror plugin log
+                    // Walk stage_logs[].edgion_plugins[].logs[].log[] looking for "mirror sent"
                     let stage_logs = entry.data["stage_logs"].as_array();
                     let found_mirror_log = stage_logs
                         .map(|stages| {
                             stages.iter().any(|stage| {
-                                stage["filters"]
+                                stage["edgion_plugins"]
                                     .as_array()
-                                    .map(|filters| {
-                                        filters.iter().any(|f| {
-                                            // Check edgion_plugins sub-logs
-                                            f["edgion_plugins"]
+                                    .map(|ep| {
+                                        ep.iter().any(|p| {
+                                            p["logs"]
                                                 .as_array()
-                                                .map(|ep| {
-                                                    ep.iter().any(|p| {
-                                                        p["logs"]
+                                                .map(|logs| {
+                                                    logs.iter().any(|l| {
+                                                        l["log"]
                                                             .as_array()
-                                                            .map(|logs| {
-                                                                logs.iter().any(|l| {
-                                                                    l["log"]
-                                                                        .as_array()
-                                                                        .map(|items| {
-                                                                            items.iter().any(|item| {
-                                                                                item.as_str()
-                                                                                    .map(|s| {
-                                                                                        s.contains("mirror-started")
-                                                                                    })
-                                                                                    .unwrap_or(false)
-                                                                            })
-                                                                        })
+                                                            .map(|items| {
+                                                                items.iter().any(|item| {
+                                                                    item.as_str()
+                                                                        .map(|s| s.contains("mirror sent"))
                                                                         .unwrap_or(false)
                                                                 })
                                                             })
@@ -456,16 +446,6 @@ impl RequestMirrorTestSuite {
                                                     })
                                                 })
                                                 .unwrap_or(false)
-                                                || f["log"]
-                                                    .as_array()
-                                                    .map(|logs| {
-                                                        logs.iter().any(|l| {
-                                                            l.as_str()
-                                                                .map(|s| s.contains("mirror-started"))
-                                                                .unwrap_or(false)
-                                                        })
-                                                    })
-                                                    .unwrap_or(false)
                                         })
                                     })
                                     .unwrap_or(false)
@@ -476,26 +456,17 @@ impl RequestMirrorTestSuite {
                     if found_mirror_log {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "'mirror-started' found in access log ✓".to_string(),
+                            "'mirror sent' found in access log ✓".to_string(),
                         )
                     } else {
-                        // Softer check: at least verify stage_logs is present
-                        // (mirror plugin may be logged at a different nesting level)
                         let raw = serde_json::to_string_pretty(&entry.data).unwrap_or_default();
-                        if raw.contains("mirror-started") {
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "'mirror-started' found in raw access log (deep nesting) ✓".to_string(),
-                            )
-                        } else {
-                            TestResult::failed(
-                                start.elapsed(),
-                                format!(
-                                    "'mirror-started' not found in access log. Raw: {}",
-                                    &raw[..raw.len().min(1000)]
-                                ),
-                            )
-                        }
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "'mirror sent' not found in access log. Raw: {}",
+                                &raw[..raw.len().min(1000)]
+                            ),
+                        )
                     }
                 })
             },

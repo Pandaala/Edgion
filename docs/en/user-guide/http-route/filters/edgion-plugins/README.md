@@ -12,7 +12,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [csrf.md](csrf.md) | CSRF protection |
 | [ctx-setter.md](ctx-setter.md) | Context variable extraction |
 | [direct-endpoint.md](direct-endpoint.md) | Direct connection to a specific endpoint |
-| [dsl.md](dsl.md) | DSL scripting engine |
+| [dsl/README.md](dsl/README.md) | DSL scripting engine |
 | [dynamic-upstream.md](dynamic-upstream.md) | Dynamic upstream selection |
 | [forward-auth.md](forward-auth.md) | External authentication delegation |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
