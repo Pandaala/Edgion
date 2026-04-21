@@ -391,21 +391,16 @@ pub async fn unified_auth_middleware(
         }
     }
 
-    // Both failed — build an informative error message.
-    let message = match (oidc_error, local_error) {
-        (Some(oidc_err), Some(local_err)) => {
-            format!("Authentication failed: OIDC: {}; Local: {}", oidc_err, local_err)
-        }
-        (Some(oidc_err), None) => {
-            format!("Authentication failed (OIDC): {}", oidc_err)
-        }
-        (None, Some(local_err)) => {
-            format!("Authentication failed (Local): {}", local_err)
-        }
-        (None, None) => "Authentication failed: no auth provider available".to_string(),
-    };
+    // Both failed — log details internally but return a generic message to the client
+    // to avoid leaking provider-specific error details.
+    tracing::debug!(
+        component = "unified_auth",
+        oidc_error = ?oidc_error,
+        local_error = ?local_error,
+        "Authentication failed"
+    );
 
-    auth_error_response(StatusCode::UNAUTHORIZED, &message)
+    auth_error_response(StatusCode::UNAUTHORIZED, "Authentication failed")
 }
 
 // ---------------------------------------------------------------------------

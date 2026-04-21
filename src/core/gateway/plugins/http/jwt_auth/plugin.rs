@@ -25,6 +25,11 @@ use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 type JwtAuthError = Box<dyn std::error::Error + Send + Sync>;
 type JwtAuthResult<T> = Result<T, JwtAuthError>;
 
+/// Maximum size for a single JWT claim header value propagated upstream (8KB).
+const MAX_JWT_CLAIM_HEADER_VALUE_BYTES: usize = 8 * 1024;
+/// Maximum aggregate size of all JWT claim headers propagated upstream (64KB).
+const MAX_JWT_CLAIM_TOTAL_HEADER_BYTES: usize = 64 * 1024;
+
 /// Classify jsonwebtoken decode error into a short PluginLog tag.
 /// Tag is a static kind label — no token or claim contents.
 fn classify_jwt_decode_error(err: &jsonwebtoken::errors::Error) -> &'static str {
@@ -415,7 +420,9 @@ impl JwtAuth {
                     })?;
 
                 let cred = map.get(key_value).ok_or_else(|| {
-                    plugin_log.push("Deny unknown key");
+                    // Use a generic failure tag so external observers cannot distinguish
+                    // "key not found" from "key found but signature invalid" (key enumeration).
+                    plugin_log.push("Deny invalid credentials");
                     format!("Unknown key '{}' in JWT", key_value)
                 })?;
                 // §3: key resolved from multi-key map
@@ -482,8 +489,15 @@ impl JwtAuth {
     /// Set headers from JWT claims based on claims_to_headers configuration
     fn set_claims_headers(&self, session: &mut dyn PluginSession, claims: &serde_json::Value) {
         if let Some(ref mapping) = self.config.claims_to_headers {
-            // Keep existing jwt_auth behavior by not enforcing header size limits here.
-            set_common_claims_headers(session, claims, mapping, usize::MAX, usize::MAX);
+            // Enforce hardcoded size limits to prevent a valid JWT from injecting arbitrarily
+            // large claim values into upstream headers.
+            set_common_claims_headers(
+                session,
+                claims,
+                mapping,
+                MAX_JWT_CLAIM_HEADER_VALUE_BYTES,
+                MAX_JWT_CLAIM_TOTAL_HEADER_BYTES,
+            );
         }
     }
 

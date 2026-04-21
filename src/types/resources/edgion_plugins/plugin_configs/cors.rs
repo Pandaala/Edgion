@@ -185,7 +185,7 @@ impl CorsConfig {
         let mut all_patterns = wildcard_patterns;
 
         if let Some(ref patterns) = self.allow_origins_by_regex {
-            all_patterns.extend(patterns.iter().map(|p| format!("({})", p)));
+            all_patterns.extend(patterns.iter().map(|p| format!("^({})$", p)));
         }
 
         if !all_patterns.is_empty() {

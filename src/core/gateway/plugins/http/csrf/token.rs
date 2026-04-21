@@ -1,8 +1,11 @@
 use base64::{engine::general_purpose, Engine as _};
+use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// CSRF Token structure
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,11 +36,10 @@ impl CsrfToken {
 
     /// Generate signature for token
     fn gen_sign(random: &str, expires: i64, key: &str) -> String {
-        let sign_data = format!("{{expires:{},random:{},key:{}}}", expires, random, key);
-        let mut hasher = Sha256::new();
-        hasher.update(sign_data.as_bytes());
-        let result = hasher.finalize();
-        hex::encode(result)
+        let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC accepts any key size");
+        let data = format!("expires:{},random:{}", expires, random);
+        mac.update(data.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
     }
 
     /// Encode token to base64 string

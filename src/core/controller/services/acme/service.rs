@@ -27,6 +27,8 @@ use kube::api::{Api, Patch, PatchParams};
 use kube::Client;
 use tokio::sync::mpsc;
 
+use zeroize::Zeroizing;
+
 use super::acme_client::{AcmeCertificateResult, AcmeClient};
 use super::dns_provider::create_dns_provider;
 use crate::types::resources::edgion_acme::{
@@ -904,6 +906,11 @@ async fn create_or_update_cert_secret(
 ) -> Result<()> {
     let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
 
+    // Zeroize the intermediate key bytes when this variable goes out of scope.
+    // Note: `ByteString` takes ownership of a `Vec<u8>`; after `clone()` below
+    // the underlying data in `ByteString` is no longer tracked by Zeroizing,
+    // but this ensures the `tls_key_bytes` temp itself is wiped on drop.
+    let tls_key_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(cert.private_key_pem.as_bytes().to_vec());
     let secret = Secret {
         metadata: kube::api::ObjectMeta {
             name: Some(name.to_string()),
@@ -919,10 +926,7 @@ async fn create_or_update_cert_secret(
                 "tls.crt".to_string(),
                 ByteString(cert.certificate_pem.as_bytes().to_vec()),
             ),
-            (
-                "tls.key".to_string(),
-                ByteString(cert.private_key_pem.as_bytes().to_vec()),
-            ),
+            ("tls.key".to_string(), ByteString(tls_key_bytes.to_vec())),
         ])),
         type_: Some("kubernetes.io/tls".to_string()),
         ..Default::default()

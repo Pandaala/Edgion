@@ -131,6 +131,25 @@ impl BasicAuth {
         let mut new_map = HashMap::new();
         for (username, password) in users {
             if self.is_pre_hashed(&password) {
+                // Warn (once per load) when a weak htpasswd hash format is encountered.
+                // SHA-1 ({SHA}) is unsalted and APR1 ($apr1$) / MD5-crypt ($1$) only run 1000
+                // rounds. Operators should migrate to bcrypt.
+                let weak_fmt = if password.starts_with("{SHA}") {
+                    Some("{SHA}")
+                } else if password.starts_with("$apr1$") {
+                    Some("$apr1$")
+                } else if password.starts_with("$1$") {
+                    Some("$1$")
+                } else {
+                    None
+                };
+                if let Some(fmt) = weak_fmt {
+                    tracing::warn!(
+                        component = "basic_auth",
+                        "htpasswd entry uses weak hash format ({}), consider upgrading to bcrypt",
+                        fmt
+                    );
+                }
                 // Store pre-hashed password directly
                 new_map.insert(username, password);
             } else {
