@@ -36,8 +36,8 @@
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `usePkce` | Boolean | `false` | Whether to enable PKCE (Proof Key for Code Exchange) |
-| `useNonce` | Boolean | `false` | Whether to include nonce in authorization requests |
+| `usePkce` | Boolean | `false` | Whether to enable PKCE (Proof Key for Code Exchange). **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
+| `useNonce` | Boolean | `false` | Whether to include nonce in authorization requests. **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
 | `redirectUri` | String | None | Custom callback URI, must be an absolute path or absolute URL |
 | `authorizationParams` | Object | None | Extra parameters appended to the authorization request (cannot contain reserved keys like `response_type`, `client_id`, etc.) |
 | `revokeTokensOnLogout` | Boolean | `false` | Whether to call the Token Revocation endpoint on logout |
@@ -102,6 +102,43 @@
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `timeout` | Integer | `3` | OIDC Provider request timeout (seconds) |
+
+---
+
+## Recommended Security Switches
+
+`usePkce` and `useNonce` both default to `false`, matching the defaults of peer gateways (Kong, APISIX, Envoy — the OIDC spec defines both as OPTIONAL for authorization code flow). **However, for production deployments both should be set to `true`**. They provide defense-in-depth for the authorization code flow, cost is negligible, and all mainstream IdPs (Keycloak, Auth0, Okta, Google, Azure AD) support them natively.
+
+### `useNonce: true` (Protect Against ID Token Replay and Cross-Session Injection)
+
+- **Threat mitigated**: An attacker obtains a legitimate ID Token from their own OIDC session and attempts to inject it into a victim's callback flow; or replay the same token multiple times
+- **How it works**: Edgion includes a random `nonce` in the `/authorize` request and stores it in a signed state cookie; at callback time, the `nonce` claim in the ID Token must match
+- **Why the threat is partially mitigated in Edgion's code path**: Authorization code flow + server-side token exchange means the ID Token never passes through the browser; `state` validation blocks classic CSRF. Nonce adds value as defense-in-depth (against IdP-side replay, cross-client token mixing, etc.)
+- **Cost**: The IdP must echo `nonce` into the ID Token's `nonce` claim. Mainstream IdPs do this automatically; non-standard / legacy IdPs may not — validate in a staging environment first
+
+### `usePkce: true` (Protect Against Authorization Code Interception)
+
+- **Threat mitigated**: In public-client scenarios (SPA / native apps), the authorization code is intercepted on the `redirect_uri` by a malicious third-party app and used to exchange for tokens
+- **How it works**: Edgion includes `code_challenge` (SHA-256(code_verifier)) in the `/authorize` request; at token exchange, it sends `code_verifier`; the IdP verifies they bind
+- **Applicability**: Even though Edgion is a "confidential client" (has client_secret), enabling PKCE is an OAuth 2.1 best practice and provides transparent extra binding for IdPs
+- **Cost**: The IdP must support PKCE (RFC 7636). Mainstream IdPs support it by default
+
+### Recommended Minimal Production Configuration
+
+```yaml
+config:
+  usePkce: true              # required
+  useNonce: true             # required
+  sessionCookieSecure: true      # already default true, keep
+  sessionCookieSameSite: "Lax"   # already default Lax, adjust per cross-site needs
+  sslVerify: true                # already default true, never disable
+  verificationMode: Auto
+```
+
+### When You May Leave Them Off
+
+- **Closed internal environment + bearer-only mode** (no browser interaction, no code flow): `useNonce` / `usePkce` have no effect — leaving `false` is fine
+- **IdP does not support nonce / PKCE and cannot be replaced** (rare): keep `false`, but compensate via other controls (stricter `sessionCookieSameSite=Strict`, IdP-side referrer checks, etc.)
 
 ---
 

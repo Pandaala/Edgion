@@ -2,15 +2,19 @@
 //!
 //! 提供 `compose_admin_routes` —— Controller 和 Center 唯一共享的装配入口。
 //! 函数内部把 business 路由、共享 auth 端点（login/me/logout/status）、
-//! metrics、health/ready、unified_auth middleware、CORS layer 按固定顺序
-//! 装配。调用方拿到的 `Router` 视为终态，追加路由会绕过 middleware——
-//! 见函数 doc 的终态约定。
+//! metrics、health/ready、unified_auth middleware 按固定顺序装配。调用方
+//! 拿到的 `Router` 视为终态，追加路由会绕过 middleware—— 见函数 doc 的终态
+//! 约定。
+//!
+//! Admin API 不挂 CORS 层：本地调试时由 edgion-dashboard 的 Vite `server.proxy`
+//! 处理（见 `edgion-dashboard/vite.config.ts`），生产由 dashboard 嵌入
+//! Controller 同源部署。如未来出现独立 origin 部署需求，再引入精确来源白名单。
 
 use std::sync::Arc;
 
 use axum::Router;
 
-use super::{add_auth_status_route, add_local_auth_routes, apply_cors_layer, wrap_with_unified_auth_layer};
+use super::{add_auth_status_route, add_local_auth_routes, wrap_with_unified_auth_layer};
 use crate::core::common::unified_auth::UnifiedAuthState;
 
 /// 按固定顺序装配 admin HTTP Router。
@@ -21,7 +25,6 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 ///    仅当 `local_auth_intent = true` 时挂载）
 /// 3. `/api/v1/auth/status`（无条件挂载）
 /// 4. `unified_auth` middleware（包所有路由；skip_paths 由 `auth_state` 提供）
-/// 5. CORS layer
 ///
 /// # 终态约定
 /// **返回的 `Router` 视为终态**。不要再 `.route()` / `.layer()`——任何追加
@@ -43,8 +46,7 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 pub fn compose_admin_routes(business: Router, auth_state: Arc<UnifiedAuthState>, local_auth_intent: bool) -> Router {
     let with_auth_routes = add_local_auth_routes(business, auth_state.clone(), local_auth_intent);
     let with_status = add_auth_status_route(with_auth_routes, auth_state.clone());
-    let with_middleware = wrap_with_unified_auth_layer(with_status, auth_state);
-    apply_cors_layer(with_middleware)
+    wrap_with_unified_auth_layer(with_status, auth_state)
 }
 
 #[cfg(test)]
@@ -143,24 +145,5 @@ mod tests {
         let req = Request::builder().uri("/foo").body(Body::empty()).unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    /// T6 — CORS preflight 返回 Access-Control-Allow-Origin header。
-    #[tokio::test]
-    async fn cors_applied() {
-        let state = new_state_with_local();
-        let app = compose_admin_routes(dummy_business(), state, true);
-        let req = Request::builder()
-            .method("OPTIONS")
-            .uri("/api/v1/auth/status")
-            .header("origin", "http://localhost:5173")
-            .header("access-control-request-method", "GET")
-            .body(Body::empty())
-            .unwrap();
-        let resp = app.oneshot(req).await.unwrap();
-        assert!(
-            resp.headers().contains_key("access-control-allow-origin"),
-            "CORS preflight missing Access-Control-Allow-Origin header"
-        );
     }
 }

@@ -115,18 +115,20 @@ filters:
 
 ### 4. Allow All Subdomains
 
-Using wildcard matching:
+Using wildcard matching (**HTTPS only**):
 
 ```yaml
 filters:
   - type: Cors
     config:
-      allow_origins: "*.example.com"
+      allow_origins: "*.example.com"    # Matches only https://*.example.com, NOT http://
       allow_methods: "GET,POST,PUT,DELETE"
       allow_headers: "Content-Type,Authorization"
 ```
 
-Or using regular expressions (more flexible):
+> ⚠️ **The `*.domain` shorthand matches `https://` only** (since Edgion 0.x). If you need to match `http://` (local dev or legacy internal subdomains), use `allow_origins_by_regex` instead — see below.
+
+Or using regular expressions (when http/https coverage is needed):
 
 ```yaml
 filters:
@@ -134,7 +136,8 @@ filters:
     config:
       allow_origins: "https://example.com"  # Main domain
       allow_origins_by_regex:
-        - "^https://.*\\.example\\.com$"    # All subdomains
+        - "^https://[^/]+\\.example\\.com$"    # HTTPS subdomains
+        # - "^https?://[^/]+\\.example\\.com$" # Include http (enable if needed)
       allow_methods: "GET,POST,PUT,DELETE"
       allow_headers: "Content-Type,Authorization"
 ```
@@ -427,15 +430,16 @@ Production:  max_age: 86400     # 24 hours, reduces preflight requests
    allow_origins: "https://app1.example.com,https://app2.example.com,https://app3.example.com"
    ```
 
-3. **Prefer `*.example.com` for subdomain wildcards**:
+3. **Prefer `*.example.com` for subdomain wildcards (HTTPS only)**:
    ```yaml
-   ✅ Fast:
+   ✅ Fast (HTTPS-only, recommended for production):
    allow_origins: "*.example.com"
-   
-   ⚠️ Slower:
+
+   ⚠️ Slower (use when http/https coverage is needed):
    allow_origins_by_regex:
-     - "^https://.*\\.example\\.com$"
+     - "^https?://[^/]+\\.example\\.com$"
    ```
+   > The `*.domain` shorthand strictly matches `https://` only. If you must allow http subdomains (local dev / legacy internal services), use `allow_origins_by_regex` with an explicit scheme.
 
 ---
 

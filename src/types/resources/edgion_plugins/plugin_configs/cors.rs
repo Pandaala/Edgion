@@ -9,7 +9,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CorsConfig {
-    /// Allowed origins: "*", "**", "*.example.com", or comma-separated list
+    /// Allowed origins: "*", "**", "*.example.com" (HTTPS-only shorthand), or comma-separated list.
+    /// The `*.domain` shorthand matches `https://<any>.domain` — it does NOT match `http://`.
+    /// If http origins must be allowed (e.g. local dev), use `allow_origins_by_regex` instead.
     #[serde(default = "default_allow_origins")]
     pub allow_origins: String,
 
@@ -162,9 +164,12 @@ impl CorsConfig {
                 if !origin.is_empty() {
                     // Check for subdomain wildcard: *.example.com
                     if let Some(domain) = origin.strip_prefix("*.") {
-                        // Convert to regex: ^https?://[^/]+\.example\.com$
-                        // Remove "*."
-                        let pattern = format!(r"^https?://[^/]+\.{}$", regex::escape(domain));
+                        // Convert to regex: ^https://[^/]+\.example\.com$
+                        // HTTPS-only by design: the shorthand would otherwise silently allow
+                        // http:// origins, which is unsafe in the face of subdomain takeover or
+                        // legacy http subdomains. For http origins (e.g. local dev), use
+                        // `allow_origins_by_regex` instead.
+                        let pattern = format!(r"^https://[^/]+\.{}$", regex::escape(domain));
                         wildcard_patterns.push(pattern);
                     } else {
                         cache.insert(origin.to_string(), true);
@@ -175,9 +180,9 @@ impl CorsConfig {
                 self.origins_cache = Some(cache);
             }
         } else if self.allow_origins.starts_with("*.") {
-            // Single subdomain wildcard
+            // Single subdomain wildcard (HTTPS-only — see above for rationale)
             let domain = &self.allow_origins[2..];
-            let pattern = format!(r"^https?://[^/]+\.{}$", regex::escape(domain));
+            let pattern = format!(r"^https://[^/]+\.{}$", regex::escape(domain));
             wildcard_patterns.push(pattern);
         }
 
@@ -496,8 +501,26 @@ mod tests {
 
         assert!(cors.is_origin_allowed("https://a.example.com"));
         assert!(cors.is_origin_allowed("https://b.example.com"));
-        assert!(cors.is_origin_allowed("http://test.example.com"));
+        // HTTPS-only: the `*.domain` shorthand does NOT match http:// origins.
+        // To allow http (e.g. local dev), operators must use `allow_origins_by_regex`.
+        assert!(!cors.is_origin_allowed("http://test.example.com"));
         assert!(!cors.is_origin_allowed("https://example.com")); // Root domain not included
+        assert!(!cors.is_origin_allowed("https://other.com"));
+    }
+
+    #[test]
+    fn test_subdomain_wildcard_http_origins_via_regex() {
+        // Explicit escape hatch for operators who need http:// matching on a subdomain.
+        let mut cors = CorsConfig {
+            allow_origins: "https://app.example.com".to_string(),
+            allow_origins_by_regex: Some(vec![r"^https?://[^/]+\.example\.com$".to_string()]),
+            allow_methods: "GET,POST".to_string(),
+            ..Default::default()
+        };
+        cors.validate_and_init().unwrap();
+
+        assert!(cors.is_origin_allowed("https://a.example.com"));
+        assert!(cors.is_origin_allowed("http://legacy.example.com"));
         assert!(!cors.is_origin_allowed("https://other.com"));
     }
 

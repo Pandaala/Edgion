@@ -36,8 +36,8 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `usePkce` | Boolean | `false` | 是否启用 PKCE（Proof Key for Code Exchange） |
-| `useNonce` | Boolean | `false` | 是否在认证请求中包含 nonce |
+| `usePkce` | Boolean | `false` | 是否启用 PKCE（Proof Key for Code Exchange）。**生产部署强烈推荐 `true`**，详见[安全开关推荐配置](#安全开关推荐配置) |
+| `useNonce` | Boolean | `false` | 是否在认证请求中包含 nonce。**生产部署强烈推荐 `true`**，详见[安全开关推荐配置](#安全开关推荐配置) |
 | `redirectUri` | String | 无 | 自定义回调 URI，须为绝对路径或绝对 URL |
 | `authorizationParams` | Object | 无 | 附加到授权请求的额外参数（不可包含保留键如 `response_type`、`client_id` 等） |
 | `revokeTokensOnLogout` | Boolean | `false` | 登出时是否调用 Token Revocation 端点 |
@@ -102,6 +102,43 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `timeout` | Integer | `3` | OIDC Provider 请求超时（秒） |
+
+---
+
+## 安全开关推荐配置
+
+Edgion 的 `usePkce` / `useNonce` 两个开关默认为 `false`，与 Kong、APISIX、Envoy 等同类网关的默认行为一致（OIDC 规范对授权码流将二者定义为 OPTIONAL）。**但在生产部署中，强烈建议两者都设为 `true`**——它们提供的是 OIDC 授权码流的纵深防御，开销可忽略，主流 IdP（Keycloak、Auth0、Okta、Google、Azure AD 等）均原生支持。
+
+### `useNonce: true`（防 ID Token 重放与跨会话注入）
+
+- **缓解威胁**：攻击者从自己合法 OIDC 会话获取 ID Token，设法注入到受害者的 callback 流中绑定身份；或同一 Token 被多次回放
+- **工作原理**：Edgion 在 `/authorize` 请求中带一个随机 `nonce`，存入签名的 state cookie；callback 拿到 ID Token 后校验 `nonce` claim 必须匹配
+- **为何 Edgion 代码路径下威胁已被部分缓解**：授权码流 + 服务器侧 token exchange 让 ID Token 不经过浏览器，`state` 校验挡住了经典 CSRF；nonce 作为防御深化仍然有价值（防 IdP 侧重放、多客户端 token 混用等边缘场景）
+- **启用代价**：IdP 必须把 nonce 回写到 ID Token 的 `nonce` claim。主流 IdP 自动支持；非标准 / 老旧 IdP 可能不支持——需先在测试环境验证
+
+### `usePkce: true`（防授权码拦截）
+
+- **缓解威胁**：公共客户端场景（SPA / 原生 App），授权码在 redirect_uri 上途中被第三方应用拦截并用于换取 Token
+- **工作原理**：Edgion 在 `/authorize` 请求带 `code_challenge`（SHA-256(code_verifier)），callback 换 token 时带 `code_verifier`；IdP 验证二者绑定
+- **适用范围**：即便 Edgion 是"机密客户端"（有 client_secret），启用 PKCE 仍是 OAuth 2.1 最佳实践，且对 IdP 是无感的额外绑定
+- **启用代价**：IdP 必须支持 PKCE（RFC 7636）。主流 IdP 默认支持
+
+### 推荐的最小生产配置
+
+```yaml
+config:
+  usePkce: true      # 必开
+  useNonce: true     # 必开
+  sessionCookieSecure: true      # 默认已 true，保持
+  sessionCookieSameSite: "Lax"   # 默认已 Lax，根据跨站需求可调
+  sslVerify: true                # 默认已 true，切勿关闭
+  verificationMode: Auto
+```
+
+### 何时可以不启用？
+
+- **封闭内部环境 + bearer only 模式**（无 browser 交互、无 code flow）：`useNonce` / `usePkce` 不起作用，可保持 `false`
+- **IdP 不支持 nonce / PKCE 且无法替换**（罕见）：保留 `false`，但必须通过其他方式弥补（如严格的 `sessionCookieSameSite=Strict` + IdP 侧的 referrer 校验）
 
 ---
 

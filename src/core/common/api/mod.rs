@@ -8,7 +8,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tower_http::cors::{Any, CorsLayer};
 
 /// Merge `GET /api/v1/auth/status` into the router, computed per-request
 /// from the shared `UnifiedAuthState`. The handler re-reads `ArcSwapOption`
@@ -57,15 +56,6 @@ pub(crate) fn wrap_with_unified_auth_layer(
         state,
         crate::core::common::unified_auth::unified_auth_middleware,
     ))
-}
-
-/// Apply a permissive CORS layer to an Axum router.
-///
-/// Allows any origin, method, and header. Suitable for development and
-/// scenarios where the Admin API is behind a gateway that enforces stricter policies.
-pub(crate) fn apply_cors_layer(router: Router) -> Router {
-    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
-    router.layer(cors)
 }
 
 /// Add local auth login/me/logout routes to the router using the shared

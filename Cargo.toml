@@ -188,7 +188,6 @@ async_singleflight = "0.6"
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 pingora-ketama = "0.8.0"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]
 tonic-build = "0.12"
@@ -205,6 +204,5 @@ console = "0.16"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 proxy-header = "0.1.2"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 wiremock = "0.6"

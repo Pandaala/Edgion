@@ -270,7 +270,6 @@ fn initializing_response() -> Response {
 /// - The three public auth endpoints `/api/v1/auth/login`, `/api/v1/auth/logout`,
 ///   and `/api/v1/auth/status` (exact match; note: `/api/v1/auth/me` is NOT
 ///   skipped — it requires a valid token)
-/// - Paths starting with `/configserver/` (edgion-cli compatibility)
 /// - When `state.require_auth == false` (operator did not configure auth)
 ///
 /// # Fail-close behavior
@@ -302,9 +301,6 @@ pub async fn unified_auth_middleware(
     // `/api/v1/auth/me` is intentionally NOT in this list — it requires
     // a valid token.
     if path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || path == "/api/v1/auth/status" {
-        return next.run(request).await;
-    }
-    if path.starts_with("/configserver/") {
         return next.run(request).await;
     }
 
@@ -776,6 +772,37 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{path} must be gated");
+        }
+    }
+
+    /// Regression test for the `/configserver/` prefix bypass removed in the
+    /// C1 fix: these paths must now traverse the normal auth path. If the
+    /// bypass returns, this test will get 200 instead of 503.
+    #[tokio::test]
+    async fn configserver_paths_are_not_bypassed() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let app = axum::Router::new()
+            .route(
+                "/configserver/{kind}/list",
+                axum::routing::get(|| async { "should-not-reach" }),
+            )
+            .route(
+                "/configserver/{kind}",
+                axum::routing::get(|| async { "should-not-reach" }),
+            )
+            .layer(axum::middleware::from_fn_with_state(state, unified_auth_middleware));
+
+        for path in ["/configserver/httproute/list", "/configserver/httproute?name=x"] {
+            let resp = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{path} must go through auth middleware (no prefix bypass)"
+            );
         }
     }
 }

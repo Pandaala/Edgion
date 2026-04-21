@@ -63,6 +63,9 @@ filters:
 | `realm` | String | `"API Gateway"` | 认证域名称，显示在浏览器登录框中 |
 | `hideCredentials` | Boolean | `false` | 是否隐藏 Authorization 头，不传递给上游服务 |
 | `anonymous` | String | 无 | 匿名用户名。设置后，未认证请求也会被允许，并设置此用户名 |
+| `authFailureDelayMs` | Integer | `0` | 认证失败时的固定延迟（毫秒）。用于缓解暴力破解和用户枚举攻击，详见下方[安全最佳实践 · 防枚举与暴力破解](#6-防枚举与暴力破解推荐配置) |
+| `cacheTtl` | Integer | `300` | 成功认证的 LRU 缓存 TTL（秒），设为 `0` 禁用缓存 |
+| `singleflight` | Boolean | `true` | 对并发的 bcrypt 验证启用去重，避免相同凭证并发请求重复 bcrypt 计算 |
 
 ---
 
@@ -264,6 +267,47 @@ Content-Type: text/plain
 5. **最小权限原则**
    - 为不同权限创建不同用户
    - 只读用户使用只读凭证
+
+### 6. 防枚举与暴力破解（推荐配置）
+
+Basic Auth 存在**用户名枚举时序侧信道**：当请求的用户名不存在时，插件会立即返回 401（耗时 <1ms）；当用户名存在但密码错误时，插件会执行 bcrypt 验证（耗时约 200ms）。攻击者可通过测量响应时间差异枚举有效用户名。
+
+这是网关层 Basic Auth 的普遍现象（Traefik、Nginx、Envoy、Kong 等主流网关同样未在代码层做时序消除）。**推荐的缓解策略是在配置层面组合使用以下两项**：
+
+**① 设置 `authFailureDelayMs`（必做）**
+
+```yaml
+filters:
+  - type: BasicAuth
+    config:
+      secretRefs:
+        - name: api-user
+      authFailureDelayMs: 500  # 认证失败统一延迟 500ms，掩盖 bcrypt (~200ms) 时序差
+```
+
+- 建议值 `>= 500`（显著大于 bcrypt 单次耗时 ~200ms）
+- 同时提高暴力破解成本：原本每秒可尝试数千次，限制后降至每连接 ~2 次/秒
+
+**② 上游叠加速率限制（推荐）**
+
+```yaml
+filters:
+  # 先按来源 IP 限流，限制枚举尝试速率
+  - type: RateLimit
+    config:
+      rate: 10           # 每秒 10 次
+      burst: 20
+      key: "$remote_addr"
+
+  # 再做 Basic Auth
+  - type: BasicAuth
+    config:
+      secretRefs:
+        - name: api-user
+      authFailureDelayMs: 500
+```
+
+**为什么不做代码层 dummy bcrypt？** 在网关上下文中，对未知用户执行 dummy bcrypt 会引入 CPU 放大 DoS 风险（攻击者通过枚举流量强制网关消耗 bcrypt CPU）。`authFailureDelayMs` + 上游限流的组合在达成同等防护效果的同时，不引入 CPU 放大攻击面，与业界网关主流做法一致。
 
 ### ❌ 避免做法
 

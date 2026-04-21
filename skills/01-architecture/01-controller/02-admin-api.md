@@ -17,11 +17,12 @@ Controller 与 Center 共享唯一的 admin router 装配入口：`src/core/comm
 2. `/api/v1/auth/{login, logout, me}`（`local_auth_intent = true` 时挂载）
 3. `/api/v1/auth/status`（无条件挂载——fix #01 round 3 回归点；CLI `ensure_auth` 需要它始终可达）
 4. `unified_auth` middleware（包所有路由；skip_paths 由 `auth_state` 提供）
-5. CORS layer
 
 **终态约定**：返回的 `Router` 视为终态。调用方不得再 `.route()` / `.layer()`——任何追加都会绕过 auth middleware，等价于 fix #01 round 2 的 P0 bug。新增 admin 路由应放入 `business` 参数后再调用 `compose_admin_routes`。
 
-4 个辅助 helper（`add_local_auth_routes`、`add_auth_status_route`、`wrap_with_unified_auth_layer`、`apply_cors_layer`）已降级 `pub(crate)`，外部不再支持直接调用；统一通过 `compose_admin_routes` 入口。
+**跨域说明**：Admin API 不挂 CORS 层。本地调试时由 `edgion-dashboard` 的 Vite `server.proxy` 处理（见 `edgion-dashboard/vite.config.ts`），生产由 dashboard 嵌入 Controller 同源部署。如未来出现独立 origin 部署需求，再引入精确来源白名单（对应 H1 修复记录）。
+
+3 个辅助 helper（`add_local_auth_routes`、`add_auth_status_route`、`wrap_with_unified_auth_layer`）已降级 `pub(crate)`，外部不再支持直接调用；统一通过 `compose_admin_routes` 入口。
 
 ## AdminState 共享状态
 
