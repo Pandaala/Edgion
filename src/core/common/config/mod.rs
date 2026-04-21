@@ -292,6 +292,10 @@ pub struct MetricsConfig {
 pub struct ResourceAbnormalMetricsConfig {
     pub enabled: bool,
     pub tick_secs: u64,
+    /// Per-snapshot safety ceiling. When the rendered snapshot would
+    /// exceed this value it is truncated and a `tracing::error!` is
+    /// emitted. Default 1000; validated range is `[10, 100000]`.
+    pub hard_cap: usize,
 }
 
 impl Default for ResourceAbnormalMetricsConfig {
@@ -299,6 +303,7 @@ impl Default for ResourceAbnormalMetricsConfig {
         Self {
             enabled: true,
             tick_secs: 300,
+            hard_cap: 1000,
         }
     }
 }
@@ -590,16 +595,24 @@ impl EdgionControllerConfig {
         Ok(file_config)
     }
 
-    /// Validate the `metrics` section. When `resource_abnormal.enabled` is true,
-    /// `tick_secs` must fall within [30, 3600]. When disabled, the tick value
-    /// is ignored.
+    /// Validate the `metrics` section. When `resource_abnormal.enabled` is
+    /// true, `tick_secs` must fall within [30, 3600] and `hard_cap` must
+    /// fall within [10, 100000]. When disabled, both values are ignored.
     pub fn validate_metrics(&self) -> anyhow::Result<()> {
         let cfg = &self.metrics.resource_abnormal;
-        if cfg.enabled && (cfg.tick_secs < 30 || cfg.tick_secs > 3600) {
-            anyhow::bail!(
-                "metrics.resource_abnormal.tick_secs must be in [30, 3600], got {}",
-                cfg.tick_secs
-            );
+        if cfg.enabled {
+            if cfg.tick_secs < 30 || cfg.tick_secs > 3600 {
+                anyhow::bail!(
+                    "metrics.resource_abnormal.tick_secs must be in [30, 3600], got {}",
+                    cfg.tick_secs
+                );
+            }
+            if cfg.hard_cap < 10 || cfg.hard_cap > 100_000 {
+                anyhow::bail!(
+                    "metrics.resource_abnormal.hard_cap must be in [10, 100000], got {}",
+                    cfg.hard_cap
+                );
+            }
         }
         Ok(())
     }
@@ -966,5 +979,27 @@ metrics:
         cfg.metrics.resource_abnormal.enabled = false;
         cfg.metrics.resource_abnormal.tick_secs = 0;
         cfg.validate_metrics().unwrap();
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_hard_cap_default_is_1000() {
+        let cfg = EdgionControllerConfig::default();
+        assert_eq!(cfg.metrics.resource_abnormal.hard_cap, 1000);
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_hard_cap_too_small_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.hard_cap = 9;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("hard_cap"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_hard_cap_too_large_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.hard_cap = 100_001;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("hard_cap"));
     }
 }

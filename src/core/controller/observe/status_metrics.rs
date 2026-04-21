@@ -14,10 +14,12 @@
 //!   replaces the Vec, so recovery and deletion are automatic.
 //!
 //! Cardinality: one series per abnormal resource at most. Hard safety cap
-//! of 10 000 entries per snapshot (see [`SNAPSHOT_ENTRY_HARD_CAP`]).
+//! defaults to 1000 entries per snapshot and is configurable via
+//! [`set_hard_cap`] (see `ResourceAbnormalMetricsConfig::hard_cap`).
 
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
@@ -25,9 +27,21 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_sto
 pub const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
 pub const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
 
-/// Safety ceiling: if a snapshot would exceed this, it is truncated and
-/// a single `tracing::error!` is emitted. Hard-coded — not a config knob.
-pub const SNAPSHOT_ENTRY_HARD_CAP: usize = 10_000;
+/// Runtime-configurable safety ceiling: if a snapshot would exceed this,
+/// it is truncated and a single `tracing::error!` is emitted. Default 1000,
+/// settable via [`set_hard_cap`] from the CLI startup path.
+static HARD_CAP: AtomicUsize = AtomicUsize::new(1000);
+
+/// Install the configured hard cap. Called once from controller CLI
+/// startup before [`spawn_snapshot_loop`].
+pub fn set_hard_cap(cap: usize) {
+    HARD_CAP.store(cap, Ordering::Relaxed);
+}
+
+#[inline]
+fn hard_cap() -> usize {
+    HARD_CAP.load(Ordering::Relaxed)
+}
 
 /// One condition trigger referenced in the `err` / `warn` label payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -660,6 +674,8 @@ mod snapshot_loop_tests {
         let mut g = renderers_slot().lock();
         g.clear();
         snapshot_slot().store(Arc::new(Vec::new()));
+        // Restore default hard cap in case a previous test changed it.
+        set_hard_cap(1000);
     }
 
     fn new_dummy(ns: &str, name: &str, type_: &str, status: &str) -> Arc<Dummy> {
@@ -702,8 +718,10 @@ mod snapshot_loop_tests {
     fn snapshot_once_truncates_beyond_hard_cap() {
         let _guard = super::TEST_MUTEX.lock();
         reset();
+        // Lower cap for a fast test; push 5 extra to force truncation.
+        set_hard_cap(100);
         let store = Arc::new(LocalRawStore::<Dummy>::new());
-        let overflow_count = SNAPSHOT_ENTRY_HARD_CAP + 5;
+        let overflow_count = 105;
         for i in 0..overflow_count {
             store.upsert(
                 format!("ns/{}", i),
@@ -714,7 +732,9 @@ mod snapshot_loop_tests {
 
         snapshot_once();
         let snap = snapshot_slot().load();
-        assert_eq!(snap.len(), SNAPSHOT_ENTRY_HARD_CAP);
+        assert_eq!(snap.len(), 100);
+        // Restore for any subsequent tests.
+        set_hard_cap(1000);
     }
 
     #[test]
@@ -751,14 +771,15 @@ pub fn snapshot_once() {
     }
     buf.sort();
 
-    if buf.len() > SNAPSHOT_ENTRY_HARD_CAP {
+    let cap = hard_cap();
+    if buf.len() > cap {
         tracing::error!(
             component = "status_metrics",
             count = buf.len(),
-            cap = SNAPSHOT_ENTRY_HARD_CAP,
+            cap = cap,
             "abnormal-resource snapshot exceeds hard cap; truncating"
         );
-        buf.truncate(SNAPSHOT_ENTRY_HARD_CAP);
+        buf.truncate(cap);
     }
 
     snapshot_slot().store(Arc::new(buf));
@@ -920,6 +941,7 @@ mod perf_tests {
     fn reset() {
         renderers_slot().lock().clear();
         snapshot_slot().store(Arc::new(Vec::new()));
+        set_hard_cap(1000);
     }
 
     #[test]

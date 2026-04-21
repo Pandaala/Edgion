@@ -399,6 +399,7 @@ impl EdgionControllerCli {
         // ConfMgr.start).
         let abn_cfg = &config.metrics.resource_abnormal;
         if abn_cfg.enabled {
+            crate::core::controller::observe::status_metrics::set_hard_cap(abn_cfg.hard_cap);
             crate::core::controller::observe::status_metrics::spawn_snapshot_loop(abn_cfg.tick_secs);
         } else {
             tracing::info!(

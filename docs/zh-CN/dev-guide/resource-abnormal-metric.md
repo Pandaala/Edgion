@@ -40,7 +40,7 @@ edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="m
 - **异常恢复或资源删除** → 最多 `tick_secs + scrape 间隔` 后 series 消失
 - **Controller 重启** → 首次 tick 后重建（重启后短暂无该类 series）
 
-系统有 **10 000 条** 的 snapshot hard cap，超出时会截断并打 `tracing::error!` —— 正常部署不会触及，仅作雪崩兜底。
+系统有 **snapshot hard cap**（默认 `1000`，可配置，范围 `[10, 100000]`），超出时会截断并打 `tracing::error!` —— 正常部署不会触及，仅作雪崩兜底。
 
 ## 配置
 
@@ -50,6 +50,7 @@ metrics:
   resource_abnormal:
     enabled: true      # 默认 true；false 则不启动后台任务、/metrics 不输出这条 metric
     tick_secs: 300     # 默认 300；范围 [30, 3600]
+    hard_cap: 1000     # 默认 1000；范围 [10, 100000]
 ```
 
 `enabled = false` 时完全关闭：后台任务不 spawn，wrapper handler 不 append，零开销。
