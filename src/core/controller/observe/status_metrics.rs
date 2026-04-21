@@ -19,6 +19,7 @@
 
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -71,11 +72,16 @@ pub fn snapshot_slot() -> &'static ArcSwap<Vec<Entry>> {
     SNAPSHOT.get_or_init(|| ArcSwap::from_pointee(Vec::new()))
 }
 
-/// Registered per-kind renderers. Append-only during controller startup;
-/// each tick's loop body briefly locks to iterate.
-pub fn renderers_slot() -> &'static Mutex<Vec<Renderer>> {
-    static RENDERERS: OnceLock<Mutex<Vec<Renderer>>> = OnceLock::new();
-    RENDERERS.get_or_init(|| Mutex::new(Vec::new()))
+/// Registered per-kind renderers, keyed by kind name so that a second
+/// registration for the same kind replaces (rather than appends to) the
+/// first. This is what makes the module safe across `conf_center` reloads
+/// that reconstruct `FileSystemController` / `KubernetesController` /
+/// `EtcdController` — each reload re-enters `register_status_renderer`
+/// with a fresh `Arc<RawStore<K>>`, and the old closure is dropped,
+/// releasing its reference to the previous store.
+pub fn renderers_slot() -> &'static Mutex<HashMap<&'static str, Renderer>> {
+    static RENDERERS: OnceLock<Mutex<HashMap<&'static str, Renderer>>> = OnceLock::new();
+    RENDERERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Test-only module-level mutex. All tests in this file that mutate the
@@ -407,7 +413,10 @@ where
     let renderer: Renderer = Box::new(move |buf: &mut Vec<Entry>| {
         render_kind(kind, store.as_ref(), buf);
     });
-    renderers_slot().lock().push(renderer);
+    // Keyed by `kind`: a reload-time second call for the same kind drops
+    // the prior closure (and with it the Arc to the old RawStore), so
+    // we don't accumulate duplicate renderers nor pin dead stores.
+    renderers_slot().lock().insert(kind, renderer);
 }
 
 #[cfg(test)]
@@ -737,14 +746,52 @@ mod snapshot_loop_tests {
         set_hard_cap(1000);
     }
 
+    /// Guards against the conf_center-reload duplication bug: a second
+    /// `register_status_renderer` call for the same kind must replace the
+    /// prior renderer (and drop its Arc to the old RawStore), NOT append.
+    /// Otherwise every reload would double the number of entries each kind
+    /// contributes per tick.
+    #[test]
+    fn re_registering_same_kind_replaces_old_renderer() {
+        let _guard = super::TEST_MUTEX.lock();
+        reset();
+
+        // First registration: one abnormal resource named "old".
+        let old_store = Arc::new(LocalRawStore::<Dummy>::new());
+        old_store.upsert("a/old".into(), new_dummy("a", "old", "Accepted", "False"));
+        register_status_renderer::<Dummy>("Dummy", old_store.clone());
+
+        // Simulated reload: second registration for the SAME kind with a
+        // freshly-constructed store exposing a differently-named resource.
+        let new_store = Arc::new(LocalRawStore::<Dummy>::new());
+        new_store.upsert("a/new".into(), new_dummy("a", "new", "Accepted", "False"));
+        register_status_renderer::<Dummy>("Dummy", new_store.clone());
+
+        snapshot_once();
+        let snap = snapshot_slot().load();
+        // If the bug came back, len would be 2 (one entry per store)
+        // AND both "old" and "new" would appear.
+        assert_eq!(
+            snap.len(),
+            1,
+            "expected exactly 1 entry (old renderer replaced); got {} entries = {:?}",
+            snap.len(),
+            snap.iter().map(|e| e.name.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(snap[0].name, "new");
+    }
+
     #[test]
     fn snapshot_once_propagates_renderer_panic_but_outer_loop_isolates_it() {
         let _guard = super::TEST_MUTEX.lock();
         reset();
         // Register a panicking renderer.
-        renderers_slot().lock().push(Box::new(|_buf: &mut Vec<Entry>| {
-            panic!("synthetic panic");
-        }));
+        renderers_slot().lock().insert(
+            "PanickingFake",
+            Box::new(|_buf: &mut Vec<Entry>| {
+                panic!("synthetic panic");
+            }),
+        );
         // New contract: panics propagate out of snapshot_once; the outer
         // `spawn_snapshot_loop` task wraps each call in catch_unwind so
         // the background loop survives.
@@ -765,7 +812,7 @@ pub fn snapshot_once() {
     let mut buf: Vec<Entry> = Vec::new();
     {
         let guard = renderers_slot().lock();
-        for renderer in guard.iter() {
+        for renderer in guard.values() {
             renderer(&mut buf);
         }
     }
