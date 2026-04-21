@@ -9,8 +9,11 @@
 #      the abnormal series to disappear on the next tick.
 #   3. Delete the bad HTTPRoute file → expect no leftover (ghost) series.
 #
-# Uses the FileSystem backend with tick_secs=10 so the snapshot loop
-# rebuilds quickly. No K8s / port-forward / test_client binary required.
+# Uses the FileSystem backend with tick_secs=30 (the current minimum
+# enforced by validate_metrics). No K8s / port-forward / test_client
+# binary required. Each phase waits up to TICK_SECS * 3 = 90s for the
+# snapshot loop to reflect the expected state, so the whole test is
+# ~5-7 minutes worst case.
 #
 # Note on FileSystem mode: the status-metrics snapshot reads from the
 # controller's in-memory LocalRawStore, which is populated from the input
@@ -42,7 +45,7 @@ PID_DIR="${WORK_DIR}/pids"
 CONTROLLER_ADMIN_PORT=15810
 CONTROLLER_GRPC_PORT=15811
 METRICS_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/metrics"
-TICK_SECS=10
+TICK_SECS=30
 
 CONTROLLER_PID=""
 TEST_PASSED=0
@@ -85,7 +88,8 @@ log_info "WORK_DIR=$WORK_DIR"
 # Make CRD schemas reachable from work_dir (non-K8s mode requires config/crd).
 ln -s "${PROJECT_ROOT}/config/crd" "${CONFIG_DIR}/crd"
 
-# Controller config with short tick so the snapshot loop rebuilds quickly.
+# Controller config pinned at the minimum tick (30s) so the snapshot loop
+# rebuilds as quickly as the validator allows.
 cat > "${CONFIG_DIR}/edgion-controller.yaml" <<EOF
 work_dir: "${WORK_DIR}"
 
@@ -178,7 +182,7 @@ scrape() { curl -sS "$METRICS_URL"; }
 wait_for_series() {
     local pattern="$1"
     local label="$2"
-    local timeout=$(( TICK_SECS * 4 ))
+    local timeout=$(( TICK_SECS * 3 + 10 ))
     local elapsed=0
     while (( elapsed < timeout )); do
         if scrape | grep -E -q -- "$pattern"; then
@@ -199,7 +203,7 @@ wait_for_series() {
 wait_for_no_series() {
     local pattern="$1"
     local label="$2"
-    local timeout=$(( TICK_SECS * 4 ))
+    local timeout=$(( TICK_SECS * 3 + 10 ))
     local elapsed=0
     while (( elapsed < timeout )); do
         if ! scrape | grep -E -q -- "$pattern"; then
