@@ -718,43 +718,35 @@ mod snapshot_loop_tests {
     }
 
     #[test]
-    fn snapshot_once_survives_panicking_renderer() {
+    fn snapshot_once_propagates_renderer_panic_but_outer_loop_isolates_it() {
         let _guard = super::TEST_MUTEX.lock();
         reset();
-        let store = Arc::new(LocalRawStore::<Dummy>::new());
-        store.upsert("a/b".into(), new_dummy("a", "b", "Accepted", "False"));
-        register_status_renderer::<Dummy>("Dummy", store.clone());
-
+        // Register a panicking renderer.
         renderers_slot().lock().push(Box::new(|_buf: &mut Vec<Entry>| {
             panic!("synthetic panic");
         }));
-
-        snapshot_once();
-        let snap = snapshot_slot().load();
-        assert_eq!(snap.len(), 1);
-        assert_eq!(snap[0].name, "b");
+        // New contract: panics propagate out of snapshot_once; the outer
+        // `spawn_snapshot_loop` task wraps each call in catch_unwind so
+        // the background loop survives.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once));
+        assert!(result.is_err(), "panic should propagate out of snapshot_once");
     }
 }
 
-use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 /// Build one fresh snapshot and atomically publish it. Exposed so tests
 /// can drive a tick synchronously.
+///
+/// Panics from registered renderers propagate out of this function. The
+/// background loop in [`spawn_snapshot_loop`] wraps each call in
+/// `catch_unwind` so a single panicking renderer cannot kill the loop.
 pub fn snapshot_once() {
     let mut buf: Vec<Entry> = Vec::new();
     {
         let guard = renderers_slot().lock();
         for renderer in guard.iter() {
-            let r = AssertUnwindSafe(|| renderer(&mut buf));
-            if let Err(payload) = std::panic::catch_unwind(r) {
-                let msg = panic_message(&payload);
-                tracing::warn!(
-                    component = "status_metrics",
-                    error = %msg,
-                    "renderer panicked during snapshot; skipping this kind for this tick"
-                );
-            }
+            renderer(&mut buf);
         }
     }
     buf.sort();
@@ -770,16 +762,6 @@ pub fn snapshot_once() {
     }
 
     snapshot_slot().store(Arc::new(buf));
-}
-
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic".to_string()
-    }
 }
 
 #[cfg(test)]
@@ -881,14 +863,17 @@ pub async fn metrics_handler() -> Response {
 
 /// Spawn the background snapshot loop. Called once from controller CLI
 /// startup when `config.metrics.resource_abnormal.enabled` is true.
+///
+/// Each tick wraps `snapshot_once` in `catch_unwind` so a renderer that
+/// panics cannot kill the loop; we log nothing extra here (the panic
+/// payload is consumed) and retry on the next tick.
 pub fn spawn_snapshot_loop(tick_secs: u64) {
     let tick = Duration::from_secs(tick_secs);
     tokio::spawn(async move {
-        let _ = std::panic::catch_unwind(AssertUnwindSafe(snapshot_once));
-
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once));
         loop {
             tokio::time::sleep(tick).await;
-            let _ = std::panic::catch_unwind(AssertUnwindSafe(snapshot_once));
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once));
         }
     });
 
