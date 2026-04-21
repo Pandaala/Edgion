@@ -793,3 +793,75 @@ pub fn spawn_snapshot_loop(tick_secs: u64) {
         "resource-abnormal snapshot loop started"
     );
 }
+
+#[cfg(test)]
+mod perf_tests {
+    use super::*;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::LocalRawStore;
+    use serde::Serialize;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    #[derive(Clone, Serialize)]
+    struct Mock {
+        metadata: M,
+        status: S,
+    }
+    #[derive(Clone, Serialize)]
+    struct M {
+        namespace: String,
+        name: String,
+    }
+    #[derive(Clone, Serialize)]
+    struct S {
+        parents: Vec<P>,
+    }
+    #[derive(Clone, Serialize)]
+    struct P {
+        conditions: Vec<C>,
+    }
+    #[derive(Clone, Serialize)]
+    struct C {
+        #[serde(rename = "type")]
+        type_: String,
+        status: String,
+    }
+
+    fn reset() {
+        renderers_slot().lock().clear();
+        snapshot_slot().store(Arc::new(Vec::new()));
+    }
+
+    #[test]
+    fn snapshot_1000_routes_under_500ms() {
+        reset();
+        let store = Arc::new(LocalRawStore::<Mock>::new());
+        for i in 0..1000 {
+            let conds = vec![
+                C { type_: "Accepted".into(), status: "True".into() },
+                C {
+                    type_: "ResolvedRefs".into(),
+                    status: if i % 5 == 0 { "False".into() } else { "True".into() },
+                },
+            ];
+            let obj = Arc::new(Mock {
+                metadata: M { namespace: "ns".into(), name: format!("r{}", i) },
+                status: S { parents: vec![P { conditions: conds }] },
+            });
+            store.upsert(format!("ns/r{}", i), obj);
+        }
+        register_status_renderer::<Mock>("Mock", store);
+
+        let t = Instant::now();
+        snapshot_once();
+        let elapsed = t.elapsed();
+        assert!(
+            elapsed.as_millis() < 500,
+            "snapshot_once with 1000 routes took {}ms (limit 500ms) — scan_conditions may have regressed",
+            elapsed.as_millis()
+        );
+
+        let snap = snapshot_slot().load();
+        assert_eq!(snap.len(), 200);
+    }
+}
