@@ -25,8 +25,8 @@ use std::sync::{Arc, OnceLock};
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 
-pub const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
-pub const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
+pub(crate) const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
+pub(crate) const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
 
 /// Runtime-configurable safety ceiling: if a snapshot would exceed this,
 /// it is truncated and a single `tracing::error!` is emitted. Default 1000,
@@ -35,7 +35,7 @@ static HARD_CAP: AtomicUsize = AtomicUsize::new(1000);
 
 /// Install the configured hard cap. Called once from controller CLI
 /// startup before [`spawn_snapshot_loop`].
-pub fn set_hard_cap(cap: usize) {
+pub(crate) fn set_hard_cap(cap: usize) {
     HARD_CAP.store(cap, Ordering::Relaxed);
 }
 
@@ -46,14 +46,14 @@ fn hard_cap() -> usize {
 
 /// One condition trigger referenced in the `err` / `warn` label payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
-pub struct ConditionRef {
+pub(crate) struct ConditionRef {
     #[serde(rename = "type")]
     pub type_: String,
     pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Entry {
+pub(crate) struct Entry {
     /// K8s `.kind` field (PascalCase singular), e.g. `HTTPRoute`.
     pub kind: &'static str,
     pub namespace: String,
@@ -63,11 +63,11 @@ pub struct Entry {
 }
 
 /// Renderer closure signature: pushes `Entry` values for one kind's store.
-pub type Renderer = Box<dyn Fn(&mut Vec<Entry>) + Send + Sync>;
+pub(crate) type Renderer = Box<dyn Fn(&mut Vec<Entry>) + Send + Sync>;
 
 /// Global current snapshot. Read lock-free on every `/metrics` scrape;
 /// replaced atomically at the end of each background tick.
-pub fn snapshot_slot() -> &'static ArcSwap<Vec<Entry>> {
+pub(crate) fn snapshot_slot() -> &'static ArcSwap<Vec<Entry>> {
     static SNAPSHOT: OnceLock<ArcSwap<Vec<Entry>>> = OnceLock::new();
     SNAPSHOT.get_or_init(|| ArcSwap::from_pointee(Vec::new()))
 }
@@ -79,7 +79,7 @@ pub fn snapshot_slot() -> &'static ArcSwap<Vec<Entry>> {
 /// `EtcdController` — each reload re-enters `register_status_renderer`
 /// with a fresh `Arc<RawStore<K>>`, and the old closure is dropped,
 /// releasing its reference to the previous store.
-pub fn renderers_slot() -> &'static Mutex<HashMap<&'static str, Renderer>> {
+pub(crate) fn renderers_slot() -> &'static Mutex<HashMap<&'static str, Renderer>> {
     static RENDERERS: OnceLock<Mutex<HashMap<&'static str, Renderer>>> = OnceLock::new();
     RENDERERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -94,7 +94,7 @@ static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 /// A condition as observed from serialized resource JSON. Only the fields
 /// we actually classify on.
 #[derive(Debug, Clone)]
-pub struct Condition {
+pub(crate) struct Condition {
     pub type_: String,
     pub status: String,
 }
@@ -114,7 +114,7 @@ pub struct Condition {
 /// Warn triggers:
 /// - `Ready:False`
 /// - `PartiallyInvalid:True` (inverse)
-pub fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, Vec<ConditionRef>)> {
+pub(crate) fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, Vec<ConditionRef>)> {
     let mut err_list = Vec::new();
     let mut warn_list = Vec::new();
     for c in conditions {
@@ -252,7 +252,7 @@ mod classify_tests {
 ///
 /// Malformed entries (missing `type` or non-string `status`) are skipped
 /// silently.
-pub fn scan_conditions(value: &serde_json::Value) -> Vec<Condition> {
+pub(crate) fn scan_conditions(value: &serde_json::Value) -> Vec<Condition> {
     let mut out = Vec::new();
     walk(value, &mut out);
     out
@@ -294,7 +294,7 @@ fn extract_condition(v: &serde_json::Value) -> Option<Condition> {
 /// Render a sorted snapshot to Prometheus text format. Returns empty
 /// string on empty input so the wrapper handler can skip appending
 /// entirely.
-pub fn render_snapshot(entries: &[Entry]) -> String {
+pub(crate) fn render_snapshot(entries: &[Entry]) -> String {
     if entries.is_empty() {
         return String::new();
     }
@@ -308,16 +308,8 @@ pub fn render_snapshot(entries: &[Entry]) -> String {
     out.push_str(METRIC_NAME);
     out.push_str(" gauge\n");
     for e in entries {
-        let err_json = if e.err_conditions.is_empty() {
-            String::new()
-        } else {
-            serde_json::to_string(&e.err_conditions).unwrap_or_default()
-        };
-        let warn_json = if e.warn_conditions.is_empty() {
-            String::new()
-        } else {
-            serde_json::to_string(&e.warn_conditions).unwrap_or_default()
-        };
+        let err_json = serialize_conditions_for_label(e, &e.err_conditions, "err");
+        let warn_json = serialize_conditions_for_label(e, &e.warn_conditions, "warn");
         out.push_str(METRIC_NAME);
         out.push_str("{kind=\"");
         out.push_str(e.kind);
@@ -332,6 +324,33 @@ pub fn render_snapshot(entries: &[Entry]) -> String {
         out.push_str("\"} 1\n");
     }
     out
+}
+
+/// Serialize one severity bucket to its JSON-array label value. Empty
+/// bucket → empty string (so PromQL `{err!=""}` can distinguish "no
+/// err conditions" from "has err conditions"). Serialization failure is
+/// logged at WARN and also yields an empty string — this path is not
+/// theoretically reachable for our struct shape, but we log instead of
+/// silently swallowing so the op has a breadcrumb if it ever trips.
+fn serialize_conditions_for_label(entry: &Entry, conditions: &[ConditionRef], bucket: &'static str) -> String {
+    if conditions.is_empty() {
+        return String::new();
+    }
+    match serde_json::to_string(conditions) {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::warn!(
+                component = "status_metrics",
+                kind = entry.kind,
+                namespace = %entry.namespace,
+                name = %entry.name,
+                bucket = bucket,
+                error = %err,
+                "failed to serialize condition bucket; emitting empty label value"
+            );
+            String::new()
+        }
+    }
 }
 
 /// Escape `\` and `"` per Prometheus text-format conventions.
@@ -356,7 +375,7 @@ fn append_escaped(out: &mut String, s: &str) {
 ///
 /// Any resource that fails to serialize is skipped with a single
 /// `tracing::warn!`; we do not propagate the failure.
-pub fn render_kind<K>(kind: &'static str, store: &dyn RawStore<K>, out: &mut Vec<Entry>)
+pub(crate) fn render_kind<K>(kind: &'static str, store: &dyn RawStore<K>, out: &mut Vec<Entry>)
 where
     K: serde::Serialize,
 {
@@ -406,7 +425,7 @@ fn extract_identity(json: &serde_json::Value) -> (String, String) {
 /// Register a per-kind renderer with the global registry. Called by each
 /// resource_controller's startup path, right after it wires its
 /// `RawStore` into the processor.
-pub fn register_status_renderer<K>(kind: &'static str, store: Arc<dyn RawStore<K>>)
+pub(crate) fn register_status_renderer<K>(kind: &'static str, store: Arc<dyn RawStore<K>>)
 where
     K: serde::Serialize + Send + Sync + 'static,
 {
@@ -808,7 +827,7 @@ use std::time::Duration;
 /// Panics from registered renderers propagate out of this function. The
 /// background loop in [`spawn_snapshot_loop`] wraps each call in
 /// `catch_unwind` so a single panicking renderer cannot kill the loop.
-pub fn snapshot_once() {
+pub(crate) fn snapshot_once() {
     let mut buf: Vec<Entry> = Vec::new();
     {
         let guard = renderers_slot().lock();
@@ -897,7 +916,7 @@ use http::{header, StatusCode};
 /// `common::observe::metrics_api::metrics_handler` in the admin router
 /// by delegating to it first, then appending the resource-abnormal
 /// block when the snapshot is non-empty.
-pub async fn metrics_handler() -> Response {
+pub(crate) async fn metrics_handler() -> Response {
     let base = crate::core::common::observe::metrics_api::metrics_handler().await;
     let (parts, body) = base.into_parts();
     if parts.status != StatusCode::OK {
@@ -929,19 +948,48 @@ pub async fn metrics_handler() -> Response {
         .into_response()
 }
 
+/// Extract a displayable message from a `catch_unwind` panic payload.
+/// Handles the two common panic types (`&'static str` via `panic!("lit")`
+/// and `String` via `panic!("{}", e)`); any other payload type yields a
+/// generic placeholder so we at least log something.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload type".to_string()
+    }
+}
+
 /// Spawn the background snapshot loop. Called once from controller CLI
 /// startup when `config.metrics.resource_abnormal.enabled` is true.
 ///
 /// Each tick wraps `snapshot_once` in `catch_unwind` so a renderer that
-/// panics cannot kill the loop; we log nothing extra here (the panic
-/// payload is consumed) and retry on the next tick.
-pub fn spawn_snapshot_loop(tick_secs: u64) {
+/// panics cannot kill the loop. Caught panics are logged at WARN level
+/// so operators can see "snapshot tick failed" events in the Controller
+/// logs (diagnosing a missing series on /metrics otherwise would require
+/// guessing). After logging, we retain the previous snapshot and retry
+/// on the next tick.
+pub(crate) fn spawn_snapshot_loop(tick_secs: u64) {
     let tick = Duration::from_secs(tick_secs);
     tokio::spawn(async move {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once));
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once)) {
+            tracing::warn!(
+                component = "status_metrics",
+                error = %panic_message(&*payload),
+                "initial snapshot_once panicked; keeping empty snapshot, will retry next tick"
+            );
+        }
         loop {
             tokio::time::sleep(tick).await;
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once));
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once)) {
+                tracing::warn!(
+                    component = "status_metrics",
+                    error = %panic_message(&*payload),
+                    "snapshot_once panicked during tick; keeping previous snapshot, will retry next tick"
+                );
+            }
         }
     });
 
