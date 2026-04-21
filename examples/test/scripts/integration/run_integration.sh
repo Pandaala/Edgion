@@ -837,6 +837,13 @@ run_all_tests() {
         run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
         run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
 
+        # Controller Resource-Abnormal Metric (standalone shell test; slow, runs its own controller with tick_secs=30)
+        if $FULL_TEST; then
+            run_test "ResourceAbnormalMetrics" "bash ${SCRIPT_DIR}/test_resource_abnormal_metrics.sh" || test_failed=true
+        else
+            log_info "Skipping slow test: ResourceAbnormalMetrics (use --full-test to run)"
+        fi
+
         # Gateway Dynamic Tests (if enabled)
         if $G_DYNAMIC_TEST; then
             run_dynamic_tests $G_DYNAMIC_STAGE
