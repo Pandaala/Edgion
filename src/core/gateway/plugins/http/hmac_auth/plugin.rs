@@ -421,13 +421,7 @@ impl RequestFilter for HmacAuth {
 
         if !self.config.algorithms.contains(&params.algorithm) {
             return self
-                .reject(
-                    session,
-                    plugin_log,
-                    401,
-                    "Algorithm not allowed",
-                    "Deny bad algorithm",
-                )
+                .reject(session, plugin_log, 401, "Algorithm not allowed", "Deny bad algorithm")
                 .await;
         }
 

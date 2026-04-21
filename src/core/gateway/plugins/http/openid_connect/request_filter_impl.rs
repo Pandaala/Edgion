@@ -173,7 +173,9 @@ impl RequestFilter for OpenidConnect {
                                                             userinfo_json.as_deref(),
                                                             &claims,
                                                         );
-                                                        plugin_log.push("token refresh wait timeout; stale token within leeway");
+                                                        plugin_log.push(
+                                                            "token refresh wait timeout; stale token within leeway",
+                                                        );
                                                         return PluginRunningResult::GoodNext;
                                                     }
                                                     Ok(_) => {}
