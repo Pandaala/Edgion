@@ -73,6 +73,13 @@ pub fn renderers_slot() -> &'static Mutex<Vec<Renderer>> {
     RENDERERS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Test-only module-level mutex. All tests in this file that mutate the
+/// global `snapshot_slot()` or `renderers_slot()` must lock this before
+/// touching state, to serialize otherwise parallel cargo test threads
+/// running in the same process.
+#[cfg(test)]
+static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 /// A condition as observed from serialized resource JSON. Only the fields
 /// we actually classify on.
 #[derive(Debug, Clone)]
@@ -119,7 +126,10 @@ mod classify_tests {
     use super::*;
 
     fn c(t: &str, s: &str) -> Condition {
-        Condition { type_: t.into(), status: s.into() }
+        Condition {
+            type_: t.into(),
+            status: s.into(),
+        }
     }
 
     #[test]
@@ -129,7 +139,11 @@ mod classify_tests {
 
     #[test]
     fn all_true_is_clean() {
-        let cs = vec![c("Accepted", "True"), c("ResolvedRefs", "True"), c("Programmed", "True")];
+        let cs = vec![
+            c("Accepted", "True"),
+            c("ResolvedRefs", "True"),
+            c("Programmed", "True"),
+        ];
         assert_eq!(classify(&cs), None);
     }
 
@@ -310,7 +324,12 @@ where
         let (ns, name) = extract_identity(&json);
         let conds = scan_conditions(&json);
         if let Some(ty) = classify(&conds) {
-            out.push(Entry { kind, namespace: ns, name, ty });
+            out.push(Entry {
+                kind,
+                namespace: ns,
+                name,
+                ty,
+            });
         }
     }
 }
@@ -489,9 +508,7 @@ edgion_controller_resource_abnormal{kind=\"HTTPRoute\",namespace=\"ns-b\",name=\
 #[cfg(test)]
 mod registration_tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::{
-        LocalRawStore, RawStore,
-    };
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::{LocalRawStore, RawStore};
     use serde::Serialize;
     use std::sync::Arc;
 
@@ -518,15 +535,24 @@ mod registration_tests {
 
     fn mk(ns: &str, name: &str, type_: &str, status: &str) -> Arc<FakeRoute> {
         Arc::new(FakeRoute {
-            metadata: FakeMeta { namespace: ns.into(), name: name.into() },
+            metadata: FakeMeta {
+                namespace: ns.into(),
+                name: name.into(),
+            },
             status: FakeStatus {
-                conditions: vec![FakeCond { type_: type_.into(), status: status.into() }],
+                conditions: vec![FakeCond {
+                    type_: type_.into(),
+                    status: status.into(),
+                }],
             },
         })
     }
 
     #[test]
     fn render_kind_emits_entries_only_for_abnormal_resources() {
+        let _guard = super::TEST_MUTEX.lock();
+        renderers_slot().lock().clear();
+        snapshot_slot().store(Arc::new(Vec::new()));
         let store: Arc<dyn RawStore<FakeRoute>> = Arc::new({
             let s = LocalRawStore::<FakeRoute>::new();
             s.upsert("default/bad".into(), mk("default", "bad", "Accepted", "False"));
@@ -583,13 +609,22 @@ mod snapshot_loop_tests {
 
     fn new_dummy(ns: &str, name: &str, type_: &str, status: &str) -> Arc<Dummy> {
         Arc::new(Dummy {
-            metadata: Meta { namespace: ns.into(), name: name.into() },
-            status: St { conditions: vec![Cond { type_: type_.into(), status: status.into() }] },
+            metadata: Meta {
+                namespace: ns.into(),
+                name: name.into(),
+            },
+            status: St {
+                conditions: vec![Cond {
+                    type_: type_.into(),
+                    status: status.into(),
+                }],
+            },
         })
     }
 
     #[test]
     fn snapshot_once_populates_from_registered_renderers_sorted() {
+        let _guard = super::TEST_MUTEX.lock();
         reset();
         let store = Arc::new(LocalRawStore::<Dummy>::new());
         store.upsert("a/b".into(), new_dummy("a", "b", "Accepted", "False"));
@@ -608,6 +643,7 @@ mod snapshot_loop_tests {
 
     #[test]
     fn snapshot_once_truncates_beyond_hard_cap() {
+        let _guard = super::TEST_MUTEX.lock();
         reset();
         let store = Arc::new(LocalRawStore::<Dummy>::new());
         let overflow_count = SNAPSHOT_ENTRY_HARD_CAP + 5;
@@ -626,6 +662,7 @@ mod snapshot_loop_tests {
 
     #[test]
     fn snapshot_once_survives_panicking_renderer() {
+        let _guard = super::TEST_MUTEX.lock();
         reset();
         let store = Arc::new(LocalRawStore::<Dummy>::new());
         store.upsert("a/b".into(), new_dummy("a", "b", "Accepted", "False"));
@@ -706,8 +743,12 @@ mod metrics_handler_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn handler_appends_nothing_when_snapshot_empty() {
+        // Test-only global-state serialization; see `TEST_MUTEX`.
+        let _guard = super::TEST_MUTEX.lock();
         ensure_recorder_installed();
+        renderers_slot().lock().clear();
         snapshot_slot().store(Arc::new(Vec::new()));
         let response = metrics_handler().await;
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -716,8 +757,12 @@ mod metrics_handler_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn handler_appends_snapshot_block_when_non_empty() {
+        // Test-only global-state serialization; see `TEST_MUTEX`.
+        let _guard = super::TEST_MUTEX.lock();
         ensure_recorder_installed();
+        renderers_slot().lock().clear();
         snapshot_slot().store(Arc::new(vec![Entry {
             kind: "HTTPRoute",
             namespace: "default".into(),
@@ -751,8 +796,7 @@ pub async fn metrics_handler() -> Response {
     let base_bytes = match axum::body::to_bytes(body, usize::MAX).await {
         Ok(b) => b,
         Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to read base metrics body")
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to read base metrics body").into_response();
         }
     };
     let mut text = String::from_utf8(base_bytes.to_vec()).unwrap_or_default();
@@ -834,19 +878,28 @@ mod perf_tests {
 
     #[test]
     fn snapshot_1000_routes_under_500ms() {
+        let _guard = super::TEST_MUTEX.lock();
         reset();
         let store = Arc::new(LocalRawStore::<Mock>::new());
         for i in 0..1000 {
             let conds = vec![
-                C { type_: "Accepted".into(), status: "True".into() },
+                C {
+                    type_: "Accepted".into(),
+                    status: "True".into(),
+                },
                 C {
                     type_: "ResolvedRefs".into(),
                     status: if i % 5 == 0 { "False".into() } else { "True".into() },
                 },
             ];
             let obj = Arc::new(Mock {
-                metadata: M { namespace: "ns".into(), name: format!("r{}", i) },
-                status: S { parents: vec![P { conditions: conds }] },
+                metadata: M {
+                    namespace: "ns".into(),
+                    name: format!("r{}", i),
+                },
+                status: S {
+                    parents: vec![P { conditions: conds }],
+                },
             });
             store.upsert(format!("ns/r{}", i), obj);
         }
