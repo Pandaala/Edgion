@@ -24,6 +24,7 @@
 
 - [Work Directory 设计](./work-directory.md)：工作目录解析、优先级与迁移策略。
 - [日志系统架构](./logging-system.md)：Access/SSL/TCP/UDP 日志链路与输出系统。
+- [Controller 资源异常 Metric](./resource-abnormal-metric.md)：`edgion_controller_resource_abnormal` gauge 的语义、配置与告警规则。
 
 ### 5. 构建与发布
 
