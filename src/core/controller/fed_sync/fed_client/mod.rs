@@ -177,6 +177,10 @@ async fn connect_and_run(
                 component = "fed_client",
                 "security skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
             );
+            crate::core::common::observe::system_metrics::mark_system_error(
+                crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
+            );
             endpoint
         } else {
             let client_tls = crate::core::common::grpc_tls::load_client_tls(tls_cfg).await?;

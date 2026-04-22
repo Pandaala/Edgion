@@ -97,8 +97,10 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
         return resp;
     };
 
-    // Validate username
+    // Validate username. Run dummy bcrypt regardless to equalize timing and
+    // prevent side-channel enumeration of whether the username exists.
     if req.username != local_state.username {
+        let _ = bcrypt::verify(&req.password, &local_state.dummy_hash);
         tracing::debug!(component = "local_auth", "Login failed: unknown username");
         let body: Json<ApiResponse<LoginResponse>> =
             Json(ApiResponse::error("Invalid username or password".to_string()));
@@ -287,6 +289,26 @@ mod handler_tests {
         assert_eq!(i, AuthStatus::Initializing);
         let d: AuthStatus = serde_json::from_str("\"disabled\"").unwrap();
         assert_eq!(d, AuthStatus::Disabled);
+    }
+
+    #[tokio::test]
+    async fn login_rejects_wrong_username() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        state.update_local(LocalAuthState::from_config(&valid_local()));
+        let app = app_with_unified(state);
+        let body = serde_json::json!({"username":"wrong_user","password":"a_long_enough_password_123"}).to_string();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

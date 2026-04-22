@@ -47,6 +47,7 @@ spec:
 | `trustedIps` | Array\<String\> | —（必填） | 可信代理 IP 地址或 CIDR 范围列表 |
 | `realIpHeader` | String | `"X-Forwarded-For"` | 提取真实 IP 的 Header 名称 |
 | `recursive` | Boolean | `true` | 是否启用递归查找（Nginx 风格） |
+| `maxTrustedHops` | Integer | 无（不限） | `recursive=true` 时可信代理跳数上限，详见 [安全取舍](#安全取舍trustedips-和-maxtrustedhops) |
 
 #### trustedIps
 
@@ -72,6 +73,87 @@ spec:
 
 - `true`（默认）：从右到左遍历 Header 中的 IP 列表，找到第一个非可信 IP
 - `false`：使用 Header 中最右边的 IP（最后一个代理）
+
+#### maxTrustedHops
+
+`recursive=true` 时可信代理跳数上限（可选）。对应 Envoy 的 `xff_num_trusted_hops` 概念。
+
+- `null`（默认）：无上限，Nginx 兼容行为——从右到左遍历直到遇到首个非可信 IP
+- `N`（>0）：右→左遍历中最多跳过 `N` 个可信 IP；如仍未遇到非可信 IP，返回第 `N` 个位置的 IP（即便其可信）
+
+**什么时候应该设置？**
+
+`maxTrustedHops` 是**辅助防线**，用来对抗"`trustedIps` 配得过宽 + 攻击者能从该范围内发起请求"的情景（见下方[安全取舍](#安全取舍trustedips-和-maxtrustedhops)）。推荐生产部署显式设置为**实际代理链层数**（如 CDN → LB → Gateway 为 `2`）。
+
+## 安全取舍：trustedIps 和 maxTrustedHops
+
+### 核心威胁：宽信任 CIDR 下的 XFF 深度伪造
+
+`recursive=true` 模式下，默认无跳数上限。若 `trustedIps` 配得过宽（例如整个 `10.0.0.0/8`），且攻击者能从该范围内的 IP 发起请求：
+
+```text
+配置: trustedIps: ["10.0.0.0/8"], recursive: true
+攻击者从 10.0.0.1 发送:
+  X-Forwarded-For: 1.2.3.4, 10.0.0.99, 10.0.0.50
+
+右→左遍历:
+  10.0.0.50 → 可信 → 继续
+  10.0.0.99 → 可信 → 继续
+  1.2.3.4   → 不可信 → 返回
+
+结果: 网关认定 client_ip = 1.2.3.4（攻击者伪造）
+```
+
+攻击者随后：
+- 绕过依赖 `client_ip` 的 IP 白名单（`ip_restriction`）
+- 把基于 IP 的限流计数写到任意其他用户名下
+- 让审计日志记录伪造的源 IP
+
+### 两道防线（需同时配置）
+
+**第一道（主要）：精确配置 `trustedIps`**
+
+`trustedIps` **只应包含真实代理出口 IP**，不应为了"偷懒"覆盖整个内网段：
+
+```yaml
+# ❌ 反例：覆盖面过宽，任何来自内网的请求都被当作可信代理
+trustedIps:
+  - "10.0.0.0/8"
+
+# ✅ 正例：仅包含实际代理（如 Cloudflare 回源 IP、内部 LB IP）
+trustedIps:
+  - "103.21.244.0/22"     # Cloudflare
+  - "103.22.200.0/22"
+  - "173.245.48.0/20"
+  - "10.1.0.10"           # 内部 LB 出口 IP（单一地址）
+```
+
+**第二道（辅助）：设置 `maxTrustedHops` 作为硬上限**
+
+即便第一道防线可能配置错误，设置 `maxTrustedHops = 实际代理链层数`，限制攻击者能伪造的 XFF 前缀长度：
+
+```yaml
+trustedIps:
+  - "103.21.244.0/22"     # Cloudflare（1 跳）
+  - "10.1.0.10"           # 内部 LB（1 跳）
+maxTrustedHops: 2         # 只信任 2 跳；攻击者无法通过填充多层"可信" IP 推进到左端
+```
+
+### 何时可不设 `maxTrustedHops`
+
+- `recursive: false`：无效果（非递归模式只看最右 IP）
+- `trustedIps` 已严格收敛到固定几个 IP / 小 CIDR 且可审计
+- 代理链动态变化（如服务网格随节点扩缩容），难以确定固定跳数——此时只能靠第一道防线
+
+### 与 Nginx / Envoy 对比
+
+| 行为 | Edgion | Nginx | Envoy |
+|------|--------|-------|-------|
+| 递归遍历 | `recursive: true` | `real_ip_recursive on` | —（隐含） |
+| 跳数上限 | `maxTrustedHops`（opt-in） | ❌ 无 | `xff_num_trusted_hops`（必填） |
+| 默认 | 无上限（Nginx 兼容） | 无上限 | 0 |
+
+Edgion 默认采用 Nginx 风格（无上限，向后兼容），同时通过 `maxTrustedHops` 为 Envoy 熟悉的 operator 和安全敏感部署提供硬边界。
 
 ## 工作原理
 

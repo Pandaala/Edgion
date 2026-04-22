@@ -153,6 +153,10 @@ impl EdgionCenterCli {
                     component = "center",
                     "grpc_security skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
                 );
+                crate::core::common::observe::system_metrics::mark_system_error(
+                    crate::core::common::observe::system_metrics::components::FED_SYNC_SERVER,
+                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
+                );
             } else {
                 let server_tls = crate::core::common::grpc_tls::load_server_tls(tls_cfg).await?;
                 server_builder = server_builder

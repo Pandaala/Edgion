@@ -24,7 +24,12 @@ impl RealIp {
     pub fn create(config: &RealIpConfig) -> Box<dyn RequestFilter> {
         // Build RealIpExtractor from plugin config
         let extractor = if !config.trusted_ips.is_empty() {
-            match RealIpExtractor::new(&config.trusted_ips, config.real_ip_header.clone(), config.recursive) {
+            match RealIpExtractor::new(
+                &config.trusted_ips,
+                config.real_ip_header.clone(),
+                config.recursive,
+                config.max_trusted_hops,
+            ) {
                 Ok(e) => Some(e),
                 Err(err) => {
                     tracing::error!(
@@ -119,6 +124,7 @@ mod tests {
             trusted_ips: vec!["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
             real_ip_header: "X-Forwarded-For".to_string(),
             recursive: true,
+            max_trusted_hops: None,
             trusted_ip_matcher: None, // Will be initialized by RealIp::create
         }
     }
@@ -127,7 +133,13 @@ mod tests {
     fn test_extract_recursive() {
         let config = create_test_config(); // recursive: true
         let extractor =
-            RealIpExtractor::new(&config.trusted_ips, config.real_ip_header.clone(), config.recursive).unwrap();
+            RealIpExtractor::new(
+                &config.trusted_ips,
+                config.real_ip_header.clone(),
+                config.recursive,
+                config.max_trusted_hops,
+            )
+            .unwrap();
 
         // Case 1: Right-to-left, find first non-trusted
         let result = extractor.extract_from_header_value("192.168.1.254", "203.0.113.1, 198.51.100.2, 192.168.1.1");
@@ -148,6 +160,7 @@ mod tests {
             &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
             "X-Forwarded-For".to_string(),
             false,
+            None,
         )
         .unwrap();
 
@@ -165,7 +178,13 @@ mod tests {
     fn test_client_not_trusted() {
         let config = create_test_config();
         let extractor =
-            RealIpExtractor::new(&config.trusted_ips, config.real_ip_header.clone(), config.recursive).unwrap();
+            RealIpExtractor::new(
+                &config.trusted_ips,
+                config.real_ip_header.clone(),
+                config.recursive,
+                config.max_trusted_hops,
+            )
+            .unwrap();
 
         // Client IP not in trusted list - should use client_addr directly
         let result = extractor.extract_from_header_value("8.8.8.8", "203.0.113.1");

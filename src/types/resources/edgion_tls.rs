@@ -15,15 +15,29 @@ pub const EDGION_TLS_GROUP: &str = "edgion.io";
 /// Kind for EdgionTls
 pub const EDGION_TLS_KIND: &str = "EdgionTls";
 
-/// TLS protocol version (similar to Cloudflare's Minimum TLS Version)
+/// TLS protocol version (similar to Cloudflare's Minimum TLS Version).
+///
+/// **Security note**: `Tls10` and `Tls11` are **formally deprecated by IETF
+/// RFC 8996 (2021)** and are no longer supported by modern browsers
+/// (Chrome 84+ / Firefox 78+ / Safari 14+ / Edge 84+). Choose them only
+/// when you must interoperate with known legacy clients (e.g., embedded
+/// IoT, older payment terminals) and understand the risk. For all other
+/// deployments use `Tls12` or `Tls13`.
+///
+/// When `min_tls_version` is not set, BoringSSL's default (TLS 1.2+)
+/// applies — which is the safe path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum TlsVersion {
+    /// TLS 1.0 — deprecated by RFC 8996; legacy-client use only.
     #[serde(rename = "TLS1_0")]
     Tls10,
+    /// TLS 1.1 — deprecated by RFC 8996; legacy-client use only.
     #[serde(rename = "TLS1_1")]
     Tls11,
+    /// TLS 1.2 — recommended baseline for all modern deployments.
     #[serde(rename = "TLS1_2")]
     Tls12,
+    /// TLS 1.3 — strongest; recommended when all clients support it.
     #[serde(rename = "TLS1_3")]
     Tls13,
 }
@@ -123,9 +137,16 @@ pub struct EdgionTlsSpec {
     /// mTLS client authentication configuration (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_auth: Option<ClientAuthConfig>,
-    /// Minimum TLS version (optional, similar to Cloudflare's Minimum TLS Version)
-    /// Options: TLS1_0, TLS1_1, TLS1_2, TLS1_3
-    /// If not configured, uses BoringSSL default
+    /// Minimum TLS version accepted on this listener (optional, similar
+    /// to Cloudflare's Minimum TLS Version).
+    ///
+    /// Options: `TLS1_0`, `TLS1_1`, `TLS1_2`, `TLS1_3`.
+    ///
+    /// **Recommended: leave unset (BoringSSL default = TLS 1.2+) or set
+    /// explicitly to `TLS1_2` / `TLS1_3`.** `TLS1_0` and `TLS1_1` are
+    /// deprecated by IETF RFC 8996 and are accepted only for explicit
+    /// legacy-client compatibility — the operator takes responsibility
+    /// for the downgrade. See `TlsVersion` docs for details.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_tls_version: Option<TlsVersion>,
     /// Cipher list in OpenSSL format (optional, similar to Nginx ssl_ciphers)

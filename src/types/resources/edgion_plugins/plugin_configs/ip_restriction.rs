@@ -54,8 +54,10 @@ pub struct IpRestrictionConfig {
     pub deny: Option<Vec<String>>,
 
     /// IP source to check (default: ClientIp)
-    /// - ClientIp: Extract from X-Forwarded-For (first IP) or X-Real-IP
-    /// - RemoteAddr: Use direct TCP connection peer address
+    /// - ClientIp: Reads `remote_addr` — pre-processed by RealIp plugin or global `spec.realIp`.
+    ///   Falls back to TCP IP if neither is configured (safe, not forgeable in that case).
+    ///   To extract the true client IP from XFF/X-Real-IP headers, configure RealIp first.
+    /// - RemoteAddr: Always the TCP connection peer address (`client_addr`), never forgeable.
     #[serde(default)]
     pub ip_source: IpSource,
 
@@ -88,10 +90,12 @@ pub struct IpRestrictionConfig {
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub enum IpSource {
-    /// Extract from X-Forwarded-For (first IP) or fallback to X-Real-IP
+    /// Reads `remote_addr` (pre-processed by RealIp plugin or global `spec.realIp`).
+    /// Without RealIp configured, falls back to TCP connection IP — not forgeable.
+    /// Configure RealIp to extract the true client IP from XFF/X-Real-IP headers.
     #[default]
     ClientIp,
-    /// Use direct TCP connection peer address
+    /// Always reads TCP connection peer address (`client_addr`), never forgeable.
     RemoteAddr,
 }
 

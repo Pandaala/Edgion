@@ -9,3 +9,4 @@
 
 pub mod fed_metrics;
 pub mod metrics_api;
+pub mod system_metrics;

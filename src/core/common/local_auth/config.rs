@@ -39,6 +39,17 @@ pub struct LocalAuthConfig {
     pub jwt_secret: String,
 
     /// JWT token expiry in hours. Default: 24.
+    ///
+    /// **Security note**: This value is the **maximum exposure window** for a
+    /// leaked / stolen token. Local-auth JWT is stateless — there is no
+    /// server-side revocation list; `POST /api/v1/auth/logout` only clears
+    /// the browser cookie and does not invalidate already-issued tokens.
+    ///
+    /// For production deployments that need true token revocation, configure
+    /// OIDC federation via `[auth]` instead (the IdP handles session
+    /// revocation). When `[local_auth]` must be used, shorten this value
+    /// (recommended: 1–4 hours) and rotate `jwt_secret` as a "revoke all"
+    /// mechanism. See `skills/02-features/02-config/03-auth-bootstrap.md`.
     pub jwt_expiry_hours: u64,
 
     /// Paths that skip authentication (e.g., health/ready probes).

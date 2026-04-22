@@ -110,6 +110,68 @@ auth:
 
 参考：`deploy/center-test/deploy.yaml`。
 
+## JWT 撤销语义（`[local_auth]` 模式）
+
+**现状**：本地 admin JWT 是 **stateless** 的——Edgion 无服务端 token 黑名单，`POST /api/v1/auth/logout` 仅清除浏览器 cookie（`Max-Age=0`），**已签发的 token 在到达 `exp` 之前仍然有效**。
+
+暴露窗口上限 = `jwt_expiry_hours`（默认 `24`）。
+
+### 这是刻意的 stateless 取舍
+
+与 **Argo CD 本地管理员** / **Kubernetes Dashboard 内置 token** 同模式。引入服务端黑名单会遇到两种架构困境：
+
+| 方案 | 问题 |
+|---|---|
+| 内存黑名单（`HashSet<jti>`） | 多实例 HA 部署时每实例独立——logout 打到实例 A、后续请求打到实例 B → B 不知道撤销 = **假象防御**；进程重启清零 |
+| Redis 黑名单 | Admin API 路径引入 Redis 硬依赖 + 每请求 1 次 RT 延迟 + Redis 故障时 fail-open vs fail-close 两难 |
+
+所以 Edgion 选择"stateless JWT + 通过其他途径提供撤销能力"。
+
+### 需要真正撤销能力时：**走 OIDC federation**
+
+`unified_auth` 支持 `[auth]` 段配 OIDC（Keycloak / Auth0 / Okta / Azure AD / Google 等）：
+- 在 IdP 端撤销用户 session 或 refresh token → 所有基于该 session 的 access token 失效
+- IdP 端统一的 session 生命周期管理、revocation、审计日志
+- 这是"管理端认证"真正需要生产级撤销时的**业界标准路径**
+
+切换示例（Controller 或 Center 任一）：
+
+```yaml
+# 关闭 local_auth，改走 OIDC
+local_auth:
+  enabled: false
+auth:
+  enabled: true
+  discovery: "https://idp.example.com/.well-known/openid-configuration"
+  client_id: "edgion-admin"
+  client_secret_ref:
+    name: oidc-admin-secret
+  # ...
+```
+
+### 如果必须用 `[local_auth]`：缩短暴露窗口
+
+对暂时不能走 OIDC 的部署：
+
+```yaml
+local_auth:
+  enabled: true
+  # ...
+  jwt_expiry_hours: 4       # 生产推荐 1-4 小时，而非默认 24h
+```
+
+**关于 CLI 工作流**：`edgion-cli` 的 `ensure_auth()` 会在 token 过期或 controller 重启后**自动 re-login**（前提是配置文件里能解析出 credentials），缩短 `jwt_expiry_hours` 不会破坏 CLI 用户体验；只会让浏览器 dashboard 场景更频繁提示重登。
+
+### 退役运维的标准操作（"撤销"的替代方案）
+
+由于没有 per-token 撤销，处理 operator 离职 / 权限回收时：
+
+1. **改密码**：`kubectl edit secret edgion-admin-credentials` 修改 `password` 字段 → Controller secret retry loop 热更新 `UnifiedAuthState` → 所有未来登录必须用新密码（但**已签发的 token** 仍到 `exp` 才失效）
+2. **轮换 `jwt_secret`**：修改 Secret 中的 `jwt_secret` 字段 → 所有已签发 token 立刻失效（**一键 revoke all**，但会顺便把当前登录的所有管理员都踢掉）
+3. **等窗口过期**：若 `jwt_expiry_hours` 已缩到 1-4h，这也是可接受的方案
+
+**方案 2（轮换 jwt_secret）是最快的"批量撤销"**，适合紧急情况；日常人员变动建议配合 OIDC federation 做。
+
 ## 相关回归测试
 
 - `examples/test/scripts/integration/test_center_no_auth.sh` —

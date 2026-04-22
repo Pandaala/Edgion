@@ -110,6 +110,7 @@ pub fn add_http_listener(
             &real_ip_config.trusted_ips,
             real_ip_config.real_ip_header.clone(),
             real_ip_config.recursive,
+            real_ip_config.max_trusted_hops,
         ) {
             Ok(extractor) => Some(Arc::new(extractor)),
             Err(e) => {

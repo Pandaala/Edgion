@@ -143,6 +143,60 @@ Date: Mon, 08 Mar 2026 10:00:00 GMT
 
 ---
 
+## Replay-Protection Security Model
+
+HMAC Auth uses a **timestamp window** to prevent signature replay — the request `Date` / `X-Date` header must be within `clockSkew` (default `300` seconds / 5 minutes) of the server clock. **The plugin does NOT perform nonce deduplication.**
+
+This matches the dominant industry pattern for HMAC authentication (AWS SigV4, Stripe Webhooks, GitHub Webhooks, Kong `hmac-auth`, APISIX `hmac-auth`) — "timestamp window + HTTPS", no gateway-layer nonce storage.
+
+### In-Window Replay Risk and Mitigations
+
+In theory, an attacker who obtains a valid signature can replay it arbitrarily many times within `clockSkew`. The **prerequisite** is obtaining the signature, and in a correctly deployed setup several layers block that:
+
+| Threat path | Defense |
+|---|---|
+| Man-in-the-middle capture | **HTTPS** (TLS prevents signature exposure on the wire) |
+| Signature leaked via logs | Enable `hideCredentials: true`; do not add `Authorization` / `Signature` to access-log headers |
+| Legitimate client replays maliciously | **Business-layer idempotency keys** (not a gateway concern) |
+| Window configured too wide | Shrink `clockSkew` (e.g., `60`) on high-sensitivity endpoints |
+
+### Recommended Configuration
+
+**Minimum secure production config**:
+
+```yaml
+filters:
+  - type: HmacAuth
+    config:
+      secretRefs:
+        - name: hmac-creds
+      clockSkew: 300          # 5-minute window; shrink to 60 for sensitive endpoints
+      hideCredentials: true   # strip Authorization/Signature from upstream (reduces log-leak surface)
+      enforceHeaders:
+        - date                # timestamp must be signed
+        - host
+      # Business-layer idempotency: sensitive non-idempotent ops (payments, password changes)
+      # must be protected by the application via an Idempotency-Key header.
+```
+
+**Also required**:
+- **HTTPS is mandatory**: HMAC signatures can be captured on cleartext; HTTPS is the baseline assumption of this plugin
+- **Do not log signatures**: default off, but avoid adding `Authorization` / `Signature` to `accessLog.extraHeaders`
+- **Idempotency for critical ops**: For non-idempotent, high-sensitivity operations (payment, password change, transfer), the backend should require an `Idempotency-Key` header and dedupe at the business layer — this is the correct place for replay protection
+
+### Why Doesn't Edgion Do Nonce Dedup at the Gateway?
+
+Nonce deduplication requires **per-request state storage** (in-memory LRU or Redis), each with problems:
+
+- **In-memory LRU**: State is per-gateway-instance; a multi-gateway deployment fails because an attacker can switch instances and replay — **illusory defense**
+- **Redis backend**: Adds ~1–3ms per request and a hard dependency on Redis; the "fail-open vs fail-close on Redis failure" question is a dilemma either way
+
+The industry (AWS / Stripe / GitHub / Kong / APISIX) has settled on "gateway does timestamp window, business layer does idempotency keys". Edgion follows the same layering.
+
+If your deployment truly needs gateway-layer nonce deduplication (edge cases), please open an issue to discuss a standalone implementation.
+
+---
+
 ## Troubleshooting
 
 ### Problem 1: Signature Verification Fails

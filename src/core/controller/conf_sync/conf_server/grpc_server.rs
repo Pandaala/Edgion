@@ -94,6 +94,10 @@ impl ConfigSyncGrpcServer {
                     component = "grpc_server",
                     "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
                 );
+                crate::core::common::observe::system_metrics::mark_system_error(
+                    crate::core::common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
+                );
             } else {
                 let server_tls = crate::core::common::grpc_tls::load_server_tls(tls).await?;
                 builder = builder.tls_config(server_tls)?;
@@ -122,6 +126,10 @@ impl ConfigSyncGrpcServer {
                 tracing::error!(
                     component = "grpc_server",
                     "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
+                );
+                crate::core::common::observe::system_metrics::mark_system_error(
+                    crate::core::common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
                 );
             } else {
                 let server_tls = crate::core::common::grpc_tls::load_server_tls(tls).await?;

@@ -66,7 +66,7 @@ description: Edgion 全局代码 Review 指南。包含 AI 执行全量 review �
 
 - Controller 资源处理 requeue 规则 → [04-review/handler-requeue/](../04-review/handler-requeue/handler-requeue-rule.md)
 - 内存"泄漏"判定 → [04-review/memory-leak/](../04-review/memory-leak/not-a-memory-leak.md)
-- 路由架构一致性 → [04-review/01-route-architecture-consistency.md](../04-review/01-route-architecture-consistency.md)
+- 路由架构一致性 → [04-review/architecture/route-architecture-consistency.md](../04-review/architecture/route-architecture-consistency.md)
 - LB 计数器：跨 retry 的 LeastConn 计数递增/递减对称性
 
 ---
