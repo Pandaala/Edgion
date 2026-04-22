@@ -9,7 +9,6 @@
 #    (middleware 的 fail-close 分支——require_auth=true + no provider ready → 503)
 # 5. 启动日志中有 WARN "No authentication configured"
 #
-# 这是 fix #01 bug 1 + bug 4 + Task 4 fix #58fd913 的集成层结构性回归。
 
 set -euo pipefail
 
@@ -111,4 +110,4 @@ if ! grep -q "No authentication configured" "$TMPDIR/center.log"; then
     exit 1
 fi
 
-echo "PASS: Center no-auth startup scenario (fix #01 bug 1/4 + Task 4 fix regression)"
+echo "PASS: Center no-auth startup scenario"
