@@ -641,5 +641,5 @@ return next()
 ## Related Documentation
 
 - [DSL Plugin Configuration Reference](./README.md) — configuration parameters, API reference, error policies
-- [Filters Overview](../overview.md)
-- [Plugin Composition and References](../plugin-composition.md)
+- [Filters Overview](../../overview.md)
+- [Plugin Composition and References](../../plugin-composition.md)

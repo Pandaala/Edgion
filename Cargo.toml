@@ -103,6 +103,8 @@ tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
 # rustls （tonic TLS ）
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
+# System CA roots for building custom rustls ClientConfig (Redis LinkSys TLS)
+rustls-native-certs = "0.8"
 x509-parser = { version = "0.18", features = ["verify"] }  # Certificate parsing and signature verification
 tonic-reflection = "0.12"
 prost = "0.13"
@@ -162,6 +164,8 @@ metrics-util = "0.20"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+rpassword = "7"
+zeroize = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
@@ -174,6 +178,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # CLI table formatting
 tabled = "0.20"
 
+rusqlite = { version = "0.31", features = ["bundled"] }
 md-5 = "0.10"
 cookie = "0.18.1"
 instant-acme = "0.8.4"
@@ -185,7 +190,6 @@ async_singleflight = "0.6"
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 pingora-ketama = "0.8.0"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]
 tonic-build = "0.12"
@@ -202,5 +206,5 @@ console = "0.16"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 proxy-header = "0.1.2"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+wiremock = "0.6"

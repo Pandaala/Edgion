@@ -8,7 +8,6 @@
 
 ## 先读这些真实入口
 
-- [../../../docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
 - [../../../src/types/resources/edgion_plugins/mod.rs](../../../src/types/resources/edgion_plugins/mod.rs)
 - [../../../src/types/resources/edgion_plugins/entry.rs](../../../src/types/resources/edgion_plugins/entry.rs)
 - [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
@@ -62,19 +61,18 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 - 只看 route filter 预解析，忽略了 `PluginStore` 和 `ExtensionRef`
 - 只改 Gateway 侧，没让 controller `preparse()` / `update_status()` 暴露校验问题
 
-## 先判断它是不是“真正的 HTTP 插件”
+## 插件类型抉择
 
-它通常属于 HTTP 插件，如果需求依赖：
+| 场景 | 选 `EdgionPlugin` | 选 Gateway API filter |
+|------|-------------------|-----------------------|
+| 需要访问 Header / Cookie / Query / Path | 是 | 否 |
+| 认证、限流、重写、镜像等 HTTP 语义 | 是 | 否 |
+| 上游响应头 / 响应体 chunk | 是 | 否 |
+| 跨插件 `PluginSession` ctx 变量 | 是 | 否 |
+| 标准 Gateway API filter（HeaderModifier、Redirect、URLRewrite、Mirror） | 否 | 是，落 `gateway_api_filters/` |
+| 只依赖 IP / 监听端口 / SNI / mTLS | 否 | 否，转 Stream plugin |
 
-- Header / Cookie / Query / Path
-- 认证、限流、镜像、重写
-- 上游响应头
-- 上游响应体 chunk
-- `PluginSession` 上下文变量
-
-如果需求只依赖 IP、监听端口、SNI、mTLS，先转去：
-
-- [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
+> 相关：[13-stream-plugin-dev.md](13-stream-plugin-dev.md)
 
 ## 选择插件阶段
 
@@ -123,17 +121,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 ## 推荐开发顺序
 
-### 1. 先决定插件是 `EdgionPlugin` 还是 Gateway API filter adapter
-
-如果是 Edgion 自定义插件：
-
-- 走 `EdgionPlugin` enum
-- 走 `EdgionPlugins` 资源与 `PluginStore`
-
-如果是标准 Gateway API filter adapter：
-
-- 更可能落在 `src/core/gateway/plugins/runtime/gateway_api_filters/`
-- 不一定需要动 `EdgionPlugin` enum
+### 1. 先决定插件类型（参见上方抉择表）
 
 ### 2. 定义配置结构
 
@@ -343,7 +331,8 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 ## 相关
 
-- [../../../docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
+- [docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
 - [observability/00-access-log.md](../../03-coding/observability/00-access-log.md)
 - [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
+- [14-link-sys-dev.md](14-link-sys-dev.md)
 - [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)

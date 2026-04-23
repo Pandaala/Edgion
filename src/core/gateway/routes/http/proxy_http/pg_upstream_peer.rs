@@ -251,15 +251,6 @@ pub async fn select_http_backend(
     // Pre-compute outside the borrow of route_unit to satisfy the borrow checker
     let sp_active = route_unit.rule.session_persistence.is_some();
 
-    // Warn if idle_timeout is configured (not supported in current version)
-    if let Some(ref sp) = route_unit.rule.session_persistence {
-        if sp.idle_timeout.is_some() {
-            tracing::warn!(
-                "sessionPersistence.idleTimeout is configured but not supported in current version (requires server-side session storage)"
-            );
-        }
-    }
-
     let sp_token = route_unit
         .rule
         .session_persistence

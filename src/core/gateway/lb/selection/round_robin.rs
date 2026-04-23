@@ -1,5 +1,12 @@
 use pingora_load_balancing::Backend;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Once;
+
+use crate::core::gateway::observe::metrics::registry::record_rr_selector_truncated;
+
+/// Emitted once per process on the first u16::MAX truncation. Subsequent events
+/// are only visible via the `edgion_rr_selector_truncated_total` counter.
+static TRUNCATION_WARN_ONCE: Once = Once::new();
 
 /// Weighted round-robin selector.
 ///
@@ -16,11 +23,16 @@ impl RoundRobinSelector {
     /// Build from a slice of backends. Weight < 1 is treated as 1.
     pub fn build(backends: &[Backend]) -> Self {
         let backends = if backends.len() > u16::MAX as usize {
-            tracing::warn!(
-                count = backends.len(),
-                max = u16::MAX,
-                "RoundRobinSelector: backend count exceeds u16::MAX, truncating"
-            );
+            let total = backends.len();
+            record_rr_selector_truncated();
+            TRUNCATION_WARN_ONCE.call_once(|| {
+                tracing::warn!(
+                    count = total,
+                    max = u16::MAX,
+                    "RoundRobinSelector: backend count exceeds u16::MAX, truncating (subsequent \
+                     events only increment metric edgion_rr_selector_truncated_total)"
+                );
+            });
             &backends[..u16::MAX as usize]
         } else {
             backends
@@ -79,5 +91,45 @@ impl RoundRobinSelector {
     /// Access the sorted backend list.
     pub fn backends(&self) -> &[Backend] {
         &self.backends
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metrics_exporter_prometheus::PrometheusBuilder;
+    use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn make_backend(i: u32) -> Backend {
+        let octets = i.to_be_bytes();
+        let ip = IpAddr::V4(Ipv4Addr::new(10, octets[1], octets[2], octets[3]));
+        Backend {
+            addr: PSocketAddr::Inet(SocketAddr::new(ip, 80)),
+            weight: 1,
+            ext: Default::default(),
+        }
+    }
+
+    #[test]
+    fn build_truncates_over_u16_max() {
+        let backends: Vec<Backend> = (0..(u16::MAX as u32 + 2)).map(make_backend).collect();
+        let selector = RoundRobinSelector::build(&backends);
+        assert_eq!(selector.backend_count(), u16::MAX as usize);
+    }
+
+    #[test]
+    fn truncation_increments_counter() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            let backends: Vec<Backend> = (0..(u16::MAX as u32 + 1)).map(make_backend).collect();
+            let _ = RoundRobinSelector::build(&backends);
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_rr_selector_truncated_total"),
+                "counter must appear on truncation, got:\n{rendered}"
+            );
+        });
     }
 }

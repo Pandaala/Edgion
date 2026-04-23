@@ -53,16 +53,16 @@ impl RequestFilter for Mock {
         // Set Content-Type header
         let _ = session.set_response_header("Content-Type", &self.config.content_type);
 
-        plugin_log.push("Mock returned; ");
-
         if self.config.terminate {
             // Return mock response (terminates request, no upstream call)
+            plugin_log.push(&format!("mock served {}", self.config.status_code));
             PluginRunningResult::ErrResponse {
                 status: self.config.status_code,
                 body: self.config.body.clone(),
             }
         } else {
             // Non-terminating (e.g., for logging/headers only)
+            plugin_log.push("mock headers set");
             PluginRunningResult::GoodNext
         }
     }

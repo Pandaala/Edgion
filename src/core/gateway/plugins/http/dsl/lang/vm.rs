@@ -673,7 +673,6 @@ impl Vm {
                         Value::Int(n) => {
                             let code = *n;
                             if !(100..=599).contains(&code) {
-                                tracing::warn!("DSL deny status {} out of valid range, using 500", code);
                                 500u16
                             } else {
                                 code as u16
@@ -691,6 +690,7 @@ impl Vm {
                     });
                 }
                 OpCode::ReturnTerminate => {
+                    log.push("Deny dsl terminate");
                     return Ok(PluginRunningResult::ErrTerminateRequest);
                 }
                 OpCode::ReturnGrpcError => {
@@ -700,10 +700,6 @@ impl Vm {
                         Value::Int(n) => {
                             let c = *n;
                             if !(0..=16).contains(&c) {
-                                tracing::warn!(
-                                    "DSL grpc_error code {} out of valid range (0-16), using 13 (INTERNAL)",
-                                    c
-                                );
                                 13u16
                             } else {
                                 c as u16
@@ -740,15 +736,30 @@ pub fn execute_safe(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.execute(session, log)));
 
     match result {
-        Ok(Ok(running_result)) => running_result,
+        Ok(Ok(running_result)) => {
+            log.push("dsl match");
+            running_result
+        }
         Ok(Err(runtime_err)) => {
-            log.push(&format!("dsl:err:{}", runtime_err));
-            tracing::warn!("DSL runtime error: {}", runtime_err);
+            let kind: &'static str = match &runtime_err {
+                RuntimeError::TypeError { .. } => "type error",
+                RuntimeError::DivisionByZero => "division by zero",
+                RuntimeError::IntegerOverflow { .. } => "integer overflow",
+                RuntimeError::StepLimitExceeded { .. } => "step limit exceeded",
+                RuntimeError::LoopLimitExceeded { .. } => "loop limit exceeded",
+                RuntimeError::CallLimitExceeded { .. } => "call limit exceeded",
+                RuntimeError::StackOverflow { .. } => "stack overflow",
+                RuntimeError::StringTooLong { .. } => "string too long",
+                RuntimeError::UndefinedLocal { .. } => "undefined local",
+                RuntimeError::ApiError { .. } => "api error",
+                RuntimeError::RegexError { .. } => "regex error",
+                RuntimeError::Internal { .. } => "internal error",
+            };
+            log.push_err(kind);
             apply_error_policy(error_policy)
         }
         Err(_panic) => {
-            log.push("dsl:panic; ");
-            tracing::error!("DSL VM panic caught by catch_unwind");
+            log.push_err("vm panic");
             apply_error_policy(error_policy)
         }
     }

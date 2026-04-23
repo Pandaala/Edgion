@@ -22,8 +22,6 @@ sync:
   command_timeout_secs: 30
   # Heartbeat ping interval sent to controllers (seconds, default: 30)
   ping_interval_secs: 30
-  # Hours before offline controller data is evicted (default: 24)
-  offline_evict_hours: 24
 
 # ============================================================================
 # Admin API Authentication (optional)

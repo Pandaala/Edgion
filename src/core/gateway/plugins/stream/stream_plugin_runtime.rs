@@ -1,7 +1,7 @@
 //! Stream plugin runtime for executing stream plugins
 
-use super::ip_restriction::StreamIpRestriction;
 use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
+use crate::core::gateway::plugins::stream::{GlobalConnectionIpRestrictionPlugin, StreamIpRestriction};
 use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
 use std::sync::Arc;
 
@@ -32,8 +32,11 @@ impl StreamPluginRuntime {
         Self { plugins: Vec::new() }
     }
 
-    /// Create runtime from stream plugin entries
-    pub fn from_stream_plugins(entries: &[StreamPluginEntry]) -> Self {
+    /// Create runtime from stream plugin entries.
+    ///
+    /// `parent_namespace` is the namespace of the owning `EdgionStreamPlugins` resource,
+    /// used by `GlobalConnectionIpRestrictionPlugin` to resolve refs with no explicit namespace.
+    pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str) -> Self {
         let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
 
         for entry in entries {
@@ -43,9 +46,14 @@ impl StreamPluginRuntime {
                 continue;
             }
 
-            // Create plugin based on type
             let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(config) => Arc::new(StreamIpRestriction::new(config)),
+                EdgionStreamPlugin::IpRestriction(rules) => Arc::new(StreamIpRestriction::new(rules)),
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
+                    Arc::new(GlobalConnectionIpRestrictionPlugin::new(
+                        gcir.plugin_metadata_ref.clone(),
+                        parent_namespace.to_string(),
+                    ))
+                }
             };
 
             tracing::debug!(plugin_name = plugin.name(), "Added stream plugin to runtime");

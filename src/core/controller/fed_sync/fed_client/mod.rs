@@ -10,17 +10,27 @@
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
 use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
-    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage, HttpProxyResponse,
-    ListResponse, Pong, RegisterRequest,
+    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
+    FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, ListResponse, Pong, RegisterRequest,
 };
+use crate::core::common::observe::fed_metrics;
 use crate::core::controller::conf_mgr::conf_center::traits::CenterApi;
+use crate::core::controller::conf_mgr::ConfMgr;
 use crate::core::controller::fed_sync::resource_collector;
+
+/// Minimum connection duration before backoff is reset.
+/// Connections shorter than this are considered unstable (e.g., Center crash-loop).
+const MIN_STABLE_CONNECTION_SECS: u64 = 30;
+
+/// Maximum concurrent HttpProxy tasks forwarded from Center.
+const MAX_CONCURRENT_PROXY: usize = 16;
 
 /// Exponential backoff state for reconnection attempts.
 pub struct ReconnectBackoff {
@@ -54,6 +64,7 @@ pub async fn run(
     supported_kinds: Vec<String>,
     mut shutdown: watch::Receiver<bool>,
     admin_router: axum::Router,
+    conf_mgr: Arc<ConfMgr>,
 ) {
     if let Err(e) = config.security.validate() {
         tracing::error!(
@@ -64,19 +75,54 @@ pub async fn run(
         return;
     }
 
+    // Wait for ConfigSyncServer to be ready before connecting to Center.
+    // This prevents the tight NotReady error loop where Center sends
+    // FedWatchRequest before the Controller's caches are initialized.
+    tracing::info!(
+        component = "fed_client",
+        "Waiting for ConfigSyncServer to be ready before connecting to Center"
+    );
+    let ready_wait_start = std::time::Instant::now();
+    loop {
+        if conf_mgr.is_ready() {
+            let elapsed = ready_wait_start.elapsed().as_secs_f64();
+            fed_metrics::record_ready_gate_wait(elapsed);
+            tracing::info!(
+                component = "fed_client",
+                elapsed_secs = elapsed,
+                "ConfigSyncServer is ready, proceeding to connect"
+            );
+            break;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            _ = shutdown.changed() => {
+                tracing::info!(component = "fed_client", "Shutdown during ready-wait, exiting");
+                return;
+            }
+        }
+    }
+
     let mut backoff = ReconnectBackoff::new();
 
     loop {
+        let connect_start = std::time::Instant::now();
         tokio::select! {
             _ = shutdown.changed() => {
                 tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
                 return;
             }
-            result = connect_and_run(&config, conf_center.clone(), &supported_kinds, admin_router.clone()) => {
+            result = connect_and_run(&config, conf_center.clone(), &supported_kinds, admin_router.clone(), conf_mgr.clone()) => {
                 match result {
                     Ok(()) => {
+                        // Only reset backoff if connection was alive long enough.
+                        // Prevents rapid reconnection when Center crash-loops
+                        // (connects briefly then dies), which would cause repeated
+                        // TLS handshakes + full resource serialization.
+                        if connect_start.elapsed() > Duration::from_secs(MIN_STABLE_CONNECTION_SECS) {
+                            backoff.reset();
+                        }
                         tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
-                        backoff.reset();
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -108,6 +154,7 @@ async fn connect_and_run(
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
     admin_router: axum::Router,
+    conf_mgr: Arc<ConfMgr>,
 ) -> Result<()> {
     let tls = config.security.resolve_active_tls();
     let use_tls = tls.is_some_and(|t| !t.skip_tls);
@@ -129,6 +176,10 @@ async fn connect_and_run(
             tracing::error!(
                 component = "fed_client",
                 "security skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
+            );
+            crate::core::common::observe::system_metrics::mark_system_error(
+                crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
             );
             endpoint
         } else {
@@ -167,42 +218,88 @@ async fn connect_and_run(
     let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
     let mut inbound = client.sync(outbound).await?.into_inner();
 
+    fed_metrics::record_connection_event(
+        fed_metrics::labels::role::CONTROLLER,
+        fed_metrics::labels::event::CONNECTED,
+    );
+    fed_metrics::set_connections_active(fed_metrics::labels::role::CONTROLLER, 1);
+    let session_started_at = std::time::Instant::now();
+
     tracing::info!(
         component = "fed_client",
         controller_id = %config.controller_id(),
         "Connected and registered with center"
     );
 
-    loop {
+    // Tracks the cancellation token for the active watch forwarding task, if any.
+    // A new WatchRequest cancels the previous one before starting a new task.
+    let mut active_watch_cancel: Option<CancellationToken> = None;
+
+    // Limit concurrent HttpProxy tasks to prevent Center from overwhelming Controller.
+    let proxy_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PROXY));
+
+    let result: Result<()> = loop {
         tokio::select! {
             msg = inbound.message() => {
-                match msg? {
-                    None => {
+                match msg {
+                    Err(e) => break Err(e.into()),
+                    Ok(None) => {
                         tracing::info!(component = "fed_client", "Center closed stream");
-                        return Ok(());
+                        break Ok(());
                     }
-                    Some(CenterMessage { payload: Some(payload) }) => {
-                        handle_center_message(
+                    Ok(Some(CenterMessage { payload: Some(payload) })) => {
+                        if let Err(e) = handle_center_message(
                             payload,
                             tx.clone(),
                             conf_center.clone(),
                             supported_kinds,
                             admin_router.clone(),
-                        ).await?;
+                            conf_mgr.clone(),
+                            &mut active_watch_cancel,
+                            proxy_semaphore.clone(),
+                        ).await {
+                            break Err(e);
+                        }
                     }
-                    Some(_) => {} // empty payload, ignore
+                    Ok(Some(_)) => {} // empty payload, ignore
                 }
             }
         }
+    };
+
+    // Cleanup: cancel any active watch forwarding task on disconnect.
+    // Without this, old forwarding tasks linger until the gRPC stream's
+    // internal channels detect the disconnect asynchronously.
+    if let Some(prev) = active_watch_cancel.take() {
+        prev.cancel();
     }
+
+    // Record session end metrics. This runs whether the loop broke with
+    // Ok(()) (clean close) or Err(..) (stream error); both count as a
+    // disconnect event on the Controller side.
+    fed_metrics::record_connection_event(
+        fed_metrics::labels::role::CONTROLLER,
+        fed_metrics::labels::event::DISCONNECTED,
+    );
+    fed_metrics::record_connection_duration(
+        fed_metrics::labels::role::CONTROLLER,
+        session_started_at.elapsed().as_secs_f64(),
+    );
+    fed_metrics::set_connections_active(fed_metrics::labels::role::CONTROLLER, 0);
+
+    result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_center_message(
     payload: CenterPayload,
     tx: Arc<tokio::sync::mpsc::Sender<ControllerMessage>>,
     conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
     admin_router: axum::Router,
+    conf_mgr: Arc<ConfMgr>,
+    active_watch_cancel: &mut Option<CancellationToken>,
+    proxy_semaphore: Arc<Semaphore>,
 ) -> Result<()> {
     match payload {
         CenterPayload::RegisterAck(ack) => {
@@ -250,20 +347,21 @@ async fn handle_center_message(
                 request_id = %cmd.request_id,
                 "CommandRequest received"
             );
-            // Reload command: call the local admin router's /api/v1/reload endpoint
             use crate::core::common::fed_sync::proto::command_request::Command;
             let (success, message) = match cmd.command {
                 Some(Command::Reload(_)) => {
                     use tower::ServiceExt;
-                    let req = http::Request::builder()
+                    match http::Request::builder()
                         .method(http::Method::POST)
                         .uri("/api/v1/reload")
                         .body(axum::body::Body::empty())
-                        .unwrap();
-                    match admin_router.clone().oneshot(req).await {
-                        Ok(resp) if resp.status().is_success() => (true, "Reload requested".to_string()),
-                        Ok(resp) => (false, format!("Reload returned {}", resp.status())),
-                        Err(e) => (false, format!("Reload failed: {}", e)),
+                    {
+                        Ok(req) => match admin_router.clone().oneshot(req).await {
+                            Ok(resp) if resp.status().is_success() => (true, "Reload requested".to_string()),
+                            Ok(resp) => (false, format!("Reload returned {}", resp.status())),
+                            Err(e) => (false, format!("Reload failed: {}", e)),
+                        },
+                        Err(e) => (false, format!("Failed to build reload request: {}", e)),
                     }
                 }
                 _ => (false, "Command not supported".to_string()),
@@ -286,9 +384,32 @@ async fn handle_center_message(
                 path = %proxy_req.path,
                 "HttpProxyRequest received"
             );
+            // Limit concurrent proxy tasks to prevent Center from overwhelming Controller.
+            let permit = match proxy_semaphore.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    tracing::warn!(
+                        component = "fed_client",
+                        request_id = %proxy_req.request_id,
+                        "HttpProxy rejected: too many concurrent requests"
+                    );
+                    let _ = tx
+                        .send(ControllerMessage {
+                            payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                request_id: proxy_req.request_id,
+                                status_code: 429,
+                                headers: Default::default(),
+                                body: b"Too many concurrent proxy requests".to_vec(),
+                            })),
+                        })
+                        .await;
+                    return Ok(());
+                }
+            };
             let tx = tx.clone();
             // Spawn as a separate task so proxy requests don't block Ping/Pong handling
             tokio::spawn(async move {
+                let _permit = permit; // held until task completes
                 let request_id = proxy_req.request_id.clone();
 
                 let method: http::Method = proxy_req.method.parse().unwrap_or(http::Method::GET);
@@ -380,6 +501,162 @@ async fn handle_center_message(
                     }
                 }
             });
+        }
+
+        CenterPayload::WatchRequest(req) => {
+            tracing::debug!(
+                component = "fed_client",
+                request_id = %req.request_id,
+                kind = %req.kind,
+                from_version = req.from_version,
+                "FedWatchRequest received"
+            );
+
+            // If ConfigSyncServer is not ready, return NotReady immediately.
+            // The ready gate in run() ensures CSS is ready before first connection.
+            // Center-side backoff (3s) handles transient unavailability during reload.
+            // We must NOT block here — this would stall Ping/Pong and cause heartbeat timeout.
+            let css = match conf_mgr.config_sync_server() {
+                Some(css) => css,
+                None => {
+                    tracing::info!(
+                        component = "fed_client",
+                        request_id = %req.request_id,
+                        "ConfigSyncServer not ready, returning NotReady (Center will retry with backoff)"
+                    );
+                    let err_msg = ControllerMessage {
+                        payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                            request_id: req.request_id,
+                            error: "NotReady".to_string(),
+                            ..Default::default()
+                        })),
+                    };
+                    let _ = tx.send(err_msg).await;
+                    return Ok(());
+                }
+            };
+
+            // Step 1: if from_version == 0, send list first
+            let watch_from = if req.from_version == 0 {
+                match css.list(&req.kind) {
+                    Ok(list_data) => {
+                        let list_msg = ControllerMessage {
+                            payload: Some(CtrlPayload::WatchListResponse(FedWatchListResponse {
+                                request_id: req.request_id.clone(),
+                                data: list_data.data,
+                                sync_version: list_data.sync_version,
+                                server_id: list_data.server_id,
+                            })),
+                        };
+                        if tx.send(list_msg).await.is_err() {
+                            return Ok(());
+                        }
+                        list_data.sync_version
+                    }
+                    Err(e) => {
+                        let err_msg = ControllerMessage {
+                            payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                                request_id: req.request_id,
+                                error: e,
+                                ..Default::default()
+                            })),
+                        };
+                        let _ = tx.send(err_msg).await;
+                        return Ok(());
+                    }
+                }
+            } else {
+                req.from_version
+            };
+
+            // Step 2: start watch forwarding task
+            // Cancel any previously active watch task before starting a new one.
+            if let Some(prev) = active_watch_cancel.take() {
+                prev.cancel();
+            }
+
+            let watch_id = format!("center-{}", req.request_id);
+            match css.watch(&req.kind, watch_id, "center".to_string(), watch_from) {
+                Ok(mut event_rx) => {
+                    let cancel = CancellationToken::new();
+                    *active_watch_cancel = Some(cancel.clone());
+
+                    let tx = tx.clone();
+                    let request_id = req.request_id.clone();
+                    let watch_kind = req.kind.clone();
+                    let initial_server_id = css.server_id();
+                    let reload_conf_mgr = conf_mgr.clone();
+                    tokio::spawn(async move {
+                        let mut reload_check = tokio::time::interval(Duration::from_secs(1));
+                        loop {
+                            tokio::select! {
+                                _ = cancel.cancelled() => {
+                                    break; // Explicitly cancelled by a new WatchRequest
+                                }
+                                event = event_rx.recv() => {
+                                    match event {
+                                        Some(event) => {
+                                            let msg = ControllerMessage {
+                                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                                                    request_id: request_id.clone(),
+                                                    data: event.data,
+                                                    sync_version: event.sync_version,
+                                                    server_id: event.server_id,
+                                                    error: event.err.unwrap_or_default(),
+                                                })),
+                                            };
+                                            fed_metrics::record_watch_event(
+                                                &watch_kind,
+                                                fed_metrics::labels::direction::SENT,
+                                            );
+                                            if tx.send(msg).await.is_err() {
+                                                break; // federation stream closed
+                                            }
+                                        }
+                                        None => break, // channel closed
+                                    }
+                                }
+                                _ = reload_check.tick() => {
+                                    // Detect Controller reload: new CSS has a different server_id.
+                                    // Without this, the forwarding task sits idle forever after reload
+                                    // because the old EventStore stops receiving events.
+                                    if let Some(new_css) = reload_conf_mgr.config_sync_server() {
+                                        if new_css.server_id() != initial_server_id {
+                                            tracing::info!(
+                                                component = "fed_client",
+                                                request_id = %request_id,
+                                                old_server_id = %initial_server_id,
+                                                new_server_id = %new_css.server_id(),
+                                                "Controller reloaded, sending ServerReload to trigger Center re-watch"
+                                            );
+                                            let msg = ControllerMessage {
+                                                payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                                                    request_id: request_id.clone(),
+                                                    error: "ServerReload".to_string(),
+                                                    ..Default::default()
+                                                })),
+                                            };
+                                            let _ = tx.send(msg).await;
+                                            break;
+                                        }
+                                    }
+                                    // If config_sync_server() returns None, reload is in progress — keep waiting
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    let err_msg = ControllerMessage {
+                        payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                            request_id: req.request_id,
+                            error: e,
+                            ..Default::default()
+                        })),
+                    };
+                    let _ = tx.send(err_msg).await;
+                }
+            }
         }
     }
     Ok(())

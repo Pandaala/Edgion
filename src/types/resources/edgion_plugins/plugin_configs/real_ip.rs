@@ -71,6 +71,22 @@ pub struct RealIpConfig {
     #[serde(default = "default_recursive")]
     pub recursive: bool,
 
+    /// Maximum number of trusted-proxy hops to traverse when `recursive=true`.
+    ///
+    /// Caps the right-to-left traversal depth — acts as a safety net when
+    /// `trusted_ips` is broader than the real proxy chain (e.g., the
+    /// entire `10.0.0.0/8` is trusted but attackers can also reach the
+    /// gateway from that range and forge arbitrarily long XFF chains).
+    ///
+    /// Matches Envoy's `xff_num_trusted_hops` concept. `None` (default)
+    /// means no cap (nginx-compatible). When set to `N`, traversal stops
+    /// after skipping `N` trusted hops; the resulting IP at that position
+    /// is returned even if trusted.
+    ///
+    /// Only takes effect when `recursive=true`. Default: `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_trusted_hops: Option<u32>,
+
     // === Runtime-only fields (not serialized) ===
     /// Compiled IP matcher (built from trusted_ips)
     #[serde(skip)]
@@ -92,6 +108,7 @@ impl Default for RealIpConfig {
             trusted_ips: Vec::new(),
             real_ip_header: default_real_ip_header(),
             recursive: default_recursive(),
+            max_trusted_hops: None,
             trusted_ip_matcher: None,
         }
     }

@@ -6,7 +6,7 @@
 - 调整 Redis / Etcd / Elasticsearch / Webhook 的运行时接线
 - 排查 “LinkSys YAML 已同步，但 gateway 侧 runtime client / webhook manager 没更新”
 
-先读这些真实入口：
+## 先读这些真实入口
 
 - [../../../src/types/resources/link_sys/mod.rs](../../../src/types/resources/link_sys/mod.rs)
 - [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
@@ -14,7 +14,6 @@
 - [../../../src/core/gateway/link_sys/runtime/conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
 - [../../../src/core/gateway/link_sys/runtime/store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
 - [../../../src/core/gateway/link_sys/providers/webhook/mod.rs](../../../src/core/gateway/link_sys/providers/webhook/mod.rs)
-- [03-link-sys-testing.md](../../05-testing/03-link-sys-testing.md)
 
 ## 先分清你改的是哪一类东西
 
@@ -135,7 +134,7 @@ LinkSys 现在的桥接关系已经固定了：
 6. 必要时 `src/core/gateway/api/mod.rs`
 7. `examples/test/conf/LinkSys/<System>/`
 8. `examples/test/conf/Services/<system>/docker-compose.yaml`
-9. `examples/test/scripts/integration/run_<system>_test.sh`
+9. `examples/test/scripts/integration/link_sys/run_<system>_test.sh`
 
 通常不需要新增新的 resource kind，也不需要额外改 controller processor 框架本身。
 
@@ -193,9 +192,9 @@ LinkSys 现在的桥接关系已经固定了：
 
 现有脚本是真实存在的：
 
-- `examples/test/scripts/integration/run_redis_test.sh`
-- `examples/test/scripts/integration/run_etcd_test.sh`
-- `examples/test/scripts/integration/run_es_test.sh`
+- `examples/test/scripts/integration/link_sys/run_redis_test.sh`
+- `examples/test/scripts/integration/link_sys/run_etcd_test.sh`
+- `examples/test/scripts/integration/link_sys/run_es_test.sh`
 
 配置与依赖也已经分层：
 
@@ -235,9 +234,9 @@ cargo check
 如果改了某个现有系统，优先跑对应脚本：
 
 ```bash
-./examples/test/scripts/integration/run_redis_test.sh
-./examples/test/scripts/integration/run_etcd_test.sh
-./examples/test/scripts/integration/run_es_test.sh
+./examples/test/scripts/integration/link_sys/run_redis_test.sh
+./examples/test/scripts/integration/link_sys/run_etcd_test.sh
+./examples/test/scripts/integration/link_sys/run_es_test.sh
 ```
 
 如果你改的是文档 / skill / AI 入口，也别忘了：
@@ -245,3 +244,8 @@ cargo check
 ```bash
 make check-agent-docs
 ```
+
+## 相关
+
+- [03-link-sys-testing.md](../../05-testing/03-link-sys-testing.md)
+- [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md)

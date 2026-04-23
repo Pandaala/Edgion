@@ -88,6 +88,10 @@ impl CenterLifeCycle for FileSystemCenter {
             "Starting FileSystem lifecycle"
         );
 
+        // Inject conf_writer into runtime so handlers can auto-create resources (e.g. PluginMetaData).
+        let writer_arc: Arc<dyn CenterApi + Send + Sync> = Arc::new(FileSystemStorage::new(self.config.conf_dir()));
+        self.base.runtime().set_conf_writer(writer_arc);
+
         let endpoint_mode = resolve_endpoint_mode(self.config.endpoint_mode());
         let conf_dir = self.config.conf_dir().clone();
 

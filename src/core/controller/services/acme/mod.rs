@@ -6,6 +6,7 @@
 
 pub mod acme_client;
 pub mod dns_provider;
+mod secret_io;
 pub mod service;
 
 pub use service::{notify_resource_changed, start_acme_service, stop_acme_service};

@@ -245,18 +245,18 @@ impl DynamicInternalUpstreamTestSuite {
                                 );
                             }
 
-                            // Verify access log plugin_log contains "OK diu-backend-canary"
+                            // Verify access log plugin_log contains "upstream selected"
                             let al_client = ctx.access_log_client();
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("OK diu-backend-canary") {
+                                    if log_str.contains("upstream selected") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Access log does not contain 'OK diu-backend-canary': {}",
+                                                "Access log does not contain 'upstream selected': {}",
                                                 log_str
                                             ),
                                         )

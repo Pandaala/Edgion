@@ -208,7 +208,11 @@ where
         // InitApply events arrive (the store will be empty until reflector fills it,
         // which is fine — lookups return None during that window, same as before).
         let (store, writer) = reflector::store();
-        self.processor.set_raw_store(Arc::new(KubeRawStore::new(store.clone())));
+        let raw_store: std::sync::Arc<
+            dyn crate::core::controller::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore<K>,
+        > = std::sync::Arc::new(KubeRawStore::new(store.clone()));
+        self.processor.set_raw_store(raw_store.clone());
+        crate::core::controller::observe::status_metrics::register_status_renderer::<K>(kind, raw_store);
         let watcher_stream = watcher(api, self.watcher_config.clone());
         let mut stream = Box::pin(reflector(writer, watcher_stream));
 
@@ -534,13 +538,22 @@ where
                                             persist_k8s_status::<K>(&client, &api_scope, namespace, name, &status_value)
                                                 .await
                                         {
-                                            tracing::warn!(
-                                                component = "resource_controller",
-                                                kind = kind,
-                                                key = %work_item.key,
-                                                error = %e,
-                                                "Failed to persist status to K8s API"
-                                            );
+                                            if matches!(&e, kube::Error::Api(status) if status.code == 404) {
+                                                tracing::info!(
+                                                    component = "resource_controller",
+                                                    kind = kind,
+                                                    key = %work_item.key,
+                                                    "Resource already deleted, skipping status persist"
+                                                );
+                                            } else {
+                                                tracing::warn!(
+                                                    component = "resource_controller",
+                                                    kind = kind,
+                                                    key = %work_item.key,
+                                                    error = %e,
+                                                    "Failed to persist status to K8s API"
+                                                );
+                                            }
                                         }
                                     }
                                     None => {
@@ -693,14 +706,24 @@ where
         let namespace = obj.meta().namespace.as_deref();
         if let Some(status_value) = extract_status_value(&obj) {
             if let Err(e) = persist_k8s_status::<K>(client, api_scope, namespace, name, &status_value).await {
-                tracing::warn!(
-                    component = "resource_controller",
-                    kind = kind,
-                    name = %name,
-                    phase = phase,
-                    error = %e,
-                    "Failed to persist status during init phase"
-                );
+                if matches!(&e, kube::Error::Api(status) if status.code == 404) {
+                    tracing::info!(
+                        component = "resource_controller",
+                        kind = kind,
+                        name = %name,
+                        phase = phase,
+                        "Resource already deleted, skipping status persist during init phase"
+                    );
+                } else {
+                    tracing::warn!(
+                        component = "resource_controller",
+                        kind = kind,
+                        name = %name,
+                        phase = phase,
+                        error = %e,
+                        "Failed to persist status during init phase"
+                    );
+                }
             }
         }
     }

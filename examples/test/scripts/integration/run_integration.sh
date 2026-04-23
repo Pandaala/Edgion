@@ -566,6 +566,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
                     run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
+                    run_test "TCPRoute_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TCPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
@@ -640,6 +641,9 @@ run_all_tests() {
                     run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
+                    run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
+                    run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+                    run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
                     run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
                     run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
@@ -681,6 +685,14 @@ run_all_tests() {
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "Status_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i ${G_ITEM}" || test_failed=true
+                fi
+                ;;
+            "LinkSys")
+                if [ -z "$G_ITEM" ]; then
+                    run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+                else
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "LinkSys_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             *)
@@ -786,6 +798,9 @@ run_all_tests() {
         run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
         run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
         run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
+        run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
+        run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+        run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
         run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
         run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
         run_test "EdgionPlugins_DslGrpcError" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
@@ -820,7 +835,15 @@ run_all_tests() {
         run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
         run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
         run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
-        
+        run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+
+        # Controller Resource-Abnormal Metric (standalone shell test; slow, runs its own controller with tick_secs=30)
+        if $FULL_TEST; then
+            run_test "ResourceAbnormalMetrics" "bash ${SCRIPT_DIR}/test_resource_abnormal_metrics.sh" || test_failed=true
+        else
+            log_info "Skipping slow test: ResourceAbnormalMetrics (use --full-test to run)"
+        fi
+
         # Gateway Dynamic Tests (if enabled)
         if $G_DYNAMIC_TEST; then
             run_dynamic_tests $G_DYNAMIC_STAGE
@@ -916,7 +939,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth"
                 fi
@@ -1006,7 +1029,21 @@ main() {
     else
         log_info "Skip build step"
     fi
-    
+
+    # Step 1.5: Center no-auth startup (standalone, no Controller/Gateway).
+    # Only runs in the default full sweep (no -r / -i targeting). Verifies that
+    # when no [local_auth] / [auth] is configured: server starts without panic,
+    # business routes return 503 fail-close, /health and /api/v1/auth/status stay
+    # reachable, and startup emits the "No authentication configured" WARN.
+    if [ -z "$G_RESOURCE" ]; then
+        log_section "Center no-auth startup"
+        if ! "${SCRIPT_DIR}/test_center_no_auth.sh"; then
+            log_error "FAIL: Center no-auth startup"
+            exit 1
+        fi
+        log_success "Center no-auth startup passed"
+    fi
+
     # Step 2: Start services (including config load)
     if $do_start; then
         log_section "Step 2: Start all services and load config"

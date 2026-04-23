@@ -14,6 +14,86 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 
+/// Derive whether the operator *expects* admin API authentication.
+///
+/// Intent-based rather than assembly-based — returns `true` in the Controller
+/// auto-generate fallback case (no `[auth]` and no `[local_auth]`) even though
+/// neither config segment is present, because the Controller will attempt to
+/// install credentials via K8s Secret.
+///
+/// Rules:
+/// - `[auth].enabled == true` → true
+/// - `[local_auth].enabled == true` (including `needs_generation()`) → true
+/// - `[local_auth]` present with `enabled == false` → that segment contributes false
+/// - Neither segment present → true (Controller auto-generate fallback)
+/// - `[auth]` present + `[local_auth]` absent → value of `[auth].enabled`
+pub(crate) fn derive_require_auth(
+    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+) -> bool {
+    let oidc_enabled = auth_config.is_some_and(|c| c.enabled);
+    let local_intent = match (local_auth_config, oidc_enabled) {
+        (Some(cfg), _) if cfg.enabled => true,
+        (Some(_), _) => false,
+        (None, false) => true,
+        (None, true) => false,
+    };
+    oidc_enabled || local_intent
+}
+
+/// Resolve the startup `LocalAuthConfig` for the Controller, tolerating a
+/// first-time Secret fetch failure so a K8s API blip does not CrashLoopBackOff.
+///
+/// Returns `(resolved_config, needs_retry)`:
+/// - `resolved_config`: `Some` if we have a usable `LocalAuthConfig` now
+///   (either explicit password from TOML or a freshly fetched Secret);
+///   `None` if we intend local auth but the first fetch failed.
+/// - `needs_retry`: `true` when the caller should spawn `secret_retry_loop`
+///
+/// On first-fetch failure, logs `warn!` and returns `(None, true)` so the
+/// Controller can still boot and serve 503 on admin paths while the background
+/// retry task works. A hard timeout in the retry task triggers `process::exit(1)`.
+pub(crate) async fn resolve_local_config(
+    config: &crate::core::common::config::EdgionControllerConfig,
+    oidc_enabled: bool,
+    conf_mgr: &ConfMgr,
+) -> (Option<crate::core::common::local_auth::LocalAuthConfig>, bool) {
+    match (config.local_auth.as_ref(), oidc_enabled) {
+        // (a) explicit [local_auth] + enabled + needs_generation → fetch Secret
+        (Some(cfg), _) if cfg.enabled && cfg.needs_generation() => {
+            match crate::core::common::local_auth::secret::ensure_admin_credentials(conf_mgr).await {
+                Ok(generated) => (Some(generated), false),
+                Err(e) => {
+                    tracing::warn!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        error = %e,
+                        "initial admin credentials Secret fetch failed; controller booting with require_auth=true; background retry task will install credentials (10min hard timeout)"
+                    );
+                    (None, true)
+                }
+            }
+        }
+        // (b) explicit [local_auth] + enabled + has password → use as-is
+        (Some(cfg), _) if cfg.enabled => (Some(cfg.clone()), false),
+        // (c) explicit [local_auth] + enabled=false → caller did not want local auth
+        (Some(_), _) => (None, false),
+        // (d) neither [auth] nor [local_auth] → auto-generate fallback
+        (None, false) => match crate::core::common::local_auth::secret::ensure_admin_credentials(conf_mgr).await {
+            Ok(generated) => (Some(generated), false),
+            Err(e) => {
+                tracing::warn!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    error = %e,
+                    "initial admin credentials Secret fetch failed (auto-generate fallback); controller booting with require_auth=true; background retry task will install credentials"
+                );
+                (None, true)
+            }
+        },
+        // (e) OIDC-only (no [local_auth])
+        (None, true) => (None, false),
+    }
+}
+
 /// Provider that wraps ConfMgr to dynamically provide ConfigSyncServer
 ///
 /// This allows the gRPC server to always use the latest ConfigSyncServer
@@ -151,6 +231,8 @@ impl EdgionControllerCli {
         security: ConfSyncSecurityConfig,
         auth_config: Option<crate::core::common::auth::AdminAuthConfig>,
         local_auth_config: Option<crate::core::common::local_auth::LocalAuthConfig>,
+        require_auth: bool,
+        needs_retry: bool,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
         tracing::info!(
@@ -215,6 +297,8 @@ impl EdgionControllerCli {
                     admin_addr,
                     auth_config.as_ref(),
                     local_auth_config.as_ref(),
+                    require_auth,
+                    needs_retry,
                     admin_shutdown
                 )
             )
@@ -288,6 +372,42 @@ impl EdgionControllerCli {
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;
 
+        // 1b. Install the process-wide Prometheus recorder so any metric emitted
+        // during startup (ConfMgr init, federation client connect, etc.) is
+        // captured. The recorder is idempotent, so tests and combined modes
+        // do not panic on re-install.
+        if let Err(e) = crate::core::common::observe::metrics_api::install_global_recorder(
+            crate::core::common::observe::metrics_api::RecorderConfig {
+                service: "edgion-controller",
+                idle_timeout_secs: 0,
+                histogram_buckets: &[],
+            },
+        ) {
+            tracing::error!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "metrics_recorder_install_failed",
+                error = %e,
+                "Failed to install Prometheus recorder; /metrics will return 500"
+            );
+        }
+
+        // Start the resource-abnormal metrics snapshot loop.
+        // Runs independently of the Prometheus recorder (renders its own
+        // text block appended to /metrics). The loop body is panic-safe;
+        // the first snapshot runs immediately after renderers are
+        // registered downstream (resource controllers do that during
+        // ConfMgr.start).
+        let abn_cfg = &config.metrics.resource_abnormal;
+        if abn_cfg.enabled {
+            crate::core::controller::observe::status_metrics::set_hard_cap(abn_cfg.hard_cap);
+            crate::core::controller::observe::status_metrics::spawn_snapshot_loop(abn_cfg.tick_secs);
+        } else {
+            tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                "metrics.resource_abnormal.enabled=false; skipping snapshot loop"
+            );
+        }
+
         // 2. Log ConfMgr configuration
         tracing::info!(
             component = COMPONENT_EDGION_CONTROLLER,
@@ -355,6 +475,7 @@ impl EdgionControllerCli {
                 kinds,
                 shutdown_rx,
                 admin_router,
+                conf_mgr.clone(),
             ));
 
             Some(shutdown_tx) // kept alive for duration of process
@@ -369,43 +490,10 @@ impl EdgionControllerCli {
         let security = config.conf_sync_security.clone();
         security.validate()?;
         let auth_config = config.auth.clone();
-
-        // Resolve local_auth: if [local_auth] is present with real credentials use it as-is;
-        // if it has empty password/secret, or if there is no [local_auth] at all (and no OIDC),
-        // auto-generate credentials and store them as a K8s Secret via CenterApi.
-        let local_auth_config = if let Some(cfg) = config.local_auth.clone() {
-            if cfg.needs_generation() {
-                // [local_auth] exists but password/secret is empty — use Secret
-                match crate::core::common::local_auth::secret::ensure_admin_credentials(&*conf_mgr).await {
-                    Ok(generated) => Some(generated),
-                    Err(e) => {
-                        tracing::error!(
-                            component = COMPONENT_EDGION_CONTROLLER,
-                            error = %e,
-                            "Failed to ensure admin credentials Secret"
-                        );
-                        None
-                    }
-                }
-            } else {
-                Some(cfg)
-            }
-        } else if config.auth.is_none() {
-            // No [auth] and no [local_auth] — auto-generate via Secret
-            match crate::core::common::local_auth::secret::ensure_admin_credentials(&*conf_mgr).await {
-                Ok(generated) => Some(generated),
-                Err(e) => {
-                    tracing::error!(
-                        component = COMPONENT_EDGION_CONTROLLER,
-                        error = %e,
-                        "Failed to ensure admin credentials Secret"
-                    );
-                    None
-                }
-            }
-        } else {
-            None // OIDC auth
-        };
+        let oidc_enabled_for_resolve = auth_config.as_ref().is_some_and(|c| c.enabled);
+        let (local_auth_config, needs_retry) =
+            resolve_local_config(&config, oidc_enabled_for_resolve, &*conf_mgr).await;
+        let require_auth = derive_require_auth(auth_config.as_ref(), config.local_auth.as_ref());
 
         Self::start_services(
             conf_mgr,
@@ -415,8 +503,93 @@ impl EdgionControllerCli {
             security,
             auth_config,
             local_auth_config,
+            require_auth, // from derive_require_auth (intent-based, not post-resolve)
+            needs_retry,  // consumed by serve/serve_with_shutdown → spawns secret_retry_loop
             shutdown_handle,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod require_auth_tests {
+    use super::*;
+    use crate::core::common::auth::AdminAuthConfig;
+    use crate::core::common::local_auth::LocalAuthConfig;
+
+    fn oidc_enabled() -> AdminAuthConfig {
+        let mut c = AdminAuthConfig::default();
+        c.enabled = true;
+        c.discovery = "https://example.com".to_string();
+        c
+    }
+
+    fn local_enabled_with_password() -> LocalAuthConfig {
+        let mut c = LocalAuthConfig::default();
+        c.enabled = true;
+        c.username = "admin".to_string();
+        c.password = "somepasswd_long_enough".to_string();
+        c.jwt_secret = "jwtsecret_long_enough_valueeee_ok".to_string();
+        c
+    }
+
+    fn local_disabled() -> LocalAuthConfig {
+        let mut c = LocalAuthConfig::default();
+        c.enabled = false;
+        c
+    }
+
+    fn local_needs_generation() -> LocalAuthConfig {
+        let mut c = LocalAuthConfig::default();
+        c.enabled = true;
+        c.username = "admin".to_string();
+        c.password = String::new(); // needs_generation() == true
+        c
+    }
+
+    #[test]
+    fn require_auth_both_explicit_enabled_true() {
+        let oidc = oidc_enabled();
+        let local = local_enabled_with_password();
+        assert!(derive_require_auth(Some(&oidc), Some(&local)));
+    }
+
+    #[test]
+    fn require_auth_local_disabled_no_oidc_false() {
+        let local = local_disabled();
+        assert!(!derive_require_auth(None, Some(&local)));
+    }
+
+    #[test]
+    fn require_auth_no_config_at_all_true() {
+        assert!(derive_require_auth(None, None));
+    }
+
+    #[test]
+    fn require_auth_local_needs_generation_true() {
+        let local = local_needs_generation();
+        assert!(derive_require_auth(None, Some(&local)));
+    }
+
+    #[test]
+    fn require_auth_oidc_only_true() {
+        let oidc = oidc_enabled();
+        assert!(derive_require_auth(Some(&oidc), None));
+    }
+
+    fn oidc_disabled() -> AdminAuthConfig {
+        let mut c = AdminAuthConfig::default();
+        c.enabled = false;
+        c
+    }
+
+    /// 双显式 opt-out：operator 明确 disabled 两边。require_auth 应为 false
+    /// （respect 明示意图）。守护：未来若有人把"any None/disabled → true"简化
+    /// 进公式，会打破 no-auth 模式。
+    #[test]
+    fn require_auth_both_explicit_disabled_false() {
+        let oidc = oidc_disabled();
+        let local = local_disabled();
+        assert!(!derive_require_auth(Some(&oidc), Some(&local)));
     }
 }

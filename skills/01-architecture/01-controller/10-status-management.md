@@ -1,5 +1,7 @@
 # Status Management — update_status 实现规范
 
+> 各资源状态字段的位置见 [05-resources/SKILL.md](../05-resources/SKILL.md)；本文只讲状态写入流程、字段规范、测试要点。
+>
 > ProcessorHandler::update_status() 的正确实现方式、已知陷阱和审查清单。
 > 本文档面向需要实现或修改 CRD status 的开发者。
 
@@ -60,7 +62,16 @@ from the control plane would be misleading.
 
 ### 4.1 Simple resources (flat status with conditions)
 
-**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy
+**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy, PluginMetaData
+
+**Condition 类型选择的实现拆分** — 本仓库两种风格并存：
+
+| 类型 | 使用的 Condition 库 | 使用的 helpers | 资源 |
+|------|-------------------|---------------|------|
+| 内部 `types::resources::common::Condition` | `status_utils::{accepted_condition, condition_false, update_condition}` | GatewayClass, EdgionGatewayConfig, LinkSys, BackendTLSPolicy |
+| `k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition` | 每个 handler 本地的 `k8s_condition_true/false` + `update_k8s_condition`（存在一定重复） | EdgionPlugins, EdgionStreamPlugins, EdgionAcme, PluginMetaData |
+
+新资源倾向用 `k8s_openapi::Condition`（与 kube-rs 生态一致）。两种风格的 `update_condition`/`update_k8s_condition` 行为等价：只在 status 变化时刷新 `last_transition_time`。
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
 populated in `update_status()` with the full list of supported Gateway API features (matching
@@ -154,15 +165,34 @@ Gateway has both gateway-level conditions (Accepted, ListenersNotValid) and
 per-listener conditions (Accepted, ResolvedRefs, Conflicted). All conditions
 respect `validation_errors`.
 
-### 4.4 EdgionAcme (lifecycle status)
+### 4.4 EdgionAcme (hybrid: Accepted condition + lifecycle fields)
 
-Uses `phase`, `last_failure_reason`, etc. No standard conditions.
+EdgionAcme 同时有 Gateway API 风格的 `Accepted` condition 和 ACME 特有的 lifecycle 字段（`phase` / `certificate_serial` / `last_renewal_time` / 等）：
+
+- **Handler** (`EdgionAcmeHandler::update_status`) 只写 `status.conditions[Accepted]`，反映 spec 校验结果
+- **后台 AcmeService** 通过 Server-Side Apply 独立更新 `phase` 及时间戳字段（field manager `edgion-acme-controller`）。AcmeService 的 SSA patch 利用 `skip_serializing_if = "Vec::is_empty"` 跳过 `conditions`，不会清空 handler 写的 condition
+- `last_failure_reason` 仍保留，供老工具使用
 
 ### 4.5 Resources without status
 
-**Pattern:** Secret, Service, EndpointSlice, Endpoint, ReferenceGrant, PluginMetaData, ConfigMap
+**Pattern:** Secret, Service, EndpointSlice, Endpoint, ReferenceGrant, ConfigMap
 
 These use `DefaultHandler` or a handler with empty `update_status()`.
+
+（PluginMetaData 之前在此列表中，现已归入 4.1 — Gateway API 风格 Accepted + ResolvedRefs；见 [05-resources/15-plugin-metadata.md](../05-resources/15-plugin-metadata.md) 的 `update_status` 节。）
+
+### 4.6 Cross-resource reference resolution (new)
+
+多个简单资源通过 `plugin_metadata_refs` / `SecretRefManager` 等索引在 `parse` 阶段注册出向引用、在 `on_delete` 阶段 `clear_refs_from` 对称清理，然后在 `update_status` 阶段反查 store 计算 `ResolvedRefs`：
+
+| Handler | 引用类型 | resolved via | 未解析时 reason |
+|--------|---------|-------------|----------------|
+| EdgionPlugins | Secret | `SecretRefManager::get_dependencies(ep_key)` | `BackendNotFound`（`ResolvedRefsError::SecretNotFound`）|
+| EdgionStreamPlugins | PluginMetaData (GCIR) | 遍历 spec 的 GCIR entry → `plugin_metadata_store.get(ns, name)` 且 type 匹配 | `InvalidPluginMetaDataRef` |
+| PluginMetaData (ServiceRegionRoute) | PluginMetaData (ClusterRegionRoute) | `plugin_metadata_store.get` 且 type 匹配 | `InvalidPluginMetaDataRef` |
+| EdgionTls | Secret | `secret_store.get` | `BackendNotFound`（`ResolvedRefsError::SecretNotFound`）|
+
+被引用方变更时通过 `plugin_metadata_refs` / `SecretRefManager` 做反向 requeue，让消费方的 ResolvedRefs 自愈。Cross-PM 的反向 requeue 通过 `ep_key` 格式 `"<Kind>:<ns>/<name>"` 编码 kind，`requeue_pm_referrers` 用 `split_once(':')` 分发到对应 processor。
 
 ## 5. The set_parent_conditions_full Contract
 
@@ -239,11 +269,11 @@ state is unchanged.
 
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
-| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins | `conditions_only_status_equal` | `status.conditions[]` |
+| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, PluginMetaData | `conditions_only_status_equal` | `status.conditions[]` |
 | **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | `status.parents[]` matched by parentRef identity |
 | **Per-ancestor** | BackendTLSPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
-| **Lifecycle** | EdgionAcme | Direct `Value` equality | All fields compared verbatim (no conditions to filter) |
+| **Hybrid (lifecycle + conditions)** | EdgionAcme | Direct `Value` equality | All fields compared verbatim — conditions and lifecycle fields together |
 | **Unknown** | Future resources | `conditions_only_status_equal` | Safe fallback |
 
 #### Key scenarios this optimizes

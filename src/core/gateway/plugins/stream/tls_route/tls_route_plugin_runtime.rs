@@ -54,7 +54,8 @@ impl TlsRoutePluginRuntime {
     }
 
     /// Execute all plugins in order. Returns Deny on first deny, otherwise Allow.
-    pub async fn run(&self, ctx: &TlsRouteContext) -> StreamPluginResult {
+    pub async fn run(&self, ctx: &mut TlsRouteContext) -> StreamPluginResult {
+        ctx.push("sni matched");
         for plugin in &self.plugins {
             match plugin.on_tls_route(ctx).await {
                 StreamPluginResult::Allow => continue,
@@ -90,6 +91,7 @@ mod tests {
                 name: "test-route".to_string(),
             },
             is_mtls: false,
+            log: crate::core::gateway::observe::logs::LogBuffer::new(),
         }
     }
 
@@ -97,8 +99,10 @@ mod tests {
     async fn test_empty_runtime_allows() {
         let rt = TlsRoutePluginRuntime::new();
         assert!(rt.is_empty());
-        let result = rt.run(&make_ctx()).await;
+        let mut ctx = make_ctx();
+        let result = rt.run(&mut ctx).await;
         assert!(matches!(result, StreamPluginResult::Allow));
+        assert!(ctx.log.contains("sni matched"));
     }
 
     #[tokio::test]

@@ -16,24 +16,33 @@ pub mod attached_route_tracker;
 pub mod backend_tls_policy_ref;
 pub mod configmap_utils;
 mod context;
+pub mod credential;
 pub mod gateway_route_index;
 mod handler;
 pub mod handlers;
 pub mod listener_port_manager;
 pub mod namespace_store;
+pub mod plugin_metadata_utils;
 mod processor;
 pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
+pub mod region_route_table;
 pub mod secret_utils;
 pub mod service_ref;
 pub mod status_diff;
 pub mod status_utils;
 
 pub use context::HandlerContext;
+pub use credential::{ResolveError, SecretMaterialResolver};
 pub use handler::{ProcessResult, ProcessorHandler};
 pub use processor::{extract_status_value, ProcessorObj, ResourceProcessor, WorkItemResult};
 pub use raw_store::{KubeRawStore, LocalRawStore, RawStore};
+// NOTE: `status_utils::condition_unknown` is intentionally NOT re-exported —
+// no in-tree caller uses it because `EdgionAcmeStatus` uses upstream
+// `k8s_openapi::Condition` (not our local `types::common::Condition`) and has
+// its own `k8s_condition_unknown` helper. Once R2 unifies the Condition type
+// the re-export can return.
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
     resolved_refs_condition, set_parent_conditions, set_parent_conditions_full, update_condition, AcceptedError,
@@ -83,6 +92,12 @@ pub use backend_tls_policy_ref::{make_target_conflict_key, BackendTLSPolicyState
 
 // Re-export namespace_store utilities
 pub use namespace_store::NamespaceStore;
+
+// Re-export plugin_metadata_utils
+pub use plugin_metadata_utils::PluginMetaDataStore;
+
+// Re-export region_route_table utilities
+pub use region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable};
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

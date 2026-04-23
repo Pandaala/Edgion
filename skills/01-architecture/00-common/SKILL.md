@@ -15,3 +15,5 @@ description: 三个 bin（edgion-controller、edgion-gateway、edgion-cli）共�
 | [01-cli-and-startup.md](01-cli-and-startup.md) | 统一命令行约定、工作目录、配置文件路径 | 修改启动参数、理解配置加载 |
 | [02-core-layout.md](02-core-layout.md) | Core 模块分层规范、放置规则 | 新增模块、避免回到旧目录结构 |
 | [03-resource-system.md](03-resource-system.md) | 资源系统：define_resources! 宏、ResourceMeta、ResourceKind、Preparse | 添加新资源类型、理解资源抽象 |
+
+> Secret → Material 解析层（Resolver 全表、Controller/Gateway 职责分界、Zeroize scope）已并入 [../05-resources/10-secret.md](../05-resources/10-secret.md)。

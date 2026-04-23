@@ -19,9 +19,6 @@ pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // Event storage
     store: Arc<RwLock<EventStore<T>>>,
 
-    // pending watch requests
-    watchers: RwLock<Vec<WatchClient<T>>>,
-
     // shared notify for broadcasting events to all watchers
     notify: Arc<Notify>,
 }
@@ -34,7 +31,6 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         Self {
             ready: RwLock::new(false),
             store: Arc::new(RwLock::new(EventStore::new(capacity as usize))),
-            watchers: RwLock::new(Vec::new()),
             notify: Arc::new(Notify::new()),
         }
     }
@@ -62,19 +58,19 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     /// Clear all data from the cache
     /// Used during relink to remove stale data
     ///
-    /// Note: This does NOT notify watcher tasks. The gRPC layer will detect
-    /// server_id changes after the new ConfigSyncServer is ready, and notify
-    /// clients to relist at that point. This ensures clients only relist when
-    /// the new server is available.
+    /// Notifies all waiting watcher tasks so they can detect the version
+    /// discontinuity (EventsLost) and exit cleanly. This is essential for
+    /// Federation watchers (Center) which don't have server_id polling —
+    /// without notification they'd wait forever on a dead cache.
     pub fn clear(&self)
     where
         T: Clone,
     {
         let mut store_guard = self.store.write();
         store_guard.clear();
-        // Do NOT call notify.notify_waiters() here.
-        // Old watcher tasks will keep waiting, but gRPC layer will detect
-        // server_id change and send WATCH_ERR_SERVER_RELOAD when new server is ready.
+        drop(store_guard);
+        // Wake all watchers so they detect the version discontinuity and exit.
+        self.notify.notify_waiters();
     }
 
     /// List all data - returns all resources in the cache with resource version
@@ -213,17 +209,12 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     where
         T: Clone + Send + Sync + 'static,
     {
-        let watchers_len = {
-            let watchers = self.watchers.read();
-            watchers.len()
-        };
         tracing::info!(
             component = "cache_server",
             client_id = %client_id,
             client_name = %client_name,
             from_version = from_version,
             ready = *self.ready.read(),
-            pending_watchers = watchers_len,
             "New watch request"
         );
         // Use bounded channel for data to provide backpressure
@@ -243,36 +234,9 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             last_send_time: Arc::new(parking_lot::RwLock::new(None)),
         };
 
-        let watcher_clone = watcher.clone();
-        {
-            let mut watchers = self.watchers.write();
-
-            // Lazy cleanup: remove watchers whose receivers have been dropped
-            // TODO: need more check on this lazy cleanup logic
-            let len_before = watchers.len();
-            watchers.retain(|w| !w.sender.is_closed());
-            let len_after = watchers.len();
-
-            if len_before > len_after {
-                tracing::info!(
-                    component = "cache_server",
-                    cleaned_count = len_before - len_after,
-                    len_before = len_before,
-                    len_after = len_after,
-                    "Cleaned up disconnected watchers"
-                );
-            }
-
-            watchers.push(watcher_clone.clone());
-        }
-
         tracing::info!(
             component = "cache_server",
             client_id = %watcher.client_id,
-            total_watchers = {
-                let watchers = self.watchers.read();
-                watchers.len()
-            },
             "Watcher registered"
         );
 
@@ -387,6 +351,7 @@ where
     fn clear(&self) {
         let mut store_guard = self.store.write();
         store_guard.clear();
+        drop(store_guard);
         self.notify.notify_waiters();
     }
 }

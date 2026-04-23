@@ -14,81 +14,76 @@ spec:
           properties:
             spec:
               type: object
-              description: "PluginMetaData defines metadata for plugins, supporting three data types"
+              required:
+                - metadata
+              description: "PluginMetaData defines named metadata resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one MetaDataEntry variant, discriminated by `metadata.type`."
               properties:
-                stringList:
+                metadata:
                   type: object
-                  description: "List of strings with metadata (only one of stringList, ipList, or regexList should be set)"
+                  description: "The single metadata entry carried by this PluginMetaData."
+                  required:
+                    - type
+                    - config
                   properties:
-                    items:
-                      type: array
-                      description: "Items in the string list"
-                      items:
-                        type: object
-                        required:
-                          - key
-                        properties:
-                          key:
-                            type: string
-                            description: "The string value (required)"
-                          code:
-                            type: integer
-                            description: "Numeric code associated with this item"
-                            format: int32
-                          priority:
-                            type: integer
-                            description: "Priority determines the order of evaluation"
-                            format: int32
-                          id:
-                            type: string
-                            description: "Unique identifier for this item"
-                          behavior:
-                            type: string
-                            description: "Defines how this item should be processed"
-                ipList:
-                  type: object
-                  description: "List of IP addresses/CIDR ranges (only one of stringList, ipList, or regexList should be set)"
-                  properties:
-                    items:
-                      type: array
-                      description: "Items in the IP list (CIDR format: '192.168.1.0/24', '10.0.0.0/8')"
-                      items:
+                    type:
+                      type: string
+                      description: "Variant tag. Determines the shape of `config`."
+                      enum:
+                        - KeyList
+                        - IpList
+                        - ClusterRegionRoute
+                        - ServiceRegionRoute
+                        - GlobalConnectionIpRestriction
+                    config:
+                      type: object
+                      description: |
+                        Variant-specific configuration. Shape depends on `type`:
+                          - KeyList: { matchMode?: "Exact"|"Regex", items: [{ key, code?, priority?, id?, behavior? }] }
+                          - IpList: { items: string[] }                     (CIDRs or bare IPs, v4/v6)
+                          - ClusterRegionRoute: full cluster topology + route rules + matchMap
+                          - ServiceRegionRoute: { clusterRef: {namespace, name}, regions: [{ name, failoverTo? }] }
+                          - GlobalConnectionIpRestriction: { enable, activeProfile, profiles: { <name>: { defaultAction, allow?, deny? } } }
+                        Validation of the concrete shape is performed by the Controller
+                        and surfaced via the `Accepted` status condition.
+                      x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              description: "Status of PluginMetaData."
+              properties:
+                conditions:
+                  type: array
+                  description: |
+                    Gateway-API-style conditions.
+                    - `Accepted`: the spec passed per-variant preparse validation.
+                    - `ResolvedRefs`: cross-PM references resolve (only meaningful for
+                      ServiceRegionRoute.clusterRef; otherwise always True).
+                  items:
+                    type: object
+                    properties:
+                      type:
                         type: string
-                regexList:
-                  type: object
-                  description: "List of regex patterns with metadata (only one of stringList, ipList, or regexList should be set)"
-                  properties:
-                    items:
-                      type: array
-                      description: "Items in the regex list"
-                      items:
-                        type: object
-                        required:
-                          - key
-                        properties:
-                          key:
-                            type: string
-                            description: "The regex pattern (required)"
-                          code:
-                            type: integer
-                            description: "Numeric code associated with this pattern"
-                            format: int32
-                          priority:
-                            type: integer
-                            description: "Priority determines the order of pattern evaluation"
-                            format: int32
-                          id:
-                            type: string
-                            description: "Unique identifier for this pattern"
-                          behavior:
-                            type: string
-                            description: "Defines how this pattern should be processed"
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+      subresources:
+        status: {}
       additionalPrinterColumns:
         - name: Type
           type: string
-          jsonPath: .spec
-          description: "Data type (stringList, ipList, or regexList)"
-          priority: 1
+          jsonPath: .spec.metadata.type
+          description: "MetaDataEntry variant"
+        - name: Accepted
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Accepted')].status
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -99,4 +94,3 @@ spec:
     kind: PluginMetaData
     shortNames:
       - pmd
-

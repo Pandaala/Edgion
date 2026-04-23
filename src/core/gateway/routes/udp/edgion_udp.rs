@@ -211,7 +211,7 @@ impl EdgionUdpProxy {
     /// Get or create a client session.
     ///
     /// Returns `Err(())` if the session limit is reached, preventing resource
-    /// exhaustion from UDP reflection/amplification attacks (fix for H-4).
+    /// exhaustion from UDP reflection/amplification attacks.
     async fn get_or_create_session(
         &self,
         client_addr: std::net::SocketAddr,
@@ -294,8 +294,7 @@ impl EdgionUdpProxy {
 
     /// Periodically clean up inactive sessions.
     ///
-    /// Exits when `cancel_token` is cancelled (fix for C-1: cleanup task
-    /// no longer holds `Arc<Self>` forever).
+    /// Exits when `cancel_token` is cancelled.
     async fn session_cleanup_loop(&self) {
         loop {
             tokio::select! {

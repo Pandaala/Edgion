@@ -1,10 +1,12 @@
 //! Redis client configuration types
 
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::common::SecretReference;
+use crate::types::resources::common::TlsConfig;
 
 /// Redis client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -39,28 +41,29 @@ pub struct RedisClientConfig {
 
     /// TLS configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tls: Option<RedisTls>,
+    pub tls: Option<TlsConfig>,
 
     /// Observability configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observability: Option<RedisObservability>,
 }
 
-/// Redis authentication configuration
+/// Redis authentication configuration.
+///
+/// All credentials MUST be stored in a Kubernetes Secret and referenced via `secretRef`.
+/// Inline username/password fields have been removed (breaking change).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RedisAuth {
-    /// Username (for Redis 6+ ACL)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
+    /// Secret reference for credentials (required).
+    /// The referenced Secret should contain `username` and/or `password` keys.
+    #[serde(rename = "secretRef")]
+    pub secret_ref: SecretReference,
 
-    /// Password
+    /// Resolved Secret object (filled by controller, not from YAML).
+    /// Serialized to the Gateway via conf_sync; never persisted into K8s `spec`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
-
-    /// Secret reference for credentials
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
+    pub secret: Option<Secret>,
 }
 
 /// Redis timeout configuration (in milliseconds)
@@ -180,44 +183,6 @@ pub struct RedisCluster {
     pub max_redirects: Option<u32>,
 }
 
-/// Redis TLS configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RedisTls {
-    /// Enable TLS
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// TLS certificates configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certs: Option<RedisTlsCerts>,
-
-    /// Skip certificate verification (insecure, for testing only)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub insecure_skip_verify: Option<bool>,
-}
-
-/// Redis TLS certificates configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RedisTlsCerts {
-    /// CA certificate (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_cert: Option<String>,
-
-    /// Client certificate (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_cert: Option<String>,
-
-    /// Client key (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_key: Option<String>,
-
-    /// Secret reference for certificates
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
-}
-
 /// Redis observability configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -259,4 +224,57 @@ pub struct RedisLogging {
     /// Log slow operations (threshold in milliseconds)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slow_log_threshold: Option<u64>,
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redis_auth_requires_secret_ref() {
+        let yaml = r#"
+secretRef:
+  name: redis-creds
+"#;
+        let auth: RedisAuth = serde_yaml::from_str(yaml).expect("should deserialize");
+        assert_eq!(auth.secret_ref.name, "redis-creds");
+        assert!(auth.secret_ref.namespace.is_none());
+    }
+
+    #[test]
+    fn redis_auth_with_namespace() {
+        let yaml = r#"
+secretRef:
+  name: redis-creds
+  namespace: credentials
+"#;
+        let auth: RedisAuth = serde_yaml::from_str(yaml).expect("should deserialize");
+        assert_eq!(auth.secret_ref.name, "redis-creds");
+        assert_eq!(auth.secret_ref.namespace.as_deref(), Some("credentials"));
+    }
+
+    #[test]
+    fn redis_auth_rejects_inline_password() {
+        let yaml = "secretRef:\n  name: r\npassword: leaked";
+        let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn redis_auth_rejects_inline_username() {
+        let yaml = "secretRef:\n  name: r\nusername: admin";
+        let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn redis_auth_rejects_missing_secret_ref() {
+        let yaml = "{}";
+        let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "secretRef 是必需字段");
+    }
 }

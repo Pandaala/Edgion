@@ -42,7 +42,7 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 
 | 文件 | 主题 |
 |------|------|
-| [observability/00-access-log.md](observability/00-access-log.md) | Access Log 设计：字段结构、PluginLog 格式、常见场景速查 |
+| [observability/00-access-log.md](observability/00-access-log.md) | Access Log 设计：字段结构、PluginLog 格式（含 `push_err` 错误条目 API）、常见场景速查 |
 | [observability/01-metrics.md](observability/01-metrics.md) | Metrics 规范：添加步骤、Label 约束、Test Metrics、禁止事项 |
 | [observability/02-tracing-and-logging.md](observability/02-tracing-and-logging.md) | 控制面日志：结构化 Tracing、Level 选择、错误上下文、instrument 命名 |
 
@@ -64,6 +64,7 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 
 ### 可观测性
 - [ ] PluginLog 每条 ≤ 40 字节，以 `; ` 结尾
+- [ ] 错误路径走 `plugin_log.push_err("<static kind>")`，不是 `push(&format!("err: {}", e))`（避免 token / claim 泄漏）
 - [ ] 没有把调试信息写进 PluginLog（应用 `tracing::debug!`）
 - [ ] 新增 metrics 通过 `GatewayMetrics` struct 管理，不直接用 `metrics::counter!()` 宏
 - [ ] 新增 metrics 无 Histogram 类型

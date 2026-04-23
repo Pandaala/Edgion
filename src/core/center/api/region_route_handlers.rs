@@ -1,99 +1,292 @@
-//! Center aggregation endpoints for RegionRoute data.
-//!
-//! These handlers call ALL online controllers in parallel and aggregate
-//! region-route information across the federation.
+//! Region Route handlers and shared helpers for Center aggregation handlers.
 
-use axum::{
-    extract::{Path, Query, State},
-    response::IntoResponse,
-    Json,
-};
-use serde::{Deserialize, Serialize};
+use axum::extract::State;
+use axum::Json;
 use std::collections::HashMap;
 
 use super::ApiState;
-use crate::core::common::api::ListResponse;
 
-// ---------------------------------------------------------------------------
-// DTOs
-// ---------------------------------------------------------------------------
+// ============= RegionRoute MetaDataStore Handlers =============
 
-/// One entry in the controller's `GET /api/v1/region-routes` response.
-#[derive(Debug, Clone, Deserialize)]
+pub async fn list_cluster_region_routes(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let routes = state.metadata_store.list_cluster_routes();
+    Json(serde_json::json!({
+        "success": true,
+        "data": routes,
+    }))
+}
+
+pub async fn list_service_region_routes(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let routes = state.metadata_store.list_service_routes();
+    Json(serde_json::json!({
+        "success": true,
+        "data": routes,
+    }))
+}
+
+// ============= Failover Handlers =============
+
+/// `POST /api/v1/center/cluster-region-routes/failover`
+///
+/// Fans out `POST /api/v1/cluster-region-routes/failover` to all online controllers
+/// with the same request body.
+///
+/// Response: `{ modified: N, failed: N }`
+pub async fn cluster_region_route_failover(
+    State(state): State<ApiState>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let body_bytes = match serde_json::to_vec(&body) {
+        Ok(b) => b,
+        Err(e) => return Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    };
+
+    let (modified, failed) =
+        fan_out_failover(&state, "/api/v1/cluster-region-routes/failover".to_string(), body_bytes).await;
+
+    Json(serde_json::json!({
+        "success": true,
+        "data": { "modified": modified, "failed": failed },
+    }))
+}
+
+/// `POST /api/v1/center/service-region-routes/failover`
+///
+/// Fans out `POST /api/v1/service-region-routes/failover` to all online controllers
+/// with the same request body.
+///
+/// Response: `{ modified: N, failed: N }`
+pub async fn service_region_route_failover(
+    State(state): State<ApiState>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let body_bytes = match serde_json::to_vec(&body) {
+        Ok(b) => b,
+        Err(e) => return Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    };
+
+    let (modified, failed) =
+        fan_out_failover(&state, "/api/v1/service-region-routes/failover".to_string(), body_bytes).await;
+
+    Json(serde_json::json!({
+        "success": true,
+        "data": { "modified": modified, "failed": failed },
+    }))
+}
+
+// ============= Sync Handlers =============
+
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ControllerRegionRouteKey {
-    service_group: String,
-    cluster: String,
-    namespace: String,
-    kind: String,
-    resources: Vec<String>,
+pub struct SyncRequest {
+    pub source_controller_id: String,
+    pub namespace: String,
+    pub name: String,
 }
 
-/// Wrapper matching the controller's JSON envelope `{ success, data }`.
-#[derive(Debug, Deserialize)]
-struct ControllerListResponse {
-    success: bool,
-    data: Option<Vec<ControllerRegionRouteKey>>,
+/// `POST /api/v1/center/cluster-region-routes/sync`
+///
+/// Reads the ClusterRegionRoute PluginMetaData from the source controller,
+/// then writes it to all other online controllers. Preserves each target's
+/// `myRegion` value (since it's intentionally different per controller).
+pub async fn cluster_region_route_sync(
+    State(state): State<ApiState>,
+    Json(body): Json<SyncRequest>,
+) -> Json<serde_json::Value> {
+    // 1. Read source PM via proxy
+    let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
+    let source_pm = match state
+        .proxy
+        .forward(
+            &body.source_controller_id,
+            "GET".to_string(),
+            source_path.clone(),
+            HashMap::new(),
+            vec![],
+        )
+        .await
+    {
+        Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
+            Ok(v) => match v.get("data") {
+                Some(data) => data.clone(),
+                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+            },
+            Err(e) => {
+                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
+            }
+        },
+        Ok(r) => {
+            return Json(
+                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            )
+        }
+        Err((status, msg)) => {
+            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+        }
+    };
+
+    // 2. Get each controller's myRegion from MetaDataStore
+    let routes = state.metadata_store.list_cluster_routes();
+    let route = routes
+        .iter()
+        .find(|r| r.namespace == body.namespace && r.name == body.name);
+    let my_region_map: HashMap<String, String> = match route {
+        Some(r) => r
+            .controllers
+            .iter()
+            .map(|(cid, entry)| (cid.clone(), entry.my_region.clone()))
+            .collect(),
+        None => HashMap::new(),
+    };
+
+    // 3. Fan-out PUT to all online controllers (except source)
+    let summaries = state.aggregator.controller_summaries();
+    let targets: Vec<_> = summaries
+        .into_iter()
+        .filter(|s| s.online && s.controller_id != body.source_controller_id)
+        .collect();
+
+    let put_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
+
+    let futs = targets.iter().map(|s| {
+        let proxy = state.proxy.clone();
+        let controller_id = s.controller_id.clone();
+        let put_path = put_path.clone();
+        let mut pm = source_pm.clone();
+
+        // Preserve target's myRegion
+        if let Some(target_my_region) = my_region_map.get(&controller_id) {
+            // Try spec.metadata.config.myRegion (raw file format)
+            if let Some(mr) = pm.pointer_mut("/spec/metadata/config/myRegion") {
+                *mr = serde_json::Value::String(target_my_region.clone());
+            }
+            // Try spec.plugins[].config.baseInfo.myRegion (processed format)
+            if let Some(plugins) = pm.pointer_mut("/spec/plugins").and_then(|p| p.as_array_mut()) {
+                for plugin in plugins.iter_mut() {
+                    if let Some(mr) = plugin.pointer_mut("/config/baseInfo/myRegion") {
+                        *mr = serde_json::Value::String(target_my_region.clone());
+                    }
+                }
+            }
+        }
+
+        async move {
+            let content = match serde_json::to_vec(&pm) {
+                Ok(b) => b,
+                Err(_) => return false,
+            };
+            let mut headers = HashMap::new();
+            headers.insert("content-type".to_string(), "application/json".to_string());
+            match proxy
+                .forward(&controller_id, "PUT".to_string(), put_path, headers, content)
+                .await
+            {
+                Ok(r) if r.status_code == 200 => true,
+                _ => {
+                    tracing::warn!(component = "center", controller_id = %controller_id, "Sync PUT failed");
+                    false
+                }
+            }
+        }
+    });
+
+    let results = futures::future::join_all(futs).await;
+    let modified = results.iter().filter(|&&ok| ok).count() + 1; // +1 for source
+    let failed = results.iter().filter(|&&ok| !ok).count();
+
+    Json(serde_json::json!({
+        "success": true,
+        "data": { "modified": modified, "failed": failed },
+    }))
 }
 
-/// Wrapper for the controller's detail response `{ success, data }`.
-#[derive(Debug, Deserialize)]
-struct ControllerDetailResponse {
-    success: bool,
-    data: Option<Vec<serde_json::Value>>,
+/// `POST /api/v1/center/service-region-routes/sync`
+///
+/// Same as cluster sync but for ServiceRegionRoute. No myRegion to preserve.
+pub async fn service_region_route_sync(
+    State(state): State<ApiState>,
+    Json(body): Json<SyncRequest>,
+) -> Json<serde_json::Value> {
+    // 1. Read source PM via proxy
+    let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
+    let source_pm = match state
+        .proxy
+        .forward(
+            &body.source_controller_id,
+            "GET".to_string(),
+            source_path,
+            HashMap::new(),
+            vec![],
+        )
+        .await
+    {
+        Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
+            Ok(v) => match v.get("data") {
+                Some(data) => data.clone(),
+                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+            },
+            Err(e) => {
+                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
+            }
+        },
+        Ok(r) => {
+            return Json(
+                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            )
+        }
+        Err((status, msg)) => {
+            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+        }
+    };
+
+    // 2. Fan-out PUT to all online controllers (except source)
+    let summaries = state.aggregator.controller_summaries();
+    let targets: Vec<_> = summaries
+        .into_iter()
+        .filter(|s| s.online && s.controller_id != body.source_controller_id)
+        .collect();
+
+    let put_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
+
+    let futs = targets.iter().map(|s| {
+        let proxy = state.proxy.clone();
+        let controller_id = s.controller_id.clone();
+        let put_path = put_path.clone();
+        let pm = source_pm.clone();
+
+        async move {
+            let content = match serde_json::to_vec(&pm) {
+                Ok(b) => b,
+                Err(_) => return false,
+            };
+            let mut headers = HashMap::new();
+            headers.insert("content-type".to_string(), "application/json".to_string());
+            match proxy
+                .forward(&controller_id, "PUT".to_string(), put_path, headers, content)
+                .await
+            {
+                Ok(r) if r.status_code == 200 => true,
+                _ => {
+                    tracing::warn!(component = "center", controller_id = %controller_id, "Service sync PUT failed");
+                    false
+                }
+            }
+        }
+    });
+
+    let results = futures::future::join_all(futs).await;
+    let modified = results.iter().filter(|&&ok| ok).count() + 1;
+    let failed = results.iter().filter(|&&ok| !ok).count();
+
+    Json(serde_json::json!({
+        "success": true,
+        "data": { "modified": modified, "failed": failed },
+    }))
 }
 
-/// Per-controller contribution to an aggregated key.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ControllerRouteRef {
-    controller_id: String,
-    resources: Vec<String>,
-}
-
-/// Aggregated region-route key across controllers.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CenterRegionRouteKey {
-    service_group: String,
-    cluster: String,
-    namespace: String,
-    kind: String,
-    controllers: Vec<ControllerRouteRef>,
-}
-
-/// Per-controller detail for a specific (serviceGroup, cluster, namespace).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CenterRegionRouteDetail {
-    controller_id: String,
-    entries: Vec<serde_json::Value>,
-}
-
-// ---------------------------------------------------------------------------
-// Query params
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-pub struct RegionRouteQuery {
-    service_group: Option<String>,
-    cluster: Option<String>,
-    namespace: Option<String>,
-    kind: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Forward a GET request to all online controllers in parallel, parse each
-/// response as `T`, and return `(controller_id, parsed)` pairs.
-/// Controllers that fail or return unparseable responses are skipped with a warning.
-async fn forward_to_all_online<T: serde::de::DeserializeOwned>(
-    state: &ApiState,
-    path: String,
-    endpoint_label: &str,
-) -> Vec<(String, T)> {
+/// Fan-out a POST request to all online controllers in parallel.
+/// Returns `(modified_count, failed_count)`.
+async fn fan_out_failover(state: &ApiState, path: String, body_bytes: Vec<u8>) -> (usize, usize) {
     let summaries = state.aggregator.controller_summaries();
     let online: Vec<_> = summaries.into_iter().filter(|s| s.online).collect();
 
@@ -101,134 +294,47 @@ async fn forward_to_all_online<T: serde::de::DeserializeOwned>(
         let proxy = state.proxy.clone();
         let controller_id = s.controller_id.clone();
         let path = path.clone();
+        let body = body_bytes.clone();
         async move {
+            let mut headers = HashMap::new();
+            headers.insert("content-type".to_string(), "application/json".to_string());
             let result = proxy
-                .forward(&controller_id, "GET".to_string(), path, HashMap::new(), vec![])
+                .forward(&controller_id, "POST".to_string(), path, headers, body)
                 .await;
-            (controller_id, result)
+            match result {
+                Ok(r) if r.status_code == 200 => {
+                    tracing::debug!(
+                        component = "center",
+                        controller_id = %controller_id,
+                        "RegionRoute failover forwarded successfully"
+                    );
+                    true
+                }
+                Ok(r) => {
+                    tracing::warn!(
+                        component = "center",
+                        controller_id = %controller_id,
+                        status = r.status_code,
+                        "RegionRoute failover POST returned non-OK status"
+                    );
+                    false
+                }
+                Err((status, msg)) => {
+                    tracing::warn!(
+                        component = "center",
+                        controller_id = %controller_id,
+                        status = %status,
+                        error = %msg,
+                        "RegionRoute failover POST failed"
+                    );
+                    false
+                }
+            }
         }
     });
 
     let results = futures::future::join_all(futs).await;
-    let mut parsed_results = Vec::new();
-
-    for (controller_id, result) in results {
-        let resp = match result {
-            Ok(r) if r.status_code == 200 => r,
-            Ok(r) => {
-                tracing::warn!(
-                    component = "center", controller_id = %controller_id,
-                    status = r.status_code,
-                    "Non-OK response for {} from controller, skipping", endpoint_label
-                );
-                continue;
-            }
-            Err((status, msg)) => {
-                tracing::warn!(
-                    component = "center", controller_id = %controller_id,
-                    status = %status, error = %msg,
-                    "Failed to fetch {} from controller, skipping", endpoint_label
-                );
-                continue;
-            }
-        };
-
-        match serde_json::from_slice::<T>(&resp.body) {
-            Ok(v) => parsed_results.push((controller_id, v)),
-            Err(e) => {
-                tracing::warn!(
-                    component = "center", controller_id = %controller_id, error = %e,
-                    "Failed to parse {} response from controller, skipping", endpoint_label
-                );
-            }
-        }
-    }
-
-    parsed_results
-}
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
-/// `GET /api/v1/center/region-routes`
-///
-/// Calls every online controller's `GET /api/v1/region-routes`, then merges
-/// results by `(serviceGroup, cluster, namespace)`.
-pub async fn list_center_region_routes(
-    State(state): State<ApiState>,
-    Query(params): Query<RegionRouteQuery>,
-) -> impl IntoResponse {
-    let responses: Vec<(String, ControllerListResponse)> =
-        forward_to_all_online(&state, "/api/v1/region-routes".to_string(), "region-routes").await;
-
-    // Aggregate: (serviceGroup, cluster, namespace, kind) → Vec<ControllerRouteRef>
-    let mut map: HashMap<(String, String, String, String), Vec<ControllerRouteRef>> = HashMap::new();
-
-    for (controller_id, parsed) in responses {
-        if !parsed.success {
-            continue;
-        }
-        if let Some(keys) = parsed.data {
-            for key in keys {
-                let group_key = (key.service_group.clone(), key.cluster.clone(), key.namespace.clone(), key.kind.clone());
-                map.entry(group_key).or_default().push(ControllerRouteRef {
-                    controller_id: controller_id.clone(),
-                    resources: key.resources,
-                });
-            }
-        }
-    }
-
-    // Build result list and apply optional filters in a single pass.
-    let mut items: Vec<CenterRegionRouteKey> = map
-        .into_iter()
-        .filter(|((sg, cl, ns, k), _)| {
-            params.service_group.as_ref().map_or(true, |f| sg == f)
-                && params.cluster.as_ref().map_or(true, |f| cl == f)
-                && params.namespace.as_ref().map_or(true, |f| ns == f)
-                && params.kind.as_ref().map_or(true, |f| k == f)
-        })
-        .map(|((sg, cl, ns, k), controllers)| CenterRegionRouteKey {
-            service_group: sg,
-            cluster: cl,
-            namespace: ns,
-            kind: k,
-            controllers,
-        })
-        .collect();
-
-    items.sort_by(|a, b| {
-        (&a.service_group, &a.cluster, &a.namespace, &a.kind)
-            .cmp(&(&b.service_group, &b.cluster, &b.namespace, &b.kind))
-    });
-
-    Json(ListResponse::success(items))
-}
-
-/// `GET /api/v1/center/region-routes/{service_group}/{cluster}/{namespace}`
-///
-/// Calls every online controller's detail endpoint and returns per-controller
-/// entries.
-pub async fn get_center_region_route_detail(
-    State(state): State<ApiState>,
-    Path((service_group, cluster, namespace, kind)): Path<(String, String, String, String)>,
-) -> impl IntoResponse {
-    let path = format!("/api/v1/region-routes/{}/{}/{}/{}", service_group, cluster, namespace, kind);
-
-    let responses: Vec<(String, ControllerDetailResponse)> =
-        forward_to_all_online(&state, path, "region-route detail").await;
-
-    let mut details: Vec<CenterRegionRouteDetail> = responses
-        .into_iter()
-        .filter(|(_, parsed)| parsed.success)
-        .map(|(controller_id, parsed)| CenterRegionRouteDetail {
-            controller_id,
-            entries: parsed.data.unwrap_or_default(),
-        })
-        .collect();
-
-    details.sort_by(|a, b| a.controller_id.cmp(&b.controller_id));
-
-    Json(ListResponse::success(details))
+    let modified = results.iter().filter(|&&ok| ok).count();
+    let failed = results.iter().filter(|&&ok| !ok).count();
+    (modified, failed)
 }

@@ -18,7 +18,7 @@
 #     --build-arg DASHBOARD_DIST_PATH=docker/.all-in-one-dist \
 #     -t edgion-all-in-one:latest .
 
-ARG RUNTIME_BASE=ubuntu:24.04
+ARG RUNTIME_BASE=debian:bookworm-slim
 FROM ${RUNTIME_BASE}
 
 ARG ALL_IN_ONE_MODE=controller-gateway

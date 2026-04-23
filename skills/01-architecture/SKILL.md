@@ -46,11 +46,7 @@ flowchart TD
     CLI -- "HTTP API" --> Controller
 ```
 
-- **edgion-controller**（控制面）：从 K8s API 或本地文件接收资源，经校验/预解析/处理后通过 gRPC 推送给 Gateway。负责状态回写、跨资源依赖管理、ACME 证书签发。
-- **edgion-gateway**（数据面）：基于 Pingora 的高性能代理，从 Controller 接收配置后处理实际流量。支持 HTTP/gRPC/TCP/TLS/UDP，具备插件系统和多种负载均衡策略。
-- **edgion-cli**（CLI 工具）：通过 HTTP API 与 Controller/Gateway 交互，提供资源 CRUD、状态查询和运维操作。
-
-## 阅读指引
+## 细粒度定位
 
 | 你想了解… | 从这里开始 |
 |-----------|-----------|
@@ -60,8 +56,8 @@ flowchart TD
 | Controller 和 Gateway 如何同步 | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
 | edgion-cli 命令和 target 模式 | [04-ctl/](04-ctl/SKILL.md) |
 | 某种具体资源的完整处理链路 | [05-resources/](05-resources/SKILL.md) |
-| 排查路由不匹配 | [02-gateway/03-routes/00-route-matching.md](02-gateway/03-routes/00-route-matching.md) |
-| 排查 TLS 证书问题 | [02-gateway/04-tls/](02-gateway/04-tls/) |
+| 排查路由不匹配 | [02-gateway/03-routes/](02-gateway/03-routes/SKILL.md) |
+| 排查 TLS 证书问题 | [02-gateway/04-tls/](02-gateway/04-tls/SKILL.md) |
 | 排查 gRPC 同步问题 | [03-controller-gateway-link/00-overview.md](03-controller-gateway-link/00-overview.md) |
 | **开发新资源类型** | [01-controller/09-add-new-resource/](01-controller/09-add-new-resource/00-guide.md) |
 | **开发 HTTP 插件** | [02-gateway/12-edgion-plugin-dev.md](02-gateway/12-edgion-plugin-dev.md) |

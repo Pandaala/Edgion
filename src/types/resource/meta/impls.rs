@@ -91,11 +91,29 @@ impl_resource_meta!(
 );
 
 impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {
-    self.validate_config();
+    // Data-plane side: log validation errors but don't fail the pre_parse step.
+    // The Controller surfaces the same errors via the Accepted condition
+    // (see LinkSysHandler::preparse + update_status).
+    let errors = self.validate_config();
+    if !errors.is_empty() {
+        let key = self.key_name_str();
+        for err in &errors {
+            tracing::warn!(link_sys = %key, error = %err, "LinkSys validation error");
+        }
+    }
 });
 
 impl_resource_meta!(PluginMetaData, PluginMetaData, "PluginMetaData", |self| {
-    self.validate_pre_parse();
+    // Data-plane side: log validation problems but don't fail the pre_parse step.
+    // The Controller records the same errors in the Accepted status condition
+    // (see PluginMetadataHandler::preparse + update_status).
+    let errors = self.validate_pre_parse();
+    if !errors.is_empty() {
+        let key = self.key_name_str();
+        for err in &errors {
+            tracing::warn!(plugin_metadata = %key, error = %err, "PluginMetaData validation error");
+        }
+    }
 });
 
 // ACME

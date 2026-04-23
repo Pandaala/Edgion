@@ -36,12 +36,11 @@ pub use plugin_configs::{
     HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacCredential, HttpMethod,
     IpRestrictionConfig, IpSource, JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm,
     JwtAuthConfig, KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames, LruCacheConfig, MappingConfig,
-    MockConfig, OnAllDown, OnMissing, OnMissingKey, OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig,
-    RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef,
-    RegionRouteBaseInfo, RegionRouteConfig, ReplaceConfig, RequestRestrictionConfig, ResolvedJweCredential, ResponseHeaderActions,
-    ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule, RestrictionSource, RouteRule, RuleMatchMode,
-    TemplateSegment, TemplateVarType, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig,
-    VerificationMode,
+    MockConfig, OnMissing, OnMissingKey, OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm,
+    RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig,
+    ReplaceConfig, RequestRestrictionConfig, ResolvedJweCredential, ResponseHeaderActions, ResponseHeaderEntry,
+    ResponseRewriteConfig, RestrictionRule, RestrictionSource, RouteRule, RuleMatchMode, TemplateSegment,
+    TemplateVarType, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
 };
 
 /// API group for EdgionPlugins

@@ -241,7 +241,11 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         let mut resolved_refs_errors =
             super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime());
         let ref_denied_list = collect_ref_denied_list(route);
-        resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(&ref_denied_list));
+        resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
+            route_ns,
+            ResourceKind::UDPRoute,
+            &ref_denied_list,
+        ));
 
         let status = route.status.get_or_insert_with(|| UDPRouteStatus { parents: vec![] });
 

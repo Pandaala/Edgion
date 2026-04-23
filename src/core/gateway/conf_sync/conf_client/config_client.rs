@@ -153,7 +153,13 @@ impl ConfigClient {
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            plugin_metadata: ClientCache::new(client_id.clone(), client_name.clone()),
+            plugin_metadata: {
+                let pm_cache = ClientCache::new(client_id.clone(), client_name.clone());
+                let pm_handler =
+                    crate::core::gateway::plugins::runtime::plugin_metadata::create_plugin_metadata_handler();
+                pm_cache.set_conf_processor(pm_handler);
+                pm_cache
+            },
             edgion_acme: edgion_acme_cache,
             required_cache_names: RwLock::new(None),
         }
@@ -320,11 +326,6 @@ impl ConfigClient {
     pub fn edgion_gateway_configs(&self) -> &ClientCache<EdgionGatewayConfig> {
         &self.edgion_gateway_configs
     }
-
-    // /// Get secrets cache for direct access
-    // pub fn secrets(&self) -> &ClientCache<Secret> {
-    //     &self.secrets
-    // }
 
     /// Get the DynClientCache for a given ResourceKind.
     ///
@@ -525,11 +526,6 @@ impl ConfigClient {
         // EdgionGatewayConfig is cluster-scoped (no namespace)
         self.edgion_gateway_configs.get(name)
     }
-
-    // /// List secrets
-    // pub fn list_secrets(&self) -> ListData<Secret> {
-    //     self.secrets.list_owned()
-    // }
 
     /// Trigger update event for an endpoint slice by key
     pub fn trigger_endpoint_slice_update_event(&self, key: &str) {

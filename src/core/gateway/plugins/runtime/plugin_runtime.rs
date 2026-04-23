@@ -69,6 +69,20 @@ pub struct PluginRuntime {
     upstream_response_async_plugins: Vec<Box<dyn UpstreamResponse>>,
 }
 
+/// Result of attempting to build a stage-specific filter from an EdgionPlugin.
+///
+/// Distinguishes "plugin variant does not belong to this stage" (a configuration
+/// error surfaced to status.conditions) from "plugin is applicable but construction
+/// declined" (already captured by `get_plugin_validation_error`).
+enum CreateResult<T> {
+    /// Plugin variant is applicable to this stage. `Some` on success, `None` if
+    /// the inner constructor returned None (e.g. DSL compile failure — already
+    /// reported through `get_plugin_validation_error`).
+    Ok(Option<T>),
+    /// Plugin variant does not belong to this stage (config error).
+    WrongStage,
+}
+
 impl Clone for PluginRuntime {
     fn clone(&self) -> Self {
         // PluginRuntime is rebuilt from edgion_plugins during pre_parse, so clone creates empty runtime on purpose.
@@ -233,10 +247,22 @@ impl PluginRuntime {
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                 }
 
-                if let Some(filter) = Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
-                    // Wrap with ConditionalRequestFilter to support condition evaluation
-                    let conditional_filter = ConditionalRequestFilter::new(filter, entry.conditions.clone());
-                    self.add_request_filter(Box::new(conditional_filter));
+                match Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
+                    CreateResult::Ok(Some(filter)) => {
+                        // Wrap with ConditionalRequestFilter to support condition evaluation
+                        let conditional_filter = ConditionalRequestFilter::new(filter, entry.conditions.clone());
+                        self.add_request_filter(Box::new(conditional_filter));
+                    }
+                    CreateResult::Ok(None) => {
+                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                    }
+                    CreateResult::WrongStage => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "requestPlugins[{}] ({}): plugin is not valid for request stage",
+                            index, plugin_name
+                        ));
+                    }
                 }
             }
         }
@@ -268,10 +294,23 @@ impl PluginRuntime {
                     ));
                 }
 
-                if let Some(filter) = Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
-                    // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
-                    let conditional_filter = ConditionalUpstreamResponseFilter::new(filter, entry.conditions.clone());
-                    self.add_upstream_response_filter(Box::new(conditional_filter));
+                match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
+                    CreateResult::Ok(Some(filter)) => {
+                        // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
+                        let conditional_filter =
+                            ConditionalUpstreamResponseFilter::new(filter, entry.conditions.clone());
+                        self.add_upstream_response_filter(Box::new(conditional_filter));
+                    }
+                    CreateResult::Ok(None) => {
+                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                    }
+                    CreateResult::WrongStage => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage",
+                            index, plugin_name
+                        ));
+                    }
                 }
             }
         }
@@ -299,10 +338,22 @@ impl PluginRuntime {
                     ));
                 }
 
-                if let Some(filter) = Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
-                    // Wrap with ConditionalUpstreamResponse to support condition evaluation
-                    let conditional_filter = ConditionalUpstreamResponse::new(filter, entry.conditions.clone());
-                    self.add_upstream_response(Box::new(conditional_filter));
+                match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
+                    CreateResult::Ok(Some(filter)) => {
+                        // Wrap with ConditionalUpstreamResponse to support condition evaluation
+                        let conditional_filter = ConditionalUpstreamResponse::new(filter, entry.conditions.clone());
+                        self.add_upstream_response(Box::new(conditional_filter));
+                    }
+                    CreateResult::Ok(None) => {
+                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                    }
+                    CreateResult::WrongStage => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponsePlugins[{}] ({}): plugin is not valid for upstream response stage",
+                            index, plugin_name
+                        ));
+                    }
                 }
             }
         }
@@ -334,11 +385,23 @@ impl PluginRuntime {
                     ));
                 }
 
-                if let Some(filter) = Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
-                    // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
-                    let conditional_filter =
-                        ConditionalUpstreamResponseBodyFilter::new(filter, entry.conditions.clone());
-                    self.add_upstream_response_body_filter(Box::new(conditional_filter));
+                match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
+                    CreateResult::Ok(Some(filter)) => {
+                        // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
+                        let conditional_filter =
+                            ConditionalUpstreamResponseBodyFilter::new(filter, entry.conditions.clone());
+                        self.add_upstream_response_body_filter(Box::new(conditional_filter));
+                    }
+                    CreateResult::Ok(None) => {
+                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                    }
+                    CreateResult::WrongStage => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseBodyFilterPlugins[{}] ({}): plugin is not valid for upstream response body filter stage",
+                            index, plugin_name
+                        ));
+                    }
                 }
             }
         }
@@ -351,52 +414,71 @@ impl PluginRuntime {
     /// # Arguments
     /// * `plugin` - The EdgionPlugin configuration
     /// * `namespace` - The namespace of the EdgionPlugins resource
-    fn create_request_filter_from_edgion(plugin: &EdgionPlugin, namespace: &str) -> Option<Box<dyn RequestFilter>> {
+    fn create_request_filter_from_edgion(
+        plugin: &EdgionPlugin,
+        namespace: &str,
+    ) -> CreateResult<Box<dyn RequestFilter>> {
         match plugin {
             EdgionPlugin::RequestHeaderModifier(config) => {
-                Some(Box::new(RequestHeaderModifierFilter::new(config.clone())))
+                CreateResult::Ok(Some(Box::new(RequestHeaderModifierFilter::new(config.clone()))))
             }
-            EdgionPlugin::RequestRedirect(config) => Some(Box::new(RequestRedirectFilter::new(config.clone()))),
-            EdgionPlugin::UrlRewrite(config) => Some(Box::new(URLRewriteFilter::new(config.clone()))),
-            EdgionPlugin::RequestMirror(config) => Some(Box::new(RequestMirrorPlugin::new(
+            EdgionPlugin::RequestRedirect(config) => {
+                CreateResult::Ok(Some(Box::new(RequestRedirectFilter::new(config.clone()))))
+            }
+            EdgionPlugin::UrlRewrite(config) => CreateResult::Ok(Some(Box::new(URLRewriteFilter::new(config.clone())))),
+            EdgionPlugin::RequestMirror(config) => CreateResult::Ok(Some(Box::new(RequestMirrorPlugin::new(
                 config.clone(),
                 namespace.to_string(),
-            ))),
-            EdgionPlugin::BasicAuth(config) => Some(Box::new(BasicAuth::new(config, namespace.to_string()))),
-            EdgionPlugin::Cors(config) => Some(Box::new(Cors::new(config))),
-            EdgionPlugin::Csrf(config) => Some(Box::new(Csrf::new(config))),
-            EdgionPlugin::IpRestriction(config) => Some(IpRestriction::create(config)),
-            EdgionPlugin::JwtAuth(config) => Some(Box::new(JwtAuth::new(config, namespace.to_string()))),
-            EdgionPlugin::JweDecrypt(config) => Some(Box::new(JweDecrypt::new(config, namespace.to_string()))),
-            EdgionPlugin::HmacAuth(config) => Some(HmacAuth::create(config)),
-            EdgionPlugin::HeaderCertAuth(config) => Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))),
-            EdgionPlugin::KeyAuth(config) => Some(KeyAuth::create(config)),
-            EdgionPlugin::LdapAuth(config) => Some(LdapAuth::create(config)),
-            EdgionPlugin::Mock(config) => Some(Box::new(Mock::new(config))),
-            EdgionPlugin::ProxyRewrite(config) => Some(Box::new(ProxyRewrite::new(config))),
-            EdgionPlugin::RequestRestriction(config) => Some(RequestRestriction::create(config)),
-            EdgionPlugin::RateLimit(config) => Some(RateLimit::create(config)),
-            EdgionPlugin::RateLimitRedis(config) => Some(RateLimitRedis::create(config)),
-            EdgionPlugin::CtxSet(config) => Some(CtxSet::create(config)),
-            EdgionPlugin::DirectEndpoint(config) => Some(Box::new(DirectEndpoint::new(config))),
-            EdgionPlugin::DynamicInternalUpstream(config) => Some(DynamicInternalUpstream::create(config)),
-            EdgionPlugin::DynamicExternalUpstream(config) => Some(DynamicExternalUpstream::create(config)),
-            EdgionPlugin::RealIp(config) => Some(RealIp::create(config)),
-            EdgionPlugin::ForwardAuth(config) => Some(Box::new(ForwardAuth::new(config))),
-            EdgionPlugin::AllEndpointStatus(config) => Some(Box::new(AllEndpointStatus::new(config))),
-            EdgionPlugin::OpenidConnect(config) => Some(Box::new(OpenidConnect::new(config, namespace.to_string()))),
+            )))),
+            EdgionPlugin::BasicAuth(config) => {
+                CreateResult::Ok(Some(Box::new(BasicAuth::new(config, namespace.to_string()))))
+            }
+            EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
+            EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
+            EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config))),
+            EdgionPlugin::JwtAuth(config) => {
+                CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
+            }
+            EdgionPlugin::JweDecrypt(config) => {
+                CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
+            }
+            EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config))),
+            EdgionPlugin::HeaderCertAuth(config) => {
+                CreateResult::Ok(Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))))
+            }
+            EdgionPlugin::KeyAuth(config) => CreateResult::Ok(Some(KeyAuth::create(config))),
+            EdgionPlugin::LdapAuth(config) => CreateResult::Ok(Some(LdapAuth::create(config))),
+            EdgionPlugin::Mock(config) => CreateResult::Ok(Some(Box::new(Mock::new(config)))),
+            EdgionPlugin::ProxyRewrite(config) => CreateResult::Ok(Some(Box::new(ProxyRewrite::new(config)))),
+            EdgionPlugin::RequestRestriction(config) => CreateResult::Ok(Some(RequestRestriction::create(config))),
+            EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create(config))),
+            EdgionPlugin::RateLimitRedis(config) => CreateResult::Ok(Some(RateLimitRedis::create(config))),
+            EdgionPlugin::CtxSet(config) => CreateResult::Ok(Some(CtxSet::create(config))),
+            EdgionPlugin::DirectEndpoint(config) => CreateResult::Ok(Some(Box::new(DirectEndpoint::new(config)))),
+            EdgionPlugin::DynamicInternalUpstream(config) => {
+                CreateResult::Ok(Some(DynamicInternalUpstream::create(config)))
+            }
+            EdgionPlugin::DynamicExternalUpstream(config) => {
+                CreateResult::Ok(Some(DynamicExternalUpstream::create(config)))
+            }
+            EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
+            EdgionPlugin::ForwardAuth(config) => CreateResult::Ok(Some(Box::new(ForwardAuth::new(config)))),
+            EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
+            EdgionPlugin::OpenidConnect(config) => {
+                CreateResult::Ok(Some(Box::new(OpenidConnect::new(config, namespace.to_string()))))
+            }
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                Some(Box::new(ext_filter))
+                CreateResult::Ok(Some(Box::new(ext_filter)))
             }
-            EdgionPlugin::Dsl(config) => DslPlugin::from_config(config),
-            EdgionPlugin::RegionRoute(config) => Some(RegionRoute::create(config)),
+            EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
+            EdgionPlugin::RegionRoute(config) => CreateResult::Ok(Some(RegionRoute::create(config, namespace))),
             // Response-stage only — not applicable to request filters
             EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
             | EdgionPlugin::ResponseRewrite(_)
-            | EdgionPlugin::BandwidthLimit(_) => None,
+            | EdgionPlugin::BandwidthLimit(_) => CreateResult::WrongStage,
         }
     }
 
@@ -404,19 +486,21 @@ impl PluginRuntime {
     fn create_upstream_response_filter_from_edgion(
         plugin: &EdgionPlugin,
         namespace: &str,
-    ) -> Option<Box<dyn UpstreamResponseFilter>> {
+    ) -> CreateResult<Box<dyn UpstreamResponseFilter>> {
         match plugin {
             EdgionPlugin::ResponseHeaderModifier(config) => {
-                Some(Box::new(ResponseHeaderModifierFilter::new(config.clone())))
+                CreateResult::Ok(Some(Box::new(ResponseHeaderModifierFilter::new(config.clone()))))
             }
-            EdgionPlugin::DebugAccessLogToHeader(config) => Some(Box::new(DebugAccessLogToHeaderFilter::new(config))),
-            EdgionPlugin::ResponseRewrite(config) => Some(Box::new(ResponseRewrite::new(config))),
+            EdgionPlugin::DebugAccessLogToHeader(config) => {
+                CreateResult::Ok(Some(Box::new(DebugAccessLogToHeaderFilter::new(config))))
+            }
+            EdgionPlugin::ResponseRewrite(config) => CreateResult::Ok(Some(Box::new(ResponseRewrite::new(config)))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                Some(Box::new(ext_filter))
+                CreateResult::Ok(Some(Box::new(ext_filter)))
             }
-            EdgionPlugin::Dsl(config) => DslPlugin::from_config_response(config),
+            EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
             // Request-stage or other-stage plugins — not applicable to upstream response filters
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::RequestRedirect(_)
@@ -446,7 +530,7 @@ impl PluginRuntime {
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
-            | EdgionPlugin::RegionRoute(_) => None,
+            | EdgionPlugin::RegionRoute(_) => CreateResult::WrongStage,
         }
     }
 
@@ -454,22 +538,22 @@ impl PluginRuntime {
     fn create_upstream_response_from_edgion(
         _plugin: &EdgionPlugin,
         _namespace: &str,
-    ) -> Option<Box<dyn UpstreamResponse>> {
-        // Currently no plugins for this stage
-        None
+    ) -> CreateResult<Box<dyn UpstreamResponse>> {
+        // Currently no plugins for this stage — every variant is therefore a stage mismatch.
+        CreateResult::WrongStage
     }
 
     /// Create an UpstreamResponseBodyFilter instance from EdgionPlugin enum
     fn create_upstream_response_body_filter_from_edgion(
         plugin: &EdgionPlugin,
         namespace: &str,
-    ) -> Option<Box<dyn UpstreamResponseBodyFilter>> {
+    ) -> CreateResult<Box<dyn UpstreamResponseBodyFilter>> {
         match plugin {
-            EdgionPlugin::BandwidthLimit(config) => Some(BandwidthLimit::create(config)),
+            EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
             EdgionPlugin::ExtensionRef(ext_ref) => {
                 let ext_filter =
                     ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                Some(Box::new(ext_filter))
+                CreateResult::Ok(Some(Box::new(ext_filter)))
             }
             // Not body-filter plugins
             EdgionPlugin::RequestHeaderModifier(_)
@@ -503,7 +587,7 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::RegionRoute(_)
-            | EdgionPlugin::Dsl(_) => None,
+            | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
     }
 
@@ -890,11 +974,11 @@ fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut
     match result {
         PluginRunningResult::ErrTerminateRequest => true,
         PluginRunningResult::ErrResponse { status, .. } => {
-            plugin_log.push(&format!("Deny ErrResponse {}; ", status));
+            plugin_log.push(&format!("deny response {}", status));
             true
         }
         PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
-            plugin_log.push(&format!("Deny ErrGrpcError {}; ", grpc_status));
+            plugin_log.push(&format!("deny grpc {}", grpc_status));
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,

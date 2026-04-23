@@ -16,14 +16,25 @@ EdgionStreamPlugins 是 Edgion 的自定义扩展资源，定义 Stream/TCP 层�
 
 ## Controller 侧处理
 
+### preparse
+
+扫描 Stage 1 `plugins` 数组，检测 legacy HTTP 字段写到 L4 `IpRestriction` 配置上的陈旧 schema，带 `[LEGACY_SCHEMA_DEPRECATED]` 前缀返回 error。update_status 识别前缀后把 reason 映射为 `LegacySchemaDeprecated` 而不是泛化的 `Invalid`，方便 operator 定位迁移指引。
+
 ### parse
 
-无特殊处理逻辑，直接透传。EdgionStreamPlugins 的配置在类型层面由预解析处理。
+- **Cross-PM ref 注册**：先 `clear_refs_from` 本资源在 `plugin_metadata_refs` 中的旧 ref，再遍历 Stage 1 每个 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry，将 `plugin_metadata_ref.namespace/name` 注册为 cluster_pm_key，value 为 `"EdgionStreamPlugins:<this_ns>/<this_name>"`
+- 这样当被引用的 GCIR PM 变更时，PM handler 的 `requeue_pm_referrers` 会把 ESP 重新入队，刷新 ResolvedRefs
+
+### on_delete
+
+- `clear_refs_from` 清除本资源在 `plugin_metadata_refs` 中的所有注册
 
 ### update_status
 
-- `Accepted`：无 validation_errors 时为 True（reason=Accepted），有错误时为 False（reason=Invalid）
-- 使用 k8s_openapi 原生的 `Condition` 类型（与其他资源使用自定义 Condition 类型不同）
+使用 `k8s_openapi::Condition` 类型，写两个 condition：
+
+- **`Accepted`**：无 validation_errors 时为 True（reason=Accepted）；有 legacy-schema 错误时为 False/`LegacySchemaDeprecated`；其他错误为 False/`Invalid`
+- **`ResolvedRefs`**：遍历 Stage 1 每个 `GlobalConnectionIpRestriction` entry，要求 `plugin_metadata_ref` 指向的 PM 存在且 `spec.metadata.type = GlobalConnectionIpRestriction`。任何不满足 → `ResolvedRefsError::PluginMetaDataNotFound`，reason 为 `InvalidPluginMetaDataRef`。Stage 2 `tls_route_plugins` 目前都是内联配置，无外部 ref
 
 ## Gateway 侧处理
 
@@ -39,3 +50,4 @@ EdgionStreamPlugins 同步到 Gateway 后，在连接建立阶段执行。典型
 | 关联方向 | 目标资源 | 关联机制 | 说明 |
 |---------|---------|---------|------|
 | EdgionStreamPlugins ← 路由资源 | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute | 关联引用 | 路由资源可引用 Stream 插件 |
+| EdgionStreamPlugins → PluginMetaData | PluginMetaData | `GlobalConnectionIpRestriction.pluginMetadataRef` | 引用 GCIR PM；通过 `plugin_metadata_refs` 建立反向 requeue 索引，PM 变更时 ESP 被重新处理 |

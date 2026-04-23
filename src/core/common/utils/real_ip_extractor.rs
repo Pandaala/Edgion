@@ -44,6 +44,11 @@ pub struct RealIpExtractor {
     /// - `true`: traverse right-to-left, skip trusted IPs, return first non-trusted.
     /// - `false`: take the rightmost IP from the header directly.
     recursive: bool,
+
+    /// Optional cap on the number of trusted-proxy hops traversed when
+    /// `recursive=true`. Mirrors Envoy's `xff_num_trusted_hops`. `None`
+    /// means unlimited (nginx-compatible).
+    max_trusted_hops: Option<u32>,
 }
 
 impl RealIpExtractor {
@@ -54,6 +59,7 @@ impl RealIpExtractor {
     /// * `real_ip_header` - Header name to extract real IP from (e.g., "X-Forwarded-For")
     /// * `recursive` - Nginx-style `real_ip_recursive`: true = traverse right-to-left skipping trusted;
     ///   false = take rightmost IP directly
+    /// * `max_trusted_hops` - Optional cap on recursive traversal depth (see struct field).
     ///
     /// # Returns
     /// * `Ok(RealIpExtractor)` - Successfully created extractor
@@ -62,7 +68,12 @@ impl RealIpExtractor {
     /// # Notes
     /// - Invalid CIDRs are skipped with a warning log
     /// - If no valid CIDRs are provided, returns extractor with no matcher (all IPs untrusted)
-    pub fn new(trusted_ips: &[String], real_ip_header: String, recursive: bool) -> Result<Self, IpRadixError> {
+    pub fn new(
+        trusted_ips: &[String],
+        real_ip_header: String,
+        recursive: bool,
+        max_trusted_hops: Option<u32>,
+    ) -> Result<Self, IpRadixError> {
         let trusted_proxy_matcher = if !trusted_ips.is_empty() {
             let mut builder = IpRadixMatcher::builder();
             let mut valid_count = 0;
@@ -106,6 +117,7 @@ impl RealIpExtractor {
             trusted_proxy_matcher,
             real_ip_header,
             recursive,
+            max_trusted_hops,
         })
     }
 
@@ -172,21 +184,35 @@ impl RealIpExtractor {
     /// - `recursive = true`: traverse right-to-left, skip trusted IPs, return first non-trusted.
     /// - `recursive = false`: take rightmost IP; if trusted, use client_addr; if not, use it.
     /// - Fallback when all IPs trusted (recursive mode): return leftmost IP.
+    ///
+    /// When `max_trusted_hops` is `Some(N)`, the right-to-left traversal stops
+    /// after skipping `N` trusted hops — caps the attacker's ability to push
+    /// the result leftward by forging a long trusted-looking prefix.
     fn resolve_from_header(&self, header_value: &str, client_ip: &IpAddr) -> String {
         let iter = || header_value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
 
         if self.recursive {
             let mut leftmost: Option<IpAddr> = None;
-            // Traverse right-to-left, find first non-trusted IP
+            let mut trusted_hops_skipped: u32 = 0;
+            // Traverse right-to-left, find first non-trusted IP (or stop at cap)
             for ip_str in iter().rev() {
                 if let Ok(ip_addr) = ip_str.parse::<IpAddr>() {
                     leftmost = Some(ip_addr);
                     if !self.is_trusted_proxy(&ip_addr) {
                         return ip_addr.to_string();
                     }
+                    // Trusted hop — count it, and stop if we've hit the cap.
+                    trusted_hops_skipped += 1;
+                    if let Some(cap) = self.max_trusted_hops {
+                        if trusted_hops_skipped >= cap {
+                            // Caller configured a hop cap; return this (trusted) IP
+                            // rather than continuing leftward into potentially-forged territory.
+                            return ip_addr.to_string();
+                        }
+                    }
                 }
             }
-            // All trusted: return leftmost IP (Nginx behavior)
+            // All trusted (no cap hit): return leftmost IP (Nginx behavior)
             leftmost
                 .map(|ip| ip.to_string())
                 .unwrap_or_else(|| client_ip.to_string())
@@ -233,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_no_trusted_ips() {
-        let extractor = RealIpExtractor::new(&[], "X-Forwarded-For".to_string(), true).unwrap();
+        let extractor = RealIpExtractor::new(&[], "X-Forwarded-For".to_string(), true, None).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();
@@ -244,7 +270,8 @@ mod tests {
 
     #[test]
     fn test_client_not_trusted() {
-        let extractor = RealIpExtractor::new(&["10.0.0.0/8".to_string()], "X-Forwarded-For".to_string(), true).unwrap();
+        let extractor =
+            RealIpExtractor::new(&["10.0.0.0/8".to_string()], "X-Forwarded-For".to_string(), true, None).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();
@@ -260,6 +287,7 @@ mod tests {
             &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
             "X-Forwarded-For".to_string(),
             true,
+            None,
         )
         .unwrap();
 
@@ -279,6 +307,7 @@ mod tests {
             &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
             "X-Forwarded-For".to_string(),
             false,
+            None,
         )
         .unwrap();
 
@@ -305,6 +334,7 @@ mod tests {
             &["0.0.0.0/0".to_string()], // All IPs trusted
             "X-Forwarded-For".to_string(),
             true,
+            None,
         )
         .unwrap();
 
@@ -337,6 +367,7 @@ mod tests {
             ],
             "X-Forwarded-For".to_string(),
             true,
+            None,
         )
         .unwrap();
 
@@ -355,6 +386,7 @@ mod tests {
             &["invalid-cidr".to_string(), "not-an-ip/24".to_string()],
             "X-Forwarded-For".to_string(),
             true,
+            None,
         )
         .unwrap();
 
@@ -363,5 +395,73 @@ mod tests {
 
         let result = extractor.extract_real_ip("192.168.1.1:45678", &headers);
         assert_eq!(result, "192.168.1.1");
+    }
+
+    /// Mitigates M12: an attacker inside a broadly-trusted CIDR cannot forge
+    /// a long "trusted" XFF prefix to push the result leftward once a hop cap
+    /// is in place.
+    #[test]
+    fn test_max_trusted_hops_caps_recursive_traversal() {
+        let extractor = RealIpExtractor::new(
+            &["10.0.0.0/8".to_string()],
+            "X-Forwarded-For".to_string(),
+            true,
+            Some(2), // cap: stop after skipping 2 trusted hops
+        )
+        .unwrap();
+
+        // Attacker from 10.0.0.1 sends `1.2.3.4, 10.0.0.99, 10.0.0.50, 10.0.0.1`.
+        // Right-to-left: skip 10.0.0.1 (hop 1), skip 10.0.0.50 (hop 2 == cap),
+        // stop at 10.0.0.50 — do NOT continue to the forged 1.2.3.4.
+        let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
+        headers
+            .insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99, 10.0.0.50, 10.0.0.1")
+            .unwrap();
+        let result = extractor.extract_real_ip("10.0.0.1:45678", &headers);
+        assert_eq!(
+            result, "10.0.0.50",
+            "hop cap must stop traversal and return the last trusted IP within cap, not the forged leftmost"
+        );
+    }
+
+    /// With the cap, a legitimate untrusted IP within the allowed hop window
+    /// is still returned (the cap is an upper bound, not a forced value).
+    #[test]
+    fn test_max_trusted_hops_does_not_block_real_client_within_window() {
+        let extractor = RealIpExtractor::new(
+            &["10.0.0.0/8".to_string()],
+            "X-Forwarded-For".to_string(),
+            true,
+            Some(3),
+        )
+        .unwrap();
+
+        // Only 1 trusted hop before reaching 1.2.3.4 (within cap=3).
+        let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
+        headers.insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99").unwrap();
+        let result = extractor.extract_real_ip("10.0.0.99:45678", &headers);
+        assert_eq!(
+            result, "1.2.3.4",
+            "cap does not prevent returning real untrusted client within window"
+        );
+    }
+
+    /// `max_trusted_hops` has no effect in non-recursive mode (rightmost
+    /// semantics unchanged).
+    #[test]
+    fn test_max_trusted_hops_ignored_in_non_recursive_mode() {
+        let extractor = RealIpExtractor::new(
+            &["10.0.0.0/8".to_string()],
+            "X-Forwarded-For".to_string(),
+            false,
+            Some(1), // set but should be ignored
+        )
+        .unwrap();
+
+        let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
+        headers.insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99").unwrap();
+        // Non-recursive takes rightmost → 10.0.0.99 is trusted → fallback to client_addr.
+        let result = extractor.extract_real_ip("10.0.0.1:45678", &headers);
+        assert_eq!(result, "10.0.0.1");
     }
 }

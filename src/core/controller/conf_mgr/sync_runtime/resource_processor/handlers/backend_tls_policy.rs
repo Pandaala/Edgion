@@ -81,19 +81,27 @@ impl BackendTlsPolicyHandler {
         // --- Conflict detection: register target refs ---
         let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
 
-        // Find old siblings BEFORE clearing (they may need status re-evaluation
-        // if this policy's targetRef changed).
+        // Snapshot old target keys and siblings BEFORE clearing, so we can
+        // detect whether the target set actually changed.
+        let old_target_keys = {
+            let mut keys = target_manager.get_dependencies(&resource_ref.key());
+            keys.sort();
+            keys
+        };
         let old_siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
 
         // Clear old target registrations and re-register with current targetRefs.
         target_manager.clear_resource_refs(&resource_ref);
 
         let policy_ns_str = btp.metadata.namespace.as_deref().unwrap_or("default");
+        let mut new_target_keys = Vec::with_capacity(btp.spec.target_refs.len());
         for target_ref in &btp.spec.target_refs {
             let target_key =
                 make_target_conflict_key(policy_ns_str, &target_ref.name, target_ref.section_name.as_deref());
-            target_manager.add_ref(target_key, resource_ref.clone());
+            target_manager.add_ref(target_key.clone(), resource_ref.clone());
+            new_target_keys.push(target_key);
         }
+        new_target_keys.sort();
 
         // Store creation timestamp for conflict precedence sorting.
         let policy_resource_key = resource_ref.resource_key();
@@ -102,9 +110,21 @@ impl BackendTlsPolicyHandler {
             .backend_tls_policy
             .set_timestamp(&policy_resource_key, ts_string.as_deref());
 
-        // Requeue old siblings whose conflict status may have changed.
-        for sibling in old_siblings {
-            ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+        // Only requeue siblings when the target set actually changed.
+        // This prevents the A→B→A→B ping-pong cycle that occurs when two
+        // policies share a target and each processing unconditionally requeues
+        // the other.
+        if old_target_keys != new_target_keys {
+            for sibling in &old_siblings {
+                ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+            }
+            // Also requeue NEW siblings — they may now conflict with this policy.
+            let new_siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
+            for sibling in &new_siblings {
+                if !old_siblings.contains(sibling) {
+                    ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+                }
+            }
         }
 
         // Clear old references first to handle updates safely.
@@ -438,25 +458,11 @@ impl BackendTlsPolicyHandler {
         }
     }
 
-    async fn on_change_policy(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
-        let resource_ref = ResourceRef::new(
-            ResourceKind::BackendTLSPolicy,
-            btp.metadata.namespace.clone(),
-            btp.metadata.name.clone().unwrap_or_default(),
-        );
-
-        // Requeue sibling policies so their conflict status gets re-evaluated.
-        let siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
-        if !siblings.is_empty() {
-            tracing::debug!(
-                policy = %resource_ref.key(),
-                sibling_count = siblings.len(),
-                "Requeuing sibling BackendTLSPolicies for conflict re-evaluation"
-            );
-            for sibling in siblings {
-                ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
-            }
-        }
+    async fn on_change_policy(&self, _btp: &BackendTLSPolicy, _ctx: &HandlerContext) {
+        // Sibling requeue is handled in parse_policy() (only when targetRefs
+        // actually change), so nothing to do here. Unconditionally requeuing
+        // siblings in both parse and on_change was causing A→B→A→B ping-pong
+        // cycles between conflicting policies.
     }
 
     /// Resolve the Gateway ancestors for a BackendTLSPolicy.

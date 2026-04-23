@@ -63,6 +63,10 @@ impl ConfigSyncClient {
                     component = "grpc_client",
                     "conf_sync mTLS skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
                 );
+                crate::core::common::observe::system_metrics::mark_system_error(
+                    crate::core::common::observe::system_metrics::components::CONF_SYNC_CLIENT,
+                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
+                );
             } else {
                 let client_tls = crate::core::common::grpc_tls::load_client_tls(tls).await?;
                 endpoint = endpoint

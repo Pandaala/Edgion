@@ -137,35 +137,8 @@ stringData:
     )
 }
 
-/// Generate a random alphanumeric string using /dev/urandom.
-fn generate_random_string(len: usize) -> String {
-    use std::io::Read;
-    let mut buf = vec![0u8; len];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        if f.read_exact(&mut buf).is_ok() {
-            return buf
-                .iter()
-                .map(|b| {
-                    let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    charset[(*b as usize) % charset.len()] as char
-                })
-                .collect();
-        }
-    }
-    // Fallback using system time
-    use std::time::SystemTime;
-    let seed = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut state = seed;
-    (0..len)
-        .map(|i| {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407 + i as u128);
-            let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            charset[((state >> 33) as usize) % charset.len()] as char
-        })
-        .collect()
+/// Generate a random alphanumeric string using a CSPRNG.
+pub(crate) fn generate_random_string(len: usize) -> String {
+    use rand::distr::{Alphanumeric, SampleString};
+    Alphanumeric.sample_string(&mut rand::rng(), len)
 }

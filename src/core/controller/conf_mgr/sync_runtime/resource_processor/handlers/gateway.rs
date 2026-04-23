@@ -63,8 +63,17 @@ enum GatewayResolvedRefsError {
         name: String,
         reason: String,
     },
-    /// Cross-namespace Secret reference denied by ReferenceGrant
-    RefNotPermitted { namespace: String, name: String },
+    /// Cross-namespace Secret reference denied by ReferenceGrant.
+    ///
+    /// `from_namespace` is the Gateway's own namespace — recorded so the
+    /// Condition `message` stays self-describing when consumed outside the
+    /// Gateway's `metadata` context (events, log aggregation, dashboards).
+    /// The referrer kind is always `Gateway` so it is not stored explicitly.
+    RefNotPermitted {
+        from_namespace: String,
+        namespace: String,
+        name: String,
+    },
     /// Route kind is not supported for this listener's protocol
     InvalidRouteKind {
         group: String,
@@ -79,8 +88,15 @@ enum GatewayResolvedRefsError {
         name: String,
         reason: String,
     },
-    /// CA certificate ref cross-namespace denied by ReferenceGrant
-    CACertRefNotPermitted { namespace: String, name: String },
+    /// CA certificate ref cross-namespace denied by ReferenceGrant.
+    ///
+    /// `from_namespace` is the Gateway's own namespace — see the note on
+    /// `RefNotPermitted` above for rationale.
+    CACertRefNotPermitted {
+        from_namespace: String,
+        namespace: String,
+        name: String,
+    },
 }
 
 impl GatewayResolvedRefsError {
@@ -99,10 +115,14 @@ impl GatewayResolvedRefsError {
             } => {
                 format!("Secret '{}/{}' invalid: {}", namespace, name, reason)
             }
-            Self::RefNotPermitted { namespace, name } => {
+            Self::RefNotPermitted {
+                from_namespace,
+                namespace,
+                name,
+            } => {
                 format!(
-                    "Cross-namespace reference to Secret '{}/{}' not allowed by ReferenceGrant",
-                    namespace, name
+                    "Reference from {}/Gateway to Secret \"{}/{}\" is not permitted without a ReferenceGrant",
+                    from_namespace, namespace, name
                 )
             }
             Self::InvalidRouteKind { group, kind, protocol } => {
@@ -124,10 +144,14 @@ impl GatewayResolvedRefsError {
             } => {
                 format!("CA certificate '{}/{}' invalid: {}", namespace, name, reason)
             }
-            Self::CACertRefNotPermitted { namespace, name } => {
+            Self::CACertRefNotPermitted {
+                from_namespace,
+                namespace,
+                name,
+            } => {
                 format!(
-                    "Cross-namespace reference to CA certificate '{}/{}' not allowed by ReferenceGrant",
-                    namespace, name
+                    "Reference from {}/Gateway to CA certificate \"{}/{}\" is not permitted without a ReferenceGrant",
+                    from_namespace, namespace, name
                 )
             }
         }
@@ -165,6 +189,34 @@ impl GatewayHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<Gateway> for GatewayHandler {
+    fn validate(&self, g: &Gateway, _ctx: &HandlerContext) -> Vec<String> {
+        let mut errors = Vec::new();
+        for listener in g.spec.listeners.as_deref().unwrap_or_default() {
+            if let Some(from) = listener
+                .allowed_routes
+                .as_ref()
+                .and_then(|ar| ar.namespaces.as_ref())
+                .and_then(|ns| ns.from.as_deref())
+            {
+                if from != "All" && from != "Same" && from != "Selector" {
+                    tracing::warn!(
+                        ns = g.metadata.namespace.as_deref().unwrap_or(""),
+                        name = g.metadata.name.as_deref().unwrap_or(""),
+                        kind = "Gateway",
+                        field = "allowedRoutes.namespaces.from",
+                        value = %from,
+                        "Unsupported enum value, rejecting resource"
+                    );
+                    errors.push(format!(
+                        "Unsupported allowedRoutes.namespaces.from value '{}' on listener '{}' (allowed: All, Same, Selector)",
+                        from, listener.name
+                    ));
+                }
+            }
+        }
+        errors
+    }
+
     fn filter(&self, g: &Gateway) -> bool {
         match &self.gateway_class_name {
             Some(class_name) => g.spec.gateway_class_name == *class_name,
@@ -392,10 +444,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
         let ports_changed = route_index.update_gateway_ports(&gateway_key, current_ports);
 
-        // Only requeue referencing routes when listener hostnames or ports
-        // actually changed. Previously this was unconditional, causing every
-        // attached-route-count update to fan out and reprocess all routes on
-        // the Gateway (e.g. adding 1 route would requeue the other 99).
+        // CYCLE PREVENTION: Only requeue referencing routes when listener
+        // hostnames or ports actually changed. All Route.on_change handlers
+        // unconditionally requeue their parent Gateways, so removing this
+        // condition would create Route→Gateway→Route infinite loops.
         if hostnames_changed || ports_changed {
             let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
             if !referencing_routes.is_empty() {
@@ -1158,6 +1210,7 @@ fn validate_listener_resolved_refs(
             );
             if !allowed {
                 errors.push(GatewayResolvedRefsError::RefNotPermitted {
+                    from_namespace: gateway_ns.to_string(),
                     namespace: cert_ns.to_string(),
                     name: cert_ref.name.clone(),
                 });
@@ -1228,6 +1281,7 @@ fn validate_listener_resolved_refs(
                             );
                             if !allowed {
                                 errors.push(GatewayResolvedRefsError::CACertRefNotPermitted {
+                                    from_namespace: gateway_ns.to_string(),
                                     namespace: ca_ns.to_string(),
                                     name: ca_ref.name.clone(),
                                 });
@@ -1275,6 +1329,7 @@ fn validate_listener_resolved_refs(
                             );
                             if !allowed {
                                 errors.push(GatewayResolvedRefsError::CACertRefNotPermitted {
+                                    from_namespace: gateway_ns.to_string(),
                                     namespace: ca_ns.to_string(),
                                     name: ca_ref.name.clone(),
                                 });

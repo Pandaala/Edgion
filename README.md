@@ -177,7 +177,7 @@ requestPlugins:
         }
 ```
 
-For full DSL API reference and advanced usage, see the [DSL Plugin Documentation](docs/en/user-guide/http-route/filters/edgion-plugins/dsl.md).
+For full DSL API reference and advanced usage, see the [DSL Plugin Documentation](docs/en/user-guide/http-route/filters/edgion-plugins/dsl/README.md).
 
 ## Deployment
 

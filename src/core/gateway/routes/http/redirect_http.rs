@@ -149,13 +149,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             "error": error_msg,
         });
 
-        if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG {
-            tracing::debug!(
-                access_log = %log_entry,
-                "Redirect access log"
-            );
-        }
-
         self.access_logger.send(log_entry.to_string()).await;
     }
 }

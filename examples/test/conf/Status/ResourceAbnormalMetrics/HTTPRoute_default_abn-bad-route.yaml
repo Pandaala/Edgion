@@ -1,0 +1,41 @@
+# Bad HTTPRoute: references Service `abn-missing-svc` which does not exist.
+# The controller's handler will compute `ResolvedRefs:False` and write it to
+# `<file>.status`. In FileSystem backend mode, however, the status-metrics
+# snapshot reads from the in-memory LocalRawStore which is populated from
+# the *input* YAML only, so we pre-seed the abnormal condition here to keep
+# the test self-contained (no K8s cluster required). The pre-seeded status
+# matches what the controller would compute at runtime.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: abn-bad-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: abn-test-gateway
+      namespace: default
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /abn
+      backendRefs:
+        - name: abn-missing-svc
+          port: 8080
+status:
+  parents:
+    - parentRef:
+        name: abn-test-gateway
+        namespace: default
+      controllerName: edgion.io/gateway-controller
+      conditions:
+        - type: Accepted
+          status: "True"
+          reason: Accepted
+          message: Route accepted
+          lastTransitionTime: "2026-04-20T00:00:00Z"
+        - type: ResolvedRefs
+          status: "False"
+          reason: BackendNotFound
+          message: "Service 'default/abn-missing-svc' not found"
+          lastTransitionTime: "2026-04-20T00:00:00Z"

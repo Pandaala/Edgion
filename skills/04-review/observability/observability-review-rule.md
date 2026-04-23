@@ -2,6 +2,49 @@
 
 > Review 代码变更时，使用本清单确保可观测性设计合理、不引入性能问题或信息爆炸。
 
+## 铁律：日志不得泄露 Secret
+
+**任何情况下**，tracing/PluginLog/access log/stdout/stderr 都**不允许**出现以下内容的原文：
+
+- 请求/响应 body 原文（即使 debug 级别也禁止 — 集中采集后等于永久存档）
+- Secret.data、TLS 私钥、ACME 账户私钥、HMAC key、API key、Bearer token、JWT、JWE claims 原文
+- 用户密码、数据库密码、basic auth credentials
+- `ctx_map` 未过滤的完整序列化（可能含 JWT claims）
+- 插件配置 JSON 原文（可能含嵌套密钥）
+
+**判定方法**：
+
+1. 搜索新增/修改文件中的 `tracing::`、`plugin_log.push`、`format!` / `{:?}` / `%` 打印变量
+2. 检查被打印的变量是否可能包含上述敏感数据：
+   - 变量名暗示：`body`、`content`、`payload`、`raw`、`spec`、`token`、`key`、`secret`、`credential`、`claims`
+   - 类型暗示：`Bytes`、`String`（源自 HTTP body 或 K8s resource）、`JwtClaims`、`JwkSet`、`PEM`
+   - 上下文暗示：Admin API handler、webhook handler、OIDC/JWT 插件、Secret/TLS 资源处理
+3. 命中任一条 → **必须改造**：
+   - 只打印长度：`body_len = content.len()`
+   - 只打印 hash 或前 8 字节：`key_prefix = &api_key[..8]`、`sha256(token)[..16]`
+   - 完全删除（若调试价值低）
+   - 字段过滤：`ctx_map` 用 allowlist/blocklist 序列化
+
+**常见误配模式（零容忍）**：
+
+| 反模式 | 典型代码 | 正确做法 |
+|--------|---------|---------|
+| 打印完整 request body | `tracing::debug!("Request body: {}", content)` | 只打印 `body_len` 或删除 |
+| 打印完整 response body | `tracing::debug!("Response: {:?}", resp.body())` | 只打印 status + content-length |
+| 打印 Secret.data | `tracing::info!(data = ?secret.data, ...)` | 只打印 `name/namespace` + 字段 key 列表 |
+| PluginLog 写 key 原值 | `log.push(&format!("key={}", api_key))` | `log.push(&format!("kl={}", api_key.len()))` |
+| `{:?}` 整个 resource spec | `tracing::debug!(spec = ?route.spec)` | debug 级别也禁 — 改打 key_name + rv |
+| `ctx_map` 原样序列化 | `serde_json::to_string(&ctx_map)` | 过滤敏感 key 后再序列化 |
+
+**历史案例**（用于 review 时识别同类模式）：
+
+- **#02 Controller create_namespaced Secret 请求体泄漏**（2026-04-17 review 发现）：`tracing::debug!("Request body: {}", content)` 在 `controller/api/namespaced_handlers.rs:104`。debug 级别下 POST/PUT Secret 请求的 base64 证书私钥、ACME 账户密钥落入 stdout + 日志归档。
+  - 教训：**Admin API handler 中绝不打印 body 原文**，即使 debug 级别；因为集中采集（Loki/ES）不区分级别，写入即留存。
+
+**与 03-coding 的关系**：本规则是 review 侧的判定清单；对应的编码规范在 [../../03-coding/01-log-safety.md](../../03-coding/01-log-safety.md) 铁律 1。两者更新时请保持同步。
+
+---
+
 ## 铁律：数据面零 tracing
 
 数据面热路径（`request_filter`、`upstream_peer`、`response_filter`、`proxy_upstream_filter`、TCP/TLS/UDP 连接处理等）**禁止任何 `tracing::*` 宏**，包括 `debug!`。
@@ -85,3 +128,4 @@
 | 插件只写了 `OK; ` 没写详细原因 | ✅ 合理 | 正常通过的插件不需要详细日志 |
 | 没有为每个插件单独添加 Counter | ✅ 合理 | 认证/限流结果已体现在 status 和 access log 中 |
 | access log 字段只在某些场景有值 | ✅ 合理 | 使用 `skip_serializing_if` 即可 |
+| `tracing::debug!` 打印 body/secret/token | ❌ 零容忍 | 见"日志不得泄露 Secret"铁律；debug 级别也禁 |

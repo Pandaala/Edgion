@@ -15,6 +15,7 @@ description: Miscellaneous skill for Edgion. Includes CI/CD (compiling binaries,
 | [cicd/](cicd/) | CI/CD：本地构建、Docker 构建、GitHub Workflow、Release 发布 | ✅ |
 | [debugging-tls-gateway.md](debugging-tls-gateway.md) | K8s 环境下 TLS 专项调试（kubectl exec + 日志文件 + grep 模式） | ✅ |
 | [debugging-conformance.md](debugging-conformance.md) | Conformance 测试调试：rv/sv/access log 三元组、orbstack-dev.sh 日志命令、各 profile 失败模式 | ✅ |
+| [03-dev-deploy-hot-replace.md](03-dev-deploy-hot-replace.md) | 开发部署热替换：原生镜像 + shell restart loop + 交叉编译 + kubectl cp 全流程 | ✅ |
 
 ## 快速参考
 

@@ -17,6 +17,7 @@ spec:
               description: "Manages automatic TLS certificate issuance and renewal via the ACME protocol"
               required:
                 - email
+                - privateKeySecretRef
                 - domains
                 - challenge
                 - storage
@@ -27,6 +28,23 @@ spec:
                 email:
                   type: string
                   description: "Contact email for ACME account registration"
+                privateKeySecretRef:
+                  type: object
+                  description: |
+                    K8s Secret to store the ACME account private key and credentials.
+                    Edgion creates this Secret if absent (with ownerReferences to the
+                    EdgionAcme resource); if it already exists, existing credentials
+                    are reused, or the `accountCredentials` key is patched in.
+                    Mirrors cert-manager's Issuer.spec.acme.privateKeySecretRef.
+                  required: ["name"]
+                  properties:
+                    name:
+                      type: string
+                      description: "Name of the Secret"
+                    namespace:
+                      type: string
+                      description: "Namespace of the Secret (defaults to EdgionAcme namespace)"
+                  additionalProperties: false
                 domains:
                   type: array
                   description: "Domain names to obtain certificates for"
@@ -120,10 +138,46 @@ spec:
                   type: object
                   description: "DNS provider credential Secret (resolved by Controller)"
                   x-kubernetes-preserve-unknown-fields: true
+                accountSecret:
+                  type: object
+                  description: "ACME account Secret (resolved by Controller)"
+                  x-kubernetes-preserve-unknown-fields: true
             status:
               type: object
               description: "EdgionAcme resource status"
               properties:
+                conditions:
+                  type: array
+                  description: |
+                    Gateway-API-style conditions:
+                      - `Accepted` reflects spec validation.
+                      - `ResolvedRefs` reflects whether the referenced ACME
+                        account / DNS-credential Secrets were successfully
+                        resolved. Uses `Unknown` with reason `NeedsRegistration`
+                        when the account Secret does not yet exist and Edgion
+                        is expected to create it; `False` with Edgion-extension
+                        reasons `SecretNotFound` / `MissingKeys` / `DecodeError`
+                        / `InvalidSecretType`, or the standard `RefNotPermitted`
+                        for cross-namespace denial.
+                    Asynchronous issuance / renewal status lives in `phase` and
+                    the timestamp fields below.
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
                 phase:
                   type: string
                   description: "Current phase of the ACME certificate lifecycle"
@@ -153,6 +207,11 @@ spec:
         - name: Domains
           type: string
           jsonPath: .spec.domains
+          priority: 1
+        - name: ResolvedRefs
+          type: string
+          jsonPath: .status.conditions[?(@.type=='ResolvedRefs')].status
+          description: "Whether the ACME account / DNS-credential Secrets have been resolved"
           priority: 1
         - name: Expires
           type: string

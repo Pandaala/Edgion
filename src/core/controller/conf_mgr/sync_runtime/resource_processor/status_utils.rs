@@ -46,6 +46,32 @@ pub mod condition_reasons {
     pub const BACKEND_NOT_FOUND: &str = "BackendNotFound";
     pub const INVALID_KIND: &str = "InvalidKind";
 
+    // ResolvedRefs reasons for CRDs that resolve Kubernetes Secrets for
+    // credentials (e.g. `LinkSys`, `EdgionAcme`, `EdgionPlugins`, `EdgionTls`).
+    // These are distinct from the Gateway-API backend-ref reasons above; they
+    // pinpoint *why* the referenced Secret could not be turned into usable
+    // credential material.
+    //
+    // NOTE: These four reasons are **Edgion extensions**, not Gateway API
+    // upstream reasons. Third-party Gateway-API tooling (Envoy Gateway / Kuma
+    // dashboards, etc.) will not recognise them by name. Cross-namespace
+    // denial intentionally uses the upstream `RefNotPermitted` and is *not*
+    // split further — the pipeline cannot distinguish "no grant yet" from
+    // "grant denies", so a more specific reason would be misleading.
+    /// Edgion extension · The referenced Secret does not exist (or has not yet been cached).
+    pub const SECRET_NOT_FOUND: &str = "SecretNotFound";
+    // NOTE: There is intentionally *no* `REFERENCE_GRANT_MISSING` /
+    // `CROSS_NS_REF_NOT_PERMITTED` / similar reason here. Cross-namespace
+    // denial uses the upstream `REF_NOT_PERMITTED` (see M6/F): the pipeline
+    // cannot distinguish "no grant yet" from "grant denies", so advertising a
+    // distinction via a dedicated reason would mislead operators.
+    /// Edgion extension · The Secret exists but is missing one or more required `data` keys.
+    pub const MISSING_KEYS: &str = "MissingKeys";
+    /// Edgion extension · A Secret data value could not be decoded (non-UTF-8, bad JSON, ...).
+    pub const DECODE_ERROR: &str = "DecodeError";
+    /// Edgion extension · The `Secret.type` is not in the resolver's accepted whitelist.
+    pub const INVALID_SECRET_TYPE: &str = "InvalidSecretType";
+
     // General reasons
     pub const INVALID: &str = "Invalid";
     /// TLS listener mode is not supported (e.g. Mixed mode for TLSRoute)
@@ -69,6 +95,13 @@ pub mod condition_reasons {
     pub const NO_VALID_CA_CERTIFICATE: &str = "NoValidCACertificate";
     /// CACertificateRef cannot be resolved (resource not found or misconfigured).
     pub const INVALID_CA_CERTIFICATE_REF: &str = "InvalidCACertificateRef";
+
+    /// Edgion extension · Referenced PluginMetaData not found or has an
+    /// unexpected variant type (e.g. `ServiceRegionRoute.clusterRef` pointing
+    /// at a non-existent or non-`ClusterRegionRoute` PluginMetaData). Not a
+    /// Gateway API upstream reason — see the "Edgion extension" note above
+    /// the Secret-focused reasons for the general caveat.
+    pub const INVALID_PLUGIN_METADATA_REF: &str = "InvalidPluginMetaDataRef";
 
     // Programmed reasons (for listener Programmed condition)
     pub const PROGRAMMED: &str = "Programmed";
@@ -141,10 +174,40 @@ pub enum ResolvedRefsError {
     BackendNotFound { namespace: String, name: String },
     /// Referenced Secret not found
     SecretNotFound { namespace: String, name: String },
-    /// Cross-namespace reference denied by ReferenceGrant policy
+    /// Cross-namespace reference denied by ReferenceGrant policy.
+    ///
+    /// Carries the referrer's `(from_namespace, from_kind)` so the message
+    /// stays self-describing when scraped out of events / aggregated log
+    /// pipelines where the owning CRD's `metadata.namespace` is no longer in
+    /// context. `from_kind` is `&'static str` because every call site knows
+    /// its `ResourceKind` at compile time (via `ResourceKind::as_str()` or a
+    /// string literal).
     RefNotPermitted {
+        from_namespace: String,
+        from_kind: &'static str,
         target_namespace: String,
         target_name: String,
+    },
+    /// Referenced PluginMetaData not found, or found but its metadata variant
+    /// type doesn't match what the referrer requires (e.g. ServiceRegionRoute.clusterRef
+    /// expects a PluginMetaData of type ClusterRegionRoute).
+    PluginMetaDataNotFound {
+        namespace: String,
+        name: String,
+        expected_type: String,
+    },
+    /// Edgion extension · The Secret exists but is missing one or more required
+    /// `data` keys (e.g. `password` for basic-auth, `tls.key` for TLS certs).
+    MissingKeys { keys: Vec<&'static str> },
+    /// Edgion extension · A Secret data value could not be decoded (non-UTF-8,
+    /// malformed JSON, etc.). `key` identifies the offending field.
+    DecodeError { key: &'static str, detail: String },
+    /// Edgion extension · The `Secret.type` is not in the resolver's accepted
+    /// whitelist (e.g. pointing an `kubernetes.io/tls` Secret at a basic-auth
+    /// credential slot).
+    InvalidSecretType {
+        got: String,
+        allowed: &'static [&'static str],
     },
 }
 
@@ -153,8 +216,12 @@ impl ResolvedRefsError {
         match self {
             Self::InvalidKind { .. } => condition_reasons::INVALID_KIND,
             Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
-            Self::SecretNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
+            Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
+            Self::PluginMetaDataNotFound { .. } => condition_reasons::INVALID_PLUGIN_METADATA_REF,
+            Self::MissingKeys { .. } => condition_reasons::MISSING_KEYS,
+            Self::DecodeError { .. } => condition_reasons::DECODE_ERROR,
+            Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
         }
     }
 
@@ -170,12 +237,36 @@ impl ResolvedRefsError {
                 format!("Secret '{}/{}' not found", namespace, name)
             }
             Self::RefNotPermitted {
+                from_namespace,
+                from_kind,
                 target_namespace,
                 target_name,
             } => {
                 format!(
-                    "Cross-namespace reference to {}/{} not allowed by ReferenceGrant",
-                    target_namespace, target_name
+                    "Reference from {}/{} to \"{}/{}\" is not permitted without a ReferenceGrant",
+                    from_namespace, from_kind, target_namespace, target_name
+                )
+            }
+            Self::PluginMetaDataNotFound {
+                namespace,
+                name,
+                expected_type,
+            } => {
+                format!(
+                    "PluginMetaData '{}/{}' (expected type={}) not found",
+                    namespace, name, expected_type
+                )
+            }
+            Self::MissingKeys { keys } => {
+                format!("Secret is missing required data keys: {}", keys.join(", "))
+            }
+            Self::DecodeError { key, detail } => {
+                format!("credential decode failed for key '{}': {}", key, detail)
+            }
+            Self::InvalidSecretType { got, allowed } => {
+                format!(
+                    "Secret.type {:?} is not accepted for this credential (allowed: {:?})",
+                    got, allowed
                 )
             }
         }
@@ -218,6 +309,23 @@ pub fn condition_false(
     Condition {
         type_: type_.to_string(),
         status: "False".to_string(),
+        reason: reason.to_string(),
+        message: message.into(),
+        last_transition_time: now_rfc3339(),
+        observed_generation,
+    }
+}
+
+/// Create a condition with Unknown status
+pub fn condition_unknown(
+    type_: &str,
+    reason: &str,
+    message: impl Into<String>,
+    observed_generation: Option<i64>,
+) -> Condition {
+    Condition {
+        type_: type_.to_string(),
+        status: "Unknown".to_string(),
         reason: reason.to_string(),
         message: message.into(),
         last_transition_time: now_rfc3339(),
@@ -284,32 +392,53 @@ pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation
 
 /// Pick the highest-priority reason from a set of ResolvedRefs errors.
 ///
-/// Priority order (matching Gateway API spec precedence):
-/// 1. InvalidKind — fundamentally wrong backend type
+/// Priority order (matching Gateway API spec precedence, with Edgion Secret
+/// extensions slotted by severity; lower number = higher priority):
+/// 1. InvalidKind — fundamentally wrong backend/ref type
 /// 2. RefNotPermitted — policy denial
-/// 3. BackendNotFound — missing backend
-fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'static str {
-    if errors
-        .iter()
-        .any(|e| matches!(e, ResolvedRefsError::InvalidKind { .. }))
-    {
-        return condition_reasons::INVALID_KIND;
+/// 3. InvalidSecretType — Secret exists but wrong type (akin to InvalidKind, but for Secrets)
+/// 4. PluginMetaDataNotFound — dependent PluginMetaData missing
+/// 5. BackendNotFound — target Service missing
+/// 6. SecretNotFound — target Secret missing
+/// 7. DecodeError — Secret content unusable (parse failure)
+/// 8. MissingKeys — Secret content incomplete
+///
+/// Exposed as `pub(crate)` so other handlers (e.g. `EdgionPluginsHandler`,
+/// which still maintains its own Condition construction pending R2) can use
+/// the same deterministic priority instead of `errors[0].reason()`.
+///
+/// **Empty slice** returns a sentinel — callers guarantee non-empty at the
+/// `resolved_refs_condition` level. See also the `variant_priority` helper:
+/// adding a new `ResolvedRefsError` variant is enforced at compile time to
+/// declare its priority (the `match` is exhaustive).
+pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'static str {
+    // Exhaustive match on every variant forces future contributors to assign
+    // a priority slot for any new variant — the compiler refuses to compile
+    // otherwise, preventing silent "fall through to generic fallback" regressions.
+    fn variant_priority(err: &ResolvedRefsError) -> u8 {
+        match err {
+            ResolvedRefsError::InvalidKind { .. } => 0,
+            ResolvedRefsError::RefNotPermitted { .. } => 1,
+            ResolvedRefsError::InvalidSecretType { .. } => 2,
+            ResolvedRefsError::PluginMetaDataNotFound { .. } => 3,
+            ResolvedRefsError::BackendNotFound { .. } => 4,
+            ResolvedRefsError::SecretNotFound { .. } => 5,
+            ResolvedRefsError::DecodeError { .. } => 6,
+            ResolvedRefsError::MissingKeys { .. } => 7,
+        }
     }
-    if errors
-        .iter()
-        .any(|e| matches!(e, ResolvedRefsError::RefNotPermitted { .. }))
-    {
-        return condition_reasons::REF_NOT_PERMITTED;
+
+    match errors.iter().min_by_key(|e| variant_priority(e)) {
+        Some(e) => e.reason(),
+        // Unreachable in practice — `resolved_refs_condition` short-circuits
+        // to `ResolvedRefs=True/RESOLVED_REFS` before calling this helper.
+        // If we ever do reach here with an empty slice, `Invalid` is a safe
+        // default for a `status=False` condition (generic "something's wrong"
+        // reason) — never returning `ResolvedRefs` because that constant is
+        // the *success* reason and `status=False + reason=ResolvedRefs` is
+        // internally contradictory under Gateway API semantics.
+        None => condition_reasons::INVALID,
     }
-    if errors.iter().any(|e| {
-        matches!(
-            e,
-            ResolvedRefsError::BackendNotFound { .. } | ResolvedRefsError::SecretNotFound { .. }
-        )
-    }) {
-        return condition_reasons::BACKEND_NOT_FOUND;
-    }
-    condition_reasons::REF_NOT_PERMITTED
 }
 
 /// Set standard conditions (Accepted, ResolvedRefs) for a resource's parent status.
@@ -448,13 +577,15 @@ mod tests {
     #[test]
     fn test_resolved_refs_error_ref_not_permitted() {
         let err = ResolvedRefsError::RefNotPermitted {
+            from_namespace: "app-ns".to_string(),
+            from_kind: "HTTPRoute",
             target_namespace: "other-ns".to_string(),
             target_name: "other-svc".to_string(),
         };
         assert_eq!(err.reason(), "RefNotPermitted");
         assert_eq!(
             err.message(),
-            "Cross-namespace reference to other-ns/other-svc not allowed by ReferenceGrant"
+            "Reference from app-ns/HTTPRoute to \"other-ns/other-svc\" is not permitted without a ReferenceGrant"
         );
     }
 
@@ -474,6 +605,8 @@ mod tests {
     fn test_resolved_refs_reason_priority_invalid_kind_highest() {
         let errors = vec![
             ResolvedRefsError::RefNotPermitted {
+                from_namespace: "app-ns".to_string(),
+                from_kind: "HTTPRoute",
                 target_namespace: "ns".to_string(),
                 target_name: "svc".to_string(),
             },
@@ -498,6 +631,8 @@ mod tests {
                 name: "svc".to_string(),
             },
             ResolvedRefsError::RefNotPermitted {
+                from_namespace: "app-ns".to_string(),
+                from_kind: "HTTPRoute",
                 target_namespace: "other".to_string(),
                 target_name: "svc2".to_string(),
             },
@@ -541,6 +676,8 @@ mod tests {
     fn test_set_parent_conditions_with_resolved_refs_errors() {
         let mut conditions = Vec::new();
         let errors = vec![ResolvedRefsError::RefNotPermitted {
+            from_namespace: "app-ns".to_string(),
+            from_kind: "HTTPRoute",
             target_namespace: "ns".to_string(),
             target_name: "svc".to_string(),
         }];
@@ -644,6 +781,71 @@ mod tests {
 
         let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
         assert_eq!(resolved.status, "True");
+    }
+
+    #[test]
+    fn test_resolved_refs_error_secret_not_found_reason_is_secret_not_found() {
+        // Regression for M6/E: SecretNotFound used to map to BACKEND_NOT_FOUND,
+        // which was misleading for Secret-backed CRDs (LinkSys / EdgionPlugins /
+        // EdgionTls). It must now map to SECRET_NOT_FOUND.
+        let err = ResolvedRefsError::SecretNotFound {
+            namespace: "ns".to_string(),
+            name: "missing".to_string(),
+        };
+        assert_eq!(err.reason(), "SecretNotFound");
+        assert!(err.message().contains("ns/missing"));
+    }
+
+    #[test]
+    fn test_resolved_refs_error_missing_keys() {
+        let err = ResolvedRefsError::MissingKeys {
+            keys: vec!["password", "username"],
+        };
+        assert_eq!(err.reason(), "MissingKeys");
+        assert!(err.message().contains("password"));
+        assert!(err.message().contains("username"));
+    }
+
+    #[test]
+    fn test_resolved_refs_error_decode_error() {
+        let err = ResolvedRefsError::DecodeError {
+            key: "password",
+            detail: "invalid utf-8".to_string(),
+        };
+        assert_eq!(err.reason(), "DecodeError");
+        assert!(err.message().contains("password"));
+        assert!(err.message().contains("invalid utf-8"));
+    }
+
+    #[test]
+    fn test_resolved_refs_error_invalid_secret_type() {
+        const ALLOWED: &[&str] = &["kubernetes.io/basic-auth", "Opaque", ""];
+        let err = ResolvedRefsError::InvalidSecretType {
+            got: "kubernetes.io/ssh-auth".to_string(),
+            allowed: ALLOWED,
+        };
+        assert_eq!(err.reason(), "InvalidSecretType");
+        assert!(err.message().contains("ssh-auth"));
+    }
+
+    #[test]
+    fn test_resolved_refs_reason_priority_invalid_secret_type_before_backend() {
+        // Two errors: one Secret-content issue, one missing-resource issue.
+        // `InvalidSecretType` has higher priority than `SecretNotFound` — the
+        // Secret both exists and has the wrong type, so reporting "not found"
+        // would mislead the operator.
+        let errors = vec![
+            ResolvedRefsError::SecretNotFound {
+                namespace: "ns".to_string(),
+                name: "other".to_string(),
+            },
+            ResolvedRefsError::InvalidSecretType {
+                got: "kubernetes.io/tls".to_string(),
+                allowed: &["kubernetes.io/basic-auth"],
+            },
+        ];
+        let cond = resolved_refs_condition(&errors, Some(1));
+        assert_eq!(cond.reason, "InvalidSecretType");
     }
 
     #[test]

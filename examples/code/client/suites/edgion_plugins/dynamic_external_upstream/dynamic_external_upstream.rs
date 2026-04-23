@@ -176,13 +176,13 @@ impl DynamicExternalUpstreamTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    // Plugin should log "OK localhost:30002"
-                                    if log_str.contains("OK localhost:30002") {
+                                    // Plugin should log "upstream selected"
+                                    if log_str.contains("upstream selected") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Access log does not contain 'OK localhost:30002': {}", log_str),
+                                            format!("Access log does not contain 'upstream selected': {}", log_str),
                                         )
                                     }
                                 }
@@ -198,11 +198,11 @@ impl DynamicExternalUpstreamTestSuite {
         )
     }
 
-    /// Skip mode: verify access log when no match (should contain "NoMap" or "NoVal")
+    /// Skip mode: verify access log when no match (should contain "upstream miss")
     fn skip_access_log_no_match() -> TestCase {
         TestCase::new(
             "skip_access_log_no_match",
-            "Skip mode: access log contains NoMap entry when key not in domainMap",
+            "Skip mode: access log contains upstream miss entry when key not in domainMap",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -230,12 +230,12 @@ impl DynamicExternalUpstreamTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("NoMap") {
+                                    if log_str.contains("upstream miss") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Access log does not contain 'NoMap': {}", log_str),
+                                            format!("Access log does not contain 'upstream miss': {}", log_str),
                                         )
                                     }
                                 }
@@ -389,13 +389,13 @@ impl DynamicExternalUpstreamTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    // Plugin should log "OK localhost:30001"
-                                    if log_str.contains("OK localhost:30001") {
+                                    // Plugin should log "upstream selected"
+                                    if log_str.contains("upstream selected") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Access log does not contain 'OK localhost:30001': {}", log_str),
+                                            format!("Access log does not contain 'upstream selected': {}", log_str),
                                         )
                                     }
                                 }
@@ -472,12 +472,12 @@ impl DynamicExternalUpstreamTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("OK localhost:30002") {
+                                    if log_str.contains("upstream selected") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Access log does not contain 'OK localhost:30002': {}", log_str),
+                                            format!("Access log does not contain 'upstream selected': {}", log_str),
                                         )
                                     }
                                 }
@@ -518,17 +518,17 @@ impl DynamicExternalUpstreamTestSuite {
                         .await
                     {
                         Ok(_resp) => {
-                            // Check access log for plugin log containing OK + ap domain (port 30003)
+                            // Check access log for plugin log containing "upstream selected"
                             let al_client = ctx.access_log_client();
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("OK localhost:30003") {
+                                    if log_str.contains("upstream selected") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!("Access log does not contain 'OK localhost:30003': {}", log_str),
+                                            format!("Access log does not contain 'upstream selected': {}", log_str),
                                         )
                                     }
                                 }

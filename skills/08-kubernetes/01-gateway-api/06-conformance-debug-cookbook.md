@@ -5,8 +5,8 @@ description: Conformance test troubleshooting recipes — pre-flight checks, com
 
 # Conformance Debug Cookbook
 
-Real-world failure patterns and recipes accumulated from conformance debugging
-sessions. Use this when a conformance run fails or behaves unexpectedly.
+Run pre-flight checks (§1) before every suite. Use §2 when a test fails or
+behaves unexpectedly — each entry follows the pattern: Symptom → Root cause → Fix.
 
 ## 1. Pre-flight Checks
 
@@ -18,26 +18,21 @@ back to a skipped pre-flight item.
 ```bash
 POD=$(kubectl get pods -n edgion-system -l app=edgion-controller \
   -o jsonpath='{.items[0].metadata.name}')
-
-# Must see "listening on ..." or "started" in recent logs, zero ERROR lines
 kubectl logs --tail=20 -n edgion-system "$POD" | grep -iE 'listen|started|error'
 ```
 
-Healthy indicator: log lines showing gRPC server listening and reconcile loop
-started, with **no** `ERROR` or `panic` lines in the last 20 lines.
+Expect: gRPC server listening + reconcile loop started, zero `ERROR`/`panic` lines.
 
 ### 1.2 Gateway healthy
 
 ```bash
 POD=$(kubectl get pods -n edgion-system -l app=edgion-gateway \
   -o jsonpath='{.items[0].metadata.name}')
-
-# Must see port bind lines (80, 443, 8443 …), zero ERROR lines
 kubectl logs --tail=30 -n edgion-system "$POD" | grep -iE 'bindto|bindaddr|listen|error'
 ```
 
-Healthy indicator: one `bindto`/`listen` line per expected port. If a port is
-missing, the corresponding tests will time out with `connection refused`.
+Expect: one `bindto`/`listen` line per expected port (80, 443, 8443…). A missing
+port means those tests will time out with `connection refused`.
 
 ### 1.3 GatewayClass accepted
 
@@ -68,15 +63,13 @@ kubectl get gateways -n gateway-conformance-infra
 ### 1.5 No stale processes
 
 ```bash
-# On the conformance runner pod (if using in-cluster runner)
-kubectl exec -n edgion-system conformance-runner -- \
-  ps aux 2>/dev/null | grep conformance-tes
-
-# Locally
+# In-cluster runner pod
+kubectl exec -n edgion-system conformance-runner -- ps aux 2>/dev/null | grep conformance-tes
+# Local
 pgrep -f "gateway-api-conformance.test" && echo "STALE — kill first"
 ```
 
-Kill any leftover `<defunct>` or lingering test processes before starting a new run.
+Kill any leftover `<defunct>` or lingering test processes before starting.
 
 ---
 
@@ -100,9 +93,7 @@ dynamically created Gateways.
 ```bash
 kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway.yaml
 kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
-
 kubectl rollout restart deployment/edgion-gateway -n edgion-system
-kubectl rollout status deployment/edgion-gateway -n edgion-system --timeout=60s
 ```
 
 ### 2.2 HTTP tests timeout with `connection refused` on port 80
@@ -124,9 +115,8 @@ kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-
 
 Then restart the gateway pod to pick up the new ports.
 
-**Impact:** With ~100+ HTTP sub-tests at 60s each, a missing port-80 turns a
-10-minute run into a 2+ hour hang. Reducing `MaxTimeToConsistency` to 15s
-mitigates this but does not fix the root cause.
+**Impact:** ~100+ HTTP sub-tests × 60s timeout = 2+ hour hang. Reducing
+`MaxTimeToConsistency` to 15s mitigates but does not fix the root cause.
 
 ### 2.3 TLS Terminate tests fail — 8443 TLS callback not triggered
 
@@ -142,46 +132,28 @@ during TLS handshake on port 8443.
 
 **Common causes:**
 - `conformance-gateway-tls.yaml` not applied (8443 not pre-bound).
-- The referenced Secret (`tls-terminate-checks-certificate`) does not exist in
-  the `gateway-conformance-infra` namespace — the conformance suite creates it
-  dynamically; if the namespace was cleaned up, the Secret is gone.
-- Gateway restarted after manifest apply but before the Secret was re-created.
+- Secret `tls-terminate-checks-certificate` missing in `gateway-conformance-infra`
+  — created dynamically by the suite; gone if namespace was cleaned up.
+- Gateway restarted before the Secret was re-created.
 
 ### 2.3.1 Port 443 mixed-mode conflict (HTTPS Terminate + TLS Passthrough)
 
 **Architectural constraint:** Edgion does **not** support mixing HTTPS Terminate
-and TLS Passthrough on the same port. Conformance tests use port 443 for both
-`same-namespace-with-https-listener` (HTTPS Terminate) and `gateway-tlsroute`
-(TLS Passthrough). The upstream test code hardcodes the port from Gateway spec;
-there is no way to remap them.
-
-**Consequence:** GATEWAY-HTTP and GATEWAY-TLS profiles **must be run
-separately** — never in the same invocation. When both manifests are present,
-TLS Passthrough requests on 443 get intercepted by the HTTPS Terminate listener,
-returning the wrong certificate or timing out.
+and TLS Passthrough on the same port. Conformance tests hardcode port 443 for
+both profiles with no way to remap. GATEWAY-HTTP and GATEWAY-TLS **must be run
+separately** — TLS Passthrough requests on 443 would otherwise be intercepted by
+the HTTPS Terminate listener, returning the wrong certificate or timing out.
 
 **Affected tests when run together (all TLSRoute data-plane tests):**
-
-- `TLSRouteSimpleSameNamespace` (core)
-- `TLSRouteHostnameIntersection` (core)
-- `TLSRouteTerminateSimpleSameNamespace` (extended)
-- `TLSRouteInvalidBackendRefNonexistent` (core — data-plane sub-test)
-- `TLSRouteInvalidBackendRefUnknownKind` (core — data-plane sub-test)
-
-All TLSRoute status-only tests pass fine in mixed mode because they don't send
-traffic through port 443.
+`TLSRouteSimpleSameNamespace`, `TLSRouteHostnameIntersection`,
+`TLSRouteTerminateSimpleSameNamespace`, `TLSRouteInvalidBackendRefNonexistent`,
+`TLSRouteInvalidBackendRefUnknownKind`. Status-only TLSRoute tests pass fine.
 
 **Run protocol:**
 
-`in-cluster-runner.sh --clean-slate` handles everything automatically:
-
-1. Deletes non-base resources from all conformance namespaces
-2. Applies only the manifests needed for the active profiles
-3. For TLS-only: injects `EDGION_BASE_MANIFESTS` pointing to
-   `base-manifests-tls-only.yaml` so the framework does not recreate HTTP
-   Gateways on port 443
-4. Restarts controller + gateway processes
-5. Saves reports to `reports/` with profile-derived filenames
+`in-cluster-runner.sh --clean-slate` handles everything automatically (deletes
+non-base resources, applies profile-specific manifests, restarts processes,
+saves reports to `reports/`):
 
 ```bash
 # Step 1: GATEWAY-HTTP + GATEWAY-GRPC
@@ -193,15 +165,10 @@ traffic through port 443.
   --conformance-profiles "GATEWAY-TLS" --timeout 30m
 ```
 
-**Important:** the framework's `base/manifests.yaml` always applies base
-Gateways (including `same-namespace-with-https-listener` on port 443). For TLS
-runs, `base-manifests-tls-only.yaml` is a filtered copy of upstream base with
-HTTP Gateways removed to prevent the port 443 conflict.
-
-**Note on cert lifecycle:** `--clean-slate` also performs `rollout restart` on
-all TLS backend deployments. This is necessary because cert Secrets are
-regenerated by the framework with new key pairs, but running backend pods cache
-the old certs in memory. See 2.14 for details.
+For TLS runs, `base-manifests-tls-only.yaml` is a filtered copy of upstream
+`base/manifests.yaml` with HTTP Gateways removed to prevent the port 443
+conflict. `--clean-slate` also restarts TLS backend deployments — cert Secrets
+are regenerated with new key pairs and pods cache the old ones. See §2.14.
 
 ### 2.3.2 Client-cert validation Gateways pollute port 443
 
@@ -209,15 +176,13 @@ the old certs in memory. See 2.14 for details.
 `tls: certificate required` on every HTTPS request to port 443.
 
 **Root cause:** `client-validation-default` and
-`client-validation-insecure-fallback` Gateways had HTTPS Terminate listeners on
-port 443 with `tls.frontend.default.validation` (client cert required). These
-Gateways served the `GatewayFrontendClientCertificateValidation` feature which
-Edgion does **not** declare — no test exercises them, but their listeners
-intercepted all port-443 HTTPS traffic and demanded client certificates.
+`client-validation-insecure-fallback` Gateways (for
+`GatewayFrontendClientCertificateValidation`, which Edgion does **not** declare)
+had HTTPS Terminate listeners on port 443 requiring client certs, intercepting
+all port-443 HTTPS traffic.
 
-**Fix:** These Gateways were removed from `conformance-gateway.yaml`. If
-`GatewayFrontendClientCertificateValidation` is declared in the future, they
-must use a dedicated port (not 443) to avoid conflicting with
+**Fix:** Removed from `conformance-gateway.yaml`. If the feature is declared
+in future, use a dedicated port (not 443) to avoid conflicting with
 `same-namespace-with-https-listener`.
 
 ### 2.4 Stale conformance-test processes on runner pod
@@ -279,13 +244,12 @@ resources exist in the cluster.
 authority` or `connection refused`. Controller logs show `Graceful shutdown timed
 out 25s after signal, forcing exit` every ~27 seconds.
 
-**Root cause:** `src/core/controller/cli/mod.rs` used
-`tokio::time::timeout(25s, async { tokio::join!(...) })` which started the 25s
-timer from service boot, not from shutdown signal. The controller exited after 25s
-regardless of workload.
+**Root cause:** `src/core/controller/cli/mod.rs` started the 25s shutdown timer
+at service boot, not at signal receipt, causing the controller to exit 25s after
+start regardless of workload.
 
-**Fix (applied 2026-04-07):** Replaced with `tokio::select!` — the 25s drain
-deadline now starts only after `ShutdownHandle::signal().wait()` fires.
+**Fix (applied 2026-04-07):** Replaced with `tokio::select!` — drain deadline
+now starts only after `ShutdownHandle::signal().wait()` fires.
 
 ### 2.13 TLS cert x509 CA:FALSE — Go 1.24+ (not triggered in v1.5.1)
 
@@ -293,15 +257,13 @@ deadline now starts only after `ShutdownHandle::signal().wait()` fires.
 x509: certificate signed by unknown authority (possibly because of "x509: invalid
 signature: parent certificate cannot sign this kind of certificate")`.
 
-**Root cause:** The upstream conformance suite (`sigs.k8s.io/gateway-api/conformance
-v1.5.1`) generates self-signed certificates with `BasicConstraints CA:FALSE`. Go
-1.24+ rejects these when used in a root CA pool via `x509.Verify`.
+**Root cause:** `sigs.k8s.io/gateway-api/conformance v1.5.1` generates
+self-signed certs with `BasicConstraints CA:FALSE`; Go 1.24+ rejects these via
+`x509.Verify`.
 
-**Status (verified 2026-04-09):** Conformance v1.5.1 TLS tests use
-`InsecureSkipVerify` / do not call `x509.Verify` on client side, so this code
-path is never triggered. All 21 GATEWAY-TLS tests pass without any patch.
-No fix needed for now; revisit if a future conformance version adds strict
-client-side certificate verification.
+**Status (verified 2026-04-09):** v1.5.1 tests use `InsecureSkipVerify` — this
+code path is never triggered. All 21 GATEWAY-TLS tests pass without any patch.
+Revisit if a future conformance version adds strict client-side verification.
 
 ### 2.14 TLS backend pods serve stale certificates after Secret regeneration
 
@@ -312,15 +274,7 @@ but the backend pod still serves the old server cert.
 **Root cause:** TLS backend pods (`tls-backend`, `tls-backend-2`, `tcp-backend`)
 mount certificate Secrets as volumes and load them into memory at startup. Secret
 updates on disk are not automatically reloaded by the `echo-basic` container.
-
-**Affected deployments and their cert Secrets:**
-
-| Namespace | Deployment | Secret |
-|-----------|-----------|--------|
-| `gateway-conformance-infra` | `tls-backend` | `tls-checks-certificate` |
-| `gateway-conformance-infra` | `tls-backend-2` | `tls-checks-certificate` |
-| `gateway-conformance-infra` | `tcp-backend` | `tls-passthrough-checks-certificate` |
-| `gateway-conformance-app-backend` | `tls-backend` | `tls-passthrough-checks-certificate` |
+Cert-to-deployment mapping is in §4.
 
 **Fix:** `--clean-slate` now automatically performs `kubectl rollout restart` on all
 TLS backend deployments before running tests. For manual recovery:
@@ -338,33 +292,27 @@ kubectl rollout restart deployment tls-backend -n gateway-conformance-app-backen
 `go test` process silently dies.
 
 **Root cause:** gRPC (HTTP/2 long-lived streams) does not work reliably through
-`kubectl port-forward`. The TAL gRPC proxy client encounters persistent
+`kubectl port-forward` — the TAL gRPC proxy client encounters persistent
 connection establishment failures.
 
-**Fix:** Use in-cluster mode (see `02-conformance-testing.md`). If you must use
+**Fix:** Use in-cluster mode (`02-conformance-testing.md`). If you must use
 port-forward, do **not** set `GATEWAY_PROXY_ENABLE_GRPC=true`.
 
 ### 2.10 `kubectl exec` disconnects mid-test
 
-**Symptom:** `kubectl exec` returns but the test is still running inside the pod.
-Log file on the local machine is truncated.
+**Symptom:** `kubectl exec` returns while the test is still running inside the
+pod; log file on the local machine is truncated.
 
-**Root cause:** `kubectl exec` has idle/connection timeouts. Long-running output
-piped through `kubectl exec > local-file` can lose data when the connection drops.
+**Root cause:** `kubectl exec` has idle/connection timeouts; long-running output
+piped via `kubectl exec > local-file` can lose data when the connection drops.
 
-**Fix:** Use `nohup` inside the pod to write logs to a pod-local file:
+**Fix:** Use `nohup` inside the pod to write logs to a pod-local file, then
+retrieve with `kubectl cp`:
 
 ```bash
 kubectl exec -n edgion-system conformance-runner -- sh -c '
 nohup /tmp/conformance-test -test.run=TestConformance -test.v ... \
-  > /tmp/conformance.log 2>&1 &
-echo "PID=$!"'
-```
-
-Then monitor and retrieve:
-
-```bash
-kubectl exec ... -- sh -c 'wc -l /tmp/conformance.log; tail -5 /tmp/conformance.log'
+  > /tmp/conformance.log 2>&1 & echo "PID=$!"'
 kubectl cp edgion-system/conformance-runner:/tmp/conformance.log /tmp/local.log
 ```
 
@@ -386,28 +334,20 @@ imagePullPolicy: IfNotPresent
 pre-existing resources.
 
 **Root cause:** `cleanup-base-resources=false` + test failure = cleanup callbacks
-never fire. Dynamic resources (ConfigMap, BackendTLSPolicy, ReferenceGrant, etc.)
-created mid-test survive into the next run. A stale ConfigMap with valid CA data
-makes the controller resolve a reference that should be missing.
-
-**Known offender:** `tls-checks-ca-certificate-reconcile-test` ConfigMap from
-the `BackendTLSPolicy/Changing_the_content_of_a_ConfigMap` sub-test.
+never fire. Dynamic resources survive into the next run. Known offender:
+`tls-checks-ca-certificate-reconcile-test` ConfigMap from the
+`BackendTLSPolicy/Changing_the_content_of_a_ConfigMap` sub-test.
 
 **Fix:**
 
 ```bash
-# Quick — delete just the known stale CM
 kubectl delete configmap tls-checks-ca-certificate-reconcile-test \
   -n gateway-conformance-infra --ignore-not-found
-
-# Thorough — use --clean-slate to nuke all non-base resources before re-running
-./scripts/in-cluster-runner.sh --run-only --clean-slate \
-  --conformance-profiles "GATEWAY-HTTP" --run-test BackendTLSPolicy
 ```
 
-**Prevention:** `in-cluster-runner.sh` now auto-deletes stale ConfigMaps before
-every run. For a full reset use `--clean-slate` (deletes all non-base-manifest
-resources across all conformance namespaces, then re-applies base manifests).
+For a full reset, use `--clean-slate` (deletes all non-base-manifest resources
+across all conformance namespaces, then re-applies base manifests).
+`in-cluster-runner.sh` now auto-deletes stale ConfigMaps before every run.
 
 ---
 
@@ -448,14 +388,12 @@ kubectl get gateways -n gateway-conformance-infra \
 | `conformance-gateway-tls.yaml` | 443, 8443, 8883 | TLS Passthrough/Terminate — required for TLSRoute |
 | `base-manifests-tls-only.yaml` | N/A | Filtered `base/manifests.yaml` with HTTP Gateways removed |
 
-**Split-profile runs are mandatory.** HTTP/GRPC and TLS profiles cannot share
-port 443. Gateway pod must be restarted after applying new manifests that add
-ports (Edgion binds ports at startup only).
+**Split-profile runs are mandatory** (see §2.3.1). Gateway pod must be restarted
+after applying new manifests that add ports — Edgion binds ports at startup only.
 
 ### Cert Secrets and Backend Pods
 
-The conformance framework dynamically creates TLS Secrets at test setup time.
-Key cert-to-deployment mappings:
+Cert-to-deployment mappings (Secrets are dynamically created by the framework):
 
 | Secret | Used by (deployment) | Namespace |
 |--------|---------------------|-----------|
@@ -464,8 +402,8 @@ Key cert-to-deployment mappings:
 | `tls-passthrough-checks-certificate` | `tls-backend` | `gateway-conformance-app-backend` |
 | `tls-terminate-checks-certificate` | Gateway listeners (port 8443) | `gateway-conformance-infra` |
 
-When Secrets are deleted/recreated, the corresponding backend pods **must** be
-restarted to pick up new certs. `--clean-slate` does this automatically.
+When Secrets are deleted/recreated, backend pods **must** be restarted.
+`--clean-slate` does this automatically (see §2.14).
 
 ---
 
@@ -482,12 +420,9 @@ restarted to pick up new certs. `--clean-slate` does this automatically.
 7. **看 backend 健康度**：Service / EndpointSlice / Secret 是否齐全
 8. **看 pre-bind manifest**：端口、hostname、TLS mode 是否和测试预期完全一致
 
-常用命令：
+常用命令（`GW_POD` 见 §1.2）：
 
 ```bash
-GW_POD=$(kubectl get pods -n edgion-system -l app=edgion-gateway \
-  -o jsonpath='{.items[0].metadata.name}')
-
 kubectl get gateway -n gateway-conformance-infra
 kubectl get tlsroute -n gateway-conformance-infra
 kubectl exec -n edgion-system "$GW_POD" -- tail -20 /usr/local/edgion/logs/tls_access.log

@@ -1,0 +1,38 @@
+# Recovered variant of the bad HTTPRoute. Same spec (the backend is still
+# `abn-missing-svc`), but the embedded status now shows ResolvedRefs:True.
+# The test overwrites the bad fixture with this to assert that a resource
+# transitioning to clean status drops its series from the snapshot.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: abn-bad-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: abn-test-gateway
+      namespace: default
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /abn
+      backendRefs:
+        - name: abn-missing-svc
+          port: 8080
+status:
+  parents:
+    - parentRef:
+        name: abn-test-gateway
+        namespace: default
+      controllerName: edgion.io/gateway-controller
+      conditions:
+        - type: Accepted
+          status: "True"
+          reason: Accepted
+          message: Route accepted
+          lastTransitionTime: "2026-04-20T00:00:00Z"
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
+          message: Backend service resolved
+          lastTransitionTime: "2026-04-20T00:00:00Z"

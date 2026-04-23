@@ -101,8 +101,6 @@ pub async fn create_namespaced(
         StatusCode::BAD_REQUEST
     })?;
 
-    tracing::debug!("Request body: {}", content);
-
     let metadata = crate::core::common::utils::extract_resource_metadata(&content).ok_or_else(|| {
         tracing::warn!("Failed to extract metadata from request body");
         StatusCode::BAD_REQUEST

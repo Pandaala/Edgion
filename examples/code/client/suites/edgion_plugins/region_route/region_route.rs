@@ -1,10 +1,27 @@
 // RegionRoute Integration Test Suite
 //
+// Tests the ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData → EdgionPlugins resolve flow.
+//
 // Required conf files (examples/test/conf/EdgionPlugins/RegionRoute/):
-//   01_EdgionPlugins_region-route-main.yaml   — all three route rules + hashCalc + writeBack
-//   01_EdgionPlugins_region-route-norules.yaml — no routeRules (no-op)
+//   01_EdgionPlugins_region-route-main.yaml      — ref-only: serviceRegionRouteRef
+//   01_EdgionPlugins_region-route-norules.yaml    — ref-only: serviceRegionRouteRef
+//   01_EdgionPlugins_region-route-myregion.yaml   — ref-only: serviceRegionRouteRef
+//   01_PluginMetaData_global-region-conf.yaml     — ClusterRegionRoute PluginMetaData with complete config:
+//                                                   regions, keyGet, hashKeyGet, hashCalc, routeRules,
+//                                                   routeByKeyConfMatch.matchMap (vip-va→virginia, vip-oh→ohio)
+//   01_PluginMetaData_region-route-main.yaml      — ServiceRegionRoute PluginMetaData with clusterRef + regions
 //   02_HTTPRoute_region-route-main-test.yaml
 //   02_HTTPRoute_region-route-norules-test.yaml
+//   02_HTTPRoute_region-route-myregion-test.yaml
+//
+// PluginMetaData resolve flow:
+//   1. Controller processes EdgionPlugins "region-route-main"
+//   2. Resolves serviceRegionRouteRef → loads ServiceRegionRoute PluginMetaData "region-route-main"
+//   3. Follows ServiceRegionRoute PluginMetaData's clusterRef → loads ClusterRegionRoute PluginMetaData "global-region-conf"
+//   4. Copies ALL config from ClusterRegionRoute PluginMetaData: regions, keyGet, hashCalc, routeRules
+//   5. Injects routeByKeyConfMatch.matchMap into RouteByKeyConfMatch route rules
+//   6. Overlays per-region failoverTo from ServiceRegionRoute PluginMetaData (none in this test)
+//   7. Gateway receives the fully merged config
 //
 // Test strategy:
 //   Backend endpoints 127.0.0.1:30001 (virginia) and 127.0.0.1:30002 (ohio) are
@@ -192,12 +209,16 @@ impl RegionRouteTestSuite {
                     let log1 = send_and_get_region(ctx.clone(), trace1).await;
                     let log2 = send_and_get_region(ctx.clone(), trace2).await;
 
-                    // Extract "hash=N" value from log entry like "key=hdr:X-Account-Id hash=N; "
+                    // Extract "hash=N" value from log entry like "key=hdr:X-Account-Id hash=N"
+                    // The value ends at the first non-digit (quote/comma in JSON serialized form).
                     let extract_hash = |log: &str| -> Option<String> {
                         let start = log.find("hash=")? + 5;
                         let rest = &log[start..];
-                        let end = rest.find(';')?;
-                        Some(rest[..end].trim().to_string())
+                        let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+                        if end == 0 {
+                            return None;
+                        }
+                        Some(rest[..end].to_string())
                     };
 
                     match (log1, log2) {
@@ -346,16 +367,13 @@ impl RegionRouteTestSuite {
                                     let log_str = entry.data.to_string();
                                     // Verify: unknown direct region falls through, RouteByKeyConfMatch
                                     // misses, then RouteByHashRange routes.
-                                    // "key=hdr:X-Account-Id" may be truncated by 100-byte LogBuffer
-                                    // (fallthrough=39B + match-miss=32B + key=31B > 100B), so we
-                                    // verify via the match-miss entry and the final jump instead.
-                                    // The jump log (→region) is truncated by the 100B LogBuffer
-                                    // after fallthrough(39B) + match-miss(32B) + wb(28B) = 99B.
-                                    // Verify: unknown direct falls through, match-miss runs,
-                                    // then RouteByHashRange computes and triggers write-back.
+                                    // LogBuffer is 100 bytes. After fallthrough(38B) + match-miss(31B)
+                                    // + key(31B) = 100B exactly, the wb→ entry (26B) doesn't fit.
+                                    // So we verify hash computation via "key=hdr:X-Account-Id hash="
+                                    // rather than "wb→res_hdr:X-Region-Hash" which is truncated.
                                     let fell_through = log_str.contains("fallthrough");
                                     let match_miss = log_str.contains("match=hdr:X-Account-Id no conf");
-                                    let hash_computed = log_str.contains("wb→res_hdr:X-Region-Hash");
+                                    let hash_computed = log_str.contains("key=hdr:X-Account-Id hash=");
                                     if fell_through && match_miss && hash_computed {
                                         TestResult::passed(start.elapsed())
                                     } else {

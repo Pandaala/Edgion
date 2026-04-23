@@ -188,6 +188,19 @@ pub struct OpenidConnectConfig {
     #[serde(default = "default_timeout_seconds")]
     pub timeout: u64,
 
+    // DoS protection: response body limits for external IdP fetches.
+    // A chunked or dishonest IdP exceeding these limits is cut off mid-stream,
+    // so peak memory per fetch is bounded by the configured value.
+    /// Max response body size accepted for OIDC discovery. Default: 65 536 (64 KB).
+    #[serde(default = "default_discovery_max_response_bytes")]
+    pub discovery_max_response_bytes: usize,
+    /// Max response body size accepted for JWKS. Default: 1 048 576 (1 MB).
+    #[serde(default = "default_jwks_max_response_bytes")]
+    pub jwks_max_response_bytes: usize,
+    /// Max response body size accepted for the userinfo endpoint. Default: 131 072 (128 KB).
+    #[serde(default = "default_userinfo_max_response_bytes")]
+    pub userinfo_max_response_bytes: usize,
+
     // Runtime fields (controller-populated)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
@@ -230,6 +243,15 @@ fn default_jwks_cache_ttl() -> u64 {
 }
 fn default_jwks_min_refresh_interval() -> u64 {
     10
+}
+fn default_discovery_max_response_bytes() -> usize {
+    65_536
+}
+fn default_jwks_max_response_bytes() -> usize {
+    1_048_576
+}
+fn default_userinfo_max_response_bytes() -> usize {
+    131_072
 }
 fn default_max_header_value_bytes() -> u64 {
     4096
@@ -326,6 +348,9 @@ impl Default for OpenidConnectConfig {
             resolved_session_secret: None,
             hide_credentials: false,
             auth_failure_delay_ms: 0,
+            discovery_max_response_bytes: default_discovery_max_response_bytes(),
+            jwks_max_response_bytes: default_jwks_max_response_bytes(),
+            userinfo_max_response_bytes: default_userinfo_max_response_bytes(),
         }
     }
 }
@@ -400,6 +425,15 @@ impl OpenidConnectConfig {
         }
         if self.jwks_min_refresh_interval == 0 {
             return Some("jwksMinRefreshInterval must be greater than 0");
+        }
+        if self.discovery_max_response_bytes == 0 {
+            return Some("discoveryMaxResponseBytes must be greater than 0");
+        }
+        if self.jwks_max_response_bytes == 0 {
+            return Some("jwksMaxResponseBytes must be greater than 0");
+        }
+        if self.userinfo_max_response_bytes == 0 {
+            return Some("userinfoMaxResponseBytes must be greater than 0");
         }
         if self.max_header_value_bytes == 0 {
             return Some("maxHeaderValueBytes must be greater than 0");

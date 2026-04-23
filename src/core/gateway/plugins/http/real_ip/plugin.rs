@@ -4,7 +4,7 @@
 //! Reuses the global RealIpExtractor for consistent behavior.
 
 use async_trait::async_trait;
-use tracing::debug;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::core::common::utils::RealIpExtractor;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -24,7 +24,12 @@ impl RealIp {
     pub fn create(config: &RealIpConfig) -> Box<dyn RequestFilter> {
         // Build RealIpExtractor from plugin config
         let extractor = if !config.trusted_ips.is_empty() {
-            match RealIpExtractor::new(&config.trusted_ips, config.real_ip_header.clone(), config.recursive) {
+            match RealIpExtractor::new(
+                &config.trusted_ips,
+                config.real_ip_header.clone(),
+                config.recursive,
+                config.max_trusted_hops,
+            ) {
                 Ok(e) => Some(e),
                 Err(err) => {
                     tracing::error!(
@@ -57,9 +62,31 @@ impl RequestFilter for RealIp {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check if extractor is available
         let Some(ref extractor) = self.extractor else {
-            plugin_log.push("Config error: No valid extractor; ");
+            plugin_log.push_err("no extractor");
             return PluginRunningResult::GoodNext;
         };
+
+        // Push which header is configured
+        match extractor.real_ip_header().to_ascii_lowercase().as_str() {
+            "x-forwarded-for" => plugin_log.push("header xff"),
+            "x-real-ip" => plugin_log.push("header real-ip"),
+            "forwarded" => plugin_log.push("header forwarded"),
+            _ => plugin_log.push("header custom"),
+        };
+
+        // Check if client addr is a trusted proxy
+        let client_addr_str = session.client_addr();
+        let client_ip: IpAddr = client_addr_str
+            .parse::<SocketAddr>()
+            .map(|sa| sa.ip())
+            .or_else(|_| client_addr_str.parse::<IpAddr>())
+            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+
+        if extractor.is_trusted_proxy(&client_ip) {
+            plugin_log.push("trusted proxy:match");
+        } else {
+            plugin_log.push("trusted proxy:miss");
+        }
 
         // Get current remote_addr (clone to avoid borrow conflicts)
         let old_remote_addr = session.remote_addr().to_string();
@@ -73,22 +100,14 @@ impl RequestFilter for RealIp {
 
         // Update remote_addr if it changed
         if new_remote_addr != old_remote_addr {
-            if let Err(e) = session.set_remote_addr(&new_remote_addr) {
-                plugin_log.push(&format!("Failed to set remote_addr: {}; ", e));
+            if let Err(_e) = session.set_remote_addr(&new_remote_addr) {
+                plugin_log.push_err("set remote addr failed");
                 return PluginRunningResult::GoodNext;
             }
 
-            debug!(
-                old = %old_remote_addr,
-                new = %new_remote_addr,
-                "RealIp: Updated remote_addr"
-            );
-            plugin_log.push(&format!(
-                "Extracted real IP: {} (was: {}); ",
-                new_remote_addr, old_remote_addr
-            ));
+            plugin_log.push(&format!("ip updated: {}", new_remote_addr));
         } else {
-            plugin_log.push(&format!("Real IP unchanged: {}; ", new_remote_addr));
+            plugin_log.push("ip unchanged");
         }
 
         PluginRunningResult::GoodNext
@@ -105,6 +124,7 @@ mod tests {
             trusted_ips: vec!["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
             real_ip_header: "X-Forwarded-For".to_string(),
             recursive: true,
+            max_trusted_hops: None,
             trusted_ip_matcher: None, // Will be initialized by RealIp::create
         }
     }
@@ -112,8 +132,13 @@ mod tests {
     #[test]
     fn test_extract_recursive() {
         let config = create_test_config(); // recursive: true
-        let extractor =
-            RealIpExtractor::new(&config.trusted_ips, config.real_ip_header.clone(), config.recursive).unwrap();
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
 
         // Case 1: Right-to-left, find first non-trusted
         let result = extractor.extract_from_header_value("192.168.1.254", "203.0.113.1, 198.51.100.2, 192.168.1.1");
@@ -134,6 +159,7 @@ mod tests {
             &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
             "X-Forwarded-For".to_string(),
             false,
+            None,
         )
         .unwrap();
 
@@ -150,8 +176,13 @@ mod tests {
     #[test]
     fn test_client_not_trusted() {
         let config = create_test_config();
-        let extractor =
-            RealIpExtractor::new(&config.trusted_ips, config.real_ip_header.clone(), config.recursive).unwrap();
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
 
         // Client IP not in trusted list - should use client_addr directly
         let result = extractor.extract_from_header_value("8.8.8.8", "203.0.113.1");

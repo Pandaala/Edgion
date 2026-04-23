@@ -1,5 +1,6 @@
 pub mod common;
 pub mod constants;
+pub mod credentials;
 pub mod ctx;
 pub mod edgion_status;
 pub mod err;
@@ -25,7 +26,6 @@ pub mod global_def {
 #[macro_use]
 pub mod resource;
 
-// Re-export from output module (previously link_sys)
 pub use self::output::{LocalFileWriterCfg, LocalFileWriterConfig, RotationConfig, RotationStrategy, StringOutput};
 
 // Backward compatibility: link_sys module alias for output types

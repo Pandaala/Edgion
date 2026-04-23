@@ -1,0 +1,16 @@
+# Gateway for TCPRoute GlobalConnectionIpRestriction enforcement tests
+# Single TCP listener on port 31296
+# The EdgionStreamPlugins annotation wires up the GCIR plugin at Gateway level.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gcir-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/gcir-stream-plugins"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31296

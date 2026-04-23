@@ -1,0 +1,28 @@
+# GlobalConnectionIpRestriction PluginMetaData — integration test fixture
+#
+# Used by Task 26 integration test script.
+# Profile strict: allow-list semantics — only 127.0.0.0/8 allowed; all others denied.
+# Profile permissive: deny-list semantics — explicitly deny 1.2.3.4/32; default allow.
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: gcir-test
+  namespace: edgion-test
+spec:
+  metadata:
+    type: GlobalConnectionIpRestriction
+    config:
+      enable: true
+      activeProfile: strict
+      description: "Integration test PM"
+      profiles:
+        strict:
+          defaultAction: deny
+          allow:
+            - name: localhost
+              cidrs: ["127.0.0.0/8"]
+        permissive:
+          defaultAction: allow
+          deny:
+            - name: blocklist
+              cidrs: ["1.2.3.4/32"]

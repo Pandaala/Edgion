@@ -5,7 +5,24 @@ description: edgion-controller Admin HTTP API（Axum :5800）：全部端点、A
 
 # Admin API (:5800)
 
-Controller 通过 Axum 提供 HTTP Admin API，监听端口 5800，供 edgion-cli 命令行工具和运维操作使用。路由在 `create_admin_router()` 中统一注册。
+Controller 通过 Axum 提供 HTTP Admin API，监听端口 5800，供 edgion-cli 命令行工具和运维操作使用。
+
+## Router 装配（compose_admin_routes）
+
+Controller 与 Center 共享唯一的 admin router 装配入口：`src/core/common/api/compose.rs::compose_admin_routes(business, auth_state, local_auth_intent)`。
+
+内部装配顺序固定（调用方无法影响）：
+
+1. `business`（各组件业务路由）
+2. `/api/v1/auth/{login, logout, me}`（`local_auth_intent = true` 时挂载）
+3. `/api/v1/auth/status`（无条件挂载——fix #01 round 3 回归点；CLI `ensure_auth` 需要它始终可达）
+4. `unified_auth` middleware（包所有路由；skip_paths 由 `auth_state` 提供）
+
+**终态约定**：返回的 `Router` 视为终态。调用方不得再 `.route()` / `.layer()`——任何追加都会绕过 auth middleware，等价于 fix #01 round 2 的 P0 bug。新增 admin 路由应放入 `business` 参数后再调用 `compose_admin_routes`。
+
+**跨域说明**：Admin API 不挂 CORS 层。本地调试时由 `edgion-dashboard` 的 Vite `server.proxy` 处理（见 `edgion-dashboard/vite.config.ts`），生产由 dashboard 嵌入 Controller 同源部署。如未来出现独立 origin 部署需求，再引入精确来源白名单（对应 H1 修复记录）。
+
+3 个辅助 helper（`add_local_auth_routes`、`add_auth_status_route`、`wrap_with_unified_auth_layer`）已降级 `pub(crate)`，外部不再支持直接调用；统一通过 `compose_admin_routes` 入口。
 
 ## AdminState 共享状态
 
@@ -173,15 +190,21 @@ Admin API 集成了统一认证中间件，支持 OIDC 和本地 JWT 两种模�
 
 登录成功后，响应会 Set-Cookie 携带 httpOnly JWT Cookie，浏览器后续请求自动附带，无需手动管理 token。适合前端 Dashboard 使用。
 
-### 自动生成凭据
+### 自动生成凭据（仅 Controller）
 
-当 TOML 中无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
+当 Controller 的 TOML/YAML 中无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
 
 1. Controller 启动时通过 CenterApi 检查 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
 2. 不存在 → 生成随机 20 位密码 + 32 位 JWT secret → 创建 Secret
 3. 已存在 → 读取凭据继续启动
 4. FileSystem 模式存储位置：`{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
 5. K8s 模式：通过 K8s API 创建真正的 Secret
+6. `secret_retry_loop` 在 Secret 延迟就绪时用 `tokio_util::sync::CancellationToken`
+   监听关停（不是 `broadcast::Receiver<()>`），避免 sender 提前 drop 导致轮询立刻退出
+   （fix #01 round 3 回归点）
+
+> **注意**：Center 没有此自动生成路径。无 `[local_auth]` + 无 `[auth]` 时 Center 启动，
+> 但所有业务路由返回 503。详见 `skills/02-features/02-config/03-auth-bootstrap.md`。
 
 ### 模块位置
 

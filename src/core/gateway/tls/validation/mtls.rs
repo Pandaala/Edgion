@@ -8,29 +8,17 @@ use crate::types::ctx::ClientCertInfo;
 /// Returns true if certificate matches whitelist or no whitelist configured
 pub fn validate_san_whitelist(cert_info: &ClientCertInfo, allowed_sans: &Vec<String>) -> bool {
     if allowed_sans.is_empty() {
-        // No whitelist configured, allow all
         return true;
     }
 
-    // Check if any SAN matches the whitelist
     for san in &cert_info.sans {
         for allowed in allowed_sans {
             if super::matches_host_pattern(san, allowed) {
-                tracing::debug!(
-                    san = %san,
-                    allowed = %allowed,
-                    "Client certificate SAN matches whitelist"
-                );
                 return true;
             }
         }
     }
 
-    tracing::warn!(
-        sans = ?cert_info.sans,
-        allowed_sans = ?allowed_sans,
-        "Client certificate SAN does not match whitelist"
-    );
     false
 }
 
@@ -38,32 +26,19 @@ pub fn validate_san_whitelist(cert_info: &ClientCertInfo, allowed_sans: &Vec<Str
 /// Returns true if certificate matches whitelist or no whitelist configured
 pub fn validate_cn_whitelist(cert_info: &ClientCertInfo, allowed_cns: &Vec<String>) -> bool {
     if allowed_cns.is_empty() {
-        // No whitelist configured, allow all
         return true;
     }
 
     let Some(ref cn) = cert_info.cn else {
-        tracing::warn!("Client certificate has no CN, but CN whitelist is configured");
         return false;
     };
 
-    // Check if CN matches the whitelist
     for allowed in allowed_cns {
         if super::matches_host_pattern(cn, allowed) {
-            tracing::debug!(
-                cn = %cn,
-                allowed = %allowed,
-                "Client certificate CN matches whitelist"
-            );
             return true;
         }
     }
 
-    tracing::warn!(
-        cn = %cn,
-        allowed_cns = ?allowed_cns,
-        "Client certificate CN does not match whitelist"
-    );
     false
 }
 

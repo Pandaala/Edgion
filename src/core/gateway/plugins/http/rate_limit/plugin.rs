@@ -223,10 +223,11 @@ impl RequestFilter for RateLimit {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        // PluginLog must stay short (≤40B) and must never contain the resolved
+        // limit_key — it can be a user-identifying value (API key, user_id).
         // Check for configuration errors
         if !self.config.is_valid() {
-            let error = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push(&format!("Config error: {}; ", error));
+            plugin_log.push_err("cfg load fail");
             // Allow request to proceed on config error (fail-open)
             return PluginRunningResult::GoodNext;
         }
@@ -244,17 +245,17 @@ impl RequestFilter for RateLimit {
             if parts.is_empty() {
                 // No keys resolved - check if we have a default key configured
                 if let Some(ref default_key) = self.config.default_key {
-                    plugin_log.push(&format!("Using default key: {}; ", default_key));
+                    plugin_log.push("key miss:allow");
                     default_key.clone()
                 } else {
                     // No default key - check onMissingKey behavior
                     match self.config.on_missing_key {
                         OnMissingKey::Allow => {
-                            plugin_log.push("No limit key, allowing (fail-open); ");
+                            plugin_log.push("key miss:allow");
                             return PluginRunningResult::GoodNext;
                         }
                         OnMissingKey::Deny => {
-                            plugin_log.push("No limit key, denying; ");
+                            plugin_log.push("Deny key miss");
                             return self.reject_request(session, Duration::ZERO).await;
                         }
                     }
@@ -277,25 +278,18 @@ impl RequestFilter for RateLimit {
         // Calculate remaining quota
         let remaining = rate_limit - curr_count;
 
+        let kl = limit_key.len();
+
         // Check if rate limit exceeded
         if curr_count > rate_limit {
-            plugin_log.push(&format!(
-                "Rate limited (key: {}, count: {}, limit: {}, scope: {:?}); ",
-                limit_key, curr_count, rate_limit, self.config.scope
-            ));
+            plugin_log.push(&format!("Deny rate limit kl={}", kl));
             // Use interval as retry_after since the window will reset after interval
             return self.reject_request(session, interval).await;
         }
 
         // Add rate limit headers
         self.add_headers(session, remaining, interval);
-        plugin_log.push(&format!(
-            "Allowed (key: {}, count: {}, remaining: {}, scope: {:?}); ",
-            limit_key,
-            curr_count,
-            remaining.max(0),
-            self.config.scope
-        ));
+        plugin_log.push(&format!("Allow kl={} r={}", kl, remaining.max(0)));
         PluginRunningResult::GoodNext
     }
 }
@@ -394,7 +388,9 @@ mod tests {
 
             let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
             assert_eq!(result, PluginRunningResult::GoodNext, "Request {} should be allowed", i);
-            assert!(plugin_log.contains("Allowed"));
+            assert!(plugin_log.contains("Allow kl="));
+            // Must never contain the raw limit key value (would leak API key / user_id)
+            assert!(!plugin_log.contains("test_basic_ip_"));
         }
     }
 
@@ -423,7 +419,9 @@ mod tests {
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Rate limited"));
+        assert!(plugin_log.contains("Deny rate limit"));
+        // Key value must never appear in the log
+        assert!(!plugin_log.contains(test_ip));
     }
 
     #[tokio::test]
@@ -438,7 +436,7 @@ mod tests {
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("No limit key"));
+        assert!(plugin_log.contains("key miss:allow"));
     }
 
     #[tokio::test]
@@ -561,7 +559,7 @@ mod tests {
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Config error"));
+        assert!(plugin_log.contains("cfg load fail"));
     }
 
     #[tokio::test]
@@ -590,7 +588,7 @@ mod tests {
 
         let result = plugin2.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow kl="));
     }
 
     #[tokio::test]

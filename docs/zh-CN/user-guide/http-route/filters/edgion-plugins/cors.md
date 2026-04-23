@@ -115,18 +115,20 @@ filters:
 
 ### 4. 允许所有子域名
 
-使用通配符匹配：
+使用通配符匹配（**仅匹配 HTTPS**）：
 
 ```yaml
 filters:
   - type: Cors
     config:
-      allow_origins: "*.example.com"
+      allow_origins: "*.example.com"    # 仅匹配 https://*.example.com，不含 http://
       allow_methods: "GET,POST,PUT,DELETE"
       allow_headers: "Content-Type,Authorization"
 ```
 
-或使用正则表达式（更灵活）：
+> ⚠️ **`*.domain` 简写仅匹配 `https://`**（Edgion 0.x 起）。如果需要匹配 `http://`（如本地 dev 或遗留内部子域），请改用 `allow_origins_by_regex`，见下。
+
+或使用正则表达式（需 http/https 全覆盖时）：
 
 ```yaml
 filters:
@@ -134,7 +136,8 @@ filters:
     config:
       allow_origins: "https://example.com"  # 主域名
       allow_origins_by_regex:
-        - "^https://.*\\.example\\.com$"    # 所有子域名
+        - "^https://[^/]+\\.example\\.com$"    # 所有 HTTPS 子域名
+        # - "^https?://[^/]+\\.example\\.com$"  # 含 http（按需启用）
       allow_methods: "GET,POST,PUT,DELETE"
       allow_headers: "Content-Type,Authorization"
 ```
@@ -427,15 +430,16 @@ filters:
    allow_origins: "https://app1.example.com,https://app2.example.com,https://app3.example.com"
    ```
 
-3. **子域名通配符优先用 `*.example.com`**：
+3. **子域名通配符优先用 `*.example.com`（仅 HTTPS）**：
    ```yaml
-   ✅ 快速:
+   ✅ 快速（HTTPS-only，推荐用于生产）:
    allow_origins: "*.example.com"
-   
-   ⚠️ 较慢:
+
+   ⚠️ 较慢（需要 http/https 全覆盖时使用）:
    allow_origins_by_regex:
-     - "^https://.*\\.example\\.com$"
+     - "^https?://[^/]+\\.example\\.com$"
    ```
+   > `*.domain` 简写严格只匹配 `https://`。若必须放行 http 子域（本地 dev / 内部遗留服务），用 `allow_origins_by_regex` 显式声明 scheme。
 
 ---
 

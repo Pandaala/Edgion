@@ -422,17 +422,62 @@ wait_controller_gateway_sync() {
   echo "    WARNING: timed out waiting for controller→gateway sync ($elapsed s). Continuing anyway."
 }
 
+wait_controller_ready() {
+  local timeout=60 elapsed=0
+  local ctrl_pod
+  ctrl_pod=$(kubectl get pods -n "$NAMESPACE" -l "app=edgion-controller" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  [[ -z "$ctrl_pod" ]] && { echo "    WARNING: no controller pod, skipping readiness wait"; return; }
+
+  echo "    Waiting for controller to become ready (admin API + K8s sync)..."
+  while (( elapsed < timeout )); do
+    local ready
+    ready=$(kubectl get pod "$ctrl_pod" -n "$NAMESPACE" \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+    if [[ "$ready" == "True" ]]; then
+      echo "    Controller ready after ${elapsed}s."
+      return
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  echo "    WARNING: controller readiness timed out (${elapsed}s). Continuing with 5s grace period..."
+  sleep 5
+}
+
+wait_gateway_endpoints_ready() {
+  local timeout=60 elapsed=0
+  local gw_svc="edgion-gateway"
+  echo "    Waiting for gateway Service endpoints to become ready..."
+  while (( elapsed < timeout )); do
+    local ep_addrs
+    ep_addrs=$(kubectl get endpoints "$gw_svc" -n "$NAMESPACE" \
+      -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
+    if [[ -n "$ep_addrs" ]]; then
+      local gw_ip
+      gw_ip=$(kubectl get svc "$gw_svc" -n "$NAMESPACE" \
+        -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+      if [[ -n "$gw_ip" ]] && kubectl exec -n "$NAMESPACE" "$RUNNER_POD" -- \
+          bash -c "echo >/dev/tcp/${gw_ip}/80" 2>/dev/null; then
+        echo "    Gateway endpoints ready and port 80 reachable after ${elapsed}s."
+        return
+      fi
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  echo "    WARNING: gateway endpoint readiness timed out (${elapsed}s). Continuing anyway..."
+}
+
 restart_controller_and_gateway() {
   echo "  Restarting controller + gateway to pick up new manifest state..."
 
   # 1. Restart controller first so it re-lists all K8s resources.
   restart_process "edgion-controller" "edgion-controller"
 
-  # 2. Wait for controller to complete its initial K8s list+watch cycle.
-  #    The controller needs time to re-list all Gateways from K8s and populate
-  #    its gRPC cache. If the gateway restarts too early, it may pull stale data.
-  echo "    Waiting 20s for controller initial sync..."
-  sleep 20
+  # 2. Wait for controller pod to pass readiness probe (K8s list+watch
+  #    complete, gRPC server ready). Replaces the former hard-coded sleep 20.
+  wait_controller_ready
 
   # 3. Restart gateway so it rebinds physical listeners from controller cache.
   restart_process "edgion-gateway" "edgion-gateway"
@@ -440,8 +485,9 @@ restart_controller_and_gateway() {
   # 4. Wait for the gateway to receive all Gateway objects from controller.
   wait_controller_gateway_sync
 
-  echo "  Waiting 10s for route sync to settle..."
-  sleep 10
+  # 5. Wait for gateway Service endpoints to become ready and port 80
+  #    reachable via ClusterIP. Replaces the former hard-coded sleep 10.
+  wait_gateway_endpoints_ready
 }
 
 if [[ "$CLEAN_SLATE" == "true" ]]; then

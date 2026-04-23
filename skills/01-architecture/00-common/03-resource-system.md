@@ -43,9 +43,9 @@ pub trait ResourceMeta {
 
 ## ResourceKind 枚举
 
-自动生成的枚举包含全部 20 种资源类型：
+自动生成的枚举包含全部 21 种资源类型：
 
-`GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Endpoint`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `PluginMetaData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`
+`GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Endpoint`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `PluginMetaData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`, `ConfigMap`
 
 ## 资源类型全表
 
@@ -71,6 +71,7 @@ pub trait ResourceMeta {
 | | PluginMetaData | ✗ | ✓ | 插件元数据 |
 | **ACME** | EdgionAcme | ✗ | ✓ | ACME 自动证书 |
 | **基础设施** | LinkSys | ✗ | ✓ | 外部系统连接器 |
+| | ConfigMap | ✗ | ✗ | Kubernetes ConfigMap（不同步到 Gateway） |
 
 > **注意**：Secret 和 ReferenceGrant 不同步到 Gateway，它们的数据在 Controller 侧被消费（Secret 内容嵌入到需要的资源中，ReferenceGrant 只在 Controller 做跨命名空间校验）。
 

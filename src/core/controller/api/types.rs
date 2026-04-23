@@ -1,5 +1,7 @@
 use crate::core::controller::api::common::map_writer_error;
-use crate::core::controller::conf_mgr::{ConfCenter, ConfMgr, ConfWriterError, SchemaValidator};
+use crate::core::controller::conf_mgr::{
+    CenterLifeCycle, ConfCenter, ConfMgr, ConfWriterError, ControllerRuntime, SchemaValidator,
+};
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use crate::types::ResourceKind;
 use axum::http::StatusCode;
@@ -25,6 +27,11 @@ impl AdminState {
     /// Get the ConfCenter from ConfMgr
     pub fn conf_center(&self) -> Arc<dyn ConfCenter> {
         self.conf_mgr.conf_center()
+    }
+
+    /// Get the ControllerRuntime for direct table access
+    pub fn runtime(&self) -> Arc<ControllerRuntime> {
+        self.conf_mgr.runtime()
     }
 
     /// Check if running in Kubernetes mode

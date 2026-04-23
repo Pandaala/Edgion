@@ -21,27 +21,45 @@ RegionRoute 通过有序路由规则（routeRules）将流量路由到多个 reg
 **核心行为：**
 - 只改变上游 **IP**（通过 DNS 解析 `backendEndpoint`）。原始请求的 **Host header**、**SNI**、路径、body 全部保持不变。
 - 每个 region 占用 `[0, modulo-1]` 中的一段范围，范围不得重叠，允许有间隙。
-- `baseInfo.myRegion`：若路由结果等于本网关所在 region，插件直接放行，不设 `ExternalJumpPreset`（流量已在本地，无需跨 region 跳转）。
-- `failoverTo`：per-region 静态重定向——该 region 的流量在健康检查前先重定向到另一个 region。
-- 可选的 auto failover 通过 DNS 探测每个 region 的健康状态；若某 region DNS 无返回，流量自动切到最健康的其他 region。
+- `myRegion`：若路由结果等于本网关所在 region，插件直接放行，不设 `ExternalJumpPreset`（流量已在本地，无需跨 region 跳转）。
+- `failoverTo`：per-region 静态重定向——该 region 的流量直接重定向到另一个 region。
 - `routeRules` 为空 → 插件 no-op。
+
+## 架构概述
+
+RegionRoute 的配置分为三层：
+
+| 层次 | 资源 | 管理者 | 说明 |
+|------|------|--------|------|
+| 集群配置 | `ClusterRegionRoute` PluginMetaData | 运维/Center | 持有完整路由配置：regions、keyGet、hashCalc、routeRules、routeByKeyConfMatch |
+| 服务配置 | `ServiceRegionRoute` PluginMetaData | 管理员预建 | 引用集群配置（`clusterRef`），可按 region 设置 `failoverTo` 覆盖 |
+| 插件引用 | `EdgionPlugins` RegionRoute plugin | 用户 | 只有 `serviceRegionRouteRef` 一个字段，指向 Service PM 名称 |
+
+引用链：`EP.serviceRegionRouteRef → ServiceRegionRoute PM → clusterRef → ClusterRegionRoute PM`
+
+**ServiceRegionRoute PluginMetaData 必须由管理员预先创建**，系统不会自动生成。
 
 ## 配置参数
 
-### 基础参数
+### EdgionPlugins 中的 RegionRoute 配置
+
+`EdgionPlugins` 中的 RegionRoute 只有一个字段：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `baseInfo` | Object | —（必填） | 基础信息包装对象，包含 region 定义及 Center 联邦聚合所需的元数据 |
-| `baseInfo.serviceGroup` | String | —（必填，DNS-1123 label） | 服务组名称，用于分组相关的 RegionRoute 插件。Center 联邦模式下，同一 `serviceGroup` 的插件会被聚合到一起进行全局视图展示和统一管理 |
-| `baseInfo.cluster` | String | `""` | 集群标识符（如 `"us-prod"`、`"eu-staging"`），用于在 Center 联邦模式下区分来自不同集群的 RegionRoute 配置 |
-| `baseInfo.regions` | Array\<Object\> | —（必填） | Region 定义列表，见下方 `RegionDef` 子字段 |
-| `baseInfo.myRegion` | String | `""` | 本网关所在 region 名称，路由目标等于此值时直接放行 |
+| `serviceRegionRouteRef` | String | 无 | 同命名空间下 ServiceRegionRoute PluginMetaData 的名称 |
+
+### ClusterRegionRoute PluginMetaData 配置
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `myRegion` | String | `""` | 本网关所在 region 名称，路由目标等于此值时直接放行 |
+| `regions` | Array\<Object\> | `[]` | Region 定义列表，见 `RegionDef` 子字段 |
 | `keyGet` | Array\<Object\> | `[]` | 共享的 key 提取配置（RouteByKeyConfMatch 和 RouteByHashRange 共用） |
 | `hashKeyGet` | Array\<Object\> | 无 | 预计算 hash 读取源（RouteByHashRange 计算前先尝试读取） |
 | `hashCalc` | Object | 无 | Hash 计算配置，缺省时 RouteByHashRange 仅做 passthrough |
 | `routeRules` | Array\<Object\> | `[]` | 有序路由规则列表，空列表时插件为 no-op |
-| `autoFailover` | Object | 无 | 自动 failover 配置（基于 DNS 探测） |
+| `routeByKeyConfMatch` | Object | 无 | RouteByKeyConfMatch 的 matchMap 配置（由 Center 管理） |
 
 ### `regions[]`（RegionDef）子字段
 
@@ -53,6 +71,13 @@ RegionRoute 通过有序路由规则（routeRules）将流量路由到多个 reg
 | `tls` | Boolean | `true` | 上游连接是否使用 TLS |
 | `failoverTo` | String | 无 | 静态 failover 目标 region 名称 |
 
+### ServiceRegionRoute PluginMetaData 配置
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `clusterRef` | Object | 无 | 指向 ClusterRegionRoute PluginMetaData 的引用（namespace + name） |
+| `regions` | Array\<Object\> | `[]` | per-region failoverTo 覆盖列表（只有 `name` 和 `failoverTo` 字段有效） |
+
 ### `hashCalc` 子字段
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -61,51 +86,35 @@ RegionRoute 通过有序路由规则（routeRules）将流量路由到多个 reg
 | `modulo` | Integer | `1000` | Hash 值域 `[0, modulo-1]`，须 >= 2 |
 | `writeBack` | Array\<Object\> | `[]` | 将计算得到的 hash 写入目标列表 |
 
-### `autoFailover` 子字段
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enabled` | Boolean | `true` | 是否启用自动 failover |
-| `healthyThreshold` | Float | `0.5` | 健康阈值，DNS 无返回时触发 failover |
-| `probeIntervalMs` | Integer | `5000` | DNS 探测间隔（毫秒） |
-| `notifyHeader` | String | 无 | 写入响应 header 的 failover region 名称（便于调试） |
-| `onAllRegionsDown` | Enum | `pass` | 所有 region 不可用时的行为。可选值：`pass`（放行） | `reject`（返回 503） |
-
 ---
 
 ## 快速开始
 
+### 第一步：创建 ClusterRegionRoute PluginMetaData（运维/Center 操作）
+
 ```yaml
 apiVersion: edgion.io/v1
-kind: EdgionPlugins
+kind: PluginMetaData
 metadata:
-  name: my-region-route
-  namespace: default
+  name: global-region-conf
+  namespace: edgion-system
 spec:
-  requestPlugins:
-    - type: RegionRoute
+  plugins:
+    - type: ClusterRegionRoute
       config:
-        baseInfo:
-          # 服务组名称 — Center 联邦模式下用于聚合同一服务的 RegionRoute 配置
-          serviceGroup: my-service
-          # 可选：集群标识符 — 区分不同集群的配置（如 "us-prod"、"eu-staging"）
-          # cluster: us-prod
+        # 本网关所在 region——路由目标等于此值时直接放行
+        myRegion: virginia
 
-          # region 定义 — hashRange [low, high]，闭区间
-          regions:
-            - name: virginia
-              hashRange: [0, 599]           # 60% 流量（1000 槽中的 600 个）
-              backendEndpoint: virginia-internal.example.com:8443
-              tls: true
-              # failoverTo: ohio            # 可选：将 virginia 流量静态重定向到 ohio
-            - name: ohio
-              hashRange: [600, 999]         # 40% 流量（1000 槽中的 400 个）
-              backendEndpoint: ohio-internal.example.com:8443
-              tls: true
-              # failoverTo: virginia        # 可选：将 ohio 流量静态重定向到 virginia
-
-          # 可选：本网关所在 region——路由目标等于此值时直接放行（本地流量，无跨 region 跳转）
-          # myRegion: virginia
+        # region 定义 — hashRange [low, high]，闭区间
+        regions:
+          - name: virginia
+            hashRange: [0, 599]           # 60% 流量（1000 槽中的 600 个）
+            backendEndpoint: virginia-internal.example.com:8443
+            tls: true
+          - name: ohio
+            hashRange: [600, 999]         # 40% 流量（1000 槽中的 400 个）
+            backendEndpoint: ohio-internal.example.com:8443
+            tls: true
 
         # RouteByKeyConfMatch 和 RouteByHashRange 共用的 key 提取配置
         keyGet:
@@ -114,40 +123,66 @@ spec:
           - type: cookie
             name: account_id
 
-        # RouteByHashRange 的预计算 hash 读取源（计算前先尝试读取）
-        hashKeyGet:
-          - type: cookie
-            name: x_region_hash
-
-        # hash 计算配置 — 若缺省，RouteByHashRange 仅做 passthrough
+        # hash 计算配置
         hashCalc:
-          algorithm: crc32     # crc32（默认）| sha256
-          modulo: 1000         # 1000 个槽 [0, 999]；hashRange[1] 必须 < modulo
-          writeBack:           # 将计算得到的 hash 写入以下目标
+          algorithm: crc32
+          modulo: 1000
+          writeBack:
             - type: responseHeader
               name: X-Region-Hash
 
-        # 有序路由规则 — 按顺序评估，第一个匹配生效
+        # 有序路由规则
         routeRules:
           - type: RouteByDirectRegion
             keyFrom:
               - type: header
                 name: X-Direct-Region
-
           - type: RouteByKeyConfMatch
-            matchMap:
-              "vip-001": virginia
-              "enterprise-xyz": ohio
+          - type: RouteByHashRange
 
-          - type: RouteByHashRange   # 终止性规则，无单独配置
+        # RouteByKeyConfMatch 映射表（由 Center 管理）
+        routeByKeyConfMatch:
+          matchMap:
+            "vip-001": virginia
+            "enterprise-xyz": ohio
+```
 
-        # 可选：auto failover（基于 DNS 探测）
-        autoFailover:
-          enabled: true
-          healthyThreshold: 0.5          # DNS 无返回时触发
-          probeIntervalMs: 5000          # 每 5s 探测一次
-          notifyHeader: X-Failover-Region    # 写入响应 header（便于 debug）
-          onAllRegionsDown: pass         # pass | reject（返回 503）
+### 第二步：创建 ServiceRegionRoute PluginMetaData（管理员操作）
+
+```yaml
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: my-svc-pm
+  namespace: default
+spec:
+  plugins:
+    - type: ServiceRegionRoute
+      config:
+        # 引用集群配置
+        clusterRef:
+          name: global-region-conf
+          namespace: edgion-system
+        # 可选：per-region failoverTo 覆盖
+        regions:
+          - name: ohio
+            failoverTo: virginia     # ohio 流量全量切到 virginia
+```
+
+### 第三步：在 EdgionPlugins 中引用
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: my-app-plugins
+  namespace: default
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        # 只有一个字段：同命名空间下的 ServiceRegionRoute PM 名称
+        serviceRegionRouteRef: my-svc-pm
 ```
 
 ## Region 哈希范围
@@ -197,41 +232,27 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 与配置保持�
 | `local, pass;` | 目标等于 myRegion，本地放行 |
 | `err:failoverTo invalid;` | failoverTo 配置无效（未找到/自指/循环），降级处理 |
 | `→virginia 127.0.0.1:30001;` | 实际跳转目标（region，host:port） |
-| `failover→ohio (100%);` | autoFailover 自动切换到 ohio |
 | `key missing, pass;` | 取不到 key，放行 |
 
 ## myRegion 与 failoverTo
 
 ### myRegion — 本地放行
 
-当网关实例部署在某个 region 内时，将 `baseInfo.myRegion` 设置为该 region 的名称。若路由结果等于本 region，插件直接放行，不设 `ExternalJumpPreset`，避免本地流量产生不必要的跨 region 网络跳转。
-
-```yaml
-baseInfo:
-  serviceGroup: my-service
-  myRegion: virginia    # 本网关部署在 virginia
-```
+当网关实例部署在某个 region 内时，将 `myRegion` 设置为该 region 的名称（在 ClusterRegionRoute PluginMetaData 中配置）。若路由结果等于本 region，插件直接放行，不设 `ExternalJumpPreset`，避免本地流量产生不必要的跨 region 网络跳转。
 
 - 空字符串（默认）= 功能禁用，所有路由均走 `ExternalJumpPreset`。
 - 若值不匹配任何 region，运行时静默禁用该功能。
 
 ### failoverTo — 静态 Region 重定向
 
-在任意 `RegionDef` 上配置 `failoverTo`，可将该 region 的流量静态重定向到另一个 region。在路由规则确定目标之后、`autoFailover` 健康检查之前生效。
+在 `RegionDef` 上配置 `failoverTo`，可将该 region 的流量静态重定向到另一个 region。路由规则确定目标后立即生效。
 
-```yaml
-baseInfo:
-  serviceGroup: my-service
-  regions:
-    - name: ohio
-      hashRange: [600, 999]
-      backendEndpoint: ohio-internal.example.com:8443
-      failoverTo: virginia     # ohio 的所有流量 → 改走 virginia
-```
+- `failoverTo` 可在 ClusterRegionRoute PluginMetaData 的 `regions[]` 中配置（影响所有服务）
+- 也可在 ServiceRegionRoute PluginMetaData 的 `regions[]` 中配置（只影响该服务），会覆盖集群配置
 
 典型场景：
 - **手动 failover**：运维将某 region 标记为下线，流量全量切到备用 region。
-- **结合 myRegion 使用**：若重定向目标等于 `baseInfo.myRegion`，重定向后的流量也会本地放行。
+- **结合 myRegion 使用**：若重定向目标等于 `myRegion`，重定向后的流量也会本地放行。
 
 约束：
 - 目标必须是合法的 region 名称，否则该条重定向静默忽略（access log 记录 `err:failoverTo invalid;`）。
@@ -242,8 +263,8 @@ baseInfo:
 
 - `backendEndpoint` 每次请求都会 DNS 解析（复用 Pingora 的 `ExternalJumpPreset` 机制），建议使用内部稳定 DNS 名指向 region 负载均衡器。
 - 插件**不修改** Host header 和 SNI。若上游校验 SNI，需确保后端证书覆盖原始 hostname。
-- Auto failover 仅基于 DNS 活性探测（DNS 是否返回 IP），不做应用层健康检查。
 - `routeRules: []`（空列表或省略）使插件变为 no-op，可用于分阶段上线。
+- ServiceRegionRoute PluginMetaData 必须与 EdgionPlugins 在**同一命名空间**下。ClusterRegionRoute PluginMetaData 可在任意命名空间（通过 `clusterRef` 的 `namespace` 字段指定）。
 
 ## 相关文档
 

@@ -148,11 +148,12 @@ curl -sf http://127.0.0.1:5901/health
 - `/configserver/{kind}/list`
 - `/configserver/{kind}?name=...&namespace=...`
 
-示例：
+示例（Controller 侧所有端点在启用认证时均需 Bearer token；未登录请先 `edgion-cli login` 或从 `~/.edgion/token` 取 token）：
 
 ```bash
-curl -s http://127.0.0.1:5800/configserver/httproute/list | jq .
-curl -s "http://127.0.0.1:5800/configserver/httproute?namespace=default&name=my-route" | jq .
+TOKEN=$(cat ~/.edgion/token)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5800/configserver/httproute/list | jq .
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:5800/configserver/httproute?namespace=default&name=my-route" | jq .
 ```
 
 ### Gateway 侧

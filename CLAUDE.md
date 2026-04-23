@@ -111,14 +111,19 @@ make check-agent-docs
 - 不要引入安全漏洞（注入、XSS 等 OWASP Top 10）
 - 改动最小化，不做未被要求的重构或功能添加
 
+## Git 约束
+
+- **禁止自行 `git commit` 或 `git push`**：完成代码修改后，向用户汇报变更内容，等待用户明确指令后再提交。
+
 ## 认证系统
 
-- **默认行为**：无配置时自动生成随机密码，存入 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
+- **Controller 默认行为**：无 `[local_auth]` 配置时自动生成随机密码，存入 Secret `edgion-admin-credentials`（namespace: `edgion-system`）。K8s 模式与本地模式均支持。
+- **Center 默认行为**：**无自动生成**。operator 必须提供 `[local_auth]` 或 `[auth]`；两者都不提供时 server 启动，`/health`、`/ready`、`/metrics`、`/api/v1/auth/status` 可访问，但所有业务路由以 503 拒绝（fail-close via `initializing_response`，而非 panic/exit）。详见 `skills/02-features/02-config/03-auth-bootstrap.md`。
 - **查看密码**：`cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
 - **API 认证**：Bearer token 或 httpOnly Cookie
 - **CLI 认证**：`edgion-cli login` 或自动检测配置文件 auto-login
 - **认证端点**：`/api/v1/auth/login`、`/api/v1/auth/logout`、`/api/v1/auth/status`、`/api/v1/auth/me`
-- **模块位置**：`src/core/common/local_auth/`、`src/core/common/unified_auth/`
+- **模块位置**：`src/core/common/local_auth/`、`src/core/common/unified_auth/`、`src/core/common/api/compose.rs`
 - **配置**：`[local_auth]` TOML 段（可选，详见 `skills/02-features/02-config/00-controller-config.md`）
 
 ## 知识源规则

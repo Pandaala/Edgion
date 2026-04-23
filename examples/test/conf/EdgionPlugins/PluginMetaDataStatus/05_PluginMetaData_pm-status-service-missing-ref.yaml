@@ -1,0 +1,17 @@
+# Scenario 5: ServiceRegionRoute PM with clusterRef pointing at a non-existent PM
+# Expect: Accepted=True, ResolvedRefs=False/InvalidPluginMetaDataRef
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: pm-status-service-missing-ref
+  namespace: edgion-test
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+      clusterRef:
+        namespace: edgion-test
+        name: pm-status-does-not-exist
+      regions:
+        - name: east
+        - name: west

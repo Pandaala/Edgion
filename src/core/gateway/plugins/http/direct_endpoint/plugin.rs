@@ -52,11 +52,6 @@ impl DirectEndpoint {
             match validate_endpoint_in_route(&target_ip, extracted_port.or(self.config.port), backend_refs, route_ns) {
                 Ok(result) => result,
                 Err(reason) => {
-                    tracing::warn!(
-                        target_ip = %target_ip,
-                        reason = %reason,
-                        "DirectEndpoint: endpoint validation failed"
-                    );
                     return Err(ResolutionError::Invalid(reason)); // Becomes Deny
                 }
             };
@@ -92,13 +87,13 @@ impl RequestFilter for DirectEndpoint {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // 0. Only supported for HTTP routes, skip for gRPC routes
         if session.ctx().is_grpc_route_matched {
-            log.push("Skip gRPC; ");
+            log.push("skip grpc");
             return PluginRunningResult::GoodNext;
         }
 
         // 1. Check config validation
-        if let Some(err) = self.config.get_validation_error() {
-            log.push(&format!("CfgErr {}; ", err));
+        if let Some(_err) = self.config.get_validation_error() {
+            log.push("config invalid");
             return PluginRunningResult::GoodNext; // Fail-open on config error
         }
 
@@ -107,11 +102,11 @@ impl RequestFilter for DirectEndpoint {
             Some(v) if !v.is_empty() => v,
             _ => match self.config.on_missing {
                 DirectEndpointOnMissing::Fallback => {
-                    log.push("NoVal fallback; ");
+                    log.push("no value fallback");
                     return PluginRunningResult::GoodNext;
                 }
                 DirectEndpointOnMissing::Reject => {
-                    log.push("NoVal 400; ");
+                    log.push("no value 400");
                     return PluginRunningResult::ErrResponse {
                         status: 400,
                         body: Some("Missing target endpoint".to_string()),
@@ -128,7 +123,7 @@ impl RequestFilter for DirectEndpoint {
                 unit.matched_info.rsc.ns.as_str(),
             ),
             _ => {
-                log.push("NoRouteOrBkRefs; ");
+                log.push("no route refs");
                 return PluginRunningResult::GoodNext;
             }
         };
@@ -137,8 +132,8 @@ impl RequestFilter for DirectEndpoint {
         match self.resolve(raw_value, backend_refs, route_ns) {
             Ok(info) => {
                 let addr_str = format!("{}", info.addr);
+                log.push(&format!("endpoint {}:{}", info.addr.ip(), info.addr.port()));
                 session.set_direct_endpoint(info);
-                log.push(&format!("OK {}; ", addr_str));
 
                 if self.config.debug_header {
                     let _ = session.set_response_header("X-Direct-Endpoint", &addr_str);
@@ -146,7 +141,7 @@ impl RequestFilter for DirectEndpoint {
                 PluginRunningResult::GoodNext
             }
             Err(ResolutionError::Missing(msg)) => {
-                log.push(&format!("{}; ", msg));
+                log.push("endpoint miss");
                 match self.config.on_missing {
                     DirectEndpointOnMissing::Fallback => PluginRunningResult::GoodNext,
                     DirectEndpointOnMissing::Reject => PluginRunningResult::ErrResponse {
@@ -156,7 +151,7 @@ impl RequestFilter for DirectEndpoint {
                 }
             }
             Err(ResolutionError::Invalid(msg)) => {
-                log.push(&format!("Invalid {}; ", msg));
+                log.push("endpoint invalid");
                 match self.config.on_invalid {
                     DirectEndpointOnInvalid::Fallback => PluginRunningResult::GoodNext,
                     DirectEndpointOnInvalid::Reject => {

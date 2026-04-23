@@ -1,0 +1,43 @@
+# ClusterRegionRoute PluginMetaData for region-route-myregion
+#
+# Three-region topology with myRegion=virginia (local pass-through).
+# europe failoverTo=ohio; ohio failoverTo=virginia.
+#
+# myRegion tests (MYREGION_HOST):
+#   virginia (=myRegion)  → local pass-through → 200
+#   ohio (failoverTo=virginia=myRegion) → redirect ohio→virginia → local → 200
+#   europe (failoverTo=ohio, ohio≠myRegion) → redirect europe→ohio → jump to loopback → 502
+#
+# routeRules only uses RouteByDirectRegion so that test requests with X-Direct-Region
+# route deterministically; no hash routing needed for myRegion tests.
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: global-region-myregion
+  namespace: edgion-default
+spec:
+  metadata:
+    type: ClusterRegionRoute
+    config:
+        myRegion: virginia
+        regions:
+          - name: virginia
+            hashRange: [0, 599]
+            backendEndpoint: "127.0.0.1:30001"
+            tls: false
+          - name: ohio
+            hashRange: [600, 999]
+            backendEndpoint: "127.0.0.1:30002"
+            tls: false
+          - name: europe
+            hashRange: [0, 0]
+            backendEndpoint: "127.0.0.1:30003"
+            tls: false
+        keyGet:
+          - type: header
+            name: X-Account-Id
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region

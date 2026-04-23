@@ -63,6 +63,9 @@ filters:
 | `realm` | String | `"API Gateway"` | Authentication realm name, displayed in the browser login dialog |
 | `hideCredentials` | Boolean | `false` | Whether to hide the Authorization header from the upstream service |
 | `anonymous` | String | None | Anonymous username. When set, unauthenticated requests are also allowed with this username |
+| `authFailureDelayMs` | Integer | `0` | Fixed delay (milliseconds) applied before returning an auth failure response. Used to mitigate brute-force and username-enumeration attacks — see [Security Best Practices · Mitigating Enumeration and Brute-Force](#6-mitigating-enumeration-and-brute-force-recommended) below |
+| `cacheTtl` | Integer | `300` | LRU cache TTL (seconds) for successful authentications. Set to `0` to disable caching |
+| `singleflight` | Boolean | `true` | Deduplicate concurrent bcrypt verifications for the same credentials to avoid redundant bcrypt work under concurrent requests |
 
 ---
 
@@ -264,6 +267,47 @@ Content-Type: text/plain
 5. **Principle of least privilege**
    - Create different users for different permissions
    - Read-only users should use read-only credentials
+
+### 6. Mitigating Enumeration and Brute-Force (Recommended)
+
+Basic Auth has a **username enumeration timing side channel**: when the requested username does not exist, the plugin returns 401 immediately (<1ms); when the username exists but the password is wrong, the plugin runs bcrypt verify (~200ms). An attacker can enumerate valid usernames by measuring the response-time difference.
+
+This is a common property of gateway-layer Basic Auth (Traefik, Nginx, Envoy, Kong and other mainstream gateways likewise do not eliminate this at the code layer). **The recommended mitigation is a configuration-level combination of the following two settings**:
+
+**① Set `authFailureDelayMs` (required)**
+
+```yaml
+filters:
+  - type: BasicAuth
+    config:
+      secretRefs:
+        - name: api-user
+      authFailureDelayMs: 500  # Uniform 500ms delay on auth failure, masking the bcrypt (~200ms) timing difference
+```
+
+- Recommended value `>= 500` (well above single bcrypt cost of ~200ms)
+- Also raises brute-force cost: from thousands of attempts/sec down to ~2/sec per connection
+
+**② Add upstream rate limiting (recommended)**
+
+```yaml
+filters:
+  # First, rate-limit by source IP to cap the enumeration probing rate
+  - type: RateLimit
+    config:
+      rate: 10           # 10 per second
+      burst: 20
+      key: "$remote_addr"
+
+  # Then do Basic Auth
+  - type: BasicAuth
+    config:
+      secretRefs:
+        - name: api-user
+      authFailureDelayMs: 500
+```
+
+**Why not dummy bcrypt at the code layer?** In the gateway context, running dummy bcrypt for unknown users introduces a CPU-amplification DoS surface (an attacker can force the gateway to burn bcrypt CPU via enumeration traffic). The `authFailureDelayMs` + upstream rate-limit combination achieves equivalent defense without creating that amplification vector, and is consistent with mainstream gateway practice.
 
 ### ❌ Avoid
 

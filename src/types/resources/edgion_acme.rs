@@ -3,8 +3,9 @@
 //! Manages automatic TLS certificate issuance and renewal via the ACME protocol (RFC 8555).
 //! Supports HTTP-01 and DNS-01 challenges with automatic EdgionTls/Secret creation.
 
-use super::common::ParentReference;
+use super::common::{ParentReference, SecretReference};
 use super::gateway::SecretObjectReference;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -254,6 +255,18 @@ pub struct EdgionAcmeSpec {
     /// Contact email for ACME account registration (required)
     pub email: String,
 
+    /// K8s Secret to store the ACME account private key and credentials.
+    ///
+    /// **REQUIRED** - must be specified by the operator.
+    ///
+    /// Edgion will create this Secret if it doesn't exist (with ownerReferences pointing
+    /// to the EdgionAcme resource). If the Secret already exists, Edgion will:
+    /// - Use existing credentials if `accountCredentials` key is present (backup restore scenario)
+    /// - Patch the `accountCredentials` key if the Secret exists but key is missing (self-managed scenario)
+    ///
+    /// See cert-manager's Issuer.spec.acme.privateKeySecretRef for the same pattern.
+    pub private_key_secret_ref: SecretReference,
+
     /// Domain names to obtain certificates for.
     /// Wildcard domains (e.g., "*.example.com") require DNS-01 challenge.
     pub domains: Vec<String>,
@@ -291,6 +304,10 @@ pub struct EdgionAcmeSpec {
     /// DNS provider credential Secret (resolved by Controller, not from YAML)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub dns_credential_secret: Option<k8s_openapi::api::core::v1::Secret>,
+
+    /// ACME account Secret (resolved by Controller, not from YAML)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub account_secret: Option<k8s_openapi::api::core::v1::Secret>,
 }
 
 fn default_acme_server() -> String {
@@ -321,6 +338,12 @@ pub enum AcmeCertPhase {
 #[derive(Default, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionAcmeStatus {
+    /// Gateway-API-style conditions. `Accepted` reflects spec validation.
+    /// The `phase` field and timestamps below track the asynchronous ACME lifecycle
+    /// (issuance / renewal) and are updated by the background AcmeService, not here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+
     /// Current phase of the ACME certificate lifecycle
     #[serde(default)]
     pub phase: AcmeCertPhase,
@@ -417,6 +440,8 @@ metadata:
   namespace: default
 spec:
   email: admin@example.com
+  privateKeySecretRef:
+    name: my-acme-account
   domains:
     - example.com
     - www.example.com
@@ -441,6 +466,7 @@ spec:
         let acme = acme.unwrap();
         assert_eq!(acme.metadata.name, Some("my-acme".to_string()));
         assert_eq!(acme.spec.email, "admin@example.com");
+        assert_eq!(acme.spec.private_key_secret_ref.name, "my-acme-account");
         assert_eq!(acme.spec.domains.len(), 2);
         assert!(acme.is_http01());
         assert!(!acme.has_wildcard_domains());
@@ -458,6 +484,8 @@ metadata:
   namespace: default
 spec:
   email: admin@example.com
+  privateKeySecretRef:
+    name: wildcard-acme-account
   domains:
     - "*.example.com"
     - example.com
@@ -503,6 +531,8 @@ metadata:
   namespace: default
 spec:
   email: admin@example.com
+  privateKeySecretRef:
+    name: test-acme-account
   domains:
     - example.com
   challenge:
@@ -537,6 +567,8 @@ metadata:
   namespace: default
 spec:
   email: a@b.com
+  privateKeySecretRef:
+    name: minimal-account
   domains:
     - a.com
   challenge:
@@ -569,6 +601,8 @@ metadata:
   namespace: default
 spec:
   email: a@b.com
+  privateKeySecretRef:
+    name: my-cert-account
   domains: [a.com]
   challenge:
     type: http-01
@@ -582,5 +616,59 @@ spec:
         let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(acme.get_edgion_tls_name(), "acme-my-cert");
         assert_eq!(acme.get_secret_namespace(), "default");
+    }
+
+    #[test]
+    fn test_private_key_secret_ref_required() {
+        // Missing privateKeySecretRef should be rejected
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: test
+  namespace: default
+spec:
+  email: admin@example.com
+  domains: [example.com]
+  challenge:
+    type: http-01
+    http01:
+      gatewayRef:
+        name: gw
+  storage:
+    secretName: cert
+"#;
+        let result: Result<EdgionAcme, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_err(), "privateKeySecretRef should be required");
+    }
+
+    #[test]
+    fn test_private_key_secret_ref_with_namespace() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: test
+  namespace: default
+spec:
+  email: admin@example.com
+  privateKeySecretRef:
+    name: my-acme-account
+    namespace: secrets-ns
+  domains: [example.com]
+  challenge:
+    type: http-01
+    http01:
+      gatewayRef:
+        name: gw
+  storage:
+    secretName: cert
+"#;
+        let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(acme.spec.private_key_secret_ref.name, "my-acme-account");
+        assert_eq!(
+            acme.spec.private_key_secret_ref.namespace.as_deref(),
+            Some("secrets-ns")
+        );
     }
 }

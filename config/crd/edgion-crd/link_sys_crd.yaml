@@ -34,32 +34,47 @@ spec:
                       description: "Server endpoints"
                       items:
                         type: string
+                    # Redis/Etcd auth - simple secretRef (required when auth is present)
                     auth:
                       type: object
                       description: "Authentication configuration"
-                      properties:
-                        username:
-                          type: string
-                          description: "Username"
-                        password:
-                          type: string
-                          description: "Password"
-                        secretRef:
-                          type: object
-                          description: "Secret reference for credentials"
+                      oneOf:
+                        # Redis/Etcd style (simple secretRef)
+                        - required: ["secretRef"]
                           properties:
-                            name:
+                            secretRef:
+                              type: object
+                              description: "Secret reference for credentials (required)"
+                              required: ["name"]
+                              properties:
+                                name:
+                                  type: string
+                                  description: "Name of the secret"
+                                namespace:
+                                  type: string
+                                  description: "Namespace of the secret"
+                              additionalProperties: false
+                          additionalProperties: false
+                        # Elasticsearch/Webhook style (tagged enum with type)
+                        - required: ["type", "secretRef"]
+                          properties:
+                            type:
                               type: string
-                              description: "Name of the secret"
-                            namespace:
-                              type: string
-                              description: "Namespace of the secret"
-                            usernameKey:
-                              type: string
-                              description: "Key in the secret for username"
-                            passwordKey:
-                              type: string
-                              description: "Key in the secret for password"
+                              description: "Authentication type"
+                              enum: ["basic", "apiKey", "bearer", "hmac"]
+                            secretRef:
+                              type: object
+                              description: "Secret reference for credentials"
+                              required: ["name"]
+                              properties:
+                                name:
+                                  type: string
+                                  description: "Name of the secret"
+                                namespace:
+                                  type: string
+                                  description: "Namespace of the secret"
+                              additionalProperties: false
+                          additionalProperties: false
                     tls:
                       type: object
                       description: "TLS/SSL configuration"
@@ -73,25 +88,25 @@ spec:
                           description: "Skip certificate verification (insecure)"
                         certs:
                           type: object
-                          description: "TLS certificates"
+                          description: "TLS certificates; private key MUST be provided via secretRef (inline clientKey is rejected)"
                           properties:
                             caCert:
                               type: string
-                              description: "CA certificate (PEM)"
+                              description: "CA certificate (PEM, public material)"
                             clientCert:
                               type: string
-                              description: "Client certificate (PEM)"
-                            clientKey:
-                              type: string
-                              description: "Client key (PEM)"
+                              description: "Client certificate (PEM, public material)"
                             secretRef:
                               type: object
-                              description: "Secret reference for certificates"
+                              description: "Secret reference (kubernetes.io/tls or Opaque with tls.crt/tls.key/ca.crt keys)"
+                              required: ["name"]
                               properties:
                                 name:
                                   type: string
                                 namespace:
                                   type: string
+                              additionalProperties: false
+                          additionalProperties: false
                     timeout:
                       type: object
                       description: "Timeout configuration (milliseconds)"
@@ -157,6 +172,17 @@ spec:
                           format: int64
                         permitWithoutStream:
                           type: boolean
+                    # Webhook specific
+                    uri:
+                      type: string
+                      description: "Webhook service URL"
+                    requestMethod:
+                      type: string
+                      description: "HTTP method (GET, POST, etc.)"
+                    timeoutMs:
+                      type: integer
+                      format: int64
+                      description: "Request timeout in milliseconds"
                     observability:
                       type: object
                       description: "Observability configuration"
@@ -180,6 +206,39 @@ spec:
                             slowLogThreshold:
                               type: integer
                               format: int64
+            status:
+              type: object
+              description: "Status of LinkSys"
+              properties:
+                conditions:
+                  type: array
+                  description: |
+                    Gateway-API-style conditions:
+                      - `Accepted` reflects spec validation.
+                      - `ResolvedRefs` reflects whether all referenced Kubernetes
+                        Secrets (auth + TLS) were successfully resolved by the
+                        Controller. Extension reasons: `SecretNotFound`,
+                        `MissingKeys`, `DecodeError`, `InvalidSecretType`; and
+                        the standard `RefNotPermitted` for cross-namespace denial.
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+      subresources:
+        status: {}
       additionalPrinterColumns:
         - name: Type
           type: string
@@ -189,6 +248,13 @@ spec:
           type: string
           jsonPath: .spec.config.endpoints[0]
           description: "First endpoint"
+        - name: Accepted
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Accepted')].status
+        - name: ResolvedRefs
+          type: string
+          jsonPath: .status.conditions[?(@.type=='ResolvedRefs')].status
+          description: "Whether all referenced Secrets have been resolved"
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -199,4 +265,3 @@ spec:
     kind: LinkSys
     shortNames:
       - lsys
-

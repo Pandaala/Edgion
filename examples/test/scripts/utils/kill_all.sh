@@ -59,6 +59,7 @@ main() {
     # Stopallprocess
     force_kill "edgion-gateway" "edgion-gateway"
     force_kill "edgion-controller" "edgion-controller"
+    force_kill "edgion-center" "edgion-center"
     force_kill "test_server" "test_server"
     
     # Waitprocess

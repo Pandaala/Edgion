@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use std::net::IpAddr;
 
 use super::super::stream_plugin_trait::StreamPluginResult;
+use crate::core::gateway::observe::logs::LogBuffer;
 
 /// Enriched context available after TLS handshake + TLSRoute match.
 #[derive(Debug, Clone)]
@@ -19,6 +20,22 @@ pub struct TlsRouteContext {
     pub tls_id: Option<String>,
     pub rsc: crate::types::Rsc,
     pub is_mtls: bool,
+    /// Per-connection plugin log buffer; callers may leave as `LogBuffer::new()`.
+    pub log: LogBuffer,
+}
+
+impl TlsRouteContext {
+    /// Push a plain log entry into the context log buffer.
+    #[inline]
+    pub fn push(&mut self, msg: &str) {
+        let _ = self.log.push(msg);
+    }
+
+    /// Push an error entry (static kind only) with unified `"err: "` prefix.
+    #[inline]
+    pub fn push_err(&mut self, kind: &'static str) {
+        let _ = self.log.push_err(kind);
+    }
 }
 
 /// Plugin trait for the TLS route stage (post-handshake, post-route-match).

@@ -45,6 +45,7 @@ spec:
                       description: Plugin type
                       enum:
                       - IpRestriction
+                      - GlobalConnectionIpRestriction
                     config:
                       type: object
                       description: Plugin configuration
@@ -68,6 +69,9 @@ spec:
                       type: string
                     message:
                       type: string
+                    observedGeneration:
+                      type: integer
+                      format: int64
     subresources:
       status: {}
     additionalPrinterColumns:

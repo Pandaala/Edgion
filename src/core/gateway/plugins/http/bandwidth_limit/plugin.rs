@@ -17,7 +17,6 @@
 //! - Effective throughput ≈ 1MB/s
 
 use std::time::Duration;
-use tracing;
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, UpstreamResponseBodyFilter};
@@ -61,7 +60,7 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
         log: &mut PluginLog,
     ) -> Option<Duration> {
         if self.rate_bps == 0 {
-            tracing::warn!(plugin = "BandwidthLimit", "rate_bps is 0 — skipping (misconfiguration)");
+            log.push("Skip bandwidth zero");
             return None;
         }
 
@@ -69,10 +68,7 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
             let chunk_size = data.len();
             if chunk_size > 0 {
                 let delay_secs = chunk_size as f64 / self.rate_bps as f64;
-                log.push(&format!(
-                    "Throttled (chunk={}B, rate={}B/s, delay={:.4}s); ",
-                    chunk_size, self.rate_bps, delay_secs
-                ));
+                log.push("Rate bandwidth");
                 return Some(Duration::from_secs_f64(delay_secs));
             }
         }

@@ -192,10 +192,10 @@ impl ProxyRewrite {
             // Preserve original query string
             let final_uri = self.build_uri_with_query(&resolved, original_query);
 
-            if let Err(e) = session.set_upstream_uri(&final_uri) {
-                plugin_log.push(&format!("URI rewrite failed: {}; ", e));
+            if let Err(_e) = session.set_upstream_uri(&final_uri) {
+                plugin_log.push_err("uri rewrite fail");
             } else {
-                plugin_log.push(&format!("URI: {} -> {}; ", original_path, final_uri));
+                plugin_log.push("path rewrite");
             }
         } else if let Some(ref regex_uri) = self.config.regex_uri {
             if let Some(caps) = captures {
@@ -213,17 +213,14 @@ impl ProxyRewrite {
                 // Preserve original query string
                 let final_uri = self.build_uri_with_query(&result, original_query);
 
-                if let Err(e) = session.set_upstream_uri(&final_uri) {
-                    plugin_log.push(&format!("Regex URI rewrite failed: {}; ", e));
+                if let Err(_e) = session.set_upstream_uri(&final_uri) {
+                    plugin_log.push_err("uri rewrite fail");
                 } else {
-                    plugin_log.push(&format!("URI(regex): {} -> {}; ", original_path, final_uri));
+                    plugin_log.push("path rewrite");
                 }
             } else {
                 // Regex configured but path doesn't match - log for debugging
-                plugin_log.push(&format!(
-                    "URI regex '{}' not matched path '{}'; ",
-                    regex_uri.pattern, original_path
-                ));
+                plugin_log.push("regex not matched");
             }
         }
     }
@@ -231,10 +228,10 @@ impl ProxyRewrite {
     /// Rewrite Host header
     fn rewrite_host(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
         if let Some(ref host) = self.config.host {
-            if let Err(e) = session.set_upstream_host(host) {
-                plugin_log.push(&format!("Host rewrite failed: {}; ", e));
+            if let Err(_e) = session.set_upstream_host(host) {
+                plugin_log.push_err("host rewrite fail");
             } else {
-                plugin_log.push(&format!("Host -> {}; ", host));
+                plugin_log.push("host rewrite");
             }
         }
     }
@@ -243,10 +240,10 @@ impl ProxyRewrite {
     fn rewrite_method(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
         if let Some(ref method) = self.config.method {
             let method_str = method.as_str();
-            if let Err(e) = session.set_upstream_method(method_str) {
-                plugin_log.push(&format!("Method rewrite failed: {}; ", e));
+            if let Err(_e) = session.set_upstream_method(method_str) {
+                plugin_log.push_err("method rewrite fail");
             } else {
-                plugin_log.push(&format!("Method -> {}; ", method_str));
+                plugin_log.push(&format!("method rewrite {}", method_str));
             }
         }
     }
@@ -271,8 +268,8 @@ impl ProxyRewrite {
                 for entry in add_headers {
                     // Don't encode header values
                     let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
-                    if let Err(e) = session.append_request_header(&entry.name, &resolved) {
-                        plugin_log.push(&format!("Header add {} failed: {}; ", entry.name, e));
+                    if let Err(_e) = session.append_request_header(&entry.name, &resolved) {
+                        plugin_log.push_err("header add fail");
                     } else {
                         modified = true;
                     }
@@ -284,8 +281,8 @@ impl ProxyRewrite {
                 for entry in set_headers {
                     // Don't encode header values
                     let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
-                    if let Err(e) = session.set_request_header(&entry.name, &resolved) {
-                        plugin_log.push(&format!("Header set {} failed: {}; ", entry.name, e));
+                    if let Err(_e) = session.set_request_header(&entry.name, &resolved) {
+                        plugin_log.push_err("header set fail");
                     } else {
                         modified = true;
                     }
@@ -295,8 +292,8 @@ impl ProxyRewrite {
             // 3. Remove headers
             if let Some(ref remove_headers) = headers.remove {
                 for name in remove_headers {
-                    if let Err(e) = session.remove_request_header(name) {
-                        plugin_log.push(&format!("Header remove {} failed: {}; ", name, e));
+                    if let Err(_e) = session.remove_request_header(name) {
+                        plugin_log.push_err("header remove fail");
                     } else {
                         modified = true;
                     }
@@ -304,7 +301,7 @@ impl ProxyRewrite {
             }
 
             if modified {
-                plugin_log.push("Headers modified; ");
+                plugin_log.push("header rewrite");
             }
         }
     }
@@ -319,9 +316,7 @@ impl RequestFilter for ProxyRewrite {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check if configuration is valid
         if !self.config.is_valid() {
-            if let Some(err) = self.config.get_validation_error() {
-                plugin_log.push(&format!("Config error: {}; ", err));
-            }
+            plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
         }
 
@@ -400,8 +395,8 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("URI:"));
-        assert!(plugin_log.contains("Host ->"));
+        assert!(plugin_log.contains("path rewrite"));
+        assert!(plugin_log.contains("host rewrite"));
     }
 
     #[tokio::test]
@@ -459,7 +454,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("URI(regex):"));
+        assert!(plugin_log.contains("path rewrite"));
     }
 
     #[tokio::test]
@@ -488,7 +483,7 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         // Should log that regex didn't match
-        assert!(plugin_log.contains("not matched"));
+        assert!(plugin_log.contains("regex not matched"));
     }
 
     #[tokio::test]
@@ -516,7 +511,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Method -> POST"));
+        assert!(plugin_log.contains("method rewrite POST"));
     }
 
     #[tokio::test]
@@ -572,7 +567,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[tokio::test]
@@ -797,7 +792,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[test]
@@ -843,7 +838,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("URI:"));
+        assert!(plugin_log.contains("path rewrite"));
     }
 
     #[tokio::test]
@@ -902,7 +897,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Headers modified"));
+        assert!(plugin_log.contains("header rewrite"));
     }
 
     #[tokio::test]

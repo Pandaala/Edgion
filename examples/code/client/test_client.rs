@@ -117,6 +117,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "security" => "Gateway/Security".to_string(),
             "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
             "tcp-stream-plugins" | "tcpstreamplugins" => "TCPRoute/StreamPlugins".to_string(),
+            "tcp-gcir" | "tcpgcir" | "tcp-global-connection-ip-restriction" => {
+                "TCPRoute/GlobalConnectionIpRestriction".to_string()
+            }
             "tls" | "tls-route" | "tlsroute" => "TLSRoute/Basic".to_string(),
             "tls-pp2" | "tlspp2" | "tls-proxy-protocol" => "TLSRoute/ProxyProtocol".to_string(),
             "tls-stream-plugins" | "tlsstreamplugins" => "TLSRoute/StreamPlugins".to_string(),
@@ -142,6 +145,14 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
+            "plugin-metadata-managed" | "pluginmetadatamanaged" | "pm-managed" => {
+                "EdgionPlugins/PluginMetaDataManaged".to_string()
+            }
+            "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
+                "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
+            }
+            "resolved-refs" | "resolvedrefs" | "ep-resolved-refs" => "EdgionPlugins/ResolvedRefs".to_string(),
+            "linksys-status" | "linksysstatus" | "ls-status" => "LinkSys/Status".to_string(),
             "ref-grant-status" => "Status/RefGrant".to_string(),
             "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
             "backend-tls-status" | "btls-status" => "Status/BackendTLSPolicy".to_string(),
@@ -194,6 +205,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
+        "TCPRoute/GlobalConnectionIpRestriction" => "TCPRoute/GlobalConnectionIpRestriction",
         // TLSRoute
         "TLSRoute/Basic" | "TLSRoute" => "TLSRoute/Basic",
         "TLSRoute/ProxyProtocol" => "TLSRoute/ProxyProtocol",
@@ -238,7 +250,12 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
+        "EdgionPlugins/PluginMetaDataManaged" | "EdgionPlugins/plugin-metadata-managed" => "EdgionPlugins",
+        "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
+        "EdgionPlugins/PluginMetaDataStatus" => "EdgionPlugins",
+        "EdgionPlugins/ResolvedRefs" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
+        "LinkSys/Status" => "EdgionPlugins",
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
@@ -483,6 +500,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TcpStreamPluginsTestSuite));
+        }
+        "TCPRoute/GlobalConnectionIpRestriction" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/GlobalConnectionIpRestriction tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GcirEnforcementTestSuite));
         }
         // TLSRoute
         "TLSRoute" | "TLSRoute/Basic" => {
@@ -771,6 +795,41 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RegionRouteTestSuite));
+        }
+        "EdgionPlugins/PluginMetaDataManaged" | "EdgionPlugins/plugin-metadata-managed" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginMetaDataManaged tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PluginMetaDataManagedTestSuite));
+        }
+        "EdgionPlugins/GlobalConnectionIpRestriction" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/GlobalConnectionIpRestriction tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GlobalConnectionIpRestrictionTestSuite));
+        }
+        "EdgionPlugins/PluginMetaDataStatus" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginMetaDataStatus tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PluginMetaDataStatusTestSuite));
+        }
+        "EdgionPlugins/ResolvedRefs" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/ResolvedRefs tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ResolvedRefsTestSuite));
+        }
+        "LinkSys/Status" => {
+            if !gateway {
+                eprintln!("Error: LinkSys/Status tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LinkSysStatusTestSuite));
         }
         "EdgionPlugins/AllEndpointStatus" => {
             if !gateway {

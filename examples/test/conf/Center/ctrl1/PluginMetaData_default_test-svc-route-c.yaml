@@ -1,0 +1,14 @@
+# ServiceRegionRoute PluginMetaData — service C, controller 1
+# Standalone ServiceRegionRoute without clusterRef.
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: test-svc-route-c
+  namespace: default
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+      regions:
+        - name: east
+        - name: west

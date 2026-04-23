@@ -3,28 +3,33 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::types::resources::edgion_plugins::IpRestrictionConfig;
+use crate::types::resources::edgion_gateway_config::PluginReference;
+use crate::types::resources::edgion_stream_plugins::connection_ip_restriction_rules::ConnectionIpRestrictionRules;
 
-/// Stream plugin enum for all supported stream plugin types
-///
-/// Currently supports:
-/// - IpRestriction: IP-based access control for TCP/UDP connections
+/// Stream plugin enum for all supported stream plugin types.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config")]
 pub enum EdgionStreamPlugin {
-    /// IP Restriction filter (allow/deny based on IP address or CIDR)
-    /// Controls access to TCP/UDP connections based on client IP
-    IpRestriction(IpRestrictionConfig),
-    // TODO: Add more stream plugins in the future
-    // RateLimit(StreamRateLimitConfig),
-    // ConnectionLimit(ConnectionLimitConfig),
+    /// Inline IP restriction (L4-specific, no HTTP fields).
+    IpRestriction(ConnectionIpRestrictionRules),
+
+    /// PM-referenced IP restriction; Center-managed, multi-Controller synced.
+    GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionEntry),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GlobalConnectionIpRestrictionEntry {
+    /// Reference to a GlobalConnectionIpRestriction PluginMetaData.
+    /// Namespace is inherited from parent EdgionStreamPlugins if omitted.
+    pub plugin_metadata_ref: PluginReference,
 }
 
 impl EdgionStreamPlugin {
-    /// Get the type name of this plugin
     pub fn type_name(&self) -> &'static str {
         match self {
             EdgionStreamPlugin::IpRestriction(_) => "IpRestriction",
+            EdgionStreamPlugin::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
         }
     }
 }

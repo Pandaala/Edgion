@@ -25,7 +25,10 @@ set -eo pipefail
 # Configuration  (edit these variables to customise the build)
 # =============================================================================
 
-DEFAULT_VERSION="0.1.19"
+# Fallback version used when HEAD has no git tag.
+# Normal release flow: git tag v0.x.y  →  script auto-detects via `git describe --tags --exact-match`
+# or pass --from-tag / --version explicitly.
+DEFAULT_VERSION="0.1.23"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
@@ -324,11 +327,13 @@ compile_binaries() {
     fi
 
     # Run compilation in Docker
+    # Use named volume for rustup to persist toolchain downloads across runs
     docker run --rm \
         --platform "${platform}" \
         -v "${PROJECT_DIR}":/project \
         -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
         -w /project \
         "${builder_tag}" \
         bash -c "${build_cmd}"
@@ -375,6 +380,7 @@ compile_examples() {
         -v "${PROJECT_DIR}":/project \
         -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
         -w /project \
         "${builder_tag}" \
         bash -c "${build_cmd}"
@@ -468,7 +474,6 @@ build_example_images() {
 
         # test_client image should include debug/test tools.
         if [[ "${example}" == "test_client" ]]; then
-            runtime_base="ubuntu:24.04"
             extra_packages="curl bash"
         fi
 
@@ -679,13 +684,21 @@ compile_frontend() {
 
     # Build frontend in Docker for consistency (no local Node.js required)
     log_info "Running npm ci + npm run build inside Docker (node:20-slim)..."
+    local ver="${VERSION#v}"   # strip leading 'v' so package.json gets e.g. 0.1.22
+    local pkg_json="${DASHBOARD_DIR}/package.json"
+    local pkg_json_orig
+    pkg_json_orig=$(cat "${pkg_json}")   # backup before docker modifies it
+
     docker run --rm \
         -v "${DASHBOARD_DIR}":/app \
         -w /app \
         node:20-slim \
-        bash -c "npm ci --prefer-offline && npm run build"
+        bash -c "npm pkg set version='${ver}' && npm ci --prefer-offline && npm run build"
+    local rc=$?
 
-    if [[ $? -ne 0 ]]; then
+    echo "${pkg_json_orig}" > "${pkg_json}"   # restore to avoid dirty working tree
+
+    if [[ ${rc} -ne 0 ]]; then
         log_error "Frontend build failed"
         exit 1
     fi
@@ -745,6 +758,7 @@ compile_all_in_one_binaries() {
         -v "${PROJECT_DIR}":/project \
         -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
         -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
         -w /project \
         "${builder_tag}" \
         bash -c "${build_cmd}"

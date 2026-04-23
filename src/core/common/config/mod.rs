@@ -43,9 +43,12 @@ pub fn is_test_mode() -> bool {
 pub fn init_integration_testing_mode(enabled: bool) {
     GLOBAL_INTEGRATION_TESTING_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
     if enabled {
-        tracing::info!(
+        tracing::warn!(
             component = "integration_testing",
-            "Integration testing mode enabled: Access Log Store + Metrics Test Data active"
+            "Integration testing mode enabled: Access Log Store + Metrics Test Data active. \
+             DO NOT enable in production — `edgion_backend_requests_total` will carry \
+             per-request `test_data` labels (e.g., backend IP, latency_ms) when Gateway \
+             annotations opt in, causing Prometheus cardinality to scale with request count."
         );
     }
 }
@@ -153,6 +156,10 @@ pub struct EdgionControllerConfig {
     #[serde(default)]
     pub validation: ValidationConfig,
 
+    #[arg(skip)]
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+
     #[command(flatten)]
     #[serde(default)]
     pub conf_sync: ConfSyncConfig,
@@ -182,8 +189,9 @@ pub struct EdgionControllerConfig {
     pub auth: Option<AdminAuthConfig>,
 
     /// Optional local authentication (built-in username/password).
-    /// When both `auth` (OIDC) and `local_auth` are absent, local_auth with
-    /// default credentials (admin/edgion1234) is used automatically.
+    /// When both `auth` (OIDC) and `local_auth` are absent, local_auth is
+    /// auto-enabled with credentials auto-generated and persisted to a K8s
+    /// Secret (`edgion-admin-credentials` in namespace `edgion-system`).
     #[arg(skip)]
     #[serde(default)]
     pub local_auth: Option<crate::core::common::local_auth::LocalAuthConfig>,
@@ -268,6 +276,36 @@ impl Default for ValidationConfig {
 
 fn default_reference_grant_validation() -> bool {
     true // Default: enabled
+}
+
+/// Top-level metrics configuration section.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct MetricsConfig {
+    pub resource_abnormal: ResourceAbnormalMetricsConfig,
+}
+
+/// Configuration for the resource-abnormal gauge
+/// (`edgion_controller_resource_abnormal`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResourceAbnormalMetricsConfig {
+    pub enabled: bool,
+    pub tick_secs: u64,
+    /// Per-snapshot safety ceiling. When the rendered snapshot would
+    /// exceed this value it is truncated and a `tracing::error!` is
+    /// emitted. Default 1000; validated range is `[10, 100000]`.
+    pub hard_cap: usize,
+}
+
+impl Default for ResourceAbnormalMetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tick_secs: 300,
+            hard_cap: 1000,
+        }
+    }
 }
 
 /// Configuration synchronization configuration
@@ -552,7 +590,31 @@ impl EdgionControllerConfig {
         // Merge: CLI args override file config
         Self::merge(&mut file_config, &cli_config);
 
+        file_config.validate_metrics()?;
+
         Ok(file_config)
+    }
+
+    /// Validate the `metrics` section. When `resource_abnormal.enabled` is
+    /// true, `tick_secs` must fall within [30, 3600] and `hard_cap` must
+    /// fall within [10, 100000]. When disabled, both values are ignored.
+    pub fn validate_metrics(&self) -> anyhow::Result<()> {
+        let cfg = &self.metrics.resource_abnormal;
+        if cfg.enabled {
+            if cfg.tick_secs < 30 || cfg.tick_secs > 3600 {
+                anyhow::bail!(
+                    "metrics.resource_abnormal.tick_secs must be in [30, 3600], got {}",
+                    cfg.tick_secs
+                );
+            }
+            if cfg.hard_cap < 10 || cfg.hard_cap > 100_000 {
+                anyhow::bail!(
+                    "metrics.resource_abnormal.hard_cap must be in [10, 100000], got {}",
+                    cfg.hard_cap
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Merge CLI config into file config (CLI takes precedence)
@@ -865,5 +927,79 @@ center:
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("does not match any cert name"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_defaults_are_applied_when_section_omitted() {
+        let yaml = "work_dir: /tmp\n";
+        let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.metrics.resource_abnormal.enabled);
+        assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 300);
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_explicit_values_parse() {
+        let yaml = r#"
+metrics:
+  resource_abnormal:
+    enabled: false
+    tick_secs: 60
+"#;
+        let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!cfg.metrics.resource_abnormal.enabled);
+        assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 60);
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_too_small_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.tick_secs = 29;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("tick_secs"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_minimum_30_accepted() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.tick_secs = 30;
+        cfg.validate_metrics().unwrap();
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_too_large_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.tick_secs = 3601;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("tick_secs"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_tick_disabled_skips_range_check() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.enabled = false;
+        cfg.metrics.resource_abnormal.tick_secs = 0;
+        cfg.validate_metrics().unwrap();
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_hard_cap_default_is_1000() {
+        let cfg = EdgionControllerConfig::default();
+        assert_eq!(cfg.metrics.resource_abnormal.hard_cap, 1000);
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_hard_cap_too_small_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.hard_cap = 9;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("hard_cap"));
+    }
+
+    #[test]
+    fn metrics_resource_abnormal_hard_cap_too_large_rejected() {
+        let mut cfg = EdgionControllerConfig::default();
+        cfg.metrics.resource_abnormal.hard_cap = 100_001;
+        let err = cfg.validate_metrics().unwrap_err();
+        assert!(err.to_string().contains("hard_cap"));
     }
 }

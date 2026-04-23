@@ -101,5 +101,5 @@ Executes after the upstream response is received, before it is sent to the clien
 
 ## Related Documentation
 
-- [Filters Overview](../overview.md)
-- [Plugin Composition and References](../plugin-composition.md)
+- [Filters Overview](../../overview.md)
+- [Plugin Composition and References](../../plugin-composition.md)

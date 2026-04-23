@@ -6,6 +6,7 @@
 //! The store is populated by the ConfHandler when EdgionAcme resources
 //! with active_challenges are synced from the Controller.
 
+use crate::core::gateway::observe::metrics::record_acme_challenge_lookup;
 use crate::types::resources::edgion_acme::EdgionAcme;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -61,26 +62,20 @@ impl AcmeChallengeStore {
                 .unwrap_or_default()
                 .as_secs();
             if now > entry.expire_at {
-                tracing::debug!(
-                    token = token,
-                    domain = %entry.domain,
-                    "ACME challenge token expired"
-                );
+                record_acme_challenge_lookup("expired");
                 return None;
             }
 
             // Check domain matches
             if entry.domain == host || host.is_empty() {
+                record_acme_challenge_lookup("hit");
                 return Some(entry.key_authorization.clone());
             }
 
-            tracing::debug!(
-                token = token,
-                expected_domain = %entry.domain,
-                actual_host = %host,
-                "ACME challenge domain mismatch"
-            );
+            record_acme_challenge_lookup("domain_mismatch");
+            return None;
         }
+        record_acme_challenge_lookup("not_found");
         None
     }
 
@@ -201,6 +196,7 @@ mod tests {
             "metadata": { "name": "test", "namespace": "default" },
             "spec": {
                 "email": "test@example.com",
+                "privateKeySecretRef": { "name": "test-acme-account" },
                 "domains": ["example.com"],
                 "challenge": { "type": "http-01" },
                 "storage": { "secretName": "test-cert" },

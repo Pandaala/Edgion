@@ -99,9 +99,17 @@ pub enum EdgionStatus {
     /// Cross-namespace reference denied (no matching ReferenceGrant)
     RefDenied = 503_12,
 
+    /// Link-local / cloud-metadata backend rejected (SSRF defense: `169.254.0.0/16`, `fe80::/10`)
+    BackendAddrLinkLocalNotAllowed = 503_13,
+
     /// Backend kind not supported (Gateway API conformance: return 500)
     BackendUnsupportedKind = 500_15,
 
     /// Backend TLS certificate SAN validation failed
     BackendTlsSanValidationFailed = 502_01,
+
+    /// ForwardAuth plugin could not reach the configured auth service
+    /// (connection refused, DNS failure, or timeout). Emitted both when the
+    /// plugin rejects the request and when `allow_degradation` lets it pass.
+    ForwardAuthServiceUnreachable = 503_14,
 }

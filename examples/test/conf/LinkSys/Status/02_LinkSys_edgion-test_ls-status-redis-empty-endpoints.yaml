@@ -1,0 +1,11 @@
+# Scenario 2: Redis LinkSys with empty endpoints → Accepted=False/Invalid
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: ls-status-redis-empty-endpoints
+  namespace: edgion-test
+spec:
+  type: redis
+  config:
+    endpoints: []
+    db: 0

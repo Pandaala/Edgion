@@ -9,7 +9,11 @@ use std::time::Duration;
 use anyhow::Result;
 use etcd_client::{Certificate, ConnectOptions, Identity, TlsOptions};
 
-use crate::types::resources::link_sys::etcd::{EtcdClientConfig, EtcdTls};
+use crate::core::gateway::link_sys::credential::CredentialState;
+use crate::core::gateway::link_sys::tls as tls_helper;
+use crate::types::credentials::materials::BasicAuthMaterial;
+use crate::types::resources::common::TlsConfig;
+use crate::types::resources::link_sys::etcd::EtcdClientConfig;
 
 // ============================================================================
 // Safety ceilings for connection configuration
@@ -27,19 +31,45 @@ const DEFAULT_DIAL_TIMEOUT_MS: u64 = 5_000;
 ///
 /// Returns `None` if no special options are needed (minimal config).
 /// The caller passes the options to `Client::connect(endpoints, options)`.
-pub fn build_connect_options(crd: &EtcdClientConfig) -> Result<Option<ConnectOptions>> {
+///
+/// `auth` is the [`CredentialState`] produced by
+/// [`credential::basic_state`](crate::core::gateway::link_sys::credential::basic_state).
+/// `Pending` / `Invalid` produce a fail-fast `bail!` (see I4 / M4).
+pub fn build_connect_options(
+    crd: &EtcdClientConfig,
+    auth: &CredentialState<BasicAuthMaterial>,
+) -> Result<Option<ConnectOptions>> {
     let mut options = ConnectOptions::new();
     let mut has_options = false;
 
-    // Authentication (secret_ref is resolved externally before calling this function)
-    if let Some(auth) = &crd.auth {
-        if let (Some(user), Some(pass)) = (&auth.username, &auth.password) {
-            options = options.with_user(user, pass);
-            has_options = true;
+    if crd.auth.is_some() {
+        match auth {
+            CredentialState::Resolved(m) => {
+                // `BasicAuthResolver` legitimately supports password-only
+                // secrets — username may be `None` inside a valid material.
+                let user = m.username.as_deref().unwrap_or("");
+                options = options.with_user(user, m.password.as_str());
+                has_options = true;
+            }
+            CredentialState::Pending => {
+                anyhow::bail!(
+                    "Etcd auth is configured via secretRef but credential material \
+                     has not been resolved yet; refusing to build client without credentials"
+                );
+            }
+            CredentialState::Invalid(reason) => {
+                anyhow::bail!("Etcd credential material is invalid: {reason}");
+            }
+            CredentialState::NotRequired => {
+                anyhow::bail!(
+                    "Etcd auth configured in CRD but credential state is NotRequired (internal bug)"
+                );
+            }
         }
     }
 
-    // TLS
+    // TLS — parse CA / mTLS material from the CRD (inline + resolved Secret)
+    // and feed it into etcd-client's `TlsOptions`.
     if let Some(tls) = &crd.tls {
         if tls.enabled {
             let tls_options = build_tls_options(tls)?;
@@ -80,30 +110,23 @@ pub fn build_connect_options(crd: &EtcdClientConfig) -> Result<Option<ConnectOpt
 
 /// Build TLS options from CRD config.
 ///
-/// Uses Rustls (etcd-client default) for TLS connections.
-/// Supports CA certificate and client certificate (mTLS).
-fn build_tls_options(tls: &EtcdTls) -> Result<TlsOptions> {
+/// Uses Rustls (etcd-client default) for TLS connections. CA + client mTLS
+/// come from [`tls_helper::build_material`], which merges inline PEM from the
+/// CRD with the resolved K8s Secret (`tls.crt` / `tls.key` / `ca.crt`).
+fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
     let mut tls_options = TlsOptions::new();
 
-    if let Some(certs) = &tls.certs {
-        // CA certificate
-        if let Some(ca_pem) = &certs.ca_cert {
-            let ca = Certificate::from_pem(ca_pem);
-            tls_options = tls_options.ca_certificate(ca);
+    if let Some(material) = tls_helper::build_material(tls) {
+        if let Some(ca_pem) = &material.ca_pem {
+            tls_options = tls_options.ca_certificate(Certificate::from_pem(ca_pem));
         }
-
-        // Client certificate + key (mTLS)
-        if let (Some(cert_pem), Some(key_pem)) = (&certs.client_cert, &certs.client_key) {
-            let identity = Identity::from_pem(cert_pem, key_pem);
-            tls_options = tls_options.identity(identity);
+        if let (Some(cert), Some(key)) = (&material.client_cert_pem, &material.client_key_pem) {
+            tls_options = tls_options.identity(Identity::from_pem(cert, key.as_slice()));
         }
-
-        // Note: certs.secret_ref is resolved externally (controller side)
-        // and populated into ca_cert/client_cert/client_key fields.
     }
 
-    // etcd-client TlsOptions does not have insecure_skip_verify.
-    // If needed, would require custom tonic channel configuration.
+    // etcd-client TlsOptions does not expose an insecure_skip_verify knob;
+    // surfacing a warning lets operators know the flag is ignored here.
     if tls.insecure_skip_verify == Some(true) {
         tracing::warn!(
             "Etcd: insecure_skip_verify is not directly supported by etcd-client TlsOptions; \
@@ -127,7 +150,13 @@ pub fn default_connect_options() -> ConnectOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::gateway::link_sys::credential::{CredentialState, InvalidReason};
     use crate::types::resources::link_sys::etcd::*;
+
+    /// Shorthand: `NotRequired` state (no auth configured).
+    fn no_auth() -> CredentialState<BasicAuthMaterial> {
+        CredentialState::NotRequired
+    }
 
     /// Create a minimal EtcdClientConfig for testing
     fn minimal_config(endpoints: Vec<String>) -> EtcdClientConfig {
@@ -147,40 +176,85 @@ mod tests {
         }
     }
 
+    fn crd_with_secret_ref() -> EtcdClientConfig {
+        use crate::types::resources::common::SecretReference;
+        EtcdClientConfig {
+            auth: Some(EtcdAuth {
+                secret_ref: SecretReference {
+                    name: "etcd-creds".to_string(),
+                    namespace: None,
+                },
+                secret: None,
+            }),
+            ..minimal_config(vec!["http://localhost:2379".to_string()])
+        }
+    }
+
     #[test]
     fn test_minimal_config_returns_none() {
         let crd = minimal_config(vec!["http://localhost:2379".to_string()]);
-        let options = build_connect_options(&crd).unwrap();
+        let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_none());
     }
 
+    /// I4 / M4 regression: `Pending` state → fail-fast.
     #[test]
-    fn test_with_auth() {
-        let crd = EtcdClientConfig {
-            auth: Some(EtcdAuth {
-                username: Some("user".to_string()),
-                password: Some("pass".to_string()),
-                secret_ref: None,
-            }),
-            ..minimal_config(vec!["http://localhost:2379".to_string()])
-        };
-        let options = build_connect_options(&crd).unwrap();
+    fn test_with_auth_pending_fails_fast() {
+        let crd = crd_with_secret_ref();
+        let err = build_connect_options(&crd, &CredentialState::Pending).expect_err("should refuse pending");
+        assert!(
+            err.to_string().contains("has not been resolved"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// M4 regression: `Invalid` state → fail-fast, with reason surfaced.
+    #[test]
+    fn test_with_auth_invalid_fails_fast() {
+        let crd = crd_with_secret_ref();
+        let state = CredentialState::Invalid(InvalidReason::ParseFailed("missing keys: [password]".into()));
+        let err = build_connect_options(&crd, &state).expect_err("should refuse invalid");
+        assert!(
+            err.to_string().contains("invalid") && err.to_string().contains("missing"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// Happy path: auth configured and material resolved → options built.
+    #[test]
+    fn test_with_auth_and_material() {
+        let crd = crd_with_secret_ref();
+        let state = CredentialState::Resolved(BasicAuthMaterial {
+            username: Some("root".to_string()),
+            password: "pw".to_string(),
+        });
+        let options = build_connect_options(&crd, &state).unwrap();
         assert!(options.is_some());
     }
 
+    /// Invariant guard: the CRD-vs-state mismatch arm. If a future refactor
+    /// breaks `credential::basic_state` so it returns `NotRequired` even when
+    /// CRD has `auth`, this test locks the fail-fast arm.
     #[test]
-    fn test_auth_without_password_returns_none() {
-        let crd = EtcdClientConfig {
-            auth: Some(EtcdAuth {
-                username: Some("user".to_string()),
-                password: None,
-                secret_ref: None,
-            }),
-            ..minimal_config(vec!["http://localhost:2379".to_string()])
-        };
-        let options = build_connect_options(&crd).unwrap();
-        // No password → no auth configured → no options
-        assert!(options.is_none());
+    fn test_crd_has_auth_but_state_not_required_is_internal_bug() {
+        let crd = crd_with_secret_ref();
+        let err = build_connect_options(&crd, &CredentialState::NotRequired).expect_err("should refuse");
+        assert!(
+            err.to_string().contains("internal bug"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// Password-only material must be accepted (etcd allows empty username).
+    #[test]
+    fn test_with_auth_password_only_material_is_accepted() {
+        let crd = crd_with_secret_ref();
+        let state = CredentialState::Resolved(BasicAuthMaterial {
+            username: None,
+            password: "pw".to_string(),
+        });
+        let options = build_connect_options(&crd, &state).unwrap();
+        assert!(options.is_some());
     }
 
     #[test]
@@ -193,7 +267,7 @@ mod tests {
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };
-        let options = build_connect_options(&crd).unwrap();
+        let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_some());
     }
 
@@ -207,8 +281,7 @@ mod tests {
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };
-        // Should not error — just clamp to MAX_DIAL_TIMEOUT_MS
-        let options = build_connect_options(&crd).unwrap();
+        let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_some());
     }
 
@@ -222,13 +295,12 @@ mod tests {
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };
-        let options = build_connect_options(&crd).unwrap();
+        let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_some());
     }
 
     #[test]
     fn test_keepalive_partial_returns_none() {
-        // Only time set, no timeout → skip keepalive
         let crd = EtcdClientConfig {
             keep_alive: Some(EtcdKeepAlive {
                 time: Some(30),
@@ -237,35 +309,35 @@ mod tests {
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };
-        let options = build_connect_options(&crd).unwrap();
+        let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_none());
     }
 
     #[test]
     fn test_with_tls_enabled_no_certs() {
         let crd = EtcdClientConfig {
-            tls: Some(EtcdTls {
+            tls: Some(TlsConfig {
                 enabled: true,
                 certs: None,
                 insecure_skip_verify: None,
             }),
             ..minimal_config(vec!["https://localhost:2379".to_string()])
         };
-        let options = build_connect_options(&crd).unwrap();
+        let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_some());
     }
 
     #[test]
     fn test_tls_disabled_returns_none() {
         let crd = EtcdClientConfig {
-            tls: Some(EtcdTls {
+            tls: Some(TlsConfig {
                 enabled: false,
                 certs: None,
                 insecure_skip_verify: None,
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };
-        let options = build_connect_options(&crd).unwrap();
+        let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_none());
     }
 }

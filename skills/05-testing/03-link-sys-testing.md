@@ -28,10 +28,6 @@ Gateway (Admin :5900)              Test Script (bash)
 | **Port allocation** | `ports.json` (Gateway listener ports) | Docker port mapping (e.g. `16379:6379`) |
 | **Config scope** | `EdgionPlugins` + `HTTPRoute` + `Gateway` | `LinkSys` CRD only |
 
-### Why Bash Instead of Rust test_client?
-
-LinkSys tests verify **the runtime client itself**, not request routing. The Gateway Admin API exposes testing endpoints under `/api/v1/testing/link-sys/<type>/` that let us exercise every operation (PING, GET, SET, HSET, LOCK, etc.) directly. Bash + curl + jq is the simplest, most transparent way to call these endpoints and assert results — no need for a compiled binary.
-
 ## Test Execution Flow
 
 ```
@@ -55,16 +51,16 @@ Step 7: Cleanup     →  kill processes, docker compose down
 
 ```bash
 # Full test (build + start + test + cleanup)
-./examples/test/scripts/integration/run_redis_test.sh
+./examples/test/scripts/integration/link_sys/run_redis_test.sh
 
 # Skip build (reuse existing binaries)
-./examples/test/scripts/integration/run_redis_test.sh --no-build
+./examples/test/scripts/integration/link_sys/run_redis_test.sh --no-build
 
 # Keep services alive after test (for manual debugging)
-./examples/test/scripts/integration/run_redis_test.sh --no-cleanup
+./examples/test/scripts/integration/link_sys/run_redis_test.sh --no-cleanup
 
 # Alias for --no-cleanup
-./examples/test/scripts/integration/run_redis_test.sh --keep-alive
+./examples/test/scripts/integration/link_sys/run_redis_test.sh --keep-alive
 ```
 
 ## Directory Structure
@@ -80,13 +76,21 @@ examples/test/
 │   │       └── docker-compose.yaml
 │   └── LinkSys/
 │       ├── Redis/
+│       │   ├── 00_Secret_default_redis-test-auth.yaml
 │       │   └── 01_LinkSys_default_redis-test.yaml
+│       ├── Etcd/
+│       │   └── 01_LinkSys_default_etcd-*.yaml
+│       ├── Elasticsearch/
+│       │   └── 01_LinkSys_default_es-test.yaml
 │       └── <Future>/
 │           └── *.yaml
 ├── scripts/
 │   └── integration/
-│       ├── run_redis_test.sh              # ← Standalone Redis test script
-│       └── run_<future>_test.sh           # ← Future: Etcd, Kafka, etc.
+│       └── link_sys/                      # ← All LinkSys standalone scripts
+│           ├── run_redis_test.sh
+│           ├── run_etcd_test.sh
+│           ├── run_es_test.sh
+│           └── run_<future>_test.sh       # ← Future: Kafka, etc.
 └── ...
 
 src/core/gateway/api/mod.rs               # Gateway Admin API with testing endpoints
@@ -168,7 +172,7 @@ On failure:
 1. **Create Docker Compose** — `conf/Services/<type>/docker-compose.yaml`
 2. **Write LinkSys CRD YAML** — `conf/LinkSys/<Type>/01_LinkSys_*.yaml`
 3. **Add Gateway Admin API testing endpoints** — `src/core/gateway/api/mod.rs`
-4. **Write test script** — `scripts/integration/run_<type>_test.sh`
+4. **Write test script** — `scripts/integration/link_sys/run_<type>_test.sh`
 5. **Build & test** — run the script
 6. **Update this skill doc** — add the new type's info
 
@@ -235,7 +239,7 @@ Add testing endpoints to `src/core/gateway/api/mod.rs` inside the `create_testin
 
 ### Step 4: Write Test Script
 
-Create `examples/test/scripts/integration/run_<type>_test.sh`. Use `run_redis_test.sh` as a template.
+Create `examples/test/scripts/integration/link_sys/run_<type>_test.sh`. Use `run_redis_test.sh` as a template.
 
 **Script structure:**
 
@@ -275,13 +279,13 @@ assert_failure()  # JSON .success == false
 
 ```bash
 # Full run
-./examples/test/scripts/integration/run_<type>_test.sh
+./examples/test/scripts/integration/link_sys/run_<type>_test.sh
 
 # Iterating (skip build)
-./examples/test/scripts/integration/run_<type>_test.sh --no-build
+./examples/test/scripts/integration/link_sys/run_<type>_test.sh --no-build
 
 # Debug (keep alive)
-./examples/test/scripts/integration/run_<type>_test.sh --keep-alive
+./examples/test/scripts/integration/link_sys/run_<type>_test.sh --keep-alive
 ```
 
 ### Step 6: Update This Document
@@ -384,7 +388,7 @@ integration_testing/redis_testing_YYYYMMDD_HHMMSS/
 
 | Item | Details |
 |------|---------|
-| **Script** | `examples/test/scripts/integration/run_redis_test.sh` |
+| **Script** | `examples/test/scripts/integration/link_sys/run_redis_test.sh` |
 | **Docker** | `examples/test/conf/Services/redis/docker-compose.yaml` |
 | **Config** | `examples/test/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml` |
 | **Docker port** | `16379:6379` |

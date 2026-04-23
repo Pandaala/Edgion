@@ -1,0 +1,18 @@
+# Scenario 6: ServiceRegionRoute PM with clusterRef pointing at a PM that exists
+# but is of the wrong type (pm-status-gcir-valid is a GCIR, not ClusterRegionRoute)
+# Expect: ResolvedRefs=False/InvalidPluginMetaDataRef
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: pm-status-service-wrong-type-ref
+  namespace: edgion-test
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+      clusterRef:
+        namespace: edgion-test
+        name: pm-status-gcir-valid
+      regions:
+        - name: east
+        - name: west

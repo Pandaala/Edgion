@@ -500,6 +500,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
+    fn add_error(&mut self, status: crate::types::EdgionStatus) {
+        self.ctx.add_error(status);
+    }
+
     fn discover_protocol(&self) -> String {
         self.ctx.request_info.discover_protocol.clone().unwrap_or_else(|| {
             if self.ctx.request_info.is_grpc_request {
@@ -615,12 +619,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                     Some(format!("{}:{}", ip, self.get_path()))
                 }
             }
-            KeyGet::Webhook { .. } => {
-                tracing::warn!(
-                    "key_get_local called with Webhook variant; returning None (use key_get for async resolution)"
-                );
-                None
-            }
+            KeyGet::Webhook { .. } => None,
         }
     }
 

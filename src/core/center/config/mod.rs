@@ -5,17 +5,42 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct DatabaseConfig {
+    /// Path to the SQLite database file. Relative paths are resolved from the current working directory.
+    pub sqlite_path: String,
+    /// Whether the SQLite database is enabled.
+    pub enabled: bool,
+    /// How often (seconds) to sync RegionRoute snapshots from online controllers.
+    pub sync_interval_secs: u64,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            sqlite_path: "data/center.db".to_string(),
+            enabled: true,
+            sync_interval_secs: 60,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CenterConfig {
     pub server: CenterServerConfig,
     pub sync: CenterSyncConfig,
+    /// SQLite database configuration.
+    #[serde(default)]
+    pub database: DatabaseConfig,
     /// Optional OIDC Admin API authentication.
     /// Omit to disable OIDC auth. When present, Admin API endpoints (except
     /// health/ready) require a valid JWT Bearer token from the OIDC provider.
     #[serde(default)]
     pub auth: Option<AdminAuthConfig>,
     /// Optional local Admin API authentication.
-    /// Omit to use default local auth (admin/edgion1234).
-    /// Both `auth` and `local_auth` can be enabled simultaneously.
+    /// Center does not inject any default credentials; omit this section only
+    /// when OIDC `auth` is configured, otherwise the Admin API will reject all
+    /// requests. Both `auth` and `local_auth` can be enabled simultaneously.
     #[serde(default)]
     pub local_auth: Option<LocalAuthConfig>,
     /// TLS config for the federation gRPC server.
@@ -29,6 +54,7 @@ impl Default for CenterConfig {
         Self {
             server: CenterServerConfig::default(),
             sync: CenterSyncConfig::default(),
+            database: DatabaseConfig::default(),
             auth: None,
             local_auth: None,
             grpc_security: ConfSyncSecurityConfig::default(),
@@ -65,8 +91,6 @@ pub struct CenterSyncConfig {
     pub command_timeout_secs: u64,
     /// Heartbeat ping interval sent to controllers (seconds, default: 30)
     pub ping_interval_secs: u64,
-    /// Hours before offline controller data is evicted (default: 24)
-    pub offline_evict_hours: u64,
 }
 
 impl Default for CenterSyncConfig {
@@ -76,7 +100,6 @@ impl Default for CenterSyncConfig {
             list_timeout_secs: 30,
             command_timeout_secs: 30,
             ping_interval_secs: 30,
-            offline_evict_hours: 24,
         }
     }
 }
@@ -94,7 +117,6 @@ mod tests {
         assert_eq!(config.sync.ping_interval_secs, 30);
         assert_eq!(config.sync.list_timeout_secs, 30);
         assert_eq!(config.sync.command_timeout_secs, 30);
-        assert_eq!(config.sync.offline_evict_hours, 24);
     }
 
     #[test]

@@ -210,6 +210,7 @@ zh-CN/
     ├── http-plugin-development.md
     ├── stream-plugin-development.md
     ├── work-directory.md, logging-system.md
+    ├── resource-abnormal-metric.md
     ├── ci-release-workflow.md
     ├── ai-agent-collaboration.md, knowledge-source-map.md
     └── jwt-auth-plugin-design.md

@@ -31,7 +31,16 @@ pub trait DnsProvider: Send + Sync {
     async fn remove_txt_record(&self, domain: &str, value: &str) -> Result<()>;
 }
 
-/// Create a DNS provider from configuration
+/// Create a DNS provider from configuration.
+///
+/// Key-presence preconditions (`api-token` for Cloudflare, `access-key-id` /
+/// `access-key-secret` for AliDNS) are enforced up-front by
+/// [`crate::types::credentials::resolvers::DnsCredentialResolver`] in the
+/// Controller's credential pipeline — a Secret missing those keys surfaces
+/// as `ResolvedRefs=False/MissingKeys` long before we reach this code path.
+/// The `ok_or_else` checks below are kept as defense in depth for direct
+/// test harnesses and to guarantee we never pass an empty token to the
+/// upstream API client; in normal operation they are unreachable.
 pub fn create_dns_provider(
     provider_name: &str,
     credentials: &std::collections::HashMap<String, String>,
@@ -40,16 +49,16 @@ pub fn create_dns_provider(
         "cloudflare" => {
             let api_token = credentials
                 .get("api-token")
-                .ok_or_else(|| anyhow::anyhow!("Cloudflare: 'api-token' not found in credential Secret"))?;
+                .ok_or_else(|| anyhow::anyhow!("Cloudflare: 'api-token' not found in credential Secret (pipeline layer should have caught this)"))?;
             Ok(Box::new(CloudflareDnsProvider::new(api_token.clone())))
         }
         "alidns" => {
             let access_key_id = credentials
                 .get("access-key-id")
-                .ok_or_else(|| anyhow::anyhow!("AliDNS: 'access-key-id' not found in credential Secret"))?;
+                .ok_or_else(|| anyhow::anyhow!("AliDNS: 'access-key-id' not found in credential Secret (pipeline layer should have caught this)"))?;
             let access_key_secret = credentials
                 .get("access-key-secret")
-                .ok_or_else(|| anyhow::anyhow!("AliDNS: 'access-key-secret' not found in credential Secret"))?;
+                .ok_or_else(|| anyhow::anyhow!("AliDNS: 'access-key-secret' not found in credential Secret (pipeline layer should have caught this)"))?;
             Ok(Box::new(AlidnsDnsProvider::new(
                 access_key_id.clone(),
                 access_key_secret.clone(),

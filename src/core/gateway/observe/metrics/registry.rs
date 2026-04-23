@@ -4,7 +4,7 @@
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
 use metrics::{counter, gauge, histogram, Counter, Gauge};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 /// Metric names as constants for consistency
 pub mod names {
@@ -29,9 +29,10 @@ pub mod names {
     // Gateway traffic byte counters
     pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
     pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
-    // Request mirror metrics
+    // Request mirror metrics (counter only — per-request latency is captured
+    // in the mirror access log `et` field; mirror is fire-and-forget and its
+    // tail latency does not affect user traffic, so no histogram is carried).
     pub const MIRROR_REQUESTS_TOTAL: &str = "edgion_mirror_requests_total";
-    pub const MIRROR_DURATION_MS: &str = "edgion_mirror_duration_ms";
     // End-to-end request duration histogram
     pub const GATEWAY_REQUEST_DURATION_MS: &str = "edgion_gateway_request_duration_ms";
     // Controller: number of gateway instances connected via gRPC long-poll
@@ -42,6 +43,18 @@ pub mod names {
     pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
     pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
     pub const CB_REJECTIONS_TOTAL: &str = "edgion_circuit_breaker_rejections_total";
+    // ACME HTTP-01 challenge lookup metrics
+    pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
+    // Stream plugin: GlobalConnectionIpRestriction decision events
+    pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
+    // RoundRobin selector: backend count > u16::MAX truncation
+    pub const RR_SELECTOR_TRUNCATED_TOTAL: &str = "edgion_rr_selector_truncated_total";
+    // Elasticsearch DataSender: per-send outcome (ok / failed_fallback / failed_no_cache)
+    pub const LINK_SYS_ES_SEND_TOTAL: &str = "edgion_link_sys_es_send_total";
+    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail)
+    pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
+    // LDAP auth plugin: cache hit ratio gauge (0.0–1.0), updated every 30 s
+    pub const LDAP_CACHE_HIT_RATE: &str = "edgion_ldap_cache_hit_rate";
 }
 
 /// Global metrics singleton
@@ -56,67 +69,79 @@ pub fn global_metrics() -> &'static GatewayMetrics {
 ///
 /// Provides high-performance, thread-safe metrics using sharded counters.
 /// All metrics are automatically exported via the metrics facade.
+///
+/// Registration policy (hybrid):
+/// - **Hot per-request** handles are eagerly registered in `new()` for zero
+///   per-call overhead; they become non-zero within the first request so the
+///   brief zero-value window is not observable in practice.
+/// - **Cold / failure-path** handles are `OnceLock`-wrapped and registered on
+///   first call, so metrics that are never touched do not appear in `/metrics`
+///   as zero-value noise (cleaner scrape, smaller bandwidth).
 pub struct GatewayMetrics {
+    // --- Hot per-request handles (eager registration) ---
     /// Total contexts created (requests received)
     ctx_created: Counter,
     /// Currently active contexts
     ctx_active: Gauge,
-    /// Total requests processed
-    requests_total: Counter,
-    /// Total failed requests
-    requests_failed: Counter,
-    /// Total access logs dropped (channel full)
-    access_log_dropped: Counter,
-    /// Total SSL logs dropped (channel full)
-    ssl_log_dropped: Counter,
-    /// Total TCP logs dropped (channel full)
-    tcp_log_dropped: Counter,
-    /// Total TLS access logs dropped (channel full)
-    tls_log_dropped: Counter,
-    /// Total UDP logs dropped (channel full)
-    udp_log_dropped: Counter,
-    /// Total K8s status updates attempted
-    status_update_total: Counter,
-    /// Total K8s status update failures
-    status_update_failed: Counter,
-    /// Total K8s status updates skipped (no change)
-    status_update_skipped: Counter,
-    /// Total reload signals received from controller
-    config_reload_signals: Counter,
-    /// Total config relist operations
-    config_relist_total: Counter,
     /// Total gateway request bytes proxied (downstream → upstream)
     gateway_request_bytes: Counter,
     /// Total gateway response bytes proxied (upstream → downstream)
     gateway_response_bytes: Counter,
-    /// Currently connected gateway instances (gRPC WatchServerMeta)
-    controller_connected_gateways: Gauge,
-    /// Total schema validation errors from Admin API (non-K8s mode)
-    schema_validation_errors: Counter,
+
+    // --- Cold / rare-event handles (lazy registration via OnceLock) ---
+    requests_total: OnceLock<Counter>,
+    requests_failed: OnceLock<Counter>,
+    access_log_dropped: OnceLock<Counter>,
+    ssl_log_dropped: OnceLock<Counter>,
+    tcp_log_dropped: OnceLock<Counter>,
+    tls_log_dropped: OnceLock<Counter>,
+    udp_log_dropped: OnceLock<Counter>,
+    status_update_total: OnceLock<Counter>,
+    status_update_failed: OnceLock<Counter>,
+    status_update_skipped: OnceLock<Counter>,
+    config_reload_signals: OnceLock<Counter>,
+    config_relist_total: OnceLock<Counter>,
+    controller_connected_gateways: OnceLock<Gauge>,
+    schema_validation_errors: OnceLock<Counter>,
+}
+
+#[inline]
+fn get_or_register_counter<'a>(slot: &'a OnceLock<Counter>, name: &'static str) -> &'a Counter {
+    slot.get_or_init(|| counter!(name))
+}
+
+#[inline]
+fn get_or_register_gauge<'a>(slot: &'a OnceLock<Gauge>, name: &'static str) -> &'a Gauge {
+    slot.get_or_init(|| gauge!(name))
 }
 
 impl GatewayMetrics {
-    /// Create a new GatewayMetrics instance
+    /// Create a new GatewayMetrics instance.
+    ///
+    /// Hot per-request handles register immediately; cold handles stay
+    /// uninitialized until their first `record_*` call.
     fn new() -> Self {
         Self {
+            // Hot handles: eager
             ctx_created: counter!(names::CTX_CREATED),
             ctx_active: gauge!(names::CTX_ACTIVE),
-            requests_total: counter!(names::REQUESTS_TOTAL),
-            requests_failed: counter!(names::REQUESTS_FAILED),
-            access_log_dropped: counter!(names::ACCESS_LOG_DROPPED),
-            ssl_log_dropped: counter!(names::SSL_LOG_DROPPED),
-            tcp_log_dropped: counter!(names::TCP_LOG_DROPPED),
-            tls_log_dropped: counter!(names::TLS_LOG_DROPPED),
-            udp_log_dropped: counter!(names::UDP_LOG_DROPPED),
-            status_update_total: counter!(names::STATUS_UPDATE_TOTAL),
-            status_update_failed: counter!(names::STATUS_UPDATE_FAILED),
-            status_update_skipped: counter!(names::STATUS_UPDATE_SKIPPED),
-            config_reload_signals: counter!(names::CONFIG_RELOAD_SIGNALS),
-            config_relist_total: counter!(names::CONFIG_RELIST_TOTAL),
             gateway_request_bytes: counter!(names::GATEWAY_REQUEST_BYTES),
             gateway_response_bytes: counter!(names::GATEWAY_RESPONSE_BYTES),
-            controller_connected_gateways: gauge!(names::CONTROLLER_CONNECTED_GATEWAYS),
-            schema_validation_errors: counter!(names::SCHEMA_VALIDATION_ERRORS),
+            // Cold handles: lazy
+            requests_total: OnceLock::new(),
+            requests_failed: OnceLock::new(),
+            access_log_dropped: OnceLock::new(),
+            ssl_log_dropped: OnceLock::new(),
+            tcp_log_dropped: OnceLock::new(),
+            tls_log_dropped: OnceLock::new(),
+            udp_log_dropped: OnceLock::new(),
+            status_update_total: OnceLock::new(),
+            status_update_failed: OnceLock::new(),
+            status_update_skipped: OnceLock::new(),
+            config_reload_signals: OnceLock::new(),
+            config_relist_total: OnceLock::new(),
+            controller_connected_gateways: OnceLock::new(),
+            schema_validation_errors: OnceLock::new(),
         }
     }
 
@@ -136,75 +161,75 @@ impl GatewayMetrics {
     /// Record a successful request
     #[inline]
     pub fn request_success(&self) {
-        self.requests_total.increment(1);
+        get_or_register_counter(&self.requests_total, names::REQUESTS_TOTAL).increment(1);
     }
 
     /// Record a failed request
     #[inline]
     pub fn request_failed(&self) {
-        self.requests_total.increment(1);
-        self.requests_failed.increment(1);
+        get_or_register_counter(&self.requests_total, names::REQUESTS_TOTAL).increment(1);
+        get_or_register_counter(&self.requests_failed, names::REQUESTS_FAILED).increment(1);
     }
 
     /// Record a dropped access log entry
     #[inline]
     pub fn access_log_dropped(&self) {
-        self.access_log_dropped.increment(1);
+        get_or_register_counter(&self.access_log_dropped, names::ACCESS_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped SSL log entry
     #[inline]
     pub fn ssl_log_dropped(&self) {
-        self.ssl_log_dropped.increment(1);
+        get_or_register_counter(&self.ssl_log_dropped, names::SSL_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped TCP log entry
     #[inline]
     pub fn tcp_log_dropped(&self) {
-        self.tcp_log_dropped.increment(1);
+        get_or_register_counter(&self.tcp_log_dropped, names::TCP_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped TLS access log entry
     #[inline]
     pub fn tls_log_dropped(&self) {
-        self.tls_log_dropped.increment(1);
+        get_or_register_counter(&self.tls_log_dropped, names::TLS_LOG_DROPPED).increment(1);
     }
 
     /// Record a dropped UDP log entry
     #[inline]
     pub fn udp_log_dropped(&self) {
-        self.udp_log_dropped.increment(1);
+        get_or_register_counter(&self.udp_log_dropped, names::UDP_LOG_DROPPED).increment(1);
     }
 
     /// Record a successful K8s status update
     #[inline]
     pub fn status_update_success(&self) {
-        self.status_update_total.increment(1);
+        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
     }
 
     /// Record a failed K8s status update
     #[inline]
     pub fn status_update_failed(&self) {
-        self.status_update_total.increment(1);
-        self.status_update_failed.increment(1);
+        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
+        get_or_register_counter(&self.status_update_failed, names::STATUS_UPDATE_FAILED).increment(1);
     }
 
     /// Record a skipped K8s status update (no change needed)
     #[inline]
     pub fn status_update_skipped(&self) {
-        self.status_update_skipped.increment(1);
+        get_or_register_counter(&self.status_update_skipped, names::STATUS_UPDATE_SKIPPED).increment(1);
     }
 
     /// Record a reload signal received from controller
     #[inline]
     pub fn config_reload_signal(&self) {
-        self.config_reload_signals.increment(1);
+        get_or_register_counter(&self.config_reload_signals, names::CONFIG_RELOAD_SIGNALS).increment(1);
     }
 
     /// Record a config relist operation
     #[inline]
     pub fn config_relist(&self) {
-        self.config_relist_total.increment(1);
+        get_or_register_counter(&self.config_relist_total, names::CONFIG_RELIST_TOTAL).increment(1);
     }
 
     /// Record proxied request bytes (downstream → upstream body)
@@ -222,41 +247,51 @@ impl GatewayMetrics {
     /// Record a gateway instance connected to controller via gRPC
     #[inline]
     pub fn gateway_connected(&self) {
-        self.controller_connected_gateways.increment(1.0);
+        get_or_register_gauge(
+            &self.controller_connected_gateways,
+            names::CONTROLLER_CONNECTED_GATEWAYS,
+        )
+        .increment(1.0);
     }
 
     /// Record a gateway instance disconnected from controller
     #[inline]
     pub fn gateway_disconnected(&self) {
-        self.controller_connected_gateways.decrement(1.0);
+        get_or_register_gauge(
+            &self.controller_connected_gateways,
+            names::CONTROLLER_CONNECTED_GATEWAYS,
+        )
+        .decrement(1.0);
     }
 
     /// Record a schema validation error from Admin API (non-K8s mode)
     #[inline]
     pub fn schema_validation_error(&self) {
-        self.schema_validation_errors.increment(1);
+        get_or_register_counter(&self.schema_validation_errors, names::SCHEMA_VALIDATION_ERRORS).increment(1);
     }
 }
 
-/// Record a backend request metric
+/// Record a backend request metric.
 ///
-/// This function records detailed metrics for each backend request,
-/// useful for monitoring request distribution and verifying LB behavior.
+/// Labels are pushed conditionally based on `BackendRequestsLabels`, so
+/// `/metrics` only carries the dimensions operators explicitly asked for.
+/// `test_key` / `test_data` are also conditional on non-empty: they are
+/// populated only when `integration-testing-mode` is on AND a Gateway
+/// annotation opts in (see `pg_logging::record_request_metrics`), so in
+/// production neither label appears in any time series.
 ///
 /// # Arguments
-/// * `gateway_ns` - Gateway namespace
-/// * `gateway_name` - Gateway name
-/// * `route_ns` - Matched route namespace
-/// * `route_name` - Matched route name
-/// * `backend_ns` - Backend service namespace
-/// * `backend_name` - Backend service name
-/// * `protocol` - Protocol (http/grpc/websocket, from discover_protocol)
-/// * `status` - Status group (2xx/3xx/4xx/5xx/failed)
-/// * `test_key` - Test identifier (from Gateway annotation, empty in production)
-/// * `test_data` - JSON test data (from TestData::to_json(), empty in production)
+/// * `cfg` - Per-label toggles from `MetricsConfig::backend_requests.labels`
+/// * `gateway_ns` / `gateway_name` - Emitted when `cfg.gateway = true`
+/// * `route_ns` / `route_name` - Emitted when `cfg.route = true`
+/// * `backend_ns` / `backend_name` - Emitted when `cfg.backend = true`
+/// * `protocol` - Protocol (http/grpc/websocket), emitted when `cfg.protocol = true`
+/// * `status` - Status group (2xx/3xx/4xx/5xx/failed), emitted when `cfg.status = true`
+/// * `test_key` / `test_data` - Emitted only when non-empty
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn record_backend_request(
+    cfg: &crate::core::gateway::cli::config::BackendRequestsLabels,
     gateway_ns: &str,
     gateway_name: &str,
     route_ns: &str,
@@ -268,20 +303,33 @@ pub fn record_backend_request(
     test_key: &str,
     test_data: &str,
 ) {
-    counter!(
-        names::BACKEND_REQUESTS_TOTAL,
-        "gateway_namespace" => gateway_ns.to_string(),
-        "gateway_name" => gateway_name.to_string(),
-        "route_namespace" => route_ns.to_string(),
-        "route_name" => route_name.to_string(),
-        "backend_namespace" => backend_ns.to_string(),
-        "backend_name" => backend_name.to_string(),
-        "protocol" => protocol.to_string(),
-        "status" => status.to_string(),
-        "test_key" => test_key.to_string(),
-        "test_data" => test_data.to_string(),
-    )
-    .increment(1);
+    // Pre-size: up to 6 resource labels + protocol + status + 2 test labels.
+    let mut labels: Vec<(&'static str, String)> = Vec::with_capacity(10);
+    if cfg.gateway {
+        labels.push(("gateway_namespace", gateway_ns.to_string()));
+        labels.push(("gateway_name", gateway_name.to_string()));
+    }
+    if cfg.route {
+        labels.push(("route_namespace", route_ns.to_string()));
+        labels.push(("route_name", route_name.to_string()));
+    }
+    if cfg.backend {
+        labels.push(("backend_namespace", backend_ns.to_string()));
+        labels.push(("backend_name", backend_name.to_string()));
+    }
+    if cfg.protocol {
+        labels.push(("protocol", protocol.to_string()));
+    }
+    if cfg.status {
+        labels.push(("status", status.to_string()));
+    }
+    if !test_key.is_empty() {
+        labels.push(("test_key", test_key.to_string()));
+    }
+    if !test_data.is_empty() {
+        labels.push(("test_data", test_data.to_string()));
+    }
+    counter!(names::BACKEND_REQUESTS_TOTAL, &labels[..]).increment(1);
 }
 
 /// Convert HTTP status code to status group
@@ -298,17 +346,25 @@ pub fn status_group(status: Option<u16>) -> &'static str {
     }
 }
 
-/// Record mirror request counters and duration histogram.
+/// Record a mirror request outcome.
+///
+/// Per-request latency used to be captured here as a `MIRROR_DURATION_MS`
+/// histogram, but the histogram was broken since the initial commit
+/// (record path recorded milliseconds into Prometheus's default
+/// second-range buckets → every sample landed in `+Inf`). It has been
+/// removed on the grounds that (a) mirror is fire-and-forget and its
+/// tail latency does not affect user traffic; (b) the `channel_full`
+/// and `timeout` statuses on this counter are a sharper "mirror
+/// falling behind" signal than a latency percentile; (c) per-request
+/// latency is still recorded in the mirror access log (`et` field) when
+/// `mirror_log` is enabled, for any finer-grained investigation.
 #[inline]
-pub fn record_mirror_metric(status: &'static str, duration_ms: f64) {
+pub fn record_mirror_metric(status: &'static str) {
     counter!(
         names::MIRROR_REQUESTS_TOTAL,
         "status" => status.to_string(),
     )
     .increment(1);
-    if crate::core::gateway::cli::config::get_request_duration_config().enabled {
-        histogram!(names::MIRROR_DURATION_MS).record(duration_ms);
-    }
 }
 
 /// Record end-to-end request duration histogram.
@@ -378,4 +434,131 @@ pub fn record_cb_recovery(service_key: &str) {
 /// Record a circuit breaker rejection (request blocked by ejected backend)
 pub fn record_cb_rejection(service_key: &str) {
     counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
+}
+
+/// Record an ACME HTTP-01 challenge token lookup event.
+///
+/// `result` must be one of: `"hit"`, `"expired"`, `"domain_mismatch"`, `"not_found"`.
+/// Low, fixed cardinality — safe as a label.
+pub fn record_acme_challenge_lookup(result: &'static str) {
+    counter!(names::ACME_CHALLENGE_LOOKUP_TOTAL, "result" => result).increment(1);
+}
+
+/// Record a `GlobalConnectionIpRestriction` stream plugin decision event.
+///
+/// `result` must be one of:
+/// - `"fail_open_pm_missing"` — referenced PluginMetadata not found; connection allowed
+/// - `"fail_open_profile_missing"` — active profile not present in PM; connection allowed
+/// - `"denied"` — client IP blocked by active profile rules
+///
+/// Low, fixed cardinality — safe as a label.
+pub fn record_conn_ip_restriction_event(result: &'static str) {
+    counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
+}
+
+/// Record the outcome of an Elasticsearch DataSender send attempt.
+///
+/// `result` must be one of:
+/// - `"ok"` — shipped directly to ES
+/// - `"failed_fallback"` — ES unavailable, successfully routed to `FailedCache`
+/// - `"failed_no_cache"` — ES unavailable and no `FailedCache` configured (log dropped)
+///
+/// Fixed cardinality — safe as a label.
+pub fn record_link_sys_es_send(result: &'static str) {
+    counter!(names::LINK_SYS_ES_SEND_TOTAL, "result" => result).increment(1);
+}
+
+/// Record a `RoundRobinSelector` backend-count truncation.
+///
+/// Fires every time a selector is built with more than `u16::MAX` backends
+/// (an extreme configuration anomaly). No labels — identifying the exact
+/// route is best done via logs; the counter exists purely as an alarm signal
+/// so operators can detect silent truncation.
+pub fn record_rr_selector_truncated() {
+    counter!(names::RR_SELECTOR_TRUNCATED_TOTAL).increment(1);
+}
+
+/// Record a LDAP auth plugin error event.
+///
+/// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`.
+/// Fixed cardinality — safe as a label.
+pub fn record_ldap_auth_error(kind: &'static str) {
+    counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
+}
+
+/// Set the LDAP auth cache hit rate gauge (0.0–1.0).
+///
+/// Called from a per-plugin background task every 30 s; not on the hot path.
+///
+/// Note: this gauge has no instance label. When multiple LDAP plugin instances are
+/// active, each background task writes to the same gauge and the last writer wins.
+/// The metric is only interpretable when a single LDAP plugin instance is running.
+pub fn set_ldap_cache_hit_rate(ratio: f64) {
+    gauge!(names::LDAP_CACHE_HIT_RATE).set(ratio);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metrics_exporter_prometheus::PrometheusBuilder;
+
+    /// Verifies the hybrid registration policy:
+    /// - Hot per-request handles register in `new()` and appear immediately (with value 0).
+    /// - Cold / failure-path handles stay absent until their record method is called.
+    #[test]
+    fn gateway_metrics_registration_policy() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            // `new()` must run inside with_local_recorder so eager counter!/gauge!
+            // macros bind to the prometheus test recorder (not the noop global).
+            let m = GatewayMetrics::new();
+
+            // --- Before any record call ---
+            let rendered = handle.render();
+            // Hot handles: eagerly registered, should be visible (value 0).
+            assert!(
+                rendered.contains("edgion_ctx_created_total"),
+                "hot counter ctx_created must register eagerly, got:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("edgion_ctx_active"),
+                "hot gauge ctx_active must register eagerly, got:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("edgion_gateway_request_bytes_total"),
+                "hot counter request_bytes must register eagerly, got:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("edgion_gateway_response_bytes_total"),
+                "hot counter response_bytes must register eagerly, got:\n{rendered}"
+            );
+            // Cold handles: absent until called.
+            assert!(
+                !rendered.contains("edgion_access_log_dropped_total"),
+                "cold counter access_log_dropped must not appear before first call, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_ssl_log_dropped_total"),
+                "cold counter ssl_log_dropped must not appear before first call, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_controller_schema_validation_errors_total"),
+                "cold counter schema_validation_errors must not appear before first call, got:\n{rendered}"
+            );
+
+            // --- After touching one cold counter ---
+            m.access_log_dropped();
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_access_log_dropped_total"),
+                "touched cold counter must appear, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_ssl_log_dropped_total"),
+                "still-untouched cold counter must remain absent, got:\n{rendered}"
+            );
+        });
+    }
 }

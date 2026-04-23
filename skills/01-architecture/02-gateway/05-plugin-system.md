@@ -1,6 +1,6 @@
 ---
 name: gateway-plugin-system
-description: 插件系统架构：4 阶段执行、PluginRuntime 预构建、条件执行、28 个 HTTP 插件、Stream 插件。
+description: 插件系统架构：4 阶段执行、PluginRuntime 预构建、条件执行、29 个 HTTP 插件、Stream 插件。
 ---
 
 # 插件系统
@@ -36,19 +36,7 @@ pub struct PluginRuntime {
 }
 ```
 
-**构建时机**：在 HTTPRoute/GRPCRoute preparse 阶段构建，而非每个请求时构建。
-
-构建路径：
-- `PluginRuntime::from_httproute_filters()` — 处理 Gateway API 标准 filter（RequestHeaderModifier、ResponseHeaderModifier、RequestRedirect、URLRewrite、RequestMirror、ExtensionRef）
-- `PluginRuntime::from_grpcroute_filters()` — 处理 GRPCRoute filter（RequestHeaderModifier、ResponseHeaderModifier、ExtensionRef）
-- `add_from_request_filters()` — 处理 EdgionPlugins CRD 定义的 RequestFilter 条目
-- `add_from_upstream_response_filters()` — 处理 EdgionPlugins CRD 的 UpstreamResponseFilter 条目
-- `add_from_upstream_response_body_filters()` — 处理 EdgionPlugins CRD 的 UpstreamResponseBodyFilter 条目
-- `add_from_upstream_responses()` — 处理 EdgionPlugins CRD 的 UpstreamResponse 条目
-
-每个 `add_from_*` 方法返回 `Vec<String>` 验证错误列表，用于在 preparse 阶段报告配置问题。
-
-**Clone 语义**：`PluginRuntime` 的 `clone()` 返回空实例（因为它在 preparse 时会重新构建）。
+**构建时机**：HTTPRoute/GRPCRoute preparse 阶段（非每请求）。入口：`from_httproute_filters()` / `from_grpcroute_filters()`（Gateway API 标准 filter）；EdgionPlugins CRD 条目通过 `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()` 加载，各返回 `Vec<String>` 验证错误。`clone()` 返回空实例（preparse 时重建）。
 
 ## 条件执行
 
@@ -142,7 +130,7 @@ resource.pre_parse()                        # event_dispatch.rs
 | DynamicExternalUpstream | `dynamic_external_upstream` | 动态外部上游（运行时指定外部地址） |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | 动态内部上游（运行时选择 K8s Service） |
 | DirectEndpoint | `direct_endpoint` | 直接指定后端端点地址 |
-| RegionRoute | `region_route` | 多 region 流量路由：baseInfo（serviceGroup/cluster 分组 + regions + myRegion）+ 有序 routeRules（RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange）+ hashKeyGet passthrough + hashCalc writeBack + failoverTo（静态重定向）+ auto failover。Center 按 `{serviceGroup}/{cluster}/{namespace}/{kind}` 聚合管理 |
+| RegionRoute | `region_route` | 多 region 流量路由：引用 ServiceRegionRoute PluginMetaData（`serviceRegionRouteRef`）→ clusterRef → ClusterRegionRoute PluginMetaData。Gateway 实时查询 PluginMetaDataGatewayStore，有序 routeRules（RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange）+ hashKeyGet passthrough + hashCalc writeBack + failoverTo（静态重定向）。无 baseInfo，无 auto failover |
 
 ### 其他类（8 个）
 
@@ -237,7 +225,7 @@ Stream 插件在 TCP/UDP 层运行，采用两阶段架构：
 
 ```
 src/core/gateway/plugins/
-├── http/                          # HTTP 插件实现（28 个）
+├── http/                          # HTTP 插件目录（28 个；加上 gateway_api_filters/ 里的 DebugAccessLogToHeader 共 29 个）
 │   ├── basic_auth/                # 各插件子目录
 │   ├── jwt_auth/
 │   ├── cors/

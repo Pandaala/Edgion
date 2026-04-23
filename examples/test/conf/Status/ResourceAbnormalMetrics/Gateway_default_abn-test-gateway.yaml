@@ -1,0 +1,11 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: abn-test-gateway
+  namespace: default
+spec:
+  gatewayClassName: abn-test-class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 38080

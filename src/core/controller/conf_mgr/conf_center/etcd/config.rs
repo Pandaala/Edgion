@@ -3,12 +3,17 @@
 //! Provides TOML-friendly (snake_case) configuration for the etcd backend.
 //! Converts to `EtcdClientConfig` internally for `EtcdLinkClient::from_config()`.
 
+use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::ByteString;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
-use crate::types::resources::link_sys::etcd::{
-    EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout, EtcdTls, EtcdTlsCerts,
-};
+use crate::core::gateway::link_sys::credential::CredentialState;
+use crate::types::credentials::materials::BasicAuthMaterial;
+use crate::types::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
+use crate::types::resources::common::{SecretReference, TlsCerts, TlsConfig};
+use crate::types::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
 
 // ============================================================================
 // EtcdConfig — TOML top-level config
@@ -116,30 +121,84 @@ impl EtcdConfig {
         self.endpoint_mode
     }
 
-    /// Convert to `EtcdClientConfig` that `EtcdLinkClient::from_config()` accepts.
+    /// Convert to `EtcdClientConfig` + `CredentialState` that
+    /// `EtcdLinkClient::from_config()` accepts.
     ///
     /// TLS certificate file paths are read from disk and embedded as PEM strings.
-    pub fn to_client_config(&self) -> anyhow::Result<EtcdClientConfig> {
-        // Auth
-        let auth = self.auth.as_ref().map(|a| EtcdAuth {
-            username: Some(a.username.clone()),
-            password: Some(a.password.clone()),
-            secret_ref: None,
-        });
+    ///
+    /// Auth note: Controller's ConfCenter uses file-based credentials (TOML
+    /// `[conf_center.auth]`), not `SecretReference`. To reuse the same
+    /// `build_connect_options` code path as the LinkSys CRD flow, we:
+    /// - fill `EtcdClientConfig.auth` with a synthetic `EtcdAuth` placeholder
+    ///   (the `secret_ref` is never read by the Gateway provider; only
+    ///   `crd.auth.is_some()` is inspected as the "auth configured" gate);
+    /// - return a [`CredentialState::Resolved`] carrying the TOML material so
+    ///   the provider's auth arm gets the plaintext `username` / `password`.
+    ///
+    /// If no `[conf_center.auth]` section is configured, returns
+    /// `(EtcdClientConfig { auth: None, .. }, CredentialState::NotRequired)`.
+    pub fn to_client_config(&self) -> anyhow::Result<(EtcdClientConfig, CredentialState<BasicAuthMaterial>)> {
+        // Auth: wire TOML username/password into CredentialState::Resolved so
+        // `build_connect_options` picks it up — previously this path hard-coded
+        // `auth = None` which silently dropped the TOML credentials (I4-class
+        // silent fallback, regression of the fix-change effort).
+        let (auth, auth_state): (Option<EtcdAuth>, CredentialState<BasicAuthMaterial>) = match &self.auth {
+            Some(cfg) => (
+                Some(EtcdAuth {
+                    // Placeholder `secret_ref` — not used by the provider. The
+                    // provider only checks `crd.auth.is_some()` to decide
+                    // whether to authenticate; the material comes from
+                    // `auth_state`, not from `secret_ref`.
+                    secret_ref: SecretReference {
+                        name: "conf-center-toml".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
+                }),
+                CredentialState::Resolved(BasicAuthMaterial {
+                    username: Some(cfg.username.clone()),
+                    password: cfg.password.clone(),
+                }),
+            ),
+            None => (None, CredentialState::NotRequired),
+        };
 
-        // TLS — read cert files from disk
+        // TLS — read cert files from disk and wrap them in a synthetic Secret
+        // so that the ConfCenter flow uses the same TLS material path as the
+        // Gateway's CRD-driven LinkSys flow (Secret → TlsMaterial).
         let tls = if let Some(tls_cfg) = &self.tls {
-            let ca_cert = read_optional_file(&tls_cfg.ca_cert_file)?;
-            let client_cert = read_optional_file(&tls_cfg.client_cert_file)?;
-            let client_key = read_optional_file(&tls_cfg.client_key_file)?;
+            let ca = read_optional_file(&tls_cfg.ca_cert_file)?;
+            let cert = read_optional_file(&tls_cfg.client_cert_file)?;
+            let key = read_optional_file(&tls_cfg.client_key_file)?;
 
-            Some(EtcdTls {
+            let mut data = BTreeMap::new();
+            if let Some(pem) = ca {
+                data.insert(TLS_CA_KEY.to_string(), ByteString(pem.into_bytes()));
+            }
+            if let Some(pem) = cert {
+                data.insert(TLS_CERT_KEY.to_string(), ByteString(pem.into_bytes()));
+            }
+            if let Some(pem) = key {
+                data.insert(TLS_KEY_KEY.to_string(), ByteString(pem.into_bytes()));
+            }
+
+            let secret = if data.is_empty() {
+                None
+            } else {
+                Some(Secret {
+                    data: Some(data),
+                    type_: Some("kubernetes.io/tls".to_string()),
+                    ..Default::default()
+                })
+            };
+
+            Some(TlsConfig {
                 enabled: true,
-                certs: Some(EtcdTlsCerts {
-                    ca_cert,
-                    client_cert,
-                    client_key,
+                certs: Some(TlsCerts {
+                    ca_cert: None,
+                    client_cert: None,
                     secret_ref: None,
+                    secret,
                 }),
                 insecure_skip_verify: None,
             })
@@ -169,20 +228,23 @@ impl EtcdConfig {
             None
         };
 
-        Ok(EtcdClientConfig {
-            endpoints: self.endpoints.clone(),
-            auth,
-            tls,
-            timeout,
-            keep_alive,
-            namespace: None,
-            auto_sync_interval: None,
-            max_call_send_size: None,
-            max_call_recv_size: None,
-            user_agent: None,
-            reject_old_cluster: None,
-            observability: None,
-        })
+        Ok((
+            EtcdClientConfig {
+                endpoints: self.endpoints.clone(),
+                auth,
+                tls,
+                timeout,
+                keep_alive,
+                namespace: None,
+                auto_sync_interval: None,
+                max_call_send_size: None,
+                max_call_recv_size: None,
+                user_agent: None,
+                reject_old_cluster: None,
+                observability: None,
+            },
+            auth_state,
+        ))
     }
 }
 
@@ -258,22 +320,25 @@ auth:
             keep_alive_timeout_secs: None,
         };
 
-        let client_config = config.to_client_config().unwrap();
+        let (client_config, auth_state) = config.to_client_config().unwrap();
         assert_eq!(client_config.endpoints, vec!["http://127.0.0.1:2379"]);
         assert!(client_config.auth.is_none());
         assert!(client_config.tls.is_none());
         assert!(client_config.timeout.is_none());
+        assert!(matches!(auth_state, CredentialState::NotRequired));
     }
 
     #[test]
-    fn test_to_client_config_with_auth() {
+    fn test_to_client_config_with_auth_wires_toml_credentials_into_state() {
+        // Regression guard (B1): TOML `[conf_center.auth]` must flow through
+        // to `CredentialState::Resolved` — previously it was silently dropped.
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
             endpoint_mode: EndpointMode::default(),
             auth: Some(EtcdAuthConfig {
-                username: "user".to_string(),
-                password: "pass".to_string(),
+                username: "root".to_string(),
+                password: "changeme".to_string(),
             }),
             tls: None,
             connect_timeout_ms: Some(5000),
@@ -282,13 +347,42 @@ auth:
             keep_alive_timeout_secs: None,
         };
 
-        let client_config = config.to_client_config().unwrap();
-        let auth = client_config.auth.unwrap();
-        assert_eq!(auth.username, Some("user".to_string()));
-        assert_eq!(auth.password, Some("pass".to_string()));
+        let (client_config, auth_state) = config.to_client_config().unwrap();
+
+        assert!(
+            client_config.auth.is_some(),
+            "placeholder EtcdAuth must be present so the provider's `crd.auth.is_some()` gate opens"
+        );
+        match auth_state {
+            CredentialState::Resolved(mat) => {
+                assert_eq!(mat.username.as_deref(), Some("root"));
+                assert_eq!(mat.password, "changeme");
+            }
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+
         let timeout = client_config.timeout.unwrap();
         assert_eq!(timeout.dial, Some(5000));
         assert_eq!(timeout.request, Some(10000));
+    }
+
+    #[test]
+    fn test_to_client_config_without_auth_is_not_required() {
+        let config = EtcdConfig {
+            endpoints: vec!["http://127.0.0.1:2379".to_string()],
+            key_prefix: "/edgion".to_string(),
+            endpoint_mode: EndpointMode::default(),
+            auth: None,
+            tls: None,
+            connect_timeout_ms: None,
+            request_timeout_ms: None,
+            keep_alive_time_secs: None,
+            keep_alive_timeout_secs: None,
+        };
+
+        let (client_config, auth_state) = config.to_client_config().unwrap();
+        assert!(client_config.auth.is_none());
+        assert!(matches!(auth_state, CredentialState::NotRequired));
     }
 
     #[test]

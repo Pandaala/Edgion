@@ -13,4 +13,3 @@ spec:
           - "0.0.0.0/0"
           - "::/0"
         defaultAction: deny
-        message: "Blocked by TLSRoute stream plugin"

@@ -6,7 +6,11 @@
 //! controller restart. All state is held as struct fields (compiler-tracked).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use parking_lot::RwLock;
+
+use super::conf_center::CenterApi;
 use super::processor_registry::ProcessorRegistry;
 use super::sync_runtime::resource_processor::{
     attached_route_tracker::AttachedRouteTracker,
@@ -15,11 +19,13 @@ use super::sync_runtime::resource_processor::{
     gateway_route_index::GatewayRouteIndex,
     listener_port_manager::ListenerPortManager,
     namespace_store::NamespaceStore,
+    plugin_metadata_utils::{PluginMetaDataRefManager, PluginMetaDataStore},
     ref_grant::{
         cross_ns_ref_manager::{new_cross_ns_ref_manager, CrossNamespaceRefManager},
         events::ReferenceGrantEventDispatcher,
         ReferenceGrantStore,
     },
+    region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable},
     secret_utils::SecretStore,
     service_ref::{new_service_ref_manager, ServiceRefManager},
 };
@@ -41,6 +47,20 @@ pub struct ControllerRuntime {
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) configmap_store: ConfigMapStore,
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
+    pub(crate) plugin_metadata_store: PluginMetaDataStore,
+    /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each PluginMetaData.
+    /// Used by the PluginMetaData handler to requeue referencing resources on change.
+    pub(crate) plugin_metadata_refs: PluginMetaDataRefManager,
+    /// Cluster RegionRoute table: pm_key → ClusterRegionRouteEntry.
+    /// Maintained by PluginMetaData handler on change/delete.
+    pub(crate) cluster_region_route_table: RegionRouteClusterTable,
+    /// Service RegionRoute table: pm_key → ServiceRegionRouteEntry.
+    /// Maintained by PluginMetaData handler (PluginMetaData fields) and EdgionPlugins handler (ref_plugins).
+    pub(crate) service_region_route_table: RegionRouteServiceTable,
+    /// Optional conf_writer injected by the ConfCenter implementation.
+    /// Used by handlers to auto-create resources (e.g., PluginMetaData for RegionRoute).
+    /// None until the ConfCenter calls `set_conf_writer()`.
+    pub(crate) conf_writer: RwLock<Option<Arc<dyn CenterApi + Send + Sync>>>,
 }
 
 impl ControllerRuntime {
@@ -58,7 +78,24 @@ impl ControllerRuntime {
             listener_port_manager: ListenerPortManager::new(),
             configmap_store: ConfigMapStore::new(),
             backend_tls_policy: BackendTLSPolicyState::new(),
+            plugin_metadata_store: PluginMetaDataStore::new(),
+            plugin_metadata_refs: PluginMetaDataRefManager::new(),
+            cluster_region_route_table: RegionRouteClusterTable::new(),
+            service_region_route_table: RegionRouteServiceTable::new(),
+            conf_writer: RwLock::new(None),
         }
+    }
+
+    /// Inject a conf_writer so handlers can auto-create resources.
+    ///
+    /// Called once by the ConfCenter after construction.
+    pub fn set_conf_writer(&self, writer: Arc<dyn CenterApi + Send + Sync>) {
+        *self.conf_writer.write() = Some(writer);
+    }
+
+    /// Get the conf_writer (if available).
+    pub fn conf_writer(&self) -> Option<Arc<dyn CenterApi + Send + Sync>> {
+        self.conf_writer.read().clone()
     }
 
     /// Clear all mutable state for leader-change or controller restart.
@@ -102,6 +139,18 @@ impl ControllerRuntime {
         tracing::info!(component = "controller_runtime", "Cleared ConfigMapStore");
 
         self.backend_tls_policy.reset();
+
+        self.plugin_metadata_store.replace_all(HashMap::new());
+        tracing::info!(component = "controller_runtime", "Cleared PluginMetaDataStore");
+
+        self.plugin_metadata_refs.clear_all();
+        tracing::info!(component = "controller_runtime", "Cleared PluginMetaDataRefManager");
+
+        self.cluster_region_route_table.clear();
+        tracing::info!(component = "controller_runtime", "Cleared RegionRouteClusterTable");
+
+        self.service_region_route_table.clear();
+        tracing::info!(component = "controller_runtime", "Cleared RegionRouteServiceTable");
     }
 }
 

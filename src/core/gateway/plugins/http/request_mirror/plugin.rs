@@ -64,32 +64,41 @@ impl RequestMirrorPlugin {
         }
     }
 
-    fn should_mirror(&self) -> bool {
-        // fraction takes precedence over percentage
+    /// Returns `Some(reason)` when mirroring should be skipped, `None` when it should proceed.
+    /// Distinguishes config-disabled (zero rate) from random sampling rejection.
+    fn skip_reason(&self) -> Option<&'static str> {
         if let Some(fraction) = &self.config.fraction {
             let denominator = fraction.denominator.unwrap_or(100);
             if denominator <= 0 || fraction.numerator <= 0 {
-                return false;
+                return Some("mirror disabled");
             }
             if fraction.numerator >= denominator {
-                return true;
+                return None;
             }
             let mut rng = rand::rng();
             let sample: i32 = rng.random_range(0..denominator);
-            return sample < fraction.numerator;
+            return if sample < fraction.numerator {
+                None
+            } else {
+                Some("mirror sampled:skip")
+            };
         }
         if let Some(pct) = self.config.percentage {
             if pct <= 0 {
-                return false;
+                return Some("mirror disabled");
             }
             if pct >= 100 {
-                return true;
+                return None;
             }
             let mut rng = rand::rng();
             let sample: i32 = rng.random_range(0..100);
-            return sample < pct;
+            return if sample < pct {
+                None
+            } else {
+                Some("mirror sampled:skip")
+            };
         }
-        true
+        None
     }
 
     fn mirror_config(&self) -> MirrorConfig {
@@ -165,22 +174,23 @@ impl RequestFilter for RequestMirrorPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if !self.should_mirror() {
+        if let Some(reason) = self.skip_reason() {
+            log.push(reason);
             return PluginRunningResult::GoodNext;
         }
 
         let permit = match self.semaphore.clone().try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
-                log.push("mirror-skipped:concurrency_limit; ");
+                log.push("mirror skipped concurrency");
                 return PluginRunningResult::GoodNext;
             }
         };
 
         let (target, base_url) = match self.resolve_target() {
             Ok(v) => v,
-            Err(e) => {
-                log.push(&format!("mirror-resolve-err:{}; ", e));
+            Err(_e) => {
+                log.push_err("mirror resolve error");
                 return PluginRunningResult::GoodNext;
             }
         };
@@ -196,7 +206,7 @@ impl RequestFilter for RequestMirrorPlugin {
         let method = match reqwest::Method::from_bytes(session.get_method().as_bytes()) {
             Ok(m) => m,
             Err(_) => {
-                log.push(&format!("mirror-invalid-method:{}; ", session.get_method()));
+                log.push_err("mirror invalid method");
                 return PluginRunningResult::GoodNext;
             }
         };
@@ -291,7 +301,7 @@ impl RequestFilter for RequestMirrorPlugin {
                 emit_mirror_log(entry).await;
             }
 
-            record_mirror_metric(status, begin.elapsed().as_millis() as f64);
+            record_mirror_metric(status);
         });
 
         session.set_mirror_state(MirrorState::Streaming {
@@ -300,7 +310,7 @@ impl RequestFilter for RequestMirrorPlugin {
             channel_full_flag,
             channel_full_timeout_ms,
         });
-        log.push("mirror-started; ");
+        log.push("mirror sent");
         PluginRunningResult::GoodNext
     }
 }

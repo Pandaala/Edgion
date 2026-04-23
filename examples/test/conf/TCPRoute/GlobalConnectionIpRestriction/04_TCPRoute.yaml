@@ -1,0 +1,19 @@
+# TCPRoute proxying to test-tcp echo backend
+# Used by the GCIR enforcement tests: when connections are ALLOWED by the plugin,
+# traffic is proxied to the echo server so the test can verify data round-trip.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: gcir-tcproute
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: gcir-gateway
+      namespace: edgion-test
+      sectionName: tcp
+      port: 31296
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

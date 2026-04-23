@@ -143,6 +143,59 @@ Date: Mon, 08 Mar 2026 10:00:00 GMT
 
 ---
 
+## 防重放安全模型
+
+HMAC Auth 插件使用**时间戳窗口**机制防止签名重放——请求 `Date` / `X-Date` header 与服务器时钟差必须 ≤ `clockSkew`（默认 `300` 秒 / 5 分钟）。**插件本身不做 nonce 去重**。
+
+这与业界主流 HMAC 认证实现一致（AWS SigV4、Stripe Webhooks、GitHub Webhooks、Kong `hmac-auth`、APISIX `hmac-auth`）——都是"时间戳窗口 + HTTPS"组合，不在代理层做 nonce 存储。
+
+### 窗口内重放风险与缓解
+
+理论上，攻击者若获得有效签名，可在 `clockSkew` 窗口内无限重放。该威胁的**前提**是拿到签名；在正确部署下有多层阻断：
+
+| 威胁路径 | 防御 |
+|---|---|
+| 中间人抓包 | **HTTPS**（TLS 阻断签名泄露） |
+| 签名从日志泄露 | 启用 `hideCredentials: true`；access log 不记录 `Authorization` / `Signature` 头 |
+| 合法客户端恶意重放 | **业务层 idempotency key**（非网关层职责） |
+| 窗口期调得过大 | 高敏感接口缩短 `clockSkew`（如 `60`） |
+
+### 推荐配置
+
+**生产环境最小安全配置**：
+
+```yaml
+filters:
+  - type: HmacAuth
+    config:
+      secretRefs:
+        - name: hmac-creds
+      clockSkew: 300          # 5 分钟窗口；高敏感接口建议缩到 60
+      hideCredentials: true   # 不把 Authorization/Signature 透传给上游（降低日志泄漏面）
+      enforceHeaders:
+        - date                # 时间戳必签
+        - host
+      # 业务层 idempotency：高敏感接口（支付、改密）必须由后端实现
+```
+
+**同时要求**：
+- **必须走 HTTPS**：HMAC 签名在明文下可被中间人捕获，HTTPS 是本插件的基础假设
+- **不要把签名写进 access log**：默认不写，但注意不要在 `accessLog.extraHeaders` 里加入 `Authorization` / `Signature`
+- **关键操作业务层做 idempotency**：对 "非幂等 + 高敏感" 的操作（支付、改密、转账），业务端应要求 `Idempotency-Key` 请求头，后端在一段时间内对同 key 只执行一次——这是防重放的正确分层
+
+### 为什么 Edgion 不在网关层做 nonce 去重？
+
+做 nonce dedup 需要**请求级状态存储**（内存 LRU 或 Redis），两种方案都有明显问题：
+
+- **内存 LRU**：多 gateway 实例部署时每实例独立，攻击者切换实例就能重放——变成**假象防御**
+- **Redis 后端**：每请求 1 次 Redis 往返（~1–3ms 延迟），引入强依赖；Redis 故障时 fail-open 还是 fail-close 都是取舍困境
+
+业界（AWS / Stripe / GitHub / Kong / APISIX）都选择"网关做时间戳窗口、业务层做 idempotency key"的分层，Edgion 遵循同一模式。
+
+若你的部署形态确实需要网关层 nonce dedup（极端情况），可提 issue 讨论独立实现方案。
+
+---
+
 ## 故障排除
 
 ### 问题 1：签名验证失败

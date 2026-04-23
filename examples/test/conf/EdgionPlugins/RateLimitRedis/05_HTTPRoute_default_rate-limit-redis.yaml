@@ -1,0 +1,68 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rate-limit-redis-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "rate-limit-redis.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/rate-limit-redis/allow
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rate-limit-redis-main
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/rate-limit-redis/missing-deny
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rate-limit-redis-missing-deny
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/rate-limit-redis/redis-fail-open
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rate-limit-redis-fail-open
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/rate-limit-redis/redis-fail-close
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rate-limit-redis-fail-close
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

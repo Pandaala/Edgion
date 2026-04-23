@@ -80,9 +80,53 @@ impl RequestFilter for IpRestriction {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Determine whether to deny this request
         let should_deny = match self.get_client_ip(session) {
-            Some(ip) => !self.config.check_ip_access(&ip),
+            Some(ip) => {
+                // Priority 1: deny list (highest priority)
+                if let Some(ref deny_matcher) = self.config.deny_matcher {
+                    if deny_matcher.match_ip(&ip) == Some(true) {
+                        plugin_log.push("Deny ip match");
+                        true
+                    } else if let Some(ref allow_matcher) = self.config.allow_matcher {
+                        // Priority 2: allow list present — whitelist mode
+                        if allow_matcher.match_ip(&ip) == Some(true) {
+                            plugin_log.push("Allow ip match");
+                            false
+                        } else {
+                            plugin_log.push("Deny ip match");
+                            true
+                        }
+                    } else {
+                        // Priority 3: default action
+                        let deny = matches!(self.config.default_action, DefaultAction::Deny);
+                        if deny {
+                            plugin_log.push("Deny default");
+                        } else {
+                            plugin_log.push("Allow default");
+                        }
+                        deny
+                    }
+                } else if let Some(ref allow_matcher) = self.config.allow_matcher {
+                    // Priority 2: allow list present (no deny list) — whitelist mode
+                    if allow_matcher.match_ip(&ip) == Some(true) {
+                        plugin_log.push("Allow ip match");
+                        false
+                    } else {
+                        plugin_log.push("Deny ip match");
+                        true
+                    }
+                } else {
+                    // Priority 3: default action
+                    let deny = matches!(self.config.default_action, DefaultAction::Deny);
+                    if deny {
+                        plugin_log.push("Deny default");
+                    } else {
+                        plugin_log.push("Allow default");
+                    }
+                    deny
+                }
+            }
             None => {
-                plugin_log.push("No client IP; ");
+                plugin_log.push("No client IP");
                 // Allow list configured means whitelist mode: unknown IP is not in whitelist → deny.
                 // Otherwise, fall back to default_action.
                 self.config.allow_matcher.is_some() || matches!(self.config.default_action, DefaultAction::Deny)
@@ -96,8 +140,6 @@ impl RequestFilter for IpRestriction {
                 .as_deref()
                 .unwrap_or("Your IP address is not allowed to access this resource");
 
-            plugin_log.push("Denied; ");
-
             // Build error response
             let mut resp = Box::new(
                 ResponseHeader::build(self.config.status, None)
@@ -108,17 +150,18 @@ impl RequestFilter for IpRestriction {
             let body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
             if let Err(_e) = session.write_response_header(resp, false).await {
+                plugin_log.push_err("write response header fail");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             if let Err(_e) = session.write_response_body(Some(body), true).await {
+                plugin_log.push_err("write response body fail");
                 return PluginRunningResult::ErrTerminateRequest;
             }
 
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        plugin_log.push("Allowed; ");
         PluginRunningResult::GoodNext
     }
 }
@@ -171,7 +214,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow ip match"));
     }
 
     #[tokio::test]
@@ -188,7 +231,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny ip match"));
     }
 
     #[tokio::test]
@@ -205,7 +248,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Denied"));
+        assert!(plugin_log.contains("Deny ip match"));
     }
 
     #[tokio::test]
@@ -220,7 +263,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allowed"));
+        assert!(plugin_log.contains("Allow default"));
     }
 
     #[tokio::test]
@@ -239,7 +282,6 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("No client IP"));
-        assert!(plugin_log.contains("Denied"));
     }
 
     #[tokio::test]
@@ -281,6 +323,5 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("No client IP"));
-        assert!(plugin_log.contains("Denied"));
     }
 }

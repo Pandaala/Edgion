@@ -1,0 +1,19 @@
+# Service PluginMetaData for ctrl-2
+#
+# In the new architecture, the ClusterRegionRoute PluginMetaData holds topology (not per-controller PluginMetaDatas).
+# This file is a ServiceRegionRoute PluginMetaData for ctrl-2, referencing the ClusterRegionRoute PluginMetaData via clusterRef.
+apiVersion: edgion.io/v1
+kind: PluginMetaData
+metadata:
+  name: region-route-main
+  namespace: edgion-default
+spec:
+  metadata:
+    type: ServiceRegionRoute
+    config:
+        clusterRef:
+          namespace: edgion-default
+          name: global-region-conf
+        regions:
+          - name: virginia
+          - name: ohio

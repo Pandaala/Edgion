@@ -11,8 +11,10 @@
 //! automatically dispatching resource changes to the appropriate sub-module managers.
 //! Runtime clients are stored in separate ArcSwap stores for typed access.
 
+pub mod credential;
 pub mod providers;
 pub mod runtime;
+pub mod tls;
 
 pub use providers::{LocalFileWriter, LogType};
 pub use runtime::{

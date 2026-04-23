@@ -62,7 +62,6 @@ pub fn check_allowed_routes(
                 // Selector is fully evaluated by the controller; trust its decision.
             }
             _ => {
-                tracing::warn!(from = %from, "Unknown AllowedRoutes.namespaces.from value");
                 return false;
             }
         }

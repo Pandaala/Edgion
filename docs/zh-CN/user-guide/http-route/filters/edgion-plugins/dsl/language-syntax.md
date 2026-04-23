@@ -641,5 +641,5 @@ return next()
 ## 相关文档
 
 - [DSL 插件配置参考](./README.md) — 配置参数、API 列表、错误策略
-- [过滤器总览](../overview.md)
-- [插件组合与引用](../plugin-composition.md)
+- [过滤器总览](../../overview.md)
+- [插件组合与引用](../../plugin-composition.md)

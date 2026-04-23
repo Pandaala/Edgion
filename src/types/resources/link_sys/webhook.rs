@@ -3,10 +3,45 @@
 //! Defines the connection parameters and health check settings for an external
 //! HTTP webhook service. Referenced by KeyGet::Webhook via "namespace/name".
 
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::common::SecretReference;
+use crate::types::resources::common::TlsConfig;
+
+// ============================================================
+// WebhookAuth — authentication configuration
+// ============================================================
+
+/// Webhook authentication configuration.
+///
+/// Uses `type` field to select auth method. All methods require a Secret reference.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum WebhookAuth {
+    /// Basic authentication (username + password in Secret)
+    Basic {
+        #[serde(rename = "secretRef")]
+        secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<Secret>,
+    },
+    /// Bearer token authentication (bearerToken in Secret)
+    Bearer {
+        #[serde(rename = "secretRef")]
+        secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<Secret>,
+    },
+    /// HMAC signature authentication (hmacKey in Secret)
+    Hmac {
+        #[serde(rename = "secretRef")]
+        secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<Secret>,
+    },
+}
 
 // ============================================================
 // WebhookServiceConfig — main configuration
@@ -47,6 +82,13 @@ use super::common::SecretReference;
 #[serde(rename_all = "camelCase")]
 pub struct WebhookServiceConfig {
     // ============================================================
+    // Authentication
+    // ============================================================
+    /// Authentication configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<WebhookAuth>,
+
+    // ============================================================
     // Connection
     // ============================================================
     /// Webhook service URL (required).
@@ -71,7 +113,7 @@ pub struct WebhookServiceConfig {
     /// Supports custom CA certificates and mutual TLS (mTLS).
     /// If not set, uses the system CA bundle and no client certificate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tls: Option<WebhookTls>,
+    pub tls: Option<TlsConfig>,
 
     // ============================================================
     // Request forwarding
@@ -145,57 +187,6 @@ pub struct WebhookServiceConfig {
     /// Supports active probing, passive monitoring, or both (recommended).
     #[serde(default)]
     pub health_check: Option<WebhookHealthCheck>,
-}
-
-// ============================================================
-// TLS
-// ============================================================
-
-/// TLS configuration for webhook service connections.
-///
-/// Consistent with RedisTls / EtcdTls in LinkSys.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookTls {
-    /// Enable TLS for the webhook connection.
-    /// When the URI starts with `https://`, TLS is always used regardless of this flag.
-    /// This flag controls custom TLS settings (CA, client cert, etc.).
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// TLS certificates configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certs: Option<WebhookTlsCerts>,
-
-    /// Skip certificate verification (DANGEROUS, only for development/testing).
-    /// Default: false
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub insecure_skip_verify: Option<bool>,
-}
-
-/// TLS certificate configuration for webhook connections.
-///
-/// Supports both inline PEM content and Kubernetes Secret references.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookTlsCerts {
-    /// CA certificate for verifying the webhook server (PEM format).
-    /// If not set, uses the system CA bundle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_cert: Option<String>,
-
-    /// Client certificate for mutual TLS (PEM format).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_cert: Option<String>,
-
-    /// Client private key for mutual TLS (PEM format).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_key: Option<String>,
-
-    /// Alternative: reference to a Kubernetes Secret containing TLS certs.
-    /// The Secret should contain `ca.crt`, `tls.crt`, `tls.key` keys.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
 }
 
 // ============================================================
@@ -419,6 +410,7 @@ pub const WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES: usize = 16384;
 impl Default for WebhookServiceConfig {
     fn default() -> Self {
         Self {
+            auth: None,
             uri: String::new(),
             request_method: default_method(),
             timeout_ms: default_timeout_ms(),
@@ -478,6 +470,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = WebhookServiceConfig::default();
+        assert!(config.auth.is_none());
         assert_eq!(config.request_method, "GET");
         assert_eq!(config.timeout_ms, 5000);
         assert_eq!(config.max_response_bytes, 1024);
@@ -649,5 +642,88 @@ backoff:
         assert_eq!(backoff.initial_sec, 5);
         assert!((backoff.multiplier - 2.0).abs() < f64::EPSILON);
         assert_eq!(backoff.max_sec, 60);
+    }
+
+    #[test]
+    fn test_webhook_auth_basic() {
+        let yaml = r#"
+type: basic
+secretRef:
+  name: webhook-creds
+"#;
+        let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match auth {
+            WebhookAuth::Basic { secret_ref, .. } => {
+                assert_eq!(secret_ref.name, "webhook-creds");
+            }
+            _ => panic!("Expected Basic auth"),
+        }
+    }
+
+    #[test]
+    fn test_webhook_auth_bearer() {
+        let yaml = r#"
+type: bearer
+secretRef:
+  name: webhook-token
+  namespace: secrets
+"#;
+        let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match auth {
+            WebhookAuth::Bearer { secret_ref, .. } => {
+                assert_eq!(secret_ref.name, "webhook-token");
+                assert_eq!(secret_ref.namespace.as_deref(), Some("secrets"));
+            }
+            _ => panic!("Expected Bearer auth"),
+        }
+    }
+
+    #[test]
+    fn test_webhook_auth_hmac() {
+        let yaml = r#"
+type: hmac
+secretRef:
+  name: webhook-hmac-key
+"#;
+        let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match auth {
+            WebhookAuth::Hmac { secret_ref, .. } => {
+                assert_eq!(secret_ref.name, "webhook-hmac-key");
+            }
+            _ => panic!("Expected Hmac auth"),
+        }
+    }
+
+    #[test]
+    fn webhook_auth_rejects_inline_username() {
+        let yaml = "type: basic\nsecretRef:\n  name: s\nusername: leaked";
+        let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn webhook_auth_rejects_inline_password() {
+        let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
+        let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn test_webhook_config_with_auth() {
+        let yaml = r#"
+uri: "https://api.example.com/resolve"
+auth:
+  type: bearer
+  secretRef:
+    name: api-token
+"#;
+        let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.auth.is_some());
+        match config.auth.unwrap() {
+            WebhookAuth::Bearer { secret_ref, .. } => {
+                assert_eq!(secret_ref.name, "api-token");
+            }
+            _ => panic!("Expected Bearer auth"),
+        }
     }
 }

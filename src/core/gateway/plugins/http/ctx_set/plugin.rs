@@ -21,7 +21,6 @@
 
 use async_trait::async_trait;
 use regex::Regex;
-use tracing::debug;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -115,10 +114,6 @@ impl CtxSet {
                 value = match self.apply_extract(&value, regex, rule.extract.as_ref().unwrap().group) {
                     Some(extracted) => extracted,
                     None => {
-                        debug!(
-                            "CtxSet: extract regex did not match for var '{}', using default",
-                            rule.name
-                        );
                         return rule.default.clone();
                     }
                 };
@@ -131,7 +126,6 @@ impl CtxSet {
             value = match self.apply_transform(&value, transform, compiled_replace) {
                 Some(transformed) => transformed,
                 None => {
-                    debug!("CtxSet: transform failed for var '{}', using default", rule.name);
                     return rule.default.clone();
                 }
             };
@@ -207,14 +201,13 @@ impl RequestFilter for CtxSet {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Check for configuration errors
         if !self.config.is_valid() {
-            let error = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push(&format!("Config error: {}; ", error));
+            let _error = self.config.get_validation_error().unwrap_or("Unknown error");
+            plugin_log.push_err("config validation fail");
             // Fail-open: allow request to proceed on config error
             return PluginRunningResult::GoodNext;
         }
 
         let mut set_count = 0;
-        let mut skip_count = 0;
 
         for (idx, rule) in self.config.vars.iter().enumerate() {
             // Process the rule to get the final value
@@ -223,21 +216,17 @@ impl RequestFilter for CtxSet {
             match value {
                 Some(v) => {
                     // Set the context variable
-                    if let Err(e) = session.set_ctx_var(&rule.name, &v) {
-                        plugin_log.push(&format!("Failed to set ctx '{}': {}; ", rule.name, e));
+                    if let Err(_) = session.set_ctx_var(&rule.name, &v) {
+                        plugin_log.push_err("ctx var set fail");
                     } else {
                         set_count += 1;
-                        debug!("CtxSet: set ctx '{}' = '{}'", rule.name, v);
                     }
                 }
-                None => {
-                    skip_count += 1;
-                    debug!("CtxSet: skipped ctx '{}' (no value, no default)", rule.name);
-                }
+                None => {}
             }
         }
 
-        plugin_log.push(&format!("Set {} vars, skipped {}; ", set_count, skip_count));
+        plugin_log.push(&format!("ctx set {}", set_count));
         PluginRunningResult::GoodNext
     }
 }
@@ -278,7 +267,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Set 1 vars"));
+        assert!(plugin_log.contains("ctx set 1"));
     }
 
     #[tokio::test]
@@ -613,7 +602,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Config error"));
+        assert!(plugin_log.contains("config validation fail"));
     }
 
     #[tokio::test]
@@ -643,7 +632,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Set 2 vars"));
+        assert!(plugin_log.contains("ctx set 2"));
     }
 
     #[tokio::test]

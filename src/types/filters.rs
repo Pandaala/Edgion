@@ -28,7 +28,17 @@ pub enum PluginRunningResult {
     Nothing,
     /// Filter running good, and should continue to run other plugins
     GoodNext,
-    /// Filter judged that the request should be stopped here, no other plugins should run
+    /// Filter judged that the request should be stopped here, no other plugins should run.
+    ///
+    /// **Convention** (enforced by code review, not by the type system): any plugin
+    /// that returns `ErrTerminateRequest` MUST have already written the response
+    /// (header + body) to the session. Otherwise the client observes a naked 502
+    /// from Pingora with no diagnostic context.
+    ///
+    /// If a plugin cannot write a response at its current stage (e.g. the sync
+    /// `UpstreamResponseFilter` hook where `await` is unavailable), prefer
+    /// [`ErrResponse`] so the runtime can emit the status/body downstream, or
+    /// document explicitly why a naked terminate is acceptable in that path.
     ErrTerminateRequest,
     /// Filter returns an error response with custom status and body
     ErrResponse {

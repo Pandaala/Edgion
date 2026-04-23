@@ -248,7 +248,11 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         let mut resolved_refs_errors =
             super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime());
         let ref_denied_list = collect_ref_denied_list(route);
-        resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(&ref_denied_list));
+        resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
+            route_ns,
+            ResourceKind::GRPCRoute,
+            &ref_denied_list,
+        ));
 
         // Per-rule validation: find rules where ALL backend refs are invalid
         let invalid_indices = find_invalid_rule_indices(route, route_ns);

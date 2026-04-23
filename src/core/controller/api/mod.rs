@@ -130,38 +130,6 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
     Json(ApiResponse::success(format!("ACME check triggered for {}", key)))
 }
 
-// ============= Auth Status Helpers =============
-
-/// Build the pre-computed auth status based on the active auth configuration.
-///
-/// When both OIDC and local auth are enabled, `auth_method` is "oidc+local".
-fn build_auth_status(
-    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
-    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
-) -> crate::core::common::local_auth::AuthStatusResponse {
-    use crate::core::common::local_auth::AuthStatusResponse;
-    let oidc_enabled = auth_config.map_or(false, |c| c.enabled);
-    let local_enabled = local_auth_config.map_or(false, |c| c.enabled);
-    match (oidc_enabled, local_enabled) {
-        (true, true) => AuthStatusResponse {
-            auth_required: true,
-            auth_method: "oidc+local".to_string(),
-        },
-        (true, false) => AuthStatusResponse {
-            auth_required: true,
-            auth_method: "oidc".to_string(),
-        },
-        (false, true) => AuthStatusResponse {
-            auth_required: true,
-            auth_method: "local".to_string(),
-        },
-        (false, false) => AuthStatusResponse {
-            auth_required: false,
-            auth_method: "none".to_string(),
-        },
-    }
-}
-
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
@@ -176,6 +144,11 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .route("/health", get(health_check))
         // Readiness check (ready to serve traffic - ConfigServer ready)
         .route("/ready", get(readiness_check))
+        // Prometheus scrape endpoint (auth-skipped, K8s controller-manager convention)
+        .route(
+            "/metrics",
+            get(crate::core::controller::observe::status_metrics::metrics_handler),
+        )
         // Cross-namespace query - List all resources of a kind
         .route(
             "/api/v1/namespaced/{kind}",
@@ -214,9 +187,24 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
-        // RegionRoute aggregation
-        .route("/api/v1/region-routes", get(region_route_handlers::list_region_routes))
-        .route("/api/v1/region-routes/{service_group}/{cluster}/{namespace}/{kind}", get(region_route_handlers::get_region_route_detail))
+        // RegionRoute PluginMetaData endpoints
+        .route(
+            "/api/v1/cluster-region-routes",
+            get(region_route_handlers::list_cluster_region_plugin_metadata),
+        )
+        .route(
+            "/api/v1/service-region-routes",
+            get(region_route_handlers::list_service_region_plugin_metadata),
+        )
+        // New-URL aliases for RegionRoute failover
+        .route(
+            "/api/v1/cluster-region-routes/failover",
+            post(region_route_handlers::cluster_plugin_metadata_failover),
+        )
+        .route(
+            "/api/v1/service-region-routes/failover",
+            post(region_route_handlers::service_plugin_metadata_failover),
+        )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
         // ConfigServer endpoints (for edgion-cli --target server)
@@ -225,78 +213,81 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         .with_state(admin_state)
 }
 
-/// Serve the admin API on the specified address
+/// Serve the admin API on the specified address.
+///
+/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown
+/// future. Kept as a separate public entry point for callers that don't need
+/// graceful shutdown plumbing.
 pub async fn serve(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    require_auth: bool,
+    needs_retry: bool,
 ) -> anyhow::Result<()> {
-    let base_router = create_admin_router(conf_mgr, schema_validator);
-    // Add local auth login/me endpoints (before auth middleware so login is accessible)
-    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
-    // Apply unified auth middleware (tries OIDC first, falls back to local)
-    let router_with_auth =
-        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
-    let app = api::apply_cors_layer(router_with_auth);
-
-    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
-    let auth_status = build_auth_status(local_auth_config, auth_config);
-    let status_router = Router::new().route(
-        "/api/v1/auth/status",
-        get(move || {
-            let status = auth_status.clone();
-            async move { axum::Json(ApiResponse::success(status)) }
-        }),
-    );
-    let app = app.merge(status_router);
-
-    tracing::info!(
-        component = "unified_api",
-        event = "server_starting",
-        addr = %addr,
-        "Controller Admin API server listening with unified K8s-style routes"
-    );
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    serve_with_shutdown(
+        conf_mgr,
+        schema_validator,
+        addr,
+        auth_config,
+        local_auth_config,
+        require_auth,
+        needs_retry,
+        std::future::pending::<()>(),
+    )
+    .await
 }
 
-/// Serve the admin API with graceful shutdown support
+/// Serve the admin API with graceful shutdown support.
 pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    require_auth: bool,
+    needs_retry: bool,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let base_router = create_admin_router(conf_mgr, schema_validator);
-    // Add local auth login/me endpoints (before auth middleware so login is accessible)
-    let router_with_auth_routes = api::add_local_auth_routes(base_router, local_auth_config);
-    // Apply unified auth middleware (tries OIDC first, falls back to local)
-    let router_with_auth =
-        api::apply_unified_auth_layer(router_with_auth_routes, auth_config, local_auth_config, "admin_api");
-    let app = api::apply_cors_layer(router_with_auth);
+    let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
+        auth_config,
+        local_auth_config,
+        require_auth,
+        "admin_api",
+    )?;
+    let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
 
-    // Add GET /api/v1/auth/status — public, no auth required (middleware skips /api/v1/auth/*)
-    let auth_status = build_auth_status(local_auth_config, auth_config);
-    let status_router = Router::new().route(
-        "/api/v1/auth/status",
-        get(move || {
-            let status = auth_status.clone();
-            async move { axum::Json(ApiResponse::success(status)) }
-        }),
-    );
-    let app = app.merge(status_router);
+    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
+    // 装配顺序由 compose_admin_routes 内部固定（见其 doc）。
+    let app = api::compose_admin_routes(base_router, auth_state.clone(), local_auth_intent);
+
+    if needs_retry {
+        let auth_state_for_retry = auth_state.clone();
+        let conf_mgr_for_retry = conf_mgr.clone();
+        let fetch: crate::core::common::local_auth::retry::FetchFn = Box::new(move || {
+            let cm = conf_mgr_for_retry.clone();
+            Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
+        });
+        let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
+        // 生产从不 cancel retry（它有自己的 10min 硬超时 + process::exit(1)），
+        // 传一个永不 cancel 的 token 即可。CancellationToken 的 drop-vs-cancel
+        // 语义细节见 `retry.rs` 模块 doc。
+        let retry_shutdown = tokio_util::sync::CancellationToken::new();
+        tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
+            auth_state_for_retry,
+            fetch,
+            std::time::Duration::from_secs(600),
+            exit,
+            retry_shutdown,
+        ));
+    }
 
     tracing::info!(
         component = "admin_api",
         addr = %addr,
-        "Starting Admin API server with graceful shutdown support"
+        "Controller Admin API server listening with unified K8s-style routes"
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -306,4 +297,55 @@ pub async fn serve_with_shutdown(
 
     tracing::info!(component = "admin_api", "Admin API server stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod auth_status_tests {
+    use crate::core::common::local_auth::{AuthStatus, LocalAuthConfig, LocalAuthState};
+    use crate::core::common::unified_auth::UnifiedAuthState;
+
+    fn valid_local() -> LocalAuthConfig {
+        let mut c = LocalAuthConfig::default();
+        c.enabled = true;
+        c.username = "admin".to_string();
+        c.password = "a_long_enough_password_123".to_string();
+        c.jwt_secret = "a_long_enough_jwt_secret_value_abcdef".to_string();
+        c
+    }
+
+    #[test]
+    fn build_auth_status_disabled_when_not_required() {
+        let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
+        let resp = state.build_status();
+        assert!(!resp.auth_required);
+        assert!(resp.active_providers.is_empty());
+        assert_eq!(resp.status, AuthStatus::Disabled);
+    }
+
+    #[test]
+    fn build_auth_status_initializing_when_required_but_no_provider() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        let resp = state.build_status();
+        assert!(resp.auth_required);
+        assert!(resp.active_providers.is_empty());
+        assert_eq!(resp.status, AuthStatus::Initializing);
+    }
+
+    #[test]
+    fn build_auth_status_ready_with_local() {
+        let cfg = valid_local();
+        let state = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test").unwrap();
+        let resp = state.build_status();
+        assert!(resp.auth_required);
+        assert_eq!(resp.active_providers, vec!["local".to_string()]);
+        assert_eq!(resp.status, AuthStatus::Ready);
+    }
+
+    #[test]
+    fn build_auth_status_ready_after_update_local() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        assert_eq!(state.build_status().status, AuthStatus::Initializing);
+        state.update_local(LocalAuthState::from_config(&valid_local()));
+        assert_eq!(state.build_status().status, AuthStatus::Ready);
+    }
 }

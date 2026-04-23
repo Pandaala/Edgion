@@ -4,10 +4,12 @@
 //! Uses reqwest HTTP client internally — no `elasticsearch` crate dependency.
 //! Compatible with Elasticsearch 7.x / 8.x and OpenSearch.
 
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::common::SecretReference;
+use crate::types::resources::common::TlsConfig;
 
 /// Elasticsearch client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -19,11 +21,11 @@ pub struct ElasticsearchClientConfig {
 
     /// Authentication configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth: Option<EsAuth>,
+    pub auth: Option<ElasticsearchAuth>,
 
     /// TLS configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tls: Option<EsTls>,
+    pub tls: Option<TlsConfig>,
 
     /// Timeout configuration (in milliseconds)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,36 +54,32 @@ pub struct ElasticsearchClientConfig {
 
 /// Elasticsearch authentication configuration.
 ///
-/// Supports three modes (pick one):
-/// 1. Basic Auth: username + password (or secretRef with password key)
-/// 2. API Key: api_key_id + api_key_secret (or secretRef)
-/// 3. Bearer Token: bearer_token (or secretRef)
+/// Uses `type` field to select auth method. All methods require a Secret reference.
+/// Inline credentials have been removed (breaking change).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EsAuth {
-    /// Username for basic authentication
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-
-    /// Password for basic authentication
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
-
-    /// API Key ID (for API Key authentication)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_id: Option<String>,
-
-    /// API Key Secret (for API Key authentication)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_secret: Option<String>,
-
-    /// Bearer token (for token-based authentication)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bearer_token: Option<String>,
-
-    /// Secret reference for credentials
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ElasticsearchAuth {
+    /// Basic authentication (username + password in Secret)
+    Basic {
+        #[serde(rename = "secretRef")]
+        secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<Secret>,
+    },
+    /// API Key authentication (apiKeyId + apiKeySecret in Secret)
+    ApiKey {
+        #[serde(rename = "secretRef")]
+        secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<Secret>,
+    },
+    /// Bearer token authentication (bearerToken in Secret)
+    Bearer {
+        #[serde(rename = "secretRef")]
+        secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<Secret>,
+    },
 }
 
 /// Elasticsearch timeout configuration (in milliseconds)
@@ -199,44 +197,6 @@ pub struct EsFailedCacheRedis {
     pub max_entries: Option<u64>,
 }
 
-/// Elasticsearch TLS configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EsTls {
-    /// Enable TLS
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// TLS certificates configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certs: Option<EsTlsCerts>,
-
-    /// Skip certificate verification (insecure, for testing only)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub insecure_skip_verify: Option<bool>,
-}
-
-/// Elasticsearch TLS certificates configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EsTlsCerts {
-    /// CA certificate (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_cert: Option<String>,
-
-    /// Client certificate (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_cert: Option<String>,
-
-    /// Client key (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_key: Option<String>,
-
-    /// Secret reference for certificates
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
-}
-
 /// Elasticsearch compatibility settings
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -301,8 +261,9 @@ endpoints:
   - "https://es-node-1:9200"
   - "https://es-node-2:9200"
 auth:
-  username: "elastic"
-  password: "secret"
+  type: basic
+  secretRef:
+    name: es-creds
 tls:
   enabled: true
   insecureSkipVerify: false
@@ -326,7 +287,12 @@ compatibility:
 "#;
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints.len(), 2);
-        assert_eq!(config.auth.as_ref().unwrap().username.as_deref(), Some("elastic"));
+        match config.auth.as_ref().unwrap() {
+            ElasticsearchAuth::Basic { secret_ref, .. } => {
+                assert_eq!(secret_ref.name, "es-creds");
+            }
+            _ => panic!("Expected Basic auth"),
+        }
         assert!(config.tls.as_ref().unwrap().enabled);
         assert_eq!(config.timeout.as_ref().unwrap().connect, Some(5000));
         assert_eq!(config.bulk.as_ref().unwrap().batch_size, Some(500));
@@ -339,13 +305,17 @@ compatibility:
 endpoints:
   - "https://es:9200"
 auth:
-  apiKeyId: "my-key-id"
-  apiKeySecret: "my-key-secret"
+  type: apiKey
+  secretRef:
+    name: es-api-key
 "#;
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
-        let auth = config.auth.unwrap();
-        assert_eq!(auth.api_key_id.as_deref(), Some("my-key-id"));
-        assert_eq!(auth.api_key_secret.as_deref(), Some("my-key-secret"));
+        match config.auth.unwrap() {
+            ElasticsearchAuth::ApiKey { secret_ref, .. } => {
+                assert_eq!(secret_ref.name, "es-api-key");
+            }
+            _ => panic!("Expected ApiKey auth"),
+        }
     }
 
     #[test]
@@ -354,11 +324,17 @@ auth:
 endpoints:
   - "https://es:9200"
 auth:
-  bearerToken: "my-token-123"
+  type: bearer
+  secretRef:
+    name: es-bearer-token
 "#;
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
-        let auth = config.auth.unwrap();
-        assert_eq!(auth.bearer_token.as_deref(), Some("my-token-123"));
+        match config.auth.unwrap() {
+            ElasticsearchAuth::Bearer { secret_ref, .. } => {
+                assert_eq!(secret_ref.name, "es-bearer-token");
+            }
+            _ => panic!("Expected Bearer auth"),
+        }
     }
 
     #[test]
@@ -394,17 +370,44 @@ compatibility:
     fn test_serde_roundtrip_json() {
         let config = ElasticsearchClientConfig {
             endpoints: vec!["http://localhost:9200".to_string()],
-            auth: Some(EsAuth {
-                username: Some("elastic".to_string()),
-                password: Some("pass".to_string()),
-                api_key_id: None,
-                api_key_secret: None,
-                bearer_token: None,
-                secret_ref: None,
+            auth: Some(ElasticsearchAuth::Basic {
+                secret_ref: SecretReference {
+                    name: "es-creds".to_string(),
+                    namespace: None,
+                },
+                secret: None,
             }),
             ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let _: ElasticsearchClientConfig = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn es_auth_rejects_inline_username() {
+        let yaml = "type: basic\nsecretRef:\n  name: s\nusername: leaked";
+        let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn es_auth_rejects_inline_password() {
+        let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
+        let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn es_auth_rejects_inline_api_key() {
+        let yaml = "type: apiKey\nsecretRef:\n  name: s\napiKeyId: leaked";
+        let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline apiKeyId 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn es_auth_rejects_inline_bearer_token() {
+        let yaml = "type: bearer\nsecretRef:\n  name: s\nbearerToken: leaked";
+        let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline bearerToken 必须被 deny_unknown_fields 拒绝");
     }
 }

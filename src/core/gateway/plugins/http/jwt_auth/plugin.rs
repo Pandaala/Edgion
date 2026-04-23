@@ -19,10 +19,33 @@ use crate::types::resources::edgion_plugins::{JwtAlgorithm, JwtAuthConfig};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 
 type JwtAuthError = Box<dyn std::error::Error + Send + Sync>;
 type JwtAuthResult<T> = Result<T, JwtAuthError>;
+
+/// Maximum size for a single JWT claim header value propagated upstream (8KB).
+const MAX_JWT_CLAIM_HEADER_VALUE_BYTES: usize = 8 * 1024;
+/// Maximum aggregate size of all JWT claim headers propagated upstream (64KB).
+const MAX_JWT_CLAIM_TOTAL_HEADER_BYTES: usize = 64 * 1024;
+
+/// Classify jsonwebtoken decode error into a short PluginLog tag.
+/// Tag is a static kind label — no token or claim contents.
+fn classify_jwt_decode_error(err: &jsonwebtoken::errors::Error) -> &'static str {
+    match err.kind() {
+        ErrorKind::ExpiredSignature => "Deny token expired",
+        ErrorKind::InvalidSignature => "Deny invalid signature",
+        ErrorKind::InvalidToken | ErrorKind::Base64(_) | ErrorKind::Json(_) | ErrorKind::Utf8(_) => {
+            "Deny malformed token"
+        }
+        ErrorKind::InvalidIssuer => "Deny invalid issuer",
+        ErrorKind::InvalidAudience => "Deny invalid audience",
+        ErrorKind::ImmatureSignature => "Deny immature token",
+        ErrorKind::InvalidAlgorithm | ErrorKind::InvalidAlgorithmName => "Deny bad algorithm",
+        _ => "Deny invalid token",
+    }
+}
 
 /// Token source for hide_credentials
 #[derive(Debug, Clone, Copy)]
@@ -313,15 +336,28 @@ impl JwtAuth {
         }
     }
 
-    /// Verify token and return username
-    fn verify_token(&self, token: &str) -> JwtAuthResult<VerifyResult> {
-        let credentials = self.load_credentials()?;
+    /// Verify token and return username.
+    /// On failure, pushes a `Deny <kind>; ` or `err: <kind>; ` tag to `plugin_log` before returning.
+    fn verify_token(&self, token: &str, plugin_log: &mut PluginLog) -> JwtAuthResult<VerifyResult> {
+        let credentials = self.load_credentials().inspect_err(|_| {
+            plugin_log.push_err("credentials load fail");
+        })?;
         let expected_alg = Self::to_jwt_algorithm(self.config.algorithm);
+        // §3: algorithm selection
+        if Self::is_symmetric(self.config.algorithm) {
+            plugin_log.push("alg symmetric");
+        } else {
+            plugin_log.push("alg asymmetric");
+        }
 
         // Always verify algorithm from JWT header matches configured algorithm
         // This prevents algorithm confusion attacks (e.g., "alg": "none")
-        let header = decode_header(token).map_err(|e| format!("Invalid JWT header: {}", e))?;
+        let header = decode_header(token).map_err(|e| {
+            plugin_log.push("Deny malformed token");
+            format!("Invalid JWT header: {}", e)
+        })?;
         if header.alg != expected_alg {
+            plugin_log.push("Deny bad algorithm");
             return Err(format!(
                 "Algorithm mismatch: expected {:?}, got {:?}",
                 self.config.algorithm, header.alg
@@ -353,7 +389,9 @@ impl JwtAuth {
         }
 
         let decoding_key = match &credentials {
-            Credentials::Single(cred) => self.build_decoding_key(cred)?,
+            Credentials::Single(cred) => self.build_decoding_key(cred).inspect_err(|_| {
+                plugin_log.push_err("bad credential key");
+            })?,
             Credentials::Multi(map) => {
                 // For multi-key, we need to peek at the payload to get key_claim_name value
                 // Decode without verification to get payload
@@ -364,34 +402,45 @@ impl JwtAuth {
                 no_verify.validate_aud = false;
                 no_verify.set_required_spec_claims::<&str>(&[]);
 
-                let token_data = decode::<Claims>(token, &DecodingKey::from_secret(&[]), &no_verify)
-                    .map_err(|e| format!("Failed to decode JWT payload: {}", e))?;
+                let token_data = decode::<Claims>(token, &DecodingKey::from_secret(&[]), &no_verify).map_err(|e| {
+                    plugin_log.push("Deny malformed token");
+                    format!("Failed to decode JWT payload: {}", e)
+                })?;
                 let claims_value = token_data.claims.to_value();
 
                 let key_value = claims_value
                     .get(&self.config.key_claim_name)
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
+                        plugin_log.push("Deny missing claim");
                         format!(
                             "JWT payload missing '{}' claim for key lookup",
                             self.config.key_claim_name
                         )
                     })?;
 
-                let cred = map
-                    .get(key_value)
-                    .ok_or_else(|| format!("Unknown key '{}' in JWT", key_value))?;
+                let cred = map.get(key_value).ok_or_else(|| {
+                    // Use a generic failure tag so external observers cannot distinguish
+                    // "key not found" from "key found but signature invalid" (key enumeration).
+                    plugin_log.push("Deny invalid credentials");
+                    format!("Unknown key '{}' in JWT", key_value)
+                })?;
+                // §3: key resolved from multi-key map
+                plugin_log.push("multi key resolved");
 
-                self.build_decoding_key(cred)?
+                self.build_decoding_key(cred).inspect_err(|_| {
+                    plugin_log.push_err("bad credential key");
+                })?
             }
             Credentials::None => {
+                plugin_log.push_err("no credentials configured");
                 return Err("No credentials configured (secret_ref or secret_refs required)".into());
             }
         };
 
         // Verify signature and claims
         let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|e| {
-            tracing::debug!("JWT verification failed: {}", e);
+            plugin_log.push(classify_jwt_decode_error(&e));
             JwtAuthError::from(anyhow!("Invalid token"))
         })?;
         let claims_value = token_data.claims.to_value();
@@ -405,6 +454,7 @@ impl JwtAuth {
                     .as_secs();
                 let max_allowed_exp = now + self.config.maximum_expiration;
                 if exp > max_allowed_exp {
+                    plugin_log.push("Deny exp too far");
                     return Err(format!(
                         "Token expiration too far in future: {} > {} (max {}s)",
                         exp, max_allowed_exp, self.config.maximum_expiration
@@ -439,8 +489,15 @@ impl JwtAuth {
     /// Set headers from JWT claims based on claims_to_headers configuration
     fn set_claims_headers(&self, session: &mut dyn PluginSession, claims: &serde_json::Value) {
         if let Some(ref mapping) = self.config.claims_to_headers {
-            // Keep existing jwt_auth behavior by not enforcing header size limits here.
-            set_common_claims_headers(session, claims, mapping, usize::MAX, usize::MAX);
+            // Enforce hardcoded size limits to prevent a valid JWT from injecting arbitrarily
+            // large claim values into upstream headers.
+            set_common_claims_headers(
+                session,
+                claims,
+                mapping,
+                MAX_JWT_CLAIM_HEADER_VALUE_BYTES,
+                MAX_JWT_CLAIM_TOTAL_HEADER_BYTES,
+            );
         }
     }
 
@@ -448,7 +505,7 @@ impl JwtAuth {
     /// Sets X-Anonymous-Consumer and X-Consumer-Username headers.
     fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
-            plugin_log.push(&format!("Anon={}; ", anonymous));
+            plugin_log.push(&format!("Anon={}", anonymous));
             let _ = session.set_request_header("X-Anonymous-Consumer", "true");
             let _ = session.set_request_header("X-Consumer-Username", anonymous);
             return true;
@@ -475,12 +532,18 @@ impl JwtAuth {
         }
     }
 
-    /// Hide credentials based on token source
+    /// Hide credentials based on token source.
     ///
-    /// Note: Only header-based tokens can be fully hidden.
-    /// Query parameter and cookie tokens cannot be removed from the upstream request
-    /// due to HTTP protocol limitations (would require URI/Cookie header rewriting).
-    fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession, source: TokenSource) {
+    /// Only header-based tokens can be fully hidden. Query parameter and cookie tokens
+    /// cannot be removed from the upstream request due to HTTP protocol limitations
+    /// (would require URI/Cookie header rewriting). In those cases a short PluginLog
+    /// tag surfaces the limitation via access log.
+    fn hide_credentials_if_needed(
+        &self,
+        session: &mut dyn PluginSession,
+        source: TokenSource,
+        plugin_log: &mut PluginLog,
+    ) {
         if !self.config.hide_credentials {
             return;
         }
@@ -489,20 +552,10 @@ impl JwtAuth {
                 let _ = session.remove_request_header(&self.config.header);
             }
             TokenSource::Query => {
-                // Query parameter removal requires URI rewriting which is complex
-                // Log a warning so users know this limitation
-                tracing::warn!(
-                    "hide_credentials: JWT in query parameter '{}' cannot be hidden (use header instead)",
-                    self.config.query
-                );
+                plugin_log.push("Skip hide query");
             }
             TokenSource::Cookie => {
-                // Cookie removal requires Cookie header rewriting which is complex
-                // Log a warning so users know this limitation
-                tracing::warn!(
-                    "hide_credentials: JWT in cookie '{}' cannot be hidden (use header instead)",
-                    self.config.cookie
-                );
+                plugin_log.push("Skip hide cookie");
             }
         }
     }
@@ -517,9 +570,18 @@ impl RequestFilter for JwtAuth {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Extract token
         let (token, source) = match self.extract_token(session) {
-            Some(t) => t,
+            Some(t) => {
+                // §3: key source
+                let src_tag = match t.1 {
+                    TokenSource::Header => "token from header",
+                    TokenSource::Query => "token from query",
+                    TokenSource::Cookie => "token from cookie",
+                };
+                plugin_log.push(src_tag);
+                t
+            }
             None => {
-                plugin_log.push("No token; ");
+                plugin_log.push("No token");
                 // Check anonymous
                 if self.handle_anonymous_access(session, plugin_log) {
                     return PluginRunningResult::GoodNext;
@@ -532,21 +594,20 @@ impl RequestFilter for JwtAuth {
         };
 
         // Verify token
-        match self.verify_token(&token) {
+        match self.verify_token(&token, plugin_log) {
             Ok(result) => {
-                plugin_log.push(&format!("OK u={}; ", result.username));
+                plugin_log.push(&format!("OK u={}", result.username));
                 // Set claims to headers if configured
                 self.set_claims_headers(session, &result.claims);
                 // Store claims in context if configured
                 if let Some(ref claims_json) = result.claims_json {
                     let _ = session.set_ctx_var("jwt_claims", claims_json);
                 }
-                self.hide_credentials_if_needed(session, source);
+                self.hide_credentials_if_needed(session, source, plugin_log);
                 PluginRunningResult::GoodNext
             }
-            Err(e) => {
-                tracing::debug!("JWT auth failed: {}", e);
-                plugin_log.push("FAIL; ");
+            Err(_) => {
+                // Specific `Deny <kind>; ` or `err: <kind>; ` tag was already pushed inside verify_token.
                 // Token present but invalid/expired — always reject, never allow anonymous
                 self.apply_auth_failure_delay().await;
                 let _ = self.auth_failed_return(session).await;
@@ -1341,5 +1402,71 @@ mod tests {
         let r = auth.run_request(&mut mock, &mut log).await;
         assert_eq!(r, PluginRunningResult::GoodNext);
         assert!(log.contains("OK u=cookie-user"));
+    }
+
+    /// Assert that no base64url segment of the token appears verbatim in serialized log.
+    fn assert_no_token_leak(log: &PluginLog, token: &str) {
+        let serialized = serde_json::to_string(log).expect("PluginLog serialize");
+        // A non-empty base64url segment is at least a few characters; skip very short
+        // segments to avoid accidental false positives on common substrings.
+        for segment in token.split('.').filter(|s| s.len() >= 6) {
+            assert!(
+                !serialized.contains(segment),
+                "PluginLog leaked token segment `{}` in `{}`",
+                segment,
+                serialized
+            );
+        }
+    }
+
+    async fn run_and_assert_reject(auth: JwtAuth, token: &str) -> PluginLog {
+        let mut mock = MockPluginSession::new();
+        let mut log = PluginLog::new("JwtAuth");
+        mock.expect_method().returning(|| "GET".to_string());
+        let token_clone = token.to_string();
+        mock.expect_header_value()
+            .returning(move |_| Some(format!("Bearer {}", token_clone)));
+        mock.expect_get_query_param().returning(|_| None);
+        mock.expect_get_cookie().returning(|_| None);
+        mock.expect_write_response_header().returning(|_, _| Ok(()));
+        mock.expect_write_response_body().returning(|_, _| Ok(()));
+        mock.expect_shutdown().returning(|| {});
+
+        let r = auth.run_request(&mut mock, &mut log).await;
+        assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
+        log
+    }
+
+    #[tokio::test]
+    async fn test_kind_tag_expired() {
+        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
+        let claims = json!({ "sub": "user123", "iat": now_ts() - 7200, "exp": now_ts() - 3600 });
+        let token = generate_hs256_token(claims, TEST_SECRET);
+
+        let log = run_and_assert_reject(auth, &token).await;
+        assert!(log.contains("Deny token expired"));
+        assert!(log.contains("FAIL"));
+        assert_no_token_leak(&log, &token);
+    }
+
+    #[tokio::test]
+    async fn test_kind_tag_invalid_sig() {
+        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
+        let claims = json!({ "sub": "user123", "exp": now_ts() + 3600 });
+        let token = generate_hs256_token(claims, "wrong-secret-for-signature-verification-test-padding");
+
+        let log = run_and_assert_reject(auth, &token).await;
+        assert!(log.contains("Deny invalid signature"));
+        assert_no_token_leak(&log, &token);
+    }
+
+    #[tokio::test]
+    async fn test_kind_tag_malformed() {
+        let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
+        let token = "not.a.valid-jwt".to_string();
+
+        let log = run_and_assert_reject(auth, &token).await;
+        assert!(log.contains("Deny malformed"));
+        assert_no_token_leak(&log, &token);
     }
 }

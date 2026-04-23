@@ -97,8 +97,7 @@ pub struct AccessLogger {
 | `edgion_backend_requests_total` | Counter | 后端请求总数（按后端分组） |
 | `edgion_gateway_request_bytes_total` | Counter | 网关请求字节数 |
 | `edgion_gateway_response_bytes_total` | Counter | 网关响应字节数 |
-| `edgion_mirror_requests_total` | Counter | 镜像请求数 |
-| `edgion_mirror_duration_ms` | Histogram | 镜像请求耗时 |
+| `edgion_mirror_requests_total` | Counter | 镜像请求数（`status` label 细分 `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`；mirror 是 fire-and-forget，per-request latency 查 mirror access log `et` 字段，不再以 histogram 暴露） |
 | `edgion_controller_connected_gateways` | Gauge | 已连接的网关实例数 |
 | `edgion_controller_schema_validation_errors_total` | Counter | Schema 验证错误数 |
 

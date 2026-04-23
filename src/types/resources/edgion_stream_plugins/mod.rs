@@ -15,16 +15,18 @@ use std::sync::Arc;
 use crate::core::gateway::plugins::{StreamPluginRuntime, TlsRoutePluginRuntime};
 
 // Submodules
+pub mod connection_ip_restriction_rules;
 pub mod stream_plugins;
 pub mod tls_route_plugins;
 
 // Re-exports from edgion_plugins
 pub use crate::types::resources::edgion_plugins::PluginEntry;
-pub use stream_plugins::EdgionStreamPlugin;
+pub use connection_ip_restriction_rules::ConnectionIpRestrictionRules;
+pub use stream_plugins::{EdgionStreamPlugin, GlobalConnectionIpRestrictionEntry};
 pub use tls_route_plugins::TlsRouteStreamPlugin;
 
 // Re-export plugin configs
-pub use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
+pub use crate::types::resources::edgion_plugins::DefaultAction;
 
 /// API group for EdgionStreamPlugins
 pub const EDGION_STREAM_PLUGINS_GROUP: &str = "edgion.io";
@@ -164,7 +166,8 @@ impl EdgionStreamPlugins {
     /// Initialize Stage 1 (ConnectionFilter) plugin runtime from `plugins`.
     pub fn init_stream_plugin_runtime(&mut self) {
         if let Some(plugins) = &self.spec.plugins {
-            self.spec.stream_plugin_runtime = Arc::new(StreamPluginRuntime::from_stream_plugins(plugins));
+            let ns = self.metadata.namespace.as_deref().unwrap_or("default");
+            self.spec.stream_plugin_runtime = Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns));
         }
     }
 

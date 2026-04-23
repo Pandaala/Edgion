@@ -52,7 +52,7 @@ pub(super) async fn run_tls_route_plugins(
     // Prefer Stage 2 (TlsRoute) runtime
     let tls_runtime = &resource.spec.tls_route_plugin_runtime;
     if !tls_runtime.is_empty() {
-        let tls_ctx = TlsRouteContext {
+        let mut tls_ctx = TlsRouteContext {
             client_ip,
             listener_port,
             sni: sni.to_string(),
@@ -67,8 +67,9 @@ pub(super) async fn run_tls_route_plugins(
                     name: String::new(),
                 }),
             is_mtls,
+            log: crate::core::gateway::observe::logs::LogBuffer::new(),
         };
-        return match tls_runtime.run(&tls_ctx).await {
+        return match tls_runtime.run(&mut tls_ctx).await {
             StreamPluginResult::Allow => {
                 ctx.push_log("tls route plugin allowed");
                 true

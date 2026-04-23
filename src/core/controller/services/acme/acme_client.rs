@@ -22,6 +22,7 @@ use instant_acme::{
     NewOrder,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
+use zeroize::Zeroizing;
 
 use crate::types::resources::edgion_acme::AcmeKeyType;
 
@@ -34,8 +35,8 @@ pub struct AcmeClient {
 pub struct AcmeCertificateResult {
     /// PEM-encoded certificate chain
     pub certificate_pem: String,
-    /// PEM-encoded private key
-    pub private_key_pem: String,
+    /// PEM-encoded private key (zeroized on drop)
+    pub private_key_pem: Zeroizing<String>,
 }
 
 /// Pending HTTP-01 challenge information
@@ -404,7 +405,7 @@ impl AcmeClient {
 
         Ok(AcmeCertificateResult {
             certificate_pem,
-            private_key_pem,
+            private_key_pem: Zeroizing::new(private_key_pem),
         })
     }
 }

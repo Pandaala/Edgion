@@ -1,14 +1,16 @@
-# RegionRoute - main config with all three route rules:
-#   RouteByDirectRegion (X-Direct-Region header)
-#   RouteByKeyConfMatch (vip-va/vip-oh → virginia/ohio)
-#   RouteByHashRange    (CRC32 of X-Account-Id / account_id cookie)
+# RegionRoute - main config using ServiceRegionRoute PluginMetaData
 #
-# hashCalc.modulo=1000, hashRange [0,999], 1000 slots, split 60/40
-# writeBack: computed hash → X-Region-Hash response header
+# All routing config comes from the ServiceRegionRoute PluginMetaData "region-route-main",
+# which in turn references the ClusterRegionRoute PluginMetaData "global-region-conf" via clusterRef.
 #
-# Two regions using loopback IP endpoints (avoids DNS dependency in tests):
-#   virginia: 127.0.0.1:30001  hashRange [0, 599]  (600/1000 = 60%)
-#   ohio:     127.0.0.1:30002  hashRange [600, 999] (400/1000 = 40%)
+# This tests the full PluginMetaData resolve flow:
+#   1. Controller resolves serviceRegionRouteRef → loads ServiceRegionRoute PluginMetaData
+#   2. ServiceRegionRoute PluginMetaData's clusterRef → loads ClusterRegionRoute PluginMetaData for topology + routing rules
+#   3. Gateway receives the merged config with route rules + matchMap
+#
+# Two regions (from ClusterRegionRoute PluginMetaData):
+#   virginia: 127.0.0.1:30001  hashRange [0, 599]  (60%)
+#   ohio:     127.0.0.1:30002  hashRange [600, 999] (40%)
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -18,39 +20,4 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        baseInfo:
-          serviceGroup: "region-route-test"
-          cluster: "test"
-          regions:
-            - name: virginia
-              hashRange: [0, 599]
-              backendEndpoint: "127.0.0.1:30001"
-              tls: false
-            - name: ohio
-              hashRange: [600, 999]
-              backendEndpoint: "127.0.0.1:30002"
-              tls: false
-        keyGet:
-          - type: header
-            name: X-Account-Id
-          - type: cookie
-            name: account_id
-        hashKeyGet:
-          - type: cookie
-            name: x_region_hash
-        hashCalc:
-          algorithm: crc32
-          modulo: 1000
-          writeBack:
-            - type: responseHeader
-              name: X-Region-Hash
-        routeRules:
-          - type: RouteByDirectRegion
-            keyFrom:
-              - type: header
-                name: X-Direct-Region
-          - type: RouteByKeyConfMatch
-            matchMap:
-              "vip-va": virginia
-              "vip-oh": ohio
-          - type: RouteByHashRange
+        serviceRegionRouteRef: "region-route-main"

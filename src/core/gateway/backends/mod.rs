@@ -21,7 +21,7 @@ pub use validation::validate_endpoint_in_route;
 
 use std::sync::OnceLock;
 
-use crate::core::common::utils::net::is_localhost;
+use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReason};
 use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::edgion_status::EdgionStatus;
@@ -299,11 +299,6 @@ pub(crate) fn resolve_target_port(
     };
 
     let Some(svc_port_entry) = svc_ports.iter().find(|p| p.port == br_port_val) else {
-        tracing::warn!(
-            service_key = %service_key,
-            br_port = br_port_val,
-            "backendRef.port does not match any Service port"
-        );
         return;
     };
 
@@ -319,12 +314,6 @@ pub(crate) fn resolve_target_port(
             if let Some(target_port) = target {
                 let current_port = addr.as_inet().map(|a| a.port()).unwrap_or(0);
                 if current_port != target_port {
-                    tracing::debug!(
-                        service_key = %service_key,
-                        from_port = current_port,
-                        to_port = target_port,
-                        "Resolved targetPort from Service spec"
-                    );
                     addr.set_port(target_port);
                 }
             }
@@ -332,6 +321,8 @@ pub(crate) fn resolve_target_port(
         return;
     }
 
+    // SAFETY: the early-return at L310 (`name.as_deref().map_or(true, |n| n.is_empty())`)
+    // ensures `name` is `Some` and non-empty whenever we reach here.
     let port_name = svc_port_entry.name.as_deref().unwrap();
 
     let use_endpoint_slice = match source {
@@ -373,21 +364,8 @@ pub(crate) fn resolve_target_port(
     if let Some(target_port) = resolved {
         let current_port = addr.as_inet().map(|a| a.port()).unwrap_or(0);
         if current_port != target_port {
-            tracing::debug!(
-                service_key = %service_key,
-                port_name = port_name,
-                from_port = current_port,
-                to_port = target_port,
-                "Resolved targetPort for multi-port Service"
-            );
             addr.set_port(target_port);
         }
-    } else {
-        tracing::warn!(
-            service_key = %service_key,
-            port_name = port_name,
-            "Could not resolve targetPort by port name in endpoint resources"
-        );
     }
 }
 
@@ -762,20 +740,22 @@ fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool, sni: &str)
     }
 }
 
-/// Validate backend address for security
+/// Validate backend address for security.
 ///
-/// Rejects localhost connections to prevent SSRF attacks.
+/// Rejects:
+/// - Loopback (`127.0.0.0/8`, `::1`) — typical SSRF-to-host
+/// - Link-local (`169.254.0.0/16`, `fe80::/10`) — covers cloud metadata (`169.254.169.254`)
+///
+/// RFC1918 private ranges are **not** blocked; cluster-internal pod/service IPs live there.
+/// Failure is surfaced via `EdgionStatus` (→ access log); deployments should also layer
+/// a NetworkPolicy egress rule on the Gateway Pod as primary defense.
 #[inline]
-fn validate_backend_addr(addr: &SocketAddr, service_key: &str) -> Result<(), EdgionStatus> {
-    if is_localhost(addr) {
-        tracing::error!(
-            addr = %addr,
-            service_key = %service_key,
-            "Rejected localhost backend for security reasons"
-        );
-        return Err(EdgionStatus::BackendLocalhostNotAllowed);
+fn validate_backend_addr(addr: &SocketAddr) -> Result<(), EdgionStatus> {
+    match classify_backend_addr(addr) {
+        None => Ok(()),
+        Some(BlockedBackendReason::Localhost) => Err(EdgionStatus::BackendLocalhostNotAllowed),
+        Some(BlockedBackendReason::LinkLocal) => Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
     }
-    Ok(())
 }
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
@@ -918,8 +898,8 @@ pub(crate) fn try_get_peer(
                 .parse::<SocketAddr>()
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
 
-            // Security check: reject localhost connections
-            validate_backend_addr(&addr, &service_key)?;
+            // Security check: reject loopback / link-local / metadata (SSRF defense)
+            validate_backend_addr(&addr)?;
 
             // Extract TLS configuration and record to upstream
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
@@ -959,8 +939,8 @@ pub(crate) fn try_get_peer(
                 .parse::<SocketAddr>()
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
 
-            // Security check: reject localhost connections
-            validate_backend_addr(&addr, &service_key)?;
+            // Security check: reject loopback / link-local / metadata (SSRF defense)
+            validate_backend_addr(&addr)?;
 
             // Extract TLS configuration and record to upstream
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
@@ -971,15 +951,9 @@ pub(crate) fn try_get_peer(
             Ok(peer)
         }
 
-        EdgionService::ServiceImport => {
-            tracing::warn!(service_key = %service_key, "ServiceImport is not yet implemented");
-            Err(EdgionStatus::BackendServiceImportNotImplemented)
-        }
+        EdgionService::ServiceImport => Err(EdgionStatus::BackendServiceImportNotImplemented),
 
-        EdgionService::Unsupported(ref kind) => {
-            tracing::error!(service_key = %service_key, kind = %kind, "Unsupported backend kind");
-            Err(EdgionStatus::BackendUnsupportedKind)
-        }
+        EdgionService::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
 
         EdgionService::ServiceEndpoint => {
             let backend = select_from_endpoints(&service_key, lb_policy, session)?;

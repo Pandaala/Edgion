@@ -173,6 +173,14 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 - `start_all_with_conf.sh` 导出 `EDGION_WORK_DIR`，使自动认证路径可达
 - CI/测试环境无需任何手动 `edgion-cli login` 步骤
 
+### Center 无认证配置回归测试
+
+`examples/test/scripts/integration/test_center_no_auth.sh` 是一个独立自包含的集成层回归，
+验证 Center 在无 `[local_auth]` + 无 `[auth]` 时：server 启动成功、`/health` 与
+`/api/v1/auth/status` 返回 200、`/api/v1/controllers` 等业务路径返回 503（fail-close）、
+启动日志包含 `No authentication configured` WARN。作为 fix #01 bug 1/4 + Task 4 fix 的
+结构性回归被纳入 `run_integration.sh` 的前置检查，不依赖 Controller/Gateway/test_server 环境。
+
 ## 容易踩坑的地方
 
 - YAML 在 `examples/test/conf/` 写了，但 `test_client.rs` 没注册，结果用例根本没跑到

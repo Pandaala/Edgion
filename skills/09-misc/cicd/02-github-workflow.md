@@ -56,7 +56,7 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
 如果你改它，要把它当成“共享基础设施”而不是某个 job 的私有脚本：
 
 - 改缓存路径或 key 时，要同时考虑 `ci.yml` 和 `build-image.yml`
-- 改依赖列表时，要核对 [../../build.rs](../../build.rs) 和 Docker builder 依赖是否仍然一致
+- 改依赖列表时，要核对 [../../../build.rs](../../../build.rs) 和 Docker builder 依赖是否仍然一致
 - 改 toolchain/component/target 输入时，要保证 `fmt`、`clippy`、交叉编译都还能表达
 
 ## 当前 release 工作流

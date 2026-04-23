@@ -16,6 +16,8 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::RwLock;
 
+use crate::core::gateway::link_sys::credential::CredentialState;
+use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::resources::link_sys::etcd::EtcdClientConfig;
 
 use super::config_mapping::{build_connect_options, default_connect_options};
@@ -31,6 +33,8 @@ pub struct EtcdLinkClient {
     client: Arc<RwLock<Option<etcd_client::Client>>>,
     /// Original config (kept for reconnection)
     config: EtcdClientConfig,
+    /// Basic auth from LinkSys runtime (reconnect)
+    auth_basic: Option<BasicAuthMaterial>,
     /// Parsed endpoints (kept for reconnection)
     endpoints: Vec<String>,
     /// Human-readable name ("namespace/name")
@@ -56,16 +60,41 @@ impl std::fmt::Debug for EtcdLinkClient {
 
 impl EtcdLinkClient {
     /// Create from CRD config. Does NOT connect — call `init()` next.
-    pub fn from_config(name: &str, config: &EtcdClientConfig) -> Result<Self> {
+    ///
+    /// Dispatch is expected to filter out `Pending` / `Invalid` states by
+    /// checking `auth.is_buildable() && credential::tls_ready(ls)` before
+    /// calling; reaching this function with a non-buildable state is treated
+    /// as an internal bug and fails fast.
+    pub fn from_config(
+        name: &str,
+        config: &EtcdClientConfig,
+        auth: &CredentialState<BasicAuthMaterial>,
+    ) -> Result<Self> {
         if config.endpoints.is_empty() {
             anyhow::bail!("Etcd endpoints list is empty for '{}'", name);
         }
+
+        // Extract the owned material for the reconnect path. `NotRequired` /
+        // `Resolved` are the only states we expect here; anything else would
+        // have been filtered out by the dispatcher.
+        let auth_basic = match auth {
+            CredentialState::NotRequired => None,
+            CredentialState::Resolved(m) => Some(m.clone()),
+            CredentialState::Pending | CredentialState::Invalid(_) => {
+                anyhow::bail!(
+                    "Etcd [{}] from_config called with non-buildable credential state: {:?}",
+                    name,
+                    auth
+                );
+            }
+        };
 
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
 
         Ok(Self {
             client: Arc::new(RwLock::new(None)),
             config: config.clone(),
+            auth_basic,
             endpoints: config.endpoints.clone(),
             name: name.to_string(),
             healthy: Arc::new(AtomicBool::new(false)),
@@ -74,13 +103,24 @@ impl EtcdLinkClient {
         })
     }
 
+    /// Rebuild a `CredentialState` from the stored material.
+    ///
+    /// Used by `init()` / reconnect to feed `build_connect_options` which now
+    /// takes `&CredentialState<_>`. Since we only ever store the result of a
+    /// `NotRequired` or `Resolved` state, the reconstruction round-trips.
+    fn auth_state(&self) -> CredentialState<BasicAuthMaterial> {
+        match &self.auth_basic {
+            Some(m) => CredentialState::Resolved(m.clone()),
+            None => CredentialState::NotRequired,
+        }
+    }
+
     /// Initialize connection and start background health monitor.
     ///
     /// Sets up the etcd connection and spawns a background task that monitors
     /// connection health and reconnects with exponential backoff on failure.
     pub async fn init(&self) -> Result<()> {
-        // Build connect options from CRD config
-        let options = build_connect_options(&self.config)?;
+        let options = build_connect_options(&self.config, &self.auth_state())?;
 
         // If no options were configured, use defaults (with dial timeout)
         let connect_options = options.unwrap_or_else(default_connect_options);
@@ -111,6 +151,7 @@ impl EtcdLinkClient {
     fn start_health_monitor(&self) {
         let client = self.client.clone();
         let config = self.config.clone();
+        let auth_state = self.auth_state();
         let endpoints = self.endpoints.clone();
         let name = self.name.clone();
         let healthy = self.healthy.clone();
@@ -158,7 +199,7 @@ impl EtcdLinkClient {
                     );
 
                     // Attempt reconnect
-                    let options = build_connect_options(&config).ok().flatten();
+                    let options = build_connect_options(&config, &auth_state).ok().flatten();
                     let connect_options = options.unwrap_or_else(default_connect_options);
                     match etcd_client::Client::connect(&endpoints, Some(connect_options)).await {
                         Ok(new_client) => {
@@ -253,10 +294,14 @@ mod tests {
         }
     }
 
+    fn no_auth() -> CredentialState<BasicAuthMaterial> {
+        CredentialState::NotRequired
+    }
+
     #[test]
     fn test_from_config_minimal() {
         let config = minimal_config();
-        let client = EtcdLinkClient::from_config("default/etcd-test", &config);
+        let client = EtcdLinkClient::from_config("default/etcd-test", &config, &no_auth());
         assert!(client.is_ok());
         let client = client.unwrap();
         assert_eq!(client.name(), "default/etcd-test");
@@ -270,7 +315,7 @@ mod tests {
             namespace: Some("/app/".to_string()),
             ..minimal_config()
         };
-        let client = EtcdLinkClient::from_config("default/etcd-ns", &config).unwrap();
+        let client = EtcdLinkClient::from_config("default/etcd-ns", &config, &no_auth()).unwrap();
         assert_eq!(client.namespace(), Some("/app/"));
         assert_eq!(client.full_key("mykey"), "/app/mykey");
     }
@@ -278,7 +323,7 @@ mod tests {
     #[test]
     fn test_from_config_without_namespace() {
         let config = minimal_config();
-        let client = EtcdLinkClient::from_config("default/etcd-test", &config).unwrap();
+        let client = EtcdLinkClient::from_config("default/etcd-test", &config, &no_auth()).unwrap();
         assert_eq!(client.full_key("mykey"), "mykey");
     }
 
@@ -288,8 +333,18 @@ mod tests {
             endpoints: vec![],
             ..minimal_config()
         };
-        let result = EtcdLinkClient::from_config("test", &config);
+        let result = EtcdLinkClient::from_config("test", &config, &no_auth());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    /// Defence-in-depth: `from_config` must refuse `Pending` / `Invalid` even
+    /// though dispatch normally filters these out up-front.
+    #[test]
+    fn test_from_config_pending_state_fails_fast() {
+        let config = minimal_config();
+        let result = EtcdLinkClient::from_config("default/etcd-test", &config, &CredentialState::Pending);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("non-buildable"));
     }
 }

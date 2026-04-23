@@ -326,7 +326,11 @@ impl RestrictionRule {
             if patterns.is_empty() {
                 return Err("'allowRegex' list cannot be empty".to_string());
             }
-            let combined = patterns.join("|");
+            let combined = patterns
+                .iter()
+                .map(|p| format!("({})", p))
+                .collect::<Vec<_>>()
+                .join("|");
             self.allow_compiled_regex = Some(Regex::new(&combined).map_err(|e| format!("Invalid allowRegex: {}", e))?);
         }
 
@@ -349,7 +353,11 @@ impl RestrictionRule {
             if patterns.is_empty() {
                 return Err("'denyRegex' list cannot be empty".to_string());
             }
-            let combined = patterns.join("|");
+            let combined = patterns
+                .iter()
+                .map(|p| format!("({})", p))
+                .collect::<Vec<_>>()
+                .join("|");
             self.deny_compiled_regex = Some(Regex::new(&combined).map_err(|e| format!("Invalid denyRegex: {}", e))?);
         }
 

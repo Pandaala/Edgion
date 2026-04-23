@@ -1,32 +1,53 @@
 //! Admin HTTP API for edgion-center.
 //!
 //! Routes:
-//!   GET  /health                              → health check
-//!   GET  /ready                               → readiness check
-//!   GET  /api/v1/server-info                  → {"mode":"center"}
-//!   GET  /api/v1/controllers                  → list all controller summaries
-//!   GET  /api/v1/clusters                     → list distinct cluster names
-//!   GET  /api/v1/resources                    → list resource keys (query: cluster=, kind=)
-//!   POST /api/v1/controllers/{id}/reload      → send reload command
-//!   GET  /api/v1/center/region-routes         → aggregated region-route keys from all controllers
-//!   GET  /api/v1/center/region-routes/{sg}/{cluster}/{ns} → aggregated region-route detail
-//!   ANY  /api/v1/proxy/{controller_id}/*rest  → proxy HTTP request to controller
+//!   GET  /health                                          → health check
+//!   GET  /ready                                           → readiness check
+//!   GET  /api/v1/server-info                              → {"mode":"center"}
+//!   GET  /api/v1/controllers                              → list all controller summaries
+//!   GET  /api/v1/clusters                                 → list distinct cluster names
+//!   GET  /api/v1/resources                                → list resource keys (query: cluster=, kind=)
+//!   POST /api/v1/controllers/{id}/reload                  → send reload command
+//!   GET  /api/v1/center/cluster-region-routes                      → aggregated ClusterRegionRoute list from MetaDataStore
+//!   GET  /api/v1/center/service-region-routes                      → aggregated ServiceRegionRoute list from MetaDataStore
+//!   POST /api/v1/center/cluster-region-routes/failover             → fan-out failover to all online controllers (new-URL path)
+//!   POST /api/v1/center/service-region-routes/failover             → fan-out failover to all online controllers (new-URL path)
+//!   GET  /api/v1/center/cluster-region-routes/consistency          → consistency detection across controllers
+//!   GET  /api/v1/center/service-region-routes/consistency          → consistency detection across controllers
+//!   GET    /api/v1/center/global-connection-ip-restrictions                        → aggregated GlobalConnectionIpRestriction list from MetaDataStore
+//!   POST   /api/v1/center/global-connection-ip-restrictions                        → create/upsert GlobalConnectionIpRestriction (fan-out PUT to target controllers)
+//!   GET    /api/v1/center/global-connection-ip-restrictions/{ns}/{name}            → single GlobalConnectionIpRestriction detail
+//!   PUT    /api/v1/center/global-connection-ip-restrictions/{ns}/{name}            → update GlobalConnectionIpRestriction (fan-out PUT to target controllers)
+//!   DELETE /api/v1/center/global-connection-ip-restrictions/{ns}/{name}            → delete GlobalConnectionIpRestriction (fan-out DELETE to target controllers)
+//!   PATCH  /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/enable     → flip enable flag (read-modify-write per controller)
+//!   PATCH  /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/active-profile → switch active profile (read-modify-write per controller)
+//!   POST   /api/v1/center/global-connection-ip-restrictions/{ns}/{name}/sync       → copy PM state from source controller to target controllers
+//!   GET    /api/v1/center/global-connection-ip-restrictions/consistency            → consistency detection across controllers
+//!   GET  /api/v1/center/admin/watch-status                          → watch cache sync status per controller
+//!   GET  /api/v1/center/admin/metadata-store                         → metadata store key summary
+//!   ANY  /api/v1/proxy/{controller_id}/*rest                       → proxy HTTP request to controller
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{any, get, post},
+    routing::{any, delete, get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod consistency_handlers;
+mod global_connection_ip_restriction_handlers;
 mod region_route_handlers;
 
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::commander::Commander;
+use crate::core::center::db::CenterDb;
+use crate::core::center::fed_sync::registry::ControllerRegistry;
+use crate::core::center::metadata_store::CenterMetaDataStore;
 use crate::core::center::proxy::ProxyForwarder;
+use crate::core::center::watch_cache::CenterSyncClient;
 use crate::core::common::api::{ApiResponse, ListResponse};
 use crate::core::common::fed_sync::proto::command_request::Command;
 use crate::core::common::fed_sync::proto::ReloadCommand;
@@ -36,6 +57,13 @@ pub struct ApiState {
     pub aggregator: Arc<ResourceAggregator>,
     pub commander: Arc<Commander>,
     pub proxy: Arc<ProxyForwarder>,
+    pub db: Option<Arc<CenterDb>>,
+    pub metadata_store: Arc<CenterMetaDataStore>,
+    pub sync_client: Arc<CenterSyncClient>,
+    /// Needed by Admin DELETE to cascade eviction into the fed-sync registry.
+    /// MetaDataStore is cleaned via `sync_client.plugin_metadata.remove_controller`
+    /// (triggers `CenterConfHandler::controller_removed`), not directly.
+    pub registry: ControllerRegistry,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -43,15 +71,87 @@ pub fn router(state: ApiState) -> Router {
         // Health/ready (no /api/v1 prefix, consistent with controller)
         .route("/health", get(health_check))
         .route("/ready", get(ready_check))
+        // Prometheus scrape endpoint (auth-skipped, K8s controller-manager convention)
+        .route(
+            "/metrics",
+            get(crate::core::common::observe::metrics_api::metrics_handler),
+        )
         // Center-specific endpoints
         .route("/api/v1/server-info", get(server_info))
         .route("/api/v1/controllers", get(list_controllers))
         .route("/api/v1/clusters", get(list_clusters))
         .route("/api/v1/resources", get(list_resources))
         .route("/api/v1/controllers/{id}/reload", post(reload_controller))
-        // Aggregated region-route endpoints
-        .route("/api/v1/center/region-routes", get(region_route_handlers::list_center_region_routes))
-        .route("/api/v1/center/region-routes/{service_group}/{cluster}/{namespace}/{kind}", get(region_route_handlers::get_center_region_route_detail))
+        // MetaDataStore-backed RegionRoute endpoints
+        .route(
+            "/api/v1/center/cluster-region-routes",
+            get(region_route_handlers::list_cluster_region_routes),
+        )
+        .route(
+            "/api/v1/center/service-region-routes",
+            get(region_route_handlers::list_service_region_routes),
+        )
+        // RegionRoute failover (new-URL paths)
+        .route(
+            "/api/v1/center/cluster-region-routes/failover",
+            post(region_route_handlers::cluster_region_route_failover),
+        )
+        .route(
+            "/api/v1/center/service-region-routes/failover",
+            post(region_route_handlers::service_region_route_failover),
+        )
+        // Config sync endpoints
+        .route(
+            "/api/v1/center/cluster-region-routes/sync",
+            post(region_route_handlers::cluster_region_route_sync),
+        )
+        .route(
+            "/api/v1/center/service-region-routes/sync",
+            post(region_route_handlers::service_region_route_sync),
+        )
+        // Consistency detection endpoints
+        .route(
+            "/api/v1/center/cluster-region-routes/consistency",
+            get(consistency_handlers::cluster_region_routes_consistency),
+        )
+        .route(
+            "/api/v1/center/service-region-routes/consistency",
+            get(consistency_handlers::service_region_routes_consistency),
+        )
+        // GlobalConnectionIpRestriction endpoints
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions",
+            get(global_connection_ip_restriction_handlers::list_global_ip_restrictions)
+                .post(global_connection_ip_restriction_handlers::create_global_ip_restriction),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}",
+            get(global_connection_ip_restriction_handlers::get_global_ip_restriction)
+                .put(global_connection_ip_restriction_handlers::update_global_ip_restriction)
+                .delete(global_connection_ip_restriction_handlers::delete_global_ip_restriction),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}/enable",
+            patch(global_connection_ip_restriction_handlers::patch_enable),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}/active-profile",
+            patch(global_connection_ip_restriction_handlers::patch_active_profile),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/{ns}/{name}/sync",
+            post(global_connection_ip_restriction_handlers::sync_global_ip_restriction),
+        )
+        .route(
+            "/api/v1/center/global-connection-ip-restrictions/consistency",
+            get(global_connection_ip_restriction_handlers::global_ip_restrictions_consistency),
+        )
+        // Admin endpoints (DB-backed)
+        .route("/api/v1/center/admin/controllers", get(list_admin_controllers))
+        .route("/api/v1/center/admin/controllers/{id}", delete(delete_admin_controller))
+        // Watch cache admin endpoints
+        .route("/api/v1/center/admin/watch-status", get(watch_status))
+        .route("/api/v1/center/admin/metadata-store", get(metadata_store_status))
         // HTTP proxy to controllers
         .route("/api/v1/proxy/{controller_id}/{*rest}", any(proxy_handler))
         .with_state(state)
@@ -120,9 +220,12 @@ impl From<crate::core::common::fed_sync::proto::ResourceKey> for ResourceKeyDto 
 }
 
 async fn list_resources(State(state): State<ApiState>, Query(params): Query<ResourceQuery>) -> impl IntoResponse {
+    // Default view excludes offline controllers: their snapshots are stale and
+    // would mislead consumers into thinking the resources are still live.
+    // Operators wanting the raw persisted record can hit `GET /api/v1/center/admin/controllers`.
     let keys = match &params.cluster {
-        Some(c) => state.aggregator.list_keys_by_cluster(c),
-        None => state.aggregator.list_all_keys(),
+        Some(c) => state.aggregator.list_online_keys_by_cluster(c),
+        None => state.aggregator.list_online_keys(),
     };
     let keys: Vec<ResourceKeyDto> = match &params.kind {
         Some(k) => keys
@@ -156,6 +259,163 @@ async fn reload_controller(State(state): State<ApiState>, Path(id_raw): Path<Str
             (status, Json(ApiResponse::<String>::error(e.to_string())))
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminControllerDto {
+    controller_id: String,
+    cluster: String,
+    env: Vec<String>,
+    tag: Vec<String>,
+    online: bool,
+    last_seen_at: i64,
+}
+
+impl From<crate::core::center::db::DbController> for AdminControllerDto {
+    fn from(r: crate::core::center::db::DbController) -> Self {
+        Self {
+            controller_id: r.controller_id,
+            cluster: r.cluster,
+            env: r.env,
+            tag: r.tag,
+            online: r.online,
+            last_seen_at: r.last_seen_at,
+        }
+    }
+}
+
+async fn list_admin_controllers(State(state): State<ApiState>) -> impl IntoResponse {
+    let Some(db) = &state.db else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ListResponse::<AdminControllerDto>::error(
+                "Database not enabled".to_string(),
+            )),
+        )
+            .into_response();
+    };
+    let db2 = db.clone();
+    match tokio::task::spawn_blocking(move || db2.list_controllers()).await {
+        Ok(Ok(rows)) => {
+            let dtos: Vec<AdminControllerDto> = rows.into_iter().map(AdminControllerDto::from).collect();
+            Json(ListResponse::success(dtos)).into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ListResponse::<AdminControllerDto>::error(e.to_string())),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ListResponse::<AdminControllerDto>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_admin_controller(State(state): State<ApiState>, Path(id_raw): Path<String>) -> impl IntoResponse {
+    let Some(db) = &state.db else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::<String>::error("Database not enabled".to_string())),
+        )
+            .into_response();
+    };
+    let id = id_raw.replace('~', "/");
+
+    // Cascade in-memory eviction BEFORE the DB row is deleted. Memory first so
+    // a mid-operation crash doesn't leave the DB clean while in-memory state
+    // still holds stale entries. `sync_client.plugin_metadata.remove_controller`
+    // additionally invokes `CenterConfHandler::controller_removed` on the
+    // metadata store, clearing its cluster_routes / service_routes /
+    // global_ip_restrictions entries for this controller.
+    let removed_registry = state.registry.remove(&id);
+    let removed_aggregator = state.aggregator.remove(&id);
+    state.sync_client.plugin_metadata.remove_controller(&id);
+    tracing::info!(
+        component = "admin_api",
+        controller_id = %id,
+        registry_had_entry = removed_registry,
+        aggregator_had_entry = removed_aggregator,
+        "DELETE /admin/controllers: evicted in-memory state; proceeding to DB delete"
+    );
+
+    let db2 = db.clone();
+    let id_for_db = id.clone();
+    match tokio::task::spawn_blocking(move || db2.delete_controller(&id_for_db)).await {
+        Ok(Ok(())) => Json(ApiResponse::success("ok".to_string())).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<String>::error(e.to_string())),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<String>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchControllerStatus {
+    controller_id: String,
+    sync_version: u64,
+    server_id: String,
+}
+
+async fn watch_status(State(state): State<ApiState>) -> impl IntoResponse {
+    let entries = state.sync_client.plugin_metadata.list_controllers();
+    let dtos: Vec<WatchControllerStatus> = entries
+        .into_iter()
+        .map(|(id, ver, sid)| WatchControllerStatus {
+            controller_id: id,
+            sync_version: ver,
+            server_id: sid,
+        })
+        .collect();
+    Json(ListResponse::success(dtos))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetaDataStoreStatus {
+    cluster_routes: Vec<MetaDataStoreEntry>,
+    service_routes: Vec<MetaDataStoreEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetaDataStoreEntry {
+    pm_key: String,
+    controller_count: usize,
+}
+
+async fn metadata_store_status(State(state): State<ApiState>) -> impl IntoResponse {
+    let cluster_routes: Vec<MetaDataStoreEntry> = state
+        .metadata_store
+        .list_cluster_routes()
+        .into_iter()
+        .map(|v| MetaDataStoreEntry {
+            pm_key: format!("{}/{}", v.namespace, v.name),
+            controller_count: v.controllers.len(),
+        })
+        .collect();
+    let service_routes: Vec<MetaDataStoreEntry> = state
+        .metadata_store
+        .list_service_routes()
+        .into_iter()
+        .map(|v| MetaDataStoreEntry {
+            pm_key: format!("{}/{}", v.namespace, v.name),
+            controller_count: v.controllers.len(),
+        })
+        .collect();
+    Json(ApiResponse::success(MetaDataStoreStatus {
+        cluster_routes,
+        service_routes,
+    }))
 }
 
 async fn proxy_handler(

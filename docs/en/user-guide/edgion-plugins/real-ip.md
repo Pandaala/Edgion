@@ -47,6 +47,7 @@ spec:
 | `trustedIps` | Array\<String\> | — (required) | List of trusted proxy IP addresses or CIDR ranges |
 | `realIpHeader` | String | `"X-Forwarded-For"` | Header name to extract the real IP from |
 | `recursive` | Boolean | `true` | Whether to enable recursive lookup (Nginx-style) |
+| `maxTrustedHops` | Integer | none (unlimited) | Cap on trusted-hop traversal when `recursive=true`. See [Security Trade-offs](#security-trade-offs-trustedips-and-maxtrustedhops) |
 
 #### trustedIps
 
@@ -72,6 +73,88 @@ Enables recursive lookup mode. Corresponds to Nginx's `real_ip_recursive` direct
 
 - `true` (default): Traverses the IP list in the header from right to left, finding the first non-trusted IP
 - `false`: Uses the rightmost IP in the header (the last proxy)
+
+#### maxTrustedHops
+
+Cap on trusted-proxy hops to traverse when `recursive=true` (optional). Mirrors Envoy's `xff_num_trusted_hops`.
+
+- `null` (default): No cap — Nginx-compatible behavior, traverse right-to-left until the first non-trusted IP
+- `N` (>0): Skip at most `N` trusted IPs in the right-to-left walk; if all `N` are trusted, return the IP at position `N` even if trusted
+
+**When to set it?**
+
+`maxTrustedHops` is a **secondary defense** against the "`trustedIps` scoped too broadly + attacker reachable from that range" scenario (see [Security Trade-offs](#security-trade-offs-trustedips-and-maxtrustedhops) below). Recommended for production: set it to your **actual proxy-chain depth** (e.g., CDN → LB → Gateway = `2`).
+
+## Security Trade-offs: trustedIps and maxTrustedHops
+
+### Core Threat: XFF Depth Forgery Under Broad Trust CIDRs
+
+With `recursive=true` and no hop cap, if `trustedIps` is scoped too broadly (e.g., the entire `10.0.0.0/8`) and attackers can originate requests from within that range:
+
+```text
+Config:  trustedIps: ["10.0.0.0/8"], recursive: true
+Attacker at 10.0.0.1 sends:
+  X-Forwarded-For: 1.2.3.4, 10.0.0.99, 10.0.0.50
+
+Right-to-left traversal:
+  10.0.0.50 → trusted → skip
+  10.0.0.99 → trusted → skip
+  1.2.3.4   → NOT trusted → return
+
+Result: gateway thinks client_ip = 1.2.3.4 (attacker-forged)
+```
+
+The attacker can then:
+- Bypass IP allowlists (`ip_restriction` plugin) that key on `client_ip`
+- Attribute rate-limit counters to arbitrary other users
+- Pollute audit logs with forged source IPs
+
+### Two Layers of Defense (configure both)
+
+**Layer 1 (primary): Scope `trustedIps` precisely**
+
+`trustedIps` **must list only the actual proxy egress IPs** — do not use broad internal CIDRs for convenience:
+
+```yaml
+# ❌ Bad: too broad — any internal request is treated as a trusted proxy
+trustedIps:
+  - "10.0.0.0/8"
+
+# ✅ Good: only the actual proxies (Cloudflare origin ranges, specific internal LB)
+trustedIps:
+  - "103.21.244.0/22"     # Cloudflare
+  - "103.22.200.0/22"
+  - "173.245.48.0/20"
+  - "10.1.0.10"           # Internal LB egress (single address)
+```
+
+**Layer 2 (secondary): Set `maxTrustedHops` as a hard ceiling**
+
+Even if Layer 1 is misconfigured, set `maxTrustedHops = actual proxy-chain depth` to limit how far an attacker can push the result with a forged trusted-looking prefix:
+
+```yaml
+trustedIps:
+  - "103.21.244.0/22"     # Cloudflare (1 hop)
+  - "10.1.0.10"           # Internal LB (1 hop)
+maxTrustedHops: 2         # Only trust 2 hops; attacker cannot push result leftward
+                          # by padding more "trusted" IPs
+```
+
+### When `maxTrustedHops` Can Be Omitted
+
+- `recursive: false`: has no effect (non-recursive takes rightmost only)
+- `trustedIps` is already tight to a handful of specific IPs / small CIDRs and is audited
+- Proxy chain is dynamic (e.g., service mesh scaling nodes) and a fixed hop count is not known — rely on Layer 1 only
+
+### Comparison with Nginx / Envoy
+
+| Behavior | Edgion | Nginx | Envoy |
+|----------|--------|-------|-------|
+| Recursive traversal | `recursive: true` | `real_ip_recursive on` | — (implicit) |
+| Hop cap | `maxTrustedHops` (opt-in) | ❌ None | `xff_num_trusted_hops` (required) |
+| Default | Unlimited (Nginx-compatible) | Unlimited | 0 |
+
+Edgion follows the Nginx style by default (unlimited, backward-compatible) while providing `maxTrustedHops` for Envoy-familiar operators and security-sensitive deployments.
 
 ## How It Works
 

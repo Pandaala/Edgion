@@ -1,10 +1,12 @@
 //! Etcd client configuration types
 
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::common::SecretReference;
+use crate::types::resources::common::TlsConfig;
 
 /// Etcd client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -19,7 +21,7 @@ pub struct EtcdClientConfig {
 
     /// TLS/SSL configuration for secure connections
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tls: Option<EtcdTls>,
+    pub tls: Option<TlsConfig>,
 
     /// Timeout configuration (dial, request, keep-alive)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -58,21 +60,22 @@ pub struct EtcdClientConfig {
     pub observability: Option<EtcdObservability>,
 }
 
-/// Etcd authentication configuration
+/// Etcd authentication configuration.
+///
+/// All credentials MUST be stored in a Kubernetes Secret and referenced via `secretRef`.
+/// Inline username/password fields have been removed (breaking change).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EtcdAuth {
-    /// Username for etcd authentication
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
+    /// Secret reference for credentials (required).
+    /// The referenced Secret should contain `username` and `password` keys.
+    #[serde(rename = "secretRef")]
+    pub secret_ref: SecretReference,
 
-    /// Password for etcd authentication
+    /// Resolved Secret object (filled by controller, not from YAML).
+    /// Serialized to the Gateway via conf_sync; never persisted into K8s `spec`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
-
-    /// Secret reference for credentials
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
+    pub secret: Option<Secret>,
 }
 
 /// Etcd timeout configuration (in milliseconds)
@@ -107,44 +110,6 @@ pub struct EtcdKeepAlive {
     /// Permit keep-alive pings without active streams
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permit_without_stream: Option<bool>,
-}
-
-/// Etcd TLS configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EtcdTls {
-    /// Enable TLS/SSL
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// TLS certificates configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certs: Option<EtcdTlsCerts>,
-
-    /// Skip certificate verification (insecure, for testing only)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub insecure_skip_verify: Option<bool>,
-}
-
-/// Etcd TLS certificates configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EtcdTlsCerts {
-    /// CA certificate (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_cert: Option<String>,
-
-    /// Client certificate (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_cert: Option<String>,
-
-    /// Client private key (PEM format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_key: Option<String>,
-
-    /// Secret reference for certificates
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
 }
 
 /// Etcd observability configuration
@@ -240,16 +205,17 @@ spec:
     endpoints:
       - "https://etcd.example.com:2379"
     auth:
-      username: "test-user"
-      password: "test-password"
+      secretRef:
+        name: etcd-creds
+        namespace: credentials
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
         let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
         let auth = etcd_config.auth.as_ref().expect("Auth should be present");
-        assert_eq!(auth.username.as_deref(), Some("test-user"));
-        assert_eq!(auth.password.as_deref(), Some("test-password"));
+        assert_eq!(auth.secret_ref.name, "etcd-creds");
+        assert_eq!(auth.secret_ref.namespace.as_deref(), Some("credentials"));
     }
 
     #[test]
@@ -271,7 +237,8 @@ spec:
       certs:
         caCert: "CA_CERT_CONTENT"
         clientCert: "CLIENT_CERT_CONTENT"
-        clientKey: "CLIENT_KEY_CONTENT"
+        secretRef:
+          name: etcd-client-tls
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
@@ -284,7 +251,35 @@ spec:
         let certs = tls.certs.as_ref().expect("Certs should be present");
         assert_eq!(certs.ca_cert.as_deref(), Some("CA_CERT_CONTENT"));
         assert_eq!(certs.client_cert.as_deref(), Some("CLIENT_CERT_CONTENT"));
-        assert_eq!(certs.client_key.as_deref(), Some("CLIENT_KEY_CONTENT"));
+        assert_eq!(
+            certs.secret_ref.as_ref().map(|s| s.name.as_str()),
+            Some("etcd-client-tls")
+        );
+    }
+
+    #[test]
+    fn test_deserialize_etcd_with_tls_rejects_inline_client_key() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: etcd-inline-key
+  namespace: test
+spec:
+  type: etcd
+  config:
+    endpoints:
+      - "https://etcd.example.com:2379"
+    tls:
+      enabled: true
+      certs:
+        clientKey: "INLINE_PRIVATE_KEY_SHOULD_FAIL"
+"#;
+        let r: Result<LinkSys, _> = serde_yaml::from_str(yaml);
+        assert!(
+            r.is_err(),
+            "inline clientKey 必须被 TlsCerts 的 deny_unknown_fields 拒绝"
+        );
     }
 
     #[test]
@@ -358,8 +353,8 @@ spec:
       - "https://etcd-1:2379"
       - "https://etcd-2:2379"
     auth:
-      username: "app-user"
-      password: "secret"
+      secretRef:
+        name: etcd-creds
     tls:
       enabled: true
       insecureSkipVerify: false
@@ -424,9 +419,11 @@ spec:
                 config: SystemConfig::Etcd(EtcdClientConfig {
                     endpoints: vec!["http://etcd:2379".to_string()],
                     auth: Some(EtcdAuth {
-                        username: Some("user".to_string()),
-                        password: Some("pass".to_string()),
-                        secret_ref: None,
+                        secret_ref: SecretReference {
+                            name: "etcd-creds".to_string(),
+                            namespace: None,
+                        },
+                        secret: None,
                     }),
                     tls: None,
                     timeout: Some(EtcdTimeout {
@@ -451,7 +448,8 @@ spec:
         assert!(yaml.contains("type: etcd"));
         assert!(yaml.contains("endpoints:"));
         assert!(yaml.contains("http://etcd:2379"));
-        assert!(yaml.contains("username: user"));
+        assert!(yaml.contains("secretRef:"));
+        assert!(yaml.contains("name: etcd-creds"));
         assert!(yaml.contains("namespace: /app/"));
         assert!(yaml.contains("autoSyncInterval: 300"));
     }
@@ -473,8 +471,6 @@ spec:
       secretRef:
         name: etcd-creds
         namespace: test
-        usernameKey: username
-        passwordKey: password
     tls:
       enabled: true
       certs:
@@ -487,13 +483,26 @@ spec:
         let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
         let auth = etcd_config.auth.as_ref().expect("Auth should be present");
-        let secret_ref = auth.secret_ref.as_ref().expect("Secret ref should be present");
-        assert_eq!(secret_ref.name, "etcd-creds");
-        assert_eq!(secret_ref.namespace.as_deref(), Some("test"));
+        assert_eq!(auth.secret_ref.name, "etcd-creds");
+        assert_eq!(auth.secret_ref.namespace.as_deref(), Some("test"));
 
         let tls = etcd_config.tls.as_ref().expect("TLS should be present");
         let tls_certs = tls.certs.as_ref().expect("TLS certs should be present");
         let tls_secret_ref = tls_certs.secret_ref.as_ref().expect("TLS secret ref should be present");
         assert_eq!(tls_secret_ref.name, "etcd-tls");
+    }
+
+    #[test]
+    fn etcd_auth_rejects_inline_password() {
+        let yaml = "secretRef:\n  name: e\npassword: leaked";
+        let r: Result<EtcdAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+    }
+
+    #[test]
+    fn etcd_auth_rejects_inline_username() {
+        let yaml = "secretRef:\n  name: e\nusername: admin";
+        let r: Result<EtcdAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
     }
 }
