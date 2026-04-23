@@ -38,8 +38,8 @@ NC='\033[0m'
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UTILS_DIR="${SCRIPT_DIR}/../utils"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+UTILS_DIR="${SCRIPT_DIR}/../../utils"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 
 REDIS_DIR="${PROJECT_ROOT}/examples/test/conf/Services/redis"
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
@@ -67,6 +67,12 @@ WORK_DIR="${PROJECT_ROOT}/integration_testing/redis_testing_${TIMESTAMP}"
 LOG_DIR="${WORK_DIR}/logs"
 PID_DIR="${WORK_DIR}/pids"
 CONFIG_DIR="${WORK_DIR}/config"
+GENERATED_SECRET_DIR="${WORK_DIR}/generated-secrets"
+
+# Exported so `edgion-cli` can auto-detect local_auth credentials from the
+# Controller-generated admin Secret (see src/core/ctl/cli/auto_auth.rs).
+export EDGION_WORK_DIR="$WORK_DIR"
+export EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR"
 
 # ── Flags ───────────────────────────────────────────────────────────────────
 DO_CLEANUP=true

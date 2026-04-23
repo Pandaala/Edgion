@@ -63,8 +63,17 @@ enum GatewayResolvedRefsError {
         name: String,
         reason: String,
     },
-    /// Cross-namespace Secret reference denied by ReferenceGrant
-    RefNotPermitted { namespace: String, name: String },
+    /// Cross-namespace Secret reference denied by ReferenceGrant.
+    ///
+    /// `from_namespace` is the Gateway's own namespace — recorded so the
+    /// Condition `message` stays self-describing when consumed outside the
+    /// Gateway's `metadata` context (events, log aggregation, dashboards).
+    /// The referrer kind is always `Gateway` so it is not stored explicitly.
+    RefNotPermitted {
+        from_namespace: String,
+        namespace: String,
+        name: String,
+    },
     /// Route kind is not supported for this listener's protocol
     InvalidRouteKind {
         group: String,
@@ -79,8 +88,15 @@ enum GatewayResolvedRefsError {
         name: String,
         reason: String,
     },
-    /// CA certificate ref cross-namespace denied by ReferenceGrant
-    CACertRefNotPermitted { namespace: String, name: String },
+    /// CA certificate ref cross-namespace denied by ReferenceGrant.
+    ///
+    /// `from_namespace` is the Gateway's own namespace — see the note on
+    /// `RefNotPermitted` above for rationale.
+    CACertRefNotPermitted {
+        from_namespace: String,
+        namespace: String,
+        name: String,
+    },
 }
 
 impl GatewayResolvedRefsError {
@@ -99,10 +115,14 @@ impl GatewayResolvedRefsError {
             } => {
                 format!("Secret '{}/{}' invalid: {}", namespace, name, reason)
             }
-            Self::RefNotPermitted { namespace, name } => {
+            Self::RefNotPermitted {
+                from_namespace,
+                namespace,
+                name,
+            } => {
                 format!(
-                    "Cross-namespace reference to Secret '{}/{}' not allowed by ReferenceGrant",
-                    namespace, name
+                    "Reference from {}/Gateway to Secret \"{}/{}\" is not permitted without a ReferenceGrant",
+                    from_namespace, namespace, name
                 )
             }
             Self::InvalidRouteKind { group, kind, protocol } => {
@@ -124,10 +144,14 @@ impl GatewayResolvedRefsError {
             } => {
                 format!("CA certificate '{}/{}' invalid: {}", namespace, name, reason)
             }
-            Self::CACertRefNotPermitted { namespace, name } => {
+            Self::CACertRefNotPermitted {
+                from_namespace,
+                namespace,
+                name,
+            } => {
                 format!(
-                    "Cross-namespace reference to CA certificate '{}/{}' not allowed by ReferenceGrant",
-                    namespace, name
+                    "Reference from {}/Gateway to CA certificate \"{}/{}\" is not permitted without a ReferenceGrant",
+                    from_namespace, namespace, name
                 )
             }
         }
@@ -1186,6 +1210,7 @@ fn validate_listener_resolved_refs(
             );
             if !allowed {
                 errors.push(GatewayResolvedRefsError::RefNotPermitted {
+                    from_namespace: gateway_ns.to_string(),
                     namespace: cert_ns.to_string(),
                     name: cert_ref.name.clone(),
                 });
@@ -1256,6 +1281,7 @@ fn validate_listener_resolved_refs(
                             );
                             if !allowed {
                                 errors.push(GatewayResolvedRefsError::CACertRefNotPermitted {
+                                    from_namespace: gateway_ns.to_string(),
                                     namespace: ca_ns.to_string(),
                                     name: ca_ref.name.clone(),
                                 });
@@ -1303,6 +1329,7 @@ fn validate_listener_resolved_refs(
                             );
                             if !allowed {
                                 errors.push(GatewayResolvedRefsError::CACertRefNotPermitted {
+                                    from_namespace: gateway_ns.to_string(),
                                     namespace: ca_ns.to_string(),
                                     name: ca_ref.name.clone(),
                                 });

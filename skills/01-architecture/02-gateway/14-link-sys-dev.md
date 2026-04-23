@@ -134,7 +134,7 @@ LinkSys 现在的桥接关系已经固定了：
 6. 必要时 `src/core/gateway/api/mod.rs`
 7. `examples/test/conf/LinkSys/<System>/`
 8. `examples/test/conf/Services/<system>/docker-compose.yaml`
-9. `examples/test/scripts/integration/run_<system>_test.sh`
+9. `examples/test/scripts/integration/link_sys/run_<system>_test.sh`
 
 通常不需要新增新的 resource kind，也不需要额外改 controller processor 框架本身。
 
@@ -192,9 +192,9 @@ LinkSys 现在的桥接关系已经固定了：
 
 现有脚本是真实存在的：
 
-- `examples/test/scripts/integration/run_redis_test.sh`
-- `examples/test/scripts/integration/run_etcd_test.sh`
-- `examples/test/scripts/integration/run_es_test.sh`
+- `examples/test/scripts/integration/link_sys/run_redis_test.sh`
+- `examples/test/scripts/integration/link_sys/run_etcd_test.sh`
+- `examples/test/scripts/integration/link_sys/run_es_test.sh`
 
 配置与依赖也已经分层：
 
@@ -234,9 +234,9 @@ cargo check
 如果改了某个现有系统，优先跑对应脚本：
 
 ```bash
-./examples/test/scripts/integration/run_redis_test.sh
-./examples/test/scripts/integration/run_etcd_test.sh
-./examples/test/scripts/integration/run_es_test.sh
+./examples/test/scripts/integration/link_sys/run_redis_test.sh
+./examples/test/scripts/integration/link_sys/run_etcd_test.sh
+./examples/test/scripts/integration/link_sys/run_es_test.sh
 ```
 
 如果你改的是文档 / skill / AI 入口，也别忘了：

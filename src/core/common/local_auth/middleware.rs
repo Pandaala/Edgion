@@ -55,8 +55,7 @@ impl LocalAuthState {
     pub fn from_config(config: &LocalAuthConfig) -> Arc<Self> {
         let password_hash = bcrypt::hash(&config.password, bcrypt::DEFAULT_COST)
             .expect("bcrypt::hash should not fail with a valid password");
-        let dummy_hash = bcrypt::hash("__dummy__", bcrypt::DEFAULT_COST)
-            .expect("bcrypt::hash should not fail");
+        let dummy_hash = bcrypt::hash("__dummy__", bcrypt::DEFAULT_COST).expect("bcrypt::hash should not fail");
 
         Arc::new(Self {
             password_hash,

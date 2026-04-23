@@ -9,7 +9,7 @@
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::RefPluginEntry;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_reasons, ResolvedRefsError,
+    condition_reasons, pick_resolved_refs_reason, ResolvedRefsError,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, format_secret_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -923,7 +923,16 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 generation,
             )
         } else {
-            let reason = resolved_errors[0].reason();
+            // M6/S3: use the shared priority helper rather than `errors[0]` —
+            // `SecretRefManager::get_dependencies` iterates a set with no
+            // stable order, so taking the first element would make the
+            // surfaced reason depend on hashing. `pick_resolved_refs_reason`
+            // deterministically picks the most severe variant.
+            //
+            // NOTE: once R2 unifies the Condition type, this whole block
+            // collapses into `resolved_refs_condition(&resolved_errors, gen)`
+            // and matches LinkSys / EdgionTls verbatim.
+            let reason = pick_resolved_refs_reason(&resolved_errors);
             let message = resolved_errors
                 .iter()
                 .map(|e| e.message())

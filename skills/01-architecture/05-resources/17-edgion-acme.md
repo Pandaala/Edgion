@@ -34,11 +34,16 @@ EdgionAcme 是 Edgion 的自定义扩展资源，实现 ACME 协议（Automatic 
 ### parse
 
 1. **清除旧引用**：清除 SecretRefManager 中该 EdgionAcme 的旧记录
-2. **解析 DNS 凭证 Secret**（仅 DNS-01 模式）：
-   - 从 `dns01.credential_ref` 获取 Secret 引用
+2. **解析 ACME 账户 Secret**（`spec.privateKeySecretRef`，必填）：
+   - 走 credential pipeline（`resource_processor::credential::pipeline::resolve_secret` + `AcmeAccountResolver`）
+   - Secret 允许 `Opaque` 类型，必需 key `accountCredentials`（JSON，即 `instant_acme::AccountCredentials`）
+   - 若 Secret 尚不存在（初次装机 / 等待 `AcmeService` 回写），会落 `ResolvedRefs=False/SecretNotFound`，`AcmeService` 生成账户后会写入 Secret 并触发 requeue
+   - 解析成功则把整份 `Secret` 对象嵌到 `spec.account_secret`，随 conf_sync 同步到 Gateway（虽然 Gateway 侧 ACME 服务不用它，但保持 CRD-内嵌模型与 LinkSys 一致，便于排查 / 离线 apply）
+3. **解析 DNS 凭证 Secret**（仅 DNS-01 模式）：
+   - 从 `dns01.credentialRef` 获取 Secret 引用（`SecretObjectReference` 结构，沿用 Gateway API 风格，不经过统一 `SecretMaterialResolver`，因为键名随 provider 不同：cloudflare = `api-token`，alidns = `access-key-id` + `access-key-secret`）
    - 在 SecretRefManager 注册引用关系
    - 从 GLOBAL_SECRET_STORE 读取 Secret 数据，填入 `spec.dns_credential_secret`
-3. **通知 ACME Service**：调用 `notify_resource_changed()` 通知后台 ACME Service 有资源变更，触发证书签发/续期流程
+4. **通知 ACME Service**：调用 `notify_resource_changed()` 通知后台 ACME Service 有资源变更，触发证书签发/续期流程
 
 ### on_delete
 
@@ -72,7 +77,8 @@ ACME 证书签发由独立的后台 Service 处理：
 
 | 关联方向 | 目标资源 | 关联机制 | 说明 |
 |---------|---------|---------|------|
-| EdgionAcme → Secret | Secret | dns01.credential_ref | DNS 提供商的 API 凭证 |
-| EdgionAcme → Secret | Secret | 创建/更新 | 签发的证书存入 Secret |
-| EdgionAcme ← SecretRefManager | Secret | 级联 requeue | DNS 凭证 Secret 变更时重新处理 |
-| EdgionAcme → Gateway/EdgionTls | 间接 | 通过 Secret | 签发的证书 Secret 被 Gateway/EdgionTls 引用 |
+| EdgionAcme → Secret | Secret | `spec.privateKeySecretRef` + `AcmeAccountResolver` | ACME 账户私钥（`accountCredentials`），由 `AcmeService` 首次注册时写入；`Zeroizing<String>` 保护 |
+| EdgionAcme → Secret | Secret | `spec.challenge.dns01.credentialRef` | DNS 提供商的 API 凭证（provider-specific key） |
+| EdgionAcme → Secret | Secret | 创建/更新（SSA） | 签发的证书（`tls.crt` / `tls.key` / `ca.crt`）写入 `storage.secretName` |
+| EdgionAcme ← SecretRefManager | Secret | 级联 requeue | 账户 / DNS 凭证 Secret 变更时重新处理 |
+| EdgionAcme → Gateway/EdgionTls | 间接 | 通过证书 Secret | 签发的证书 Secret 被 Gateway/EdgionTls 引用 |

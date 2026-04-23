@@ -14,6 +14,8 @@ use anyhow::Result;
 use fred::clients::Pool;
 use fred::interfaces::{ClientLike, EventInterface};
 
+use crate::core::gateway::link_sys::credential::CredentialState;
+use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::resources::link_sys::redis::RedisClientConfig;
 
 use super::config_mapping::{build_fred_config, build_fred_pool};
@@ -41,8 +43,12 @@ impl RedisLinkClient {
     ///
     /// Maps CRD config → fred Config + Builder, then builds a connection pool.
     /// The pool is not yet connected; call `init()` to establish connections.
-    pub fn from_config(name: &str, config: &RedisClientConfig) -> Result<Self> {
-        let fred_config = build_fred_config(config)?;
+    pub fn from_config(
+        name: &str,
+        config: &RedisClientConfig,
+        auth: &CredentialState<BasicAuthMaterial>,
+    ) -> Result<Self> {
+        let fred_config = build_fred_config(config, auth)?;
         let (builder, pool_size) = build_fred_pool(config, fred_config)?;
 
         let pool = builder

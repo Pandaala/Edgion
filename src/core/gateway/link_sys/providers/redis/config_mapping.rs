@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 use fred::types::config::{Config, ReconnectPolicy, ServerConfig, TcpConfig};
 use fred::types::Builder;
 
+use crate::core::gateway::link_sys::credential::CredentialState;
+use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode};
 
 // ============================================================================
@@ -35,7 +37,13 @@ const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 5_000;
 /// - Database selection
 ///
 /// TLS, pool, and timeout settings are applied via the `Builder` in `build_fred_pool`.
-pub fn build_fred_config(crd: &RedisClientConfig) -> Result<Config> {
+///
+/// The caller passes the resolved [`CredentialState`] produced by
+/// [`credential::basic_state`](crate::core::gateway::link_sys::credential::basic_state).
+/// `Pending` / `Invalid` produce a fail-fast `bail!` (see I4 + M4) — dispatch
+/// is expected to filter these out up-front by checking
+/// `auth_state.is_buildable() && credential::tls_ready(ls)`.
+pub fn build_fred_config(crd: &RedisClientConfig, auth: &CredentialState<BasicAuthMaterial>) -> Result<Config> {
     let server = build_server_config(crd)?;
 
     let mut config = Config {
@@ -43,18 +51,33 @@ pub fn build_fred_config(crd: &RedisClientConfig) -> Result<Config> {
         ..Default::default()
     };
 
-    // Database selection (standalone/sentinel only; cluster ignores this)
     if let Some(db) = crd.db {
         config.database = Some(db as u8);
     }
 
-    // Authentication (secret_ref is resolved externally before calling this function)
-    if let Some(auth) = &crd.auth {
-        if let Some(pw) = &auth.password {
-            config.password = Some(pw.clone());
-        }
-        if let Some(user) = &auth.username {
-            config.username = Some(user.clone());
+    if crd.auth.is_some() {
+        match auth {
+            CredentialState::Resolved(m) => {
+                config.username = m.username.clone();
+                config.password = Some(m.password.clone());
+            }
+            CredentialState::Pending => {
+                anyhow::bail!(
+                    "Redis auth is configured via secretRef but credential material \
+                     has not been resolved yet; refusing to build client without credentials"
+                );
+            }
+            CredentialState::Invalid(reason) => {
+                anyhow::bail!("Redis credential material is invalid: {reason}");
+            }
+            CredentialState::NotRequired => {
+                // CRD declares auth, but state says NotRequired — internal bug
+                // (resolver / dispatcher inconsistency). Fail hard rather than
+                // authenticate anonymously.
+                anyhow::bail!(
+                    "Redis auth configured in CRD but credential state is NotRequired (internal bug)"
+                );
+            }
         }
     }
 
@@ -165,11 +188,15 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
                      For development, consider using a self-signed cert with the system CA store."
                 );
             }
-            // Use default rustls config with system root CA store.
-            // TODO: Build rustls ClientConfig from CRD certs (CA, client cert/key)
-            // using the same approach as Edgion's core/tls/ module.
-            let tls_connector = fred::types::config::TlsConnector::default_rustls()
-                .map_err(|e| anyhow::anyhow!("Failed to create rustls TLS config: {:?}", e))?;
+            // Prefer a custom rustls `ClientConfig` built from CRD / Secret
+            // material (private CA, client mTLS). Falls back to fred's default
+            // rustls connector (system CA roots, no client auth) when the CRD
+            // carries no TLS material at all.
+            let tls_connector = match crate::core::gateway::link_sys::tls::build_rustls_client_config(tls)? {
+                Some(client_config) => fred::types::config::TlsConnector::from(client_config),
+                None => fred::types::config::TlsConnector::default_rustls()
+                    .map_err(|e| anyhow::anyhow!("Failed to create default rustls TLS config: {:?}", e))?,
+            };
             builder.with_config(|config| {
                 config.tls = Some(tls_connector.into());
             });
@@ -232,6 +259,7 @@ pub(crate) fn parse_host_port(addr: &str) -> Result<(String, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::gateway::link_sys::credential::{CredentialState, InvalidReason};
     use crate::types::resources::link_sys::redis::*;
 
     /// Create a minimal RedisClientConfig for testing
@@ -247,6 +275,11 @@ mod tests {
             tls: None,
             observability: None,
         }
+    }
+
+    /// Shorthand: `NotRequired` state (no auth configured).
+    fn no_auth() -> CredentialState<BasicAuthMaterial> {
+        CredentialState::NotRequired
     }
 
     #[test]
@@ -280,7 +313,7 @@ mod tests {
     #[test]
     fn test_build_server_config_standalone() {
         let crd = minimal_config(vec!["redis://127.0.0.1:6379".to_string()]);
-        let config = build_fred_config(&crd).unwrap();
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
         assert!(config.server.is_centralized());
     }
 
@@ -298,7 +331,7 @@ mod tests {
             }),
             ..minimal_config(vec![])
         };
-        let config = build_fred_config(&crd).unwrap();
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
         assert!(config.server.is_clustered());
     }
 
@@ -317,14 +350,14 @@ mod tests {
             }),
             ..minimal_config(vec![])
         };
-        let config = build_fred_config(&crd).unwrap();
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
         assert!(config.server.is_sentinel());
     }
 
     #[test]
     fn test_empty_endpoints_returns_error() {
         let crd = minimal_config(vec![]);
-        assert!(build_fred_config(&crd).is_err());
+        assert!(build_fred_config(&crd, &no_auth()).is_err());
     }
 
     #[test]
@@ -341,19 +374,86 @@ mod tests {
         assert!(build_server_config(&crd).is_err());
     }
 
-    #[test]
-    fn test_config_auth_mapping() {
-        let crd = RedisClientConfig {
+    fn crd_with_secret_ref() -> RedisClientConfig {
+        use crate::types::resources::common::SecretReference;
+        RedisClientConfig {
             auth: Some(RedisAuth {
-                username: Some("admin".to_string()),
-                password: Some("secret".to_string()),
-                secret_ref: None,
+                secret_ref: SecretReference {
+                    name: "redis-creds".to_string(),
+                    namespace: None,
+                },
+                secret: None,
             }),
             ..minimal_config(vec!["redis://localhost:6379".to_string()])
-        };
-        let config = build_fred_config(&crd).unwrap();
-        assert_eq!(config.username, Some("admin".to_string()));
-        assert_eq!(config.password, Some("secret".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_config_auth_mapping() {
+        let crd = crd_with_secret_ref();
+        let state = CredentialState::Resolved(BasicAuthMaterial {
+            username: Some("u".to_string()),
+            password: "p".to_string(),
+        });
+        let config = build_fred_config(&crd, &state).unwrap();
+        assert_eq!(config.username, Some("u".to_string()));
+        assert_eq!(config.password, Some("p".to_string()));
+    }
+
+    /// I4 / M4 regression: auth configured in CRD but state is `Pending` must
+    /// fail-fast instead of silently falling back to empty credentials.
+    #[test]
+    fn test_config_auth_pending_fails_fast() {
+        let crd = crd_with_secret_ref();
+        let err = build_fred_config(&crd, &CredentialState::Pending).expect_err("should refuse pending");
+        assert!(
+            err.to_string().contains("has not been resolved"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// M4 regression: auth configured in CRD, state is `Invalid` → fail-fast
+    /// with a distinct message carrying the reason.
+    #[test]
+    fn test_config_auth_invalid_fails_fast() {
+        let crd = crd_with_secret_ref();
+        let state = CredentialState::Invalid(InvalidReason::ParseFailed("missing keys: [password]".into()));
+        let err = build_fred_config(&crd, &state).expect_err("should refuse invalid");
+        assert!(
+            err.to_string().contains("invalid") && err.to_string().contains("missing keys"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// Invariant guard: the resolver-selection logic in
+    /// `credential::basic_state` must never return `NotRequired` when the CRD
+    /// declares `auth`. If that invariant is ever broken (e.g. future
+    /// refactor of resolver dispatch), this test locks the fail-fast arm in
+    /// `build_fred_config` so CI catches it instead of silently authenticating
+    /// anonymously.
+    #[test]
+    fn test_config_crd_has_auth_but_state_not_required_is_internal_bug() {
+        let crd = crd_with_secret_ref();
+        let err = build_fred_config(&crd, &CredentialState::NotRequired).expect_err("should refuse");
+        assert!(
+            err.to_string().contains("internal bug"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// Password-only basic auth (username = None) is a legitimate configuration
+    /// supported by `BasicAuthResolver`; ensure we don't regress into rejecting
+    /// this valid case.
+    #[test]
+    fn test_config_auth_password_only_material_is_accepted() {
+        let crd = crd_with_secret_ref();
+        let state = CredentialState::Resolved(BasicAuthMaterial {
+            username: None,
+            password: "pw".to_string(),
+        });
+        let config = build_fred_config(&crd, &state).unwrap();
+        assert_eq!(config.username, None);
+        assert_eq!(config.password, Some("pw".to_string()));
     }
 
     #[test]
@@ -362,7 +462,7 @@ mod tests {
             db: Some(3),
             ..minimal_config(vec!["redis://localhost:6379".to_string()])
         };
-        let config = build_fred_config(&crd).unwrap();
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
         assert_eq!(config.database, Some(3));
     }
 
@@ -375,7 +475,7 @@ mod tests {
             }),
             ..minimal_config(vec!["redis://localhost:6379".to_string()])
         };
-        let config = build_fred_config(&crd).unwrap();
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
         let (_builder, pool_size) = build_fred_pool(&crd, config).unwrap();
         assert_eq!(pool_size, MAX_POOL_SIZE);
     }
@@ -383,7 +483,7 @@ mod tests {
     #[test]
     fn test_pool_size_default() {
         let crd = minimal_config(vec!["redis://localhost:6379".to_string()]);
-        let config = build_fred_config(&crd).unwrap();
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
         let (_builder, pool_size) = build_fred_pool(&crd, config).unwrap();
         assert_eq!(pool_size, DEFAULT_POOL_SIZE);
     }

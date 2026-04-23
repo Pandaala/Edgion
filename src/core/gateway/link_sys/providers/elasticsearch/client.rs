@@ -18,6 +18,7 @@ use anyhow::Result;
 use reqwest::Client;
 use tokio::sync::{mpsc, watch};
 
+use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::types::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
 
 use super::bulk::bulk_ingest_loop;
@@ -50,8 +51,12 @@ pub struct EsLinkClient {
 
 impl EsLinkClient {
     /// Create from CRD config. Does NOT connect — call `init()` next.
-    pub fn from_config(name: &str, config: &ElasticsearchClientConfig) -> Result<Self> {
-        let (client, _headers) = build_es_client(config)?;
+    pub fn from_config(
+        name: &str,
+        config: &ElasticsearchClientConfig,
+        auth: &CredentialState<ResolvedCredential>,
+    ) -> Result<Self> {
+        let (client, _headers) = build_es_client(config, auth)?;
         let bulk_config = EsBulkConfig::from_crd(config);
 
         Ok(Self {

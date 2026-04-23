@@ -31,6 +31,10 @@ use zeroize::Zeroizing;
 
 use super::acme_client::{AcmeCertificateResult, AcmeClient};
 use super::dns_provider::create_dns_provider;
+use super::secret_io::{
+    account_credentials_from_json, create_account_secret, extract_account_json_string,
+    patch_account_key_into_existing_secret,
+};
 use crate::types::resources::edgion_acme::{
     AcmeCertPhase, AcmeChallengeType, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
 };
@@ -736,103 +740,117 @@ fn extract_dns_credentials(acme: &EdgionAcme) -> Result<HashMap<String, String>>
 // ACME Account Management
 // ============================================================================
 
-/// Account Secret name convention: `{EdgionAcme.name}-acme-account`
-fn account_secret_name(acme_name: &str) -> String {
-    format!("{}-acme-account", acme_name)
+/// Extract ACME account JSON from [`EdgionAcmeSpec::account_secret`] without calling the Kubernetes API.
+fn embedded_account_json(acme: &EdgionAcme) -> Result<Option<Zeroizing<String>>> {
+    let Some(ref embedded) = acme.spec.account_secret else {
+        return Ok(None);
+    };
+    let Some(ref map) = embedded.data else {
+        return Ok(None);
+    };
+    extract_account_json_string(map)
 }
 
-/// Get or create an ACME account for the given resource
+/// Get or create an ACME account for the given resource.
+///
+/// Uses `spec.privateKeySecretRef` and the `accountCredentials` data key (see `ACME_ACCOUNT_KEY`).
+/// When [`EdgionAcmeSpec::account_secret`] is populated by the sync handler, restores from that
+/// blob first (no redundant Secret `GET`).
+/// - Secret not found: register, then create Secret (with ownerReferences when uid is set).
+/// - Secret exists with valid `accountCredentials` (or legacy `credentials`):
+///   restore — **no overwrite** (backup / operator restore).
+/// - Secret exists but missing those keys: register, then **merge-patch** `accountCredentials` only
+///   (self-managed empty Secret).
+/// - Key present but JSON invalid: **error** (operator must fix; we do not re-register over it).
 async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Result<AcmeClient> {
-    let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
+    let owner_ns = acme.metadata.namespace.as_deref().unwrap_or("default");
     let acme_name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
-    let secret_name = account_secret_name(acme_name);
-    let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let acme_uid = acme.metadata.uid.as_deref();
 
-    // Try to restore from existing account Secret
-    match secret_api.get(&secret_name).await {
+    let secret_name = &acme.spec.private_key_secret_ref.name;
+    let secret_ns = acme.spec.private_key_secret_ref.effective_namespace(owner_ns);
+    let secret_api: Api<Secret> = Api::namespaced(client.clone(), secret_ns);
+
+    let eab_kid = acme.spec.external_account_binding.as_ref().map(|e| e.key_id.as_str());
+    let eab_hmac = acme.spec.external_account_binding.as_ref().map(|e| e.hmac_key.as_str());
+
+    if let Some(zjson) = embedded_account_json(acme)? {
+        let creds = account_credentials_from_json(&zjson)?;
+        tracing::info!(
+            component = "acme_service",
+            name = %acme_name,
+            "Restored ACME account from embedded account Secret"
+        );
+        return AcmeClient::from_credentials(creds).await;
+    }
+
+    // `spec.account_secret` is absent on the normal first-registration path
+    // (handler only embeds on `ResolveOutcome::Ok`; NeedsRegistration / SecretNotFound /
+    // MissingKeys all fall through here). Keep this at debug to avoid log spam —
+    // operator-facing signal already lives on the `ResolvedRefs` condition.
+    if acme.spec.account_secret.is_none() {
+        tracing::debug!(
+            component = "acme_service",
+            name = %acme_name,
+            "EdgionAcme spec.account_secret absent; resolving account Secret via Kubernetes API"
+        );
+    }
+
+    match secret_api.get(secret_name).await {
         Ok(secret) => {
-            if let Some(ref data) = secret.data {
-                if let Some(creds_bytes) = data.get("credentials") {
-                    let creds_json = String::from_utf8(creds_bytes.0.clone())
-                        .context("Account credentials Secret contains invalid UTF-8")?;
-                    let creds: instant_acme::AccountCredentials =
-                        serde_json::from_str(&creds_json).context("Failed to deserialize account credentials")?;
-
+            let data = secret.data.as_ref();
+            if let Some(map) = data {
+                if let Some(zjson) = extract_account_json_string(map)? {
+                    let creds = account_credentials_from_json(&zjson)?;
                     tracing::info!(
                         component = "acme_service",
                         name = %acme_name,
                         "Restored ACME account from Secret"
                     );
-
                     return AcmeClient::from_credentials(creds).await;
                 }
             }
-            tracing::warn!(
+            // Secret object exists, but no account key yet — pre-created empty (self-managed)
+            let (acme_client, credentials) = AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac)
+                .await
+                .context("Failed to create ACME account")?;
+
+            let creds_json =
+                Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);
+            patch_account_key_into_existing_secret(&secret_api, secret_name, &creds_json).await?;
+
+            tracing::info!(
                 component = "acme_service",
                 name = %acme_name,
-                "Account Secret exists but has no credentials, creating new account"
+                account_id = %acme_client.account_id(),
+                "New ACME account registered; credentials merge-patched into existing Secret"
             );
+            Ok(acme_client)
         }
         Err(kube::Error::Api(resp)) if resp.code == 404 => {
             tracing::info!(
                 component = "acme_service",
                 name = %acme_name,
-                "No existing ACME account, creating new one"
+                "No account Secret yet; creating ACME account and Secret"
             );
-        }
-        Err(e) => {
-            tracing::warn!(
+            let (acme_client, credentials) = AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac)
+                .await
+                .context("Failed to create ACME account")?;
+
+            let creds_json =
+                Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);
+            create_account_secret(&secret_api, secret_name, secret_ns, acme_name, acme_uid, &creds_json).await?;
+
+            tracing::info!(
                 component = "acme_service",
                 name = %acme_name,
-                error = %e,
-                "Failed to get account Secret, creating new account"
+                account_id = %acme_client.account_id(),
+                "New ACME account created and Secret persisted"
             );
+            Ok(acme_client)
         }
+        Err(e) => Err(e).context("Failed to get ACME account Secret"),
     }
-
-    // Create new account
-    let eab_kid = acme.spec.external_account_binding.as_ref().map(|e| e.key_id.as_str());
-    let eab_hmac = acme.spec.external_account_binding.as_ref().map(|e| e.hmac_key.as_str());
-
-    let (acme_client, credentials) = AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac)
-        .await
-        .context("Failed to create ACME account")?;
-
-    // Persist account credentials to K8s Secret
-    let creds_json = serde_json::to_string(&credentials).context("Failed to serialize account credentials")?;
-
-    let account_secret = Secret {
-        metadata: kube::api::ObjectMeta {
-            name: Some(secret_name.clone()),
-            namespace: Some(namespace.to_string()),
-            labels: Some(BTreeMap::from([
-                ("edgion.io/managed-by".to_string(), "acme".to_string()),
-                ("edgion.io/acme-resource".to_string(), acme_name.to_string()),
-            ])),
-            ..Default::default()
-        },
-        data: Some(BTreeMap::from([(
-            "credentials".to_string(),
-            ByteString(creds_json.into_bytes()),
-        )])),
-        type_: Some("Opaque".to_string()),
-        ..Default::default()
-    };
-
-    let pp = PatchParams::apply("edgion-acme-controller");
-    secret_api
-        .patch(&secret_name, &pp, &Patch::Apply(account_secret))
-        .await
-        .context("Failed to persist ACME account credentials")?;
-
-    tracing::info!(
-        component = "acme_service",
-        name = %acme_name,
-        account_id = %acme_client.account_id(),
-        "New ACME account created and persisted"
-    );
-
-    Ok(acme_client)
 }
 
 // ============================================================================
@@ -1055,6 +1073,65 @@ fn parse_resource_key(key: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::credentials::ACME_ACCOUNT_KEY;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    const MINIMAL_ACME_YAML: &str = r#"
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: t
+  namespace: default
+spec:
+  email: a@b.com
+  privateKeySecretRef:
+    name: acc
+  domains:
+    - x.com
+  challenge:
+    type: http-01
+    http01:
+      gatewayRef:
+        name: gw
+        namespace: default
+  storage:
+    secretName: cert
+"#;
+
+    #[test]
+    fn embedded_account_json_none_when_not_embedded() {
+        let acme: EdgionAcme = serde_yaml::from_str(MINIMAL_ACME_YAML).unwrap();
+        assert!(embedded_account_json(&acme).unwrap().is_none());
+    }
+
+    #[test]
+    fn embedded_account_json_reads_embedded_secret_without_kube() {
+        let mut acme: EdgionAcme = serde_yaml::from_str(MINIMAL_ACME_YAML).unwrap();
+        let mut data = BTreeMap::new();
+        data.insert(
+            ACME_ACCOUNT_KEY.to_string(),
+            ByteString(br#"{"account_url":"https://example/acct","key_pem":"test"}"#.to_vec()),
+        );
+        acme.spec.account_secret = Some(Secret {
+            metadata: Default::default(),
+            data: Some(data),
+            ..Default::default()
+        });
+        let z = embedded_account_json(&acme).unwrap().expect("expected JSON blob");
+        assert!(z.contains("account_url"));
+    }
+
+    #[test]
+    fn embedded_account_json_none_when_embedded_has_no_account_keys() {
+        let mut acme: EdgionAcme = serde_yaml::from_str(MINIMAL_ACME_YAML).unwrap();
+        acme.spec.account_secret = Some(Secret {
+            metadata: Default::default(),
+            data: Some(BTreeMap::new()),
+            ..Default::default()
+        });
+        assert!(embedded_account_json(&acme).unwrap().is_none());
+    }
 
     // ================================================================
     // exponential_backoff

@@ -150,10 +150,21 @@ pub fn validate_backend_refs(
 }
 
 /// Collect RefNotPermitted errors from ref_denied fields on backend refs.
-pub fn collect_ref_denied_errors(ref_denied_list: &[Option<&RefDenied>]) -> Vec<ResolvedRefsError> {
+///
+/// `from_ns` / `from_kind` identify the referring Route (e.g. `HTTPRoute` in
+/// `app-ns`). They are folded into `ResolvedRefsError::RefNotPermitted` so the
+/// Condition `message` stays self-describing once it leaves the CRD's
+/// `metadata` context (events, log aggregation, dashboards).
+pub fn collect_ref_denied_errors(
+    from_ns: &str,
+    from_kind: ResourceKind,
+    ref_denied_list: &[Option<&RefDenied>],
+) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
     for ref_denied in ref_denied_list.iter().flatten() {
         errors.push(ResolvedRefsError::RefNotPermitted {
+            from_namespace: from_ns.to_string(),
+            from_kind: from_kind.as_str(),
             target_namespace: ref_denied.target_namespace.clone(),
             target_name: ref_denied.target_name.clone(),
         });

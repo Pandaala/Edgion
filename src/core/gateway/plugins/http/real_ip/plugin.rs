@@ -132,14 +132,13 @@ mod tests {
     #[test]
     fn test_extract_recursive() {
         let config = create_test_config(); // recursive: true
-        let extractor =
-            RealIpExtractor::new(
-                &config.trusted_ips,
-                config.real_ip_header.clone(),
-                config.recursive,
-                config.max_trusted_hops,
-            )
-            .unwrap();
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
 
         // Case 1: Right-to-left, find first non-trusted
         let result = extractor.extract_from_header_value("192.168.1.254", "203.0.113.1, 198.51.100.2, 192.168.1.1");
@@ -177,14 +176,13 @@ mod tests {
     #[test]
     fn test_client_not_trusted() {
         let config = create_test_config();
-        let extractor =
-            RealIpExtractor::new(
-                &config.trusted_ips,
-                config.real_ip_header.clone(),
-                config.recursive,
-                config.max_trusted_hops,
-            )
-            .unwrap();
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
 
         // Client IP not in trusted list - should use client_addr directly
         let result = extractor.extract_from_header_value("8.8.8.8", "203.0.113.1");

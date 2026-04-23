@@ -438,11 +438,12 @@ mod tests {
 
         // Only 1 trusted hop before reaching 1.2.3.4 (within cap=3).
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
-        headers
-            .insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99")
-            .unwrap();
+        headers.insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99").unwrap();
         let result = extractor.extract_real_ip("10.0.0.99:45678", &headers);
-        assert_eq!(result, "1.2.3.4", "cap does not prevent returning real untrusted client within window");
+        assert_eq!(
+            result, "1.2.3.4",
+            "cap does not prevent returning real untrusted client within window"
+        );
     }
 
     /// `max_trusted_hops` has no effect in non-recursive mode (rightmost
@@ -458,9 +459,7 @@ mod tests {
         .unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
-        headers
-            .insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99")
-            .unwrap();
+        headers.insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99").unwrap();
         // Non-recursive takes rightmost → 10.0.0.99 is trusted → fallback to client_addr.
         let result = extractor.extract_real_ip("10.0.0.1:45678", &headers);
         assert_eq!(result, "10.0.0.1");

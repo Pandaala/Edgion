@@ -199,7 +199,7 @@ impl LinkSys {
 #[serde(rename_all = "camelCase")]
 pub struct LinkSysStatus {
     /// Conditions describe the current conditions of the LinkSys resource.
-    /// Standard conditions: Accepted, Ready
+    /// Standard conditions: Accepted, ResolvedRefs (Gateway API).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
 }

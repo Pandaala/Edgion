@@ -1,7 +1,13 @@
-//! Common types shared across all route resources
-//!
-//! This module contains types that are used by multiple route resources
-//! (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, etc.)
+//! Common reusable types for Edgion custom resources.
+
+pub mod secret_ref;
+pub mod tls;
+
+pub use secret_ref::SecretReference;
+pub use tls::{TlsCerts, TlsConfig};
+
+// ---- Types shared across all route resources ----
+// (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, etc.)
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

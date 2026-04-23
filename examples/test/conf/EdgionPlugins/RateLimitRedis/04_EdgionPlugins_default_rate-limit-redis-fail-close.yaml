@@ -1,0 +1,24 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rate-limit-redis-fail-close
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimitRedis
+      config:
+        redisRef: "default/redis-not-found"
+        policies:
+          - rate: 3
+            interval: "10s"
+            algorithm: SlidingWindow
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onMissingKey: Deny
+        onRedisFailure: Deny
+        rejectStatus: 429
+        rejectMessage: "Redis unavailable (deny)"
+        showLimitHeaders: true
+        keyPrefix: "edgion:it:rlr:fail-close:"

@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 
 use crate::types::resources::link_sys::LinkSys;
 
+use crate::core::gateway::link_sys::credential;
 use crate::core::gateway::link_sys::providers::elasticsearch::{EsLinkClient, LinkSysHealth as EsLinkHealth};
 use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
 use crate::core::gateway::link_sys::providers::redis::{LinkSysHealth as RedisLinkHealth, RedisLinkClient};
@@ -295,10 +296,25 @@ fn es_runtime_replace_all(new_map: HashMap<String, Arc<EsLinkClient>>) -> HashMa
 async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     let webhook_manager = get_webhook_manager();
 
+    // Snapshot current runtime maps so that we can carry over clients for
+    // resources whose credentials are not yet resolved (I5). Without this,
+    // `replace_all` would drop a working-but-pending-credential-update client.
+    let old_redis_snapshot = REDIS_RUNTIME.load_full();
+    let old_etcd_snapshot = ETCD_RUNTIME.load_full();
+    let old_es_snapshot = ES_RUNTIME.load_full();
+
     // Build new clients maps
     let mut new_redis_map: HashMap<String, Arc<RedisLinkClient>> = HashMap::new();
     let mut new_etcd_map: HashMap<String, Arc<EtcdLinkClient>> = HashMap::new();
     let mut new_es_map: HashMap<String, Arc<EsLinkClient>> = HashMap::new();
+
+    // Keys whose client was carried over unchanged from the old snapshot.
+    // These must be excluded from the post-swap shutdown loop — the Arc is
+    // alive in both old and new maps, so `replace_all` returns it as "old"
+    // even though it is still in service.
+    let mut preserved_redis_keys: HashSet<String> = HashSet::new();
+    let mut preserved_etcd_keys: HashSet<String> = HashSet::new();
+    let mut preserved_es_keys: HashSet<String> = HashSet::new();
 
     for (key, ls) in data {
         match &ls.spec.config {
@@ -306,7 +322,28 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 webhook_manager.upsert(key, config.clone()).await;
             }
             crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                match RedisLinkClient::from_config(key, redis_config) {
+                let auth_state = credential::basic_state(ls);
+                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
+                    if let Some(existing) = old_redis_snapshot.get(key) {
+                        tracing::info!(
+                            key,
+                            auth_state = auth_state.kind(),
+                            tls_ready = credential::tls_ready(ls),
+                            "LinkSys not ready; keeping existing Redis client"
+                        );
+                        new_redis_map.insert(key.clone(), existing.clone());
+                        preserved_redis_keys.insert(key.clone());
+                    } else {
+                        tracing::info!(
+                            key,
+                            auth_state = auth_state.kind(),
+                            tls_ready = credential::tls_ready(ls),
+                            "LinkSys not ready; skipping Redis client build"
+                        );
+                    }
+                    continue;
+                }
+                match RedisLinkClient::from_config(key, redis_config, &auth_state) {
                     Ok(client) => {
                         let client = Arc::new(client);
                         let client_ref = client.clone();
@@ -333,7 +370,28 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 }
             }
             crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                match EtcdLinkClient::from_config(key, etcd_config) {
+                let auth_state = credential::basic_state(ls);
+                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
+                    if let Some(existing) = old_etcd_snapshot.get(key) {
+                        tracing::info!(
+                            key,
+                            auth_state = auth_state.kind(),
+                            tls_ready = credential::tls_ready(ls),
+                            "LinkSys not ready; keeping existing Etcd client"
+                        );
+                        new_etcd_map.insert(key.clone(), existing.clone());
+                        preserved_etcd_keys.insert(key.clone());
+                    } else {
+                        tracing::info!(
+                            key,
+                            auth_state = auth_state.kind(),
+                            tls_ready = credential::tls_ready(ls),
+                            "LinkSys not ready; skipping Etcd client build"
+                        );
+                    }
+                    continue;
+                }
+                match EtcdLinkClient::from_config(key, etcd_config, &auth_state) {
                     Ok(client) => {
                         let client = Arc::new(client);
                         let client_ref = client.clone();
@@ -360,7 +418,28 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 }
             }
             crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                match EsLinkClient::from_config(key, es_config) {
+                let auth_state = credential::resolved_state(ls);
+                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
+                    if let Some(existing) = old_es_snapshot.get(key) {
+                        tracing::info!(
+                            key,
+                            auth_state = auth_state.kind(),
+                            tls_ready = credential::tls_ready(ls),
+                            "LinkSys not ready; keeping existing Elasticsearch client"
+                        );
+                        new_es_map.insert(key.clone(), existing.clone());
+                        preserved_es_keys.insert(key.clone());
+                    } else {
+                        tracing::info!(
+                            key,
+                            auth_state = auth_state.kind(),
+                            tls_ready = credential::tls_ready(ls),
+                            "LinkSys not ready; skipping Elasticsearch client build"
+                        );
+                    }
+                    continue;
+                }
+                match EsLinkClient::from_config(key, es_config, &auth_state) {
                     Ok(client) => {
                         let client = Arc::new(client);
                         let client_ref = client.clone();
@@ -396,11 +475,16 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
         }
     }
 
-    // Atomically swap Redis runtime store; shutdown old clients in background
+    // Atomically swap Redis runtime store; shutdown old clients in background.
+    // Preserved keys have the same Arc in old & new maps — do not shut them
+    // down, they are still in service.
     let old_redis = redis_runtime_replace_all(new_redis_map);
     if !old_redis.is_empty() {
         tokio::spawn(async move {
             for (key, client) in old_redis {
+                if preserved_redis_keys.contains(&key) {
+                    continue;
+                }
                 if let Err(e) = client.shutdown().await {
                     tracing::warn!(redis = %key, error = %e, "Error shutting down old Redis client");
                 }
@@ -413,6 +497,9 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     if !old_etcd.is_empty() {
         tokio::spawn(async move {
             for (key, client) in old_etcd {
+                if preserved_etcd_keys.contains(&key) {
+                    continue;
+                }
                 if let Err(e) = client.shutdown().await {
                     tracing::warn!(etcd = %key, error = %e, "Error shutting down old Etcd client");
                 }
@@ -425,6 +512,9 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     if !old_es.is_empty() {
         tokio::spawn(async move {
             for (key, client) in old_es {
+                if preserved_es_keys.contains(&key) {
+                    continue;
+                }
                 if let Err(e) = client.shutdown().await {
                     tracing::warn!(es = %key, error = %e, "Error shutting down old ES client");
                 }
@@ -444,7 +534,23 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                 webhook_manager.upsert(key, config.clone()).await;
             }
             crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                match RedisLinkClient::from_config(key, redis_config) {
+                let auth_state = credential::basic_state(ls);
+                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
+                    // Option A (per I5): preserve the previous client if any
+                    // so in-flight work keeps running while the Controller
+                    // resolves the Secret; no rebuild.
+                    let existing = REDIS_RUNTIME.load().contains_key(key);
+                    tracing::info!(
+                        key,
+                        auth_state = auth_state.kind(),
+                        tls_ready = credential::tls_ready(ls),
+                        existing,
+                        "LinkSys not ready; {} Redis client",
+                        if existing { "keeping existing" } else { "skipping" }
+                    );
+                    continue;
+                }
+                match RedisLinkClient::from_config(key, redis_config, &auth_state) {
                     Ok(client) => {
                         let client = Arc::new(client);
                         let client_ref = client.clone();
@@ -488,7 +594,20 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                 }
             }
             crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                match EtcdLinkClient::from_config(key, etcd_config) {
+                let auth_state = credential::basic_state(ls);
+                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
+                    let existing = ETCD_RUNTIME.load().contains_key(key);
+                    tracing::info!(
+                        key,
+                        auth_state = auth_state.kind(),
+                        tls_ready = credential::tls_ready(ls),
+                        existing,
+                        "LinkSys not ready; {} Etcd client",
+                        if existing { "keeping existing" } else { "skipping" }
+                    );
+                    continue;
+                }
+                match EtcdLinkClient::from_config(key, etcd_config, &auth_state) {
                     Ok(client) => {
                         let client = Arc::new(client);
                         let client_ref = client.clone();
@@ -532,7 +651,20 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                 }
             }
             crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                match EsLinkClient::from_config(key, es_config) {
+                let auth_state = credential::resolved_state(ls);
+                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
+                    let existing = ES_RUNTIME.load().contains_key(key);
+                    tracing::info!(
+                        key,
+                        auth_state = auth_state.kind(),
+                        tls_ready = credential::tls_ready(ls),
+                        existing,
+                        "LinkSys not ready; {} Elasticsearch client",
+                        if existing { "keeping existing" } else { "skipping" }
+                    );
+                    continue;
+                }
+                match EsLinkClient::from_config(key, es_config, &auth_state) {
                     Ok(client) => {
                         let client = Arc::new(client);
                         let client_ref = client.clone();
@@ -732,5 +864,225 @@ mod tests {
 
         let ls = store.get("default/nonexistent");
         assert!(ls.is_none());
+    }
+
+    // ============================================================
+    // I5: credential-readiness-gated dispatch
+    //
+    // These tests mutate the process-global REDIS_RUNTIME. A full-set test
+    // running concurrently with a partial-update test would wipe the map the
+    // latter seeded, producing flaky failures. Serialize them through a
+    // module-local Mutex. Keys are namespaced under `i5-ns/` to avoid
+    // colliding with any future non-dispatch test.
+    // ============================================================
+
+    use std::sync::Mutex as StdMutex;
+    static I5_DISPATCH_LOCK: StdMutex<()> = StdMutex::new(());
+
+    /// How the injected Secret (if any) is populated — controls the
+    /// `CredentialState` that `basic_state(ls)` will compute.
+    #[derive(Clone, Copy)]
+    enum InjectedSecret {
+        /// No Secret injected → `CredentialState::Pending`.
+        Missing,
+        /// Secret with a valid `password` key → `CredentialState::Resolved`.
+        Valid,
+        /// Secret present but missing the `password` key → the
+        /// `BasicAuthResolver::parse` fails, producing
+        /// `CredentialState::Invalid(InvalidReason::ParseFailed(_))`.
+        MalformedForInvalid,
+    }
+
+    fn create_redis_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> LinkSys {
+        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
+        use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let secret = match inject {
+            InjectedSecret::Missing => None,
+            InjectedSecret::Valid => {
+                let mut data = BTreeMap::new();
+                data.insert("password".to_string(), ByteString(b"pw".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+            InjectedSecret::MalformedForInvalid => {
+                let mut data = BTreeMap::new();
+                data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+        };
+
+        LinkSys {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Redis(RedisClientConfig {
+                    endpoints: vec!["redis://127.0.0.1:6379".to_string()],
+                    auth: Some(RedisAuth {
+                        secret_ref: SecretReference {
+                            name: "creds".to_string(),
+                            namespace: None,
+                        },
+                        secret,
+                    }),
+                    db: None,
+                    timeout: None,
+                    pool: None,
+                    retry: None,
+                    topology: None,
+                    tls: None,
+                    observability: None,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    /// I5 regression: full-set dispatch must not build a client for a LinkSys
+    /// whose credential Secret has not been injected yet.
+    #[tokio::test]
+    async fn dispatch_full_set_skips_build_when_credential_not_ready() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "i5-ns/pending-full-set".to_string();
+        let ls = create_redis_linksys("i5-ns", "pending-full-set", InjectedSecret::Missing);
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ls);
+
+        dispatch_full_set(&data).await;
+
+        assert!(
+            get_redis_client(&key).is_none(),
+            "no client should be built for a pending-credential LinkSys"
+        );
+    }
+
+    /// I5 regression: when a previously-built client exists and a subsequent
+    /// full-set carries the same resource with pending credentials (Secret
+    /// temporarily gone), the existing client is preserved rather than torn
+    /// down — Option A in I5.
+    #[tokio::test]
+    async fn dispatch_full_set_preserves_existing_client_on_pending_update() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "i5-ns/preserve-full-set".to_string();
+
+        // Seed with a ready LinkSys so a client is inserted.
+        let ready = create_redis_linksys("i5-ns", "preserve-full-set", InjectedSecret::Valid);
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ready);
+        dispatch_full_set(&data).await;
+        let first = get_redis_client(&key).expect("client should be built when ready");
+
+        // Second full-set for the same key but with pending credentials.
+        let pending = create_redis_linksys("i5-ns", "preserve-full-set", InjectedSecret::Missing);
+        let mut data = HashMap::new();
+        data.insert(key.clone(), pending);
+        dispatch_full_set(&data).await;
+
+        let second = get_redis_client(&key).expect("client should be preserved on pending update");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the preserved client must be the same Arc instance"
+        );
+
+        // Cleanup so the global store doesn't carry state into other tests.
+        let _ = redis_runtime_remove(&key);
+    }
+
+    /// I5 regression: partial-update dispatch must not build a client on an
+    /// add with pending credentials.
+    #[tokio::test]
+    async fn dispatch_partial_update_skips_build_when_credential_not_ready() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "i5-ns/pending-partial-add".to_string();
+        let ls = create_redis_linksys("i5-ns", "pending-partial-add", InjectedSecret::Missing);
+        let mut add = HashMap::new();
+        add.insert(key.clone(), ls);
+
+        dispatch_partial_update(&add, &HashSet::new()).await;
+
+        assert!(
+            get_redis_client(&key).is_none(),
+            "no client should be built for a pending-credential partial add"
+        );
+    }
+
+    /// I5 regression: partial-update on an existing key that turns pending
+    /// preserves the old client (Option A).
+    #[tokio::test]
+    async fn dispatch_partial_update_preserves_existing_client_on_pending_update() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "i5-ns/preserve-partial".to_string();
+
+        // Seed
+        let ready = create_redis_linksys("i5-ns", "preserve-partial", InjectedSecret::Valid);
+        let mut add = HashMap::new();
+        add.insert(key.clone(), ready);
+        dispatch_partial_update(&add, &HashSet::new()).await;
+        let first = get_redis_client(&key).expect("client should be built when ready");
+
+        // Pending update
+        let pending = create_redis_linksys("i5-ns", "preserve-partial", InjectedSecret::Missing);
+        let mut add = HashMap::new();
+        add.insert(key.clone(), pending);
+        dispatch_partial_update(&add, &HashSet::new()).await;
+
+        let second = get_redis_client(&key).expect("client should be preserved on pending update");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the preserved client must be the same Arc instance"
+        );
+
+        let _ = redis_runtime_remove(&key);
+    }
+
+    /// M4 regression (dispatch side): an `Invalid` credential state must also
+    /// block client builds, symmetric to the `Pending` case. `Pending` and
+    /// `Invalid` share the same `is_buildable() == false` arm, but keeping a
+    /// separate test here defends against any future refactor that
+    /// accidentally treats them differently at the dispatch layer.
+    #[tokio::test]
+    async fn dispatch_full_set_skips_build_when_credential_invalid() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "i5-ns/invalid-full-set".to_string();
+        let ls = create_redis_linksys("i5-ns", "invalid-full-set", InjectedSecret::MalformedForInvalid);
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ls);
+
+        dispatch_full_set(&data).await;
+
+        assert!(
+            get_redis_client(&key).is_none(),
+            "no client should be built for an invalid-credential LinkSys"
+        );
+    }
+
+    /// M4 regression (dispatch side): partial-update add with `Invalid` state
+    /// must also be filtered out.
+    #[tokio::test]
+    async fn dispatch_partial_update_skips_build_when_credential_invalid() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "i5-ns/invalid-partial-add".to_string();
+        let ls = create_redis_linksys("i5-ns", "invalid-partial-add", InjectedSecret::MalformedForInvalid);
+        let mut add = HashMap::new();
+        add.insert(key.clone(), ls);
+
+        dispatch_partial_update(&add, &HashSet::new()).await;
+
+        assert!(
+            get_redis_client(&key).is_none(),
+            "no client should be built for an invalid-credential partial add"
+        );
     }
 }

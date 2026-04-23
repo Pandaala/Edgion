@@ -196,6 +196,7 @@ mod tests {
             "metadata": { "name": "test", "namespace": "default" },
             "spec": {
                 "email": "test@example.com",
+                "privateKeySecretRef": { "name": "test-acme-account" },
                 "domains": ["example.com"],
                 "challenge": { "type": "http-01" },
                 "storage": { "secretName": "test-cert" },

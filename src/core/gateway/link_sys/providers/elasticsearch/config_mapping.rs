@@ -5,9 +5,11 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Client, ClientBuilder};
+use reqwest::{Certificate, Client, ClientBuilder, Identity};
 use std::time::Duration;
 
+use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
+use crate::core::gateway::link_sys::tls as tls_helper;
 use crate::types::resources::link_sys::elasticsearch::*;
 
 // ============================================================================
@@ -46,7 +48,17 @@ const DEFAULT_DATE_PATTERN: &str = "%Y.%m.%d";
 ///
 /// The returned `HeaderMap` includes Content-Type and any auth headers.
 /// TLS and pool settings are applied to the client builder.
-pub fn build_es_client(crd: &ElasticsearchClientConfig) -> Result<(Client, HeaderMap)> {
+///
+/// `auth` is the [`CredentialState`] produced by
+/// [`credential::resolved_state`](crate::core::gateway::link_sys::credential::resolved_state).
+/// Because `resolved_state` drives resolver selection from the CRD auth
+/// variant, a `Resolved(_)` value is guaranteed to match the CRD's auth kind
+/// — "type mismatch" is therefore impossible and is not checked here.
+/// `Pending` / `Invalid` produce a fail-fast `bail!` (see I4 / M4).
+pub fn build_es_client(
+    crd: &ElasticsearchClientConfig,
+    auth: &CredentialState<ResolvedCredential>,
+) -> Result<(Client, HeaderMap)> {
     let mut builder = ClientBuilder::new();
 
     // ── Connection pool ────────────────────────────────────────────
@@ -86,32 +98,45 @@ pub fn build_es_client(crd: &ElasticsearchClientConfig) -> Result<(Client, Heade
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    // ── Authentication ─────────────────────────────────────────────
-    if let Some(auth) = &crd.auth {
-        if let Some(token) = &auth.bearer_token {
-            let val = format!("Bearer {}", token);
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&val).context("invalid bearer token header value")?,
-            );
-        } else if let Some(api_key_id) = &auth.api_key_id {
-            let api_key_secret = auth.api_key_secret.as_deref().unwrap_or("");
-            let encoded = BASE64.encode(format!("{}:{}", api_key_id, api_key_secret));
-            let val = format!("ApiKey {}", encoded);
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&val).context("invalid api key header value")?,
-            );
-        } else if let Some(username) = &auth.username {
-            let password = auth.password.as_deref().unwrap_or("");
-            let encoded = BASE64.encode(format!("{}:{}", username, password));
-            let val = format!("Basic {}", encoded);
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&val).context("invalid basic auth header value")?,
-            );
-        }
-        // secret_ref is resolved externally before calling this function
+    // ── Authentication: secretRef in CRD; material carried by CredentialState ──
+    //
+    // `resolved_state` picks the resolver by auth variant, so a `Resolved`
+    // value always matches the CRD's auth kind. The match on `Resolved` below
+    // rejects the HMAC variant (which is only produced for Webhook auth), but
+    // that arm is unreachable for a well-formed ES config — it exists so the
+    // match is exhaustive over `ResolvedCredential`.
+    if crd.auth.is_some() {
+        let auth_header = match auth {
+            CredentialState::Resolved(ResolvedCredential::Basic(m)) => {
+                let u = m.username.as_deref().unwrap_or("");
+                let encoded = BASE64.encode(format!("{}:{}", u, m.password.as_str()));
+                format!("Basic {}", encoded)
+            }
+            CredentialState::Resolved(ResolvedCredential::EsApiKey(m)) => {
+                let encoded = BASE64.encode(format!("{}:{}", m.api_key_id, m.api_key_secret));
+                format!("ApiKey {}", encoded)
+            }
+            CredentialState::Resolved(ResolvedCredential::Bearer(m)) => {
+                format!("Bearer {}", m.token)
+            }
+            CredentialState::Resolved(ResolvedCredential::Hmac(_)) => anyhow::bail!(
+                "Elasticsearch auth does not support HMAC material (internal bug: resolver selected wrong variant)"
+            ),
+            CredentialState::Pending => anyhow::bail!(
+                "Elasticsearch auth is configured via secretRef but credential material \
+                 has not been resolved yet; refusing to build client without credentials"
+            ),
+            CredentialState::Invalid(reason) => {
+                anyhow::bail!("Elasticsearch credential material is invalid: {reason}");
+            }
+            CredentialState::NotRequired => anyhow::bail!(
+                "Elasticsearch auth configured in CRD but credential state is NotRequired (internal bug)"
+            ),
+        };
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&auth_header).context("invalid auth header value")?,
+        );
     }
 
     builder = builder.default_headers(headers.clone());
@@ -133,8 +158,18 @@ pub fn build_es_client(crd: &ElasticsearchClientConfig) -> Result<(Client, Heade
             );
             builder = builder.danger_accept_invalid_certs(true);
         }
-        // TODO: Build rustls config from CRD certs/CA when TLS certs are provided.
-        // Reuse Edgion's existing TLS config builder (src/core/tls/) in future iteration.
+
+        // CA + client mTLS from inline PEM and/or embedded K8s Secret.
+        if let Some(material) = tls_helper::build_material(tls) {
+            if let Some(ca_pem) = &material.ca_pem {
+                let cert = Certificate::from_pem(ca_pem).context("invalid ES CA certificate PEM")?;
+                builder = builder.add_root_certificate(cert);
+            }
+            if let Some(combined) = tls_helper::combined_identity_pem(&material) {
+                let identity = Identity::from_pem(combined.as_slice()).context("invalid ES client identity PEM")?;
+                builder = builder.identity(identity);
+            }
+        }
     }
 
     let client = builder.build().context("failed to build reqwest client")?;
@@ -208,66 +243,128 @@ impl EsBulkConfig {
 mod tests {
     use super::*;
 
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    use crate::core::gateway::link_sys::credential::{CredentialState, InvalidReason, ResolvedCredential};
+    use crate::types::credentials::materials::{BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial};
+
+    /// Shorthand: `NotRequired` state.
+    fn no_auth() -> CredentialState<ResolvedCredential> {
+        CredentialState::NotRequired
+    }
+
+    fn basic_auth_crd() -> ElasticsearchClientConfig {
+        use crate::types::resources::common::SecretReference;
+        ElasticsearchClientConfig {
+            auth: Some(ElasticsearchAuth::Basic {
+                secret_ref: SecretReference {
+                    name: "es-creds".to_string(),
+                    namespace: None,
+                },
+                secret: None,
+            }),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_build_es_client_simple() {
         let crd = ElasticsearchClientConfig::default();
-        let (_, headers) = build_es_client(&crd).unwrap();
+        let (_, headers) = build_es_client(&crd, &no_auth()).unwrap();
         assert!(headers.get("content-type").is_some());
         assert!(headers.get("authorization").is_none());
     }
 
     #[test]
     fn test_build_es_client_basic_auth() {
-        let crd = ElasticsearchClientConfig {
-            auth: Some(EsAuth {
-                username: Some("elastic".to_string()),
-                password: Some("secret".to_string()),
-                api_key_id: None,
-                api_key_secret: None,
-                bearer_token: None,
-                secret_ref: None,
-            }),
-            ..Default::default()
-        };
-        let (_, headers) = build_es_client(&crd).unwrap();
+        let crd = basic_auth_crd();
+        let state = CredentialState::Resolved(ResolvedCredential::Basic(BasicAuthMaterial {
+            username: Some("user".to_string()),
+            password: "secret".to_string(),
+        }));
+        let (_, headers) = build_es_client(&crd, &state).unwrap();
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
-        assert!(auth.starts_with("Basic "));
+        let expected = format!("Basic {}", BASE64.encode("user:secret"));
+        assert_eq!(auth, expected);
     }
 
     #[test]
     fn test_build_es_client_api_key_auth() {
+        use crate::types::resources::common::SecretReference;
         let crd = ElasticsearchClientConfig {
-            auth: Some(EsAuth {
-                username: None,
-                password: None,
-                api_key_id: Some("my-key-id".to_string()),
-                api_key_secret: Some("my-key-secret".to_string()),
-                bearer_token: None,
-                secret_ref: None,
+            auth: Some(ElasticsearchAuth::ApiKey {
+                secret_ref: SecretReference {
+                    name: "es-api-key".to_string(),
+                    namespace: None,
+                },
+                secret: None,
             }),
             ..Default::default()
         };
-        let (_, headers) = build_es_client(&crd).unwrap();
+        let state = CredentialState::Resolved(ResolvedCredential::EsApiKey(EsApiKeyMaterial {
+            api_key_id: "id".to_string(),
+            api_key_secret: "sec".to_string(),
+        }));
+        let (_, headers) = build_es_client(&crd, &state).unwrap();
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
-        assert!(auth.starts_with("ApiKey "));
+        let expected = format!("ApiKey {}", BASE64.encode("id:sec"));
+        assert_eq!(auth, expected);
+    }
+
+    /// I4 / M4 regression: `Pending` state → fail-fast.
+    #[test]
+    fn test_build_es_client_auth_pending_fails_fast() {
+        let crd = basic_auth_crd();
+        let err = build_es_client(&crd, &CredentialState::Pending).expect_err("should refuse pending");
+        assert!(
+            err.to_string().contains("has not been resolved"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// M4 regression: `Invalid` state → fail-fast with reason surfaced.
+    #[test]
+    fn test_build_es_client_auth_invalid_fails_fast() {
+        let crd = basic_auth_crd();
+        let state = CredentialState::Invalid(InvalidReason::ParseFailed("missing keys: [password]".into()));
+        let err = build_es_client(&crd, &state).expect_err("should refuse invalid");
+        assert!(
+            err.to_string().contains("invalid") && err.to_string().contains("missing"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// Invariant guard: CRD has `auth` but state says `NotRequired` — this
+    /// can only happen if `credential::resolved_state` is buggy. Fail-fast.
+    #[test]
+    fn test_build_es_client_crd_has_auth_but_state_not_required_is_internal_bug() {
+        let crd = basic_auth_crd();
+        let err = build_es_client(&crd, &CredentialState::NotRequired).expect_err("should refuse");
+        assert!(
+            err.to_string().contains("internal bug"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[test]
     fn test_build_es_client_bearer_auth() {
+        use crate::types::resources::common::SecretReference;
         let crd = ElasticsearchClientConfig {
-            auth: Some(EsAuth {
-                username: None,
-                password: None,
-                api_key_id: None,
-                api_key_secret: None,
-                bearer_token: Some("my-token".to_string()),
-                secret_ref: None,
+            auth: Some(ElasticsearchAuth::Bearer {
+                secret_ref: SecretReference {
+                    name: "es-token".to_string(),
+                    namespace: None,
+                },
+                secret: None,
             }),
             ..Default::default()
         };
-        let (_, headers) = build_es_client(&crd).unwrap();
+        let state = CredentialState::Resolved(ResolvedCredential::Bearer(BearerMaterial {
+            token: "tokval".to_string(),
+        }));
+        let (_, headers) = build_es_client(&crd, &state).unwrap();
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
-        assert_eq!(auth, "Bearer my-token");
+        assert_eq!(auth, "Bearer tokval");
     }
 
     #[test]
@@ -323,7 +420,6 @@ mod tests {
             }),
             ..Default::default()
         };
-        // Should not error — clamping is internal
-        let (_, _) = build_es_client(&crd).unwrap();
+        let (_, _) = build_es_client(&crd, &no_auth()).unwrap();
     }
 }

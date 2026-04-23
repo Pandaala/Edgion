@@ -5,9 +5,10 @@
 //! - Cascading requeue for dependent resources (EdgionTls, Gateway)
 
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::ByteString;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ProcessResult, ProcessorHandler,
@@ -112,13 +113,41 @@ impl Default for SecretHandler {
     }
 }
 
+/// Merge `stringData` into `data` following Kubernetes semantics.
+///
+/// - `stringData` values overwrite any `data` entry with the same key.
+/// - `stringData` is cleared after merging, so the in-memory Secret has a
+///   single authoritative `data` map.
+/// - No-op when both maps are absent or empty.
+fn normalize_string_data(secret: &mut Secret) {
+    let Some(string_data) = secret.string_data.take() else {
+        return;
+    };
+    if string_data.is_empty() {
+        return;
+    }
+    let data = secret.data.get_or_insert_with(BTreeMap::new);
+    for (k, v) in string_data {
+        data.insert(k, ByteString(v.into_bytes()));
+    }
+}
+
 #[async_trait::async_trait]
 impl ProcessorHandler<Secret> for SecretHandler {
-    async fn parse(&self, secret: Secret, ctx: &HandlerContext) -> ProcessResult<Secret> {
+    async fn parse(&self, mut secret: Secret, ctx: &HandlerContext) -> ProcessResult<Secret> {
         let secret_key = format_secret_key(
             secret.metadata.namespace.as_ref(),
             secret.metadata.name.as_deref().unwrap_or(""),
         );
+
+        // Normalize `stringData` into `data` so downstream consumers
+        // (SecretMaterialResolver, TLS callback, plugin pipelines) see a single
+        // `data` map regardless of how the Secret was authored.
+        //
+        // Matches Kubernetes server-side semantics: stringData values are
+        // copied into data (UTF-8 -> bytes) and overwrite any pre-existing
+        // entries with the same key.
+        normalize_string_data(&mut secret);
 
         // During init phase, accumulate for authoritative replace_all at init_done.
         {
@@ -181,7 +210,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::SecretHandler;
+    use super::{normalize_string_data, SecretHandler};
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
@@ -219,5 +248,54 @@ mod tests {
             &secret,
             &["clientSecret", "client_secret", "secret"]
         ));
+    }
+
+    #[test]
+    fn normalize_string_data_copies_into_data_and_clears() {
+        let mut secret = Secret::default();
+        let mut sd = BTreeMap::new();
+        sd.insert("password".to_string(), "hunter2".to_string());
+        sd.insert("username".to_string(), "alice".to_string());
+        secret.string_data = Some(sd);
+
+        normalize_string_data(&mut secret);
+
+        assert!(secret.string_data.is_none(), "stringData must be cleared");
+        let data = secret.data.expect("data must be present");
+        assert_eq!(data.get("password").unwrap().0, b"hunter2".to_vec());
+        assert_eq!(data.get("username").unwrap().0, b"alice".to_vec());
+    }
+
+    #[test]
+    fn normalize_string_data_overrides_existing_data_entry() {
+        let mut secret = Secret::default();
+        let mut data = BTreeMap::new();
+        data.insert("password".to_string(), ByteString(b"old".to_vec()));
+        secret.data = Some(data);
+        let mut sd = BTreeMap::new();
+        sd.insert("password".to_string(), "new".to_string());
+        secret.string_data = Some(sd);
+
+        normalize_string_data(&mut secret);
+
+        let data = secret.data.unwrap();
+        assert_eq!(
+            data.get("password").unwrap().0,
+            b"new".to_vec(),
+            "stringData must win over data for duplicate keys"
+        );
+    }
+
+    #[test]
+    fn normalize_string_data_noop_when_absent() {
+        let mut secret = Secret::default();
+        let mut data = BTreeMap::new();
+        data.insert("key".to_string(), ByteString(b"val".to_vec()));
+        secret.data = Some(data);
+
+        normalize_string_data(&mut secret);
+
+        assert!(secret.string_data.is_none());
+        assert_eq!(secret.data.unwrap().get("key").unwrap().0, b"val".to_vec());
     }
 }

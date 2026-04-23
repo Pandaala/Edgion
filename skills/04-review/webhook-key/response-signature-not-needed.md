@@ -21,7 +21,7 @@
 4. **响应签名唯一价值 = TLS 配错兜底**：
    - operator 设了 `insecure_skip_verify: true` 或用 `http://` URI 时才相关
    - 这是操作失误，不是代码缺口；正确解法是修正配置，不是给错误配置加兜底
-5. **Webhook TLS 支持已完备**：`WebhookTls { enabled, certs, insecure_skip_verify }` + mTLS via `secretRef` 全套能力已存在；operator 应用
+5. **Webhook TLS 支持已完备**：统一 `TlsConfig { enabled, certs, insecure_skip_verify }` + mTLS via `secretRef` 全套能力已存在；operator 应用
 6. **URI 是 operator 静态配置**：不是用户可控输入，没有"用户诱导 Edgion 调向恶意端点"的攻击面；与 H3 ForwardAuth/Webhook SSRF NOT-AN-ISSUE 判定一致
 
 ## 判定规则
@@ -37,7 +37,7 @@
 
 - `webhook/resolver.rs::extract_value_from_response` 仍直接返回提取值，无签名校验调用
 - `WebhookProviderConfig` 无 `responseSignature` / `signatureHeader` 字段
-- `WebhookTls { enabled, certs, insecure_skip_verify, secret_ref }` 四件套仍完整存在
+- `TlsConfig { enabled, certs, insecure_skip_verify }`（含 `certs.secret_ref`）四件套仍完整存在
 
 三点满足 → 架构取舍，指向 `tasks/security-audit/04-admin-api.md` L1 NOT-AN-ISSUE 决策关闭。
 

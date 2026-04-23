@@ -1365,6 +1365,7 @@ dependencies = [
  "rpassword",
  "rusqlite",
  "rustls",
+ "rustls-native-certs 0.8.3",
  "schemars",
  "serde",
  "serde_json",

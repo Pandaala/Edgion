@@ -113,9 +113,11 @@ pub fn build_webhook_client(
         builder = builder.danger_accept_invalid_certs(true);
     }
 
-    if let Some(ref certs) = tls.certs {
-        if let Some(ref ca_pem) = certs.ca_cert {
-            match Certificate::from_pem(ca_pem.as_bytes()) {
+    // Resolve CA / mTLS from inline PEM + embedded Secret (private key is
+    // secret-only; inline is rejected by `TlsCerts::deny_unknown_fields`).
+    if let Some(material) = crate::core::gateway::link_sys::tls::build_material(tls) {
+        if let Some(ca_pem) = &material.ca_pem {
+            match Certificate::from_pem(ca_pem) {
                 Ok(cert) => {
                     builder = builder.add_root_certificate(cert);
                 }
@@ -126,11 +128,8 @@ pub fn build_webhook_client(
             }
         }
 
-        if let (Some(ref client_cert), Some(ref client_key)) = (&certs.client_cert, &certs.client_key) {
-            let mut pem = client_cert.clone();
-            pem.push('\n');
-            pem.push_str(client_key);
-            match Identity::from_pem(pem.as_bytes()) {
+        if let Some(combined) = crate::core::gateway::link_sys::tls::combined_identity_pem(&material) {
+            match Identity::from_pem(combined.as_slice()) {
                 Ok(identity) => {
                     builder = builder.identity(identity);
                 }

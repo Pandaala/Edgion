@@ -1,5 +1,6 @@
 pub mod common;
 pub mod constants;
+pub mod credentials;
 pub mod ctx;
 pub mod edgion_status;
 pub mod err;
