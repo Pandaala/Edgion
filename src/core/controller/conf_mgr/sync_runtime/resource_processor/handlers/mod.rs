@@ -20,6 +20,7 @@ pub(crate) mod hostname_resolution;
 mod http_route;
 mod link_sys;
 mod plugin_metadata;
+mod plugins;
 mod reference_grant;
 pub(crate) mod route_utils;
 mod secret;
