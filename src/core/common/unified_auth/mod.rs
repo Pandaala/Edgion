@@ -49,7 +49,7 @@ use super::auth::AdminAuthConfig;
 use super::local_auth::config::LocalAuthConfig;
 use super::local_auth::handlers::LocalAuthClaims;
 use super::local_auth::middleware::LocalAuthState;
-use crate::core::gateway::plugins::http::common::jwt_common::{
+use crate::core::common::jwt_common::{
     map_jwt_decode_error, resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError,
 };
 

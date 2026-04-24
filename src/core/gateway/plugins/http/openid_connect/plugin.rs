@@ -25,7 +25,7 @@ use crate::core::gateway::plugins::http::common::auth_common::{
     send_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
 use crate::core::gateway::plugins::http::common::http_client::get_http_client_with_ssl_verify;
-use crate::core::gateway::plugins::http::common::jwt_common::{
+use crate::core::common::jwt_common::{
     map_jwt_decode_error, resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError,
 };
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};

@@ -3,9 +3,7 @@
 //! Used by both the Controller's PluginMetadataHandler and Center's CenterMetaDataStore
 //! to parse raw PluginMetaData resources into typed cluster/service route entries.
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
-    ClusterRegionRouteEntry, ServiceRegionRouteEntry,
-};
+use crate::types::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
 use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
 use crate::types::resources::plugin_metadata::{MetaDataEntry, PluginMetaData};
 

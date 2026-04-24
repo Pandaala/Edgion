@@ -98,3 +98,44 @@ pub struct RouteByKeyConfMatchMeta {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bypass_cluster_keys: Vec<String>,
 }
+
+/// Parsed ClusterRegionRoute entry stored in the RegionRoute index.
+///
+/// Derived from a PluginMetaData with a ClusterRegionRoute spec. Used by both
+/// the Controller's in-memory table and the Center's aggregated store.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterRegionRouteEntry {
+    pub pm_namespace: String,
+    pub pm_name: String,
+    pub my_region: String,
+    pub regions: Vec<RegionDef>,
+    pub key_get: Vec<KeyGet>,
+    pub hash_key_get: Option<Vec<KeyGet>>,
+    pub hash_calc: Option<HashCalcConfig>,
+    pub route_rules: Vec<RouteRule>,
+    pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
+}
+
+/// Reference to an EdgionPlugin resource that uses a ServiceRegionRoute PluginMetaData.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefPluginEntry {
+    pub kind: String,
+    pub namespace: String,
+    pub name: String,
+}
+
+/// Parsed ServiceRegionRoute entry stored in the RegionRoute index.
+///
+/// Derived from a PluginMetaData with a ServiceRegionRoute spec. The `ref_plugins`
+/// field is only populated by the Controller (Center always leaves it empty).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRegionRouteEntry {
+    pub pm_namespace: String,
+    pub pm_name: String,
+    pub cluster_pm_ref: Option<PluginMetaDataRef>,
+    pub regions: Vec<ServiceRegionDef>,
+    pub ref_plugins: Vec<RefPluginEntry>,
+}

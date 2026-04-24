@@ -1,5 +1,6 @@
 pub mod api;
 pub mod auth;
+pub mod jwt_common;
 pub mod conf_sync;
 pub mod config;
 pub mod fed_sync;

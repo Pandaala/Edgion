@@ -129,6 +129,12 @@ src/core/controller/
 
 ```
 src/core/common/
+├── auth/         # OIDC JWT 认证状态（AuthMiddlewareState、JWKS 缓存）
+├── local_auth/   # 本地 HS256 JWT 认证（登录、token 签发）
+├── unified_auth/ # 统一认证中间件（OIDC + local 顺序验证）
+├── api/          # Admin API 路由组合工具（compose、auth 层包装）
+├── jwt_common.rs # 通用 JWT/JWK 工具函数（算法策略、JWK 选择、错误映射）
+│                 #   ← common 和 gateway 均依赖此模块；gateway 不可反向依赖 common
 ├── conf_sync/    # 共享 proto / traits / 同步类型
 │   ├── proto/        # protobuf 定义
 │   ├── traits/       # CacheEventDispatch + ConfHandler
@@ -145,6 +151,13 @@ src/core/common/
     ├── metadata_filter/  # 元数据清理
     └── proxy_protocol/   # PROXY Protocol
 ```
+
+**依赖方向约束**：
+- `common` 不可依赖 `gateway`
+- `common` 不可依赖 `controller`
+- `center` 不可依赖 `controller`
+
+跨 bin 共用的类型（如 RegionRoute Entry 类型）必须放在 `types/`，让各方依赖 `types` 而非互相依赖。JWT/JWK 工具等被双方共用的逻辑必须放在 `common/`，由 gateway/center 反过来引用。
 
 不要仅为了避免跨模块导入就把代码移到 `common/`。保持业务归属明确。
 
@@ -188,6 +201,7 @@ src/types/
 | 扁平 gateway 桶如 `gateway/http_routes`、`gateway/health_check` | 按子系统组织 |
 | 新的兼容性 shim 隐藏真实归属 | 直接放在正确的 bin 组 |
 | 在 `types/` 中放执行逻辑 | types 只放数据定义 |
+| `common` 或 `center` 导入 `controller` 内部模块 | 将共用类型提升到 `types/`，让各方依赖 types |
 | 在 gateway 中直接调用 kube-rs API | 通过 ConfigClient 从 Controller 同步 |
 | 插件直接访问数据库/外部系统 | 通过 LinkSysStore 中的客户端 |
 
