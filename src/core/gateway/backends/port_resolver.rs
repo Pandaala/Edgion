@@ -25,12 +25,7 @@ pub enum PortLookupSource {
 /// For single-port Services where port != targetPort (e.g. port:443 -> targetPort:8443),
 /// the addr may still carry the Service port if the LB was built before EndpointSlice sync.
 /// This function corrects it by looking up the targetPort directly from the Service spec.
-pub fn resolve_target_port(
-    addr: &mut SocketAddr,
-    br_port: Option<i32>,
-    service_key: &str,
-    source: PortLookupSource,
-) {
+pub fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key: &str, source: PortLookupSource) {
     let Some(br_port_val) = br_port else {
         return;
     };

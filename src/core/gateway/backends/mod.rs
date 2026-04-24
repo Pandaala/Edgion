@@ -3,7 +3,7 @@ pub mod discovery;
 pub mod endpoint_mode;
 pub mod gateway_backend_tls_store;
 pub mod health;
-pub mod peer_builder;
+pub(crate) mod peer_builder;
 pub mod policy;
 pub mod port_resolver;
 pub mod preload;
@@ -90,20 +90,21 @@ pub(crate) fn try_get_peer(
     };
 
     let service_type = EdgionService::from_kind(br_kind);
-    // Clone all borrowed fields from ctx before any mutable borrow of ctx (needed for
-    // the borrow checker since build_peer_from_lb_selection takes &mut ctx).
-    let br_name = br_name.clone();
-    let lb_policy = lb_policy.clone();
-    let backend_tls_policy = backend_tls_policy.clone();
 
-    // Get backend info for service key
+    // Form service_key while the immutable borrows of ctx are still alive — avoids
+    // cloning br_name / namespace on the hot path.
     let namespace = ctx
         .backend_context
         .as_ref()
-        .map(|bc| bc.rsc.ns.clone())
+        .map(|bc| bc.rsc.ns.as_str())
         .ok_or(EdgionStatus::Unknown)?;
-
     let service_key = format!("{}/{}", namespace, br_name);
+
+    // Clone only the fields we hand to build_peer_from_lb_selection as owned values
+    // (the helper takes &mut ctx, which would invalidate the ctx-borrowed references).
+    let lb_policy = lb_policy.clone();
+    let backend_tls_policy = backend_tls_policy.clone();
+
     let backend_app_protocol = detect_backend_app_protocol(&service_key, br_port);
 
     match service_type {
