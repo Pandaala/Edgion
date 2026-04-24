@@ -2,11 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, HandlerContext, ResourceRef,
-};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
     fetch_secret, PendingReason, ResolveOutcome,
+};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    format_secret_key, HandlerContext, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::common::SecretReference;
@@ -35,10 +35,8 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         name: sor.name.clone(),
                         namespace: sor.namespace.clone(),
                     };
-                    let secret_key = format_secret_key(
-                        sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()),
-                        &sor.name,
-                    );
+                    let secret_key =
+                        format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
                         ResolveOutcome::Ok(s) => s,
                         ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
@@ -175,8 +173,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                     tracing::info!(
                         edgion_plugins = %resource_ref.key(),
                         key_count = all_keys.len(),
-                        "KeyAuth: Resolved {} API keys from Secrets",
-                        all_keys.len()
+                        "KeyAuth: Resolved API keys from Secrets"
                     );
                     config.resolved_keys = Some(all_keys);
                 } else {

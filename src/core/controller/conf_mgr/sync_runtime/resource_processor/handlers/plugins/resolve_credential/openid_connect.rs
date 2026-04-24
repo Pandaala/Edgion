@@ -1,11 +1,11 @@
 //! OpenID Connect credential resolution.
 
 use super::read_secret_utf8;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, HandlerContext, ResourceRef,
-};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
     fetch_secret, PendingReason, ResolveOutcome,
+};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    format_secret_key, HandlerContext, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::common::SecretReference;
@@ -29,14 +29,11 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         name: sor.name.clone(),
                         namespace: sor.namespace.clone(),
                     };
-                    let secret_key = format_secret_key(
-                        sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()),
-                        &sor.name,
-                    );
+                    let secret_key =
+                        format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
                         ResolveOutcome::Ok(secret) => {
-                            let resolved =
-                                read_secret_utf8(&secret, &["clientSecret", "client_secret", "secret"]);
+                            let resolved = read_secret_utf8(&secret, &["clientSecret", "client_secret", "secret"]);
                             if let Some(value) = resolved {
                                 config.resolved_client_secret = Some(value);
                                 tracing::debug!(
@@ -81,14 +78,11 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         name: sor.name.clone(),
                         namespace: sor.namespace.clone(),
                     };
-                    let secret_key = format_secret_key(
-                        sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()),
-                        &sor.name,
-                    );
+                    let secret_key =
+                        format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
                         ResolveOutcome::Ok(secret) => {
-                            let resolved =
-                                read_secret_utf8(&secret, &["sessionSecret", "session_secret", "secret"]);
+                            let resolved = read_secret_utf8(&secret, &["sessionSecret", "session_secret", "secret"]);
                             if let Some(value) = resolved {
                                 config.resolved_session_secret = Some(value);
                                 tracing::debug!(

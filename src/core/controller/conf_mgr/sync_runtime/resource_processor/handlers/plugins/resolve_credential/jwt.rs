@@ -4,11 +4,11 @@ use std::collections::HashMap;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, HandlerContext, ResourceRef,
-};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
     fetch_secret, PendingReason, ResolveOutcome,
+};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    format_secret_key, HandlerContext, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::common::SecretReference;
@@ -31,10 +31,8 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         name: sor.name.clone(),
                         namespace: sor.namespace.clone(),
                     };
-                    let secret_key = format_secret_key(
-                        sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()),
-                        &sor.name,
-                    );
+                    let secret_key =
+                        format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
                         ResolveOutcome::Ok(secret) => {
                             if let Some(data) = &secret.data {
@@ -89,6 +87,8 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                             name: sor.name.clone(),
                             namespace: sor.namespace.clone(),
                         };
+                        let secret_key =
+                            format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                         match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
                             ResolveOutcome::Ok(secret) => {
                                 if let Some(data) = &secret.data {
@@ -110,7 +110,29 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                                     }
                                 }
                             }
-                            ResolveOutcome::Pending(_) | ResolveOutcome::Invalid(_) => continue,
+                            ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+                                tracing::info!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    secret_key = %secret_key,
+                                    "JwtAuth: Secret not found yet, will be reprocessed when Secret arrives"
+                                );
+                                continue;
+                            }
+                            ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                                ref from_ns,
+                                ref to_ns,
+                                ref secret_name,
+                            }) => {
+                                tracing::warn!(
+                                    edgion_plugins = %resource_ref.key(),
+                                    from_ns = %from_ns,
+                                    to_ns = %to_ns,
+                                    secret_name = %secret_name,
+                                    "JwtAuth: cross-namespace Secret reference denied (ReferenceGrant missing)"
+                                );
+                                continue;
+                            }
+                            ResolveOutcome::Invalid(_) => continue,
                         }
                     }
                     if !resolved.is_empty() {

@@ -3,11 +3,11 @@
 use std::collections::{HashMap, HashSet};
 
 use super::read_secret_utf8;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, HandlerContext, ResourceRef,
-};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
     fetch_secret, PendingReason, ResolveOutcome,
+};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
+    format_secret_key, HandlerContext, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::common::SecretReference;
@@ -40,10 +40,8 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         name: sor.name.clone(),
                         namespace: sor.namespace.clone(),
                     };
-                    let secret_key = format_secret_key(
-                        sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()),
-                        &sor.name,
-                    );
+                    let secret_key =
+                        format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
                         ResolveOutcome::Ok(s) => s,
                         ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
@@ -80,19 +78,19 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         continue;
                     };
 
-                    let entries: Vec<HashMap<String, serde_yaml::Value>> =
-                        match serde_yaml::from_str(&credentials_yaml) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!(
-                                    edgion_plugins = %resource_ref.key(),
-                                    secret_key = %secret_key,
-                                    error = %e,
-                                    "HmacAuth: Failed to parse credentials.yaml"
-                                );
-                                continue;
-                            }
-                        };
+                    let entries: Vec<HashMap<String, serde_yaml::Value>> = match serde_yaml::from_str(&credentials_yaml)
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                error = %e,
+                                "HmacAuth: Failed to parse credentials.yaml"
+                            );
+                            continue;
+                        }
+                    };
 
                     for entry_map in entries {
                         let username = entry_map
