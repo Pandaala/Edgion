@@ -145,7 +145,7 @@ pub fn fetch_secret(
 fn check_secret_type<R: SecretMaterialResolver>(secret: &Secret, resolver: &R) -> Option<InvalidCredentialError> {
     let allowed = resolver.allowed_secret_types();
     let got = secret.type_.as_deref().unwrap_or("");
-    if allowed.iter().any(|a| *a == got) {
+    if allowed.contains(&got) {
         None
     } else {
         Some(InvalidCredentialError::InvalidSecretType {
