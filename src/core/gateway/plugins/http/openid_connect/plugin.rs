@@ -22,8 +22,8 @@ use tokio::sync::{Mutex, RwLock};
 use crate::core::common::jwt_common::{
     map_jwt_decode_error, resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError,
 };
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
 use crate::core::gateway::cache::ShardedLruCache;
+use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{
     send_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
@@ -139,10 +139,64 @@ pub struct OpenidConnect {
     refresh_singleflight_results: Arc<Mutex<HashMap<String, RefreshSingleflightResult>>>,
 }
 
-#[path = "openid_impl.rs"]
-mod openid_impl;
+impl OpenidConnect {
+    pub fn new(config: &OpenidConnectConfig, plugin_namespace: String) -> Self {
+        Self {
+            name: "OpenidConnect".to_string(),
+            config: config.clone(),
+            plugin_namespace,
+            discovery_doc: Arc::new(RwLock::new(None)),
+            discovery_refresh: Arc::new(Mutex::new(())),
+            jwks_state: Arc::new(RwLock::new(JwksState::default())),
+            jwks_refresh: Arc::new(Mutex::new(())),
+            introspection_cache: Arc::new(ShardedLruCache::new(
+                if config.introspection.lru_cache.capacity == 0 {
+                    get_default_lru_cache_capacity()
+                } else {
+                    config.introspection.lru_cache.capacity
+                },
+                if config.introspection.lru_cache.shards > 0 {
+                    config.introspection.lru_cache.shards
+                } else {
+                    get_default_lru_cache_shards()
+                },
+            )),
+            access_token_cache: Arc::new(ShardedLruCache::new(
+                if config.access_token.lru_cache.capacity == 0 {
+                    get_default_lru_cache_capacity()
+                } else {
+                    config.access_token.lru_cache.capacity
+                },
+                if config.access_token.lru_cache.shards > 0 {
+                    config.access_token.lru_cache.shards
+                } else {
+                    get_default_lru_cache_shards()
+                },
+            )),
+            refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),
+            refresh_singleflight_results: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[path = "callback.rs"]
+mod callback;
+#[path = "config_validation.rs"]
+mod config_validation;
+#[path = "discovery_jwks.rs"]
+mod discovery_jwks;
+#[path = "logout.rs"]
+mod logout;
 #[path = "request_filter_impl.rs"]
 mod request_filter_impl;
+#[path = "session_cookie.rs"]
+mod session_cookie;
+#[path = "token_exchange.rs"]
+mod token_exchange;
+#[path = "token_verify.rs"]
+mod token_verify;
+#[path = "userinfo.rs"]
+mod userinfo;
 
 #[cfg(test)]
 #[path = "tests.rs"]
