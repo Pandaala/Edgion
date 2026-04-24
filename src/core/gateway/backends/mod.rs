@@ -4,6 +4,7 @@ pub mod endpoint_mode;
 pub mod gateway_backend_tls_store;
 pub mod health;
 pub mod policy;
+pub mod port_resolver;
 pub mod preload;
 pub mod service_kind;
 pub mod validation;
@@ -21,6 +22,7 @@ pub use endpoint_mode::{
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
 pub use policy::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
+pub use port_resolver::{resolve_target_port, PortLookupSource};
 pub use preload::preload_load_balancers;
 pub use service_kind::EdgionService;
 pub use validation::validate_endpoint_in_route;
@@ -30,9 +32,10 @@ use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::resources::BackendTLSPolicy;
-use crate::types::{ConsistentHashOn, EdgionHttpContext, HTTPBackendRef, ParsedLBPolicy};
+use crate::types::{ConsistentHashOn, EdgionHttpContext, ParsedLBPolicy};
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
+use port_resolver::resolve_port_name;
 #[cfg(feature = "boringssl")]
 use pingora_core::protocols::tls::CaType;
 #[cfg(feature = "boringssl")]
@@ -148,137 +151,6 @@ fn apply_backend_app_protocol(
             }
         }
         None => {}
-    }
-}
-
-/// Get port from BackendRef or Service spec
-/// Returns error if port is not available in either place
-#[inline]
-#[allow(dead_code)]
-fn get_port_from_backend_ref_or_service(
-    br: &HTTPBackendRef,
-    service: &k8s_openapi::api::core::v1::Service,
-) -> Result<u16, EdgionStatus> {
-    match br.port {
-        Some(p) => Ok(p as u16),
-        None => service
-            .spec
-            .as_ref()
-            .and_then(|spec| spec.ports.as_ref())
-            .and_then(|ports| ports.first())
-            .map(|p| p.port as u16)
-            .ok_or(EdgionStatus::BackendPortResolutionFailed),
-    }
-}
-
-/// Which endpoint resource to query when resolving targetPort by port name.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum PortLookupSource {
-    /// Determine from global endpoint mode (for `EdgionService::Service`).
-    Auto,
-    /// Force EndpointSlice (for `EdgionService::ServiceEndpointSlice`).
-    EndpointSlice,
-    /// Force Endpoint (for `EdgionService::ServiceEndpoint`).
-    Endpoint,
-}
-
-/// Resolve the correct targetPort for a backend address selected from the load balancer.
-///
-/// The LB stores backends with the targetPort from the first port entry in EndpointSlice/Endpoint.
-/// For multi-port Services, `br_port` (backendRef.port = Service port number) may refer to a
-/// different port entry. This function looks up the correct targetPort via:
-///   br_port (Service port) -> Service.spec.ports[].name -> EndpointSlice/Endpoint port name -> targetPort
-///
-/// For single-port Services where port != targetPort (e.g. port:443 -> targetPort:8443),
-/// the addr may still carry the Service port if the LB was built before EndpointSlice sync.
-/// This function corrects it by looking up the targetPort directly from the Service spec.
-pub(crate) fn resolve_target_port(
-    addr: &mut SocketAddr,
-    br_port: Option<i32>,
-    service_key: &str,
-    source: PortLookupSource,
-) {
-    let Some(br_port_val) = br_port else {
-        return;
-    };
-
-    let svc_store = get_global_service_store();
-    let Some(service) = svc_store.get(service_key) else {
-        return;
-    };
-
-    let Some(svc_ports) = service.spec.as_ref().and_then(|s| s.ports.as_ref()) else {
-        return;
-    };
-
-    let Some(svc_port_entry) = svc_ports.iter().find(|p| p.port == br_port_val) else {
-        return;
-    };
-
-    // For single-port Services (or when port name is empty), fall back to
-    // direct targetPort lookup from the Service spec. This handles cases where
-    // port != targetPort and the LB backend address carries the wrong port.
-    if svc_ports.len() <= 1 || svc_port_entry.name.as_deref().map_or(true, |n| n.is_empty()) {
-        if let Some(tp) = &svc_port_entry.target_port {
-            let target = match tp {
-                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(p) => Some(*p as u16),
-                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::String(s) => s.parse::<u16>().ok(),
-            };
-            if let Some(target_port) = target {
-                let current_port = addr.as_inet().map(|a| a.port()).unwrap_or(0);
-                if current_port != target_port {
-                    addr.set_port(target_port);
-                }
-            }
-        }
-        return;
-    }
-
-    // SAFETY: the early-return at L310 (`name.as_deref().map_or(true, |n| n.is_empty())`)
-    // ensures `name` is `Some` and non-empty whenever we reach here.
-    let port_name = svc_port_entry.name.as_deref().unwrap();
-
-    let use_endpoint_slice = match source {
-        PortLookupSource::EndpointSlice => true,
-        PortLookupSource::Endpoint => false,
-        PortLookupSource::Auto => !matches!(get_global_endpoint_mode(), EndpointMode::Endpoint),
-    };
-
-    let resolved = if use_endpoint_slice {
-        get_roundrobin_store()
-            .get_slices_for_service(service_key)
-            .and_then(|slices| {
-                slices.iter().find_map(|s| {
-                    s.ports.as_ref()?.iter().find_map(|p| {
-                        if p.name.as_deref() == Some(port_name) {
-                            p.port.map(|v| v as u16)
-                        } else {
-                            None
-                        }
-                    })
-                })
-            })
-    } else {
-        get_endpoint_roundrobin_store()
-            .get_endpoint_for_service(service_key)
-            .and_then(|ep| {
-                ep.subsets.as_ref()?.iter().find_map(|subset| {
-                    subset.ports.as_ref()?.iter().find_map(|p| {
-                        if p.name.as_deref() == Some(port_name) {
-                            Some(p.port as u16)
-                        } else {
-                            None
-                        }
-                    })
-                })
-            })
-    };
-
-    if let Some(target_port) = resolved {
-        let current_port = addr.as_inet().map(|a| a.port()).unwrap_or(0);
-        if current_port != target_port {
-            addr.set_port(target_port);
-        }
     }
 }
 
@@ -988,21 +860,6 @@ pub fn query_backend_tls_policy_for_service(
 
     // 3) Last resort: highest priority policy (original behavior)
     policies.into_iter().next()
-}
-
-/// Resolve a Service port number to its port name.
-fn resolve_port_name(service_name: &str, namespace: Option<&str>, port: i32) -> Option<String> {
-    let ns = namespace.unwrap_or("");
-    let key = format!("{}/{}", ns, service_name);
-    let svc_store = get_global_service_store();
-    svc_store.with_service(&key, |svc| {
-        svc.spec
-            .as_ref()?
-            .ports
-            .as_ref()?
-            .iter()
-            .find_map(|sp| if sp.port == port { sp.name.clone() } else { None })
-    })?
 }
 
 /// Get HTTP peer from service and endpoint slice stores using load balancing
