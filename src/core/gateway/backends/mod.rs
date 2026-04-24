@@ -11,6 +11,7 @@ pub mod selector;
 pub mod service_kind;
 pub mod validation;
 
+use crate::types::resources::BackendTLSPolicy;
 pub use circuit_breaker::{get_circuit_breaker_store, parse_circuit_breaker_annotation};
 pub use discovery::{
     create_endpoint_handler, create_ep_slice_handler, create_service_handler, get_endpoint_roundrobin_store,
@@ -38,12 +39,13 @@ use crate::types::edgion_status::EdgionStatus;
 use crate::types::{EdgionHttpContext, ParsedLBPolicy};
 use peer_builder::{
     apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol, extract_tls_config,
-    record_tls_to_upstream, validate_backend_addr,
+    record_tls_to_upstream, validate_backend_addr, BackendAppProtocol,
 };
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
+use std::sync::Arc;
 
 use selector::{
     extract_hash_key, is_backend_healthy, select_backend_by_policy, select_from_endpoint_slice, select_from_endpoints,
@@ -88,13 +90,17 @@ pub(crate) fn try_get_peer(
     };
 
     let service_type = EdgionService::from_kind(br_kind);
+    // Clone all borrowed fields from ctx before any mutable borrow of ctx (needed for
+    // the borrow checker since build_peer_from_lb_selection takes &mut ctx).
+    let br_name = br_name.clone();
+    let lb_policy = lb_policy.clone();
     let backend_tls_policy = backend_tls_policy.clone();
 
     // Get backend info for service key
     let namespace = ctx
         .backend_context
         .as_ref()
-        .map(|bc| bc.rsc.ns.as_str())
+        .map(|bc| bc.rsc.ns.clone())
         .ok_or(EdgionStatus::Unknown)?;
 
     let service_key = format!("{}/{}", namespace, br_name);
@@ -117,47 +123,24 @@ pub(crate) fn try_get_peer(
                 if is_backend_healthy(&service_key, &b, &health_store) {
                     b
                 } else {
-                    // Target unhealthy — fall through to normal LB (fallback handled by caller)
                     return Err(EdgionStatus::BackendEndpointSliceNotFoundByConsistent);
                 }
             } else {
-                select_backend_by_policy(&service_key, lb_policy, session)?
+                select_backend_by_policy(&service_key, &lb_policy, session)?
             };
 
-            let lb_addr = backend.addr.clone();
-            let mut peer_addr = lb_addr.clone();
-            resolve_target_port(&mut peer_addr, br_port, &service_key, PortLookupSource::Auto);
-
-            let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
-
-            let lb_policy_clone = lb_policy.clone();
-
-            if ctx.gateway_info.metrics_test_type.is_some()
-                && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
-            {
-                let hash_key_bytes = extract_hash_key(session, lb_policy);
-                ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
-            }
-
-            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.backend_addr = Some(peer_addr.clone());
-                upstream.lb_backend_addr = Some(lb_addr);
-                upstream.service_key = Some(service_key.clone());
-                upstream.lb_policy = lb_policy_clone;
-
-                if use_tls {
-                    upstream.tls = Some(crate::types::BackendTlsInfo {
-                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
-                        handshake_ok: None,
-                        protocol: None,
-                        cipher: None,
-                    });
-                }
-            }
-
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
-            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
-            Ok(peer)
+            build_peer_from_lb_selection(
+                ctx,
+                session,
+                &service_key,
+                br_port,
+                &lb_policy,
+                &backend_tls_policy,
+                backend,
+                PortLookupSource::Auto,
+                backend_app_protocol,
+                gateway_key_ref,
+            )
         }
 
         EdgionService::ServiceClusterIp => {
@@ -247,79 +230,86 @@ pub(crate) fn try_get_peer(
         EdgionService::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
 
         EdgionService::ServiceEndpoint => {
-            let backend = select_from_endpoints(&service_key, lb_policy, session)?;
-
-            let lb_addr = backend.addr.clone();
-            let mut peer_addr = lb_addr.clone();
-            resolve_target_port(&mut peer_addr, br_port, &service_key, PortLookupSource::Endpoint);
-
-            let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
-            let lb_policy_clone = lb_policy.clone();
-
-            if ctx.gateway_info.metrics_test_type.is_some()
-                && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
-            {
-                let hash_key_bytes = extract_hash_key(session, lb_policy);
-                ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
-            }
-
-            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.backend_addr = Some(peer_addr.clone());
-                upstream.lb_backend_addr = Some(lb_addr);
-                upstream.service_key = Some(service_key.clone());
-                upstream.lb_policy = lb_policy_clone;
-                if use_tls {
-                    upstream.tls = Some(crate::types::BackendTlsInfo {
-                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
-                        handshake_ok: None,
-                        protocol: None,
-                        cipher: None,
-                    });
-                }
-            }
-
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
-            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
-            Ok(peer)
+            let backend = select_from_endpoints(&service_key, &lb_policy, session)?;
+            build_peer_from_lb_selection(
+                ctx,
+                session,
+                &service_key,
+                br_port,
+                &lb_policy,
+                &backend_tls_policy,
+                backend,
+                PortLookupSource::Endpoint,
+                backend_app_protocol,
+                gateway_key_ref,
+            )
         }
 
         EdgionService::ServiceEndpointSlice => {
-            let backend = select_from_endpoint_slice(&service_key, lb_policy, session)?;
-
-            let lb_addr = backend.addr.clone();
-            let mut peer_addr = lb_addr.clone();
-            resolve_target_port(&mut peer_addr, br_port, &service_key, PortLookupSource::EndpointSlice);
-
-            let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
-            let lb_policy_clone = lb_policy.clone();
-
-            if ctx.gateway_info.metrics_test_type.is_some()
-                && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
-            {
-                let hash_key_bytes = extract_hash_key(session, lb_policy);
-                ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
-            }
-
-            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.backend_addr = Some(peer_addr.clone());
-                upstream.lb_backend_addr = Some(lb_addr);
-                upstream.service_key = Some(service_key.clone());
-                upstream.lb_policy = lb_policy_clone;
-                if use_tls {
-                    upstream.tls = Some(crate::types::BackendTlsInfo {
-                        sni: if sni.is_empty() { None } else { Some(sni.clone()) },
-                        handshake_ok: None,
-                        protocol: None,
-                        cipher: None,
-                    });
-                }
-            }
-
-            let mut peer = create_tls_peer(peer_addr, &backend_tls_policy, gateway_key_ref)?;
-            apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
-            Ok(peer)
+            let backend = select_from_endpoint_slice(&service_key, &lb_policy, session)?;
+            build_peer_from_lb_selection(
+                ctx,
+                session,
+                &service_key,
+                br_port,
+                &lb_policy,
+                &backend_tls_policy,
+                backend,
+                PortLookupSource::EndpointSlice,
+                backend_app_protocol,
+                gateway_key_ref,
+            )
         }
     }
+}
+
+/// 三个 LB-based kind 分支的公共逻辑。
+///
+/// 入参：已经选出来的 backend + 对应的 `PortLookupSource`。
+/// 作用：解析 targetPort → 提取 TLS → 记录 hash_key/upstream → 构造 peer + app protocol。
+#[allow(clippy::too_many_arguments)]
+fn build_peer_from_lb_selection(
+    ctx: &mut EdgionHttpContext,
+    session: &Session,
+    service_key: &str,
+    br_port: Option<i32>,
+    lb_policy: &Option<ParsedLBPolicy>,
+    backend_tls_policy: &Option<Arc<BackendTLSPolicy>>,
+    backend: pingora_load_balancing::Backend,
+    port_source: PortLookupSource,
+    backend_app_protocol: Option<BackendAppProtocol>,
+    gateway_key_ref: Option<&str>,
+) -> Result<Box<HttpPeer>, EdgionStatus> {
+    let lb_addr = backend.addr.clone();
+    let mut peer_addr = lb_addr.clone();
+    resolve_target_port(&mut peer_addr, br_port, service_key, port_source);
+
+    let (use_tls, sni) = extract_tls_config(backend_tls_policy);
+    let lb_policy_clone = lb_policy.clone();
+
+    if ctx.gateway_info.metrics_test_type.is_some() && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+        let hash_key_bytes = extract_hash_key(session, lb_policy);
+        ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
+    }
+
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.backend_addr = Some(peer_addr.clone());
+        upstream.lb_backend_addr = Some(lb_addr);
+        upstream.service_key = Some(service_key.to_string());
+        upstream.lb_policy = lb_policy_clone;
+        if use_tls {
+            upstream.tls = Some(crate::types::BackendTlsInfo {
+                sni: if sni.is_empty() { None } else { Some(sni.clone()) },
+                handshake_ok: None,
+                protocol: None,
+                cipher: None,
+            });
+        }
+    }
+
+    let mut peer = create_tls_peer(peer_addr, backend_tls_policy, gateway_key_ref)?;
+    apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
+    Ok(peer)
 }
 
 /// Get HTTP peer from service and endpoint slice stores using load balancing
