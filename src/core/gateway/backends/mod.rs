@@ -22,7 +22,10 @@ pub use endpoint_mode::{
 };
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
-pub use policy::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
+pub use policy::{
+    create_backend_tls_policy_handler, get_global_backend_tls_policy_store, query_backend_tls_policy_for_service,
+    BackendTLSPolicyStore,
+};
 pub use port_resolver::{resolve_target_port, PortLookupSource};
 pub use preload::preload_load_balancers;
 pub use service_kind::EdgionService;
@@ -30,7 +33,6 @@ pub use validation::validate_endpoint_in_route;
 
 use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::edgion_status::EdgionStatus;
-use crate::types::resources::BackendTLSPolicy;
 use crate::types::{ConsistentHashOn, EdgionHttpContext, ParsedLBPolicy};
 use peer_builder::{
     apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol, extract_tls_config,
@@ -40,8 +42,6 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
-use port_resolver::resolve_port_name;
-use std::sync::Arc;
 
 use crate::core::gateway::lb::runtime_state;
 use crate::core::gateway::lb::selection;
@@ -547,52 +547,6 @@ pub(crate) fn try_get_peer(
             Ok(peer)
         }
     }
-}
-
-/// Query BackendTLSPolicy for a given Service, optionally scoped to a specific port.
-///
-/// When `port` is provided, resolves the port number to a port name via the Service
-/// spec, then applies Gateway API sectionName matching:
-///   1. Prefer policies whose targetRef.sectionName matches the port name (most specific).
-///   2. Fall back to policies with no sectionName (applies to entire Service).
-///
-/// When `port` is None, returns the highest-priority policy regardless of sectionName.
-pub fn query_backend_tls_policy_for_service(
-    name: &str,
-    namespace: Option<&str>,
-    port: Option<i32>,
-) -> Option<Arc<BackendTLSPolicy>> {
-    let policy_store = get_global_backend_tls_policy_store();
-    let policies = policy_store.get_policies_for_target(name, namespace);
-
-    if policies.is_empty() {
-        return None;
-    }
-
-    let port_name = port.and_then(|p| resolve_port_name(name, namespace, p));
-
-    if let Some(ref pn) = port_name {
-        // 1) Exact sectionName match
-        if let Some(exact) = policies.iter().find(|pol| {
-            pol.spec
-                .target_refs
-                .iter()
-                .any(|tr| tr.section_name.as_deref() == Some(pn.as_str()))
-        }) {
-            return Some(exact.clone());
-        }
-    }
-
-    // 2) Fall back to policies with no sectionName
-    if let Some(wildcard) = policies
-        .iter()
-        .find(|pol| pol.spec.target_refs.iter().any(|tr| tr.section_name.is_none()))
-    {
-        return Some(wildcard.clone());
-    }
-
-    // 3) Last resort: highest priority policy (original behavior)
-    policies.into_iter().next()
 }
 
 /// Get HTTP peer from service and endpoint slice stores using load balancing
