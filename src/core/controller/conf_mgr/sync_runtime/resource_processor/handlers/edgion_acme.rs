@@ -71,7 +71,7 @@ mod acme_reasons {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
-    fn validate(&self, acme: &EdgionAcme, ctx: &HandlerContext) -> Vec<String> {
+    fn validate(&self, acme: &EdgionAcme, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = Vec::new();
 
         // Validate email
@@ -110,26 +110,6 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                                 other
                             ));
                         }
-                    }
-
-                    // Check DNS credential Secret existence
-                    let secret_ns = dns01
-                        .credential_ref
-                        .namespace
-                        .as_ref()
-                        .or(acme.metadata.namespace.as_ref());
-
-                    if ctx
-                        .runtime()
-                        .secret_store
-                        .get(secret_ns.map(|s| s.as_str()), &dns01.credential_ref.name)
-                        .is_none()
-                    {
-                        let secret_key = format_secret_key(secret_ns, &dns01.credential_ref.name);
-                        errors.push(format!(
-                            "EdgionAcme: DNS credential Secret '{}' not found (may arrive later)",
-                            secret_key
-                        ));
                     }
                 }
             }
