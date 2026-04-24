@@ -7,6 +7,7 @@ pub mod peer_builder;
 pub mod policy;
 pub mod port_resolver;
 pub mod preload;
+pub mod selector;
 pub mod service_kind;
 pub mod validation;
 
@@ -28,12 +29,13 @@ pub use policy::{
 };
 pub use port_resolver::{resolve_target_port, PortLookupSource};
 pub use preload::preload_load_balancers;
+pub use selector::{get_backends_for_service, select_roundrobin_backend};
 pub use service_kind::EdgionService;
 pub use validation::validate_endpoint_in_route;
 
 use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::edgion_status::EdgionStatus;
-use crate::types::{ConsistentHashOn, EdgionHttpContext, ParsedLBPolicy};
+use crate::types::{EdgionHttpContext, ParsedLBPolicy};
 use peer_builder::{
     apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol, extract_tls_config,
     record_tls_to_upstream, validate_backend_addr,
@@ -43,238 +45,9 @@ use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 
-use crate::core::gateway::lb::runtime_state;
-use crate::core::gateway::lb::selection;
-
-/// Health predicate for all self-impl selection algorithms.
-///
-/// Returns true if the service has no health check configured (default healthy),
-/// or if the backend is marked healthy in the health status store.
-#[inline]
-fn is_backend_healthy(
-    service_key: &str,
-    backend: &pingora_load_balancing::Backend,
-    health_store: &health::check::HealthStatusStore,
-) -> bool {
-    // 1. Active health check filter (existing)
-    if health_store.has_service(service_key)
-        && !health_store.is_healthy(service_key, health::check::backend_hash(backend))
-    {
-        return false;
-    }
-    // 2. Circuit breaker filter (new)
-    let cb_store = get_circuit_breaker_store();
-    if cb_store.is_ejected(service_key, health::check::backend_hash(backend)) {
-        crate::core::gateway::observe::metrics::record_cb_rejection(service_key);
-        return false;
-    }
-    true
-}
-
-/// Select backend from a backend list using self-impl round-robin.
-/// The `RoundRobinSelector` is cached per service in `runtime_state`.
-fn select_rr(
-    service_key: &str,
-    backends: &[pingora_load_balancing::Backend],
-) -> Option<pingora_load_balancing::Backend> {
-    if backends.is_empty() {
-        return None;
-    }
-    let rr = runtime_state::get_rr_selector(service_key, backends);
-    let health_store = get_health_status_store();
-    rr.select(256, |b| is_backend_healthy(service_key, b, &health_store))
-}
-
-/// Select backend using round-robin based on endpoint mode.
-///
-/// EndpointMode only controls which resources are synced:
-/// - Auto/Both/EndpointSlice: use EndpointSlice for backend selection
-/// - Endpoint: use Endpoints for backend selection
-///
-/// Use `ServiceEndpoint` or `ServiceEndpointSlice` in BackendRef.kind to override.
-pub fn select_roundrobin_backend(service_key: &str) -> Option<pingora_load_balancing::Backend> {
-    let backends = get_backends_for_service(service_key);
-    select_rr(service_key, &backends)
-}
-
-/// Get backend list for a service from the appropriate store based on endpoint mode.
-pub(crate) fn get_backends_for_service(service_key: &str) -> Vec<pingora_load_balancing::Backend> {
-    match get_global_endpoint_mode() {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            get_roundrobin_store().get_backends_for_service(service_key)
-        }
-        EndpointMode::Endpoint => get_endpoint_roundrobin_store().get_backends_for_service(service_key),
-    }
-}
-
-/// Extract hash key from request based on LB policy configuration
-///
-/// Returns the hash key bytes for consistent hashing, or empty bytes if not applicable
-fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Vec<u8> {
-    let Some(ParsedLBPolicy::ConsistentHash(hash_on)) = lb_policy else {
-        return Vec::new();
-    };
-
-    let req_header = session.req_header();
-
-    match hash_on {
-        ConsistentHashOn::Header(header_name) => {
-            // Extract value from request header
-            req_header
-                .headers
-                .get(header_name.as_str())
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.as_bytes().to_vec())
-                .unwrap_or_default()
-        }
-        ConsistentHashOn::Cookie(cookie_name) => {
-            // Extract value from Cookie header
-            req_header
-                .headers
-                .get("cookie")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|cookies| {
-                    // Parse cookies: "name1=value1; name2=value2"
-                    cookies.split(';').map(|s| s.trim()).find_map(|cookie| {
-                        let (name, value) = cookie.split_once('=')?;
-
-                        if name == cookie_name {
-                            Some(value.as_bytes().to_vec())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .unwrap_or_default()
-        }
-        ConsistentHashOn::Arg(arg_name) => {
-            // Extract value from query string
-            req_header
-                .uri
-                .query()
-                .and_then(|query| {
-                    // Parse query string: "name1=value1&name2=value2"
-                    query.split('&').find_map(|param| {
-                        let (name, value) = param.split_once('=')?;
-
-                        if name == arg_name {
-                            Some(value.as_bytes().to_vec())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .unwrap_or_default()
-        }
-    }
-}
-
-/// Select backend based on endpoint mode and LB policy.
-///
-/// EndpointMode only controls which resources are synced:
-/// - Auto/Both/EndpointSlice: use EndpointSlice for backend selection
-/// - Endpoint: use Endpoints for backend selection
-///
-/// Use `ServiceEndpoint` or `ServiceEndpointSlice` in BackendRef.kind to override.
-fn select_backend_by_policy(
-    service_key: &str,
-    lb_policy: &Option<ParsedLBPolicy>,
-    session: &Session,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
-    match get_global_endpoint_mode() {
-        // EndpointSlice, Both, Auto all default to EndpointSlice
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            select_from_endpoint_slice(service_key, lb_policy, session)
-        }
-        // Only explicit Endpoint mode uses Endpoints
-        EndpointMode::Endpoint => select_from_endpoints(service_key, lb_policy, session),
-    }
-}
-
-/// Core selection logic shared by both EndpointSlice and Endpoints paths.
-fn select_from_backends(
-    service_key: &str,
-    lb_policy: &Option<ParsedLBPolicy>,
-    session: &Session,
-    backends: Vec<pingora_load_balancing::Backend>,
-    not_found_rr_default: EdgionStatus,
-    not_found_rr: EdgionStatus,
-    not_found_ch: EdgionStatus,
-    not_found_lc: EdgionStatus,
-    not_found_ewma: EdgionStatus,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
-    if backends.is_empty() {
-        return Err(not_found_rr_default);
-    }
-    let health_store = get_health_status_store();
-
-    match lb_policy {
-        None => {
-            let rr = runtime_state::get_rr_selector(service_key, &backends);
-            rr.select(256, |b| is_backend_healthy(service_key, b, &health_store))
-                .ok_or(not_found_rr_default)
-        }
-        Some(ParsedLBPolicy::ConsistentHash(_)) => {
-            let hash_key = extract_hash_key(session, lb_policy);
-            if hash_key.is_empty() {
-                let rr = runtime_state::get_rr_selector(service_key, &backends);
-                rr.select(256, |b| is_backend_healthy(service_key, b, &health_store))
-                    .ok_or(not_found_rr)
-            } else {
-                let ring_lock = runtime_state::get_ch_ring(service_key, &backends);
-                let ring = ring_lock.read();
-                ring.select(&hash_key, 256, |b| is_backend_healthy(service_key, b, &health_store))
-                    .ok_or(not_found_ch)
-            }
-        }
-        Some(ParsedLBPolicy::LeastConn) => selection::least_conn::select(&backends, service_key, 256, |b| {
-            is_backend_healthy(service_key, b, &health_store)
-        })
-        .ok_or(not_found_lc),
-        Some(ParsedLBPolicy::Ewma) => selection::ewma::select(&backends, service_key, 256, |b| {
-            is_backend_healthy(service_key, b, &health_store)
-        })
-        .ok_or(not_found_ewma),
-    }
-}
-
-fn select_from_endpoint_slice(
-    service_key: &str,
-    lb_policy: &Option<ParsedLBPolicy>,
-    session: &Session,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
-    let backends = get_roundrobin_store().get_backends_for_service(service_key);
-    select_from_backends(
-        service_key,
-        lb_policy,
-        session,
-        backends,
-        EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
-        EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
-        EdgionStatus::BackendEndpointSliceNotFoundByConsistent,
-        EdgionStatus::BackendEndpointSliceNotFoundByLeastConn,
-        EdgionStatus::BackendEndpointSliceNotFoundByEwma,
-    )
-}
-
-fn select_from_endpoints(
-    service_key: &str,
-    lb_policy: &Option<ParsedLBPolicy>,
-    session: &Session,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
-    let backends = get_endpoint_roundrobin_store().get_backends_for_service(service_key);
-    select_from_backends(
-        service_key,
-        lb_policy,
-        session,
-        backends,
-        EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault,
-        EdgionStatus::BackendEndpointNotFoundByRoundRobin,
-        EdgionStatus::BackendEndpointNotFoundByConsistent,
-        EdgionStatus::BackendEndpointNotFoundByLeastConn,
-        EdgionStatus::BackendEndpointNotFoundByEwma,
-    )
-}
+use selector::{
+    extract_hash_key, is_backend_healthy, select_backend_by_policy, select_from_endpoint_slice, select_from_endpoints,
+};
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 pub(crate) fn try_get_peer(
