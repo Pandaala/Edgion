@@ -10,7 +10,7 @@
 
 pub mod pipeline;
 
-pub use pipeline::{resolve_credential, resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome};
+pub use pipeline::{fetch_secret, resolve_credential, resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome};
 
 // Re-export the credential parsing layer for call sites that still use the
 // old path. Keeping them here avoids churn while making the new location
