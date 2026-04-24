@@ -1,25 +1,27 @@
 pub mod circuit_breaker;
 pub mod discovery;
+pub mod endpoint_mode;
 pub mod gateway_backend_tls_store;
 pub mod health;
 pub mod policy;
 pub mod preload;
 pub mod validation;
 
-pub use crate::core::controller::conf_mgr::conf_center::EndpointMode;
 pub use circuit_breaker::{get_circuit_breaker_store, parse_circuit_breaker_annotation};
 pub use discovery::{
     create_endpoint_handler, create_ep_slice_handler, create_service_handler, get_endpoint_roundrobin_store,
     get_global_service_store, get_roundrobin_store, EndpointDiscovery, EndpointExt, EndpointSliceExt, EndpointStore,
     EpSliceStore, ServiceStore,
 };
+pub use endpoint_mode::{
+    get_global_endpoint_mode, init_global_endpoint_mode, is_endpoint_slice_mode, try_get_global_endpoint_mode,
+    EndpointMode,
+};
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
 pub use policy::{create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore};
 pub use preload::preload_load_balancers;
 pub use validation::validate_endpoint_in_route;
-
-use std::sync::OnceLock;
 
 use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReason};
 use crate::core::gateway::{end_response_500, end_response_503};
@@ -40,55 +42,6 @@ use pingora_core::utils::tls::CertKey;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::sync::Arc;
-
-/// Global endpoint mode - initialized once at startup, zero-cost read access.
-static GLOBAL_ENDPOINT_MODE: OnceLock<EndpointMode> = OnceLock::new();
-
-/// Initialize global endpoint mode (called once at startup).
-///
-/// Uses get_or_init to avoid panics on restart and logs mismatch if detected.
-pub fn init_global_endpoint_mode(mode: EndpointMode) {
-    let existing = GLOBAL_ENDPOINT_MODE.get_or_init(|| {
-        tracing::info!(
-            component = "backends",
-            mode = ?mode,
-            "Global endpoint mode initialized"
-        );
-        mode
-    });
-
-    if *existing != mode {
-        tracing::warn!(
-            component = "backends",
-            existing_mode = ?existing,
-            new_mode = ?mode,
-            "Endpoint mode mismatch on restart - using existing mode"
-        );
-    }
-}
-
-/// Get global endpoint mode (zero-cost after initialization).
-#[inline]
-pub fn get_global_endpoint_mode() -> EndpointMode {
-    *GLOBAL_ENDPOINT_MODE
-        .get()
-        .expect("GLOBAL_ENDPOINT_MODE not initialized - call init_global_endpoint_mode first")
-}
-
-/// Try to get global endpoint mode without panicking.
-///
-/// Returns `None` if the endpoint mode has not been initialized yet.
-/// Useful for code that needs to check endpoint mode but may run before initialization.
-#[inline]
-pub fn try_get_global_endpoint_mode() -> Option<EndpointMode> {
-    GLOBAL_ENDPOINT_MODE.get().copied()
-}
-
-/// Check if using EndpointSlice mode.
-#[inline]
-pub fn is_endpoint_slice_mode() -> bool {
-    matches!(get_global_endpoint_mode(), EndpointMode::EndpointSlice)
-}
 
 use crate::core::gateway::lb::runtime_state;
 use crate::core::gateway::lb::selection;
