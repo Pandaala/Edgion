@@ -250,13 +250,19 @@ async fn resolve_for_spec(
             if let Some(auth) = &mut es.auth {
                 let res = match auth {
                     ElasticsearchAuth::Basic { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver).await.map(|s| *secret = s)
+                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver)
+                            .await
+                            .map(|s| *secret = s)
                     }
                     ElasticsearchAuth::ApiKey { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &EsApiKeyResolver).await.map(|s| *secret = s)
+                        resolve_one(ctx, owner, secret_ref, &EsApiKeyResolver)
+                            .await
+                            .map(|s| *secret = s)
                     }
                     ElasticsearchAuth::Bearer { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BearerResolver).await.map(|s| *secret = s)
+                        resolve_one(ctx, owner, secret_ref, &BearerResolver)
+                            .await
+                            .map(|s| *secret = s)
                     }
                 };
                 if let Err(e) = res {
@@ -271,14 +277,16 @@ async fn resolve_for_spec(
             if let Some(auth) = &mut w.auth {
                 let res = match auth {
                     WebhookAuth::Basic { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver).await.map(|s| *secret = s)
+                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver)
+                            .await
+                            .map(|s| *secret = s)
                     }
-                    WebhookAuth::Bearer { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BearerResolver).await.map(|s| *secret = s)
-                    }
-                    WebhookAuth::Hmac { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &HmacResolver).await.map(|s| *secret = s)
-                    }
+                    WebhookAuth::Bearer { secret_ref, secret } => resolve_one(ctx, owner, secret_ref, &BearerResolver)
+                        .await
+                        .map(|s| *secret = s),
+                    WebhookAuth::Hmac { secret_ref, secret } => resolve_one(ctx, owner, secret_ref, &HmacResolver)
+                        .await
+                        .map(|s| *secret = s),
                 };
                 if let Err(e) = res {
                     errors.push(e);
@@ -764,7 +772,10 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret must not be attached on InvalidSecretType");
+                assert!(
+                    auth.secret.is_none(),
+                    "secret must not be attached on InvalidSecretType"
+                );
             }
             ProcessResult::Skip { reason } => panic!("expected Continue so status persists, got Skip: {reason}"),
         }

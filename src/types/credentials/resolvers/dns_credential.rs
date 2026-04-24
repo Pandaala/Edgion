@@ -29,9 +29,7 @@
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
 
-use super::super::{
-    resolver::{ResolveError, SecretMaterialResolver},
-};
+use super::super::resolver::{ResolveError, SecretMaterialResolver};
 
 /// Placeholder material. See module docs for why this is empty.
 #[derive(Clone, Debug, Default)]

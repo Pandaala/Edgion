@@ -18,8 +18,8 @@ pub use global_connection_ip_restriction::{GlobalConnectionIpRestrictionData, Ip
 pub use ip_list::IpListData;
 pub use key_list::{KeyListData, KeyMatchMode, MetaDataItem};
 pub use region_route::{
-    ClusterRegionRouteConfig, ClusterRegionRouteEntry, RefPluginEntry, RouteByKeyConfMatchMeta,
-    ServiceRegionDef, ServiceRegionRouteConfig, ServiceRegionRouteEntry,
+    ClusterRegionRouteConfig, ClusterRegionRouteEntry, RefPluginEntry, RouteByKeyConfMatchMeta, ServiceRegionDef,
+    ServiceRegionRouteConfig, ServiceRegionRouteEntry,
 };
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;

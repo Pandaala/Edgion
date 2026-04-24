@@ -1034,14 +1034,7 @@ mod tests {
         let (k2, s2) = make_secret("default", "alidns-secret", &[("unrelated", b"v")]);
         let (ctx, _rt) = make_ctx(HashMap::from([(k1, s1), (k2, s2)]));
         let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01(
-            "default",
-            "my-acme",
-            "acme-account",
-            "alidns",
-            "alidns-secret",
-            None,
-        );
+        let acme = make_acme_dns01("default", "my-acme", "acme-account", "alidns", "alidns-secret", None);
 
         let result = handler.parse(acme, &ctx).await;
 
@@ -1138,7 +1131,14 @@ mod tests {
         // No account Secret, no DNS Secret.
         let (ctx, _rt) = make_ctx(HashMap::new());
         let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01("default", "my-acme", "missing-account", "cloudflare", "missing-dns", None);
+        let acme = make_acme_dns01(
+            "default",
+            "my-acme",
+            "missing-account",
+            "cloudflare",
+            "missing-dns",
+            None,
+        );
 
         let result = handler.parse(acme, &ctx).await;
 

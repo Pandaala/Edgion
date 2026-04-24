@@ -61,9 +61,7 @@ pub fn build_connect_options(
                 anyhow::bail!("Etcd credential material is invalid: {reason}");
             }
             CredentialState::NotRequired => {
-                anyhow::bail!(
-                    "Etcd auth configured in CRD but credential state is NotRequired (internal bug)"
-                );
+                anyhow::bail!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)");
             }
         }
     }

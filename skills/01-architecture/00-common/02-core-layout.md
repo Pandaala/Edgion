@@ -154,10 +154,17 @@ src/core/common/
 
 **依赖方向约束**：
 - `common` 不可依赖 `gateway`
-- `common` 不可依赖 `controller`
+- `common` 不可依赖 `controller`（有 3 处历史遗留例外待清理，见下）
 - `center` 不可依赖 `controller`
 
 跨 bin 共用的类型（如 RegionRoute Entry 类型）必须放在 `types/`，让各方依赖 `types` 而非互相依赖。JWT/JWK 工具等被双方共用的逻辑必须放在 `common/`，由 gateway/center 反过来引用。
+
+**已知历史遗留例外（`common → controller`，待后续清理）：**
+- `common/config/mod.rs` → `controller::conf_mgr::{ConfCenterConfig, FileSystemConfig}`
+- `common/utils/metadata_filter.rs` → `controller::conf_mgr::conf_center::MetadataFilterConfig`
+- `common/local_auth/secret.rs` → `controller::conf_mgr::conf_center::traits::{CenterApi, ConfWriterError}`
+
+遇到这三处时不要误判为新违规；修复它们需要将相关配置/traits 提升到 `types/` 或 `common/`，是独立任务。
 
 不要仅为了避免跨模块导入就把代码移到 `common/`。保持业务归属明确。
 

@@ -129,9 +129,9 @@ pub fn build_es_client(
             CredentialState::Invalid(reason) => {
                 anyhow::bail!("Elasticsearch credential material is invalid: {reason}");
             }
-            CredentialState::NotRequired => anyhow::bail!(
-                "Elasticsearch auth configured in CRD but credential state is NotRequired (internal bug)"
-            ),
+            CredentialState::NotRequired => {
+                anyhow::bail!("Elasticsearch auth configured in CRD but credential state is NotRequired (internal bug)")
+            }
         };
         headers.insert(
             AUTHORIZATION,

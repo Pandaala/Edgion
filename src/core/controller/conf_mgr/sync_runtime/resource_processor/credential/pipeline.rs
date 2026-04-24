@@ -190,9 +190,7 @@ fn resolve_inner<R: SecretMaterialResolver>(
     let data = match secret.data.as_ref() {
         Some(d) => d,
         None => {
-            return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(
-                resolver.required_keys().to_vec(),
-            ));
+            return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()));
         }
     };
 

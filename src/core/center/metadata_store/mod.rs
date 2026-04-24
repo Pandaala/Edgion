@@ -10,9 +10,9 @@ use parking_lot::RwLock;
 
 use crate::core::center::watch_cache::CenterConfHandler;
 use crate::core::common::metadata_conf_handler::{parse_region_route, ParsedRegionRoute};
-use crate::types::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
 use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
 use crate::types::resources::plugin_metadata::PluginMetaData;
+use crate::types::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
 use crate::types::resources::plugin_metadata::{GlobalConnectionIpRestrictionData, MetaDataEntry, ProfileRules};
 
 /// View of aggregated ClusterRegionRoute entries from all controllers for a single pm_key.

@@ -1,7 +1,7 @@
 //! EdgionPlugins Handler
 //!
 //! Handles EdgionPlugins resources with Gateway API standard status management.
-//! Also resolves Secret references for plugins like JwtAuth.
+//! Delegates per-plugin Secret resolution to `plugins::resolve_credential`.
 //!
 //! Features:
 //! - parse: Resolve Secret references and register to SecretRefManager for cascading updates

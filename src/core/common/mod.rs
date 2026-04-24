@@ -1,11 +1,11 @@
 pub mod api;
 pub mod auth;
-pub mod jwt_common;
 pub mod conf_sync;
 pub mod config;
 pub mod fed_sync;
 pub mod grpc_tls;
 pub mod http_util;
+pub mod jwt_common;
 pub mod local_auth;
 pub mod matcher;
 pub mod metadata_conf_handler;

@@ -47,15 +47,19 @@ pub fn create_dns_provider(
 ) -> Result<Box<dyn DnsProvider>> {
     match provider_name {
         "cloudflare" => {
-            let api_token = credentials
-                .get("api-token")
-                .ok_or_else(|| anyhow::anyhow!("Cloudflare: 'api-token' not found in credential Secret (pipeline layer should have caught this)"))?;
+            let api_token = credentials.get("api-token").ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cloudflare: 'api-token' not found in credential Secret (pipeline layer should have caught this)"
+                )
+            })?;
             Ok(Box::new(CloudflareDnsProvider::new(api_token.clone())))
         }
         "alidns" => {
-            let access_key_id = credentials
-                .get("access-key-id")
-                .ok_or_else(|| anyhow::anyhow!("AliDNS: 'access-key-id' not found in credential Secret (pipeline layer should have caught this)"))?;
+            let access_key_id = credentials.get("access-key-id").ok_or_else(|| {
+                anyhow::anyhow!(
+                    "AliDNS: 'access-key-id' not found in credential Secret (pipeline layer should have caught this)"
+                )
+            })?;
             let access_key_secret = credentials
                 .get("access-key-secret")
                 .ok_or_else(|| anyhow::anyhow!("AliDNS: 'access-key-secret' not found in credential Secret (pipeline layer should have caught this)"))?;

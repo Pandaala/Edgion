@@ -74,9 +74,7 @@ pub fn build_fred_config(crd: &RedisClientConfig, auth: &CredentialState<BasicAu
                 // CRD declares auth, but state says NotRequired — internal bug
                 // (resolver / dispatcher inconsistency). Fail hard rather than
                 // authenticate anonymously.
-                anyhow::bail!(
-                    "Redis auth configured in CRD but credential state is NotRequired (internal bug)"
-                );
+                anyhow::bail!("Redis auth configured in CRD but credential state is NotRequired (internal bug)");
             }
         }
     }
