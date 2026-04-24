@@ -12,7 +12,7 @@
 //
 // Scenarios:
 //   1. ep_resolved_refs_true_when_secret_exists   — EP + existing Secret → ResolvedRefs=True
-//   2. ep_resolved_refs_false_when_secret_missing — EP + missing Secret  → ResolvedRefs=False/BackendNotFound
+//   2. ep_resolved_refs_false_when_secret_missing — EP + missing Secret  → ResolvedRefs=False/SecretNotFound
 //   3. esp_resolved_refs_true_when_gcir_pm_exists — ESP + existing GCIR PM → ResolvedRefs=True
 //   4. esp_resolved_refs_false_when_gcir_pm_missing — ESP + missing PM → ResolvedRefs=False/InvalidPluginMetaDataRef
 
@@ -135,13 +135,13 @@ impl ResolvedRefsTestSuite {
     }
 
     // =========================================================================
-    // Scenario 2: EP referencing a missing Secret → ResolvedRefs=False/BackendNotFound
+    // Scenario 2: EP referencing a missing Secret → ResolvedRefs=False/SecretNotFound
     // =========================================================================
 
     fn ep_resolved_refs_false_when_secret_missing() -> TestCase {
         TestCase::new(
             "ep_resolved_refs_false_when_secret_missing",
-            "EdgionPlugins 'ep-secret-missing': ResolvedRefs=False/BackendNotFound when Secret is absent",
+            "EdgionPlugins 'ep-secret-missing': ResolvedRefs=False/SecretNotFound when Secret is absent",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -158,10 +158,10 @@ impl ResolvedRefsTestSuite {
                                         format!("ResolvedRefs should be False: {:?}", c),
                                     );
                                 }
-                                if c["reason"].as_str() != Some("BackendNotFound") {
+                                if c["reason"].as_str() != Some("SecretNotFound") {
                                     return TestResult::failed(
                                         start.elapsed(),
-                                        format!("ResolvedRefs reason should be BackendNotFound: {:?}", c),
+                                        format!("ResolvedRefs reason should be SecretNotFound: {:?}", c),
                                     );
                                 }
                                 let msg = c["message"].as_str().unwrap_or("");
@@ -177,7 +177,7 @@ impl ResolvedRefsTestSuite {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
-                                        "ResolvedRefs=False/BackendNotFound with '{}' in message",
+                                        "ResolvedRefs=False/SecretNotFound with '{}' in message",
                                         expected_secret_name
                                     ),
                                 )
