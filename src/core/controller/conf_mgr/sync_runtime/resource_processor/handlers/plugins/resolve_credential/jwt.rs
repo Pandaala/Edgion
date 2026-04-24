@@ -27,10 +27,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
             if let EdgionPlugin::JwtAuth(ref mut config) = entry.plugin {
                 // Resolve single secret_ref
                 if let Some(ref sor) = config.secret_ref.clone() {
-                    let sref = SecretReference {
-                        name: sor.name.clone(),
-                        namespace: sor.namespace.clone(),
-                    };
+                    let sref: SecretReference = sor.into();
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
@@ -83,10 +80,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 if let Some(ref secret_refs) = config.secret_refs.clone() {
                     let mut resolved = HashMap::new();
                     for sor in secret_refs {
-                        let sref = SecretReference {
-                            name: sor.name.clone(),
-                            namespace: sor.namespace.clone(),
-                        };
+                        let sref: SecretReference = sor.into();
                         let secret_key =
                             format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                         match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {

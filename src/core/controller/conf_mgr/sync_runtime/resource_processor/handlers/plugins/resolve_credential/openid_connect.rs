@@ -25,10 +25,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 config.resolved_session_secret = None;
 
                 if let Some(sor) = config.client_secret_ref.clone() {
-                    let sref = SecretReference {
-                        name: sor.name.clone(),
-                        namespace: sor.namespace.clone(),
-                    };
+                    let sref: SecretReference = (&sor).into();
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
@@ -74,10 +71,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 }
 
                 if let Some(sor) = config.session_secret_ref.clone() {
-                    let sref = SecretReference {
-                        name: sor.name.clone(),
-                        namespace: sor.namespace.clone(),
-                    };
+                    let sref: SecretReference = (&sor).into();
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {

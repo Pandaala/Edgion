@@ -186,6 +186,15 @@ pub struct SecretObjectReference {
     pub namespace: Option<String>,
 }
 
+impl From<&SecretObjectReference> for super::common::SecretReference {
+    fn from(value: &SecretObjectReference) -> Self {
+        Self {
+            name: value.name.clone(),
+            namespace: value.namespace.clone(),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AllowedRoutes {

@@ -27,10 +27,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 let Some(sor) = config.secret_ref.clone() else {
                     continue;
                 };
-                let sref = SecretReference {
-                    name: sor.name.clone(),
-                    namespace: sor.namespace.clone(),
-                };
+                let sref: SecretReference = (&sor).into();
 
                 let secret_key =
                     format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
