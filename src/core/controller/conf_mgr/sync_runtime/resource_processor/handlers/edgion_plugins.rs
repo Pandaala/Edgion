@@ -9,7 +9,7 @@
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::RefPluginEntry;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_reasons, pick_resolved_refs_reason, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, pick_resolved_refs_reason, update_condition, ResolvedRefsError,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -17,9 +17,6 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
 use crate::types::ResourceKind;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use k8s_openapi::chrono::Utc;
 
 use super::plugins::resolve_credential as cred;
 
@@ -180,17 +177,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         // Accepted reflects preparse + validate errors (already merged by processor).
         let accepted = if validation_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
                 "Resource accepted",
                 generation,
             )
         } else {
-            k8s_condition_false(
+            condition_false(
                 condition_types::ACCEPTED,
                 condition_reasons::INVALID,
-                &validation_errors.join("; "),
+                validation_errors.join("; "),
                 generation,
             )
         };
@@ -200,7 +197,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // in the ref manager's dependency list but not in secret_store.
         let resolved_errors = Self::resolve_secret_refs(ep, ctx);
         let resolved_refs = if resolved_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::RESOLVED_REFS,
                 "All references resolved",
@@ -212,24 +209,20 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             // stable order, so taking the first element would make the
             // surfaced reason depend on hashing. `pick_resolved_refs_reason`
             // deterministically picks the most severe variant.
-            //
-            // NOTE: once R2 unifies the Condition type, this whole block
-            // collapses into `resolved_refs_condition(&resolved_errors, gen)`
-            // and matches LinkSys / EdgionTls verbatim.
             let reason = pick_resolved_refs_reason(&resolved_errors);
             let message = resolved_errors
                 .iter()
                 .map(|e| e.message())
                 .collect::<Vec<_>>()
                 .join("; ");
-            k8s_condition_false(condition_types::RESOLVED_REFS, reason, &message, generation)
+            condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
         let status = ep
             .status
             .get_or_insert_with(|| EdgionPluginsStatus { conditions: vec![] });
-        update_k8s_condition(&mut status.conditions, accepted);
-        update_k8s_condition(&mut status.conditions, resolved_refs);
+        update_condition(&mut status.conditions, accepted);
+        update_condition(&mut status.conditions, resolved_refs);
     }
 }
 
@@ -259,46 +252,6 @@ impl EdgionPluginsHandler {
             }
         }
         errors
-    }
-}
-
-/// Create a k8s_openapi Condition with True status
-fn k8s_condition_true(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "True".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Create a k8s_openapi Condition with False status
-fn k8s_condition_false(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "False".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Update or insert a k8s_openapi Condition
-fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Condition) {
-    if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
-        let status_changed = existing.status != new_condition.status;
-        existing.status = new_condition.status;
-        existing.reason = new_condition.reason;
-        existing.message = new_condition.message;
-        existing.observed_generation = new_condition.observed_generation;
-        if status_changed {
-            existing.last_transition_time = new_condition.last_transition_time;
-        }
-    } else {
-        conditions.push(new_condition);
     }
 }
 

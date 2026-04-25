@@ -103,6 +103,12 @@ pub mod condition_reasons {
     /// the Secret-focused reasons for the general caveat.
     pub const INVALID_PLUGIN_METADATA_REF: &str = "InvalidPluginMetaDataRef";
 
+    // Listener ResolvedRefs reasons (Gateway API v1.5)
+    /// Listener certificate Secret ref invalid or unresolvable.
+    pub const INVALID_CERTIFICATE_REF: &str = "InvalidCertificateRef";
+    /// Listener CA certificate ref kind unsupported.
+    pub const INVALID_CA_CERTIFICATE_KIND: &str = "InvalidCACertificateKind";
+
     // Programmed reasons (for listener Programmed condition)
     pub const PROGRAMMED: &str = "Programmed";
     pub const INVALID_LISTENER: &str = "Invalid";

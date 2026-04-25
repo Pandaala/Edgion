@@ -22,7 +22,7 @@ pub use region_route::{
     ServiceRegionRouteConfig, ServiceRegionRouteEntry,
 };
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use crate::types::resources::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

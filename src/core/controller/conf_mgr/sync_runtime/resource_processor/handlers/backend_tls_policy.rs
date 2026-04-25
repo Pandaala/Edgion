@@ -469,13 +469,16 @@ impl BackendTlsPolicyHandler {
     ///
     /// Chain: BTP.targetRef(Service) -> ServiceRefManager(service->routes) -> GatewayRouteIndex(route->gateways)
     ///
-    /// Returns deduplicated list of (gateway_ns, gateway_name).
+    /// Returns deduplicated, sorted list of (gateway_ns, gateway_name), capped at 16
+    /// per Gateway API `+kubebuilder:validation:MaxItems=16` on `status.ancestors`.
     fn resolve_ancestor_gateways(btp: &BackendTLSPolicy, ctx: &HandlerContext) -> Vec<(String, String)> {
+        // Gateway API PolicyAncestorStatus maxItems=16.
+        const MAX_POLICY_ANCESTORS: usize = 16;
+
         let policy_ns = btp.metadata.namespace.as_deref().unwrap_or("default");
         let service_ref_manager = &ctx.runtime().service_ref_mgr;
         let route_index = &ctx.runtime().gateway_route_index;
 
-        let mut gateways = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
         for target_ref in &btp.spec.target_refs {
@@ -492,16 +495,28 @@ impl BackendTlsPolicyHandler {
                 let gw_keys = route_index.get_gateways_for_route(route_ref.kind, &route_key);
 
                 for gw_key in gw_keys {
-                    if seen.insert(gw_key.clone()) {
-                        if let Some((ns, name)) = gw_key.split_once('/') {
-                            gateways.push((ns.to_string(), name.to_string()));
-                        }
-                    }
+                    seen.insert(gw_key);
                 }
             }
         }
 
-        gateways
+        // Sort for stable truncation: same 16 Gateways selected on every reconcile.
+        let mut keys: Vec<String> = seen.into_iter().collect();
+        keys.sort_unstable();
+
+        if keys.len() > MAX_POLICY_ANCESTORS {
+            tracing::warn!(
+                policy = %format!("{}/{}", policy_ns, btp.metadata.name.as_deref().unwrap_or("")),
+                total = keys.len(),
+                "BackendTLSPolicy ancestors truncated to {} per Gateway API limit",
+                MAX_POLICY_ANCESTORS,
+            );
+            keys.truncate(MAX_POLICY_ANCESTORS);
+        }
+
+        keys.into_iter()
+            .filter_map(|k| k.split_once('/').map(|(ns, name)| (ns.to_string(), name.to_string())))
+            .collect()
     }
 
     #[inline]

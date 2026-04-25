@@ -1065,7 +1065,7 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
         .iter()
         .any(|e| matches!(e, GatewayResolvedRefsError::InvalidCACertificateKind { .. }))
     {
-        return "InvalidCACertificateKind";
+        return condition_reasons::INVALID_CA_CERTIFICATE_KIND;
     }
     if errors.iter().any(|e| {
         matches!(
@@ -1081,7 +1081,7 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
     {
         return condition_reasons::INVALID_CA_CERTIFICATE_REF;
     }
-    "InvalidCertificateRef"
+    condition_reasons::INVALID_CERTIFICATE_REF
 }
 
 fn validate_listener_resolved_refs(

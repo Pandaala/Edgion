@@ -17,7 +17,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credent
 };
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_reasons, condition_types,
+    condition_false, condition_reasons, condition_true, condition_types, condition_unknown, update_condition,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -25,12 +25,9 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 use crate::core::controller::services::acme::notify_resource_changed;
 use crate::types::credentials::resolvers::{AcmeAccountResolver, DnsCredentialResolver};
 use crate::types::prelude_resources::EdgionAcme;
-use crate::types::resources::common::SecretReference;
+use crate::types::resources::common::{Condition, SecretReference};
 use crate::types::resources::edgion_acme::{AcmeChallengeType, EdgionAcmeStatus};
 use crate::types::ResourceKind;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use k8s_openapi::chrono::Utc;
 
 /// EdgionAcme handler
 ///
@@ -155,11 +152,11 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         let account_corrupted = match account_action {
             AcmeResolveAction::NoAction => false,
             AcmeResolveAction::Continue(cond) => {
-                update_k8s_condition(&mut status.conditions, cond);
+                update_condition(&mut status.conditions, cond);
                 false
             }
             AcmeResolveAction::Abort(cond) => {
-                update_k8s_condition(&mut status.conditions, cond);
+                update_condition(&mut status.conditions, cond);
                 true
             }
         };
@@ -252,7 +249,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                     match dns_action {
                         AcmeResolveAction::NoAction => {}
                         AcmeResolveAction::Continue(cond) => {
-                            update_k8s_condition(&mut status.conditions, cond);
+                            update_condition(&mut status.conditions, cond);
                         }
                         AcmeResolveAction::Abort(cond) => {
                             // Today `role=Dns` never returns `Abort`, but if a
@@ -261,7 +258,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                             // release builds. Write it (graceful degrade) and
                             // raise a debug-only assertion so the unintentional
                             // contract change surfaces in dev/CI.
-                            update_k8s_condition(&mut status.conditions, cond);
+                            update_condition(&mut status.conditions, cond);
                             debug_assert!(false, "Dns role unexpectedly returned Abort");
                         }
                     }
@@ -317,21 +314,21 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         // Accepted condition: reflects spec validation. phase / issuance status is
         // maintained separately by the background AcmeService (see parse/notify_resource_changed).
         let accepted = if validation_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
                 "Resource accepted",
                 generation,
             )
         } else {
-            k8s_condition_false(
+            condition_false(
                 condition_types::ACCEPTED,
                 condition_reasons::INVALID,
                 validation_errors.join("; "),
                 generation,
             )
         };
-        update_k8s_condition(&mut status.conditions, accepted);
+        update_condition(&mut status.conditions, accepted);
 
         // ResolvedRefs is set in parse(); update_status only manages Accepted.
 
@@ -341,68 +338,6 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         if !validation_errors.is_empty() {
             status.last_failure_reason = Some(validation_errors.join("; "));
         }
-    }
-}
-
-// ============================================================================
-// k8s_openapi::Condition helpers (EdgionAcmeStatus uses upstream Condition type)
-// ============================================================================
-
-fn k8s_condition_true(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "True".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-fn k8s_condition_false(
-    type_: &str,
-    reason: &str,
-    message: impl Into<String>,
-    observed_generation: Option<i64>,
-) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "False".to_string(),
-        reason: reason.to_string(),
-        message: message.into(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-fn k8s_condition_unknown(
-    type_: &str,
-    reason: &str,
-    message: impl Into<String>,
-    observed_generation: Option<i64>,
-) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "Unknown".to_string(),
-        reason: reason.to_string(),
-        message: message.into(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Condition) {
-    if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
-        let status_changed = existing.status != new_condition.status;
-        existing.status = new_condition.status;
-        existing.reason = new_condition.reason;
-        existing.message = new_condition.message;
-        existing.observed_generation = new_condition.observed_generation;
-        if status_changed {
-            existing.last_transition_time = new_condition.last_transition_time;
-        }
-    } else {
-        conditions.push(new_condition);
     }
 }
 
@@ -468,7 +403,7 @@ fn outcome_to_resolved_refs_action<T>(
         // ── Ok ────────────────────────────────────────────────────────────
         (ResolveOutcome::Ok(_), Account) => {
             tracing::debug!(edgion_acme = %resource_key, "ACME account Secret validated");
-            Continue(k8s_condition_true(
+            Continue(condition_true(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::RESOLVED_REFS,
                 "ACME account credentials loaded",
@@ -484,7 +419,7 @@ fn outcome_to_resolved_refs_action<T>(
                 name = %name,
                 "ACME account Secret absent, will be created on first registration"
             );
-            Continue(k8s_condition_unknown(
+            Continue(condition_unknown(
                 condition_types::RESOLVED_REFS,
                 acme_reasons::NEEDS_REGISTRATION,
                 "Account Secret absent or missing accountCredentials key, will be created/patched on first ACME registration",
@@ -514,7 +449,7 @@ fn outcome_to_resolved_refs_action<T>(
             // "grant denies" is impossible — we used to advertise such a
             // distinction via `CrossNsReferenceNotPermitted`, but it was
             // always misleading.
-            Continue(k8s_condition_false(
+            Continue(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::REF_NOT_PERMITTED,
                 format!(
@@ -548,7 +483,7 @@ fn outcome_to_resolved_refs_action<T>(
                 edgion_acme = %resource_key,
                 "ACME account Secret exists without accountCredentials key, will be patched on first registration"
             );
-            Continue(k8s_condition_unknown(
+            Continue(condition_unknown(
                 condition_types::RESOLVED_REFS,
                 acme_reasons::NEEDS_REGISTRATION,
                 "Account Secret absent or missing accountCredentials key, will be created/patched on first ACME registration",
@@ -569,7 +504,7 @@ fn outcome_to_resolved_refs_action<T>(
             // both DecodeError and InvalidSecretType into one bucket,
             // diverging from how LinkSys / EdgionPlugins / EdgionTls
             // report the same pipeline variants.
-            Abort(k8s_condition_false(
+            Abort(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::DECODE_ERROR,
                 format!("credential decode failed for key '{}': {}", key, detail),
@@ -585,7 +520,7 @@ fn outcome_to_resolved_refs_action<T>(
                 ?allowed,
                 "ACME account Secret has unsupported type"
             );
-            Abort(k8s_condition_false(
+            Abort(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::INVALID_SECRET_TYPE,
                 format!(
@@ -613,7 +548,7 @@ fn outcome_to_resolved_refs_action<T>(
                 name = %name,
                 "DNS credential Secret not found yet, will be reprocessed when Secret arrives"
             );
-            Continue(k8s_condition_false(
+            Continue(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::SECRET_NOT_FOUND,
                 format!("DNS credential Secret '{}/{}' not found", namespace, name),
@@ -637,7 +572,7 @@ fn outcome_to_resolved_refs_action<T>(
                 secret_name = %secret_name,
                 "Cross-namespace reference to DNS credential Secret denied (ReferenceGrant missing)"
             );
-            Continue(k8s_condition_false(
+            Continue(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::REF_NOT_PERMITTED,
                 format!(
@@ -656,7 +591,7 @@ fn outcome_to_resolved_refs_action<T>(
                 ?keys,
                 "DNS credential Secret missing required keys"
             );
-            Continue(k8s_condition_false(
+            Continue(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::MISSING_KEYS,
                 format!(
@@ -676,7 +611,7 @@ fn outcome_to_resolved_refs_action<T>(
                 detail = %detail,
                 "DNS credential Secret value could not be decoded"
             );
-            Continue(k8s_condition_false(
+            Continue(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::DECODE_ERROR,
                 format!("DNS credential decode failed for key '{}': {}", key, detail),
@@ -692,7 +627,7 @@ fn outcome_to_resolved_refs_action<T>(
                 ?allowed,
                 "DNS credential Secret has unsupported type"
             );
-            Continue(k8s_condition_false(
+            Continue(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::INVALID_SECRET_TYPE,
                 format!(

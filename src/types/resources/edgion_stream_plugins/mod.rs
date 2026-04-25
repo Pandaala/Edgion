@@ -6,7 +6,7 @@
 //! - `plugins` (Stage 1): ConnectionFilter — pre-TLS, IP-only
 //! - `tls_route_plugins` (Stage 2): TlsRoute — post-handshake, post-route-match
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use crate::types::resources::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

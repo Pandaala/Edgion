@@ -3,7 +3,7 @@
 //! Handles EdgionStreamPlugins resources with Gateway API standard status management.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_reasons, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, update_condition, ResolvedRefsError,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
@@ -11,9 +11,6 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 use crate::types::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
 use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, EdgionStreamPluginsStatus};
 use crate::types::resources::plugin_metadata::MetaDataEntry;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use k8s_openapi::chrono::Utc;
 
 const SELF_KIND: &str = "EdgionStreamPlugins";
 
@@ -118,7 +115,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
 
         // Accepted: preparse/validate errors (with legacy-schema reason mapping).
         let accepted = if validation_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
                 "Resource accepted",
@@ -136,14 +133,14 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 .map(|e| e.strip_prefix(LEGACY_SCHEMA_MARKER).unwrap_or(e))
                 .collect::<Vec<_>>()
                 .join("; ");
-            k8s_condition_false(condition_types::ACCEPTED, reason, &message, generation)
+            condition_false(condition_types::ACCEPTED, reason, message, generation)
         };
 
         // ResolvedRefs: each GlobalConnectionIpRestriction plugin_metadata_ref must
         // resolve to an existing PluginMetaData of the matching variant type.
         let resolved_errors = resolve_refs(esp, ctx);
         let resolved_refs = if resolved_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::RESOLVED_REFS,
                 "All references resolved",
@@ -156,14 +153,14 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 .map(|e| e.message())
                 .collect::<Vec<_>>()
                 .join("; ");
-            k8s_condition_false(condition_types::RESOLVED_REFS, reason, &message, generation)
+            condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
         let status = esp
             .status
             .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
-        update_k8s_condition(&mut status.conditions, accepted);
-        update_k8s_condition(&mut status.conditions, resolved_refs);
+        update_condition(&mut status.conditions, accepted);
+        update_condition(&mut status.conditions, resolved_refs);
     }
 }
 
@@ -185,46 +182,6 @@ fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<Resolved
         }
     }
     errors
-}
-
-/// Create a k8s_openapi Condition with True status
-fn k8s_condition_true(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "True".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Create a k8s_openapi Condition with False status
-fn k8s_condition_false(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "False".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Update or insert a k8s_openapi Condition
-fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Condition) {
-    if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
-        let status_changed = existing.status != new_condition.status;
-        existing.status = new_condition.status;
-        existing.reason = new_condition.reason;
-        existing.message = new_condition.message;
-        existing.observed_generation = new_condition.observed_generation;
-        if status_changed {
-            existing.last_transition_time = new_condition.last_transition_time;
-        }
-    } else {
-        conditions.push(new_condition);
-    }
 }
 
 #[cfg(test)]

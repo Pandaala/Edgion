@@ -3,9 +3,9 @@
 //! Manages automatic TLS certificate issuance and renewal via the ACME protocol (RFC 8555).
 //! Supports HTTP-01 and DNS-01 challenges with automatic EdgionTls/Secret creation.
 
+use super::common::Condition;
 use super::common::{ParentReference, SecretReference};
 use super::gateway::SecretObjectReference;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
