@@ -57,6 +57,10 @@ pub struct EdgionGatewayConfigSpec {
     /// against ReferenceGrant policies
     #[serde(default)]
     pub enable_reference_grant_validation: bool,
+
+    /// Global LinkSys provider configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_sys: Option<LinkSysGlobalConfig>,
 }
 
 // ============================================
@@ -218,6 +222,7 @@ impl Default for EdgionGatewayConfigSpec {
             global_plugins_ref: None,
             preflight_policy: None,
             enable_reference_grant_validation: false,
+            link_sys: None,
         }
     }
 }
@@ -349,6 +354,25 @@ pub struct PluginReference {
     /// Namespace of the EdgionPlugins resource (defaults to "default")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+}
+
+// ============================================
+// LinkSys Global Configuration
+// ============================================
+
+/// Global configuration for LinkSys providers
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkSysGlobalConfig {
+    /// Global hard cap for webhook response body size (bytes).
+    /// Per-resource `maxResponseBytes` is clamped to this value.
+    /// Default: 16384 (16KB)
+    #[serde(default = "default_webhook_max_response_bytes")]
+    pub webhook_max_response_bytes: usize,
+}
+
+fn default_webhook_max_response_bytes() -> usize {
+    16384
 }
 
 impl EdgionGatewayConfigSpec {

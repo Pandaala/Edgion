@@ -18,7 +18,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
 use crate::types::credentials::resolvers::{
-    BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver,
+    BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver, WebhookApiKeyResolver,
 };
 use crate::types::credentials::SecretMaterialResolver;
 use crate::types::prelude_resources::LinkSys;
@@ -287,6 +287,11 @@ async fn resolve_for_spec(
                     WebhookAuth::Hmac { secret_ref, secret } => resolve_one(ctx, owner, secret_ref, &HmacResolver)
                         .await
                         .map(|s| *secret = s),
+                    WebhookAuth::ApiKey { secret_ref, secret, .. } => {
+                        resolve_one(ctx, owner, secret_ref, &WebhookApiKeyResolver)
+                            .await
+                            .map(|s| *secret = s)
+                    }
                 };
                 if let Err(e) = res {
                     errors.push(e);

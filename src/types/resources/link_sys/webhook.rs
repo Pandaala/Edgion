@@ -41,6 +41,23 @@ pub enum WebhookAuth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<Secret>,
     },
+    /// API Key authentication — injects the key as a header or query parameter.
+    ///
+    /// The secret must contain a `apiKey` data key.
+    ApiKey {
+        #[serde(rename = "secretRef")]
+        secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<k8s_openapi::api::core::v1::Secret>,
+        /// Where to inject the key: "header" or "query"
+        r#in: String,
+        /// Header name when `in = "header"` (e.g. "X-API-Key")
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "headerName")]
+        header_name: Option<String>,
+        /// Query parameter name when `in = "query"` (e.g. "api_key")
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "queryParam")]
+        query_param: Option<String>,
+    },
 }
 
 // ============================================================
@@ -116,19 +133,6 @@ pub struct WebhookServiceConfig {
     pub tls: Option<TlsConfig>,
 
     // ============================================================
-    // Request forwarding
-    // ============================================================
-    /// Headers to forward from the original request to the webhook service.
-    ///
-    /// Behavior:
-    /// - None: forward ONLY standard X-Forwarded-* headers
-    /// - Some(list): forward the listed headers + X-Forwarded-* headers
-    ///
-    /// Hop-by-hop headers are always excluded.
-    #[serde(default)]
-    pub request_headers: Option<Vec<String>>,
-
-    // ============================================================
     // Response handling
     // ============================================================
     /// Status codes considered as success.
@@ -136,11 +140,14 @@ pub struct WebhookServiceConfig {
     #[serde(default)]
     pub success_status_codes: Option<Vec<u16>>,
 
+    /// Static headers sent on every outbound call (merged with per-call headers; caller wins on conflict).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_headers: Option<std::collections::HashMap<String, String>>,
+
     /// Maximum response body size to read in bytes.
     /// Prevents memory exhaustion from unexpectedly large webhook responses.
     ///
     /// Default: 1024 (1KB)
-    /// Hard upper limit: controlled by WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES (16KB)
     #[serde(default = "default_max_response_bytes")]
     pub max_response_bytes: usize,
 
@@ -400,9 +407,6 @@ fn default_max_backoff() -> u64 {
     60
 }
 
-/// Global hard upper limit for webhook response body size (16KB).
-pub const WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES: usize = 16384;
-
 // ============================================================
 // Default + Validation
 // ============================================================
@@ -415,7 +419,7 @@ impl Default for WebhookServiceConfig {
             request_method: default_method(),
             timeout_ms: default_timeout_ms(),
             tls: None,
-            request_headers: None,
+            default_headers: None,
             success_status_codes: None,
             max_response_bytes: default_max_response_bytes(),
             allow_degradation: false,
@@ -451,9 +455,6 @@ impl WebhookServiceConfig {
         }
         if self.max_response_bytes == 0 {
             return Some("maxResponseBytes must be greater than 0");
-        }
-        if self.max_response_bytes > WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES {
-            return Some("maxResponseBytes exceeds global limit (16KB)");
         }
         None
     }
@@ -523,19 +524,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validation_max_response_bytes_exceeds_global() {
-        let config = WebhookServiceConfig {
-            uri: "http://example.com".to_string(),
-            max_response_bytes: WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES + 1,
-            ..Default::default()
-        };
-        assert_eq!(
-            config.get_validation_error(),
-            Some("maxResponseBytes exceeds global limit (16KB)")
-        );
-    }
-
-    #[test]
     fn test_validation_valid_config() {
         let config = WebhookServiceConfig {
             uri: "https://api.example.com/resolve".to_string(),
@@ -562,9 +550,6 @@ uri: "http://localhost:8080/resolve"
 uri: "https://key-service.internal/resolve"
 requestMethod: POST
 timeoutMs: 3000
-requestHeaders:
-  - Authorization
-  - X-Request-ID
 successStatusCodes: [200]
 maxResponseBytes: 2048
 allowDegradation: true
@@ -724,6 +709,67 @@ auth:
                 assert_eq!(secret_ref.name, "api-token");
             }
             _ => panic!("Expected Bearer auth"),
+        }
+    }
+
+    #[test]
+    fn test_serde_default_headers() {
+        let yaml = r#"
+uri: "http://api.example.com"
+defaultHeaders:
+  X-Source: edgion
+  Content-Type: "application/json"
+"#;
+        let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+        let headers = config.default_headers.unwrap();
+        assert_eq!(headers.get("X-Source").map(String::as_str), Some("edgion"));
+        assert_eq!(
+            headers.get("Content-Type").map(String::as_str),
+            Some("application/json")
+        );
+    }
+
+    #[test]
+    fn test_webhook_auth_api_key_header() {
+        let yaml = r#"
+type: apiKey
+secretRef:
+  name: my-api-key
+in: header
+headerName: X-API-Key
+"#;
+        let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match auth {
+            WebhookAuth::ApiKey {
+                secret_ref,
+                r#in,
+                header_name,
+                ..
+            } => {
+                assert_eq!(secret_ref.name, "my-api-key");
+                assert_eq!(r#in, "header");
+                assert_eq!(header_name.as_deref(), Some("X-API-Key"));
+            }
+            _ => panic!("Expected ApiKey auth"),
+        }
+    }
+
+    #[test]
+    fn test_webhook_auth_api_key_query() {
+        let yaml = r#"
+type: apiKey
+secretRef:
+  name: my-api-key
+in: query
+queryParam: api_key
+"#;
+        let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match auth {
+            WebhookAuth::ApiKey { r#in, query_param, .. } => {
+                assert_eq!(r#in, "query");
+                assert_eq!(query_param.as_deref(), Some("api_key"));
+            }
+            _ => panic!("Expected ApiKey auth"),
         }
     }
 }

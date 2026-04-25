@@ -56,6 +56,12 @@ pub struct HmacMaterial {
     pub key: String,
 }
 
+/// Webhook API Key auth.
+#[derive(Clone, Debug)]
+pub struct WebhookApiKeyMaterial {
+    pub api_key: String,
+}
+
 /// ACME account credentials: a JSON-serialized `instant_acme::AccountCredentials`
 /// that holds the account's private key PEM and therefore must be zeroized.
 ///
@@ -144,6 +150,7 @@ mod tests {
         assert_send_sync::<EsApiKeyMaterial>();
         assert_send_sync::<BearerMaterial>();
         assert_send_sync::<HmacMaterial>();
+        assert_send_sync::<WebhookApiKeyMaterial>();
         assert_send_sync::<AcmeAccountMaterial>();
         assert_send_sync::<TlsMaterial>();
     }

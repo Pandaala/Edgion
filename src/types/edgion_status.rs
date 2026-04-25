@@ -10,6 +10,11 @@ pub enum EdgionStatus {
 
     UnknownGRPCERR = 999_01,
 
+    /// AccessLogEntry self-serialization failed; emitted as a fixed-string JSON
+    /// fallback so downstream log parsers still see a parseable record.
+    /// Practically unreachable — the entry struct contains only primitives.
+    AccessLogSerializeFailed = 999_02,
+
     /// Missing Host header (HTTP 400)
     HostMissing = 400_01,
 

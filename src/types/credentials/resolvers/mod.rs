@@ -8,6 +8,7 @@ pub mod dns_credential;
 pub mod es_api_key;
 pub mod hmac;
 pub mod tls;
+pub mod webhook_api_key;
 
 pub use acme::{AcmeAccountResolver, ACME_ACCOUNT_KEY};
 pub use basic::BasicAuthResolver;
@@ -16,3 +17,4 @@ pub use dns_credential::{DnsCredentialMaterial, DnsCredentialResolver};
 pub use es_api_key::EsApiKeyResolver;
 pub use hmac::HmacResolver;
 pub use tls::{TlsCertsResolver, TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
+pub use webhook_api_key::WebhookApiKeyResolver;

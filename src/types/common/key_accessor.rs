@@ -123,6 +123,16 @@ pub enum KeyGet {
         #[serde(rename = "webhookRef")]
         webhook_ref: String,
 
+        /// Headers to forward from the incoming request to the webhook service.
+        /// None = do not forward any incoming headers.
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "forwardHeaders")]
+        forward_headers: Option<Vec<String>>,
+
+        /// Path suffix appended to the webhook uri.
+        /// e.g. uri="https://api.example.com" + pathSuffix="/v2/resolve" → https://api.example.com/v2/resolve
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "pathSuffix")]
+        path_suffix: Option<String>,
+
         /// How to extract the key value from the webhook response
         extract: WebhookExtract,
     },
@@ -340,6 +350,8 @@ mod tests {
         assert_eq!(
             KeyGet::Webhook {
                 webhook_ref: "prod/resolver".to_string(),
+                forward_headers: None,
+                path_suffix: None,
                 extract: WebhookExtract::BodyText,
             }
             .as_log_str(),
@@ -366,6 +378,8 @@ mod tests {
         assert_eq!(
             KeyGet::Webhook {
                 webhook_ref: "ns/name".to_string(),
+                forward_headers: None,
+                path_suffix: None,
                 extract: WebhookExtract::BodyText,
             }
             .source_type(),
@@ -560,6 +574,8 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "prod/key-resolver".to_string(),
+                forward_headers: None,
+                path_suffix: None,
                 extract: WebhookExtract::Header {
                     name: "X-Resolved-Key".to_string(),
                 },
@@ -581,6 +597,8 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "prod/user-mapper".to_string(),
+                forward_headers: None,
+                path_suffix: None,
                 extract: WebhookExtract::Body {
                     path: "data.user_id".to_string(),
                 },
@@ -601,6 +619,8 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "ns/resolver".to_string(),
+                forward_headers: None,
+                path_suffix: None,
                 extract: WebhookExtract::BodyText,
             }
         );
@@ -620,6 +640,8 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "ns/resolver".to_string(),
+                forward_headers: None,
+                path_suffix: None,
                 extract: WebhookExtract::Cookie {
                     name: "session_token".to_string(),
                 },
@@ -631,6 +653,8 @@ extract:
     fn test_key_get_webhook_json_roundtrip() {
         let key = KeyGet::Webhook {
             webhook_ref: "prod/resolver".to_string(),
+            forward_headers: None,
+            path_suffix: None,
             extract: WebhookExtract::Body {
                 path: "data.key".to_string(),
             },
@@ -644,6 +668,8 @@ extract:
     fn test_key_get_webhook_is_remote() {
         assert!(KeyGet::Webhook {
             webhook_ref: "ns/name".to_string(),
+            forward_headers: None,
+            path_suffix: None,
             extract: WebhookExtract::BodyText,
         }
         .is_remote());
@@ -659,11 +685,68 @@ extract:
         assert_eq!(
             KeyGet::Webhook {
                 webhook_ref: "prod/resolver".to_string(),
+                forward_headers: None,
+                path_suffix: None,
                 extract: WebhookExtract::BodyText,
             }
             .name(),
             Some("prod/resolver")
         );
+    }
+
+    #[test]
+    fn test_key_get_webhook_forward_headers_and_path_suffix() {
+        let yaml = r#"
+type: webhook
+webhookRef: "prod/resolver"
+forwardHeaders:
+  - Authorization
+  - X-User-ID
+pathSuffix: "/v2/resolve"
+extract:
+  source: bodyText
+"#;
+        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
+        match key {
+            KeyGet::Webhook {
+                webhook_ref,
+                forward_headers,
+                path_suffix,
+                extract,
+            } => {
+                assert_eq!(webhook_ref, "prod/resolver");
+                assert_eq!(
+                    forward_headers.as_deref(),
+                    Some(["Authorization".to_string(), "X-User-ID".to_string()].as_slice())
+                );
+                assert_eq!(path_suffix.as_deref(), Some("/v2/resolve"));
+                assert_eq!(extract, WebhookExtract::BodyText);
+            }
+            _ => panic!("Expected Webhook variant"),
+        }
+    }
+
+    #[test]
+    fn test_key_get_webhook_defaults_omitted() {
+        // forward_headers and path_suffix should be None when absent
+        let yaml = r#"
+type: webhook
+webhookRef: "ns/name"
+extract:
+  source: bodyText
+"#;
+        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
+        match key {
+            KeyGet::Webhook {
+                forward_headers,
+                path_suffix,
+                ..
+            } => {
+                assert!(forward_headers.is_none());
+                assert!(path_suffix.is_none());
+            }
+            _ => panic!("Expected Webhook variant"),
+        }
     }
 
     #[test]

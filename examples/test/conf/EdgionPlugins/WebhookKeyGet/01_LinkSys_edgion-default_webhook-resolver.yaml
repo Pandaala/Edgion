@@ -11,9 +11,6 @@ spec:
     uri: "http://127.0.0.1:30001/webhook/resolve"
     requestMethod: GET
     timeoutMs: 5000
-    requestHeaders:
-      - X-Tenant-Id
-      - X-Request-ID
     successStatusCodes: [200]
     allowDegradation: false
     maxResponseBytes: 4096

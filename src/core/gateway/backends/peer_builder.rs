@@ -86,17 +86,6 @@ fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey
     Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
 }
 
-#[cfg(not(feature = "boringssl"))]
-fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, EdgionStatus> {
-    if policy.spec.resolved_client_certificate.is_some() {
-        tracing::warn!(
-            policy = %format!("{}/{}", policy.namespace().unwrap_or(""), policy.name()),
-            "upstream mTLS client cert is not supported by this TLS feature set"
-        );
-    }
-    Ok(None)
-}
-
 #[cfg(feature = "boringssl")]
 fn build_client_cert_key_from_secret(
     secret: &k8s_openapi::api::core::v1::Secret,
@@ -109,14 +98,6 @@ fn build_client_cert_key_from_secret(
     let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
 
     Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
-}
-
-#[cfg(not(feature = "boringssl"))]
-fn build_client_cert_key_from_secret(
-    _secret: &k8s_openapi::api::core::v1::Secret,
-) -> Result<Option<Arc<()>>, EdgionStatus> {
-    tracing::warn!("upstream mTLS client cert from Gateway is not supported by this TLS feature set");
-    Ok(None)
 }
 
 #[cfg(feature = "boringssl")]

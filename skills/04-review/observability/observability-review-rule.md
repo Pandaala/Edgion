@@ -65,7 +65,7 @@
 - ConfHandler / conf_handler_impl 中的配置加载事件（`tracing::info!`）
 - 数据面进程级一次性初始化（`once_cell`）
 - 致命错误 panic 前（`tracing::error!`）
-- access log 发送失败（`pg_logging.rs` 中的 `tracing::warn!`）
+- 被 `is_integration_testing_mode()` 保护的测试基础设施路径（如 `pg_logging.rs:89` 的 access_log_store 写失败 `tracing::warn!`）— 该分支生产环境永远不进入
 
 详见 [coding-standards/01-log-safety.md](../../03-coding/01-log-safety.md) 铁律 3。
 

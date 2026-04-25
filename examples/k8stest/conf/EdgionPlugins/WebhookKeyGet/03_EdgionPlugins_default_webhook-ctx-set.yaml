@@ -17,6 +17,9 @@ spec:
             from:
               type: webhook
               webhookRef: "edgion-default/webhook-resolver"
+              forwardHeaders:
+                - X-Tenant-Id
+                - X-Request-ID
               extract:
                 source: body
                 path: "data.user_id"
@@ -27,6 +30,9 @@ spec:
             from:
               type: webhook
               webhookRef: "edgion-default/webhook-resolver"
+              forwardHeaders:
+                - X-Tenant-Id
+                - X-Request-ID
               extract:
                 source: header
                 name: "X-Resolved-Key"
@@ -36,6 +42,8 @@ spec:
             from:
               type: webhook
               webhookRef: "edgion-default/webhook-body-resolver"
+              forwardHeaders:
+                - X-Tenant-Id
               extract:
                 source: bodyText
 

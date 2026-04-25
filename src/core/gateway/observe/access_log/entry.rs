@@ -96,9 +96,11 @@ impl<'a> AccessLogEntry<'a> {
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|e| {
-            tracing::error!("Failed to serialize access log: {}", e);
-            "{}".to_string()
+        serde_json::to_string(self).unwrap_or_else(|_| {
+            format!(
+                r#"{{"ts":{},"errors":["AccessLogSerializeFailed"]}}"#,
+                chrono::Utc::now().timestamp_millis()
+            )
         })
     }
 

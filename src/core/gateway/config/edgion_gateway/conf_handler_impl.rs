@@ -1,4 +1,5 @@
 use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
+use crate::core::gateway::link_sys::providers::webhook::manager::configure_webhook_global_max;
 use crate::types::prelude_resources::EdgionGatewayConfig;
 use kube::ResourceExt;
 use parking_lot::RwLock;
@@ -43,6 +44,12 @@ impl Default for EdgionGatewayConfigHandler {
     }
 }
 
+fn apply_link_sys_config(config: &EdgionGatewayConfig) {
+    if let Some(link_sys) = &config.spec.link_sys {
+        configure_webhook_global_max(link_sys.webhook_max_response_bytes);
+    }
+}
+
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionGatewayConfig>>) {
         tracing::info!(
@@ -52,6 +59,9 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         );
         let mut store = EDGION_GATEWAY_CONFIG_STORE.write();
         *store = arc_map_to_owned(data);
+        for config in store.values() {
+            apply_link_sys_config(config);
+        }
     }
 
     fn partial_update(
@@ -70,6 +80,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in add {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig added");
+                apply_link_sys_config(&config);
                 store.insert(key, (*config).clone());
             }
         }
@@ -82,6 +93,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in update {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig updated");
+                apply_link_sys_config(&config);
                 if store.insert(key.clone(), (*config).clone()).is_none() {
                     tracing::warn!(key = %key, "EdgionGatewayConfig update: key not found in store, inserting");
                 }
@@ -130,6 +142,7 @@ mod tests {
                 global_plugins_ref: None,
                 preflight_policy: None,
                 enable_reference_grant_validation: false,
+                link_sys: None,
             },
         )
     }
@@ -242,6 +255,18 @@ mod tests {
         // must not panic
         handler.partial_update(HashMap::new(), HashMap::new(), remove);
         assert_eq!(count_edgion_gateway_configs(), 0);
+    }
+
+    #[test]
+    fn test_link_sys_config_webhook_max() {
+        use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfigSpec, LinkSysGlobalConfig};
+        let spec = EdgionGatewayConfigSpec {
+            link_sys: Some(LinkSysGlobalConfig {
+                webhook_max_response_bytes: 65536,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(spec.link_sys.unwrap().webhook_max_response_bytes, 65536);
     }
 
     #[test]

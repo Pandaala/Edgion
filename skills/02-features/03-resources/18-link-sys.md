@@ -217,9 +217,10 @@ spec:
       enabled: true
       certs:
         secretRef: { name: webhook-client-tls }
-    requestHeaders: ["Authorization", "X-Request-ID"]
+    defaultHeaders:                                # 静态出站 headers，每次调用都带上
+      X-Source: edgion
     successStatusCodes: [200]
-    maxResponseBytes: 2048                         # 硬上限 16 KiB
+    maxResponseBytes: 2048                         # 默认硬上限 16 KiB（可经 EdgionGatewayConfig.linkSys.webhookMaxResponseBytes 调整）
     allowDegradation: true                         # 故障时静默降级返回 None
     statusOnError: 503                             # allowDegradation=false 且 webhook 是唯一 key 来源时的返回码
     retry:
@@ -248,8 +249,9 @@ spec:
         #   maxSec: 60
 ```
 
-- Auth tagged-enum：`type: basic` → `BasicAuthResolver`、`type: bearer` → `BearerResolver`、`type: hmac` → `HmacResolver`（Secret 键 `hmacKey`）。
-- `uri` 必须 `http://` 或 `https://`；`requestMethod` 必须是合法 HTTP 方法；`statusOnError` ∈ [200, 599]；`maxResponseBytes` ≤ `WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES` (16 KiB)。违反任何一条会写 `Accepted=False/Invalid`。
+- Auth tagged-enum：`type: basic` → `BasicAuthResolver`、`type: bearer` → `BearerResolver`、`type: hmac` → `HmacResolver`（Secret 键 `hmacKey`）、`type: apiKey` → `WebhookApiKeyResolver`（Secret 键 `apiKey`，注入 header 或 query）。
+- `uri` 必须 `http://` 或 `https://`；`requestMethod` 必须是合法 HTTP 方法；`statusOnError` ∈ [200, 599]；`maxResponseBytes` 在调用时 clamp 至 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）。
+- 调用语义（method/path/headers/body）由消费方决定：`KeyGet::Webhook` 通过 `forwardHeaders` 选择从入站请求转发哪些 header、`pathSuffix` 拼接到 `uri` 末尾；其他消费方通过 `get_webhook_call_handle()` + `WebhookCallRequest` 自定义。
 
 ### `type: kafka`
 

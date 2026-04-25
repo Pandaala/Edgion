@@ -40,7 +40,6 @@ use pingora_http::ResponseHeader;
 use pingora_limits::rate::Rate;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::debug;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
@@ -96,12 +95,6 @@ impl RateLimit {
         self.rate.get_or_init(|| {
             let interval = self.config.get_interval_duration();
             let slots = self.config.get_effective_slots();
-
-            debug!(
-                "Initializing Rate instance: interval={:?}, slots={}, hashes={}",
-                interval, slots, CMS_HASHES
-            );
-
             Rate::new_with_estimator_config(interval, CMS_HASHES, slots)
         })
     }

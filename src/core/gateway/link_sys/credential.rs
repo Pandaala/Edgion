@@ -16,8 +16,12 @@
 //! `&CredentialState<_>` so that Pending / Invalid produce a fail-fast `bail!`
 //! instead of a silent empty-credential fallback (see I4 / I5).
 
-use crate::types::credentials::materials::{BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial};
-use crate::types::credentials::resolvers::{BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver};
+use crate::types::credentials::materials::{
+    BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial, WebhookApiKeyMaterial,
+};
+use crate::types::credentials::resolvers::{
+    BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, WebhookApiKeyResolver,
+};
 use crate::types::credentials::SecretMaterialResolver;
 use crate::types::resources::common::TlsConfig;
 use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
@@ -154,6 +158,7 @@ pub enum ResolvedCredential {
     EsApiKey(EsApiKeyMaterial),
     Bearer(BearerMaterial),
     Hmac(HmacMaterial),
+    WebhookApiKey(WebhookApiKeyMaterial),
 }
 
 // ============================================================================
@@ -234,6 +239,10 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
             }
             Some(WebhookAuth::Hmac { secret, .. }) => {
                 state_from_optional_secret(secret.as_ref(), &HmacResolver).map(ResolvedCredential::Hmac)
+            }
+            Some(WebhookAuth::ApiKey { secret, .. }) => {
+                state_from_optional_secret(secret.as_ref(), &WebhookApiKeyResolver)
+                    .map(ResolvedCredential::WebhookApiKey)
             }
         },
         _ => CredentialState::NotRequired,

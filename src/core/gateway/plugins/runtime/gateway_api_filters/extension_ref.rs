@@ -258,13 +258,9 @@ impl ExtensionRefFilter {
 
         match result {
             Ok(()) => max_delay,
-            Err(payload) => {
-                tracing::error!(
-                    plugin_key = %self.plugin_key(),
-                    "Plugin body filter panicked, plugin_ref popped safely"
-                );
-                std::panic::resume_unwind(payload);
-            }
+            // pop_plugin_ref above ensured cleanup; re-throw the panic so
+            // Pingora's worker-level handler aborts the request.
+            Err(payload) => std::panic::resume_unwind(payload),
         }
     }
 }

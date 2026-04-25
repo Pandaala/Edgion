@@ -122,6 +122,9 @@ pub fn build_es_client(
             CredentialState::Resolved(ResolvedCredential::Hmac(_)) => anyhow::bail!(
                 "Elasticsearch auth does not support HMAC material (internal bug: resolver selected wrong variant)"
             ),
+            CredentialState::Resolved(ResolvedCredential::WebhookApiKey(_)) => anyhow::bail!(
+                "Elasticsearch auth does not support WebhookApiKey material (internal bug: resolver selected wrong variant)"
+            ),
             CredentialState::Pending => anyhow::bail!(
                 "Elasticsearch auth is configured via secretRef but credential material \
                  has not been resolved yet; refusing to build client without credentials"

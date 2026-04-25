@@ -4,7 +4,7 @@
 //! Keyed by "namespace/name" matching webhook_ref in KeyGet::Webhook.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +22,20 @@ use super::runtime::{SlidingWindowCounter, WebhookRuntime};
 // ============================================================
 
 static WEBHOOK_MANAGER: std::sync::LazyLock<WebhookManager> = std::sync::LazyLock::new(WebhookManager::new);
+
+/// Global cap for webhook response body size. Initialized to 16KB.
+static WEBHOOK_GLOBAL_MAX: AtomicUsize = AtomicUsize::new(16384);
+
+/// Read the current global max response bytes for webhook calls.
+pub fn get_webhook_global_max() -> usize {
+    WEBHOOK_GLOBAL_MAX.load(Ordering::Relaxed)
+}
+
+/// Set the global max response bytes (called when EdgionGatewayConfig is updated).
+pub fn configure_webhook_global_max(bytes: usize) {
+    WEBHOOK_GLOBAL_MAX.store(bytes, Ordering::Relaxed);
+    tracing::info!(bytes, "Webhook global max response bytes updated");
+}
 
 /// Get the global webhook manager
 pub fn get_webhook_manager() -> &'static WebhookManager {
@@ -150,13 +164,43 @@ impl WebhookManagerOps for StaticWebhookManagerAdapter {
 }
 
 // ============================================================
+// Public call handle for plugins and gateway internals
+// ============================================================
+
+/// Handle for making outbound calls via a registered webhook connection.
+pub struct WebhookCallHandle(pub(crate) std::sync::Arc<super::runtime::WebhookRuntime>);
+
+impl WebhookCallHandle {
+    /// Execute an outbound HTTP call via this webhook connection.
+    pub async fn call(
+        &self,
+        req: super::call::WebhookCallRequest,
+    ) -> Result<super::call::WebhookCallResult, super::call::WebhookCallError> {
+        super::call::webhook_call(&self.0, req, get_webhook_global_max()).await
+    }
+}
+
+/// Get a handle for making generic webhook calls (used by plugins and gateway internals).
+/// Returns None if no webhook with the given ref is registered.
+pub async fn get_webhook_call_handle(webhook_ref: &str) -> Option<WebhookCallHandle> {
+    get_webhook_manager().get(webhook_ref).await.map(WebhookCallHandle)
+}
+
+// ============================================================
 // Tests
 // ============================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn configure_global_max_changes_value() {
+        configure_webhook_global_max(65536);
+        assert_eq!(get_webhook_global_max(), 65536);
+        // reset to default for other tests
+        configure_webhook_global_max(16384);
+    }
 
     #[tokio::test]
     async fn test_manager_upsert_and_get() {

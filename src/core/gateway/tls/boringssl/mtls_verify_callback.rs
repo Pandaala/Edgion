@@ -64,7 +64,6 @@ unsafe extern "C" fn free_verify_context(
 ) {
     if !ptr.is_null() {
         let _ = Box::from_raw(ptr as *mut VerifyContext);
-        tracing::trace!("Freed mTLS verify context");
     }
 }
 
@@ -93,7 +92,9 @@ unsafe extern "C" fn verify_callback(preverify_ok: c_int, x509_ctx: *mut boring_
     let result = std::panic::catch_unwind(|| verify_callback_impl(preverify_ok, x509_ctx));
 
     result.unwrap_or_else(|e| {
-        // Panic occurred - log and reject connection
+        // Panic occurred - best-effort log to ssl.log and reject connection.
+        // FFI calls here cannot panic in Rust sense; log_mtls_failure handles
+        // null ssl_ptr and missing meta gracefully (silently drops the entry).
         let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
             s.to_string()
         } else if let Some(s) = e.downcast_ref::<String>() {
@@ -102,10 +103,9 @@ unsafe extern "C" fn verify_callback(preverify_ok: c_int, x509_ctx: *mut boring_
             "unknown panic".to_string()
         };
 
-        tracing::error!(
-            panic = %panic_msg,
-            "PANIC in TLS verify callback! Rejecting connection to prevent UB"
-        );
+        let ssl_ptr = boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
+            as *mut boring_sys::SSL;
+        log_mtls_failure(ssl_ptr, &format!("verify callback panic: {}", panic_msg));
         0 // Reject on panic
     })
 }
@@ -140,7 +140,9 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
         as *mut boring_sys::SSL;
 
     if ssl_ptr.is_null() {
-        tracing::error!("verify_callback: failed to get SSL from X509_STORE_CTX");
+        // Defensive: BoringSSL guarantees a non-null SSL pointer in this callback
+        // context. If null somehow, ssl.log can't be written (no conn meta), so
+        // silently reject the connection.
         return 0;
     }
 
@@ -281,7 +283,6 @@ pub fn set_verify_callback_with_whitelist(
         // Set verify mode with custom callback
         boring_sys::SSL_set_verify(ssl_ptr, verify_mode.bits() as c_int, Some(verify_callback));
 
-        tracing::debug!("Set custom mTLS verify callback with SAN/CN whitelist");
         Ok(())
     }
 }

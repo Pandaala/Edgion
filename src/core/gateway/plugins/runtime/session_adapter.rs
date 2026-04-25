@@ -112,11 +112,15 @@ impl<'a> PingoraSessionAdapter<'a> {
     ///
     /// Looks up the WebhookRuntime from the global registry, performs health/rate-limit
     /// checks, sends the HTTP request with retry, and extracts the value from the response.
-    ///
-    /// TODO: Full implementation in Phase 3 (WebhookRegistry + runtime)
-    async fn resolve_webhook(&self, webhook_ref: &str, extract: &WebhookExtract) -> Option<String> {
+    async fn resolve_webhook(
+        &self,
+        webhook_ref: &str,
+        forward_headers: Option<&[String]>,
+        path_suffix: Option<&str>,
+        extract: &WebhookExtract,
+    ) -> Option<String> {
         use crate::core::gateway::link_sys::providers::webhook::resolve_webhook_key;
-        resolve_webhook_key(self, webhook_ref, extract).await
+        resolve_webhook_key(self, webhook_ref, forward_headers, path_suffix, extract).await
     }
 
     /// Extract path parameters from route pattern (lazy extraction).
@@ -591,7 +595,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             }
 
             // ---- Async variant: calls external webhook service ----
-            KeyGet::Webhook { webhook_ref, extract } => self.resolve_webhook(webhook_ref, extract).await,
+            KeyGet::Webhook {
+                webhook_ref,
+                forward_headers,
+                path_suffix,
+                extract,
+            } => {
+                self.resolve_webhook(webhook_ref, forward_headers.as_deref(), path_suffix.as_deref(), extract)
+                    .await
+            }
         }
     }
 
