@@ -87,18 +87,56 @@ LinkSys 现在不是“每种外部系统一个资源 kind”，而是一个统�
 
 ### 2. Webhook
 
-Webhook 不是普通 KV client，而是一个独立的 webhook service manager 模式：
+Webhook 是一个**通用出站 HTTP 客户端**：LinkSys CRD 只描述"怎么连"（uri、auth、tls、超时、重试、健康检查），调用语义（method/path/headers/body）由消费方在 `WebhookCallRequest` 里给。
 
-- `providers/webhook/manager.rs`：全局注册表
-- `providers/webhook/runtime.rs`：运行时状态
-- `providers/webhook/health.rs`：主动健康检查
-- `providers/webhook/resolver.rs`：给 `KeyGet::Webhook` 这类路径消费
+模块布局：
+
+- `providers/webhook/manager.rs`：全局注册表 + 全局 `webhookMaxResponseBytes` AtomicUsize + 公开 `WebhookCallHandle`
+- `providers/webhook/runtime.rs`：运行时状态（`WebhookRuntime`，含 health/rate counter/http client）
+- `providers/webhook/health.rs`：主动 + 被动健康检查
+- `providers/webhook/call.rs`：统一调用接口 `webhook_call()` / `WebhookCallRequest` / `WebhookCallResult` / `WebhookCallError`
+- `providers/webhook/resolver.rs`：`KeyGet::Webhook` 适配层（封装 forwardHeaders / pathSuffix / extract）
+- `providers/webhook/client.rs`：`WebhookLinkClient`（LinkSysLifecycle 适配，把资源同步到 manager）
 
 关键点：
 
 - key 仍然是 `namespace/name`
-- `WebhookManager.upsert()` 会按配置重建 HTTP client 和健康检查任务
-- 删除资源时要正确 abort 旧 health task
+- `WebhookManager.upsert()` 按配置重建 HTTP client 和健康检查任务（idempotent）；删除资源时要 abort 旧 health task
+- 不要重新发明调用逻辑：所有出站调用都走 `webhook_call(&runtime, req, get_webhook_global_max())`，它统一处理 health gate、限流、auth 注入、重试、响应大小限制
+- `WebhookServiceConfig.defaultHeaders` 是连接层静态 headers；调用方传入的 headers 优先级更高（caller wins on conflict）
+
+#### 给插件 / 网关内部消费方使用的公开 API
+
+```rust
+use crate::core::gateway::link_sys::{get_webhook_call_handle, WebhookCallRequest};
+
+let handle = get_webhook_call_handle("prod/notifier").await
+    .ok_or("webhook not registered")?;
+
+let result = handle.call(WebhookCallRequest {
+    method: "POST".into(),
+    path: "/events".into(),       // 拼接到 uri 后；空字符串则用 uri 原样
+    headers: my_headers,          // 与 defaultHeaders 合并，调用方优先
+    body: Some(json_body.into()),
+}).await?;
+
+// result.status / result.headers / result.body
+```
+
+错误分支：`Unhealthy` / `RateLimited` / `Timeout` / `Connect` / `StatusNotSuccess` / `ResponseTooLarge` / `Exhausted`。
+
+#### `KeyGet::Webhook` 调用语义
+
+```yaml
+from:
+  type: webhook
+  webhookRef: "ns/name"
+  forwardHeaders: [X-Tenant-Id]   # 从入站请求转发到 webhook 的 header 名（hop-by-hop 自动跳过）
+  pathSuffix: "/v2/resolve"        # 拼接到 uri 后
+  extract: { source: bodyText }
+```
+
+resolver.rs 总是会附加 `X-Forwarded-For/Method/Uri/Host` context headers，无需在 forwardHeaders 里列出。
 
 ### 3. Kafka
 

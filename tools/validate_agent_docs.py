@@ -180,13 +180,13 @@ FORBIDDEN_PATTERNS = {
         'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
         "  - ${LOG_DIR}/access.log",
     ],
-    "examples/test/scripts/integration/run_redis_test.sh": [
+    "examples/test/scripts/integration/link_sys/run_redis_test.sh": [
         'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
     ],
-    "examples/test/scripts/integration/run_etcd_test.sh": [
+    "examples/test/scripts/integration/link_sys/run_etcd_test.sh": [
         'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
     ],
-    "examples/test/scripts/integration/run_es_test.sh": [
+    "examples/test/scripts/integration/link_sys/run_es_test.sh": [
         'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
     ],
     "docs/en/ops-guide/observability/access-log.md": [

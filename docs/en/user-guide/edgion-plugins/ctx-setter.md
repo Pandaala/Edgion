@@ -52,8 +52,20 @@ The `from` field uses the unified `KeyGet` structure:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | String | — (required) | Data source type: `header`, `query`, `cookie`, `path`, `method`, `clientIp`, `ctx` |
+| `type` | String | — (required) | Data source type: `header`, `query`, `cookie`, `path`, `method`, `clientIp`, `ctx`, `webhook` |
 | `name` | String | None | Key name (required for `header`, `query`, `cookie`, `ctx` types) |
+| `webhookRef` | String | None | LinkSys webhook resource reference `"namespace/name"` (required for `webhook` type) |
+| `forwardHeaders` | Array\<String\> | None | List of inbound request header names to forward to the webhook; absent/empty = forward none (optional for `webhook` type) |
+| `pathSuffix` | String | None | Path appended to the webhook `uri` (optional for `webhook` type) |
+| `extract` | Object | — (required for webhook) | How to extract a value from the webhook response; see below |
+
+#### WebhookExtract Sub-fields
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `source` | String | Extraction source: `header` (response header), `cookie` (Set-Cookie), `body` (JSON path), `bodyText` (raw text) |
+| `name` | String | Required for `header`/`cookie`; the target header / cookie name |
+| `path` | String | Required for `body`; dot-path, e.g. `data.user_id`, `items.0.id` |
 
 ## Configuration Examples
 
@@ -124,7 +136,70 @@ rules:
 
 > **Note**: Variables in templates (e.g., `{{ client_ip }}`) must be **existing** context variables or built-in variables. It's recommended to first extract base variables with CtxSet, then combine them with templates.
 
-### 5. Comprehensive Example
+### 5. Webhook Resolution
+
+Resolve a variable value by calling an external service via webhook. First create a LinkSys webhook resource describing the connection:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: user-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    uri: "https://api.example.com/v1/resolve"
+    requestMethod: GET
+    timeoutMs: 3000
+    successStatusCodes: [200]
+```
+
+Then reference it from CtxSet:
+
+```yaml
+rules:
+  # Extract user_id from JSON response body
+  - name: user_id
+    from:
+      type: webhook
+      webhookRef: "edgion-default/user-resolver"
+      forwardHeaders:                      # forward these inbound headers to the webhook
+        - X-Tenant-Id
+        - Authorization
+      pathSuffix: "/user"                  # actual request: https://api.example.com/v1/resolve/user
+      extract:
+        source: body
+        path: "data.userId"
+    default: "anonymous"
+
+  # Extract token from a response header
+  - name: api_token
+    from:
+      type: webhook
+      webhookRef: "edgion-default/user-resolver"
+      forwardHeaders: [X-Tenant-Id]
+      extract:
+        source: header
+        name: "X-Resolved-Token"
+
+  # Extract from raw response body (plain text)
+  - name: body_value
+    from:
+      type: webhook
+      webhookRef: "edgion-default/user-resolver"
+      forwardHeaders: [X-Tenant-Id]
+      extract:
+        source: bodyText
+```
+
+**Notes**:
+- LinkSys webhook resource connection settings (`auth`, `tls`, `retry`, `rateLimit`, `healthCheck`, `maxResponseBytes`) — see [LinkSys resource documentation](../../dev-guide/resource-architecture-overview.md).
+- `forwardHeaders` from the caller is merged with the LinkSys CRD's `defaultHeaders` (if any) — **caller headers win on conflict**.
+- Hop-by-hop headers (e.g. `Connection`, `Transfer-Encoding`) are automatically skipped.
+- When the webhook call fails, is rate-limited, unhealthy, or returns a non-2xx status, the resolver returns `None` — falling back to `default`.
+
+### 6. Comprehensive Example
 
 Combining multiple features:
 

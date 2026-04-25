@@ -52,8 +52,20 @@ CtxSet 支持从多种数据源（Header, Query, Cookie 等）提取数据，并
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `type` | String | —（必填） | 数据源类型：`header`、`query`、`cookie`、`path`、`method`、`clientIp`、`ctx` |
+| `type` | String | —（必填） | 数据源类型：`header`、`query`、`cookie`、`path`、`method`、`clientIp`、`ctx`、`webhook` |
 | `name` | String | 无 | 键名（`header`、`query`、`cookie`、`ctx` 类型必填） |
+| `webhookRef` | String | 无 | 引用的 LinkSys webhook 资源 `"namespace/name"`（`webhook` 类型必填） |
+| `forwardHeaders` | Array\<String\> | 无 | 从入站请求转发到 webhook 的 header 名单；缺省/空 = 不额外转发（`webhook` 类型可选） |
+| `pathSuffix` | String | 无 | 拼接到 webhook `uri` 后的 path（`webhook` 类型可选） |
+| `extract` | Object | —（webhook 必填） | 从 webhook 响应中提取值的方式，见下方 |
+
+#### WebhookExtract 子字段
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `source` | String | 提取来源：`header`（响应 header）、`cookie`（Set-Cookie）、`body`（JSON 路径）、`bodyText`（原始文本） |
+| `name` | String | `header`/`cookie` 类型必填，目标 header / cookie 名 |
+| `path` | String | `body` 类型必填，dot 路径，例如 `data.user_id`、`items.0.id` |
 
 ## 配置示例
 
@@ -124,7 +136,70 @@ rules:
 
 > **注意**：模板中的变量（如 `{{ client_ip }}`）必须是 **已存在** 的上下文变量或内置变量。建议先用 CtxSet 提取基础变量，再用模板组合。
 
-### 5. 综合示例
+### 5. Webhook 调用解析
+
+通过 webhook 调用外部服务解析变量值。需要先创建 LinkSys webhook 资源描述目标连接：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: user-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    uri: "https://api.example.com/v1/resolve"
+    requestMethod: GET
+    timeoutMs: 3000
+    successStatusCodes: [200]
+```
+
+然后在 CtxSet 里引用：
+
+```yaml
+rules:
+  # 从 webhook 响应 JSON 提取 user_id
+  - name: user_id
+    from:
+      type: webhook
+      webhookRef: "edgion-default/user-resolver"
+      forwardHeaders:                      # 把入站请求的这些 header 透传给 webhook
+        - X-Tenant-Id
+        - Authorization
+      pathSuffix: "/user"                  # 实际请求 https://api.example.com/v1/resolve/user
+      extract:
+        source: body
+        path: "data.userId"
+    default: "anonymous"
+
+  # 从 webhook 响应 header 提取 token
+  - name: api_token
+    from:
+      type: webhook
+      webhookRef: "edgion-default/user-resolver"
+      forwardHeaders: [X-Tenant-Id]
+      extract:
+        source: header
+        name: "X-Resolved-Token"
+
+  # 从 webhook 响应纯文本提取
+  - name: body_value
+    from:
+      type: webhook
+      webhookRef: "edgion-default/user-resolver"
+      forwardHeaders: [X-Tenant-Id]
+      extract:
+        source: bodyText
+```
+
+**注意**：
+- LinkSys webhook 资源的 `auth`、`tls`、`retry`、`rateLimit`、`healthCheck`、`maxResponseBytes` 等连接级配置见 [LinkSys 资源文档](../../dev-guide/resource-architecture-overview.md)。
+- 调用方传入的 `forwardHeaders` 与 LinkSys CRD `defaultHeaders`（如有）合并发往 webhook，**调用方传入的 header 优先级更高**。
+- Hop-by-hop header（如 `Connection`、`Transfer-Encoding`）会自动跳过转发。
+- Webhook 调用失败、限流、不健康、响应非 2xx 时返回 `None`，触发 `default` 兜底。
+
+### 6. 综合示例
 
 结合多种功能：
 

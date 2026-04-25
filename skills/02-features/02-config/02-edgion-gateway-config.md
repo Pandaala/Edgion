@@ -96,6 +96,10 @@ spec:
 
   # ─── ReferenceGrant 校验 ───
   enableReferenceGrantValidation: false     # bool
+
+  # ─── LinkSys 全局配置 ───
+  linkSys:
+    webhookMaxResponseBytes: 16384          # usize, webhook 响应体硬上限（默认 16 KiB）
 ```
 
 ## spec 字段详解
@@ -154,6 +158,14 @@ spec:
 |------|------|------|------|
 | `mode` | `String` | `cors-standard` | `cors-standard`：OPTIONS + Origin + ACRM；`all-options`：所有 OPTIONS 请求 |
 | `statusCode` | `u16` | `204` | 无 CORS 插件时的 preflight 响应状态码 |
+
+### spec.linkSys
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `webhookMaxResponseBytes` | `usize` | `16384` | LinkSys Webhook 响应体硬上限（字节）。所有 webhook 调用的响应大小都被 clamp 至 `min(per-resource maxResponseBytes, 此值)`。需要更大响应时（如插件调用外部 API 返回较大 JSON）同时调高这两个值。|
+
+> 修改后通过 `EdgionGatewayConfig` partial-update 即时生效，无需重启 Gateway。
 
 ### spec.globalPluginsRef
 
