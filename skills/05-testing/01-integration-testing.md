@@ -154,7 +154,75 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 ./target/debug/examples/test_client -g -r <Resource> -i <Item>
 ```
 
-`Gateway/DynamicTest` 这类动态场景需要关注 `test_client --phase <initial|update>` 的分支，不要只看普通 item 执行路径。
+## 动态（热更新）测试
+
+热更新测试由 Rust 侧 scenario 框架统一编排，作为完整集成测试的最后一步**默认自动执行**。
+
+### 触发与查看
+
+```bash
+# 默认跑：含 dynamic scenarios（所有 family + 最后跑 dynamic）
+./examples/test/scripts/integration/run_integration.sh
+
+# 单独跑 -r Gateway：仍包含 dynamic（迁移自旧 run_dynamic_tests 行为）
+./examples/test/scripts/integration/run_integration.sh -r Gateway
+
+# 窄域跑（-r 指定非 Gateway，e.g. -r EdgionPlugins）：跳过 dynamic，加快迭代
+
+# 列出已注册的 scenario id
+./target/debug/examples/test_client --list-dynamic-scenarios
+
+# 单独跑一个 scenario（保留现场后用）
+./target/debug/examples/test_client -g --dynamic-scenario BasicAuthDynamic
+```
+
+完整 `run_integration.sh` 流程的最后一步会枚举 `--list-dynamic-scenarios` 的输出，逐个调用 `--dynamic-scenario`，每条以 `Dyn_<id>` 名义出现在 `report.log`。
+
+### 当前 scenario 集合
+
+| Scenario id | conf 目录 | 验证内容 |
+|-------------|----------|---------|
+| `GatewayDynamic` | `Gateway/DynamicTest/` | Gateway/HTTPRoute 配置变更（既有用例迁移） |
+| `DslDynamic` | `EdgionPlugins/DslDynamic/DynamicTest/` | DSL 插件 source 切换 v1→v2 |
+| `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest/` | `secretRefs` 列表收缩，bob 凭据移除后 401 |
+| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest/` | `onMissingKey` 从 Allow 切到 Deny |
+
+### 框架在哪
+
+- 框架代码：`examples/code/client/dynamic/`
+  - `ctx.rs` — `ScenarioCtx`：组合算子 `assert_phase`、`apply_dir`、`delete_resources`、`wait_resource_sync`、`sleep`
+  - `scenario.rs` — `Scenario` 结构 + `PhaseSuite` phase→suite factory 映射
+  - `registry.rs` — 显式 `all()` 列表（新增 scenario 加一行即可）
+  - `scenarios/<id>.rs` — 每个 scenario 一个文件，N-phase 状态机用 `ScenarioCtx` 串起来
+- 设计文档：`docs/superpowers/specs/2026-04-25-plugin-dynamic-test-framework-design.md`
+- 实施计划：`docs/superpowers/plans/2026-04-25-plugin-dynamic-test-framework.md`
+
+### 新增一个动态 scenario
+
+1. 在 `examples/test/conf/<Resource>/<Item>/DynamicTest/` 写 `initial/` + `updates/` YAML（`load_conf.sh` 自动跳过 `updates/` 与 `delete/`）
+2. 在 `examples/code/client/suites/<family>/dynamic.rs` 写两个 phase suite（`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`），通过 family `mod.rs` re-export 到 `suites::*`
+3. 在 `test_client.rs` 三处 dispatch 表加分支：`resolve_suite`（如需 alias）、`suite_to_port_key`、`add_suites_for_suite`（按 `--phase` 选择 suite）
+4. 在 `examples/code/client/dynamic/scenarios/<id>.rs` 写 scenario，`run` 函数按 N-phase 顺序串 `assert_phase` / `apply_dir` / `wait_resource_sync` / `sleep`
+5. 在 `dynamic/scenarios/mod.rs` 加 `pub mod <id>;`
+6. 在 `dynamic/registry.rs` 的 `all()` 追加 `crate::dynamic::scenarios::<id>::SCENARIO`
+
+之后 `--list-dynamic-scenarios` 会自动列出，`run_integration.sh`（默认）会在完整跑或 `-r Gateway` 路径下自动包含。
+
+### 手动按 phase 调试
+
+scenario 内部用 `ctx.assert_phase(scenario, "initial"|"update")` 调度 suite。手动需要绕开编排时仍可用旧路径（保留现场后）：
+
+```bash
+# 只跑 initial 阶段断言
+./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase initial
+# 手动 apply updates/ 后再跑 update 阶段断言
+./target/debug/edgion-cli --server http://127.0.0.1:5800 \
+    apply -f examples/test/conf/<Resource>/<Item>/DynamicTest/updates/
+sleep 3
+./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase update
+```
+
+`--phase` 参数仍然有效（每个 dynamic dispatch 都按 phase 路由到对应 suite），是排查 scenario 内部某 phase 行为时的常用入口。
 
 ## 常见排查顺序
 

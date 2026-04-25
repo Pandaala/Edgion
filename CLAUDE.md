@@ -39,17 +39,17 @@ Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller�
   2. 选择最接近的模式参考（`route-like`、`controller-only`、`plugin-like`、`cluster-scoped`）
   3. `skills/01-architecture/00-common/03-resource-system.md`
   4. `skills/01-architecture/01-controller/03-config-center/SKILL.md`
-  5. `skills/05-testing/00-integration-testing.md`
+  5. `skills/05-testing/01-integration-testing.md`
 
 - **添加/调试 HTTP 插件**：
   1. `skills/01-architecture/02-gateway/12-edgion-plugin-dev.md`
   2. `skills/03-coding/observability/00-access-log.md`
-  3. `skills/05-testing/00-integration-testing.md`
+  3. `skills/05-testing/01-integration-testing.md`（含「动态（热更新）测试」节——若插件支持热更新，加一个 dynamic scenario）
 
 - **添加/调试 Stream 插件**：
   1. `skills/01-architecture/02-gateway/13-stream-plugin-dev.md`
   2. `skills/02-features/05-annotations/00-annotations-overview.md`
-  3. `skills/05-testing/00-integration-testing.md`
+  3. `skills/05-testing/01-integration-testing.md`（含「动态（热更新）测试」节——stream scenario 模板暂缺，可参考 HTTP scenario 自行扩展）
 
 - **调试路由/TLS/同步问题**：
   1. `skills/05-testing/SKILL.md`

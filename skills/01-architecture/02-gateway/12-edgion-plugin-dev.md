@@ -313,6 +313,16 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 - `MockPluginSession`
 
+### 如果插件支持热更新（`partial_update` / `full_set`）
+
+光验初始状态不够——补一个 dynamic scenario 把"YAML 更新→ 运行时行为变"的链路也跑回归。模板：移除一条凭据（BasicAuth）、切换一个枚举字段（RateLimit `onMissingKey`）。
+
+- 直接看现有 scenario 入门：`examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`
+- conf 目录约定：`examples/test/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/`（`load_conf.sh` 自动跳过 `updates/` 与 `delete/`）
+- 详细新增步骤、CLI 入口、注册位置：[../../05-testing/01-integration-testing.md「动态（热更新）测试」节](../../05-testing/01-integration-testing.md)
+
+> **避坑**：BasicAuth bcrypt LRU、RateLimit sliding window counter 等带状态缓存的字段，热更新可能 false-pass（旧 cache 命中）。优先验"整条 ref 移除"或"枚举字段切换"这种**逻辑分支**变化，不要光验"修改密码内容"或"改 rate 数值"。
+
 另外可以参考：
 
 - `src/types/resources/edgion_plugins/tests.rs`

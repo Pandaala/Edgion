@@ -50,15 +50,16 @@ pub use gateway::{
 
 // EdgionPlugins tests
 pub use edgion_plugins::{
-    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, BasicAuthTestSuite,
-    CorsPluginTestSuite, CsrfTestSuite, CtxSetTestSuite, DirectEndpointTestSuite, DslDynamicInitialTestSuite,
-    DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite,
-    DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite, GlobalConnectionIpRestrictionTestSuite,
-    HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite,
-    LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
-    PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite, ProxyRewriteTestSuite, RateLimitTestSuite,
-    RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
-    ResolvedRefsTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite, BasicAuthDynamicInitialTestSuite,
+    BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite, CorsPluginTestSuite, CsrfTestSuite, CtxSetTestSuite,
+    DirectEndpointTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite,
+    DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite,
+    GlobalConnectionIpRestrictionTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite,
+    JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite,
+    PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite, ProxyRewriteTestSuite,
+    RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
+    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
+    ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

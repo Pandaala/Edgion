@@ -212,81 +212,32 @@ finalize_report() {
 }
 
 # =============================================================================
-# Dynamic Test function
+# Dynamic Scenarios function (scenario-driven replacement of run_dynamic_tests)
 # =============================================================================
-run_dynamic_tests() {
-    local stage=${1:-0}  # 0=，1=，2=
-    local edgion_cli="${PROJECT_ROOT}/target/debug/edgion-cli"
-    local conf_dir="${PROJECT_ROOT}/examples/test/conf"
-    local controller_url="http://127.0.0.1:5800"
-    local gateway_url="http://127.0.0.1:5900"
+run_dynamic_scenarios() {
+    local test_client="${PROJECT_ROOT}/target/debug/examples/test_client"
 
-    log_section "🔄 Gateway "
+    log_section "🔄 Dynamic Scenarios"
 
-    if [ $stage -eq 0 ] || [ $stage -eq 1 ]; then
-        log_info ">>>  1/2: "
-
-        # （）
-        run_test "Dynamic_Initial_Phase" \
-            "${PROJECT_ROOT}/target/debug/examples/test_client \
-             -g -r Gateway -i Dynamic --phase initial" || test_failed=true
-
-        log_success ""
+    if [ ! -x "$test_client" ]; then
+        log_error "test_client binary not found: $test_client"
+        return 1
     fi
 
-    if [ $stage -eq 0 ]; then
-        log_section "📦 "
-
-        # 1.
-        log_info "Applying updates from DynamicTest/updates/..."
-        "${edgion_cli}" --server "${controller_url}" \
-            apply -f "${conf_dir}/Gateway/DynamicTest/updates/" || {
-            log_error "Failed to apply dynamic updates"
-            return 1
-        }
-
-        # 2.
-        if [ -f "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt" ]; then
-            log_info "Deleting resources..."
-            while IFS= read -r resource; do
-                [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
-                # : Kind/Namespace/Name
-                IFS='/' read -r kind namespace name <<< "$resource"
-                if [ -n "$kind" ] && [ -n "$namespace" ] && [ -n "$name" ]; then
-                    log_info "Deleting: $kind/$namespace/$name"
-                    "${edgion_cli}" --server "${controller_url}" delete "$kind" "$name" -n "$namespace" || true
-                fi
-            done < "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt"
-        fi
-        
-        # 3. （2）
-        log_info "Verifying resource synchronization..."
-        run_test "Resource_Diff_After_Dynamic_Update" \
-            "${PROJECT_ROOT}/target/debug/examples/resource_diff \
-             --controller-url ${controller_url} \
-             --gateway-url ${gateway_url}" || {
-            log_info "Resource sync has some issues (non-blocking, continuing...)"
-        }
-        
-        # 4. 
-        log_info "Waiting 3s for configuration to take effect..."
-        sleep 3
-        
-        log_success ""
+    local ids
+    ids=$("$test_client" --list-dynamic-scenarios 2>/dev/null || true)
+    if [ -z "$ids" ]; then
+        log_info "No dynamic scenarios registered (--list-dynamic-scenarios returned empty)"
+        return 0
     fi
-    
-    if [ $stage -eq 0 ] || [ $stage -eq 2 ]; then
-        log_info ">>>  2/2: "
-        
-        # （）
-        run_test "Dynamic_After_Update_Phase" \
-            "${PROJECT_ROOT}/target/debug/examples/test_client \
-             -g -r Gateway -i Dynamic --phase update" || test_failed=true
-        
-        log_success ""
-    fi
-    
-    log_section "✅ "
+
+    local scenario
+    for scenario in $ids; do
+        run_test "Dyn_${scenario}" \
+            "${test_client} -g --dynamic-scenario ${scenario}" || test_failed=true
+    done
+
+    log_success "Dynamic scenarios finished"
 }
 
 # =============================================================================
@@ -488,8 +439,6 @@ show_help() {
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
-    echo "  --dynamic-test         Run Gateway dynamic configuration tests"
-    echo "  --dynamic-stage <NUM>  Dynamic test stage: 1=initial, 2=update, 0=both (default: 0)"
     echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 50051)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
@@ -512,8 +461,6 @@ show_help() {
 # Global variables for test context (set by main, used by run_all_tests)
 G_RESOURCE=""
 G_ITEM=""
-G_DYNAMIC_TEST=false
-G_DYNAMIC_STAGE=0
 
 # =============================================================================
 # Run all tests function (can be called multiple times)
@@ -844,15 +791,13 @@ run_all_tests() {
             log_info "Skipping slow test: ResourceAbnormalMetrics (use --full-test to run)"
         fi
 
-        # Gateway Dynamic Tests (if enabled)
-        if $G_DYNAMIC_TEST; then
-            run_dynamic_tests $G_DYNAMIC_STAGE
-        fi
+        # Dynamic scenarios (always run as part of full test cycle)
+        run_dynamic_scenarios
     fi
-    
-    # Run dynamic tests for Gateway resource (if specified and enabled)
-    if [ -n "$G_RESOURCE" ] && [ "$G_RESOURCE" = "Gateway" ] && $G_DYNAMIC_TEST; then
-        run_dynamic_tests $G_DYNAMIC_STAGE
+
+    # Run dynamic scenarios when narrow scope = Gateway
+    if [ -n "$G_RESOURCE" ] && [ "$G_RESOURCE" = "Gateway" ]; then
+        run_dynamic_scenarios
     fi
     
     if $test_failed; then
@@ -894,14 +839,6 @@ main() {
             --full-test)
                 FULL_TEST=true
                 shift
-                ;;
-            --dynamic-test)
-                G_DYNAMIC_TEST=true
-                shift
-                ;;
-            --dynamic-stage)
-                G_DYNAMIC_STAGE=$2
-                shift 2
                 ;;
             --controller-grpc-port)
                 CONTROLLER_GRPC_PORT="$2"

@@ -31,7 +31,7 @@
 | `Gateway/AllowedRoutes/*` | `examples/test/conf/Gateway/AllowedRoutes/` | `AllowedRoutes*TestSuite` | 是 | namespace / kinds / selector |
 | `Gateway/TLS/*` | `examples/test/conf/Gateway/TLS/` | `BackendTlsTestSuite`、`BackendTlsSanTestSuite`、`GatewayTlsTestSuite`、`GatewayTlsNoHostnameListenerTestSuite` | 是 | backend TLS、backend TLS SAN 验证、listener TLS |
 | `Gateway/FrontendValidation` | `examples/test/conf/Gateway/FrontendValidation/` | `FrontendValidationTestSuite` | 是 | 前端 mTLS 客户端证书验证 |
-| `Gateway/DynamicTest` | `examples/test/conf/Gateway/DynamicTest/` | `InitialPhaseTestSuite`、`UpdatePhaseTestSuite` | 是 | 配置动态更新，注意 `--phase` |
+| `Gateway/DynamicTest` | `examples/test/conf/Gateway/DynamicTest/` | `InitialPhaseTestSuite`、`UpdatePhaseTestSuite` | 是 | 配置动态更新，由 `GatewayDynamic` scenario 编排（详见 [01-integration-testing.md 动态测试节](../01-integration-testing.md)） |
 | `Gateway/ListenerHostname` | `examples/test/conf/Gateway/ListenerHostname/` | `ListenerHostnameTestSuite` | 是 | listener hostname 选择 |
 | `Gateway/PortConflict` | `examples/test/conf/Gateway/PortConflict/` | `PortConflictTestSuite` | 是 | listener 端口冲突 |
 | `Gateway/StreamPlugins` | `examples/test/conf/Gateway/StreamPlugins/` | `StreamPluginsTestSuite` | 是 | gateway 级 stream plugin |

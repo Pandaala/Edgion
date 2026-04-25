@@ -6,6 +6,7 @@
 #![allow(unused_imports)]
 
 pub mod access_log_client;
+mod dynamic;
 mod framework;
 mod log_analyzer;
 pub mod metrics_helper;
@@ -78,6 +79,14 @@ struct Cli {
     /// Test phase for dynamic tests (initial or update)
     #[arg(long)]
     phase: Option<String>,
+
+    /// List all registered dynamic scenario ids (one per line) and exit.
+    #[arg(long = "list-dynamic-scenarios")]
+    list_dynamic_scenarios: bool,
+
+    /// Run a single dynamic scenario by id.
+    #[arg(long = "dynamic-scenario")]
+    dynamic_scenario: Option<String>,
 
     /// ：
     #[arg(value_name = "COMMAND")]
@@ -234,6 +243,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/Csrf" => "EdgionPlugins",
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/BasicAuth" => "EdgionPlugins",
+        "EdgionPlugins/BasicAuthDynamic" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "EdgionPlugins/JweDecrypt" => "EdgionPlugins",
         "EdgionPlugins/KeyAuth" => "EdgionPlugins",
@@ -242,6 +252,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/LdapAuth" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimit" => "EdgionPlugins",
+        "EdgionPlugins/RateLimitDynamic" => "EdgionPlugins",
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/RequestMirror" => "EdgionPlugins",
@@ -686,6 +697,24 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::BasicAuthTestSuite));
         }
+        "EdgionPlugins/BasicAuthDynamic" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/BasicAuthDynamic tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicInitialTestSuite));
+                }
+                Some("update") => {
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicUpdateTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicInitialTestSuite));
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicUpdateTestSuite));
+                }
+            }
+        }
         "EdgionPlugins/JweDecrypt" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/JweDecrypt tests require --gateway flag");
@@ -741,6 +770,24 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RateLimitTestSuite));
+        }
+        "EdgionPlugins/RateLimitDynamic" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RateLimitDynamic tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::RateLimitDynamicInitialTestSuite));
+                }
+                Some("update") => {
+                    runner.add_suite(Box::new(suites::RateLimitDynamicUpdateTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::RateLimitDynamicInitialTestSuite));
+                    runner.add_suite(Box::new(suites::RateLimitDynamicUpdateTestSuite));
+                }
+            }
         }
         "EdgionPlugins/RealIp" => {
             if !gateway {
@@ -1132,6 +1179,91 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
     }
 }
 
+async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
+    use anyhow::Context;
+
+    let scenario =
+        dynamic::registry::find(sid).ok_or_else(|| anyhow::anyhow!("Unknown dynamic scenario id: {}", sid))?;
+
+    let project_root = std::env::current_dir().context("Failed to get current directory")?;
+    let conf_root = project_root.join("examples/test/conf");
+
+    // Gateway 模式下从 ports.json 拉默认 http 端口；否则用 CLI 默认。
+    let (http_port, grpc_port, tcp_port, udp_port, https_port, grpc_https_port, http_host, grpc_host) = if cli.gateway {
+        match port_config::PortConfig::load() {
+            Ok(cfg) => {
+                let p = cfg.get_ports("default");
+                (
+                    p.http.unwrap_or(cli.http_port),
+                    p.grpc.unwrap_or(cli.grpc_port),
+                    p.tcp.unwrap_or(cli.tcp_port),
+                    p.udp.unwrap_or(cli.udp_port),
+                    p.https.unwrap_or(cli.https_port),
+                    p.grpc_tls.unwrap_or(cli.grpc_https_port),
+                    Some("test.example.com".to_string()),
+                    Some("grpc.example.com".to_string()),
+                )
+            }
+            Err(_) => (
+                cli.http_port,
+                cli.grpc_port,
+                cli.tcp_port,
+                cli.udp_port,
+                cli.https_port,
+                cli.grpc_https_port,
+                Some("test.example.com".to_string()),
+                Some("grpc.example.com".to_string()),
+            ),
+        }
+    } else {
+        (
+            cli.http_port,
+            cli.grpc_port,
+            cli.tcp_port,
+            cli.udp_port,
+            cli.https_port,
+            cli.grpc_https_port,
+            None,
+            None,
+        )
+    };
+
+    let access_log_path =
+        std::env::var("EDGION_TEST_ACCESS_LOG_PATH").unwrap_or_else(|_| "logs/edgion_access.log".to_string());
+
+    let test_ctx = framework::TestContext::new(
+        cli.target_host.clone(),
+        http_port,
+        grpc_port,
+        cli.websocket_port,
+        tcp_port,
+        cli.tcp_port + 1, // tcp_filtered_port 约定为 tcp+1
+        udp_port,
+        https_port,
+        grpc_https_port,
+        cli.admin_port,
+        http_host,
+        grpc_host,
+        cli.gateway,
+        cli.verbose,
+        PathBuf::from(access_log_path),
+    );
+
+    let ctx = dynamic::ScenarioCtx {
+        test_ctx,
+        conf_root,
+        conf_path: scenario.conf_path.to_string(),
+        controller_url: format!("http://127.0.0.1:{}", cli.admin_port),
+        gateway_url: "http://127.0.0.1:5900".to_string(),
+        project_root,
+    };
+
+    eprintln!("▶ Running dynamic scenario: {} ({})", scenario.id, scenario.conf_path);
+    (scenario.run)(ctx).await?;
+    eprintln!("✓ Dynamic scenario {} passed", scenario.id);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     //  rustls（）
@@ -1145,6 +1277,19 @@ async fn main() -> Result<()> {
 
     if cli.verbose {
         tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
+    }
+
+    // --list-dynamic-scenarios: 打印 id 列表后退出。
+    if cli.list_dynamic_scenarios {
+        for s in dynamic::all() {
+            println!("{}", s.id);
+        }
+        return Ok(());
+    }
+
+    // --dynamic-scenario <id>: 执行单个 scenario 后退出。
+    if let Some(ref sid) = cli.dynamic_scenario {
+        return run_dynamic_scenario(&cli, sid).await;
     }
 
     //  suite

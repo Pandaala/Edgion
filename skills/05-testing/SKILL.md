@@ -15,7 +15,7 @@ description: Testing skill for Edgion. Use when writing, running, or extending u
 | 文件 | 主题 | 状态 |
 |------|------|------|
 | [00-unit-testing.md](00-unit-testing.md) | 单元测试：inline test module、运行方式、编写规范、与集成测试的分工 | ✅ 完整 |
-| [01-integration-testing.md](01-integration-testing.md) | 集成测试：架构、运行流程、新增测试步骤 | ✅ 已重构 |
+| [01-integration-testing.md](01-integration-testing.md) | 集成测试：架构、运行流程、新增测试步骤、**动态（热更新）测试 scenario 框架** | ✅ 已重构 |
 | [02-k8s-integration-testing.md](02-k8s-integration-testing.md) | K8s 集成测试：与本地测试差异、改造清单、执行阶段 | ✅ 完整 |
 
 ### Part 2 — 专项测试（特定场景验证）
@@ -36,6 +36,18 @@ cargo test --all
 ```bash
 ./examples/test/scripts/integration/run_integration.sh
 ```
+
+### 运行动态（热更新）测试
+Dynamic scenarios 默认作为完整 `run_integration.sh`（不带 `-r`）和 `-r Gateway` 路径的最后一步自动执行；窄域路径（`-r EdgionPlugins -i ...` 等）跳过。
+```bash
+# 默认跑：包含 dynamic scenarios
+./examples/test/scripts/integration/run_integration.sh
+
+# 列出 / 单跑 scenario
+./target/debug/examples/test_client --list-dynamic-scenarios
+./target/debug/examples/test_client -g --dynamic-scenario <id>
+```
+Scenario 框架与新增方法见 [01-integration-testing.md「动态（热更新）测试」节](01-integration-testing.md)。
 
 ### 查看测试报告
 ```bash

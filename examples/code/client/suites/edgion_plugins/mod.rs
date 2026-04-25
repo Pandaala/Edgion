@@ -38,7 +38,7 @@ mod webhook_key_get;
 
 pub use all_endpoint_status::AllEndpointStatusTestSuite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
-pub use basic_auth::BasicAuthTestSuite;
+pub use basic_auth::{BasicAuthDynamicInitialTestSuite, BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite};
 pub use cors::CorsPluginTestSuite;
 pub use csrf::CsrfTestSuite;
 pub use ctx_set::CtxSetTestSuite;
@@ -60,7 +60,7 @@ pub use plugin_condition::{AllConditionsTestSuite, PluginConditionTestSuite};
 pub use plugin_metadata_managed::PluginMetaDataManagedTestSuite;
 pub use plugin_metadata_status::PluginMetaDataStatusTestSuite;
 pub use proxy_rewrite::ProxyRewriteTestSuite;
-pub use rate_limit::RateLimitTestSuite;
+pub use rate_limit::{RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite};
 pub use real_ip::RealIpPluginTestSuite;
 pub use region_route::RegionRouteTestSuite;
 pub use request_mirror::RequestMirrorTestSuite;

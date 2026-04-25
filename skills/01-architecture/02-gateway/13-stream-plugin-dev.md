@@ -236,6 +236,12 @@ metadata:
 - [../../../examples/test/conf/TCPRoute/StreamPlugins/](../../../examples/test/conf/TCPRoute/StreamPlugins/)
 - [../../../examples/test/conf/TLSRoute/StreamPlugins/](../../../examples/test/conf/TLSRoute/StreamPlugins/)
 
+### 第 3 项的执行入口：dynamic scenario 框架
+
+热更新链路的回归不应停在"看 store 是否有新值"——要让连接/路由实际行为也跑一次。`examples/code/client/dynamic/` 框架支持 N-phase 状态机断言，目前内置 scenario 都是 HTTP 层（`gateway_dynamic`、`dsl_dynamic`、`basic_auth_dynamic`、`rate_limit_dynamic`），stream 插件**尚无 scenario 模板**——`ScenarioCtx` / `assert_phase` 通过 `TestSuite` 调度，原则上只要写一个发 TCP/TLS 流量的 `TestSuite` 就能复用整套编排。
+
+写法：参考 `examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs` 的结构，把 phase suite 换成 stream-aware 的（验证连接拒绝/通过、TLS handshake 行为等）。详细注册位置和 CLI 入口见 [../../05-testing/01-integration-testing.md「动态（热更新）测试」节](../../05-testing/01-integration-testing.md)。
+
 ## 审查清单
 
 - 新插件到底属于 Stage 1、Stage 2，还是两边都要
