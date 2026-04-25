@@ -20,7 +20,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_
     condition_reasons, condition_types,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::services::acme::notify_resource_changed;
 use crate::types::credentials::resolvers::{AcmeAccountResolver, DnsCredentialResolver};
@@ -143,148 +143,34 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         let generation = acme.metadata.generation;
         let status = acme.status.get_or_insert_with(EdgionAcmeStatus::default);
 
+        // ── Map outcome → ResolvedRefs Action (P0-07 unified mapping) ─────
+        let resource_key = resource_ref.key();
+        let account_action =
+            outcome_to_resolved_refs_action(&outcome, &resource_key, generation, &AcmeResolveCtx::Account);
         // `account_corrupted` means the Secret exists but carries unusable
         // `accountCredentials` (decode failure / unsupported Secret.type).
         // We still return Continue so `update_status` persists the condition,
         // but we must NOT notify AcmeService — it must not attempt registration
         // against a broken account.
-        let account_corrupted = match outcome {
-            ResolveOutcome::Ok(secret) => {
-                acme.spec.account_secret = Some(secret);
-                tracing::debug!(
-                    edgion_acme = %resource_ref.key(),
-                    "ACME account Secret validated"
-                );
-                let cond = k8s_condition_true(
-                    condition_types::RESOLVED_REFS,
-                    condition_reasons::RESOLVED_REFS,
-                    "ACME account credentials loaded",
-                    generation,
-                );
+        let account_corrupted = match account_action {
+            AcmeResolveAction::NoAction => false,
+            AcmeResolveAction::Continue(cond) => {
                 update_k8s_condition(&mut status.conditions, cond);
                 false
             }
-            ResolveOutcome::Pending(PendingReason::SecretNotFound {
-                ref namespace,
-                ref name,
-            }) => {
-                tracing::info!(
-                    edgion_acme = %resource_ref.key(),
-                    %namespace,
-                    name = %name,
-                    "ACME account Secret absent, will be created on first registration"
-                );
-                let cond = k8s_condition_unknown(
-                    condition_types::RESOLVED_REFS,
-                    acme_reasons::NEEDS_REGISTRATION,
-                    "Account Secret absent or missing accountCredentials key, will be created/patched on first ACME registration",
-                    generation,
-                );
-                update_k8s_condition(&mut status.conditions, cond);
-                false
-            }
-            ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                from_ns,
-                to_ns,
-                secret_name,
-            }) => {
-                tracing::warn!(
-                    edgion_acme = %resource_ref.key(),
-                    from_ns = %from_ns,
-                    to_ns = %to_ns,
-                    secret_name = %secret_name,
-                    "Cross-namespace reference to account Secret denied (ReferenceGrant missing)"
-                );
-                // M6/F: cross-ns denial collapses onto Gateway-API standard
-                // `RefNotPermitted`. The pipeline's `check_reference_allowed`
-                // returns a bare bool, so distinguishing "no grant yet" from
-                // "grant denies" is impossible — we used to advertise such a
-                // distinction via `CrossNsReferenceNotPermitted`, but it was
-                // always misleading.
-                let cond = k8s_condition_false(
-                    condition_types::RESOLVED_REFS,
-                    condition_reasons::REF_NOT_PERMITTED,
-                    format!(
-                        "Reference from {}/EdgionAcme to Secret \"{}/{}\" is not permitted without a ReferenceGrant",
-                        from_ns, to_ns, secret_name
-                    ),
-                    generation,
-                );
-                update_k8s_condition(&mut status.conditions, cond);
-                false
-            }
-            ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(_)) => {
-                // Deliberate divergence from LinkSys / EdgionPlugins / EdgionTls:
-                // those handlers report `MissingKeys` as `ResolvedRefs=False`
-                // (`reason=MissingKeys`, an Edgion extension) because a Secret
-                // with missing credential keys is a hard operator error for
-                // generic credential flows.
-                //
-                // ACME is different — `AcmeService` will *auto-patch* the
-                // `accountCredentials` key into the Secret on first
-                // registration. So a Secret that exists but lacks
-                // `accountCredentials` is an *expected bootstrap state*, not
-                // a failure; we surface it as `ResolvedRefs=Unknown` /
-                // `NeedsRegistration` to match the "absent Secret" case above
-                // and avoid spurious alerts.
-                //
-                // If M6/G ever unifies ACME onto the generic pipeline
-                // (removing the auto-patch path), this arm should collapse
-                // into the `DecodeError` / `InvalidSecretType` pattern.
-                tracing::info!(
-                    edgion_acme = %resource_ref.key(),
-                    "ACME account Secret exists without accountCredentials key, will be patched on first registration"
-                );
-                let cond = k8s_condition_unknown(
-                    condition_types::RESOLVED_REFS,
-                    acme_reasons::NEEDS_REGISTRATION,
-                    "Account Secret absent or missing accountCredentials key, will be created/patched on first ACME registration",
-                    generation,
-                );
-                update_k8s_condition(&mut status.conditions, cond);
-                false
-            }
-            ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { key, detail }) => {
-                tracing::error!(
-                    edgion_acme = %resource_ref.key(),
-                    key = %key,
-                    detail = %detail,
-                    "ACME account Secret data is corrupted (will not auto-repair)"
-                );
-                // M6/G: align ACME with the generic credential pipeline. This
-                // was `AcmeAccountCorrupted` before, but that reason subsumed
-                // both DecodeError and InvalidSecretType into one bucket,
-                // diverging from how LinkSys / EdgionPlugins / EdgionTls
-                // report the same pipeline variants.
-                let cond = k8s_condition_false(
-                    condition_types::RESOLVED_REFS,
-                    condition_reasons::DECODE_ERROR,
-                    format!("credential decode failed for key '{}': {}", key, detail),
-                    generation,
-                );
-                update_k8s_condition(&mut status.conditions, cond);
-                true
-            }
-            ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }) => {
-                tracing::error!(
-                    edgion_acme = %resource_ref.key(),
-                    got = %got,
-                    ?allowed,
-                    "ACME account Secret has unsupported type"
-                );
-                let cond = k8s_condition_false(
-                    condition_types::RESOLVED_REFS,
-                    condition_reasons::INVALID_SECRET_TYPE,
-                    format!(
-                        "Secret.type {:?} is not accepted for this credential (allowed: {:?})",
-                        got, allowed
-                    ),
-                    generation,
-                );
+            AcmeResolveAction::Abort(cond) => {
                 update_k8s_condition(&mut status.conditions, cond);
                 true
             }
         };
+
+        // Move the validated Secret into the spec for AcmeService. When the
+        // outcome is anything other than `Ok`, this is a no-op. (When
+        // `account_corrupted` is true, outcome is `Invalid::DecodeError` /
+        // `Invalid::InvalidSecretType`, so this `if let` never fires.)
+        if let ResolveOutcome::Ok(secret) = outcome {
+            acme.spec.account_secret = Some(secret);
+        }
 
         if account_corrupted {
             // Return Continue so `update_status` persists `ResolvedRefs=False`
@@ -337,11 +223,6 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                 name: dns01.credential_ref.name.clone(),
                 namespace: dns01.credential_ref.namespace.clone(),
             };
-            let secret_key = format_secret_key(
-                dns_secret_ref.namespace.as_ref().or(acme.metadata.namespace.as_ref()),
-                &dns_secret_ref.name,
-            );
-
             // `validate()` already rejects unknown providers with an `Accepted=False`
             // reason, but we still reach `parse()` on the next reconcile.
             // Guard the resolver construction so unknown providers skip the
@@ -359,109 +240,34 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                     )
                     .await;
 
-                    match outcome {
-                        ResolveOutcome::Ok(secret) => {
-                            acme.spec.dns_credential_secret = Some(secret);
-                            tracing::debug!(
-                                edgion_acme = %resource_ref.key(),
-                                secret_key = %secret_key,
-                                "DNS credential Secret resolved"
-                            );
-                            // Do NOT write ResolvedRefs=True here — a True
-                            // written by the account branch stays True, and
-                            // an Unknown(NeedsRegistration) from the account
-                            // branch intentionally survives DNS success.
-                        }
-                        ResolveOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
-                            tracing::info!(
-                                edgion_acme = %resource_ref.key(),
-                                %namespace,
-                                name = %name,
-                                "DNS credential Secret not found yet, will be reprocessed when Secret arrives"
-                            );
-                            let cond = k8s_condition_false(
-                                condition_types::RESOLVED_REFS,
-                                condition_reasons::SECRET_NOT_FOUND,
-                                format!("DNS credential Secret '{}/{}' not found", namespace, name),
-                                generation,
-                            );
+                    // ── Map outcome → ResolvedRefs Action (P0-07 unified) ─
+                    let dns_action = outcome_to_resolved_refs_action(
+                        &outcome,
+                        &resource_key,
+                        generation,
+                        &AcmeResolveCtx::Dns {
+                            provider: dns01.provider.as_str(),
+                        },
+                    );
+                    match dns_action {
+                        AcmeResolveAction::NoAction => {}
+                        AcmeResolveAction::Continue(cond) => {
                             update_k8s_condition(&mut status.conditions, cond);
                         }
-                        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                            from_ns,
-                            to_ns,
-                            secret_name,
-                        }) => {
-                            tracing::warn!(
-                                edgion_acme = %resource_ref.key(),
-                                from_ns = %from_ns,
-                                to_ns = %to_ns,
-                                secret_name = %secret_name,
-                                "Cross-namespace reference to DNS credential Secret denied (ReferenceGrant missing)"
-                            );
-                            let cond = k8s_condition_false(
-                                condition_types::RESOLVED_REFS,
-                                condition_reasons::REF_NOT_PERMITTED,
-                                format!(
-                                    "Reference from {}/EdgionAcme to DNS credential Secret \"{}/{}\" is not permitted without a ReferenceGrant",
-                                    from_ns, to_ns, secret_name
-                                ),
-                                generation,
-                            );
+                        AcmeResolveAction::Abort(cond) => {
+                            // Today `role=Dns` never returns `Abort`, but if a
+                            // future refactor introduces a Dns-corrupted path
+                            // we must NOT silently drop the condition in
+                            // release builds. Write it (graceful degrade) and
+                            // raise a debug-only assertion so the unintentional
+                            // contract change surfaces in dev/CI.
                             update_k8s_condition(&mut status.conditions, cond);
+                            debug_assert!(false, "Dns role unexpectedly returned Abort");
                         }
-                        ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(keys)) => {
-                            tracing::warn!(
-                                edgion_acme = %resource_ref.key(),
-                                provider = %dns01.provider,
-                                ?keys,
-                                "DNS credential Secret missing required keys"
-                            );
-                            let cond = k8s_condition_false(
-                                condition_types::RESOLVED_REFS,
-                                condition_reasons::MISSING_KEYS,
-                                format!(
-                                    "DNS credential Secret for provider '{}' is missing required keys: {}",
-                                    dns01.provider,
-                                    keys.join(", ")
-                                ),
-                                generation,
-                            );
-                            update_k8s_condition(&mut status.conditions, cond);
-                        }
-                        ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { key, detail }) => {
-                            tracing::error!(
-                                edgion_acme = %resource_ref.key(),
-                                key = %key,
-                                detail = %detail,
-                                "DNS credential Secret value could not be decoded"
-                            );
-                            let cond = k8s_condition_false(
-                                condition_types::RESOLVED_REFS,
-                                condition_reasons::DECODE_ERROR,
-                                format!("DNS credential decode failed for key '{}': {}", key, detail),
-                                generation,
-                            );
-                            update_k8s_condition(&mut status.conditions, cond);
-                        }
-                        ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }) => {
-                            tracing::error!(
-                                edgion_acme = %resource_ref.key(),
-                                got = %got,
-                                ?allowed,
-                                "DNS credential Secret has unsupported type"
-                            );
-                            let cond = k8s_condition_false(
-                                condition_types::RESOLVED_REFS,
-                                condition_reasons::INVALID_SECRET_TYPE,
-                                format!(
-                                    "DNS credential Secret.type {:?} is not accepted (allowed: {:?})",
-                                    got, allowed
-                                ),
-                                generation,
-                            );
-                            update_k8s_condition(&mut status.conditions, cond);
-                        }
+                    }
+
+                    if let ResolveOutcome::Ok(secret) = outcome {
+                        acme.spec.dns_credential_secret = Some(secret);
                     }
                 }
                 None => {
@@ -597,6 +403,305 @@ fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Conditio
         }
     } else {
         conditions.push(new_condition);
+    }
+}
+
+// ============================================================================
+// Resolve-outcome → ResolvedRefs Action mapping (P0-07)
+//
+// Pure mapping from a credential `ResolveOutcome` to the next action `parse`
+// should take on the `ResolvedRefs` condition. Centralizes the 12 (account+DNS)
+// × (6-variant) condition construction sites into a single match keyed on
+// `(outcome, role)`, so future changes touch one location instead of twelve.
+// ============================================================================
+
+/// Credential context: drives ACME-bootstrap semantics and the Ok-arm behavior.
+///
+/// Per-variant behavior:
+/// - `Account`
+///   - `Ok`                    → `True / RESOLVED_REFS` (write condition)
+///   - `SecretNotFound`        → `Unknown / NEEDS_REGISTRATION` (auto-bootstrap)
+///   - `MissingKeys`           → `Unknown / NEEDS_REGISTRATION` (auto-bootstrap)
+///   - `ReferenceGrantMissing` → `False / REF_NOT_PERMITTED`
+///   - `DecodeError`           → `False / DECODE_ERROR` + `Abort` (corrupt account)
+///   - `InvalidSecretType`     → `False / INVALID_SECRET_TYPE` + `Abort`
+/// - `Dns { provider }`
+///   - `Ok`                    → `NoAction` (don't override account branch's True/Unknown)
+///   - all failures            → `False / <reason>`; never returns `Abort`
+///   - `provider` is interpolated into the `MissingKeys` message
+///
+/// Encoded as an enum so `Account` cannot carry a provider and `Dns` cannot
+/// omit one — the contract is enforced statically.
+#[derive(Debug)]
+enum AcmeResolveCtx<'a> {
+    Account,
+    Dns { provider: &'a str },
+}
+
+#[derive(Debug)]
+enum AcmeResolveAction {
+    /// Don't write a condition, don't abort. Only `Dns + Ok`.
+    NoAction,
+    /// Write the condition, continue.
+    Continue(Condition),
+    /// Write the condition, then short-circuit `parse`.
+    /// Only `Account + DecodeError/InvalidSecretType`.
+    Abort(Condition),
+}
+
+/// Map a `ResolveOutcome` to the next action for the `ResolvedRefs` condition.
+///
+/// Constructs the appropriate `Condition` (status + reason + message) and emits
+/// a `tracing` event at the right level. Does not touch `HandlerContext`,
+/// status, or the resource — pure with respect to caller state, so callers can
+/// drive it from unit tests.
+fn outcome_to_resolved_refs_action<T>(
+    outcome: &ResolveOutcome<T>,
+    resource_key: &str,
+    generation: Option<i64>,
+    ctx: &AcmeResolveCtx<'_>,
+) -> AcmeResolveAction {
+    use AcmeResolveAction::*;
+    use AcmeResolveCtx::*;
+
+    match (outcome, ctx) {
+        // ── Ok ────────────────────────────────────────────────────────────
+        (ResolveOutcome::Ok(_), Account) => {
+            tracing::debug!(edgion_acme = %resource_key, "ACME account Secret validated");
+            Continue(k8s_condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "ACME account credentials loaded",
+                generation,
+            ))
+        }
+
+        // ── Pending::SecretNotFound ───────────────────────────────────────
+        (ResolveOutcome::Pending(PendingReason::SecretNotFound { namespace, name }), Account) => {
+            tracing::info!(
+                edgion_acme = %resource_key,
+                %namespace,
+                name = %name,
+                "ACME account Secret absent, will be created on first registration"
+            );
+            Continue(k8s_condition_unknown(
+                condition_types::RESOLVED_REFS,
+                acme_reasons::NEEDS_REGISTRATION,
+                "Account Secret absent or missing accountCredentials key, will be created/patched on first ACME registration",
+                generation,
+            ))
+        }
+
+        // ── Pending::ReferenceGrantMissing ────────────────────────────────
+        (
+            ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                from_ns,
+                to_ns,
+                secret_name,
+            }),
+            Account,
+        ) => {
+            tracing::warn!(
+                edgion_acme = %resource_key,
+                from_ns = %from_ns,
+                to_ns = %to_ns,
+                secret_name = %secret_name,
+                "Cross-namespace reference to account Secret denied (ReferenceGrant missing)"
+            );
+            // M6/F: cross-ns denial collapses onto Gateway-API standard
+            // `RefNotPermitted`. The pipeline's `check_reference_allowed`
+            // returns a bare bool, so distinguishing "no grant yet" from
+            // "grant denies" is impossible — we used to advertise such a
+            // distinction via `CrossNsReferenceNotPermitted`, but it was
+            // always misleading.
+            Continue(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::REF_NOT_PERMITTED,
+                format!(
+                    "Reference from {}/EdgionAcme to Secret \"{}/{}\" is not permitted without a ReferenceGrant",
+                    from_ns, to_ns, secret_name
+                ),
+                generation,
+            ))
+        }
+
+        // ── Invalid::MissingKeys ──────────────────────────────────────────
+        (ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(_)), Account) => {
+            // Deliberate divergence from LinkSys / EdgionPlugins / EdgionTls:
+            // those handlers report `MissingKeys` as `ResolvedRefs=False`
+            // (`reason=MissingKeys`, an Edgion extension) because a Secret
+            // with missing credential keys is a hard operator error for
+            // generic credential flows.
+            //
+            // ACME is different — `AcmeService` will *auto-patch* the
+            // `accountCredentials` key into the Secret on first
+            // registration. So a Secret that exists but lacks
+            // `accountCredentials` is an *expected bootstrap state*, not
+            // a failure; we surface it as `ResolvedRefs=Unknown` /
+            // `NeedsRegistration` to match the "absent Secret" case above
+            // and avoid spurious alerts.
+            //
+            // If M6/G ever unifies ACME onto the generic pipeline
+            // (removing the auto-patch path), this arm should collapse
+            // into the `DecodeError` / `InvalidSecretType` pattern.
+            tracing::info!(
+                edgion_acme = %resource_key,
+                "ACME account Secret exists without accountCredentials key, will be patched on first registration"
+            );
+            Continue(k8s_condition_unknown(
+                condition_types::RESOLVED_REFS,
+                acme_reasons::NEEDS_REGISTRATION,
+                "Account Secret absent or missing accountCredentials key, will be created/patched on first ACME registration",
+                generation,
+            ))
+        }
+
+        // ── Invalid::DecodeError ──────────────────────────────────────────
+        (ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { key, detail }), Account) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                key = %key,
+                detail = %detail,
+                "ACME account Secret data is corrupted (will not auto-repair)"
+            );
+            // M6/G: align ACME with the generic credential pipeline. This
+            // was `AcmeAccountCorrupted` before, but that reason subsumed
+            // both DecodeError and InvalidSecretType into one bucket,
+            // diverging from how LinkSys / EdgionPlugins / EdgionTls
+            // report the same pipeline variants.
+            Abort(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::DECODE_ERROR,
+                format!("credential decode failed for key '{}': {}", key, detail),
+                generation,
+            ))
+        }
+
+        // ── Invalid::InvalidSecretType ────────────────────────────────────
+        (ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }), Account) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                got = %got,
+                ?allowed,
+                "ACME account Secret has unsupported type"
+            );
+            Abort(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::INVALID_SECRET_TYPE,
+                format!(
+                    "Secret.type {:?} is not accepted for this credential (allowed: {:?})",
+                    got, allowed
+                ),
+                generation,
+            ))
+        }
+
+        // ── Ok (Dns) ──────────────────────────────────────────────────────
+        (ResolveOutcome::Ok(_), Dns { .. }) => {
+            // Do NOT write a condition: an account-branch True / Unknown
+            // (NeedsRegistration) must survive a successful DNS resolve. See
+            // the DNS-only-overrides aggregation rules in `parse` for details.
+            tracing::debug!(edgion_acme = %resource_key, "DNS credential Secret resolved");
+            NoAction
+        }
+
+        // ── Pending::SecretNotFound (Dns) ─────────────────────────────────
+        (ResolveOutcome::Pending(PendingReason::SecretNotFound { namespace, name }), Dns { .. }) => {
+            tracing::info!(
+                edgion_acme = %resource_key,
+                %namespace,
+                name = %name,
+                "DNS credential Secret not found yet, will be reprocessed when Secret arrives"
+            );
+            Continue(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::SECRET_NOT_FOUND,
+                format!("DNS credential Secret '{}/{}' not found", namespace, name),
+                generation,
+            ))
+        }
+
+        // ── Pending::ReferenceGrantMissing (Dns) ──────────────────────────
+        (
+            ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                from_ns,
+                to_ns,
+                secret_name,
+            }),
+            Dns { .. },
+        ) => {
+            tracing::warn!(
+                edgion_acme = %resource_key,
+                from_ns = %from_ns,
+                to_ns = %to_ns,
+                secret_name = %secret_name,
+                "Cross-namespace reference to DNS credential Secret denied (ReferenceGrant missing)"
+            );
+            Continue(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::REF_NOT_PERMITTED,
+                format!(
+                    "Reference from {}/EdgionAcme to DNS credential Secret \"{}/{}\" is not permitted without a ReferenceGrant",
+                    from_ns, to_ns, secret_name
+                ),
+                generation,
+            ))
+        }
+
+        // ── Invalid::MissingKeys (Dns) ────────────────────────────────────
+        (ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(keys)), Dns { provider }) => {
+            tracing::warn!(
+                edgion_acme = %resource_key,
+                provider = %provider,
+                ?keys,
+                "DNS credential Secret missing required keys"
+            );
+            Continue(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::MISSING_KEYS,
+                format!(
+                    "DNS credential Secret for provider '{}' is missing required keys: {}",
+                    provider,
+                    keys.join(", ")
+                ),
+                generation,
+            ))
+        }
+
+        // ── Invalid::DecodeError (Dns) ────────────────────────────────────
+        (ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { key, detail }), Dns { .. }) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                key = %key,
+                detail = %detail,
+                "DNS credential Secret value could not be decoded"
+            );
+            Continue(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::DECODE_ERROR,
+                format!("DNS credential decode failed for key '{}': {}", key, detail),
+                generation,
+            ))
+        }
+
+        // ── Invalid::InvalidSecretType (Dns) ──────────────────────────────
+        (ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }), Dns { .. }) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                got = %got,
+                ?allowed,
+                "DNS credential Secret has unsupported type"
+            );
+            Continue(k8s_condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::INVALID_SECRET_TYPE,
+                format!(
+                    "DNS credential Secret.type {:?} is not accepted (allowed: {:?})",
+                    got, allowed
+                ),
+                generation,
+            ))
+        }
     }
 }
 
@@ -1239,6 +1344,279 @@ mod tests {
                 );
             }
             ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
+        }
+    }
+
+    // ========================================================================
+    // outcome_to_resolved_refs_action: Account role
+    // ========================================================================
+
+    fn account_ctx() -> AcmeResolveCtx<'static> {
+        AcmeResolveCtx::Account
+    }
+
+    #[test]
+    fn account_ok_returns_continue_with_true_resolved_refs() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Ok(Secret::default());
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(1), &account_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.type_, condition_types::RESOLVED_REFS);
+                assert_eq!(cond.status, "True");
+                assert_eq!(cond.reason, condition_reasons::RESOLVED_REFS);
+                assert!(
+                    cond.message.contains("ACME account credentials loaded"),
+                    "got: {}",
+                    cond.message
+                );
+                assert_eq!(cond.observed_generation, Some(1));
+            }
+            other => panic!("expected Continue, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn account_secret_not_found_returns_continue_unknown_needs_registration() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::SecretNotFound {
+            namespace: "default".to_string(),
+            name: "acme-account".to_string(),
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(2), &account_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "Unknown");
+                assert_eq!(cond.reason, acme_reasons::NEEDS_REGISTRATION);
+                assert!(cond.message.contains("Account Secret absent"), "got: {}", cond.message);
+                assert_eq!(cond.observed_generation, Some(2));
+            }
+            other => panic!("expected Continue(Unknown), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn account_ref_grant_missing_returns_continue_false_ref_not_permitted() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            from_ns: "default".to_string(),
+            to_ns: "secrets".to_string(),
+            secret_name: "acme-key".to_string(),
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(3), &account_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::REF_NOT_PERMITTED);
+                assert!(
+                    cond.message
+                        .contains("Reference from default/EdgionAcme to Secret \"secrets/acme-key\""),
+                    "got: {}",
+                    cond.message
+                );
+                assert_eq!(cond.observed_generation, Some(3));
+            }
+            other => panic!("expected Continue(False), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn account_missing_keys_returns_continue_unknown_needs_registration() {
+        let outcome: ResolveOutcome<Secret> =
+            ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(vec!["accountCredentials"]));
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(4), &account_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "Unknown");
+                assert_eq!(cond.reason, acme_reasons::NEEDS_REGISTRATION);
+                assert!(cond.message.contains("Account Secret absent"), "got: {}", cond.message);
+                // The Account MissingKeys arm uses a fixed bootstrap-state message
+                // (NeedsRegistration) rather than interpolating the `keys` vec.
+                // Note: the hardcoded message text itself contains "accountCredentials" as
+                // part of the human-readable description — this is intentional and differs
+                // from the Dns MissingKeys arm which does format keys into the message.
+                assert_eq!(cond.observed_generation, Some(4));
+            }
+            other => panic!("expected Continue(Unknown), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn account_decode_error_returns_abort_false_decode_error() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::DecodeError {
+            key: "accountCredentials",
+            detail: "invalid utf-8 at byte 3".to_string(),
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(5), &account_ctx());
+        match action {
+            AcmeResolveAction::Abort(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::DECODE_ERROR);
+                assert!(
+                    cond.message
+                        .contains("credential decode failed for key 'accountCredentials'"),
+                    "got: {}",
+                    cond.message
+                );
+                assert!(cond.message.contains("invalid utf-8"), "got: {}", cond.message);
+                assert_eq!(cond.observed_generation, Some(5));
+            }
+            other => panic!("expected Abort, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn account_invalid_secret_type_returns_abort_false_invalid_type() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType {
+            got: "Opaque".to_string(),
+            allowed: &["edgion.io/acme-account"],
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(6), &account_ctx());
+        match action {
+            AcmeResolveAction::Abort(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::INVALID_SECRET_TYPE);
+                assert!(cond.message.contains("Secret.type"), "got: {}", cond.message);
+                assert!(cond.message.contains("Opaque"), "got: {}", cond.message);
+                assert!(
+                    cond.message.contains("not accepted for this credential"),
+                    "got: {}",
+                    cond.message
+                );
+                assert_eq!(cond.observed_generation, Some(6));
+            }
+            other => panic!("expected Abort, got {:?}", other),
+        }
+    }
+
+    // ========================================================================
+    // outcome_to_resolved_refs_action: Dns role
+    // ========================================================================
+
+    fn dns_ctx() -> AcmeResolveCtx<'static> {
+        AcmeResolveCtx::Dns { provider: "cloudflare" }
+    }
+
+    #[test]
+    fn dns_ok_returns_no_action() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Ok(Secret::default());
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(1), &dns_ctx());
+        match action {
+            AcmeResolveAction::NoAction => {}
+            other => panic!("expected NoAction, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dns_secret_not_found_returns_continue_false_secret_not_found() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::SecretNotFound {
+            namespace: "default".to_string(),
+            name: "cf-token".to_string(),
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(2), &dns_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::SECRET_NOT_FOUND);
+                assert!(
+                    cond.message
+                        .contains("DNS credential Secret 'default/cf-token' not found"),
+                    "got: {}",
+                    cond.message
+                );
+                assert_eq!(cond.observed_generation, Some(2));
+            }
+            other => panic!("expected Continue(False), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dns_ref_grant_missing_returns_continue_false_ref_not_permitted_with_dns_label() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            from_ns: "default".to_string(),
+            to_ns: "secrets".to_string(),
+            secret_name: "cf-token".to_string(),
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(3), &dns_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::REF_NOT_PERMITTED);
+                assert!(
+                    cond.message
+                        .contains("Reference from default/EdgionAcme to DNS credential Secret \"secrets/cf-token\""),
+                    "got: {}",
+                    cond.message
+                );
+                assert_eq!(cond.observed_generation, Some(3));
+            }
+            other => panic!("expected Continue(False), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dns_missing_keys_returns_continue_false_missing_keys_with_provider() {
+        let outcome: ResolveOutcome<Secret> =
+            ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(vec!["api-token"]));
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(4), &dns_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::MISSING_KEYS);
+                assert!(
+                    cond.message.contains("DNS credential Secret for provider 'cloudflare'"),
+                    "got: {}",
+                    cond.message
+                );
+                assert!(cond.message.contains("api-token"), "got: {}", cond.message);
+                assert_eq!(cond.observed_generation, Some(4));
+            }
+            other => panic!("expected Continue(False), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dns_decode_error_returns_continue_false_decode_error_with_dns_label() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::DecodeError {
+            key: "api-token",
+            detail: "invalid utf-8 at byte 1".to_string(),
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(5), &dns_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::DECODE_ERROR);
+                assert!(
+                    cond.message
+                        .contains("DNS credential decode failed for key 'api-token'"),
+                    "got: {}",
+                    cond.message
+                );
+                assert!(cond.message.contains("invalid utf-8"), "got: {}", cond.message);
+                assert_eq!(cond.observed_generation, Some(5));
+            }
+            other => panic!("expected Continue(False), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dns_invalid_secret_type_returns_continue_false_invalid_type_with_dns_label() {
+        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType {
+            got: "kubernetes.io/tls".to_string(),
+            allowed: &["Opaque"],
+        });
+        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(6), &dns_ctx());
+        match action {
+            AcmeResolveAction::Continue(cond) => {
+                assert_eq!(cond.status, "False");
+                assert_eq!(cond.reason, condition_reasons::INVALID_SECRET_TYPE);
+                assert!(
+                    cond.message.contains("DNS credential Secret.type"),
+                    "got: {}",
+                    cond.message
+                );
+                assert!(cond.message.contains("kubernetes.io/tls"), "got: {}", cond.message);
+                assert!(cond.message.contains("not accepted"), "got: {}", cond.message);
+                assert_eq!(cond.observed_generation, Some(6));
+            }
+            other => panic!("expected Continue(False), got {:?}", other),
         }
     }
 }
