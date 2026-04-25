@@ -8,20 +8,7 @@ use reqwest::StatusCode;
 use serde_json::Value;
 
 use super::client::EsLinkClient;
-
-// ============================================================================
-// Health Status (shared type, compatible with Redis/Etcd)
-// ============================================================================
-
-/// Health status for admin API exposure.
-#[derive(serde::Serialize, Debug)]
-pub struct LinkSysHealth {
-    pub name: String,
-    pub system_type: String,
-    pub connected: bool,
-    pub latency_ms: Option<u64>,
-    pub error: Option<String>,
-}
+use crate::core::gateway::link_sys::LinkSysHealth;
 
 // ============================================================================
 // Cluster Operations

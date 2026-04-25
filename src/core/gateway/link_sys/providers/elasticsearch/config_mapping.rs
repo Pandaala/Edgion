@@ -142,32 +142,38 @@ pub fn build_es_client(
     builder = builder.default_headers(headers.clone());
 
     // ── TLS ────────────────────────────────────────────────────────
+    // Gate on `tls.enabled` to match Redis/Etcd semantics: TLS material is
+    // only applied when the operator opts in. For `https://` endpoints the
+    // transport itself is still TLS via reqwest's defaults; `enabled: true`
+    // only adds custom CA / client mTLS / insecure_skip_verify on top.
     if let Some(tls) = &crd.tls {
-        if let Some(true) = tls.insecure_skip_verify {
-            let is_prod = std::env::var("EDGION_ENV")
-                .map(|v| v.eq_ignore_ascii_case("production"))
-                .unwrap_or(false);
-            if is_prod {
-                anyhow::bail!(
-                    "Elasticsearch insecure_skip_verify cannot be enabled in production (EDGION_ENV=production). \
-                     Use a proper CA certificate or disable TLS verification only in non-production environments."
+        if tls.enabled {
+            if let Some(true) = tls.insecure_skip_verify {
+                let is_prod = std::env::var("EDGION_ENV")
+                    .map(|v| v.eq_ignore_ascii_case("production"))
+                    .unwrap_or(false);
+                if is_prod {
+                    anyhow::bail!(
+                        "Elasticsearch insecure_skip_verify cannot be enabled in production (EDGION_ENV=production). \
+                         Use a proper CA certificate or disable TLS verification only in non-production environments."
+                    );
+                }
+                tracing::warn!(
+                    "ES client: TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production"
                 );
+                builder = builder.danger_accept_invalid_certs(true);
             }
-            tracing::warn!(
-                "ES client: TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production"
-            );
-            builder = builder.danger_accept_invalid_certs(true);
-        }
 
-        // CA + client mTLS from inline PEM and/or embedded K8s Secret.
-        if let Some(material) = tls_helper::build_material(tls) {
-            if let Some(ca_pem) = &material.ca_pem {
-                let cert = Certificate::from_pem(ca_pem).context("invalid ES CA certificate PEM")?;
-                builder = builder.add_root_certificate(cert);
-            }
-            if let Some(combined) = tls_helper::combined_identity_pem(&material) {
-                let identity = Identity::from_pem(combined.as_slice()).context("invalid ES client identity PEM")?;
-                builder = builder.identity(identity);
+            // CA + client mTLS from inline PEM and/or embedded K8s Secret.
+            if let Some(material) = tls_helper::build_material(tls) {
+                if let Some(ca_pem) = &material.ca_pem {
+                    let cert = Certificate::from_pem(ca_pem).context("invalid ES CA certificate PEM")?;
+                    builder = builder.add_root_certificate(cert);
+                }
+                if let Some(combined) = tls_helper::combined_identity_pem(&material) {
+                    let identity = Identity::from_pem(combined.as_slice()).context("invalid ES client identity PEM")?;
+                    builder = builder.identity(identity);
+                }
             }
         }
     }
@@ -409,6 +415,32 @@ mod tests {
         assert!(name.starts_with("test-logs-"));
         // Format: test-logs-YYYY.MM.DD (20 chars)
         assert_eq!(name.len(), "test-logs-2026.02.11".len());
+    }
+
+    /// P1-02: `tls.enabled = false` must NOT inject TLS material or honour
+    /// `insecure_skip_verify`. Without this gate ES diverges from Redis/Etcd
+    /// and would `bail!` on `insecure_skip_verify: true` in production even
+    /// though the operator has not opted into TLS.
+    #[test]
+    fn test_tls_disabled_ignores_insecure_skip_verify_even_in_prod() {
+        use crate::types::resources::common::TlsConfig;
+        let crd = ElasticsearchClientConfig {
+            tls: Some(TlsConfig {
+                enabled: false,
+                certs: None,
+                insecure_skip_verify: Some(true),
+            }),
+            ..Default::default()
+        };
+        // Simulate production: would bail if the `enabled` gate were missing.
+        std::env::set_var("EDGION_ENV", "production");
+        let result = build_es_client(&crd, &no_auth());
+        std::env::remove_var("EDGION_ENV");
+        assert!(
+            result.is_ok(),
+            "tls.enabled=false must skip insecure_skip_verify handling, got: {:?}",
+            result.err()
+        );
     }
 
     #[test]

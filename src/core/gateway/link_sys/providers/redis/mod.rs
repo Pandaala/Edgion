@@ -25,4 +25,4 @@ pub mod ops;
 // Re-export key types for convenient access
 pub use client::RedisLinkClient;
 pub use data_sender::RedisDataSender;
-pub use ops::{LinkSysHealth, LockOptions, RedisLockGuard};
+pub use ops::{LockOptions, RedisLockGuard};

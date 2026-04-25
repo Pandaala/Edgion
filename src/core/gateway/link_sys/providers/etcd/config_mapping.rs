@@ -123,12 +123,14 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
         }
     }
 
-    // etcd-client TlsOptions does not expose an insecure_skip_verify knob;
-    // surfacing a warning lets operators know the flag is ignored here.
+    // etcd-client TlsOptions does not expose an insecure_skip_verify knob.
+    // Aligning with Redis: refuse to start rather than silently ignoring the
+    // operator's intent (an operator who set `insecure_skip_verify: true` for
+    // testing would otherwise get strict verification without any signal).
     if tls.insecure_skip_verify == Some(true) {
-        tracing::warn!(
-            "Etcd: insecure_skip_verify is not directly supported by etcd-client TlsOptions; \
-             use a custom channel if needed"
+        anyhow::bail!(
+            "Etcd TLS insecure_skip_verify is configured but not supported by etcd-client. \
+             TLS always verifies certificates. Use a proper CA certificate or connect without TLS."
         );
     }
 
@@ -323,6 +325,27 @@ mod tests {
         };
         let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_some());
+    }
+
+    /// P1-02: aligning with Redis, `insecure_skip_verify: true` must fail
+    /// fast rather than silently being ignored — etcd-client cannot honour
+    /// the flag and an operator who set it (e.g. for self-signed dev certs)
+    /// would otherwise get strict verification with no signal.
+    #[test]
+    fn test_insecure_skip_verify_bails() {
+        let crd = EtcdClientConfig {
+            tls: Some(TlsConfig {
+                enabled: true,
+                certs: None,
+                insecure_skip_verify: Some(true),
+            }),
+            ..minimal_config(vec!["https://localhost:2379".to_string()])
+        };
+        let err = build_connect_options(&crd, &no_auth()).expect_err("should refuse insecure_skip_verify");
+        assert!(
+            err.to_string().contains("insecure_skip_verify"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[test]

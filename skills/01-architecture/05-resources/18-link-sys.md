@@ -25,6 +25,18 @@ LinkSys 定义外部系统连接器（Redis / Etcd / Elasticsearch / Webhook / K
 | Gateway 运行时 Store | `src/core/gateway/link_sys/runtime/store.rs` |
 | Provider 客户端 | `src/core/gateway/link_sys/providers/{redis,etcd,elasticsearch}/` |
 
+## 推荐 `use` 路径（避免命名混淆）
+
+LinkSys CRD 与日志输出/轮转配置（用于 link_sys 运行时写日志）虽然名字相近，但是两套完全不同的类型：
+
+| 你想要的东西 | 推荐 `use` 路径 |
+|------|------|
+| LinkSys CRD 结构体（Redis/Etcd/ES/Webhook 连接定义） | `use crate::types::{LinkSys, LinkSysSpec};`（顶层重导出）<br>或 `use crate::types::resources::link_sys::*;`（直接路径） |
+| 日志输出 / 文件轮转配置（`StringOutput`、`RotationConfig`、`LocalFileWriterCfg`） | `use crate::types::output::*;`（**唯一路径**，过去的 `crate::types::link_sys` 别名已删除） |
+| link_sys 运行时（`DataSender` trait、provider 客户端） | `use crate::core::gateway::link_sys::*;` |
+
+`crate::types::link_sys` 这个模块路径**不再存在**。如果还看到这种写法，是历史遗留的别名残留，统一改为上表中的路径。
+
 ## CRD 顶层布局
 
 `LinkSysSpec` 用 `#[serde(tag = "type", content = "config")]` tagged enum：

@@ -28,11 +28,6 @@ pub mod resource;
 
 pub use self::output::{LocalFileWriterCfg, LocalFileWriterConfig, RotationConfig, RotationStrategy, StringOutput};
 
-// Backward compatibility: link_sys module alias for output types
-pub mod link_sys {
-    pub use super::output::*;
-}
-
 // Re-export from resource module
 pub use self::resource::ResourceKind;
 pub use self::resource::ResourceMeta;

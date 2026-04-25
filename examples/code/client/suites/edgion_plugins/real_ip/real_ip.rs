@@ -280,7 +280,11 @@ impl RealIpPluginTestSuite {
                         .send()
                         .await;
 
-                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace_id, 10, 200).await {
+                    let entry = match ctx
+                        .access_log_client()
+                        .get_access_log_with_retry(&trace_id, 10, 200)
+                        .await
+                    {
                         Ok(e) => e,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Access log not found: {}", e)),
                     };

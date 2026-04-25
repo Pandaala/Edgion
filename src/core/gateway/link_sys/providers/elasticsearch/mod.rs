@@ -39,4 +39,4 @@ pub mod ops;
 pub use client::EsLinkClient;
 pub use config_mapping::EsBulkConfig;
 pub use data_sender::EsDataSender;
-pub use ops::{EsSearchHit, EsSearchResult, LinkSysHealth};
+pub use ops::{EsSearchHit, EsSearchResult};

@@ -606,7 +606,7 @@ async fn redis_list_clients() -> Json<ApiResponse<Vec<String>>> {
 }
 
 /// Health check all Redis clients
-async fn redis_health_all() -> Json<ApiResponse<Vec<crate::core::gateway::link_sys::providers::redis::LinkSysHealth>>> {
+async fn redis_health_all() -> Json<ApiResponse<Vec<crate::core::gateway::link_sys::LinkSysHealth>>> {
     let health = crate::core::gateway::link_sys::runtime::store::health_check_all_redis().await;
     Json(ApiResponse::success(health))
 }
@@ -899,7 +899,7 @@ async fn etcd_list_clients() -> Json<ApiResponse<Vec<String>>> {
 }
 
 /// Health check all Etcd clients
-async fn etcd_health_all() -> Json<ApiResponse<Vec<crate::core::gateway::link_sys::providers::redis::LinkSysHealth>>> {
+async fn etcd_health_all() -> Json<ApiResponse<Vec<crate::core::gateway::link_sys::LinkSysHealth>>> {
     let health = crate::core::gateway::link_sys::runtime::store::health_check_all_etcd().await;
     Json(ApiResponse::success(health))
 }

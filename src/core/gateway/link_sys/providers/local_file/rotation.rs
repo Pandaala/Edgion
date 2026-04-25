@@ -4,7 +4,7 @@ use chrono::Local;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use crate::types::link_sys::RotationStrategy;
+use crate::types::output::RotationStrategy;
 
 /// Generate the archive (rotated) file path for time-based strategies.
 /// Used when rotating: the active file (base path) is renamed to this path.

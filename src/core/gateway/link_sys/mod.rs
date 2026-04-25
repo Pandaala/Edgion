@@ -12,10 +12,13 @@
 //! Runtime clients are stored in separate ArcSwap stores for typed access.
 
 pub mod credential;
+pub mod health;
 pub mod lifecycle;
 pub mod providers;
 pub mod runtime;
 pub mod tls;
+
+pub use health::LinkSysHealth;
 
 pub use providers::{LocalFileWriter, LogType};
 pub use runtime::{

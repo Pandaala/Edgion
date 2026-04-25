@@ -16,10 +16,11 @@ use crate::types::resources::link_sys::LinkSys;
 
 use crate::core::gateway::link_sys::credential;
 use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
-use crate::core::gateway::link_sys::providers::elasticsearch::{EsLinkClient, LinkSysHealth as EsLinkHealth};
+use crate::core::gateway::link_sys::providers::elasticsearch::EsLinkClient;
 use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
-use crate::core::gateway::link_sys::providers::redis::{LinkSysHealth as RedisLinkHealth, RedisLinkClient};
+use crate::core::gateway::link_sys::providers::redis::RedisLinkClient;
 use crate::core::gateway::link_sys::providers::webhook::WebhookLinkClient;
+use crate::core::gateway::link_sys::LinkSysHealth;
 
 // ============================================================
 // Type aliases
@@ -136,7 +137,7 @@ pub fn list_redis_clients() -> Vec<String> {
 }
 
 /// Health check all registered Redis clients.
-pub async fn health_check_all_redis() -> Vec<RedisLinkHealth> {
+pub async fn health_check_all_redis() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<RedisLinkClient>> = REDIS_RUNTIME.load().values().cloned().collect();
     let mut results = Vec::with_capacity(clients.len());
     for client in clients {
@@ -195,7 +196,7 @@ pub fn list_etcd_clients() -> Vec<String> {
 }
 
 /// Health check all registered Etcd clients.
-pub async fn health_check_all_etcd() -> Vec<RedisLinkHealth> {
+pub async fn health_check_all_etcd() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<EtcdLinkClient>> = ETCD_RUNTIME.load().values().cloned().collect();
     let mut results = Vec::with_capacity(clients.len());
     for client in clients {
@@ -254,7 +255,7 @@ pub fn list_es_clients() -> Vec<String> {
 }
 
 /// Health check all registered Elasticsearch clients.
-pub async fn health_check_all_es() -> Vec<EsLinkHealth> {
+pub async fn health_check_all_es() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<EsLinkClient>> = ES_RUNTIME.load().values().cloned().collect();
     let mut results = Vec::with_capacity(clients.len());
     for client in clients {

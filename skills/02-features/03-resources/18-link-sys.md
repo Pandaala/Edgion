@@ -57,7 +57,7 @@ secretRef:
 ```yaml
 tls:
   enabled: true
-  insecureSkipVerify: false       # 仅开发/测试；etcd 忽略该选项
+  insecureSkipVerify: false       # 仅开发/测试；Redis/Etcd 不支持，写 true 会直接拒绝启动
   certs:
     caCert: |                      # 公开材料，可内联
       -----BEGIN CERTIFICATE-----
@@ -153,7 +153,7 @@ spec:
 ```
 
 - `auth` 同样使用 `BasicAuthResolver`（username + password，etcd 通常二者都必填）。
-- etcd 当前忽略 `insecureSkipVerify`，会打印 warning；要跳过验证只能通过其他机制。
+- etcd-client 不支持 `insecureSkipVerify`：显式设为 `true` 会直接 `bail!` 拒绝启动（与 Redis 对齐，避免"已忽略却继续严格验证"导致的配置错觉）。要跳过验证只能通过其他机制。
 
 ### `type: elasticsearch`
 

@@ -12,7 +12,7 @@ use super::rotation::{
 use super::LocalFileWriter;
 use crate::core::gateway::link_sys::DataSender;
 use crate::core::gateway::observe::global_metrics;
-use crate::types::link_sys::RotationStrategy;
+use crate::types::output::RotationStrategy;
 
 #[async_trait]
 impl DataSender<String> for LocalFileWriter {
