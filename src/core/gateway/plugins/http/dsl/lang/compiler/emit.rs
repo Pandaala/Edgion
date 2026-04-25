@@ -1,0 +1,122 @@
+//! Bytecode emission, constants, and scope/local management
+
+use super::super::bytecode::*;
+use super::super::error::CompileError;
+use super::{Compiler, Local, MAX_REGEX_PATTERN_LEN};
+
+impl Compiler {
+    pub(super) fn emit(&mut self, op: OpCode) -> usize {
+        let idx = self.code.len();
+        self.code.push(op);
+        idx
+    }
+
+    pub(super) fn current_offset(&self) -> usize {
+        self.code.len()
+    }
+
+    /// Patch a jump instruction at `idx` to jump to current position
+    pub(super) fn patch_jump(&mut self, idx: usize) {
+        let target = self.code.len() as i32;
+        let source = idx as i32 + 1; // jump is relative to NEXT instruction
+        let offset = target - source;
+        match &mut self.code[idx] {
+            OpCode::Jump(ref mut o) => *o = offset,
+            OpCode::JumpIfFalse(ref mut o) => *o = offset,
+            _ => {}
+        }
+    }
+
+    // ==================== Constants ====================
+
+    /// Check that the constants pool won't overflow u16.
+    fn check_const_limit(&self) -> Result<u16, CompileError> {
+        let len = self.constants.len();
+        if len >= u16::MAX as usize {
+            return Err(CompileError::new(
+                "constant pool overflow: too many constants (max 65535)",
+            ));
+        }
+        Ok(len as u16)
+    }
+
+    pub(super) fn add_str_const(&mut self, s: &str) -> Result<u16, CompileError> {
+        if let Some(&idx) = self.const_str_map.get(s) {
+            return Ok(idx);
+        }
+        let idx = self.check_const_limit()?;
+        self.constants.push(Constant::Str(s.to_string()));
+        self.const_str_map.insert(s.to_string(), idx);
+        Ok(idx)
+    }
+
+    pub(super) fn add_int_const(&mut self, n: i64) -> Result<u16, CompileError> {
+        if let Some(&idx) = self.const_int_map.get(&n) {
+            return Ok(idx);
+        }
+        let idx = self.check_const_limit()?;
+        self.constants.push(Constant::Int(n));
+        self.const_int_map.insert(n, idx);
+        Ok(idx)
+    }
+
+    pub(super) fn add_regex_const(&mut self, pattern: &str) -> Result<u16, CompileError> {
+        if pattern.len() > MAX_REGEX_PATTERN_LEN {
+            return Err(CompileError::new(format!(
+                "regex pattern too long: {} (max {})",
+                pattern.len(),
+                MAX_REGEX_PATTERN_LEN
+            )));
+        }
+        // Deduplicate: check if this regex pattern already exists
+        for (i, c) in self.constants.iter().enumerate() {
+            if let Constant::Regex(existing) = c {
+                if existing == pattern {
+                    return Ok(i as u16);
+                }
+            }
+        }
+        // Validate regex at compile time
+        regex::Regex::new(pattern).map_err(|e| CompileError::new(format!("invalid regex '{}': {}", pattern, e)))?;
+        let idx = self.check_const_limit()?;
+        self.constants.push(Constant::Regex(pattern.to_string()));
+        Ok(idx)
+    }
+
+    // ==================== Locals ====================
+
+    pub(super) fn declare_local(&mut self, name: &str, mutable: bool) -> Result<u16, CompileError> {
+        if self.next_slot == u16::MAX {
+            return Err(CompileError::new("too many local variables (max 65534)"));
+        }
+        let slot = self.next_slot;
+        self.next_slot += 1;
+        self.locals.push(Local {
+            name: name.to_string(),
+            slot,
+            mutable,
+            depth: self.scope_depth,
+        });
+        Ok(slot)
+    }
+
+    pub(super) fn resolve_local(&self, name: &str) -> Option<&Local> {
+        self.locals.iter().rev().find(|l| l.name == name)
+    }
+
+    pub(super) fn enter_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    pub(super) fn leave_scope(&mut self) {
+        assert!(self.scope_depth > 0, "leave_scope called at depth 0");
+        // Pop locals declared in the current scope
+        while let Some(local) = self.locals.last() {
+            if local.depth < self.scope_depth {
+                break;
+            }
+            self.locals.pop();
+        }
+        self.scope_depth = self.scope_depth.saturating_sub(1);
+    }
+}
