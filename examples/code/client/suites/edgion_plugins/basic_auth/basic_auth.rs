@@ -427,6 +427,61 @@ impl BasicAuthTestSuite {
         )
     }
 
+    fn test_stage_logs_contain_basic_auth() -> TestCase {
+        TestCase::new(
+            "stage_logs_contain_basic_auth",
+            "Access log stage_logs contains BasicAuth plugin entry on successful auth",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("test-basic-auth-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/health", ctx.http_url());
+                    let auth = basic_auth_header(USER_ALICE.0, USER_ALICE.1);
+
+                    let _ = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", TEST_HOST)
+                        .header("Authorization", &auth)
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace_id, 10, 200).await {
+                        Ok(e) => e,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Access log not found: {}", e)),
+                    };
+
+                    let found = entry.data["stage_logs"]
+                        .as_array()
+                        .map(|stages| {
+                            stages.iter().any(|stage| {
+                                stage["edgion_plugins"]
+                                    .as_array()
+                                    .map(|eps| {
+                                        eps.iter().any(|ep| {
+                                            ep["logs"]
+                                                .as_array()
+                                                .map(|logs| logs.iter().any(|l| l["name"].as_str() == Some("BasicAuth")))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false);
+
+                    if found {
+                        TestResult::passed_with_message(start.elapsed(), "BasicAuth found in stage_logs".to_string())
+                    } else {
+                        TestResult::failed(start.elapsed(), "BasicAuth not found in stage_logs".to_string())
+                    }
+                })
+            },
+        )
+    }
+
     /// Successful auth with delay config must NOT be delayed.
     /// Verifies that the delay is only applied on failure paths, not success.
     fn test_no_delay_on_success() -> TestCase {
@@ -510,6 +565,8 @@ impl TestSuite for BasicAuthTestSuite {
             Self::test_auth_failure_delay_on_missing_credentials(),
             Self::test_auth_failure_delay_on_wrong_password(),
             Self::test_no_delay_on_success(),
+            // access log regression
+            Self::test_stage_logs_contain_basic_auth(),
         ]
     }
 }

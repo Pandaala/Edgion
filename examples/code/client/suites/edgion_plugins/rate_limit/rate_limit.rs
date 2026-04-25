@@ -372,6 +372,61 @@ impl RateLimitTestSuite {
             },
         )
     }
+
+    fn test_stage_logs_contain_rate_limit() -> TestCase {
+        TestCase::new(
+            "stage_logs_contain_rate_limit",
+            "Access log stage_logs contains RateLimit plugin entry on allowed request",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("test-rate-limit-{}", uuid::Uuid::new_v4());
+                    let test_key = format!("al-probe-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/test/rate-limit/api", ctx.http_url());
+
+                    let _ = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "rate-limit.example.com")
+                        .header("X-Rate-Key", &test_key)
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace_id, 10, 200).await {
+                        Ok(e) => e,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Access log not found: {}", e)),
+                    };
+
+                    let found = entry.data["stage_logs"]
+                        .as_array()
+                        .map(|stages| {
+                            stages.iter().any(|stage| {
+                                stage["edgion_plugins"]
+                                    .as_array()
+                                    .map(|eps| {
+                                        eps.iter().any(|ep| {
+                                            ep["logs"]
+                                                .as_array()
+                                                .map(|logs| logs.iter().any(|l| l["name"].as_str() == Some("RateLimit")))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false);
+
+                    if found {
+                        TestResult::passed_with_message(start.elapsed(), "RateLimit found in stage_logs".to_string())
+                    } else {
+                        TestResult::failed(start.elapsed(), "RateLimit not found in stage_logs".to_string())
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for RateLimitTestSuite {
@@ -396,6 +451,8 @@ impl TestSuite for RateLimitTestSuite {
             // key
             Self::test_different_keys_independent(),
             Self::test_missing_key_allows(),
+            // access log regression
+            Self::test_stage_logs_contain_rate_limit(),
         ]
     }
 }

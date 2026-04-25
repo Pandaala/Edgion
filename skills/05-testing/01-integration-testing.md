@@ -129,7 +129,7 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 
 1. 直接响应断言：状态码、header、body、握手是否成功
 2. Access log：插件执行链、条件命中、内部字段、stage logs
-3. Metrics：负载均衡、hash、一致性、延迟统计
+3. Metrics：负载均衡、hash、一致性、延迟统计（**仅限已有 counter/gauge，不为插件单独新增**）
 4. `resource_diff` / `config_load_validator`：配置是否被 controller/gateway 正确接受
 
 经验上：
@@ -137,6 +137,8 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 - 插件链路、条件执行、header/body 改写，用 access log 更稳
 - LB、retry、hash、一致性，用 metrics 更稳
 - `TLSRoute` / `EdgionTls` 常常需要同时看握手结果、gateway 日志和 access log
+
+> **Metrics 断言范围限定**：metrics 断言只用于已有的 counter/gauge（如 `edgion_backend_requests_total`、`edgion_conn_ip_restriction_events_total`），**不应为验证插件行为而新增插件专属 counter**（如 `edgion_rate_limit_rejected_total`）。认证、限流、改写等插件的正确性验证走响应断言 + access log，已足够。原则见 [`03-coding/observability/01-metrics.md`](../03-coding/observability/01-metrics.md)「禁止事项：每个插件单独注册自己的 metrics」。
 
 ### 6. 缩小范围跑
 

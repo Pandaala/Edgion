@@ -40,9 +40,7 @@ impl StreamPluginRuntime {
         let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
 
         for entry in entries {
-            // Skip disabled plugins
             if !entry.is_enabled() {
-                tracing::debug!(plugin_type = entry.type_name(), "Skipping disabled stream plugin");
                 continue;
             }
 
@@ -56,7 +54,6 @@ impl StreamPluginRuntime {
                 }
             };
 
-            tracing::debug!(plugin_name = plugin.name(), "Added stream plugin to runtime");
             plugins.push(plugin);
         }
 

@@ -19,6 +19,7 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
   - **已确认的误报场景**（具体案例）→ [cpu-memory/not-a-performance-issue.md](cpu-memory/not-a-performance-issue.md)
 - 审查 `RwLock`/`Mutex` `.unwrap()` 时，先看 [rwlock-unwrap/rwlock-unwrap-rule.md](rwlock-unwrap/rwlock-unwrap-rule.md)
 - 审查 handler 时，先看 [handler-requeue/handler-requeue-rule.md](handler-requeue/handler-requeue-rule.md)
+- 审查 DSL `log.error()` / `log.warn()` "可能将用户值写入 PluginLog / secret 泄漏" 类 finding 时：**已知限制，不接受新 finding**。当前实现静默丢弃动态参数（写入静态字符串 `"dsl log error"` / `"dsl log warn"`），是无脱敏层时期的临时 workaround；完整脱敏支持已登记为 `tasks/todo/log-desensitization.md`，排期后统一修复
 - 审查可观测性（日志/metrics/access log）时，先看 [observability/observability-review-rule.md](observability/observability-review-rule.md)
 - 审查 TLS/SSL 客户端配置时，先看 [ssl/tonic-domain-name-false-positive.md](ssl/tonic-domain-name-false-positive.md)
 - 审查 OpenSSL/rustls 后端缺口时，跳过 — 已知限制，BoringSSL 是唯一生产后端，详见 `tasks/todo/multi-tls-backend-gaps.md`

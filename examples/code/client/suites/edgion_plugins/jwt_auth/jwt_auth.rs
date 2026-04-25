@@ -396,6 +396,61 @@ impl JwtAuthTestSuite {
             },
         )
     }
+
+    fn test_stage_logs_contain_jwt_auth() -> TestCase {
+        TestCase::new(
+            "stage_logs_contain_jwt_auth",
+            "Access log stage_logs contains JwtAuth plugin entry on successful auth",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("test-jwt-auth-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/health", ctx.http_url());
+                    let jwt = generate_jwt("test-user", 3600);
+
+                    let _ = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "jwt-test.example.com")
+                        .header("Authorization", format!("Bearer {}", jwt))
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace_id, 10, 200).await {
+                        Ok(e) => e,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Access log not found: {}", e)),
+                    };
+
+                    let found = entry.data["stage_logs"]
+                        .as_array()
+                        .map(|stages| {
+                            stages.iter().any(|stage| {
+                                stage["edgion_plugins"]
+                                    .as_array()
+                                    .map(|eps| {
+                                        eps.iter().any(|ep| {
+                                            ep["logs"]
+                                                .as_array()
+                                                .map(|logs| logs.iter().any(|l| l["name"].as_str() == Some("JwtAuth")))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false);
+
+                    if found {
+                        TestResult::passed_with_message(start.elapsed(), "JwtAuth found in stage_logs".to_string())
+                    } else {
+                        TestResult::failed(start.elapsed(), "JwtAuth not found in stage_logs".to_string())
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for JwtAuthTestSuite {
@@ -418,6 +473,8 @@ impl TestSuite for JwtAuthTestSuite {
             Self::test_www_authenticate_header(),
             // P2: Username extraction (sub claim fallback)
             Self::test_jwt_with_sub_claim(),
+            // access log regression
+            Self::test_stage_logs_contain_jwt_auth(),
         ]
     }
 }

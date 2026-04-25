@@ -132,6 +132,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "backend-tls-gateway-cert" | "backendtlsgatewaycert" => "Gateway/TLS/BackendTLSGatewayCert".to_string(),
             "misdirected-request" | "misdirectedrequest" | "421" => "Gateway/TLS/MisdirectedRequest".to_string(),
             "frontend-validation" | "frontendvalidation" | "fv-mtls" => "Gateway/FrontendValidation".to_string(),
+            "csrf" => "EdgionPlugins/Csrf".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
@@ -230,6 +231,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginCondition" => "EdgionPlugins",
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "EdgionPlugins/Cors" => "EdgionPlugins",
+        "EdgionPlugins/Csrf" => "EdgionPlugins",
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/BasicAuth" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
@@ -858,6 +860,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CorsPluginTestSuite));
+        }
+        "EdgionPlugins/Csrf" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/Csrf tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CsrfTestSuite));
         }
         "EdgionPlugins/CtxSet" => {
             if !gateway {

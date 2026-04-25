@@ -259,6 +259,60 @@ impl RealIpPluginTestSuite {
             },
         )
     }
+
+    fn test_stage_logs_contain_real_ip() -> TestCase {
+        TestCase::new(
+            "stage_logs_contain_real_ip",
+            "Access log stage_logs contains RealIp plugin entry on normal request",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("test-real-ip-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/headers", ctx.http_url());
+
+                    let _ = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", HOST)
+                        .header("x-forwarded-for", "203.0.113.1, 10.0.0.5")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace_id, 10, 200).await {
+                        Ok(e) => e,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Access log not found: {}", e)),
+                    };
+
+                    let found = entry.data["stage_logs"]
+                        .as_array()
+                        .map(|stages| {
+                            stages.iter().any(|stage| {
+                                stage["edgion_plugins"]
+                                    .as_array()
+                                    .map(|eps| {
+                                        eps.iter().any(|ep| {
+                                            ep["logs"]
+                                                .as_array()
+                                                .map(|logs| logs.iter().any(|l| l["name"].as_str() == Some("RealIp")))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false);
+
+                    if found {
+                        TestResult::passed_with_message(start.elapsed(), "RealIp found in stage_logs".to_string())
+                    } else {
+                        TestResult::failed(start.elapsed(), "RealIp not found in stage_logs".to_string())
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for RealIpPluginTestSuite {
@@ -271,6 +325,8 @@ impl TestSuite for RealIpPluginTestSuite {
             Self::test_xff_extraction_recursive(),
             Self::test_direct_connection(),
             Self::test_all_trusted_ips(),
+            // access log regression
+            Self::test_stage_logs_contain_real_ip(),
         ]
     }
 }
