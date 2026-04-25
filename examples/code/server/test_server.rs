@@ -260,6 +260,14 @@ fn create_echo_router(server_addr_str: String) -> Router {
             "/webhook/resolve-body",
             get(webhook_resolve_body_handler).post(webhook_resolve_body_handler),
         )
+        .route(
+            "/webhook/resolve/extra",
+            get(webhook_resolve_extra_handler).post(webhook_resolve_extra_handler),
+        )
+        .route(
+            "/webhook/apikey-resolve",
+            get(webhook_apikey_resolve_handler).post(webhook_apikey_resolve_handler),
+        )
         .route("/webhook/healthz", get(health_handler))
         .route("/status/{code}", get(status_handler))
         .route("/delay/{seconds}", get(delay_handler))
@@ -737,6 +745,52 @@ async fn webhook_resolve_body_handler(req: AxumRequest<Body>) -> impl IntoRespon
         .unwrap_or("unknown");
 
     format!("  body-key-{}  ", tenant)
+}
+
+/// Endpoint for pathSuffix testing — returns a payload that proves the suffix routed here.
+async fn webhook_resolve_extra_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let tenant = req
+        .headers()
+        .get("x-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    let body = format!(r#"{{"data":{{"path_suffix_id":"suffix-{tenant}"}}}}"#);
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+}
+
+/// Endpoint for apiKey-auth testing — returns 401 unless X-API-Key header present and correct.
+async fn webhook_apikey_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let api_key = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if api_key != "test-secret-key-12345" {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"missing or wrong api key"}"#.to_string(),
+        );
+    }
+    let tenant = req
+        .headers()
+        .get("x-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    let body = format!(r#"{{"data":{{"apikey_user":"apikey-{tenant}"}}}}"#);
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
 }
 
 async fn status_handler(Path(code): Path<u16>) -> impl IntoResponse {

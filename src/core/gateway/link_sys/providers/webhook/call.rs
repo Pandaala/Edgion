@@ -324,6 +324,53 @@ async fn read_body_limited(resp: reqwest::Response, max_bytes: usize) -> Bytes {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+    use std::sync::Arc;
+
+    use crate::types::resources::link_sys::webhook::{WebhookRetry, WebhookServiceConfig};
+
+    // ============================================================
+    // Test helpers
+    // ============================================================
+
+    fn make_runtime(uri: String, config_overrides: impl FnOnce(&mut WebhookServiceConfig)) -> WebhookRuntime {
+        let mut config = WebhookServiceConfig {
+            uri,
+            ..Default::default()
+        };
+        config_overrides(&mut config);
+        WebhookRuntime {
+            config,
+            http_client: Arc::new(reqwest::Client::new()),
+            healthy: AtomicBool::new(true),
+            passive_failures: AtomicU32::new(0),
+            last_halfopen: AtomicU64::new(0),
+            backoff_sec: AtomicU64::new(0),
+            rate_counter: None,
+        }
+    }
+
+    fn make_secret(key: &str, value: &str) -> k8s_openapi::api::core::v1::Secret {
+        let mut data = std::collections::BTreeMap::new();
+        data.insert(key.to_string(), k8s_openapi::ByteString(value.as_bytes().to_vec()));
+        k8s_openapi::api::core::v1::Secret {
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
+    fn simple_get_req() -> WebhookCallRequest {
+        WebhookCallRequest {
+            method: "GET".to_string(),
+            path: String::new(),
+            headers: HashMap::new(),
+            body: None,
+        }
+    }
+
+    // ============================================================
+    // Existing tests
+    // ============================================================
 
     #[test]
     fn webhook_call_request_default_path_is_empty() {
@@ -371,5 +418,281 @@ mod tests {
         assert_eq!(merged.get("X-Source").map(String::as_str), Some("caller"));
         assert_eq!(merged.get("X-Only-Base").map(String::as_str), Some("yes"));
         assert_eq!(merged.get("X-Caller").map(String::as_str), Some("yes"));
+    }
+
+    // ============================================================
+    // P0 — webhook_call() core flow tests
+    // ============================================================
+
+    /// 1. Unhealthy gate: runtime marked unhealthy with no half-open path → Unhealthy error.
+    #[tokio::test]
+    async fn unhealthy_gate_returns_unhealthy_error() {
+        let runtime = make_runtime("http://127.0.0.1:1".to_string(), |_| {});
+        // Mark unhealthy — no backoff config so should_halfopen_probe returns false.
+        runtime.healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        assert!(matches!(result, Err(WebhookCallError::Unhealthy)), "Expected Unhealthy");
+    }
+
+    /// 2. RateLimited gate: exhausted sliding window counter → RateLimited error.
+    #[tokio::test]
+    async fn rate_limited_gate_returns_rate_limited_error() {
+        use crate::core::gateway::link_sys::providers::webhook::runtime::SlidingWindowCounter;
+
+        let mut runtime = make_runtime("http://127.0.0.1:1".to_string(), |_| {});
+        // Create a counter with limit=0 so every acquire fails immediately.
+        runtime.rate_counter = Some(SlidingWindowCounter::new(0, std::time::Duration::from_secs(1)));
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        assert!(
+            matches!(result, Err(WebhookCallError::RateLimited)),
+            "Expected RateLimited"
+        );
+    }
+
+    /// 3. Successful 2xx call: wiremock returns 200 with body → Ok result with correct status + body.
+    #[tokio::test]
+    async fn successful_2xx_call_returns_ok_with_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("hello-webhook"))
+            .mount(&server)
+            .await;
+
+        let runtime = make_runtime(format!("{}/resolve", server.uri()), |c| {
+            // 1MB limit so body is not truncated
+            c.max_response_bytes = 1024 * 1024;
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let ok = result.expect("Expected Ok");
+        assert_eq!(ok.status, 200);
+        assert_eq!(ok.body.as_ref(), b"hello-webhook");
+    }
+
+    /// 4. StatusNotSuccess: wiremock returns 500 → Err(StatusNotSuccess { status: 500, .. }).
+    #[tokio::test]
+    async fn status_not_success_returns_error_with_status() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/check"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&server)
+            .await;
+
+        let runtime = make_runtime(format!("{}/check", server.uri()), |c| {
+            c.max_response_bytes = 1024 * 1024;
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        match result {
+            Err(WebhookCallError::StatusNotSuccess { status, .. }) => {
+                assert_eq!(status, 500);
+            }
+            Err(e) => panic!("Expected StatusNotSuccess(500), got Err({e:?})"),
+            Ok(_) => panic!("Expected StatusNotSuccess(500), got Ok"),
+        }
+    }
+
+    /// 5. ResponseTooLarge: wiremock returns body bigger than per-resource max_response_bytes → Err(ResponseTooLarge).
+    #[tokio::test]
+    async fn response_too_large_returns_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Body is 100 bytes; we'll set max_response_bytes to 10.
+        let big_body = "x".repeat(100);
+        Mock::given(method("GET"))
+            .and(path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(big_body))
+            .mount(&server)
+            .await;
+
+        let runtime = make_runtime(format!("{}/big", server.uri()), |c| {
+            c.max_response_bytes = 10;
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        assert!(
+            matches!(result, Err(WebhookCallError::ResponseTooLarge)),
+            "Expected ResponseTooLarge"
+        );
+    }
+
+    /// 6. Bearer auth injection: Authorization: Bearer tok123 is sent to the server.
+    #[tokio::test]
+    async fn bearer_auth_injects_authorization_header() {
+        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::link_sys::webhook::WebhookAuth;
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/auth"))
+            .and(header("Authorization", "Bearer tok123"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+
+        let secret = make_secret("bearerToken", "tok123");
+        let runtime = make_runtime(format!("{}/auth", server.uri()), |c| {
+            c.max_response_bytes = 1024;
+            c.auth = Some(WebhookAuth::Bearer {
+                secret_ref: SecretReference {
+                    name: "test-secret".to_string(),
+                    namespace: None,
+                },
+                secret: Some(secret),
+            });
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        assert!(result.is_ok(), "Bearer auth call failed");
+        assert_eq!(result.unwrap().status, 200);
+    }
+
+    /// 7. ApiKey header auth injection: X-API-Key: k123 is sent to the server.
+    #[tokio::test]
+    async fn api_key_header_auth_injects_custom_header() {
+        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::link_sys::webhook::WebhookAuth;
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/key"))
+            .and(header("X-API-Key", "k123"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("authorized"))
+            .mount(&server)
+            .await;
+
+        let secret = make_secret("apiKey", "k123");
+        let runtime = make_runtime(format!("{}/key", server.uri()), |c| {
+            c.max_response_bytes = 1024;
+            c.auth = Some(WebhookAuth::ApiKey {
+                secret_ref: SecretReference {
+                    name: "test-apikey".to_string(),
+                    namespace: None,
+                },
+                secret: Some(secret),
+                r#in: "header".to_string(),
+                header_name: Some("X-API-Key".to_string()),
+                query_param: None,
+            });
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        assert!(result.is_ok(), "ApiKey header auth call failed");
+        assert_eq!(result.unwrap().status, 200);
+    }
+
+    /// 8. Retry on retry_on_status: first 500 then 200; final result is Ok, exactly 2 requests received.
+    #[tokio::test]
+    async fn retry_on_status_retries_and_succeeds() {
+        use std::sync::atomic::AtomicU32 as StdAtomicU32;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        // First request returns 500, second returns 200.
+        // We use a counter to serve different responses.
+        // wiremock supports priority: lower number = matched first.
+        // Use `.up_to_n_times(1)` for the first 500, then unlimited 200.
+        Mock::given(method("GET"))
+            .and(path("/retry"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/retry"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("success"))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+
+        let _ = StdAtomicU32::new(0); // silence unused import warning
+
+        let runtime = make_runtime(format!("{}/retry", server.uri()), |c| {
+            c.max_response_bytes = 1024;
+            c.retry = Some(WebhookRetry {
+                max_retries: 1,
+                retry_delay_ms: 0, // no delay in tests
+                retry_on_timeout: false,
+                retry_on_connect_error: false,
+                retry_on_status: vec![500],
+            });
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        assert!(result.is_ok(), "Expected Ok after retry");
+        assert_eq!(result.unwrap().status, 200);
+
+        // Verify exactly 2 requests were received (initial + 1 retry)
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(
+            received.len(),
+            2,
+            "Expected exactly 2 requests (1 initial + 1 retry), got {}",
+            received.len()
+        );
+    }
+
+    // ============================================================
+    // P1 — defaultHeaders merge precedence in a real call
+    // ============================================================
+
+    /// 11. defaultHeaders merge precedence: caller wins on conflict, default kept when not overridden.
+    #[tokio::test]
+    async fn default_headers_merge_precedence_in_real_call() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Wiremock asserts: X-Source=caller (caller overrides default) AND X-Constant=yes (default kept).
+        Mock::given(method("GET"))
+            .and(path("/merge"))
+            .and(header("X-Source", "caller"))
+            .and(header("X-Constant", "yes"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("merged"))
+            .mount(&server)
+            .await;
+
+        let runtime = make_runtime(format!("{}/merge", server.uri()), |c| {
+            c.max_response_bytes = 1024;
+            let mut defaults = HashMap::new();
+            defaults.insert("X-Source".to_string(), "srv".to_string());
+            defaults.insert("X-Constant".to_string(), "yes".to_string());
+            c.default_headers = Some(defaults);
+        });
+
+        // Caller provides X-Source which should override the default.
+        let mut caller_headers = HashMap::new();
+        caller_headers.insert("X-Source".to_string(), "caller".to_string());
+
+        let req = WebhookCallRequest {
+            method: "GET".to_string(),
+            path: String::new(),
+            headers: caller_headers,
+            body: None,
+        };
+
+        let result = webhook_call(&runtime, req, 65536).await;
+        assert!(result.is_ok(), "defaultHeaders merge call failed");
+        assert_eq!(result.unwrap().status, 200);
     }
 }

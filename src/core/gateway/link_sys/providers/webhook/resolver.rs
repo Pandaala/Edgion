@@ -245,4 +245,17 @@ mod tests {
         let extract = WebhookExtract::BodyText;
         assert_eq!(extract_value(&result, &extract), None);
     }
+
+    // P1 — hop-by-hop header filtering
+    /// Verifies that is_hop_by_hop correctly identifies hop-by-hop headers,
+    /// locking in the behavior used in resolve_webhook_key's forwardHeaders filtering.
+    #[test]
+    fn is_hop_by_hop_filters_connection() {
+        use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
+        assert!(is_hop_by_hop("Connection"));
+        assert!(is_hop_by_hop("Transfer-Encoding"));
+        assert!(is_hop_by_hop("Keep-Alive"));
+        assert!(!is_hop_by_hop("Authorization"));
+        assert!(!is_hop_by_hop("X-Tenant-Id"));
+    }
 }

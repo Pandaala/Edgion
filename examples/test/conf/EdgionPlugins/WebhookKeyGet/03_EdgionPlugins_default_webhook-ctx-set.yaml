@@ -53,3 +53,28 @@ spec:
               type: header
               name: X-Tenant-Id
             default: "no-tenant"
+
+          # 5. Resolve via webhook with pathSuffix
+          - name: webhook_path_suffix_id
+            from:
+              type: webhook
+              webhookRef: "edgion-default/webhook-resolver"
+              forwardHeaders:
+                - X-Tenant-Id
+              pathSuffix: "/extra"
+              extract:
+                source: body
+                path: "data.path_suffix_id"
+            default: "fallback-suffix"
+
+          # 6. Resolve via webhook with apiKey auth
+          - name: webhook_apikey_user
+            from:
+              type: webhook
+              webhookRef: "edgion-default/webhook-apikey-resolver"
+              forwardHeaders:
+                - X-Tenant-Id
+              extract:
+                source: body
+                path: "data.apikey_user"
+            default: "fallback-apikey"
