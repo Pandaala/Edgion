@@ -82,10 +82,12 @@ pub struct HttpRouteRuleUnit {
     pub path_regex: Option<Regex>,
     /// Parent references for sectionName matching
     pub parent_refs: Option<Vec<ParentReference>>,
-    /// Pre-compiled regexes for header RegularExpression matchers (aligned with headers vec)
-    pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
-    /// Pre-compiled regexes for query param RegularExpression matchers (aligned with query_params vec)
-    pub compiled_query_regexes: Vec<Option<Arc<Regex>>>,
+    /// Pre-compiled regexes for header RegularExpression matchers (aligned with headers vec).
+    /// `Regex` is internally Arc-like; the surrounding `HttpRouteRuleUnit` is shared via
+    /// outer `Arc<HttpRouteRuleUnit>`, so no extra `Arc` wrapper is needed.
+    pub compiled_header_regexes: Vec<Option<Regex>>,
+    /// Pre-compiled regexes for query param RegularExpression matchers (aligned with query_params vec).
+    pub compiled_query_regexes: Vec<Option<Regex>>,
     /// True when the match item has non-empty query_params conditions.
     /// Used to skip query string parsing on the hot path for routes that don't need it.
     pub has_query_matchers: bool,
@@ -100,12 +102,21 @@ impl HttpRouteRuleUnit {
     pub fn compile_match_regexes(
         match_item: &crate::types::HTTPRouteMatch,
     ) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
+        // Controller validates regex patterns at preparse (see ref_grant/validator.rs::check_regex_pattern),
+        // so compilation failures here indicate a controller/gateway sync invariant violation.
         let header_regexes = match_item.headers.as_ref().map_or_else(Vec::new, |headers| {
             headers
                 .iter()
                 .map(|hm| {
                     if hm.match_type.as_deref() == Some("RegularExpression") {
-                        Regex::new(&hm.value).ok().map(|r| Arc::new(r))
+                        match Regex::new(&hm.value) {
+                            Ok(r) => Some(Arc::new(r)),
+                            Err(e) => {
+                                tracing::error!(header = %hm.name, pattern = %hm.value, error = %e,
+                                    "Header regex failed to compile at gateway despite controller validation; matcher will fail-closed");
+                                None
+                            }
+                        }
                     } else {
                         None
                     }
@@ -117,7 +128,14 @@ impl HttpRouteRuleUnit {
                 .iter()
                 .map(|qm| {
                     if qm.match_type.as_deref() == Some("RegularExpression") {
-                        Regex::new(&qm.value).ok().map(|r| Arc::new(r))
+                        match Regex::new(&qm.value) {
+                            Ok(r) => Some(Arc::new(r)),
+                            Err(e) => {
+                                tracing::error!(query = %qm.name, pattern = %qm.value, error = %e,
+                                    "Query regex failed to compile at gateway despite controller validation; matcher will fail-closed");
+                                None
+                            }
+                        }
                     } else {
                         None
                     }
@@ -265,14 +283,10 @@ impl HttpRouteRuleUnit {
 
         match match_type {
             "Exact" => Ok(header_value == header_match.value),
-            "RegularExpression" => {
-                if let Some(re) = compiled_regex {
-                    return Ok(re.is_match(header_value));
-                }
-                let re = Regex::new(&header_match.value)
-                    .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
-                Ok(re.is_match(header_value))
-            }
+            "RegularExpression" => match compiled_regex {
+                Some(re) => Ok(re.is_match(header_value)),
+                None => Ok(false),
+            },
             _ => Ok(false),
         }
     }
@@ -293,14 +307,10 @@ impl HttpRouteRuleUnit {
 
         match match_type {
             "Exact" => Ok(param_value == &query_param_match.value),
-            "RegularExpression" => {
-                if let Some(re) = compiled_regex {
-                    return Ok(re.is_match(param_value));
-                }
-                let re = Regex::new(&query_param_match.value)
-                    .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
-                Ok(re.is_match(param_value))
-            }
+            "RegularExpression" => match compiled_regex {
+                Some(re) => Ok(re.is_match(param_value)),
+                None => Ok(false),
+            },
             _ => Ok(false),
         }
     }

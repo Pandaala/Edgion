@@ -42,20 +42,30 @@ fn get_effective_hostnames(route: &HTTPRoute) -> Vec<String> {
 }
 
 impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
+    // Update order is load-bearing across all ConfHandler entry points:
+    //   1. sync/cleanup LB policies   — populate global policy store first so any
+    //      lookup driven by the new route_cache can resolve its policy.
+    //   2. mutate route_cache         — canonical store reflecting the new state.
+    //   3. rebuild listener managers  — readers off match engines see (cache, policy)
+    //      that are already mutually consistent.
+    // Reordering risks a transient window where matched routes reference services
+    // whose LB policy is still stale (or missing). Regression tests in this file
+    // pin the end-state for full_set / partial_update / mixed scenarios.
     fn full_set(&self, data: &HashMap<String, Arc<HTTPRoute>>) {
         let data_owned = arc_map_to_owned(data);
+        // Step 1: sync LB policies (must precede cache mutation — see invariant above).
         sync_lb_policies_for_routes(&data_owned);
 
         let start_time = Instant::now();
         tracing::info!(component = "http_route_manager", cnt = data.len(), "full set start");
 
-        // Step 1: Replace route cache (reuse data_owned to avoid double clone)
+        // Step 2: Replace route cache (reuse data_owned to avoid double clone)
         self.route_cache.clear();
         for (key, route) in data_owned {
             self.route_cache.insert(key, route);
         }
 
-        // Step 2: Rebuild all per-listener managers
+        // Step 3: Rebuild all per-listener managers
         self.rebuild_all_listener_managers();
 
         let elapsed = start_time.elapsed();
@@ -74,6 +84,9 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
     ) {
         let mut add_or_update_owned = arc_map_into_owned(add);
         add_or_update_owned.extend(arc_map_into_owned(update));
+        // Step 1: sync/cleanup LB policies before touching route_cache (see invariant
+        // above on full_set). cleanup runs after sync so that an updated route which
+        // still references an old service does not have its policy dropped here.
         sync_lb_policies_for_routes(&add_or_update_owned);
         cleanup_lb_policies_for_routes(&remove);
 
@@ -588,5 +601,271 @@ mod tests {
         route.spec.resolved_hostnames = Some(vec!["a.example.com".to_string(), "b.example.com".to_string()]);
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["a.example.com", "b.example.com"]);
+    }
+
+    // ====================================================================
+    // ConfHandler ordering regression tests
+    //
+    // These pin the post-conditions of full_set / partial_update so that the
+    // ordering invariant documented at the top of the impl block (sync LB →
+    // mutate cache → rebuild) cannot be silently broken by a refactor.
+    //
+    // The global POLICY_STORE is shared across tests; each scenario uses a
+    // distinct namespace and cleans up its own service entries to stay
+    // isolation-safe under `cargo test`'s default parallelism.
+    // ====================================================================
+
+    fn build_route_with_lb_policy(
+        namespace: &str,
+        name: &str,
+        service: &str,
+        kind: &str,
+        policy_name: &str,
+    ) -> HTTPRoute {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": { "namespace": namespace, "name": name },
+            "spec": {
+                "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
+                "hostnames": ["test.example.com"],
+                "rules": [{
+                    "backendRefs": [{
+                        "name": service,
+                        "port": 8080,
+                        "kind": "Service",
+                        "filters": [{
+                            "type": "ExtensionRef",
+                            "extensionRef": { "group": "edgion.io", "kind": kind, "name": policy_name }
+                        }]
+                    }]
+                }]
+            }
+        });
+        let mut route: HTTPRoute = serde_json::from_value(json).expect("Failed to build HTTPRoute");
+        route.pre_parse();
+        route
+    }
+
+    #[test]
+    fn test_full_set_replaces_cache_and_syncs_policies() {
+        use crate::core::gateway::lb::lb_policy::{get_global_policy_store, LbPolicy};
+
+        let mgr = GlobalHttpRouteManagers::new();
+        let policy_store = get_global_policy_store();
+        let svc_key = "test-fs-ord/svc1";
+        let route_key = "test-fs-ord/route1";
+        let stale_key = "test-fs-ord/stale";
+
+        let stale = build_route_with_lb_policy("test-fs-ord", "stale", "svc1", "LBPolicyLeastConn", "default");
+        mgr.route_cache.insert(stale_key.to_string(), stale);
+
+        let mut data = HashMap::new();
+        data.insert(
+            route_key.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-fs-ord",
+                "route1",
+                "svc1",
+                "LBPolicyConsistentHash",
+                "header.x-id",
+            )),
+        );
+        mgr.full_set(&data);
+
+        assert!(
+            mgr.route_cache.get(stale_key).is_none(),
+            "full_set must clear stale cache entries"
+        );
+        assert!(
+            mgr.route_cache.get(route_key).is_some(),
+            "new route must be present in cache"
+        );
+        assert!(
+            policy_store.get(svc_key).contains(&LbPolicy::Consistent),
+            "policy must be visible in store after full_set returns"
+        );
+
+        policy_store.delete_lb_policies_by_resource_key(route_key);
+        policy_store.delete_lb_policies_by_resource_key(stale_key);
+    }
+
+    #[test]
+    fn test_partial_update_policy_only_change() {
+        use crate::core::gateway::lb::lb_policy::{get_global_policy_store, LbPolicy};
+
+        let mgr = GlobalHttpRouteManagers::new();
+        let policy_store = get_global_policy_store();
+        let svc_key = "test-pu-pol/svc";
+        let route_key = "test-pu-pol/route1";
+
+        let mut add = HashMap::new();
+        add.insert(
+            route_key.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-pu-pol",
+                "route1",
+                "svc",
+                "LBPolicyConsistentHash",
+                "header.x-id",
+            )),
+        );
+        mgr.partial_update(add, HashMap::new(), HashSet::new());
+        assert!(policy_store.get(svc_key).contains(&LbPolicy::Consistent));
+
+        let mut update = HashMap::new();
+        update.insert(
+            route_key.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-pu-pol",
+                "route1",
+                "svc",
+                "LBPolicyLeastConn",
+                "default",
+            )),
+        );
+        mgr.partial_update(HashMap::new(), update, HashSet::new());
+
+        assert!(mgr.route_cache.get(route_key).is_some());
+        let policies = policy_store.get(svc_key);
+        assert!(
+            policies.contains(&LbPolicy::LeastConnection),
+            "updated policy must reach the store"
+        );
+        // Union semantics: prior policy persists until the last referencing route is removed.
+        assert!(
+            policies.contains(&LbPolicy::Consistent),
+            "union semantics: prior policy retained"
+        );
+
+        policy_store.delete_lb_policies_by_resource_key(route_key);
+    }
+
+    #[test]
+    fn test_partial_update_route_only_change() {
+        use crate::core::gateway::lb::lb_policy::get_global_policy_store;
+
+        let mgr = GlobalHttpRouteManagers::new();
+        let policy_store = get_global_policy_store();
+        let svc_key = "test-pu-rt/svc";
+        let route_key = "test-pu-rt/route1";
+
+        let mut add = HashMap::new();
+        add.insert(
+            route_key.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-pu-rt",
+                "route1",
+                "svc",
+                "LBPolicyConsistentHash",
+                "header.x-id",
+            )),
+        );
+        mgr.partial_update(add, HashMap::new(), HashSet::new());
+        let policies_before = policy_store.get(svc_key);
+        assert_eq!(policies_before.len(), 1);
+
+        // Same policy, different hostname — pure route metadata change, no policy change.
+        let mut updated_route =
+            build_route_with_lb_policy("test-pu-rt", "route1", "svc", "LBPolicyConsistentHash", "header.x-id");
+        updated_route.spec.hostnames = Some(vec!["other.example.com".to_string()]);
+        let mut update = HashMap::new();
+        update.insert(route_key.to_string(), Arc::new(updated_route));
+        mgr.partial_update(HashMap::new(), update, HashSet::new());
+
+        let cached = mgr.route_cache.get(route_key).expect("route must remain in cache");
+        assert_eq!(
+            cached.spec.hostnames.as_deref(),
+            Some(&["other.example.com".to_string()][..]),
+            "route_cache must hold the updated route after partial_update"
+        );
+        assert_eq!(
+            policy_store.get(svc_key).len(),
+            policies_before.len(),
+            "policies untouched when route content changes but policy doesn't"
+        );
+
+        policy_store.delete_lb_policies_by_resource_key(route_key);
+    }
+
+    #[test]
+    fn test_partial_update_simultaneous_add_update_remove() {
+        use crate::core::gateway::lb::lb_policy::{get_global_policy_store, LbPolicy};
+
+        let mgr = GlobalHttpRouteManagers::new();
+        let policy_store = get_global_policy_store();
+        let route_a = "test-pu-mix/route-a";
+        let route_b = "test-pu-mix/route-b";
+        let route_c = "test-pu-mix/route-c";
+        let svc_a = "test-pu-mix/svc-a";
+        let svc_b = "test-pu-mix/svc-b";
+        let svc_c = "test-pu-mix/svc-c";
+
+        let mut init = HashMap::new();
+        init.insert(
+            route_a.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-pu-mix",
+                "route-a",
+                "svc-a",
+                "LBPolicyConsistentHash",
+                "header.x-id",
+            )),
+        );
+        init.insert(
+            route_b.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-pu-mix",
+                "route-b",
+                "svc-b",
+                "LBPolicyLeastConn",
+                "default",
+            )),
+        );
+        mgr.partial_update(init, HashMap::new(), HashSet::new());
+
+        let mut add = HashMap::new();
+        add.insert(
+            route_c.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-pu-mix",
+                "route-c",
+                "svc-c",
+                "LBPolicyLeastConn",
+                "default",
+            )),
+        );
+        let mut update = HashMap::new();
+        update.insert(
+            route_a.to_string(),
+            Arc::new(build_route_with_lb_policy(
+                "test-pu-mix",
+                "route-a",
+                "svc-a",
+                "LBPolicyLeastConn",
+                "default",
+            )),
+        );
+        let mut remove = HashSet::new();
+        remove.insert(route_b.to_string());
+        mgr.partial_update(add, update, remove);
+
+        assert!(mgr.route_cache.get(route_a).is_some());
+        assert!(mgr.route_cache.get(route_b).is_none(), "removed route must be evicted");
+        assert!(mgr.route_cache.get(route_c).is_some());
+
+        let pa = policy_store.get(svc_a);
+        assert!(
+            pa.contains(&LbPolicy::LeastConnection),
+            "updated policy on route-a present"
+        );
+        assert!(
+            policy_store.get(svc_b).is_empty(),
+            "policy for removed route's service must be cleaned up"
+        );
+        assert!(policy_store.get(svc_c).contains(&LbPolicy::LeastConnection));
+
+        policy_store.delete_lb_policies_by_resource_key(route_a);
+        policy_store.delete_lb_policies_by_resource_key(route_c);
     }
 }

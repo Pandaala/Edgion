@@ -33,13 +33,25 @@ pub fn lookup_gateway(namespace: &str, name: &str) -> Option<Arc<Gateway>> {
 
 ---
 
-## 编译期预处理的 Regex 回退分支永远不触发
+## HTTP/gRPC route 正则匹配：Controller 已校验 + 热路径无 fallback
 
-**误判场景**：`match_header` / `match_query_param` 中有 `compiled_regex` 为 `None` 时回退到 `Regex::new()` 的分支。
+**历史误判**：`match_header` / `match_query_param` 中曾有 `compiled_regex` 为 `None` 时调用 `Regex::new()` 的回退分支，被审计反复标记为热路径性能问题。
 
-**实际情况**：`MatchItem` 结构体有 `compiled_header_regexes` / `compiled_query_regexes` 字段，在路由创建时统一预编译。请求匹配时通过索引传入，回退的 `Regex::new()` 分支只在 index 越界（数组长度与 matcher 数量不一致）时触发，属于配置 bug 场景，**正常运行中永远不走**。
+**当时的辩护**：声称"路由创建时已统一预编译，回退分支只在配置 bug 时走，正常运行不触发"。
 
-**判定**：回退分支是防御性代码，不是热路径，不是性能问题。
+**辩护的破绽**：Controller 端 `validate_http_route_if_enabled` / `validate_grpc_route_if_enabled` 当时**只校验 `match_type` 枚举值**，没有真正 `Regex::new()` 试编译。非法正则可以畅通进入数据面，`compile_match_regexes` 用 `Regex::new(...).ok()` 静默吞错，最终每次请求落到 fallback 重复编译且重复失败——既隐藏配置错，又付热路径开销。
+
+**当前修复（2026-04-25）**：
+1. Controller 侧 `ref_grant/validator.rs::check_regex_pattern` 在 `validate_*_route_if_enabled` 中对所有 `RegularExpression` 字段（HTTPRoute path/header/query, GRPCRoute method.service/method.method/header）`Regex::new()` 试编译，失败 push 到 errors → 路由 `Accepted=False`。
+2. Gateway 侧 `match_unit.rs::match_header` / `match_query_param`（HTTP & gRPC）**删除运行时 fallback**，`compiled_regex == None` 直接返回 `Ok(false)` fail-closed。
+3. Gateway 侧 `compile_match_regexes` 仍保留 `Regex::new(...).ok()`（防御 controller bug），失败时 `tracing::error!` 大声告警，不静默。
+
+**审查时认定标准**：
+- 看到 `match_header` / `match_query_param` 里没有 `Regex::new` 调用 → 已是修复后状态，不是问题。
+- 看到 `compile_match_regexes` 里 `Ok/Err` 双臂带 `tracing::error!` → 这是数据面对 controller bug 的最后防线，不是性能问题。
+- 看到 controller `check_regex_pattern` 调用 → 说明非法正则在准入期就被拒，Gateway fallback 路径理论不可达。
+
+**判定**：当前实现里 fallback 已彻底移除；任何"建议给 match_header 加运行时 Regex::new"的 finding 都是反向 regression。
 
 ---
 

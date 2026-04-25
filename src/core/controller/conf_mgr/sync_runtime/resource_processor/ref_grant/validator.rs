@@ -155,6 +155,22 @@ pub fn is_cross_ns_ref_allowed(
     )
 }
 
+/// Try compile a regex pattern; on failure push a structured validation error.
+fn check_regex_pattern(pattern: &str, kind: &str, field: &str, ns: &str, name: &str, errors: &mut Vec<String>) {
+    if let Err(e) = regex::Regex::new(pattern) {
+        tracing::warn!(
+            ns = ns,
+            name = name,
+            kind = kind,
+            field = field,
+            pattern = %pattern,
+            error = %e,
+            "Invalid RegularExpression pattern, rejecting resource"
+        );
+        errors.push(format!("Invalid {} {} regex '{}': {}", kind, field, pattern, e));
+    }
+}
+
 /// Validate HTTPRoute with ReferenceGrant if validation is enabled.
 ///
 /// Cross-namespace backend ref violations are NOT returned as validation errors here.
@@ -163,16 +179,25 @@ pub fn is_cross_ns_ref_allowed(
 /// violates Gateway API spec — ref_denied routes must remain Accepted=True.
 pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute) -> Vec<String> {
     let mut errors = Vec::new();
+    let ns = route.metadata.namespace.as_deref().unwrap_or("");
+    let name = route.metadata.name.as_deref().unwrap_or("");
     let rules = route.spec.rules.as_deref().unwrap_or_default();
     for rule in rules {
         let matches = rule.matches.as_deref().unwrap_or_default();
         for m in matches {
+            if let Some(p) = &m.path {
+                if p.match_type.as_deref() == Some("RegularExpression") {
+                    if let Some(value) = p.value.as_deref() {
+                        check_regex_pattern(value, "HTTPRoute", "path", ns, name, &mut errors);
+                    }
+                }
+            }
             for h in m.headers.as_deref().unwrap_or_default() {
                 let mt = h.match_type.as_deref().unwrap_or("Exact");
                 if mt != "Exact" && mt != "RegularExpression" {
                     tracing::warn!(
-                        ns = route.metadata.namespace.as_deref().unwrap_or(""),
-                        name = route.metadata.name.as_deref().unwrap_or(""),
+                        ns = ns,
+                        name = name,
                         kind = "HTTPRoute",
                         field = "match_type",
                         value = %mt,
@@ -182,14 +207,16 @@ pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute
                         "Unsupported HTTPRoute header match type '{}' (allowed: Exact, RegularExpression)",
                         mt
                     ));
+                } else if mt == "RegularExpression" {
+                    check_regex_pattern(&h.value, "HTTPRoute", "header", ns, name, &mut errors);
                 }
             }
             for q in m.query_params.as_deref().unwrap_or_default() {
                 let mt = q.match_type.as_deref().unwrap_or("Exact");
                 if mt != "Exact" && mt != "RegularExpression" {
                     tracing::warn!(
-                        ns = route.metadata.namespace.as_deref().unwrap_or(""),
-                        name = route.metadata.name.as_deref().unwrap_or(""),
+                        ns = ns,
+                        name = name,
                         kind = "HTTPRoute",
                         field = "match_type",
                         value = %mt,
@@ -199,6 +226,8 @@ pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute
                         "Unsupported HTTPRoute query param match type '{}' (allowed: Exact, RegularExpression)",
                         mt
                     ));
+                } else if mt == "RegularExpression" {
+                    check_regex_pattern(&q.value, "HTTPRoute", "queryParam", ns, name, &mut errors);
                 }
             }
         }
@@ -213,17 +242,30 @@ pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute
 /// (sets ResolvedRefs=False). Returning them here would cause Accepted=False, which
 /// violates Gateway API spec — ref_denied routes must remain Accepted=True.
 pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute) -> Vec<String> {
+    use crate::types::resources::grpc_route::GRPCMethodMatchType;
     let mut errors = Vec::new();
+    let ns = route.metadata.namespace.as_deref().unwrap_or("");
+    let name = route.metadata.name.as_deref().unwrap_or("");
     let rules = route.spec.rules.as_deref().unwrap_or_default();
     for rule in rules {
         let matches = rule.matches.as_deref().unwrap_or_default();
         for m in matches {
+            if let Some(method) = &m.method {
+                if method.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression) {
+                    if let Some(svc) = method.service.as_deref() {
+                        check_regex_pattern(svc, "GRPCRoute", "method.service", ns, name, &mut errors);
+                    }
+                    if let Some(mth) = method.method.as_deref() {
+                        check_regex_pattern(mth, "GRPCRoute", "method.method", ns, name, &mut errors);
+                    }
+                }
+            }
             for h in m.headers.as_deref().unwrap_or_default() {
                 let mt = h.match_type.as_deref().unwrap_or("Exact");
                 if mt != "Exact" && mt != "RegularExpression" {
                     tracing::warn!(
-                        ns = route.metadata.namespace.as_deref().unwrap_or(""),
-                        name = route.metadata.name.as_deref().unwrap_or(""),
+                        ns = ns,
+                        name = name,
                         kind = "GRPCRoute",
                         field = "match_type",
                         value = %mt,
@@ -233,6 +275,8 @@ pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute
                         "Unsupported GRPCRoute header match type '{}' (allowed: Exact, RegularExpression)",
                         mt
                     ));
+                } else if mt == "RegularExpression" {
+                    check_regex_pattern(&h.value, "GRPCRoute", "header", ns, name, &mut errors);
                 }
             }
         }

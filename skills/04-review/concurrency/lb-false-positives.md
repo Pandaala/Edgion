@@ -111,6 +111,35 @@
 
 ---
 
+## ServiceLbPolicy::add_route_ref 「去重 push」是有意设计
+
+**误判场景**：`policy_store.rs` 的 `add_route_ref`（旧称 `merge`）对新 policies 做"已有则跳过、否则 push"，与"最后一写获胜"不一致；多 route 引用同 service 时旧 policy 不会被覆盖。
+
+**实际情况**：
+
+1. **联合语义是产品定义**：一个 Service 可被多 HTTPRoute 引用，每条 route 声明的 LB 策略都应被该 Service 尊重；策略列表是所有引用 route 的并集，由 LB 层按请求选取，而非 store 层仲裁。
+2. **生命周期由 route_refs 管理**：策略只在最后一个引用 route 被 `remove_by_route` 移除时才会被清理，不存在"route 单独把自己之前注册的策略清掉"的场景，也不需要这种语义。
+3. **已在 2026-04 P2-03 中加注释说明**：`policies/lb_policy/policy_store.rs` 注释明确写出 union semantics 与 LWW 的差别。
+
+**判定**：联合 + 引用计数清理是有意设计，下次 review 不应再以「不是 last-write-wins」为由提报。
+
+---
+
+## ConfigClient 多 ClientCache 无跨缓存事务不是问题
+
+**误判场景**：`conf_sync/conf_client/config_client.rs` 同时持有十几个 `ClientCache<T>`，更新各 cache 之间没有跨 cache 的事务/一致性 barrier；某些资源依赖关系（如 EndpointSlice 依赖 Service、HTTPRoute 依赖 Listener resolved）未在代码中显式排序或文档化。
+
+**实际情况**：
+
+1. **配置同步本就是最终一致**：Controller→Gateway 走 gRPC list/watch，server 侧已按版本号驱动事件；client 侧的 cache 在任意时刻可能领先/落后于其他 cache 一小段，所有 reader 路径都做了"找不到就降级"或"等下次重建"。
+2. **Readiness 已有 barrier**：`required_cache_names` + `is_ready()` 在启动期阻塞业务流量，直到关键 cache 全部就位（见 `config_client.rs:40-42`）；运行期增量更新时短暂不一致由 reader 侧容忍。
+3. **顺序约束在子模块内被强制**：单个 ConfHandler（如 HTTPRoute）内部已显式按"sync LB → mutate cache → rebuild"顺序更新（见 `gateway/routes/http/conf_handler_impl.rs` 顶部注释及对应测试）；跨 cache 的顺序不需要在 ConfigClient 层文档化。
+4. **强事务代价过高**：要在数据面引入跨 cache 的写锁/版本 barrier，会把每次配置同步串行化，得不偿失。
+
+**判定**：跨 cache 最终一致 + 子模块内强顺序 + readiness barrier，是经过权衡的设计，不需要在 ConfigClient 层加事务或全局顺序文档。
+
+---
+
 ## select_from_backends 9 个参数不需要重构
 
 **误判场景**：`select_from_backends` 有 9 个参数，其中 5 个是 EdgionStatus 错误码（source×algorithm 组合），建议传入 source 枚举并内部映射。

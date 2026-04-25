@@ -246,8 +246,11 @@ impl GrpcRouteRuleUnit {
         Ok(Some(matched_gi))
     }
 
-    /// Match gRPC header
-    /// Uses pre-compiled regex if provided, otherwise falls back to runtime compilation
+    /// Match gRPC header.
+    ///
+    /// Controller validates regex patterns at preparse (see ref_grant/validator.rs::check_regex_pattern),
+    /// so a missing `compiled_regex` here means controller validation gap or compile-time
+    /// invariant violation — fail-closed instead of recompiling on every request.
     fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &crate::types::GRPCHeaderMatch,
@@ -262,16 +265,10 @@ impl GrpcRouteRuleUnit {
 
         match match_type {
             "Exact" => Ok(header_value == header_match.value),
-            "RegularExpression" => {
-                // Use pre-compiled regex if available
-                if let Some(regex) = compiled_regex {
-                    Ok(regex.is_match(header_value))
-                } else {
-                    let re = Regex::new(&header_match.value)
-                        .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
-                    Ok(re.is_match(header_value))
-                }
-            }
+            "RegularExpression" => match compiled_regex {
+                Some(regex) => Ok(regex.is_match(header_value)),
+                None => Ok(false),
+            },
             _ => Ok(header_value == header_match.value),
         }
     }
