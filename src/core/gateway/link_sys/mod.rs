@@ -12,6 +12,7 @@
 //! Runtime clients are stored in separate ArcSwap stores for typed access.
 
 pub mod credential;
+pub mod lifecycle;
 pub mod providers;
 pub mod runtime;
 pub mod tls;

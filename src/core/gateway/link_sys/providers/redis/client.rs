@@ -14,7 +14,10 @@ use anyhow::Result;
 use fred::clients::Pool;
 use fred::interfaces::{ClientLike, EventInterface};
 
+use async_trait::async_trait;
+
 use crate::core::gateway::link_sys::credential::CredentialState;
+use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
 use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::resources::link_sys::redis::RedisClientConfig;
 
@@ -146,4 +149,21 @@ impl RedisLinkClient {
     pub fn pool(&self) -> &Pool {
         &self.pool
     }
+}
+
+#[async_trait]
+impl LinkSysLifecycle for RedisLinkClient {
+    async fn init(&self) -> anyhow::Result<()> {
+        RedisLinkClient::init(self).await
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        RedisLinkClient::shutdown(self).await
+    }
+
+    fn healthy(&self) -> bool {
+        RedisLinkClient::healthy(self)
+    }
+
+    // SHUTDOWN_ON_REPLACE 用 trait 默认值 true
 }

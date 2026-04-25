@@ -18,7 +18,10 @@ use anyhow::Result;
 use reqwest::Client;
 use tokio::sync::{mpsc, watch};
 
+use async_trait::async_trait;
+
 use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
+use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
 use crate::types::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
 
 use super::bulk::bulk_ingest_loop;
@@ -194,5 +197,20 @@ impl std::fmt::Debug for EsLinkClient {
             .field("endpoints", &self.endpoints)
             .field("healthy", &self.healthy.load(Ordering::Relaxed))
             .finish()
+    }
+}
+
+#[async_trait]
+impl LinkSysLifecycle for EsLinkClient {
+    async fn init(&self) -> anyhow::Result<()> {
+        EsLinkClient::init(self).await
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        EsLinkClient::shutdown(self).await
+    }
+
+    fn healthy(&self) -> bool {
+        EsLinkClient::healthy(self)
     }
 }

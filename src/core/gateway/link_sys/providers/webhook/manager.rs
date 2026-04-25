@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use crate::core::gateway::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
@@ -114,6 +115,37 @@ impl WebhookManager {
             }
         }
         tracing::info!(webhook = %webhook_ref, "Webhook removed from manager");
+    }
+}
+
+// ============================================================
+// WebhookManagerOps — abstraction for testability
+// ============================================================
+
+/// Abstraction over the webhook manager's mutating operations, so that
+/// `WebhookLinkClient` can be unit-tested with a fake implementation.
+///
+/// Production wiring uses `StaticWebhookManagerAdapter` to delegate to the
+/// global `get_webhook_manager()`. Tests provide their own implementor.
+#[async_trait]
+pub trait WebhookManagerOps: Send + Sync + 'static {
+    async fn upsert(&self, key: &str, config: WebhookServiceConfig);
+    async fn remove(&self, key: &str);
+}
+
+/// Zero-sized adapter that bridges the `&'static WebhookManager` returned by
+/// `get_webhook_manager()` into the `Arc<dyn WebhookManagerOps>` shape that
+/// `WebhookLinkClient` holds.
+pub struct StaticWebhookManagerAdapter;
+
+#[async_trait]
+impl WebhookManagerOps for StaticWebhookManagerAdapter {
+    async fn upsert(&self, key: &str, config: WebhookServiceConfig) {
+        get_webhook_manager().upsert(key, config).await
+    }
+
+    async fn remove(&self, key: &str) {
+        get_webhook_manager().remove(key).await
     }
 }
 

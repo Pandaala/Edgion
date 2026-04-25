@@ -15,10 +15,11 @@ use std::sync::LazyLock;
 use crate::types::resources::link_sys::LinkSys;
 
 use crate::core::gateway::link_sys::credential;
+use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
 use crate::core::gateway::link_sys::providers::elasticsearch::{EsLinkClient, LinkSysHealth as EsLinkHealth};
 use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
 use crate::core::gateway::link_sys::providers::redis::{LinkSysHealth as RedisLinkHealth, RedisLinkClient};
-use crate::core::gateway::link_sys::providers::webhook::get_webhook_manager;
+use crate::core::gateway::link_sys::providers::webhook::WebhookLinkClient;
 
 // ============================================================
 // Type aliases
@@ -289,29 +290,242 @@ fn es_runtime_replace_all(new_map: HashMap<String, Arc<EsLinkClient>>) -> HashMa
 }
 
 // ============================================================
+// Webhook runtime store (ArcSwap for lock-free reads)
+// ============================================================
+//
+// Webhook does NOT expose a typed `get_webhook_client` API — the runtime
+// store is internal-only, used by dispatch to track per-key Arc<WebhookLinkClient>
+// instances so they can be shut down on remove. Plugins / other consumers
+// continue to interact with WebhookManager via existing APIs.
+
+static WEBHOOK_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<WebhookLinkClient>>>> =
+    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+
+fn webhook_runtime_insert(key: String, client: Arc<WebhookLinkClient>) {
+    let current = WEBHOOK_RUNTIME.load();
+    let mut new_map = (**current).clone();
+    new_map.insert(key, client);
+    WEBHOOK_RUNTIME.store(Arc::new(new_map));
+}
+
+fn webhook_runtime_remove(key: &str) -> Option<Arc<WebhookLinkClient>> {
+    let current = WEBHOOK_RUNTIME.load();
+    if !current.contains_key(key) {
+        return None;
+    }
+    let mut new_map = (**current).clone();
+    let old = new_map.remove(key);
+    WEBHOOK_RUNTIME.store(Arc::new(new_map));
+    old
+}
+
+fn webhook_runtime_replace_all(
+    new_map: HashMap<String, Arc<WebhookLinkClient>>,
+) -> HashMap<String, Arc<WebhookLinkClient>> {
+    let old = WEBHOOK_RUNTIME.swap(Arc::new(new_map));
+    (*old).clone()
+}
+
+// ============================================================
+// Generic dispatch helpers
+// ============================================================
+
+/// remove / disable 路径共用的 helper：如果有旧 client，spawn shutdown。
+///
+/// 注意：本 helper 永远调 `shutdown`，不看 `SHUTDOWN_ON_REPLACE`。该 const 只控制
+/// *replace* 场景（update 时的旧 Arc），不影响 *remove*——真正删除时所有 provider
+/// 都需要清理（包括 Webhook 的 `manager.remove`）。
+fn spawn_shutdown_if_present<C: LinkSysLifecycle>(client: Option<Arc<C>>, label: &'static str) {
+    if let Some(c) = client {
+        tokio::spawn(async move {
+            if let Err(e) = c.shutdown().await {
+                tracing::warn!(label, error = %e, "shutdown failed");
+            }
+        });
+    }
+}
+
+/// `dispatch_partial_update` 场景：未就绪时保持现状（live store 中的旧 Arc 仍在服务）。
+/// 返回 `true` 表示已处理，调用方应 `continue`。
+fn preserve_if_not_ready<C>(
+    key: &str,
+    label: &'static str,
+    auth_kind: &str,
+    tls_ok: bool,
+    ready: bool,
+    runtime: &ArcSwap<HashMap<String, Arc<C>>>,
+) -> bool {
+    if ready {
+        return false;
+    }
+    let existing = runtime.load().contains_key(key);
+    tracing::info!(
+        key,
+        label,
+        auth_kind,
+        tls_ready = tls_ok,
+        existing,
+        "LinkSys not ready; {} client",
+        if existing { "keeping existing" } else { "skipping" }
+    );
+    true
+}
+
+/// 构建新 client，swap 进 store；后台 init 新 client，并（如适用）后台 shutdown 旧 client。
+/// 用于 `dispatch_partial_update`。
+///
+/// 内部全部走 `tokio::spawn`，本身不 await，因此为同步 `fn`。
+/// 调用方必须在 tokio 运行时上下文中调用。
+///
+/// **关键不变量**：old 的读取（`runtime.load().get(key).cloned()`）是只读的；之后
+/// `insert_fn` 一次原子 `ArcSwap.store()` 把 new map 放进去（new map 里的该 key
+/// 已经是 new client）。这样 `get_*_client(key)` 从始至终看到的要么是 old 要么是 new，
+/// **不会出现 None 的窗口**。如果换成先 `remove` 再 `insert`，中间就会有一次
+/// store 操作让 key 暂时消失——这正是重构前原代码显式避免的 invariant。
+fn spawn_and_swap_partial<C, F>(
+    key: &str,
+    label: &'static str,
+    build: F,
+    insert_fn: fn(String, Arc<C>),
+    runtime: &ArcSwap<HashMap<String, Arc<C>>>,
+) where
+    C: LinkSysLifecycle,
+    F: FnOnce() -> anyhow::Result<C>,
+{
+    match build() {
+        Err(e) => tracing::error!(key, label, error = %e, "from_config failed"),
+        Ok(client) => {
+            let client = Arc::new(client);
+            let old = runtime.load().get(key).cloned();
+            insert_fn(key.to_string(), client.clone());
+
+            // 新 client：永远后台 init
+            let c = client.clone();
+            let k = key.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = c.init().await {
+                    tracing::error!(label, key = %k, error = %e, "init failed");
+                }
+            });
+
+            // 旧 client：仅当 provider 声明 SHUTDOWN_ON_REPLACE 时才关
+            if let Some(old_client) = old {
+                if C::SHUTDOWN_ON_REPLACE {
+                    tokio::spawn(async move {
+                        if let Err(e) = old_client.shutdown().await {
+                            tracing::warn!(label, error = %e, "shutdown old client failed");
+                        }
+                    });
+                }
+                // 否则 Arc drop，引用计数自然回收，manager 状态由新 init 的 upsert 维护
+            }
+        }
+    }
+}
+
+/// `dispatch_full_set` 场景：未就绪时把旧 Arc carry-over 到 new_map。
+/// 返回 `true` 表示已处理，调用方应 `continue`。
+fn carry_over_if_not_ready<C>(
+    key: &str,
+    label: &'static str,
+    auth_kind: &str,
+    tls_ok: bool,
+    ready: bool,
+    old_snapshot: &HashMap<String, Arc<C>>,
+    new_map: &mut HashMap<String, Arc<C>>,
+    preserved: &mut HashSet<String>,
+) -> bool {
+    if ready {
+        return false;
+    }
+    if let Some(existing) = old_snapshot.get(key) {
+        tracing::info!(
+            key,
+            label,
+            auth_kind,
+            tls_ready = tls_ok,
+            "LinkSys not ready; keeping existing client"
+        );
+        new_map.insert(key.to_string(), existing.clone());
+        preserved.insert(key.to_string());
+    } else {
+        tracing::info!(
+            key,
+            label,
+            auth_kind,
+            tls_ready = tls_ok,
+            "LinkSys not ready; skipping client build"
+        );
+    }
+    true
+}
+
+/// `dispatch_full_set` 场景：把新 client 加入 new_map，后台 init。
+/// 若构建失败则什么都不加（对应从 map 移除的语义）。
+fn register_for_full_set<C: LinkSysLifecycle>(
+    key: &str,
+    label: &'static str,
+    build: impl FnOnce() -> anyhow::Result<C>,
+    new_map: &mut HashMap<String, Arc<C>>,
+) {
+    match build() {
+        Err(e) => tracing::error!(key, label, error = %e, "from_config failed"),
+        Ok(client) => {
+            let client = Arc::new(client);
+            new_map.insert(key.to_string(), client.clone());
+            let k = key.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = client.init().await {
+                    tracing::error!(label, key = %k, error = %e, "init failed");
+                }
+            });
+        }
+    }
+}
+
+/// `dispatch_full_set` 结束后，原子交换各 provider 的 store；对被淘汰的旧 Arc
+/// （若 provider 声明 SHUTDOWN_ON_REPLACE）在后台并发 shutdown。
+fn swap_and_shutdown_olds<C: LinkSysLifecycle>(
+    label: &'static str,
+    new_map: HashMap<String, Arc<C>>,
+    preserved: HashSet<String>,
+    replace_fn: fn(HashMap<String, Arc<C>>) -> HashMap<String, Arc<C>>,
+) {
+    let old = replace_fn(new_map);
+    if !C::SHUTDOWN_ON_REPLACE || old.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        for (k, client) in old {
+            if preserved.contains(&k) {
+                continue; // carry-over Arc 在 new_map 中是同一份，不能关
+            }
+            if let Err(e) = client.shutdown().await {
+                tracing::warn!(label, key = %k, error = %e, "shutdown old client failed");
+            }
+        }
+    });
+}
+
+// ============================================================
 // Dispatch to sub-module managers
 // ============================================================
 
 /// Dispatch a full set of LinkSys resources to sub-module managers.
 async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
-    let webhook_manager = get_webhook_manager();
-
     // Snapshot current runtime maps so that we can carry over clients for
-    // resources whose credentials are not yet resolved (I5). Without this,
-    // `replace_all` would drop a working-but-pending-credential-update client.
+    // resources whose credentials are not yet resolved (I5).
+    let old_webhook_snapshot = WEBHOOK_RUNTIME.load_full();
     let old_redis_snapshot = REDIS_RUNTIME.load_full();
     let old_etcd_snapshot = ETCD_RUNTIME.load_full();
     let old_es_snapshot = ES_RUNTIME.load_full();
 
-    // Build new clients maps
+    let mut new_webhook_map: HashMap<String, Arc<WebhookLinkClient>> = HashMap::new();
     let mut new_redis_map: HashMap<String, Arc<RedisLinkClient>> = HashMap::new();
     let mut new_etcd_map: HashMap<String, Arc<EtcdLinkClient>> = HashMap::new();
     let mut new_es_map: HashMap<String, Arc<EsLinkClient>> = HashMap::new();
 
-    // Keys whose client was carried over unchanged from the old snapshot.
-    // These must be excluded from the post-swap shutdown loop — the Arc is
-    // alive in both old and new maps, so `replace_all` returns it as "old"
-    // even though it is still in service.
+    let mut preserved_webhook_keys: HashSet<String> = HashSet::new();
     let mut preserved_redis_keys: HashSet<String> = HashSet::new();
     let mut preserved_etcd_keys: HashSet<String> = HashSet::new();
     let mut preserved_es_keys: HashSet<String> = HashSet::new();
@@ -319,151 +533,93 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     for (key, ls) in data {
         match &ls.spec.config {
             crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
-                webhook_manager.upsert(key, config.clone()).await;
+                if carry_over_if_not_ready(
+                    key,
+                    "Webhook",
+                    "NotRequired",
+                    true,
+                    true,
+                    &*old_webhook_snapshot,
+                    &mut new_webhook_map,
+                    &mut preserved_webhook_keys,
+                ) {
+                    continue;
+                }
+                register_for_full_set(
+                    key,
+                    "Webhook",
+                    || Ok(WebhookLinkClient::new(key.clone(), config.clone())),
+                    &mut new_webhook_map,
+                );
             }
             crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                let auth_state = credential::basic_state(ls);
-                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
-                    if let Some(existing) = old_redis_snapshot.get(key) {
-                        tracing::info!(
-                            key,
-                            auth_state = auth_state.kind(),
-                            tls_ready = credential::tls_ready(ls),
-                            "LinkSys not ready; keeping existing Redis client"
-                        );
-                        new_redis_map.insert(key.clone(), existing.clone());
-                        preserved_redis_keys.insert(key.clone());
-                    } else {
-                        tracing::info!(
-                            key,
-                            auth_state = auth_state.kind(),
-                            tls_ready = credential::tls_ready(ls),
-                            "LinkSys not ready; skipping Redis client build"
-                        );
-                    }
+                let tls_ok = credential::tls_ready(ls);
+                let auth = credential::basic_state(ls);
+                let ready = auth.is_buildable() && tls_ok;
+                if carry_over_if_not_ready(
+                    key,
+                    "Redis",
+                    auth.kind(),
+                    tls_ok,
+                    ready,
+                    &*old_redis_snapshot,
+                    &mut new_redis_map,
+                    &mut preserved_redis_keys,
+                ) {
                     continue;
                 }
-                match RedisLinkClient::from_config(key, redis_config, &auth_state) {
-                    Ok(client) => {
-                        let client = Arc::new(client);
-                        let client_ref = client.clone();
-                        let key_owned = key.clone();
-                        // Init in background — don't block full_set for slow connections
-                        tokio::spawn(async move {
-                            if let Err(e) = client_ref.init().await {
-                                tracing::error!(
-                                    redis = %key_owned,
-                                    error = %e,
-                                    "Failed to initialize Redis client"
-                                );
-                            }
-                        });
-                        new_redis_map.insert(key.clone(), client);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            key,
-                            error = %e,
-                            "Failed to build Redis client from config"
-                        );
-                    }
-                }
+                register_for_full_set(
+                    key,
+                    "Redis",
+                    || RedisLinkClient::from_config(key, redis_config, &auth),
+                    &mut new_redis_map,
+                );
             }
             crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                let auth_state = credential::basic_state(ls);
-                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
-                    if let Some(existing) = old_etcd_snapshot.get(key) {
-                        tracing::info!(
-                            key,
-                            auth_state = auth_state.kind(),
-                            tls_ready = credential::tls_ready(ls),
-                            "LinkSys not ready; keeping existing Etcd client"
-                        );
-                        new_etcd_map.insert(key.clone(), existing.clone());
-                        preserved_etcd_keys.insert(key.clone());
-                    } else {
-                        tracing::info!(
-                            key,
-                            auth_state = auth_state.kind(),
-                            tls_ready = credential::tls_ready(ls),
-                            "LinkSys not ready; skipping Etcd client build"
-                        );
-                    }
+                let tls_ok = credential::tls_ready(ls);
+                let auth = credential::basic_state(ls);
+                let ready = auth.is_buildable() && tls_ok;
+                if carry_over_if_not_ready(
+                    key,
+                    "Etcd",
+                    auth.kind(),
+                    tls_ok,
+                    ready,
+                    &*old_etcd_snapshot,
+                    &mut new_etcd_map,
+                    &mut preserved_etcd_keys,
+                ) {
                     continue;
                 }
-                match EtcdLinkClient::from_config(key, etcd_config, &auth_state) {
-                    Ok(client) => {
-                        let client = Arc::new(client);
-                        let client_ref = client.clone();
-                        let key_owned = key.clone();
-                        // Init in background — don't block full_set for slow connections
-                        tokio::spawn(async move {
-                            if let Err(e) = client_ref.init().await {
-                                tracing::error!(
-                                    etcd = %key_owned,
-                                    error = %e,
-                                    "Failed to initialize Etcd client"
-                                );
-                            }
-                        });
-                        new_etcd_map.insert(key.clone(), client);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            key,
-                            error = %e,
-                            "Failed to build Etcd client from config"
-                        );
-                    }
-                }
+                register_for_full_set(
+                    key,
+                    "Etcd",
+                    || EtcdLinkClient::from_config(key, etcd_config, &auth),
+                    &mut new_etcd_map,
+                );
             }
             crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                let auth_state = credential::resolved_state(ls);
-                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
-                    if let Some(existing) = old_es_snapshot.get(key) {
-                        tracing::info!(
-                            key,
-                            auth_state = auth_state.kind(),
-                            tls_ready = credential::tls_ready(ls),
-                            "LinkSys not ready; keeping existing Elasticsearch client"
-                        );
-                        new_es_map.insert(key.clone(), existing.clone());
-                        preserved_es_keys.insert(key.clone());
-                    } else {
-                        tracing::info!(
-                            key,
-                            auth_state = auth_state.kind(),
-                            tls_ready = credential::tls_ready(ls),
-                            "LinkSys not ready; skipping Elasticsearch client build"
-                        );
-                    }
+                let tls_ok = credential::tls_ready(ls);
+                let auth = credential::resolved_state(ls);
+                let ready = auth.is_buildable() && tls_ok;
+                if carry_over_if_not_ready(
+                    key,
+                    "Elasticsearch",
+                    auth.kind(),
+                    tls_ok,
+                    ready,
+                    &*old_es_snapshot,
+                    &mut new_es_map,
+                    &mut preserved_es_keys,
+                ) {
                     continue;
                 }
-                match EsLinkClient::from_config(key, es_config, &auth_state) {
-                    Ok(client) => {
-                        let client = Arc::new(client);
-                        let client_ref = client.clone();
-                        let key_owned = key.clone();
-                        // Init in background — don't block full_set for slow connections
-                        tokio::spawn(async move {
-                            if let Err(e) = client_ref.init().await {
-                                tracing::error!(
-                                    es = %key_owned,
-                                    error = %e,
-                                    "Failed to initialize Elasticsearch client"
-                                );
-                            }
-                        });
-                        new_es_map.insert(key.clone(), client);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            key,
-                            error = %e,
-                            "Failed to build Elasticsearch client from config"
-                        );
-                    }
-                }
+                register_for_full_set(
+                    key,
+                    "Elasticsearch",
+                    || EsLinkClient::from_config(key, es_config, &auth),
+                    &mut new_es_map,
+                );
             }
             _ => {
                 tracing::debug!(
@@ -475,237 +631,82 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
         }
     }
 
-    // Atomically swap Redis runtime store; shutdown old clients in background.
-    // Preserved keys have the same Arc in old & new maps — do not shut them
-    // down, they are still in service.
-    let old_redis = redis_runtime_replace_all(new_redis_map);
-    if !old_redis.is_empty() {
-        tokio::spawn(async move {
-            for (key, client) in old_redis {
-                if preserved_redis_keys.contains(&key) {
-                    continue;
-                }
-                if let Err(e) = client.shutdown().await {
-                    tracing::warn!(redis = %key, error = %e, "Error shutting down old Redis client");
-                }
-            }
-        });
-    }
-
-    // Atomically swap Etcd runtime store; shutdown old clients in background
-    let old_etcd = etcd_runtime_replace_all(new_etcd_map);
-    if !old_etcd.is_empty() {
-        tokio::spawn(async move {
-            for (key, client) in old_etcd {
-                if preserved_etcd_keys.contains(&key) {
-                    continue;
-                }
-                if let Err(e) = client.shutdown().await {
-                    tracing::warn!(etcd = %key, error = %e, "Error shutting down old Etcd client");
-                }
-            }
-        });
-    }
-
-    // Atomically swap ES runtime store; shutdown old clients in background
-    let old_es = es_runtime_replace_all(new_es_map);
-    if !old_es.is_empty() {
-        tokio::spawn(async move {
-            for (key, client) in old_es {
-                if preserved_es_keys.contains(&key) {
-                    continue;
-                }
-                if let Err(e) = client.shutdown().await {
-                    tracing::warn!(es = %key, error = %e, "Error shutting down old ES client");
-                }
-            }
-        });
-    }
+    // Atomic swap + background shutdown of淘汰旧 Arc，按 SHUTDOWN_ON_REPLACE 控制
+    swap_and_shutdown_olds(
+        "Webhook",
+        new_webhook_map,
+        preserved_webhook_keys,
+        webhook_runtime_replace_all,
+    );
+    swap_and_shutdown_olds("Redis", new_redis_map, preserved_redis_keys, redis_runtime_replace_all);
+    swap_and_shutdown_olds("Etcd", new_etcd_map, preserved_etcd_keys, etcd_runtime_replace_all);
+    swap_and_shutdown_olds("Elasticsearch", new_es_map, preserved_es_keys, es_runtime_replace_all);
 }
 
 /// Dispatch incremental changes to sub-module managers.
 async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remove: &HashSet<String>) {
-    let webhook_manager = get_webhook_manager();
-
     // Handle add/update
     for (key, ls) in add_or_update {
         match &ls.spec.config {
             crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
-                webhook_manager.upsert(key, config.clone()).await;
+                let auth_kind = "NotRequired"; // Webhook 走 manager 内部 auth，dispatch 不解析
+                let tls_ok = true;
+                let ready = true; // Webhook 没有 credential gating，永远就绪
+                if preserve_if_not_ready(key, "Webhook", auth_kind, tls_ok, ready, &WEBHOOK_RUNTIME) {
+                    continue;
+                }
+                spawn_and_swap_partial(
+                    key,
+                    "Webhook",
+                    || Ok(WebhookLinkClient::new(key.clone(), config.clone())),
+                    webhook_runtime_insert,
+                    &WEBHOOK_RUNTIME,
+                );
             }
             crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                let auth_state = credential::basic_state(ls);
-                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
-                    // Option A (per I5): preserve the previous client if any
-                    // so in-flight work keeps running while the Controller
-                    // resolves the Secret; no rebuild.
-                    let existing = REDIS_RUNTIME.load().contains_key(key);
-                    tracing::info!(
-                        key,
-                        auth_state = auth_state.kind(),
-                        tls_ready = credential::tls_ready(ls),
-                        existing,
-                        "LinkSys not ready; {} Redis client",
-                        if existing { "keeping existing" } else { "skipping" }
-                    );
+                let tls_ok = credential::tls_ready(ls);
+                let auth = credential::basic_state(ls);
+                let ready = auth.is_buildable() && tls_ok;
+                if preserve_if_not_ready(key, "Redis", auth.kind(), tls_ok, ready, &REDIS_RUNTIME) {
                     continue;
                 }
-                match RedisLinkClient::from_config(key, redis_config, &auth_state) {
-                    Ok(client) => {
-                        let client = Arc::new(client);
-                        let client_ref = client.clone();
-                        let key_owned = key.clone();
-
-                        // Swap into store first (so get_redis_client returns new client immediately)
-                        let old = {
-                            let current = REDIS_RUNTIME.load();
-                            let old = current.get(key).cloned();
-                            redis_runtime_insert(key.clone(), client);
-                            old
-                        };
-
-                        // Init new client in background
-                        tokio::spawn(async move {
-                            if let Err(e) = client_ref.init().await {
-                                tracing::error!(
-                                    redis = %key_owned,
-                                    error = %e,
-                                    "Failed to initialize Redis client"
-                                );
-                            }
-                        });
-
-                        // Shutdown old client in background
-                        if let Some(old_client) = old {
-                            tokio::spawn(async move {
-                                if let Err(e) = old_client.shutdown().await {
-                                    tracing::warn!(error = %e, "Error shutting down old Redis client");
-                                }
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            key,
-                            error = %e,
-                            "Failed to build Redis client from config"
-                        );
-                    }
-                }
+                spawn_and_swap_partial(
+                    key,
+                    "Redis",
+                    || RedisLinkClient::from_config(key, redis_config, &auth),
+                    redis_runtime_insert,
+                    &REDIS_RUNTIME,
+                );
             }
             crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                let auth_state = credential::basic_state(ls);
-                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
-                    let existing = ETCD_RUNTIME.load().contains_key(key);
-                    tracing::info!(
-                        key,
-                        auth_state = auth_state.kind(),
-                        tls_ready = credential::tls_ready(ls),
-                        existing,
-                        "LinkSys not ready; {} Etcd client",
-                        if existing { "keeping existing" } else { "skipping" }
-                    );
+                let tls_ok = credential::tls_ready(ls);
+                let auth = credential::basic_state(ls);
+                let ready = auth.is_buildable() && tls_ok;
+                if preserve_if_not_ready(key, "Etcd", auth.kind(), tls_ok, ready, &ETCD_RUNTIME) {
                     continue;
                 }
-                match EtcdLinkClient::from_config(key, etcd_config, &auth_state) {
-                    Ok(client) => {
-                        let client = Arc::new(client);
-                        let client_ref = client.clone();
-                        let key_owned = key.clone();
-
-                        // Swap into store first (so get_etcd_client returns new client immediately)
-                        let old = {
-                            let current = ETCD_RUNTIME.load();
-                            let old = current.get(key).cloned();
-                            etcd_runtime_insert(key.clone(), client);
-                            old
-                        };
-
-                        // Init new client in background
-                        tokio::spawn(async move {
-                            if let Err(e) = client_ref.init().await {
-                                tracing::error!(
-                                    etcd = %key_owned,
-                                    error = %e,
-                                    "Failed to initialize Etcd client"
-                                );
-                            }
-                        });
-
-                        // Shutdown old client in background
-                        if let Some(old_client) = old {
-                            tokio::spawn(async move {
-                                if let Err(e) = old_client.shutdown().await {
-                                    tracing::warn!(error = %e, "Error shutting down old Etcd client");
-                                }
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            key,
-                            error = %e,
-                            "Failed to build Etcd client from config"
-                        );
-                    }
-                }
+                spawn_and_swap_partial(
+                    key,
+                    "Etcd",
+                    || EtcdLinkClient::from_config(key, etcd_config, &auth),
+                    etcd_runtime_insert,
+                    &ETCD_RUNTIME,
+                );
             }
             crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                let auth_state = credential::resolved_state(ls);
-                if !auth_state.is_buildable() || !credential::tls_ready(ls) {
-                    let existing = ES_RUNTIME.load().contains_key(key);
-                    tracing::info!(
-                        key,
-                        auth_state = auth_state.kind(),
-                        tls_ready = credential::tls_ready(ls),
-                        existing,
-                        "LinkSys not ready; {} Elasticsearch client",
-                        if existing { "keeping existing" } else { "skipping" }
-                    );
+                let tls_ok = credential::tls_ready(ls);
+                let auth = credential::resolved_state(ls);
+                let ready = auth.is_buildable() && tls_ok;
+                if preserve_if_not_ready(key, "Elasticsearch", auth.kind(), tls_ok, ready, &ES_RUNTIME) {
                     continue;
                 }
-                match EsLinkClient::from_config(key, es_config, &auth_state) {
-                    Ok(client) => {
-                        let client = Arc::new(client);
-                        let client_ref = client.clone();
-                        let key_owned = key.clone();
-
-                        // Swap into store first (so get_es_client returns new client immediately)
-                        let old = {
-                            let current = ES_RUNTIME.load();
-                            let old = current.get(key).cloned();
-                            es_runtime_insert(key.clone(), client);
-                            old
-                        };
-
-                        // Init new client in background
-                        tokio::spawn(async move {
-                            if let Err(e) = client_ref.init().await {
-                                tracing::error!(
-                                    es = %key_owned,
-                                    error = %e,
-                                    "Failed to initialize Elasticsearch client"
-                                );
-                            }
-                        });
-
-                        // Shutdown old client in background
-                        if let Some(old_client) = old {
-                            tokio::spawn(async move {
-                                if let Err(e) = old_client.shutdown().await {
-                                    tracing::warn!(error = %e, "Error shutting down old ES client");
-                                }
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            key,
-                            error = %e,
-                            "Failed to build Elasticsearch client from config"
-                        );
-                    }
-                }
+                spawn_and_swap_partial(
+                    key,
+                    "Elasticsearch",
+                    || EsLinkClient::from_config(key, es_config, &auth),
+                    es_runtime_insert,
+                    &ES_RUNTIME,
+                );
             }
             _ => {
                 tracing::debug!(
@@ -717,40 +718,12 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
         }
     }
 
-    // Handle remove — we don't know the type of removed resources,
-    // so we try to remove from all managers (no-op if not found).
+    // Handle remove — uniform across all 4 providers
     for key in remove {
-        webhook_manager.remove(key).await;
-
-        // Remove Redis client and shutdown in background
-        if let Some(old_client) = redis_runtime_remove(key) {
-            let key_owned = key.clone();
-            tokio::spawn(async move {
-                if let Err(e) = old_client.shutdown().await {
-                    tracing::warn!(redis = %key_owned, error = %e, "Error shutting down removed Redis client");
-                }
-            });
-        }
-
-        // Remove Etcd client and shutdown in background
-        if let Some(old_client) = etcd_runtime_remove(key) {
-            let key_owned = key.clone();
-            tokio::spawn(async move {
-                if let Err(e) = old_client.shutdown().await {
-                    tracing::warn!(etcd = %key_owned, error = %e, "Error shutting down removed Etcd client");
-                }
-            });
-        }
-
-        // Remove ES client and shutdown in background
-        if let Some(old_client) = es_runtime_remove(key) {
-            let key_owned = key.clone();
-            tokio::spawn(async move {
-                if let Err(e) = old_client.shutdown().await {
-                    tracing::warn!(es = %key_owned, error = %e, "Error shutting down removed ES client");
-                }
-            });
-        }
+        spawn_shutdown_if_present(webhook_runtime_remove(key), "Webhook");
+        spawn_shutdown_if_present(redis_runtime_remove(key), "Redis");
+        spawn_shutdown_if_present(etcd_runtime_remove(key), "Etcd");
+        spawn_shutdown_if_present(es_runtime_remove(key), "Elasticsearch");
     }
 }
 
@@ -1083,6 +1056,65 @@ mod tests {
         assert!(
             get_redis_client(&key).is_none(),
             "no client should be built for an invalid-credential partial add"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_partial_update_replace_webhook_keeps_runtime_arc_swap() {
+        use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
+        use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
+
+        // 与其他直接调 dispatch_* 的测试（I5/M4 系列）共享一把全局锁串行化。
+        // 不持锁会被它们的 `dispatch_full_set` 调用通过空的 new_webhook_map
+        // 经 `webhook_runtime_replace_all` 抹掉本测试插入的 key。
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Use a unique key to also avoid interference with other tests' add/remove paths.
+        let key = "t13-ns/wh-arc-swap".to_string();
+
+        let make_ls = |uri: &str| LinkSys {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some("t13-ns".into()),
+                name: Some("wh-arc-swap".into()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Webhook(WebhookServiceConfig {
+                    uri: uri.into(),
+                    ..Default::default()
+                }),
+            },
+            status: None,
+        };
+
+        // Add
+        let mut add = HashMap::new();
+        add.insert(key.clone(), make_ls("http://a/x"));
+        dispatch_partial_update(&add, &HashSet::new()).await;
+        // spawn_and_swap_partial inserts into WEBHOOK_RUNTIME synchronously before
+        // spawning background init, so the Arc is visible immediately after await.
+        let arc1 = WEBHOOK_RUNTIME.load().get(&key).cloned();
+        assert!(arc1.is_some(), "first dispatch must populate WEBHOOK_RUNTIME");
+
+        // Update (different config) — a new Arc should replace the old one.
+        // SHUTDOWN_ON_REPLACE is false for Webhook, so the old Arc is simply dropped.
+        let mut update = HashMap::new();
+        update.insert(key.clone(), make_ls("http://b/y"));
+        dispatch_partial_update(&update, &HashSet::new()).await;
+        let arc2 = WEBHOOK_RUNTIME.load().get(&key).cloned();
+        assert!(arc2.is_some(), "after update, WEBHOOK_RUNTIME must still hold a client");
+        assert!(
+            !Arc::ptr_eq(arc1.as_ref().unwrap(), arc2.as_ref().unwrap()),
+            "update must produce a fresh Arc"
+        );
+
+        // Remove
+        let mut remove = HashSet::new();
+        remove.insert(key.clone());
+        dispatch_partial_update(&HashMap::new(), &remove).await;
+        assert!(
+            WEBHOOK_RUNTIME.load().get(&key).is_none(),
+            "remove must clear WEBHOOK_RUNTIME"
         );
     }
 }
