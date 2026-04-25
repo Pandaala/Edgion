@@ -101,7 +101,7 @@ impl HttpRouteRuleUnit {
     /// with the `headers` / `query_params` slices in `HTTPRouteMatch`.
     pub fn compile_match_regexes(
         match_item: &crate::types::HTTPRouteMatch,
-    ) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
+    ) -> (Vec<Option<Regex>>, Vec<Option<Regex>>) {
         // Controller validates regex patterns at preparse (see ref_grant/validator.rs::check_regex_pattern),
         // so compilation failures here indicate a controller/gateway sync invariant violation.
         let header_regexes = match_item.headers.as_ref().map_or_else(Vec::new, |headers| {
@@ -110,7 +110,7 @@ impl HttpRouteRuleUnit {
                 .map(|hm| {
                     if hm.match_type.as_deref() == Some("RegularExpression") {
                         match Regex::new(&hm.value) {
-                            Ok(r) => Some(Arc::new(r)),
+                            Ok(r) => Some(r),
                             Err(e) => {
                                 tracing::error!(header = %hm.name, pattern = %hm.value, error = %e,
                                     "Header regex failed to compile at gateway despite controller validation; matcher will fail-closed");
@@ -129,7 +129,7 @@ impl HttpRouteRuleUnit {
                 .map(|qm| {
                     if qm.match_type.as_deref() == Some("RegularExpression") {
                         match Regex::new(&qm.value) {
-                            Ok(r) => Some(Arc::new(r)),
+                            Ok(r) => Some(r),
                             Err(e) => {
                                 tracing::error!(query = %qm.name, pattern = %qm.value, error = %e,
                                     "Query regex failed to compile at gateway despite controller validation; matcher will fail-closed");
@@ -272,7 +272,7 @@ impl HttpRouteRuleUnit {
     pub(crate) fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &crate::types::HTTPHeaderMatch,
-        compiled_regex: Option<&Arc<Regex>>,
+        compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let header_value = match req_header.headers.get(&header_match.name) {
             Some(value) => value.to_str().unwrap_or(""),
@@ -296,7 +296,7 @@ impl HttpRouteRuleUnit {
     pub(crate) fn match_query_param(
         query_params: &HashMap<String, String>,
         query_param_match: &crate::types::HTTPQueryParamMatch,
-        compiled_regex: Option<&Arc<Regex>>,
+        compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let param_value = match query_params.get(&query_param_match.name) {
             Some(value) => value,
@@ -324,8 +324,8 @@ impl HttpRouteRuleUnit {
         parent_refs: &Option<Vec<ParentReference>>,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
-        compiled_header_regexes: &[Option<Arc<Regex>>],
-        compiled_query_regexes: &[Option<Arc<Regex>>],
+        compiled_header_regexes: &[Option<Regex>],
+        compiled_query_regexes: &[Option<Regex>],
         has_query_matchers: bool,
     ) -> Result<Option<GatewayInfo>, EdError> {
         let method = req_header.method.as_str();
