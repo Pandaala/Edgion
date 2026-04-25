@@ -100,16 +100,19 @@ impl UpdatePhaseTestSuite {
                     match post_resp {
                         Ok(resp) => {
                             let status = resp.status();
-                            //  200502  503 (backend )
-                            if status.is_success() || status == 502 || status == 503 {
+                            // 期望 POST 通过了 gateway 路由匹配（无论 backend 怎么回应）。
+                            // 200/502/503 是预期的 gateway-backend 链路结果；405 是 backend
+                            // (test_server `/{*path}` catch-all 只支持 GET) 拒绝 POST，但这
+                            // 仍证明 gateway 的 method=POST 路由匹配生效（已转发到 backend）。
+                            if status.is_success() || status == 405 || status == 502 || status == 503 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("✓ Method updated: GET→404, POST→{}", status),
+                                    format!("✓ Method updated: GET→404, POST→{} (passed through gateway)", status),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("POST should succeed or 502, got {}", status),
+                                    format!("POST should pass through gateway (200/405/502/503), got {}", status),
                                 )
                             }
                         }
