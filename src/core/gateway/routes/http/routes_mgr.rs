@@ -419,6 +419,28 @@ impl GlobalHttpRouteManagers {
             }
         }
 
+        // Sweep orphan entries: a partial update only touches affected listeners,
+        // but earlier rebuild_all calls may have pre-created by_listener entries
+        // for listeners that no longer appear in PGIS and are not referenced by
+        // any current route. Without this sweep, those entries (and their stale
+        // route tables) leak indefinitely — they are never the target of a
+        // subsequent partial update.
+        let route_referenced: HashSet<ListenerKey> = self
+            .route_cache
+            .iter()
+            .flat_map(|e| resolved_listeners_for_route(e.value()).to_vec())
+            .collect();
+        let orphans: Vec<ListenerKey> = self
+            .by_listener
+            .iter()
+            .filter(|e| !route_referenced.contains(e.key()) && !active_listeners.contains(e.key()))
+            .map(|e| e.key().clone())
+            .collect();
+        for key in &orphans {
+            self.by_listener.remove(key);
+        }
+        removed_stale += orphans.len();
+
         tracing::info!(
             component = "global_http_route_managers",
             affected = affected_listeners.len(),

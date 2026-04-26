@@ -4,9 +4,14 @@ use crate::core::gateway::plugins::StageLogs;
 use crate::core::gateway::routes::grpc::GrpcMatchInfo;
 use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
 use serde::Serialize;
+use std::collections::HashMap;
 
 fn is_empty<T>(slice: &&[T]) -> bool {
     slice.is_empty()
+}
+
+fn map_is_empty(m: &&HashMap<String, String>) -> bool {
+    m.is_empty()
 }
 
 /// Unified match info that covers both HTTP and gRPC routes in access logs.
@@ -35,6 +40,11 @@ pub struct AccessLogEntry<'a> {
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub stage_logs: &'a [StageLogs],
 
+    /// Plugin-set context variables (e.g. CtxSet writes here, request matchers read).
+    /// Flattened into the response so callers can grep "key":"value" directly.
+    #[serde(skip_serializing_if = "map_is_empty", flatten)]
+    pub ctx: &'a HashMap<String, String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conn_est: Option<bool>,
 }
@@ -57,6 +67,7 @@ impl<'a> AccessLogEntry<'a> {
             errors: &ctx.edgion_status,
             backend_context: ctx.backend_context.as_ref(),
             stage_logs: &ctx.stage_logs,
+            ctx: &ctx.ctx_map,
             conn_est: None,
         }
     }

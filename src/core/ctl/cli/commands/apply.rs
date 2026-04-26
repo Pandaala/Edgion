@@ -52,16 +52,62 @@ async fn apply_directory(client: &EdgionClient, dir: &Path, dry_run: bool) -> Re
     Ok(())
 }
 
-/// Apply a single YAML file
+/// Split a YAML stream on top-level `---` separators. Returns each non-empty document.
+fn split_yaml_docs(content: &str) -> Vec<String> {
+    let mut docs = Vec::new();
+    let mut current = String::new();
+    for line in content.lines() {
+        if line.trim_start().starts_with("---") && line.trim_start().trim_start_matches('-').trim().is_empty() {
+            if !current.trim().is_empty() {
+                docs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if !current.trim().is_empty() {
+        docs.push(current);
+    }
+    docs
+}
+
+/// Apply a YAML file (supports multi-document YAML separated by `---`).
 async fn apply_file(client: &EdgionClient, file: &Path, dry_run: bool) -> Result<()> {
-    // Read file content
     let content = fs::read_to_string(file)
         .await
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
+    let docs = split_yaml_docs(&content);
+    if docs.is_empty() {
+        anyhow::bail!("Empty YAML file: {}", file.display());
+    }
+    for (idx, doc) in docs.iter().enumerate() {
+        apply_doc(client, file, doc, idx + 1, docs.len(), dry_run).await?;
+    }
+    Ok(())
+}
+
+/// Apply a single document (parsed from one YAML stream entry).
+async fn apply_doc(
+    client: &EdgionClient,
+    file: &Path,
+    content: &str,
+    doc_idx: usize,
+    doc_total: usize,
+    dry_run: bool,
+) -> Result<()> {
+    let suffix = if doc_total > 1 {
+        format!(" (doc {}/{})", doc_idx, doc_total)
+    } else {
+        String::new()
+    };
+
     // Extract metadata
-    let metadata = extract_resource_metadata(&content)
-        .with_context(|| format!("Failed to parse metadata from {}", file.display()))?;
+    let metadata = extract_resource_metadata(content)
+        .with_context(|| format!("Failed to parse metadata from {}{}", file.display(), suffix))?;
+
+    let content = content.to_string();
 
     let kind = metadata.kind.as_ref().context("Missing 'kind' field in resource")?;
     // Convert kind to lowercase for API compatibility
