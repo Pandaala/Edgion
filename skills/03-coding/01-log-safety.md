@@ -17,12 +17,11 @@
 
 ### 需要审慎处理
 
-| 类别 | 风险 | 建议 |
-|------|------|------|
-| `ctx_map` (access log) | 插件可能存入 `jwt_claims`, `oidc_claims` 等 | 暂缓：access log 为管理员级别访问，脱敏必要性待评估 |
-| `client_cert_info` | subject / SAN 可能包含 PII | mTLS 场景下审查 access log 输出 |
-| `X-Forwarded-For` | 客户端真实 IP | 视合规要求决定是否保留 |
-| plugin `stage_logs` | 可能包含 username | 暂缓：同 ctx_map，管理员访问，脱敏必要性待评估 |
+| 类别 | 风险 | 处理方式 |
+|------|------|---------|
+| `client_cert_info` | subject / SAN 可能包含 PII | 已通过 `serialize_with = "masked::serialize"` 接入 `[access_log_sensitive]` 全局开关 |
+| `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` | 用户真实 IP / 请求路径 | 同上，启用 `mode=replace` 或 `mode=wrap` 时统一脱敏 |
+| plugin log 动态参数 | 可能含 username / IP / token | 通过 `push_fmt` + `sensitive(...)` 显式标注；DSL `log_warn` / `log_error` 自动走 `push_sensitive` |
 
 ### 代码示例
 
@@ -309,5 +308,5 @@ rg -n 'impl (ProxyHttp|ServerApp|TlsAccept|ConnectionFilter|StreamPlugin|TlsRout
 | ~~`connection_filter_bridge.rs`~~ | ~~连接过滤 debug/info~~ | ~~全部删除~~ | ✅ 已修复 |
 | ~~`grpc/match_unit.rs`~~ | ~~请求级 warn~~ | ~~删除~~ | ✅ 已修复 |
 | ~~`preflight_handler.rs`~~ | ~~preflight debug~~ | ~~删除~~ | ✅ 已修复 |
-| access log `ctx_map` | 完整 ctx_map 序列化，可能含 JWT/OIDC/JWE claims | 暂缓：管理员访问级别，脱敏必要性待评估 | ⏸ 搁置 |
-| LDAP/JWT auth plugin | username 进入 stage_logs | 暂缓：同上 | ⏸ 搁置 |
+| ~~access log `ctx_map`~~ | ~~完整 ctx_map 序列化~~ | 字段已从 access log entry 移除 | ✅ 已修复 |
+| ~~LDAP/JWT auth plugin username~~ | ~~username 进入 stage_logs~~ | 接入 `[access_log_sensitive]` 全局脱敏开关，配合 `sensitive(...)` 显式标注 | ✅ 已修复 |

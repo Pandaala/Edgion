@@ -96,12 +96,13 @@ rate_limit:
   max_estimator_slots_k: 1024             # CMS 最大精度上限
   gateway_instance_count: 1               # 静态实例数（无 Controller 推送时的 fallback）
 
-# ─── Plugin Metadata ───
+# ─── 日志脱敏（默认 off） ───
 
-plugin_metadata:
-  # Ctx keys containing these substrings (case-insensitive) are excluded from access log.
-  # Keys starting with `_` are always excluded regardless of this list.
-  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential]
+access_log_sensitive:
+  mode: off                        # off | replace | wrap
+  # replace_with: "***"            # mode=replace 时的替换串
+  # wrap_prefix: "<E>"             # mode=wrap 时的前缀
+  # wrap_suffix: "</E>"            # mode=wrap 时的后缀
 ```
 
 ## 字段详解
@@ -179,24 +180,35 @@ LogConfig:
 | `max_estimator_slots_k` | `usize` | `1024` | CMS 最大 slot 数上限 |
 | `gateway_instance_count` | `u32` | `1` | Gateway 实例数（集群限流分母，无 Controller 时的静态 fallback） |
 
-### [plugin_metadata]
+### [access_log_sensitive]
+
+控制 access log、ssl.log、plugin log 中已标注敏感字段的脱敏行为。**默认 `mode=off`**，所有敏感值以明文输出（保留历史行为）。
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `ctx_log_denylist` | `Vec<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx key 中包含这些子串（大小写不敏感）的条目不进入 access log |
+| `mode` | `Enum` | `"off"` | `"off"` / `"replace"` / `"wrap"` |
+| `replace_with` | `String` | `"***"` | `mode=replace` 时整体替换敏感值 |
+| `wrap_prefix` | `String` | `"<E>"` | `mode=wrap` 时附加的前缀 |
+| `wrap_suffix` | `String` | `"</E>"` | `mode=wrap` 时附加的后缀 |
 
-> **注意：** 在配置文件中设置此字段会**完全替换**默认列表，而非追加。如需保留默认保护，须手动包含全部默认关键词再加上自定义词。
+**三种模式行为**（以 `client_addr=1.2.3.4` 为例）：
 
-**过滤规则**（两者满足其一则跳过）：
-1. Key 以 `_` 开头（plugin 内部私有约定）
-2. Key 包含 `ctx_log_denylist` 中任意子串（大小写不敏感匹配）
+| 模式 | 输出 |
+|------|------|
+| `off` | `"1.2.3.4"` |
+| `replace` | `"***"` |
+| `wrap` | `"<E>1.2.3.4</E>"` |
 
-**示例**：
-- `jwt_claims` → 命中 `claim` → 过滤 ✗
-- `jwe_payload` → 命中 `payload` → 过滤 ✗
-- `_internal_state` → `_` 前缀 → 过滤 ✗
-- `tenant_id` → 无命中，无前缀 → 保留 ✓
-- `user_id` → 无命中，无前缀 → 保留 ✓
+**生效范围**：
+- access log 字段：`client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` / 客户端证书 `subject` / `sans` / `cn`
+- plugin log：通过 `sensitive(...)` 标注的参数；DSL `log_warn` / `log_error` 的用户参数
+- ssl.log：mTLS 白名单校验失败错误中的客户端证书字段
+
+**实现细节**：
+- 全局 `AtomicU8` 控制模式，启动时 `init_sensitive` 一次写入；运行期不可变
+- 默认 off 时仅一次 atomic load 开销，可视为零成本
+- Wrap 模式使用 thread-local 缓冲区，无堆分配
+- 自定义 wrap 前后缀时，总长度不宜超过 36 字节，否则会减少 plugin log 单条目可写长度
 
 ## `integration_testing_mode`
 
