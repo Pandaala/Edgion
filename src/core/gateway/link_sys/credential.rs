@@ -1,9 +1,9 @@
 //! Materialise credentials on the Gateway from the embedded `Secret` carried
-//! inside `LinkSys.spec.*Auth.secret` (see fix-change C1).
+//! inside `LinkSys.spec.*Auth.secret`.
 //!
 //! # Tri-state credential model
 //!
-//! Auth credentials go through four states on the Gateway side (see M4):
+//! Auth credentials go through four states on the Gateway side:
 //!
 //! - [`CredentialState::NotRequired`] — the CRD does not configure auth at all.
 //! - [`CredentialState::Pending`]     — the CRD configures `auth.secretRef`, but
@@ -14,7 +14,7 @@
 //!
 //! Dispatch gates on [`is_buildable`]; providers receive a
 //! `&CredentialState<_>` so that Pending / Invalid produce a fail-fast `bail!`
-//! instead of a silent empty-credential fallback (see I4 / I5).
+//! instead of a silent empty-credential fallback.
 
 use crate::types::credentials::materials::{
     BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial, WebhookApiKeyMaterial,
@@ -167,15 +167,13 @@ pub enum ResolvedCredential {
 // ============================================================================
 
 /// Parse a `Secret` using the supplied resolver. `Ok(material)` on success;
-/// `Err` on `data == None` or any `ResolveError`.
+/// `Err` on `data == None` or any `ResolveError` (preserving the `ResolveError`
+/// as the `anyhow::Error` source chain).
 fn parse_secret<R: SecretMaterialResolver>(secret: &Secret, resolver: &R) -> Result<R::Material, anyhow::Error> {
     let Some(data) = secret.data.as_ref() else {
         return Err(anyhow::anyhow!("Secret.data is empty"));
     };
-    resolver.parse(data).map_err(|e| {
-        tracing::warn!(error = %e, "failed to parse credential material on Gateway");
-        anyhow::anyhow!(e.to_string())
-    })
+    resolver.parse(data).map_err(anyhow::Error::new)
 }
 
 fn state_from_optional_secret<R: SecretMaterialResolver>(
@@ -187,7 +185,10 @@ fn state_from_optional_secret<R: SecretMaterialResolver>(
     };
     match parse_secret(secret, resolver) {
         Ok(m) => CredentialState::Resolved(m),
-        Err(e) => CredentialState::Invalid(InvalidReason::ParseFailed(e.to_string())),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to parse credential material on Gateway");
+            CredentialState::Invalid(InvalidReason::ParseFailed(format!("{e:#}")))
+        }
     }
 }
 

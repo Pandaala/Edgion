@@ -26,7 +26,7 @@
 //!   heap copies that are dropped normally, without zeroization.
 //!
 //! Treat `Zeroizing` here as **defense-in-depth, not a strict end-to-end
-//! guarantee**. See `tasks/fix-change/M1-zeroize-scope-documentation.md`.
+//! guarantee**.
 
 use zeroize::Zeroizing;
 

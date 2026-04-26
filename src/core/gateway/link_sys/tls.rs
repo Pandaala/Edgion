@@ -104,8 +104,24 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
         if native.certs.is_empty() {
             anyhow::bail!("no system CA certificates were loaded for LinkSys TLS");
         }
+        let mut added = 0usize;
+        let mut rejected = 0usize;
         for cert in native.certs {
-            roots.add(cert).ok();
+            if roots.add(cert).is_ok() {
+                added += 1;
+            } else {
+                rejected += 1;
+            }
+        }
+        if rejected > 0 {
+            tracing::warn!(
+                added,
+                rejected,
+                "LinkSys TLS: some system CA certificates were rejected by rustls"
+            );
+        }
+        if added == 0 {
+            anyhow::bail!("no system CA certificates accepted by rustls for LinkSys TLS");
         }
     }
 

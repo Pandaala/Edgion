@@ -30,6 +30,12 @@ impl EdgionCenterCli {
     }
 
     pub async fn run(&self) -> Result<()> {
+        // Install a default tracing subscriber before any tracing macro fires
+        // (Center emits warnings during config parsing, before any config-driven
+        // log setup could run). `set_global_default` is one-shot, so this fixes
+        // Center's logging for the whole process.
+        crate::core::common::startup::init_default_tracing();
+
         // Install the process-wide Prometheus recorder before anything emits
         // metrics. Idempotent, so tests and combined modes do not panic on
         // re-install.

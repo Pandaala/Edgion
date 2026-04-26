@@ -328,7 +328,7 @@ pub async fn unified_auth_middleware(
         None => match extract_cookie_token(&request) {
             Some(t) => t,
             None => {
-                return auth_error_response(StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header");
+                return auth_error_response(StatusCode::UNAUTHORIZED, "Missing credentials");
             }
         },
     };

@@ -11,7 +11,8 @@
 pub mod pipeline;
 
 pub use pipeline::{
-    fetch_secret, resolve_credential, resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
+    fetch_secret, resolve_credential, resolve_secret, FetchOutcome, InvalidCredentialError, PendingReason,
+    ResolveOutcome,
 };
 
 // Re-export the credential parsing layer for call sites that still use the

@@ -204,7 +204,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 generation,
             )
         } else {
-            // M6/S3: use the shared priority helper rather than `errors[0]` —
+            // Use the shared priority helper rather than `errors[0]` —
             // `SecretRefManager::get_dependencies` iterates a set with no
             // stable order, so taking the first element would make the
             // surfaced reason depend on hashing. `pick_resolved_refs_reason`

@@ -76,9 +76,7 @@ async fn try_serve_acme_challenge(session: &mut Session) -> pingora_core::Result
     resp.insert_header("Content-Length", key_auth.len().to_string())?;
 
     session.write_response_header(Box::new(resp), false).await?;
-    session
-        .write_response_body(Some(bytes::Bytes::from(key_auth)), true)
-        .await?;
+    session.write_response_body(Some(key_auth), true).await?;
 
     // Short-circuit: response already sent, no further proxy processing needed
     Err(pingora_core::Error::explain(

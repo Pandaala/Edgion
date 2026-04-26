@@ -74,6 +74,20 @@ pub enum ResolveOutcome<T> {
     Invalid(InvalidCredentialError),
 }
 
+/// Two-way result of [`fetch_secret`]. Fetching never produces an `Invalid`
+/// outcome (type/key validation happens in later pipeline stages), so this
+/// type is strictly narrower than [`ResolveOutcome`].
+#[derive(Debug)]
+pub enum FetchOutcome<T> {
+    /// Successfully fetched.
+    Ok(T),
+
+    /// Fetch is deferred — caller should set `Pending` status and wait for
+    /// the referenced Secret to appear or for the cross-namespace
+    /// `ReferenceGrant` to be granted.
+    Pending(PendingReason),
+}
+
 // ---------------------------------------------------------------------------
 // Internal steps (shared by the three public entry points)
 // ---------------------------------------------------------------------------
@@ -81,8 +95,10 @@ pub enum ResolveOutcome<T> {
 /// Fetch the Secret object: compute namespace, register dependency, check
 /// cross-namespace ReferenceGrant, look up in the store.
 ///
-/// Returns `Ok(Secret)`, `Pending(SecretNotFound)`, or
-/// `Pending(ReferenceGrantMissing)`. Never returns `Invalid`.
+/// Returns [`FetchOutcome::Ok`] or [`FetchOutcome::Pending`] (with
+/// `SecretNotFound` or `ReferenceGrantMissing`). The narrower
+/// [`FetchOutcome`] return type makes the absence of an `Invalid` arm
+/// explicit; callers should not write a fallback `Invalid` branch.
 ///
 /// Callers that only need the raw Secret (e.g. EdgionPlugins plugin
 /// resolvers) use this directly; the typed pipeline entry points
@@ -94,7 +110,7 @@ pub fn fetch_secret(
     owner_group: &str,
     owner_kind: &str,
     secret_ref: &SecretObjectReference,
-) -> ResolveOutcome<Secret> {
+) -> FetchOutcome<Secret> {
     // ── Step 1: compute effective namespace ──────────────────────────────
     let owner_ns = owner.namespace.as_deref().unwrap_or("default");
     let secret_ns = secret_ref.effective_namespace(owner_ns).to_string();
@@ -118,7 +134,7 @@ pub fn fetch_secret(
             Some(&secret_ref.name),
         );
         if !allowed {
-            return ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            return FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                 from_ns: owner_ns.to_string(),
                 to_ns: secret_ns,
                 secret_name: secret_ref.name.clone(),
@@ -132,8 +148,8 @@ pub fn fetch_secret(
         .secret_store
         .get(Some(secret_ns.as_str()), &secret_ref.name)
     {
-        Some(s) => ResolveOutcome::Ok(s),
-        None => ResolveOutcome::Pending(PendingReason::SecretNotFound {
+        Some(s) => FetchOutcome::Ok(s),
+        None => FetchOutcome::Pending(PendingReason::SecretNotFound {
             namespace: secret_ns,
             name: secret_ref.name.clone(),
         }),
@@ -178,9 +194,8 @@ fn resolve_inner<R: SecretMaterialResolver>(
     resolver: &R,
 ) -> ResolveOutcome<(Secret, R::Material)> {
     let secret = match fetch_secret(ctx, owner, owner_group, owner_kind, secret_ref) {
-        ResolveOutcome::Ok(s) => s,
-        ResolveOutcome::Pending(r) => return ResolveOutcome::Pending(r),
-        ResolveOutcome::Invalid(e) => return ResolveOutcome::Invalid(e),
+        FetchOutcome::Ok(s) => s,
+        FetchOutcome::Pending(r) => return ResolveOutcome::Pending(r),
     };
 
     if let Some(e) = check_secret_type(&secret, resolver) {

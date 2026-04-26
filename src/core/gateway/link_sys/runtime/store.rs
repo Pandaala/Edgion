@@ -72,25 +72,30 @@ impl LinkSysStore {
     /// Dispatches each resource to the appropriate sub-module manager
     /// based on its SystemConfig type.
     pub fn replace_all(&self, data: HashMap<String, LinkSys>) {
-        // Dispatch all resources to sub-module managers
-        let rt = tokio::runtime::Handle::try_current();
-        if let Ok(handle) = rt {
-            let data_clone = data.clone();
+        // Wrap once and share with the dispatch task to avoid cloning the entire map
+        // (full_sync replays every LinkSys resource and used to copy the whole HashMap).
+        let data = Arc::new(data);
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let data_for_dispatch = Arc::clone(&data);
             handle.spawn(async move {
-                dispatch_full_set(&data_clone).await;
+                dispatch_full_set(&data_for_dispatch).await;
             });
         }
 
-        self.resources.store(Arc::new(data));
+        self.resources.store(data);
     }
 
     /// Update LinkSys resources atomically (incremental sync).
     ///
     /// Dispatches changes to the appropriate sub-module managers.
     pub fn update(&self, add_or_update: HashMap<String, LinkSys>, remove: &HashSet<String>) {
+        // Wrap once and share with the dispatch task to avoid a second deep clone of
+        // `add_or_update` (each LinkSys carries nested credential structs).
+        let add_or_update = Arc::new(add_or_update);
+
         let current = self.resources.load();
-        let current_map: &LinkSysMap = &current;
-        let mut new_map: LinkSysMap = current_map.clone();
+        let mut new_map: LinkSysMap = (**current).clone();
 
         for key in remove {
             new_map.remove(key);
@@ -100,12 +105,11 @@ impl LinkSysStore {
         }
 
         // Dispatch changes to sub-module managers
-        let rt = tokio::runtime::Handle::try_current();
-        if let Ok(handle) = rt {
-            let add_update = add_or_update.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let dispatch_data = Arc::clone(&add_or_update);
             let remove_set = remove.clone();
             handle.spawn(async move {
-                dispatch_partial_update(&add_update, &remove_set).await;
+                dispatch_partial_update(&dispatch_data, &remove_set).await;
             });
         }
 

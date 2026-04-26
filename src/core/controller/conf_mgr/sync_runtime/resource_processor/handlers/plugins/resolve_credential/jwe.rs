@@ -3,7 +3,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
-    fetch_secret, PendingReason, ResolveOutcome,
+    fetch_secret, FetchOutcome, PendingReason,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
@@ -29,8 +29,8 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 let secret_key =
                     format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                 let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-                    ResolveOutcome::Ok(s) => s,
-                    ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+                    FetchOutcome::Ok(s) => s,
+                    FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
                         tracing::info!(
                             edgion_plugins = %resource_ref.key(),
                             secret_key = %secret_key,
@@ -38,7 +38,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         );
                         continue;
                     }
-                    ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                    FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                         ref from_ns,
                         ref to_ns,
                         ref secret_name,
@@ -52,7 +52,6 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         );
                         continue;
                     }
-                    ResolveOutcome::Invalid(_) => continue,
                 };
 
                 let mut resolved = ResolvedJweCredential::default();

@@ -140,8 +140,8 @@ impl EtcdConfig {
     pub fn to_client_config(&self) -> anyhow::Result<(EtcdClientConfig, CredentialState<BasicAuthMaterial>)> {
         // Auth: wire TOML username/password into CredentialState::Resolved so
         // `build_connect_options` picks it up — previously this path hard-coded
-        // `auth = None` which silently dropped the TOML credentials (I4-class
-        // silent fallback, regression of the fix-change effort).
+        // `auth = None` which silently dropped the TOML credentials (a
+        // silent-fallback regression of the credential-state contract).
         let (auth, auth_state): (Option<EtcdAuth>, CredentialState<BasicAuthMaterial>) = match &self.auth {
             Some(cfg) => (
                 Some(EtcdAuth {

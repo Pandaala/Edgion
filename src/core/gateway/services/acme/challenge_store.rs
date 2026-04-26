@@ -8,15 +8,20 @@
 
 use crate::core::gateway::observe::metrics::record_acme_challenge_lookup;
 use crate::types::resources::edgion_acme::EdgionAcme;
+use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A single challenge entry in the store
+/// A single challenge entry in the store.
+///
+/// `key_authorization` is stored as `Bytes` so the request hot path can return
+/// it via cheap refcount-bumping clones instead of allocating a fresh `String`
+/// per lookup hit. Downstream writes the body as `Bytes` regardless.
 #[derive(Debug, Clone)]
 pub struct ChallengeEntry {
     pub domain: String,
-    pub key_authorization: String,
+    pub key_authorization: Bytes,
     pub expire_at: u64,
 }
 
@@ -53,7 +58,7 @@ impl AcmeChallengeStore {
 
     /// Look up a challenge token and return the key authorization if found and not expired.
     /// Also validates the domain matches.
-    pub fn lookup(&self, token: &str, host: &str) -> Option<String> {
+    pub fn lookup(&self, token: &str, host: &str) -> Option<Bytes> {
         let tokens = self.tokens.read();
         if let Some(entry) = tokens.get(token) {
             // Check expiry
@@ -97,7 +102,7 @@ impl AcmeChallengeStore {
                         c.token.clone(),
                         ChallengeEntry {
                             domain: c.domain.clone(),
-                            key_authorization: c.key_authorization.clone(),
+                            key_authorization: Bytes::from(c.key_authorization.clone()),
                             expire_at: c.expire_at,
                         },
                     );
@@ -147,7 +152,7 @@ impl AcmeChallengeStore {
                         c.token.clone(),
                         ChallengeEntry {
                             domain: c.domain.clone(),
-                            key_authorization: c.key_authorization.clone(),
+                            key_authorization: Bytes::from(c.key_authorization.clone()),
                             expire_at: c.expire_at,
                         },
                     );
@@ -247,7 +252,7 @@ mod tests {
 
         // Valid lookup
         let result = store.lookup("test-token-123", "example.com");
-        assert_eq!(result, Some("test-token-123.thumbprint".to_string()));
+        assert_eq!(result, Some(Bytes::from_static(b"test-token-123.thumbprint")));
 
         // Wrong token
         assert!(store.lookup("wrong-token", "example.com").is_none());

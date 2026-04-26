@@ -91,6 +91,30 @@ pub const WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES: usize = 16384;  // 16KB 硬上限
 
 ---
 
+## Resource reconcile / 配置同步路径的小对象 clone 不是问题
+
+**误判场景**：在 Controller `resource_processor` / Gateway `conf_handler` 等"配置变更触发"的路径上，看到对单个资源、单条 entry、单个 service 的 `.clone()` / `.to_vec()` / 整 HashMap 拷贝，被标为"P3 不必要的 clone / 应改 Arc<T>"。典型样例：
+
+| 位置 | 模式 | 触发频率 |
+|------|------|---------|
+| `handlers/secret.rs` 同一 secret 给 init_accumulator + secret_store 各 clone 一次 | Secret 资源 reconcile | 每个 Secret 创建/更新 |
+| `lb/lb_policy/policy_store.rs::get(service_key) -> Vec<LbPolicy>` | DashMap entry policies `.to_vec()` | HTTPRoute reconcile |
+
+**实际情况**：这些 clone 全部在 reconcile / config sync 路径，调用频率 = K8s 资源变更频率（人/Operator 操作量级，最高也是 reload 时的 burst），**不是每请求触发**。被 clone 的对象通常是单条资源（KB 量级），整路径耗时由 etcd RTT / gRPC 序列化主导，几次 String/HashMap clone 的 alloc + memcpy 在 totals 里测不出来。
+
+要把它们改 Arc 通常需要：
+- 改公开类型签名（`WorkItemResult::obj`、`PolicyStore::get` 返回类型等），cascading 到多处 caller / 测试；
+- 或加闭包 API（`with_policies(&self, key, F)`）改变上层用法。
+
+冷路径上没有可观测收益，但带来真实的改动面与回归风险。
+
+**判定**：是否在热路径决定一切——
+- ✅ 拒绝："P3 reconcile / config sync 路径上的小对象 clone" 类 finding。
+- ⚠️ 接受："full_set 整 map 拷贝且每秒同步" 这种放大型场景（已有案例：LinkSys `replace_all` 用 `Arc::clone` 共享给 dispatch task，避免整 HashMap copy；ACME `challenge_store::lookup` 改用 `Bytes` 在 HTTP-01 验证请求每次命中省一次 String alloc + memcpy）。
+- 接受口径：finding 必须证明「在请求路径每秒触发」或「单次拷贝 ≥ MB 量级」之一，否则按本条关闭。
+
+---
+
 ## 离线 Controller 数据保留是业务需求
 
 **误判场景**：`ControllerRegistry` / `ResourceAggregator` 中离线 Controller 的条目不被定期清理，被标记为"内存泄漏"。

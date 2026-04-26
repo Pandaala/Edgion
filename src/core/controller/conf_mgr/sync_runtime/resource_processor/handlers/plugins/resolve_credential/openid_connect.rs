@@ -2,7 +2,7 @@
 
 use super::read_secret_utf8;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
-    fetch_secret, PendingReason, ResolveOutcome,
+    fetch_secret, FetchOutcome, PendingReason,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
@@ -27,7 +27,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-                        ResolveOutcome::Ok(secret) => {
+                        FetchOutcome::Ok(secret) => {
                             let resolved = read_secret_utf8(&secret, &["clientSecret", "client_secret", "secret"]);
                             if let Some(value) = resolved {
                                 config.resolved_client_secret = Some(value);
@@ -44,14 +44,14 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                                 );
                             }
                         }
-                        ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+                        FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
                             tracing::info!(
                                 edgion_plugins = %resource_ref.key(),
                                 secret_key = %secret_key,
                                 "OpenidConnect: client secret not found yet, will be reprocessed when Secret arrives"
                             );
                         }
-                        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                        FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                             ref from_ns,
                             ref to_ns,
                             ref secret_name,
@@ -64,7 +64,6 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                                 "OpenidConnect: cross-namespace client secret reference denied (ReferenceGrant missing)"
                             );
                         }
-                        ResolveOutcome::Invalid(_) => {}
                     }
                 }
 
@@ -72,7 +71,7 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-                        ResolveOutcome::Ok(secret) => {
+                        FetchOutcome::Ok(secret) => {
                             let resolved = read_secret_utf8(&secret, &["sessionSecret", "session_secret", "secret"]);
                             if let Some(value) = resolved {
                                 config.resolved_session_secret = Some(value);
@@ -89,14 +88,14 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                                 );
                             }
                         }
-                        ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+                        FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
                             tracing::info!(
                                 edgion_plugins = %resource_ref.key(),
                                 secret_key = %secret_key,
                                 "OpenidConnect: session secret not found yet, will be reprocessed when Secret arrives"
                             );
                         }
-                        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                        FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                             ref from_ns,
                             ref to_ns,
                             ref secret_name,
@@ -109,7 +108,6 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                                 "OpenidConnect: cross-namespace session secret reference denied (ReferenceGrant missing)"
                             );
                         }
-                        ResolveOutcome::Invalid(_) => {}
                     }
                 }
             }

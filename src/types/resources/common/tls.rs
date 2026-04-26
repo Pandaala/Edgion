@@ -6,10 +6,10 @@
 //! - [`TlsConfig`] — on/off switch, certs sub-object, `insecureSkipVerify`.
 //! - [`TlsCerts`] — CA + client cert + `secretRef` (+ resolved `Secret`).
 //!
-//! Design decisions (see `tasks/fix-change/R1-unify-tls-types.md`):
+//! Design decisions:
 //!
 //! - Inline private key (`clientKey`) is **not allowed** — `deny_unknown_fields`
-//!   rejects it at YAML parse time, per D2 ("no inline sensitive material").
+//!   rejects it at YAML parse time ("no inline sensitive material" rule).
 //!   Client private key MUST be provided through `secretRef` pointing at a
 //!   `kubernetes.io/tls` or `Opaque` Secret (key: `tls.key`).
 //! - `ca_cert` / `client_cert` inline PEM is still allowed (public material).

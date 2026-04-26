@@ -10,5 +10,6 @@ pub mod local_auth;
 pub mod matcher;
 pub mod metadata_conf_handler;
 pub mod observe;
+pub mod startup;
 pub mod unified_auth;
 pub mod utils;

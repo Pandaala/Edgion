@@ -44,9 +44,9 @@ impl Default for LinkSysHandler {
 /// Translate a pipeline `ResolveOutcome<T>` into `Result<T, ResolvedRefsError>`.
 ///
 /// Cross-namespace denial maps to the Gateway-API standard `RefNotPermitted`
-/// (not a dedicated `ReferenceGrantMissing` reason) — see M6 problem F: the
-/// pipeline cannot distinguish "no grant yet" from "grant denies", so a more
-/// specific reason would promise operators a signal we cannot deliver.
+/// (not a dedicated `ReferenceGrantMissing` reason): the pipeline cannot
+/// distinguish "no grant yet" from "grant denies", so a more specific reason
+/// would promise operators a signal we cannot deliver.
 fn outcome_to_result<T>(outcome: ResolveOutcome<T>) -> Result<T, ResolvedRefsError> {
     match outcome {
         ResolveOutcome::Ok(t) => Ok(t),
@@ -99,7 +99,7 @@ fn apply_resolved_refs_condition(ls: &mut LinkSys, generation: Option<i64>, erro
 ///   justified. `RefNotPermitted` is intentionally *not* in this bucket even
 ///   though "operator forgot Grant" is an edit-to-fix case, because the
 ///   pipeline cannot distinguish "forgot to create Grant" from "deliberately
-///   denied". See M6/F.
+///   denied".
 fn needs_operator_secret_edit(err: &ResolvedRefsError) -> bool {
     matches!(
         err,
@@ -135,10 +135,9 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                 // help. The spec is still pushed to the Gateway via conf_sync
                 // with `auth.secret` / `tls.certs.secret` left as `None`
                 // (partially resolved when only one side failed). Gateway
-                // must refuse to build / keep a client on this input — see
-                //   * tasks/fix-change/I4-*.md (provider empty-credential fallback)
-                //   * tasks/fix-change/I5-*.md (dispatch builds client even when pending)
-                // Until I4/I5 land, this path widens the exposure of those bugs.
+                // providers must check `CredentialState::is_buildable` and
+                // refuse to build a client on `Pending` / `Invalid` material;
+                // see `core::gateway::link_sys::credential` for the contract.
                 tracing::warn!(
                     link_sys = %owner.key(),
                     ?err,
@@ -222,18 +221,18 @@ async fn drive_standard<A: AuthSpec, T: TlsSpec>(
 /// resolved Secret onto the corresponding `auth.secret` / `tls.certs.secret`
 /// field. Returns the collected `ResolvedRefsError`s (empty on full success).
 ///
-/// **Multi-error collection** (M7): auth and tls are resolved independently —
+/// **Multi-error collection**: auth and tls are resolved independently —
 /// a failure on one side does not short-circuit the other. This matches the
 /// Gateway-API convention where `ResolvedRefs.message` aggregates all broken
 /// refs and `reason` is picked deterministically via
 /// `pick_resolved_refs_reason`'s priority table. Without this, an operator
 /// who mistypes both Secret names only sees the auth error first, then has
-/// to reconcile again to discover the tls error — and the M6 priority table
+/// to reconcile again to discover the tls error — and the priority table
 /// effectively never fires because the slice always has one element.
 ///
 /// Leaving `secret: None` on the unresolved field is safe: gateway providers
-/// only build a client when `ResolvedRefs=True` (see I4/I5), so partially
-/// resolved spec never reaches a live client.
+/// only build a client when `CredentialState::is_buildable` returns true, so
+/// a partially resolved spec never reaches a live client.
 async fn resolve_for_spec(
     ctx: &HandlerContext,
     owner: &ResourceRef,
@@ -530,7 +529,7 @@ mod tests {
                 );
                 let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs");
                 assert_eq!(rr.status, "False");
-                // M6/F: cross-ns denial collapses onto the Gateway-API standard
+                // Cross-ns denial collapses onto the Gateway-API standard
                 // `RefNotPermitted` reason — the pipeline cannot distinguish
                 // "no grant yet" from "grant denies", and the upstream spec
                 // explicitly uses a single reason for both.
@@ -557,9 +556,9 @@ mod tests {
         }
     }
 
-    /// Regression for I3: after a successful parse leaves `ResolvedRefs=True`,
-    /// a subsequent parse against a broken Secret must flip the condition to
-    /// `False` with the correct reason — not silently retain `True`.
+    /// After a successful parse leaves `ResolvedRefs=True`, a subsequent parse
+    /// against a broken Secret must flip the condition to `False` with the
+    /// correct reason — not silently retain `True`.
     ///
     /// The real flow re-parses on Secret changes (wakeup via SecretRefManager);
     /// here we simulate it by swapping the Secret in the store between two
@@ -624,8 +623,9 @@ mod tests {
                 assert_eq!(rr.reason, condition_reasons::MISSING_KEYS);
                 assert!(rr.message.contains("password"), "message should mention missing key");
                 // Invalid data must NOT leave a stale Secret embedded on spec
-                // (otherwise Gateway could race and use bad material before
-                // I4/I5 land; see comment in `parse`).
+                // — defence-in-depth so Gateway providers (which already gate
+                // on `CredentialState::is_buildable`) never see bad material
+                // even if a future change widens dispatch.
                 let auth = match &ls.spec.config {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
                     _ => panic!("expected Redis"),
@@ -636,7 +636,7 @@ mod tests {
         }
     }
 
-    /// `DecodeError` variant of I2/I3: the Secret has the required key but the
+    /// `DecodeError` variant: the Secret has the required key but the
     /// value is not UTF-8, so `BasicAuthResolver::parse` surfaces
     /// `ResolveError::DecodeError`, which pipeline maps to
     /// `InvalidCredentialError::DecodeError`.
@@ -676,7 +676,7 @@ mod tests {
         }
     }
 
-    /// `InvalidSecretType` variant of I2/I3: the Secret data is fine, but its
+    /// `InvalidSecretType` variant: the Secret data is fine, but its
     /// `type` is not in `BasicAuthResolver::allowed_secret_types()`
     /// (`kubernetes.io/basic-auth`, `Opaque`, or missing).
     ///
@@ -870,9 +870,9 @@ mod tests {
         assert_eq!(rr.status, "True");
     }
 
-    /// M7 regression: `resolve_for_spec` must NOT short-circuit on the first
-    /// auth failure — tls must also be resolved so both errors land in the
-    /// same `ResolvedRefs` condition.
+    /// Multi-error regression: `resolve_for_spec` must NOT short-circuit on
+    /// the first auth failure — tls must also be resolved so both errors land
+    /// in the same `ResolvedRefs` condition.
     ///
     /// Setup:
     /// - auth.secretRef points to a non-existent Secret → `SecretNotFound`
@@ -970,7 +970,7 @@ mod tests {
         // `InvalidSecretType` (priority 2) wins over `SecretNotFound`
         // (priority 5) per `pick_resolved_refs_reason`. If this flips back
         // to `SecretNotFound`, it means the Redis branch short-circuited on
-        // auth again — M7 regression.
+        // auth again — multi-error aggregation regression.
         assert_eq!(
             rr.reason,
             condition_reasons::INVALID_SECRET_TYPE,
@@ -992,8 +992,8 @@ mod tests {
         );
     }
 
-    /// Regression test for C1: verify that LinkSys.spec survives a JSON round-trip
-    /// and preserves the embedded Secret (mimics conf_sync over gRPC).
+    /// Verify that LinkSys.spec survives a JSON round-trip and preserves the
+    /// embedded Secret (mimics conf_sync over gRPC).
     #[tokio::test]
     async fn test_spec_serde_round_trip_preserves_secret() {
         let (key, secret) = make_secret("default", "redis-creds", &[("password", b"s3cr3t")]);
