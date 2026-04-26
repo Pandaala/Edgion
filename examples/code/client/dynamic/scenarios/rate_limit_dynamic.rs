@@ -31,11 +31,7 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
         let scenario = SCENARIO;
         ctx.assert_phase(scenario, "initial").await?;
         ctx.apply_dir("updates/").await?;
-        if let Err(e) = ctx.wait_resource_sync().await {
-            eprintln!("resource_diff non-blocking: {}", e);
-        }
-        ctx.sleep(Duration::from_secs(3)).await;
-        ctx.assert_phase(scenario, "update").await?;
+        ctx.wait_phase(scenario, "update", Duration::from_secs(15)).await?;
         Ok(())
     })
 }

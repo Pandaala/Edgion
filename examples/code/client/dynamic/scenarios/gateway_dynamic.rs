@@ -37,12 +37,7 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
         ctx.assert_phase(scenario, "initial").await?;
         ctx.apply_dir("updates/").await?;
         ctx.delete_resources("delete/resources_to_delete.txt").await?;
-        if let Err(e) = ctx.wait_resource_sync().await {
-            // 对齐旧 bash 行为：sync 失败不 block，仅 log。
-            eprintln!("resource_diff non-blocking error: {}", e);
-        }
-        ctx.sleep(Duration::from_secs(3)).await;
-        ctx.assert_phase(scenario, "update").await?;
+        ctx.wait_phase(scenario, "update", Duration::from_secs(15)).await?;
         Ok(())
     })
 }

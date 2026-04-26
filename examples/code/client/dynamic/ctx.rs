@@ -4,6 +4,7 @@ use crate::framework::TestContext;
 use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::time::Instant;
 
 /// 每个 scenario 执行时获得的上下文。
 /// 持有：
@@ -65,21 +66,6 @@ impl ScenarioCtx {
 }
 
 impl ScenarioCtx {
-    /// 等待 controller 与 gateway 资源状态对齐。
-    /// 超时默认 5s、轮询间隔 500ms —— 对热更新场景足够且显著优于裸 sleep 3s。
-    pub async fn wait_resource_sync(&self) -> Result<()> {
-        crate::dynamic::wait::wait_for_resource_sync(
-            &self.project_root,
-            &self.controller_url,
-            &self.gateway_url,
-            Duration::from_secs(5),
-            Duration::from_millis(500),
-        )
-        .await
-    }
-}
-
-impl ScenarioCtx {
     /// 根据当前 scenario + phase 名派发到对应 TestSuite 并运行。
     /// 所有 test case 必须全部 pass，否则返回 Err。
     pub async fn assert_phase(&self, scenario: &crate::dynamic::scenario::Scenario, phase: &str) -> Result<()> {
@@ -117,6 +103,44 @@ impl ScenarioCtx {
                 results.total_tests(),
                 failed_names
             ))
+        }
+    }
+}
+
+impl ScenarioCtx {
+    /// 重复执行 phase suite 直到全 pass 或超时。
+    ///
+    /// phase suite 已经编码"正确的最终状态" —— 框架只重试到状态匹配，
+    /// 比 "fixed sleep + 一次断言" 更准、比 "scenario 自定义 predicate" 更通用。
+    ///
+    /// - 推荐 timeout：15s（覆盖 gRPC 推送 + 100ms debounce + ArcSwap）。
+    /// - 内部 poll 间隔固定 200ms。
+    /// - 中间失败 attempt 的错误被丢弃（`TestRunner` 本身静默，`assert_phase` 失败
+    ///   只在返回 Err 时构造错误字符串），不会污染 report.log。
+    pub async fn wait_phase(
+        &self,
+        scenario: &crate::dynamic::scenario::Scenario,
+        phase: &str,
+        timeout: Duration,
+    ) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        let mut attempts: usize = 0;
+        loop {
+            attempts += 1;
+            let err = match self.assert_phase(scenario, phase).await {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
+            };
+            if Instant::now() >= deadline {
+                return Err(anyhow::anyhow!(
+                    "wait_phase('{}') for scenario '{}' timed out after {} attempt(s); last error: {:#}",
+                    phase,
+                    scenario.id,
+                    attempts,
+                    err
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
 }

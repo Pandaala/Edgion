@@ -190,7 +190,7 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 ### 框架在哪
 
 - 框架代码：`examples/code/client/dynamic/`
-  - `ctx.rs` — `ScenarioCtx`：组合算子 `assert_phase`、`apply_dir`、`delete_resources`、`wait_resource_sync`、`sleep`
+  - `ctx.rs` — `ScenarioCtx`：组合算子 `assert_phase`、`wait_phase`、`apply_dir`、`delete_resources`、`sleep`（旧的 `wait_resource_sync` 方法已移除；底层 `wait::wait_for_resource_sync` 函数与 `examples/code/validator/resource_diff` binary 仍保留作为 setup-time sanity check）
   - `scenario.rs` — `Scenario` 结构 + `PhaseSuite` phase→suite factory 映射
   - `registry.rs` — 显式 `all()` 列表（新增 scenario 加一行即可）
   - `scenarios/<id>.rs` — 每个 scenario 一个文件，N-phase 状态机用 `ScenarioCtx` 串起来
@@ -202,7 +202,7 @@ rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code exam
 1. 在 `examples/test/conf/<Resource>/<Item>/DynamicTest/` 写 `initial/` + `updates/` YAML（`load_conf.sh` 自动跳过 `updates/` 与 `delete/`）
 2. 在 `examples/code/client/suites/<family>/dynamic.rs` 写两个 phase suite（`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`），通过 family `mod.rs` re-export 到 `suites::*`
 3. 在 `test_client.rs` 三处 dispatch 表加分支：`resolve_suite`（如需 alias）、`suite_to_port_key`、`add_suites_for_suite`（按 `--phase` 选择 suite）
-4. 在 `examples/code/client/dynamic/scenarios/<id>.rs` 写 scenario，`run` 函数按 N-phase 顺序串 `assert_phase` / `apply_dir` / `wait_resource_sync` / `sleep`
+4. 在 `examples/code/client/dynamic/scenarios/<id>.rs` 写 scenario，`run` 函数按 N-phase 顺序串：`assert_phase`（初态） → `apply_dir` / `delete_resources`（变更） → `wait_phase`（带 timeout，等终态业务断言全 pass）。**不要**用 `sleep` 兜底，也不要用 `wait_resource_sync`——前者不可靠，后者已不在 ScenarioCtx 上暴露
 5. 在 `dynamic/scenarios/mod.rs` 加 `pub mod <id>;`
 6. 在 `dynamic/registry.rs` 的 `all()` 追加 `crate::dynamic::scenarios::<id>::SCENARIO`
 
@@ -223,6 +223,8 @@ sleep 3
 ```
 
 `--phase` 参数仍然有效（每个 dynamic dispatch 都按 phase 路由到对应 suite），是排查 scenario 内部某 phase 行为时的常用入口。
+
+> 注：scenario 内部不再用固定 `sleep` 等同步——见上面 §动态测试 ScenarioCtx 算子列表的 `wait_phase`。手动调试场景仍可用 `sleep`，因为人在终端可以看 log 决策超时。
 
 ## 常见排查顺序
 

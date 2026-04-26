@@ -28,7 +28,7 @@ pub fn build_client(controller_url: &str) -> Result<EdgionClient> {
 /// **NOTE:** 当 `path` 是目录时，`apply_directory` 内部对单文件失败仅 print_error
 /// 后继续，整体返回 `Ok(())`（见 `src/core/ctl/cli/commands/apply.rs:38`）。
 /// 因此目录模式下个别 YAML 失败不会传播为错误；scenario 应在 apply 后通过
-/// `wait_resource_sync` 或 phase 断言显式校验 gateway 状态。
+/// `wait_phase`（业务断言重试）或 phase 断言显式校验 gateway 状态。
 pub async fn apply_path(client: &EdgionClient, path: &Path) -> Result<()> {
     let path_str = path
         .to_str()

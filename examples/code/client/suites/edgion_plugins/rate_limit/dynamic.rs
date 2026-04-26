@@ -9,7 +9,10 @@ use std::time::Instant;
 const HOST: &str = "rate-limit-dynamic.example.com";
 
 async fn do_request_without_key(ctx: &TestContext) -> reqwest::Result<u16> {
-    let url = format!("{}/test/rate-limit-dynamic", ctx.http_url());
+    // Hard-code the EdgionPlugins listener port (matches dsl/dynamic.rs).
+    // ctx.http_url() defaults to the test_server backend (30001) under
+    // run_dynamic_scenario, which would bypass the gateway entirely.
+    let url = format!("http://{}:31180/test/rate-limit-dynamic", ctx.target_host);
     ctx.http_client
         .get(&url)
         .header("host", HOST)
