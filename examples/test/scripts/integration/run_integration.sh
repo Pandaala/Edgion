@@ -42,6 +42,9 @@ LDAP_SERVICE_REQUIRED=false
 LDAP_SERVICE_STARTED=false
 CONTROLLER_GRPC_PORT=50051
 
+# Whether to skip cache residue detection after tests
+SKIP_RESIDUE_CHECK="${SKIP_RESIDUE_CHECK:-false}"
+
 # =============================================================================
 # Log functions
 # =============================================================================
@@ -55,6 +58,10 @@ log_success() {
 
 log_error() {
     echo -e "${RED}[✗]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[!]${NC} $1"
 }
 
 log_section() {
@@ -442,6 +449,8 @@ show_help() {
     echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 50051)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
+    echo "  --skip-residue-check   Skip cache residue detection after tests (also set via SKIP_RESIDUE_CHECK=true)"
+    echo "                         Set RESIDUE_MODE=fail env to make leaks count as failed tests (default: warn — log only)"
     echo "  -h, --help             Show help"
     echo ""
     echo "Examples:"
@@ -852,6 +861,10 @@ main() {
                 with_reload=true
                 shift
                 ;;
+            --skip-residue-check)
+                SKIP_RESIDUE_CHECK=true
+                shift
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -1181,13 +1194,60 @@ main() {
     
     # Finalize report
     finalize_report
-    
+
+    # =============================================================================
+    # Final Step: Cache Residue Detection (leak detection across all scenarios)
+    # =============================================================================
+    if [ "$SKIP_RESIDUE_CHECK" != "true" ]; then
+        log_section "Final Step: Cache Residue Detection"
+
+        local residue_bin="${PROJECT_ROOT}/target/debug/cache_residue"
+        if [ ! -x "$residue_bin" ]; then
+            log_warn "cache_residue binary not built; building now..."
+            (cd "$PROJECT_ROOT" && cargo build --bin cache_residue) || {
+                log_error "cache_residue build failed — skipping leak check"
+                # do not fail the run on missing binary; fall through
+                residue_bin=""
+            }
+        fi
+
+        if [ -n "$residue_bin" ] && [ -x "$residue_bin" ]; then
+            # Always invoke validator with --mode fail so exit 1 unambiguously means
+            # "residue detected". Shell-side RESIDUE_MODE then decides whether to
+            # block the build (default: warn — log but do not fail).
+            local residue_mode="${RESIDUE_MODE:-warn}"
+            "$residue_bin" \
+                --controller-addr "http://127.0.0.1:5800" \
+                --gateway-addr    "http://127.0.0.1:5900" \
+                --timeout-secs 30 \
+                --mode fail
+            local rc=$?
+
+            if [ $rc -eq 0 ]; then
+                log_success "Cache residue check passed (no leaks)"
+            elif [ $rc -eq 1 ]; then
+                if [ "$residue_mode" = "fail" ]; then
+                    log_error "Cache residue detected (RESIDUE_MODE=fail) — see report above"
+                    ((FAILED_TESTS++))
+                else
+                    log_warn "Cache residue detected (RESIDUE_MODE=warn — not failing build); see report above"
+                fi
+            elif [ $rc -eq 2 ]; then
+                log_error "cache_residue infrastructure error (rc=2)"
+                ((FAILED_TESTS++))
+            else
+                log_error "cache_residue unexpected exit code: $rc"
+                ((FAILED_TESTS++))
+            fi
+        fi
+    fi
+
     if $test_failed; then
         log_error "Some tests failed"
         log_info "View detailed logs: ${TEST_LOG_DIR}"
         exit 1
     fi
-    
+
     # Completed
     log_section "Test completed"
     log_success "All tests passed!"

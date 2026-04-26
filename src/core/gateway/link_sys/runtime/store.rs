@@ -140,6 +140,11 @@ pub fn list_redis_clients() -> Vec<String> {
     REDIS_RUNTIME.load().keys().cloned().collect()
 }
 
+/// Number of Redis link clients currently in the runtime.
+pub fn redis_client_count() -> usize {
+    REDIS_RUNTIME.load().len()
+}
+
 /// Health check all registered Redis clients.
 pub async fn health_check_all_redis() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<RedisLinkClient>> = REDIS_RUNTIME.load().values().cloned().collect();
@@ -199,6 +204,11 @@ pub fn list_etcd_clients() -> Vec<String> {
     ETCD_RUNTIME.load().keys().cloned().collect()
 }
 
+/// Number of Etcd link clients currently in the runtime.
+pub fn etcd_client_count() -> usize {
+    ETCD_RUNTIME.load().len()
+}
+
 /// Health check all registered Etcd clients.
 pub async fn health_check_all_etcd() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<EtcdLinkClient>> = ETCD_RUNTIME.load().values().cloned().collect();
@@ -256,6 +266,11 @@ pub fn get_es_client(name: &str) -> Option<Arc<EsLinkClient>> {
 /// List all registered Elasticsearch client names.
 pub fn list_es_clients() -> Vec<String> {
     ES_RUNTIME.load().keys().cloned().collect()
+}
+
+/// Number of Elasticsearch link clients currently in the runtime.
+pub fn es_client_count() -> usize {
+    ES_RUNTIME.load().len()
 }
 
 /// Health check all registered Elasticsearch clients.
@@ -1125,5 +1140,18 @@ mod tests {
             WEBHOOK_RUNTIME.load().get(&key).is_none(),
             "remove must clear WEBHOOK_RUNTIME"
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_stats_tests {
+    use super::*;
+
+    #[test]
+    fn redis_count_starts_at_zero_or_existing() {
+        // Globals may carry state from other tests; just exercise the API.
+        let _: usize = redis_client_count();
+        let _: usize = etcd_client_count();
+        let _: usize = es_client_count();
     }
 }

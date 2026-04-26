@@ -42,3 +42,7 @@ description: Controller↔Gateway 双向 gRPC 同步架构：ConfigSync 协议�
 - **不同步资源**：`ReferenceGrant` 和 `Secret` 是 `no_sync_kinds`，仅在 Controller 侧使用，不发送到 Gateway。
 - **通道安全（mTLS）**：可选的 `conf_sync_security` 配置，为 gRPC 通道启用双向 TLS 认证，支持多套命名证书集（`[[conf_sync_security.certs]]`）和 `active` 字段切换，也向后兼容旧版 `[conf_sync_security.tls]` 单套格式。证书通过 `edgion-cli gen-certs --cert-name <name>` 生成。详见 [00-overview.md § 通道安全](00-overview.md#通道安全mtls)。
 - **模块分布**：`common/conf_sync`（Proto + 共享 traits）、`common/config`（TLS 配置结构）、`controller/conf_sync`（服务端）、`gateway/conf_sync`（客户端）、`ctl/certs`（证书生成）。
+
+## 测试基础设施
+
+- **全清测试通路**：`POST controller /api/v1/admin/wipe-all`（仅 testing-mode）按 tier 顺序删除全部 21 个 kind，配合 `cache_residue` 验证 leak。详见 [05-testing/02-cache-residue-detection.md](../../05-testing/02-cache-residue-detection.md)。

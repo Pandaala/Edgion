@@ -427,6 +427,24 @@ where
         self.endpoints.store(Arc::new(new_map));
     }
 
+    /// Number of LoadBalancer entries (hot path).
+    pub fn lb_count(&self) -> usize {
+        self.endpoints.load().len()
+    }
+
+    /// Number of raw Endpoints data entries (cold path; only populated for RoundRobin store).
+    pub fn ep_data_count(&self) -> usize {
+        self.ep_data.read().len()
+    }
+
+    /// Union of LB keys and ep_data keys. Not atomically consistent across both layers;
+    /// safe for leak-detection use after a quiesced wipe.
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: HashSet<String> = self.endpoints.load().keys().cloned().collect();
+        keys.extend(self.ep_data.read().keys().cloned());
+        keys.into_iter().collect()
+    }
+
     /// Update Endpoints in-place and refresh LoadBalancer
     /// This is more efficient than rebuilding the entire ArcSwap map
     ///
@@ -472,6 +490,41 @@ where
             ),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use pingora_load_balancing::selection::RoundRobin;
+
+    fn empty_endpoints(name: &str) -> Endpoints {
+        Endpoints {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            subsets: None,
+        }
+    }
+
+    #[test]
+    fn counts_are_zero_initially() {
+        let store: EndpointStore<RoundRobin> = EndpointStore::new();
+        assert_eq!(store.lb_count(), 0);
+        assert_eq!(store.ep_data_count(), 0);
+        assert!(store.keys().is_empty());
+    }
+
+    #[test]
+    fn ep_data_count_tracks_writes() {
+        let store: EndpointStore<RoundRobin> = EndpointStore::new();
+        let mut data = HashMap::new();
+        data.insert("default/svc-a".to_string(), empty_endpoints("svc-a"));
+        store.replace_data_only(data);
+        assert_eq!(store.ep_data_count(), 1);
+        assert_eq!(store.lb_count(), 0); // LB creation is lazy — still absent
+        assert_eq!(store.keys(), vec!["default/svc-a".to_string()]);
     }
 }
 

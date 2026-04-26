@@ -232,11 +232,11 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
         // Dynamic endpoints for all resource types
         .route("/configclient/{kind}", get(get_resource))
         .route("/configclient/{kind}/list", get(list_resources))
-        .with_state(config_client);
+        .with_state(config_client.clone());
 
     // Add testing endpoints only when integration testing mode is enabled
     if crate::core::common::config::is_integration_testing_mode() {
-        router = router.merge(create_testing_router());
+        router = router.merge(create_testing_router(config_client));
     }
 
     router
@@ -331,6 +331,19 @@ struct StoreStatsResponse {
     backend_tls_policy: crate::core::gateway::backends::policy::BackendTLSPolicyStoreStats,
     gateway_class_store: SimpleCountStats,
     edgion_gateway_config_store: SimpleCountStats,
+    // New sections (Tasks 1-10)
+    client_caches: ClientCachesStats,
+    service_store: SimpleCountStats,
+    endpoint_store: EndpointStoreStats,
+    ep_slice_store: EpSliceStoreStats,
+    health_status_store: SimpleCountStats,
+    circuit_breaker_store: SimpleCountStats,
+    health_check_config_store: SimpleCountStats,
+    gateway_backend_tls_store: SimpleCountStats,
+    plugin_metadata_store: SimpleCountStats,
+    link_sys_runtime: LinkSysRuntimeStats,
+    plugin_store_v2: PluginStoreStatsV2,
+    stream_plugin_store_v2: PluginStoreStatsV2,
 }
 
 #[derive(Serialize)]
@@ -370,8 +383,39 @@ struct SimpleCountStats {
     count: usize,
 }
 
+#[derive(Serialize)]
+struct ClientCachesStats {
+    by_kind: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct EndpointStoreStats {
+    lb_count: usize,
+    ep_data_count: usize,
+}
+
+#[derive(Serialize)]
+struct EpSliceStoreStats {
+    lb_count: usize,
+    slice_count: usize,
+    service_index_count: usize,
+}
+
+#[derive(Serialize)]
+struct LinkSysRuntimeStats {
+    redis_clients: usize,
+    etcd_clients: usize,
+    es_clients: usize,
+}
+
+#[derive(Serialize)]
+struct PluginStoreStatsV2 {
+    total: usize,
+    by_kind: std::collections::BTreeMap<String, usize>,
+}
+
 /// Collect statistics from all derived stores for config-sync leak detection.
-async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
+async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<StoreStatsResponse>> {
     let http_routes = crate::core::gateway::routes::http::get_global_route_manager().stats();
     let grpc_routes = crate::core::gateway::routes::grpc::get_global_grpc_route_manager().stats();
     let tcp_routes = crate::core::gateway::routes::tcp::get_global_tcp_route_managers().stats();
@@ -397,12 +441,14 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
         listener_count: crate::core::gateway::tls::store::cert_matcher::get_tls_cert_matcher().listener_count(),
     };
 
+    let http_plugin_store = crate::core::gateway::plugins::http::get_global_plugin_store();
     let plugin_store = PluginStoreStats {
-        plugins: crate::core::gateway::plugins::http::get_global_plugin_store().count(),
+        plugins: http_plugin_store.count(),
     };
 
+    let stream_plugin_store_ref = crate::core::gateway::plugins::stream::get_global_stream_plugin_store();
     let stream_plugin_store = StreamPluginStoreStats {
-        plugins: crate::core::gateway::plugins::stream::get_global_stream_plugin_store().count(),
+        plugins: stream_plugin_store_ref.count(),
     };
 
     let link_sys_store = LinkSysStoreStats {
@@ -418,6 +464,64 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
     };
     let edgion_gateway_config_store = SimpleCountStats {
         count: crate::core::gateway::config::edgion_gateway::count_edgion_gateway_configs(),
+    };
+
+    let client_caches = ClientCachesStats {
+        by_kind: client.client_cache_stats(),
+    };
+
+    let svc_store_g = crate::core::gateway::backends::get_global_service_store();
+    let service_store = SimpleCountStats {
+        count: svc_store_g.count(),
+    };
+
+    let ep_g = crate::core::gateway::backends::get_endpoint_roundrobin_store();
+    let endpoint_store = EndpointStoreStats {
+        lb_count: ep_g.lb_count(),
+        ep_data_count: ep_g.ep_data_count(),
+    };
+
+    let eps_g = crate::core::gateway::backends::get_roundrobin_store();
+    let ep_slice_store = EpSliceStoreStats {
+        lb_count: eps_g.lb_count(),
+        slice_count: eps_g.slice_count(),
+        service_index_count: eps_g.service_index_count(),
+    };
+
+    let hs_g = crate::core::gateway::backends::health::check::status_store::get_health_status_store();
+    let health_status_store = SimpleCountStats {
+        count: hs_g.tracked_service_count(),
+    };
+
+    let cb_g = crate::core::gateway::backends::circuit_breaker::store::get_circuit_breaker_store();
+    let circuit_breaker_store = SimpleCountStats {
+        count: cb_g.service_count(),
+    };
+
+    let hcc_g = crate::core::gateway::backends::health::check::config_store::get_hc_config_store();
+    let health_check_config_store = SimpleCountStats { count: hcc_g.count() };
+
+    let gbt_g = crate::core::gateway::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store();
+    let gateway_backend_tls_store = SimpleCountStats { count: gbt_g.count() };
+
+    let plugin_metadata_store = SimpleCountStats {
+        count: crate::core::gateway::plugins::runtime::plugin_metadata::count_plugin_metadata(),
+    };
+
+    let link_sys_runtime = LinkSysRuntimeStats {
+        redis_clients: crate::core::gateway::link_sys::runtime::store::redis_client_count(),
+        etcd_clients: crate::core::gateway::link_sys::runtime::store::etcd_client_count(),
+        es_clients: crate::core::gateway::link_sys::runtime::store::es_client_count(),
+    };
+
+    let plugin_store_v2 = PluginStoreStatsV2 {
+        total: http_plugin_store.count(),
+        by_kind: http_plugin_store.count_by_kind(),
+    };
+
+    let stream_plugin_store_v2 = PluginStoreStatsV2 {
+        total: stream_plugin_store_ref.count(),
+        by_kind: stream_plugin_store_ref.count_by_kind(),
     };
 
     Json(ApiResponse::success(StoreStatsResponse {
@@ -438,14 +542,27 @@ async fn store_stats() -> Json<ApiResponse<StoreStatsResponse>> {
         backend_tls_policy,
         gateway_class_store,
         edgion_gateway_config_store,
+        client_caches,
+        service_store,
+        endpoint_store,
+        ep_slice_store,
+        health_status_store,
+        circuit_breaker_store,
+        health_check_config_store,
+        gateway_backend_tls_store,
+        plugin_metadata_store,
+        link_sys_runtime,
+        plugin_store_v2,
+        stream_plugin_store_v2,
     }))
 }
 
 /// Create testing-specific router (only added when integration testing mode is enabled)
-fn create_testing_router() -> Router {
+fn create_testing_router(config_client: Arc<ConfigClient>) -> Router {
     Router::new()
         .route("/api/v1/testing/status", get(testing_status))
         .route("/api/v1/debug/store-stats", get(store_stats))
+        .with_state(config_client)
         .route(
             "/api/v1/testing/access-log/{trace_id}",
             get(get_access_log).delete(delete_access_log),
@@ -1457,4 +1574,107 @@ pub async fn serve_with_shutdown(
 
     tracing::info!(component = "admin_api_gateway", "Admin API server stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod store_stats_tests {
+    use super::*;
+
+    #[test]
+    fn store_stats_response_serializes() {
+        let resp = StoreStatsResponse {
+            http_routes: crate::core::gateway::routes::http::HttpRouteManagerStats {
+                exact_domains: 0,
+                wildcard_domains: 0,
+                has_catch_all: false,
+                http_routes: 0,
+                listener_count: 0,
+            },
+            grpc_routes: crate::core::gateway::routes::grpc::GrpcRouteManagerStats {
+                grpc_routes: 0,
+                resource_keys: 0,
+                route_units_cache: 0,
+                listener_count: 0,
+            },
+            tcp_routes: crate::core::gateway::routes::tcp::TcpRouteManagerStats {
+                route_cache: 0,
+                listener_count: 0,
+            },
+            udp_routes: crate::core::gateway::routes::udp::UdpRouteManagerStats {
+                route_cache: 0,
+                listener_count: 0,
+            },
+            tls_routes: crate::core::gateway::routes::tls::TlsRouteManagerStats {
+                route_cache: 0,
+                listener_count: 0,
+            },
+            gateway_config: GatewayConfigStats { gateways: 0 },
+            listener_gateway_info:
+                crate::core::gateway::runtime::store::listener_gateway_info::ListenerGatewayInfoStats {
+                    listener_count: 0,
+                    total_entries: 0,
+                },
+            gateway_tls_matcher: crate::core::gateway::runtime::matching::tls::GatewayTlsMatcherStats {
+                listener_count: 0,
+                is_empty: true,
+            },
+            tls_store: TlsStoreStats {
+                entries: 0,
+                valid: 0,
+                invalid: 0,
+            },
+            tls_cert_matcher: TlsCertMatcherStats { listener_count: 0 },
+            plugin_store: PluginStoreStats { plugins: 0 },
+            stream_plugin_store: StreamPluginStoreStats { plugins: 0 },
+            link_sys_store: LinkSysStoreStats { resources: 0 },
+            policy_store: crate::core::gateway::lb::lb_policy::PolicyStoreStats {
+                total_services: 0,
+                total_route_refs: 0,
+            },
+            backend_tls_policy: crate::core::gateway::backends::policy::BackendTLSPolicyStoreStats {
+                policies: 0,
+                reverse_index_targets: 0,
+            },
+            gateway_class_store: SimpleCountStats { count: 0 },
+            edgion_gateway_config_store: SimpleCountStats { count: 0 },
+            client_caches: ClientCachesStats {
+                by_kind: std::collections::BTreeMap::new(),
+            },
+            service_store: SimpleCountStats { count: 0 },
+            endpoint_store: EndpointStoreStats {
+                lb_count: 0,
+                ep_data_count: 0,
+            },
+            ep_slice_store: EpSliceStoreStats {
+                lb_count: 0,
+                slice_count: 0,
+                service_index_count: 0,
+            },
+            health_status_store: SimpleCountStats { count: 0 },
+            circuit_breaker_store: SimpleCountStats { count: 0 },
+            health_check_config_store: SimpleCountStats { count: 0 },
+            gateway_backend_tls_store: SimpleCountStats { count: 0 },
+            plugin_metadata_store: SimpleCountStats { count: 0 },
+            link_sys_runtime: LinkSysRuntimeStats {
+                redis_clients: 0,
+                etcd_clients: 0,
+                es_clients: 0,
+            },
+            plugin_store_v2: PluginStoreStatsV2 {
+                total: 0,
+                by_kind: std::collections::BTreeMap::new(),
+            },
+            stream_plugin_store_v2: PluginStoreStatsV2 {
+                total: 0,
+                by_kind: std::collections::BTreeMap::new(),
+            },
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json.is_object());
+        assert!(json.get("client_caches").is_some());
+        assert!(json.get("plugin_store_v2").is_some());
+        assert!(json.get("stream_plugin_store_v2").is_some());
+        assert!(json.get("plugin_store").is_some()); // backward compat
+        assert!(json.get("stream_plugin_store").is_some()); // backward compat
+    }
 }

@@ -24,6 +24,7 @@ description: Testing skill for Edgion. Use when writing, running, or extending u
 |------|------|------|
 | [03-link-sys-testing.md](03-link-sys-testing.md) | LinkSys 集成测试：bash 测试流程、Admin API 验证、Docker Compose | ✅ 完整 |
 | [04-conf-sync-leak-testing.md](04-conf-sync-leak-testing.md) | 配置同步泄漏检测：基础循环测试 + 高级边界场景 + **mTLS 通道测试** | ✅ 完整 |
+| [02-cache-residue-detection.md](02-cache-residue-detection.md) | Cache 残留检测：wipe-all + store-stats leak 检测，添加新 store / ignore-path、调试 leak 报告 | ✅ 完整 |
 
 ## 快速入门
 

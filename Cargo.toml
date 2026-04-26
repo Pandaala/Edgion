@@ -24,6 +24,10 @@ path = "src/bin/edgion_ctl.rs"
 name = "edgion-center"
 path = "src/bin/edgion_center.rs"
 
+[[bin]]
+name = "cache_residue"
+path = "examples/code/validator/cache_residue.rs"
+
 [[example]]
 name = "build_test_proto"
 path = "examples/code/build_test_proto.rs"

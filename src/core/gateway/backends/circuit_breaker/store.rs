@@ -40,6 +40,16 @@ impl CircuitBreakerStore {
         }
     }
 
+    /// Number of services with circuit-breaker state.
+    pub fn service_count(&self) -> usize {
+        self.services.len()
+    }
+
+    /// Service keys currently tracked (snapshot).
+    pub fn keys(&self) -> Vec<String> {
+        self.services.iter().map(|kv| kv.key().clone()).collect()
+    }
+
     pub fn set_service_config(&self, service_key: &str, config: Option<CircuitBreakerConfig>) {
         match config {
             Some(cfg) => {
@@ -310,5 +320,17 @@ mod tests {
         store.record_failure("default/svc1", 111, 2);
         assert!(store.is_ejected("default/svc1", 111));
         assert!(!store.is_ejected("default/svc2", 111));
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_reports_zero() {
+        let store = CircuitBreakerStore::new();
+        assert_eq!(store.service_count(), 0);
+        assert!(store.keys().is_empty());
     }
 }

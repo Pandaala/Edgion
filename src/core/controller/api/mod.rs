@@ -1,9 +1,11 @@
 mod cluster_handlers;
 mod common;
 mod configserver_handlers;
+mod debug_handlers;
 mod namespaced_handlers;
 mod region_route_handlers;
 mod types;
+mod wipe_handlers;
 
 use crate::core::common::api::{self, ApiResponse};
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator};
@@ -139,7 +141,7 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         schema_validator,
     });
 
-    Router::new()
+    let mut router = Router::new()
         // Health check (liveness)
         .route("/health", get(health_check))
         // Readiness check (ready to serve traffic - ConfigServer ready)
@@ -210,7 +212,20 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         // ConfigServer endpoints (for edgion-cli --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))
-        .with_state(admin_state)
+        .with_state(admin_state.clone());
+
+    if crate::core::common::config::is_test_mode() {
+        router = router
+            .route(
+                "/api/v1/debug/store-stats",
+                get(debug_handlers::store_stats).with_state(admin_state.clone()),
+            )
+            .route(
+                "/api/v1/admin/wipe-all",
+                post(wipe_handlers::wipe_all).with_state(admin_state),
+            );
+    }
+    router
 }
 
 /// Serve the admin API on the specified address.

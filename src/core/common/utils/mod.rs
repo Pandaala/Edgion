@@ -56,6 +56,14 @@ pub fn next_resource_version() -> u64 {
     }
 }
 
+/// Peek at the last-generated `resource_version` without incrementing it.
+///
+/// Returns 0 if `next_resource_version()` has never been called.
+/// Intended for diagnostic/stats use only — not for assigning versions to resources.
+pub fn current_resource_version() -> u64 {
+    LAST_VERSION.load(Ordering::Relaxed)
+}
+
 /// Inspect a raw YAML/JSON document to determine whether a Kubernetes
 /// `resource_version` is already present. If missing, generate one using
 /// `next_resource_version()`.

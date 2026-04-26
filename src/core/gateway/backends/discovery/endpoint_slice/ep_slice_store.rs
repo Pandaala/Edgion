@@ -609,6 +609,30 @@ where
         // 4. Atomically update service_lbs
         self.service_lbs.store(Arc::new(new_service_lbs));
     }
+
+    /// Number of LoadBalancer entries (hot path).
+    pub fn lb_count(&self) -> usize {
+        self.service_lbs.load().len()
+    }
+
+    /// Number of EndpointSlice raw entries.
+    pub fn slice_count(&self) -> usize {
+        self.ep_slices.read().len()
+    }
+
+    /// Number of (service -> slice keys) reverse index entries.
+    pub fn service_index_count(&self) -> usize {
+        self.service_to_slices.read().len()
+    }
+
+    /// Union of service_lbs keys and ep_slices keys (snapshot). Excludes service_to_slices
+    /// because it is a service-keyed reverse index — a different key namespace than ep_slices.
+    /// Not atomically consistent across layers; safe for leak-detection use after a quiesced wipe.
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: HashSet<String> = self.service_lbs.load().keys().cloned().collect();
+        keys.extend(self.ep_slices.read().keys().cloned());
+        keys.into_iter().collect()
+    }
 }
 
 /// Extract service key from EndpointSlice label
@@ -633,6 +657,21 @@ pub fn extract_service_key(ep_slice: &EndpointSlice) -> String {
         format!("{}/{}", namespace, service_name)
     } else {
         service_name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use pingora_load_balancing::selection::RoundRobin;
+
+    #[test]
+    fn counts_are_zero_initially() {
+        let store: EpSliceStore<RoundRobin> = EpSliceStore::new();
+        assert_eq!(store.lb_count(), 0);
+        assert_eq!(store.slice_count(), 0);
+        assert_eq!(store.service_index_count(), 0);
+        assert!(store.keys().is_empty());
     }
 }
 

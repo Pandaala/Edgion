@@ -31,6 +31,17 @@ pub fn create_plugin_metadata_handler() -> Box<dyn ConfHandler<PluginMetaData> +
     Box::new(get_global_plugin_metadata_store())
 }
 
+/// Count PluginMetaData entries in the global store.
+pub fn count_plugin_metadata() -> usize {
+    GLOBAL_PLUGIN_METADATA_STORE.count()
+}
+
+/// List all keys ("namespace/name") in the global PluginMetaData store.
+#[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15/16); allow until then.
+pub fn plugin_metadata_keys() -> Vec<String> {
+    GLOBAL_PLUGIN_METADATA_STORE.keys()
+}
+
 /// Raw PluginMetaData map. Key: "namespace/name" (e.g. "edgion-default/global-region-conf").
 type RawMap = HashMap<String, Arc<PluginMetaData>>;
 
@@ -78,6 +89,19 @@ impl PluginMetaDataGatewayStore {
                 global_connection_ip_restrictions: HashMap::new(),
             }),
         }
+    }
+
+    // ── Audit / stats ───────────────────────────────────────────────────────
+
+    /// Number of PluginMetaData entries currently in the store.
+    pub fn count(&self) -> usize {
+        self.raw.load().len()
+    }
+
+    /// Keys currently in the store (snapshot copy).
+    #[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15/16); allow until then.
+    pub fn keys(&self) -> Vec<String> {
+        self.raw.load().keys().cloned().collect()
     }
 
     // ── Typed getters (zero-clone, returns Arc) ─────────────────────────────
@@ -244,5 +268,17 @@ impl ConfHandler<PluginMetaData> for PluginMetaDataGatewayStore {
         let mut add_or_update = add;
         add_or_update.extend(update);
         self.update(add_or_update, &remove);
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn count_returns_zero_initially() {
+        let store = PluginMetaDataGatewayStore::new();
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
     }
 }

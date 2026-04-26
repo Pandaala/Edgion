@@ -2,6 +2,9 @@ use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
 use crate::core::gateway::routes::grpc::get_global_grpc_route_managers;
 use crate::core::gateway::routes::http::get_global_http_route_managers;
+use crate::core::gateway::routes::tcp::get_global_tcp_route_managers;
+use crate::core::gateway::routes::tls::get_global_tls_route_managers;
+use crate::core::gateway::routes::udp::get_global_udp_route_managers;
 use crate::core::gateway::runtime::matching::rebuild_gateway_tls_matcher;
 use crate::core::gateway::runtime::store::{
     get_global_gateway_config_store, get_global_gateway_store, get_listener_gateway_info_store,
@@ -74,12 +77,18 @@ impl ConfHandler<Gateway> for GatewayHandler {
         rebuild_listener_gateway_infos(&gateways);
         let keys_after = get_listener_gateway_info_store().all_listener_keys();
 
-        // Rebuild HTTP/gRPC per-listener route managers only when the listener
-        // set changed (listeners added or removed). This avoids unnecessary full
-        // rebuilds on Gateway metadata-only changes (e.g. annotations, status).
+        // Rebuild per-listener route managers (HTTP/gRPC/TCP/TLS/UDP) only when
+        // the listener set changed (listeners added or removed). Without rebuilding
+        // TCP/TLS/UDP here, their per-listener entries leak when a Gateway is
+        // removed: route delete only checks active_listeners (PGIS) while Gateway
+        // still exists, so empty buckets are not removed; once Gateway disappears
+        // there is no other trigger to clean up the now-orphan listener entries.
         if listeners_changed(&keys_before, &keys_after) {
             get_global_http_route_managers().rebuild_all_listener_managers();
             get_global_grpc_route_managers().rebuild_all_listener_managers();
+            get_global_tcp_route_managers().rebuild_all_listener_managers();
+            get_global_tls_route_managers().rebuild_all_listener_managers();
+            get_global_udp_route_managers().rebuild_all_listener_managers();
         }
     }
 
@@ -186,6 +195,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
             if listeners_changed(&keys_before, &keys_after) {
                 get_global_http_route_managers().rebuild_all_listener_managers();
                 get_global_grpc_route_managers().rebuild_all_listener_managers();
+                get_global_tcp_route_managers().rebuild_all_listener_managers();
+                get_global_tls_route_managers().rebuild_all_listener_managers();
+                get_global_udp_route_managers().rebuild_all_listener_managers();
             }
         }
     }

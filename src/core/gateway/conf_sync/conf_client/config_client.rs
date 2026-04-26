@@ -531,6 +531,62 @@ impl ConfigClient {
     pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
         self.endpoint_slices.trigger_update_event_by_key(key);
     }
+
+    /// Per-kind entry counts for all 18 ClientCaches. Used by store-stats leak detection.
+    ///
+    /// Covers every kind that ConfigClient actually caches on the Gateway side.
+    /// Omitted (not cached on Gateway): Secret, ConfigMap, ReferenceGrant.
+    pub fn client_cache_stats(&self) -> std::collections::BTreeMap<String, usize> {
+        let mut out = std::collections::BTreeMap::new();
+        out.insert("HTTPRoute".to_string(), self.routes().len());
+        out.insert("GRPCRoute".to_string(), self.grpc_routes().len());
+        out.insert("TCPRoute".to_string(), self.tcp_routes().len());
+        out.insert("UDPRoute".to_string(), self.udp_routes().len());
+        out.insert("TLSRoute".to_string(), self.tls_routes().len());
+        out.insert("Service".to_string(), self.services().len());
+        out.insert("EndpointSlice".to_string(), self.endpoint_slices().len());
+        out.insert("Endpoints".to_string(), self.endpoints().len());
+        out.insert("EdgionTls".to_string(), self.edgion_tls().len());
+        out.insert("EdgionAcme".to_string(), self.edgion_acme().len());
+        out.insert("EdgionPlugins".to_string(), self.edgion_plugins().len());
+        out.insert("EdgionStreamPlugins".to_string(), self.edgion_stream_plugins().len());
+        out.insert("BackendTLSPolicy".to_string(), self.backend_tls_policies().len());
+        out.insert("PluginMetaData".to_string(), self.plugin_metadata().len());
+        out.insert("LinkSys".to_string(), self.link_sys().len());
+        out.insert("GatewayClass".to_string(), self.gateway_classes().len());
+        out.insert("Gateway".to_string(), self.gateways().len());
+        out.insert("EdgionGatewayConfig".to_string(), self.edgion_gateway_configs().len());
+        out
+    }
+
+    /// Per-kind sample keys (capped at `max`). Used by leak detection diagnostic report.
+    ///
+    /// Returns an empty Vec for any kind not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
+    #[allow(dead_code)] // Consumed by validator binary (Task 15/16); allow until then.
+    pub fn client_cache_keys(&self, kind: &str, max: usize) -> Vec<String> {
+        let all = match kind {
+            "HTTPRoute" => self.routes().keys(),
+            "GRPCRoute" => self.grpc_routes().keys(),
+            "TCPRoute" => self.tcp_routes().keys(),
+            "UDPRoute" => self.udp_routes().keys(),
+            "TLSRoute" => self.tls_routes().keys(),
+            "Service" => self.services().keys(),
+            "EndpointSlice" => self.endpoint_slices().keys(),
+            "Endpoints" => self.endpoints().keys(),
+            "EdgionTls" => self.edgion_tls().keys(),
+            "EdgionAcme" => self.edgion_acme().keys(),
+            "EdgionPlugins" => self.edgion_plugins().keys(),
+            "EdgionStreamPlugins" => self.edgion_stream_plugins().keys(),
+            "BackendTLSPolicy" => self.backend_tls_policies().keys(),
+            "PluginMetaData" => self.plugin_metadata().keys(),
+            "LinkSys" => self.link_sys().keys(),
+            "GatewayClass" => self.gateway_classes().keys(),
+            "Gateway" => self.gateways().keys(),
+            "EdgionGatewayConfig" => self.edgion_gateway_configs().keys(),
+            _ => Vec::new(),
+        };
+        all.into_iter().take(max).collect()
+    }
 }
 
 pub struct ListDataSimple {
@@ -657,5 +713,31 @@ mod tests {
 
         // Other caches remain not ready, but should not block.
         assert!(client.is_ready().is_ok());
+    }
+
+    #[test]
+    fn client_cache_stats_all_zero_initially() {
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let _enter = rt.enter();
+        let client = ConfigClient::new("cid".to_string(), "cname".to_string());
+        let stats = client.client_cache_stats();
+        // 18 (not 19 from plan template): Secret and ConfigMap have no ClientCache on
+        // the gateway side; ReferenceGrant is not synced. EdgionAcme is added (real cache).
+        assert_eq!(stats.len(), 18, "expected 18 gateway-side ClientCache kinds");
+        for (kind, count) in &stats {
+            assert_eq!(*count, 0, "kind {kind} should start empty");
+        }
+        // Cross-check: every kind reported by stats must be reachable via client_cache_keys.
+        // Catches future divergence if a new kind is added to stats but not keys.
+        for kind in stats.keys() {
+            let sample = client.client_cache_keys(kind, 5);
+            assert!(
+                sample.is_empty(),
+                "kind {} reported in stats but client_cache_keys returned non-empty for empty store",
+                kind
+            );
+        }
+        // Unknown kind returns empty vec (no panic).
+        assert!(client.client_cache_keys("UnknownKind", 10).is_empty());
     }
 }

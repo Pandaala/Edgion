@@ -40,6 +40,16 @@ impl GatewayBackendTlsStore {
         self.store.store(Arc::new(new_map));
     }
 
+    /// Number of gateway entries currently in the store.
+    pub fn count(&self) -> usize {
+        self.store.load().len()
+    }
+
+    /// Gateway keys currently in the store (snapshot).
+    pub fn keys(&self) -> Vec<String> {
+        self.store.load().keys().cloned().collect()
+    }
+
     /// Remove the client certificate for a gateway.
     pub fn remove(&self, gateway_key: &str) {
         let current = self.store.load();
@@ -54,5 +64,17 @@ impl GatewayBackendTlsStore {
 impl Default for GatewayBackendTlsStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_reports_zero() {
+        let store = GatewayBackendTlsStore::new();
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
     }
 }
