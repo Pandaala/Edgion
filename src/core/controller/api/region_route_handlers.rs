@@ -55,7 +55,7 @@ pub struct ServiceRegionPluginMetadataEntry {
 // ============= Failover Types =============
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginMetadataFailoverRequest {
     pub namespace: String,
     pub name: String,
@@ -257,4 +257,127 @@ fn patch_region_failover(regions: &mut Vec<serde_json::Value>, region_name: &str
         modified = true;
     }
     modified
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failover_request_rejects_unknown_fields() {
+        // Any unknown field must be rejected to keep the contract
+        // "failover endpoint can only change failoverTo".
+        let json = r#"{
+            "namespace": "default",
+            "name": "test-cluster-route",
+            "regionName": "east",
+            "failoverTo": "west",
+            "myRegion": "evil"
+        }"#;
+        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "unknown field 'myRegion' must be rejected");
+    }
+
+    #[test]
+    fn failover_request_accepts_canonical_payload() {
+        let json = r#"{
+            "namespace": "default",
+            "name": "test-cluster-route",
+            "regionName": "east",
+            "failoverTo": "west"
+        }"#;
+        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        let req = result.expect("canonical 4-field payload must be accepted");
+        // Assert field values to verify rename_all = "camelCase" maps correctly.
+        assert_eq!(req.namespace, "default");
+        assert_eq!(req.name, "test-cluster-route");
+        assert_eq!(req.region_name, "east");
+        assert_eq!(req.failover_to, "west");
+    }
+
+    #[test]
+    fn failover_request_accepts_empty_failover_to() {
+        // Empty string semantics = "clear failover".
+        let json = r#"{
+            "namespace": "default",
+            "name": "test-cluster-route",
+            "regionName": "east",
+            "failoverTo": ""
+        }"#;
+        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().failover_to, "");
+    }
+
+    /// Locked invariant: `patch_region_failover` mutates ONLY the targeted region's
+    /// `failoverTo` field. Every other byte of the surrounding region object and other
+    /// regions stays identical. This is the runtime guarantee behind the contract
+    /// "the failover endpoint cannot modify anything other than failoverTo".
+    #[test]
+    fn patch_region_failover_only_changes_target_failover_to() {
+        let original = serde_json::json!([
+            {
+                "name": "east",
+                "weight": 100,
+                "endpoints": ["10.0.0.1", "10.0.0.2"],
+                "failoverTo": "old-target"
+            },
+            {
+                "name": "west",
+                "weight": 50,
+                "endpoints": ["10.0.1.1"],
+                "failoverTo": "another"
+            }
+        ]);
+        let mut regions = original.as_array().unwrap().clone();
+
+        let modified = patch_region_failover(&mut regions, "east", "west");
+        assert!(modified, "should report modified");
+
+        // Target region: only failoverTo changed
+        assert_eq!(regions[0]["failoverTo"], serde_json::Value::String("west".into()));
+        assert_eq!(regions[0]["name"], original[0]["name"]);
+        assert_eq!(regions[0]["weight"], original[0]["weight"]);
+        assert_eq!(regions[0]["endpoints"], original[0]["endpoints"]);
+
+        // Non-target region: byte-for-byte identical
+        assert_eq!(regions[1], original[1]);
+    }
+
+    #[test]
+    fn patch_region_failover_clear_removes_field_only() {
+        let original = serde_json::json!([
+            {
+                "name": "east",
+                "weight": 100,
+                "failoverTo": "west"
+            },
+            {
+                "name": "west",
+                "weight": 50,
+                "failoverTo": "east"
+            }
+        ]);
+        let mut regions = original.as_array().unwrap().clone();
+
+        let modified = patch_region_failover(&mut regions, "east", "");
+        assert!(modified);
+
+        // Target region: failoverTo removed, other fields untouched
+        assert!(regions[0].as_object().unwrap().get("failoverTo").is_none());
+        assert_eq!(regions[0]["name"], original[0]["name"]);
+        assert_eq!(regions[0]["weight"], original[0]["weight"]);
+
+        // Non-target region: identical
+        assert_eq!(regions[1], original[1]);
+    }
+
+    #[test]
+    fn patch_region_failover_no_match_returns_false() {
+        let mut regions = vec![serde_json::json!({"name": "east", "failoverTo": "x"})];
+        let modified = patch_region_failover(&mut regions, "nonexistent", "y");
+        assert!(!modified);
+        // Untouched
+        assert_eq!(regions[0]["failoverTo"], serde_json::Value::String("x".into()));
+    }
 }

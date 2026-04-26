@@ -196,6 +196,12 @@ Gateway 不缓存解析结果，每次请求通过 `PluginMetaDataGatewayStore` 
 | `POST /api/v1/cluster-region-routes/failover` | 修改 Cluster PM 中某 region 的 failoverTo |
 | `POST /api/v1/service-region-routes/failover` | 修改 Service PM 中某 region 的 failoverTo |
 
+> **接口契约**：上述 failover 接口（Center 与 Controller 两端）的 body 必须严格是
+> `{namespace, name, regionName, failoverTo}` 四个字段，含任何其他字段（例如 `myRegion`、
+> `spec`、完整 PluginMetaData YAML）都会在反序列化阶段被 4xx 拒绝。这条契约由强类型
+> `FailoverRequest` + `deny_unknown_fields` 在两端独立强制：Center 重新序列化后再 fan-out
+> 给 Controller，绝不透传上游 raw bytes。
+
 ## Controller 侧处理
 
 ### preparse

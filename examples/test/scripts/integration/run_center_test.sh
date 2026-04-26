@@ -466,6 +466,107 @@ print('not_found')
   fi
 fi
 
+# ─── Test 4d: failover_preserves_my_region ──────────────────────────────────
+# Multi-controller setup: each controller has its own myRegion. Failover must NOT
+# homogenize them.
+out=$(auth_get "$TOKEN" "$CENTER_HTTP/api/v1/center/cluster-region-routes")
+if [[ -z "$out" ]]; then
+  fail "failover_preserves_my_region" "empty response from center cluster-region-routes"
+else
+  preserved=$(echo "$out" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+items = d.get('data', [])
+for item in items:
+  if item.get('name') == 'test-cluster-route':
+    controllers = item.get('controllers', {})
+    my_regions = sorted({entry.get('myRegion') for entry in controllers.values() if entry.get('myRegion')})
+    # Two distinct controllers must report two distinct (and non-empty) myRegion values.
+    if len(my_regions) >= 2 and all(my_regions):
+      print('ok')
+      sys.exit(0)
+print('homogenized:' + str(my_regions))
+" 2>/dev/null || echo "error")
+  if [[ "$preserved" == "ok" ]]; then
+    pass "failover_preserves_my_region"
+  else
+    fail "failover_preserves_my_region" "expected distinct myRegion per controller, got: $preserved. Response: $out"
+  fi
+fi
+
+# ─── Test 4e: failover_rejects_unknown_fields_cluster ───────────────────────
+# Spec contract: Center failover endpoint must reject any payload containing
+# fields beyond {namespace, name, regionName, failoverTo}. Type system enforces
+# this via deny_unknown_fields.
+evil_body='{"namespace":"default","name":"test-cluster-route","regionName":"east","failoverTo":"west","myRegion":"evil"}'
+status=$(curl -s -o /tmp/edgion_failover_neg_body \
+  -w "%{http_code}" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -X POST \
+  --data "$evil_body" \
+  "$CENTER_HTTP/api/v1/center/cluster-region-routes/failover")
+if [[ "$status" == "400" || "$status" == "422" ]]; then
+  pass "failover_rejects_unknown_fields_cluster"
+else
+  fail "failover_rejects_unknown_fields_cluster" "expected 400/422 for unknown field, got $status. Body: $(cat /tmp/edgion_failover_neg_body 2>/dev/null)"
+fi
+
+# ─── Test 4f: failover_rejects_unknown_fields_service ───────────────────────
+evil_body_svc='{"namespace":"default","name":"svc-route-a","regionName":"east","failoverTo":"west","spec":{"metadata":{}}}'
+status=$(curl -s -o /tmp/edgion_failover_neg_body_svc \
+  -w "%{http_code}" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -X POST \
+  --data "$evil_body_svc" \
+  "$CENTER_HTTP/api/v1/center/service-region-routes/failover")
+if [[ "$status" == "400" || "$status" == "422" ]]; then
+  pass "failover_rejects_unknown_fields_service"
+else
+  fail "failover_rejects_unknown_fields_service" "expected 400/422 for unknown field, got $status. Body: $(cat /tmp/edgion_failover_neg_body_svc 2>/dev/null)"
+fi
+
+# ─── Test 4g: failover_clear ────────────────────────────────────────────────
+# Empty failoverTo = clear the failover. Other regions and myRegion remain unchanged.
+clear_body='{"namespace":"default","name":"test-cluster-route","regionName":"east","failoverTo":""}'
+out=$(auth_post "$TOKEN" "$CENTER_HTTP/api/v1/center/cluster-region-routes/failover" "$clear_body")
+modified=$(echo "$out" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d.get('data', {}).get('modified', 0))
+" 2>/dev/null || echo "0")
+if [[ "$modified" -lt 1 ]]; then
+  fail "failover_clear" "expected modified >= 1 after clear, got $modified. Response: $out"
+else
+  log "Waiting 3s for clear to propagate..."
+  sleep 3
+  out=$(auth_get "$TOKEN" "$CENTER_HTTP/api/v1/center/cluster-region-routes")
+  cleared=$(echo "$out" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+items = d.get('data', [])
+for item in items:
+  if item.get('name') == 'test-cluster-route':
+    controllers = item.get('controllers', {})
+    for cid, entry in controllers.items():
+      regions = entry.get('regions', [])
+      east = next((r for r in regions if r.get('name') == 'east'), None)
+      if east is None:
+        print('east_missing'); sys.exit(0)
+      # After clear: failoverTo absent OR empty.
+      ft = east.get('failoverTo', '')
+      if ft != '':
+        print('still_set:' + str(ft)); sys.exit(0)
+print('ok')
+" 2>/dev/null || echo "error")
+  if [[ "$cleared" == "ok" ]]; then
+    pass "failover_clear"
+  else
+    fail "failover_clear" "failoverTo not cleared: $cleared. Response: $out"
+  fi
+fi
+
 # ─── Test 5: consistency_detect ─────────────────────────────────────────────
 out=$(auth_get "$TOKEN" "$CENTER_HTTP/api/v1/center/cluster-region-routes/consistency")
 if [[ -z "$out" ]]; then
