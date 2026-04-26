@@ -79,14 +79,21 @@ impl fmt::Display for MatchInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientCertInfo {
     /// Certificate subject DN (Distinguished Name)
+    #[serde(serialize_with = "crate::types::sensitive::masked::serialize")]
     pub subject: String,
     /// Subject Alternative Names (SANs) from certificate
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "crate::types::sensitive::masked_vec::serialize"
+    )]
     pub sans: Vec<String>,
     /// Common Name (CN) extracted from subject
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+    )]
     pub cn: Option<String>,
-    /// Certificate fingerprint (SHA256 hex)
+    /// Certificate fingerprint (SHA256 hex) — not PII
     pub fingerprint: String,
 }
 
@@ -210,13 +217,19 @@ impl fmt::Display for NormalizedHostname {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
     /// TCP client IP address (direct connection, immutable)
-    #[serde(rename = "client-addr")]
+    #[serde(
+        rename = "client-addr",
+        serialize_with = "crate::types::sensitive::masked::serialize"
+    )]
     pub client_addr: String,
     /// TCP client port (direct connection, 0 if unknown)
     #[serde(rename = "client-port")]
     pub client_port: u16,
     /// Real client address (extracted from headers if behind trusted proxy)
-    #[serde(rename = "remote-addr")]
+    #[serde(
+        rename = "remote-addr",
+        serialize_with = "crate::types::sensitive::masked::serialize"
+    )]
     pub remote_addr: String,
     /// Trace ID from x-trace-id header
     #[serde(rename = "x-trace-id")]
@@ -226,16 +239,24 @@ pub struct RequestInfo {
     #[serde(rename = "host")]
     pub hostname: NormalizedHostname,
     /// Request path from URI
+    #[serde(serialize_with = "crate::types::sensitive::masked::serialize")]
     pub path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
     /// Original X-Forwarded-For header value (before appending client IP)
-    #[serde(rename = "x-forwarded-for", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "x-forwarded-for",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+    )]
     pub x_forwarded_for: Option<String>,
     /// SNI (Server Name Indication) from TLS handshake
     /// Only present for HTTPS connections; HTTP connections will have None
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+    )]
     pub sni: Option<String>,
     /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -713,5 +734,98 @@ impl EdgionHttpContext {
     /// Check if a context variable exists
     pub fn has_ctx_var(&self, key: &str) -> bool {
         self.ctx_map.contains_key(key)
+    }
+}
+
+#[cfg(test)]
+mod sensitive_tests {
+    use super::*;
+    use crate::types::sensitive::SENSITIVE_MODE;
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+
+    static MODE_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ModeGuard<'a>(u8, std::sync::MutexGuard<'a, ()>);
+    impl Drop for ModeGuard<'_> {
+        fn drop(&mut self) {
+            SENSITIVE_MODE.store(self.0, Ordering::SeqCst);
+        }
+    }
+    fn set_mode(mode: u8) -> ModeGuard<'static> {
+        let guard = MODE_LOCK.lock().unwrap();
+        let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
+        ModeGuard(prev, guard)
+    }
+
+    #[test]
+    fn test_client_cert_info_wrap_mode() {
+        let _g = set_mode(2);
+        let cert = ClientCertInfo {
+            subject: "CN=alice@example.com".to_string(),
+            sans: vec!["alice@example.com".to_string()],
+            cn: Some("alice@example.com".to_string()),
+            fingerprint: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&cert).unwrap();
+        assert!(
+            json.contains("<E>CN=alice@example.com</E>"),
+            "subject not wrapped: {}",
+            json
+        );
+        assert!(json.contains("<E>alice@example.com</E>"), "sans not wrapped: {}", json);
+        assert!(json.contains("abc123"), "fingerprint should not be wrapped: {}", json);
+    }
+
+    #[test]
+    fn test_client_cert_info_off_mode() {
+        let _g = set_mode(0);
+        let cert = ClientCertInfo {
+            subject: "CN=alice@example.com".to_string(),
+            sans: vec![],
+            cn: None,
+            fingerprint: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&cert).unwrap();
+        assert!(
+            json.contains("CN=alice@example.com"),
+            "subject should be plain in off mode: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_request_info_wrap_mode() {
+        let _g = set_mode(2);
+        let ri = RequestInfo {
+            client_addr: "127.0.0.1".to_string(),
+            remote_addr: "10.0.0.1".to_string(),
+            path: "/api/users/alice".to_string(),
+            x_forwarded_for: Some("203.0.113.5, 10.0.0.1".to_string()),
+            sni: Some("example.com".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ri).unwrap();
+        assert!(json.contains("<E>127.0.0.1</E>"), "client_addr: {}", json);
+        assert!(json.contains("<E>10.0.0.1</E>"), "remote_addr: {}", json);
+        assert!(json.contains("<E>/api/users/alice</E>"), "path: {}", json);
+        assert!(json.contains("<E>203.0.113.5, 10.0.0.1</E>"), "xff: {}", json);
+        assert!(json.contains("<E>example.com</E>"), "sni: {}", json);
+    }
+
+    #[test]
+    fn test_request_info_replace_mode() {
+        let _g = set_mode(1);
+        let ri = RequestInfo {
+            client_addr: "127.0.0.1".to_string(),
+            remote_addr: "10.0.0.1".to_string(),
+            path: "/api/users/alice".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ri).unwrap();
+        assert!(!json.contains("127.0.0.1"), "client_addr leaked: {}", json);
+        assert!(!json.contains("10.0.0.1"), "remote_addr leaked: {}", json);
+        assert!(!json.contains("/api/users/alice"), "path leaked: {}", json);
+        assert!(json.contains("***"), "replace_with not found: {}", json);
     }
 }

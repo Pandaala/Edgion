@@ -424,7 +424,7 @@ impl TlsCallback {
                     return;
                 }
             }
-            Err(e) => {
+            Err(_e) => {
                 // days_from_now(0) can only fail due to BoringSSL internal allocation failure
                 // (effectively impossible). Log the error but allow the connection to proceed
                 // rather than causing a complete outage — the cert was already validated at
@@ -433,7 +433,7 @@ impl TlsCallback {
                     .meta
                     .log
                     .get_or_insert_with(crate::core::gateway::observe::logs::LogBuffer::new)
-                    .push(&format!("[warn] cert_expiry_check_failed: {e}"));
+                    .push_err("cert_expiry_check_failed");
             }
         }
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
@@ -475,12 +475,12 @@ impl TlsCallback {
         }
 
         if let Some(ref ciphers) = edgion_tls.spec.ciphers {
-            if let Err(e) = self.configure_ciphers(ssl, ciphers) {
+            if let Err(_e) = self.configure_ciphers(ssl, ciphers) {
                 let _ = ssl_ctx
                     .meta
                     .log
                     .get_or_insert_with(LogBuffer::new)
-                    .push(&format!("[err] cipher: {e}"));
+                    .push_err("cipher config fail");
             }
         }
     }

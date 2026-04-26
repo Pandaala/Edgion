@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use http::StatusCode;
 use pingora_http::ResponseHeader;
 
-use crate::core::gateway::plugins::runtime::log::PluginLog;
+use crate::core::gateway::plugins::runtime::log::{la, PluginLog};
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::HTTPRequestRedirectFilter;
@@ -138,7 +138,7 @@ impl RequestFilter for RequestRedirectFilter {
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::FOUND);
 
         // Log redirect operation (key point)
-        plugin_log.push(&format!("redirect {}", status.as_u16()));
+        plugin_log.push_fmt("redirect {}", la![status.as_u16().to_string().as_str()]);
 
         // Build redirect response
         let mut resp = match ResponseHeader::build(status, None) {

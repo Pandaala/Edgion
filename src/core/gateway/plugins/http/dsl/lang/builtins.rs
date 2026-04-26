@@ -671,13 +671,13 @@ impl Vm {
                 }
             }
             BuiltinId::LogWarn => {
-                state.pop()?; // discard: dynamic value may contain sensitive headers/tokens
-                log.push_err("dsl log warn");
+                let value = state.pop()?.into_string();
+                log.push_sensitive(&value);
                 Ok(Value::Nil)
             }
             BuiltinId::LogError => {
-                state.pop()?; // discard: dynamic value may contain sensitive headers/tokens
-                log.push_err("dsl log error");
+                let value = state.pop()?.into_string();
+                log.push_sensitive(&value);
                 Ok(Value::Nil)
             }
         }

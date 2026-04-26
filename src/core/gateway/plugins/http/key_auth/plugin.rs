@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
@@ -198,7 +199,7 @@ impl RequestFilter for KeyAuth {
 
         // Log OK with username if available
         if let Some(username) = metadata.headers.get("X-Consumer-Username") {
-            plugin_log.push(&format!("OK user {}", username));
+            plugin_log.push_fmt("OK user {}", la![sensitive(username)]);
         } else {
             plugin_log.push("OK");
         }

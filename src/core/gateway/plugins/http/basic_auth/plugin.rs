@@ -8,6 +8,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_sec
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::BasicAuthConfig;
@@ -360,7 +361,7 @@ impl RequestFilter for BasicAuth {
             }
         };
 
-        plugin_log.push(&format!("OK user {}", username));
+        plugin_log.push_fmt("OK user {}", la![sensitive(&username)]);
 
         // Set consumer headers for upstream
         let _ = self.set_consumer_headers(session, &username);

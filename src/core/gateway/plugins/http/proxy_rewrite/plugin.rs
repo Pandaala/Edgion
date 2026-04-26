@@ -8,6 +8,7 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::Regex;
 use std::sync::LazyLock;
 
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::ProxyRewriteConfig;
@@ -243,7 +244,7 @@ impl ProxyRewrite {
             if let Err(_e) = session.set_upstream_method(method_str) {
                 plugin_log.push_err("method rewrite fail");
             } else {
-                plugin_log.push(&format!("method rewrite {}", method_str));
+                plugin_log.push_fmt("method rewrite {}", la![sensitive(method_str)]);
             }
         }
     }

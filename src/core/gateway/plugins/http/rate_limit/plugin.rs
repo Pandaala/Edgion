@@ -41,6 +41,7 @@ use pingora_limits::rate::Rate;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
 use crate::types::filters::PluginRunningResult;
@@ -275,14 +276,14 @@ impl RequestFilter for RateLimit {
 
         // Check if rate limit exceeded
         if curr_count > rate_limit {
-            plugin_log.push(&format!("Deny rate limit kl={}", kl));
+            plugin_log.push_fmt("Deny rate limit kl={}", la![kl.to_string().as_str()]);
             // Use interval as retry_after since the window will reset after interval
             return self.reject_request(session, interval).await;
         }
 
         // Add rate limit headers
         self.add_headers(session, remaining, interval);
-        plugin_log.push(&format!("Allow kl={} r={}", kl, remaining.max(0)));
+        plugin_log.push_fmt("Allow kl={} r={}", la![kl.to_string().as_str(), remaining.max(0).to_string().as_str()]);
         PluginRunningResult::GoodNext
     }
 }

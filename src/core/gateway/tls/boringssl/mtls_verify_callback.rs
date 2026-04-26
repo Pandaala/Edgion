@@ -193,20 +193,27 @@ fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) ->
     // Validate SAN whitelist
     if let Some(ref allowed_sans) = client_auth.allowed_sans {
         if !validate_san_whitelist(&cert_info, allowed_sans) {
-            return Err(format!(
-                "mTLS SAN whitelist failed: subject={}, sans={:?}",
-                cert_info.subject, cert_info.sans
-            ));
+            // Apply active sensitive mode to client cert fields before embedding in err_log,
+            // matching the protection ClientCertInfo gets via serde when serialized normally.
+            let subject = crate::types::sensitive::apply_sensitive(&cert_info.subject, |s| s.to_string());
+            let sans: Vec<String> = cert_info
+                .sans
+                .iter()
+                .map(|s| crate::types::sensitive::apply_sensitive(s, |w| w.to_string()))
+                .collect();
+            return Err(format!("mTLS SAN whitelist failed: subject={}, sans={:?}", subject, sans));
         }
     }
 
     // Validate CN whitelist
     if let Some(ref allowed_cns) = client_auth.allowed_cns {
         if !validate_cn_whitelist(&cert_info, allowed_cns) {
-            return Err(format!(
-                "mTLS CN whitelist failed: subject={}, cn={:?}",
-                cert_info.subject, cert_info.cn
-            ));
+            let subject = crate::types::sensitive::apply_sensitive(&cert_info.subject, |s| s.to_string());
+            let cn = cert_info
+                .cn
+                .as_ref()
+                .map(|s| crate::types::sensitive::apply_sensitive(s, |w| w.to_string()));
+            return Err(format!("mTLS CN whitelist failed: subject={}, cn={:?}", subject, cn));
         }
     }
 

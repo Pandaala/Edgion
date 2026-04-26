@@ -18,6 +18,7 @@ use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384, Sha512};
 
 use crate::core::gateway::plugins::http::common::auth_common::send_auth_error_response;
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
@@ -478,7 +479,7 @@ impl RequestFilter for HmacAuth {
         self.set_upstream_headers(session, credential);
         self.hide_credentials(session);
 
-        plugin_log.push(&format!("OK user {}", params.username));
+        plugin_log.push_fmt("OK user {}", la![sensitive(&params.username)]);
         PluginRunningResult::GoodNext
     }
 }

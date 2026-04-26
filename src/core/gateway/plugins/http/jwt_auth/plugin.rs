@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::JwtAuthConfig;
@@ -70,7 +71,7 @@ impl RequestFilter for JwtAuth {
         // Verify token
         match self.verify_token(&token, plugin_log) {
             Ok(result) => {
-                plugin_log.push(&format!("OK u={}", result.username));
+                plugin_log.push_fmt("OK u={}", la![sensitive(&result.username)]);
                 // Set claims to headers if configured
                 self.set_claims_headers(session, &result.claims);
                 // Store claims in context if configured

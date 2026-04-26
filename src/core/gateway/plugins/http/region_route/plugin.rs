@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::common::KeyGet;
@@ -165,7 +166,7 @@ impl RegionRoute {
 
         match regions.iter().enumerate().find(|(_, r)| r.name == target_name) {
             Some((target_idx, target_region)) => {
-                log.push(&format!("redirect {}→{}", region.name, target_region.name));
+                log.push_fmt("redirect {}→{}", la![sensitive(&region.name), sensitive(&target_region.name)]);
                 (target_idx, target_region)
             }
             None => {
@@ -200,7 +201,7 @@ impl RegionRoute {
             .to_string();
 
         log.push("proxy pass");
-        log.push(&format!("→{} {}:{}", region.name, host, port));
+        log.push_fmt("→{} {}:{}", la![sensitive(&region.name), sensitive(host), sensitive(&port.to_string())]);
 
         session.set_external_jump(ExternalJumpPreset {
             domain: host.to_string(),
@@ -225,7 +226,8 @@ impl RegionRoute {
             if let Some((raw, src)) = self.extract_first(session, hkg).await {
                 if let Ok(v) = raw.parse::<u16>() {
                     if v < modulo {
-                        log.push(&format!("hash_pass={} from:{}", v, src.as_log_str()));
+                        let src_s = src.as_log_str();
+                        log.push_fmt("hash_pass={} from:{}", la![sensitive(&v.to_string()), sensitive(&src_s)]);
                         return Self::lookup_region(&cluster.regions, v);
                     }
                 }
@@ -254,7 +256,8 @@ impl RegionRoute {
         };
 
         let hash_val = compute_hash(&key, &calc.algorithm, calc.modulo);
-        log.push(&format!("key={} hash={}", src.as_log_str(), hash_val));
+        let src_s = src.as_log_str();
+        log.push_fmt("key={} hash={}", la![sensitive(&src_s), sensitive(&hash_val.to_string())]);
 
         if !calc.write_back.is_empty() {
             let mut targets = String::new();
@@ -265,12 +268,12 @@ impl RegionRoute {
                 }
                 targets.push_str(&wb.as_log_str());
             }
-            log.push(&format!("wb→{}", targets));
+            log.push_fmt("wb→{}", la![sensitive(&targets)]);
         }
 
         let result = Self::lookup_region(&cluster.regions, hash_val);
         if result.is_none() {
-            log.push(&format!("hash={} no_range, pass", hash_val));
+            log.push_fmt("hash={} no_range, pass", la![sensitive(&hash_val.to_string())]);
         }
         result
     }
@@ -306,12 +309,13 @@ impl RequestFilter for RegionRoute {
                     };
                     match Self::find_region(&cluster.regions, &name) {
                         Some((idx, region)) => {
-                            log.push(&format!("direct={}(from:{})", name, src.as_log_str()));
+                            let src_s = src.as_log_str();
+                            log.push_fmt("direct={}(from:{})", la![sensitive(&name), sensitive(&src_s)]);
                             let (_, region) = Self::apply_redirect(&cluster.regions, idx, region, &svc, log);
                             return self.route_to(session, region, &cluster, log).await;
                         }
                         None => {
-                            log.push(&format!("direct unknown '{}', fallthrough", name));
+                            log.push_fmt("direct unknown '{}', fallthrough", la![sensitive(&name)]);
                             continue;
                         }
                     }
@@ -327,17 +331,20 @@ impl RequestFilter for RegionRoute {
                     match effective_map.get(&value) {
                         Some(region_name) => match Self::find_region(&cluster.regions, region_name) {
                             Some((idx, region)) => {
-                                log.push(&format!("match={}→{}", src.as_log_str(), region.name));
+                                let src_s = src.as_log_str();
+                                log.push_fmt("match={}→{}", la![sensitive(&src_s), sensitive(&region.name)]);
                                 let (_, region) = Self::apply_redirect(&cluster.regions, idx, region, &svc, log);
                                 return self.route_to(session, region, &cluster, log).await;
                             }
                             None => {
-                                log.push(&format!("match={}→{} unknown", src.as_log_str(), region_name));
+                                let src_s = src.as_log_str();
+                                log.push_fmt("match={}→{} unknown", la![sensitive(&src_s), sensitive(region_name)]);
                                 continue;
                             }
                         },
                         None => {
-                            log.push(&format!("match={} no conf", src.as_log_str()));
+                            let src_s = src.as_log_str();
+                            log.push_fmt("match={} no conf", la![sensitive(&src_s)]);
                             continue;
                         }
                     }

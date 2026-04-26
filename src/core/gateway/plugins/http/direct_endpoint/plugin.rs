@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::net::IpAddr;
 
 use crate::core::gateway::backends::validate_endpoint_in_route;
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing};
@@ -132,7 +133,7 @@ impl RequestFilter for DirectEndpoint {
         match self.resolve(raw_value, backend_refs, route_ns) {
             Ok(info) => {
                 let addr_str = format!("{}", info.addr);
-                log.push(&format!("endpoint {}:{}", info.addr.ip(), info.addr.port()));
+                log.push_fmt("endpoint {}", la![sensitive(&addr_str)]);
                 session.set_direct_endpoint(info);
 
                 if self.config.debug_header {

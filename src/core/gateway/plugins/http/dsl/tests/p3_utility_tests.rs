@@ -1,6 +1,23 @@
 //! Tests for P3 utility functions: hmac_sha256, json_get, uuid, hex encode/decode, time_format, ip_in_cidr, join, log_warn, log_error.
 
 use super::*;
+use crate::types::sensitive::SENSITIVE_MODE;
+use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+
+static MODE_LOCK: Mutex<()> = Mutex::new(());
+
+struct ModeGuard<'a>(u8, std::sync::MutexGuard<'a, ()>);
+impl Drop for ModeGuard<'_> {
+    fn drop(&mut self) {
+        SENSITIVE_MODE.store(self.0, Ordering::SeqCst);
+    }
+}
+fn set_mode(mode: u8) -> ModeGuard<'static> {
+    let guard = MODE_LOCK.lock().unwrap();
+    let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
+    ModeGuard(prev, guard)
+}
 
 #[test]
 fn test_hmac_sha256() {
@@ -276,6 +293,7 @@ fn test_join() {
 
 #[test]
 fn test_log_warn() {
+    let _g = set_mode(0);
     let source = r#"
         log_warn("something suspicious")
         return next()
@@ -286,11 +304,12 @@ fn test_log_warn() {
     let mut s = session;
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.log.as_ref().unwrap().contains("warn:"));
+    assert!(log.contains("something suspicious"), "log_warn value not recorded: {:?}", log.log);
 }
 
 #[test]
 fn test_log_error() {
+    let _g = set_mode(0);
     let source = r#"
         log_error("critical failure")
         return next()
@@ -301,7 +320,73 @@ fn test_log_error() {
     let mut s = session;
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.log.as_ref().unwrap().contains("error:"));
+    assert!(log.contains("critical failure"), "log_error value not recorded: {:?}", log.log);
+}
+
+#[test]
+fn test_log_warn_replace_mode() {
+    let _g = set_mode(1);
+    let source = r#"
+        log_warn("super-secret-value")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(log.contains("***"), "expected masked output: {:?}", log.log);
+    assert!(!log.contains("super-secret-value"), "plaintext must not appear in replace mode");
+}
+
+#[test]
+fn test_log_warn_wrap_mode() {
+    let _g = set_mode(2);
+    let source = r#"
+        log_warn("super-secret-value")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(log.contains("<E>super-secret-value</E>"), "expected wrapped output: {:?}", log.log);
+}
+
+#[test]
+fn test_log_error_replace_mode() {
+    let _g = set_mode(1);
+    let source = r#"
+        log_error("super-secret-value")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(log.contains("***"), "expected masked output: {:?}", log.log);
+    assert!(!log.contains("super-secret-value"), "plaintext must not appear in replace mode");
+}
+
+#[test]
+fn test_log_error_wrap_mode() {
+    let _g = set_mode(2);
+    let source = r#"
+        log_error("super-secret-value")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(log.contains("<E>super-secret-value</E>"), "expected wrapped output: {:?}", log.log);
 }
 
 #[test]

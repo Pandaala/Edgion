@@ -3,6 +3,7 @@
 //! Rewrites responses before returning to client.
 //! Supports status code and headers modification.
 
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::ResponseRewriteConfig;
@@ -34,7 +35,7 @@ impl ResponseRewrite {
             if let Err(_e) = session.set_response_status(status_code) {
                 plugin_log.push_err("status rewrite fail");
             } else {
-                plugin_log.push(&format!("status rewrite {}", status_code));
+                plugin_log.push_fmt("status rewrite {}", la![status_code.to_string().as_str()]);
             }
         }
     }

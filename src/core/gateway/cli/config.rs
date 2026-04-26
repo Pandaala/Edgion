@@ -45,6 +45,22 @@ pub struct EdgionGatewayConfig {
     #[serde(default = "default_access_log_config")]
     pub access_log: LogConfig,
 
+    /// Sensitive data masking for access logs. Disabled by default.
+    ///
+    /// TOML example (replace mode):
+    ///   [access_log_sensitive]
+    ///   mode = "replace"
+    ///   replace_with = "***"
+    ///
+    /// TOML example (wrap mode):
+    ///   [access_log_sensitive]
+    ///   mode = "wrap"
+    ///   wrap_prefix = "<E>"
+    ///   wrap_suffix = "</E>"
+    #[arg(skip)]
+    #[serde(default, skip_serializing)]
+    pub access_log_sensitive: crate::types::sensitive::SensitiveMaskConfig,
+
     #[arg(skip)]
     #[serde(default = "default_ssl_log_config")]
     pub ssl_log: LogConfig,
@@ -79,11 +95,6 @@ pub struct EdgionGatewayConfig {
     #[arg(skip)]
     #[serde(default, alias = "auth_cache")]
     pub lru_cache: LruCacheGlobalConfig,
-
-    /// Plugin metadata global configuration
-    #[arg(skip)]
-    #[serde(default)]
-    pub plugin_metadata: PluginMetadataConfig,
 
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
@@ -652,66 +663,6 @@ pub fn get_default_lru_cache_shards() -> usize {
 }
 
 // ============================================
-// Plugin Metadata Global Configuration
-// ============================================
-
-const DEFAULT_CTX_LOG_DENYLIST: &[&str] = &["auth", "pass", "claim", "payload", "token", "secret", "credential"];
-
-fn default_ctx_log_denylist() -> Vec<String> {
-    DEFAULT_CTX_LOG_DENYLIST.iter().map(|s| s.to_string()).collect()
-}
-
-/// Plugin metadata global configuration.
-///
-/// Controls cross-cutting plugin behaviors, e.g. which ctx keys are excluded from access log.
-///
-/// ## TOML Configuration Example:
-/// ```toml
-/// [plugin_metadata]
-/// ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "credential"]
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PluginMetadataConfig {
-    /// Ctx keys containing these substrings (case-insensitive) are excluded from access log.
-    /// Keys starting with `_` are always excluded regardless of this list.
-    /// Default covers common auth/credential patterns.
-    ///
-    /// **Warning:** Setting this field in TOML **replaces** the entire default list.
-    /// To extend the defaults, include all default keywords plus your additions.
-    #[serde(default = "default_ctx_log_denylist")]
-    pub ctx_log_denylist: Vec<String>,
-}
-
-impl Default for PluginMetadataConfig {
-    fn default() -> Self {
-        Self {
-            ctx_log_denylist: default_ctx_log_denylist(),
-        }
-    }
-}
-
-static PLUGIN_METADATA_CONFIG: OnceLock<PluginMetadataConfig> = OnceLock::new();
-
-/// Initialize the global plugin metadata configuration (call once at startup).
-pub fn init_plugin_metadata_config(config: PluginMetadataConfig) {
-    let _ = PLUGIN_METADATA_CONFIG.set(config);
-}
-
-/// Get the ctx log denylist from global config.
-///
-/// # Panics
-///
-/// Panics if called before `init_plugin_metadata_config` — this prevents silent PII leakage
-/// that would occur if the denylist were silently empty due to a missed init call.
-pub fn get_ctx_log_denylist() -> &'static [String] {
-    PLUGIN_METADATA_CONFIG
-        .get()
-        .expect("PluginMetadataConfig not initialized — call init_plugin_metadata_config at startup")
-        .ctx_log_denylist
-        .as_slice()
-}
-
 impl EdgionGatewayConfig {
     /// Load configuration from TOML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
@@ -859,35 +810,42 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_metadata_config_default() {
-        let config = PluginMetadataConfig::default();
-        let denylist = config.ctx_log_denylist;
-        assert!(denylist.contains(&"auth".to_string()));
-        assert!(denylist.contains(&"claim".to_string()));
-        assert!(denylist.contains(&"payload".to_string()));
-        assert!(denylist.contains(&"token".to_string()));
-        assert!(denylist.contains(&"pass".to_string()));
-        assert!(denylist.contains(&"secret".to_string()));
-        assert!(denylist.contains(&"credential".to_string()));
+    fn test_access_log_sensitive_default_is_off() {
+        let cfg: EdgionGatewayConfig = toml::from_str("").unwrap();
+        assert!(matches!(
+            cfg.access_log_sensitive.mode,
+            crate::types::sensitive::SensitiveMode::Off
+        ));
     }
 
     #[test]
-    fn test_plugin_metadata_config_yaml_deserialize() {
-        let yaml = r#"
-plugin_metadata:
-  ctx_log_denylist: [custom_key, my_secret]
+    fn test_access_log_sensitive_replace_mode() {
+        let toml_str = r#"
+[access_log_sensitive]
+mode = "replace"
+replace_with = "{MSKED}"
 "#;
-        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("parse failed");
-        let denylist = &config.plugin_metadata.ctx_log_denylist;
-        assert!(denylist.contains(&"custom_key".to_string()));
-        assert!(denylist.contains(&"my_secret".to_string()));
-        assert!(!denylist.contains(&"auth".to_string()));
+        let cfg: EdgionGatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            cfg.access_log_sensitive.mode,
+            crate::types::sensitive::SensitiveMode::Replace
+        ));
+        assert_eq!(cfg.access_log_sensitive.replace_with, "{MSKED}");
     }
 
     #[test]
-    fn test_get_ctx_log_denylist_returns_slice() {
-        init_plugin_metadata_config(PluginMetadataConfig::default());
-        let list = get_ctx_log_denylist();
-        assert!(!list.is_empty());
+    fn test_access_log_sensitive_wrap_mode() {
+        let toml_str = r#"
+[access_log_sensitive]
+mode = "wrap"
+wrap_prefix = "<E>"
+wrap_suffix = "</E>"
+"#;
+        let cfg: EdgionGatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            cfg.access_log_sensitive.mode,
+            crate::types::sensitive::SensitiveMode::Wrap
+        ));
+        assert_eq!(cfg.access_log_sensitive.wrap_prefix, "<E>");
     }
 }

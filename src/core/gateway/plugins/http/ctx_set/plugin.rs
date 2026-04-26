@@ -22,6 +22,7 @@
 use async_trait::async_trait;
 use regex::Regex;
 
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{
@@ -207,26 +208,21 @@ impl RequestFilter for CtxSet {
             return PluginRunningResult::GoodNext;
         }
 
-        let mut set_count = 0;
-
         for (idx, rule) in self.config.vars.iter().enumerate() {
-            // Process the rule to get the final value
             let value = self.process_rule(rule, idx, session).await;
 
             match value {
                 Some(v) => {
-                    // Set the context variable
                     if let Err(_) = session.set_ctx_var(&rule.name, &v) {
                         plugin_log.push_err("ctx var set fail");
                     } else {
-                        set_count += 1;
+                        plugin_log.push_fmt("key {} set", la![rule.name.as_str()]);
                     }
                 }
                 None => {}
             }
         }
 
-        plugin_log.push(&format!("ctx set {}", set_count));
         PluginRunningResult::GoodNext
     }
 }
@@ -267,7 +263,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("ctx set 1"));
+        assert!(plugin_log.contains("key test_var set"));
     }
 
     #[tokio::test]
@@ -632,7 +628,7 @@ vars:
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("ctx set 2"));
+        assert!(plugin_log.contains("key var1 set") && plugin_log.contains("key var2 set"));
     }
 
     #[tokio::test]

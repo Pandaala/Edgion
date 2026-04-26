@@ -62,6 +62,7 @@ use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::core::gateway::plugins::http::common::http_client::{get_http_client, is_hop_by_hop};
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::ForwardAuthConfig;
@@ -256,7 +257,7 @@ impl RequestFilter for ForwardAuth {
             if self.config.upstream_headers.is_empty() {
                 let key = Self::cache_key(session, &self.config.request_headers);
                 if let Some(cached_status) = cache.get(&key) {
-                    plugin_log.push(&format!("auth cached {}", cached_status));
+                    plugin_log.push_fmt("auth cached {}", la![cached_status.to_string().as_str()]);
                     if self.config.hide_credentials {
                         let _ = session.remove_request_header("authorization");
                     }
@@ -326,7 +327,7 @@ impl RequestFilter for ForwardAuth {
                     cache.insert(key, status, Some(Duration::from_secs(self.config.cache_ttl)));
                 }
             }
-            plugin_log.push(&format!("auth pass {}", status));
+            plugin_log.push_fmt("auth pass {}", la![status.to_string().as_str()]);
             PluginRunningResult::GoodNext
         } else {
             // Auth failed: collect client_headers from auth response to add to error response
@@ -359,7 +360,7 @@ impl RequestFilter for ForwardAuth {
                 String::from_utf8_lossy(&buf).into_owned()
             };
 
-            plugin_log.push(&format!("auth deny {}", status));
+            plugin_log.push_fmt("auth deny {}", la![status.to_string().as_str()]);
             apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
             self.send_error_response(session, status, &body, Some(&extra_headers))
                 .await
@@ -572,7 +573,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Config error"));
+        assert!(plugin_log.contains("cfg invalid"));
     }
 
     fn setup_mock_for_build_auth_headers(mock: &mut MockPluginSession) {

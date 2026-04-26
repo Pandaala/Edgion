@@ -11,6 +11,7 @@ pub mod observe;
 pub mod output;
 pub mod resources;
 pub mod schema;
+pub mod sensitive;
 pub mod work_dir;
 
 // Re-export common types

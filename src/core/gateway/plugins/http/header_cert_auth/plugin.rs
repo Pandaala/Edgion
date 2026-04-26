@@ -438,7 +438,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK"));
+        assert!(log.contains("cert verify:ok"));
     }
 
     #[tokio::test]

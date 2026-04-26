@@ -6,6 +6,55 @@ use serde::Serialize;
 /// Default capacity for plugin name string.
 pub const NAME_CAPACITY: usize = 36;
 
+/// A single argument to [`PluginLog::push_fmt`].
+///
+/// - `Plain` — written as-is regardless of sensitive mode.
+/// - `Sensitive` — passed through [`crate::types::sensitive::apply_sensitive`]; masked or wrapped
+///   when the active mode is Replace or Wrap.
+///
+/// Construct via `From<&str>` (plain) or [`sensitive()`] (sensitive).
+/// Use the [`la!`] macro to build a `&[LogArg]` slice without explicit `.into()` calls.
+#[derive(Debug)]
+pub enum LogArg<'a> {
+    Plain(&'a str),
+    Sensitive(&'a str),
+}
+
+impl<'a> From<&'a str> for LogArg<'a> {
+    #[inline]
+    fn from(s: &'a str) -> Self {
+        LogArg::Plain(s)
+    }
+}
+
+/// Mark an argument as sensitive so it is masked when the active mode is Replace or Wrap.
+///
+/// Plain arguments need no annotation — only wrap sensitive ones.
+///
+/// ```ignore
+/// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
+/// ```
+#[inline]
+pub fn sensitive(s: &str) -> LogArg<'_> {
+    LogArg::Sensitive(s)
+}
+
+/// Build a `&[LogArg]` slice for [`PluginLog::push_fmt`] / [`PluginLog::u_push_fmt`].
+///
+/// Plain `&str` values need no wrapper; only sensitive values use [`sensitive()`].
+///
+/// ```ignore
+/// log.push_fmt("key {} set by {}", la![key, sensitive(&user_input)]);
+/// ```
+#[macro_export]
+macro_rules! la {
+    () => { &[] as &[$crate::core::gateway::plugins::runtime::log::LogArg] };
+    ($($e:expr),+ $(,)?) => {
+        &[$( $crate::core::gateway::plugins::runtime::log::LogArg::from($e) ),+]
+    };
+}
+pub use la;
+
 /// Plugin log entry
 /// Fixed structure for plugin execution logging
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +155,95 @@ impl PluginLog {
     #[inline]
     pub fn u_push_err(&mut self, kind: &'static str) -> bool {
         self.ulog.get_or_insert_with(ULogBuffer::new).push_err(kind)
+    }
+
+    /// Push a user-controlled dynamic value through the active masking mode.
+    ///
+    /// Truncates to the last UTF-8 char boundary at or before 64 bytes to respect
+    /// LogBuffer's 100-byte limit after any wrapper overhead.
+    /// Use this for DSL/plugin content that may contain credentials or PII.
+    /// For static event labels, use [`push_err`] instead.
+    #[inline]
+    pub fn push_sensitive(&mut self, value: &str) -> bool {
+        // Reserve bytes for wrap prefix+suffix so the final entry fits LogBuffer's 100-byte limit.
+        // Default wrap overhead is 7 bytes ("<E>" + "</E>"); operators can configure longer strings.
+        let overhead = crate::types::sensitive::wrap_overhead();
+        let max_value_bytes = (100usize.saturating_sub(overhead)).min(64);
+        let end = (0..=value.len().min(max_value_bytes))
+            .rev()
+            .find(|&i| value.is_char_boundary(i))
+            .unwrap_or(0);
+        let truncated = &value[..end];
+        crate::types::sensitive::apply_sensitive(truncated, |w| {
+            let result = self.log.get_or_insert_with(LogBuffer::new).push(w);
+            if !result {
+                self.log_full = Some(true);
+            }
+            result
+        })
+    }
+
+    /// Unbounded-buffer counterpart of [`push_sensitive`]. No truncation —
+    /// ULogBuffer handles its own 512-byte limit.
+    #[inline]
+    pub fn u_push_sensitive(&mut self, value: &str) -> bool {
+        crate::types::sensitive::apply_sensitive(value, |w| self.ulog.get_or_insert_with(ULogBuffer::new).push(w))
+    }
+
+    /// Push a format-string log entry where only explicitly marked args are masked.
+    ///
+    /// The template string is never masked. Each `{}` placeholder is replaced by the
+    /// corresponding [`LogArg`]: `Plain` args are inserted verbatim; `Sensitive` args are
+    /// passed through the active masking mode (replace/wrap). Use the [`la!`] macro to
+    /// build the args slice conveniently.
+    ///
+    /// ```ignore
+    /// log.push_fmt("key {} set", la![rule.name.as_str()]);
+    /// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
+    /// ```
+    pub fn push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
+        let mut buf = String::new();
+        let mut arg_iter = args.iter();
+        let mut rest = fmt;
+        while let Some(pos) = rest.find("{}") {
+            buf.push_str(&rest[..pos]);
+            rest = &rest[pos + 2..];
+            if let Some(arg) = arg_iter.next() {
+                match arg {
+                    LogArg::Plain(s) => buf.push_str(s),
+                    LogArg::Sensitive(s) => {
+                        crate::types::sensitive::apply_sensitive(s, |w| buf.push_str(w));
+                    }
+                }
+            }
+        }
+        buf.push_str(rest);
+        let ok = self.log.get_or_insert_with(LogBuffer::new).push(&buf);
+        if !ok {
+            self.log_full = Some(true);
+        }
+        ok
+    }
+
+    /// Unbounded-buffer counterpart of [`push_fmt`].
+    pub fn u_push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
+        let mut buf = String::new();
+        let mut arg_iter = args.iter();
+        let mut rest = fmt;
+        while let Some(pos) = rest.find("{}") {
+            buf.push_str(&rest[..pos]);
+            rest = &rest[pos + 2..];
+            if let Some(arg) = arg_iter.next() {
+                match arg {
+                    LogArg::Plain(s) => buf.push_str(s),
+                    LogArg::Sensitive(s) => {
+                        crate::types::sensitive::apply_sensitive(s, |w| buf.push_str(w));
+                    }
+                }
+            }
+        }
+        buf.push_str(rest);
+        self.ulog.get_or_insert_with(ULogBuffer::new).push(&buf)
     }
 
     /// Helper method for tests: checks if log buffer contains a substring
@@ -211,6 +349,110 @@ pub struct StageLogs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::sensitive::SENSITIVE_MODE;
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+
+    static MODE_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ModeGuard<'a>(u8, std::sync::MutexGuard<'a, ()>);
+    impl Drop for ModeGuard<'_> {
+        fn drop(&mut self) {
+            SENSITIVE_MODE.store(self.0, Ordering::SeqCst);
+        }
+    }
+    fn set_mode(mode: u8) -> ModeGuard<'static> {
+        let guard = MODE_LOCK.lock().unwrap();
+        let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
+        ModeGuard(prev, guard)
+    }
+
+    #[test]
+    fn test_push_fmt_plain_args_never_masked() {
+        let _g = set_mode(1); // Replace mode
+        let mut log = PluginLog::new("test");
+        log.push_fmt("key {} set", la!["my-key"]);
+        assert!(log.contains("key my-key set"));
+    }
+
+    #[test]
+    fn test_push_fmt_sensitive_arg_replaced() {
+        let _g = set_mode(1); // Replace mode
+        let mut log = PluginLog::new("test");
+        log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
+        assert!(log.contains("user admin from ***"));
+        assert!(!log.contains("1.2.3.4"));
+    }
+
+    #[test]
+    fn test_push_fmt_sensitive_arg_wrapped() {
+        let _g = set_mode(2); // Wrap mode
+        let mut log = PluginLog::new("test");
+        log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
+        assert!(log.contains("user admin from <E>1.2.3.4</E>"));
+    }
+
+    #[test]
+    fn test_push_fmt_off_mode_writes_plain() {
+        let _g = set_mode(0); // Off mode
+        let mut log = PluginLog::new("test");
+        log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
+        assert!(log.contains("user admin from 1.2.3.4"));
+    }
+
+    #[test]
+    fn test_push_fmt_no_placeholders() {
+        let _g = set_mode(1);
+        let mut log = PluginLog::new("test");
+        log.push_fmt("static message; ", la![]);
+        assert!(log.contains("static message; "));
+    }
+
+    #[test]
+    fn test_push_sensitive_off_writes_plain() {
+        let _g = set_mode(0);
+        let mut log = PluginLog::new("test");
+        log.push_sensitive("hello world");
+        assert!(log.contains("hello world"));
+    }
+
+    #[test]
+    fn test_push_sensitive_replace_writes_stars() {
+        let _g = set_mode(1);
+        let mut log = PluginLog::new("test");
+        log.push_sensitive("secret-token-value");
+        assert!(log.contains("***"));
+        assert!(!log.contains("secret-token-value"));
+    }
+
+    #[test]
+    fn test_push_sensitive_wrap_wraps_value() {
+        let _g = set_mode(2);
+        let mut log = PluginLog::new("test");
+        log.push_sensitive("user@example.com");
+        assert!(log.contains("<E>user@example.com</E>"));
+    }
+
+    #[test]
+    fn test_push_sensitive_truncates_at_utf8_boundary() {
+        let _g = set_mode(0);
+        // 63 ASCII bytes + 2-byte 'é' (bytes 63-64) + "trail"
+        let mut s = "a".repeat(63);
+        s.push('é');
+        s.push_str("trail");
+        assert!(s.len() > 64);
+        let mut log = PluginLog::new("test");
+        log.push_sensitive(&s);
+        assert!(!log.contains("trail"));
+    }
+
+    #[test]
+    fn test_u_push_sensitive_wrap() {
+        let _g = set_mode(2);
+        let mut log = PluginLog::new("test");
+        log.u_push_sensitive("dynamic-debug-value");
+        assert!(log.ulog.as_ref().unwrap().contains("<E>dynamic-debug-value</E>"));
+    }
 
     #[test]
     fn test_fixed_buffer() {

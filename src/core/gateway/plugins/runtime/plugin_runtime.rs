@@ -5,6 +5,7 @@ use std::time::Duration;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::types::filters::PluginRunningResult;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::{
@@ -974,11 +975,11 @@ fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut
     match result {
         PluginRunningResult::ErrTerminateRequest => true,
         PluginRunningResult::ErrResponse { status, .. } => {
-            plugin_log.push(&format!("deny response {}", status));
+            plugin_log.push_fmt("deny response {}", la![status.to_string().as_str()]);
             true
         }
         PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
-            plugin_log.push(&format!("deny grpc {}", grpc_status));
+            plugin_log.push_fmt("deny grpc {}", la![grpc_status.to_string().as_str()]);
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,

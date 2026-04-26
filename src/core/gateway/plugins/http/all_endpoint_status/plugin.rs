@@ -21,6 +21,7 @@ use tokio::sync::Semaphore;
 use crate::core::gateway::backends::discovery::endpoint::{get_endpoint_roundrobin_store, EndpointExt};
 use crate::core::gateway::backends::discovery::endpoint_slice::{get_roundrobin_store, EndpointSliceExt};
 use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
@@ -698,7 +699,7 @@ impl RequestFilter for AllEndpointStatus {
             }
         };
 
-        log.push(&format!("status served {}", total_endpoints));
+        log.push_fmt("status served {}", la![total_endpoints.to_string().as_str()]);
 
         self.send_json_response(session, 200, &json_body).await
         // _global_permit is dropped here, releasing the concurrency slot

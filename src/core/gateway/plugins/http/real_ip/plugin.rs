@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::core::common::utils::RealIpExtractor;
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::RealIpConfig;
@@ -105,7 +106,7 @@ impl RequestFilter for RealIp {
                 return PluginRunningResult::GoodNext;
             }
 
-            plugin_log.push(&format!("ip updated: {}", new_remote_addr));
+            plugin_log.push_fmt("ip updated: {}", la![sensitive(&new_remote_addr)]);
         } else {
             plugin_log.push("ip unchanged");
         }
