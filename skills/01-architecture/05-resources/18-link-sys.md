@@ -18,7 +18,7 @@ LinkSys 定义外部系统连接器（Redis / Etcd / Elasticsearch / Webhook / K
 | Controller Handler | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
 | Credential pipeline（Controller） | `src/core/controller/conf_mgr/sync_runtime/resource_processor/credential/` |
 | 资源类型定义 | `src/types/resources/link_sys/`（mod.rs、redis.rs、etcd.rs、elasticsearch.rs、webhook.rs、common.rs） |
-| 共享 TLS / SecretReference 类型 | `src/types/resources/common/{secret_ref,tls}.rs` |
+| 共享 SecretObjectReference / SecretSlot / TLS 类型 | `src/types/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
 | 凭据解析层（Controller + Gateway 共用） | `src/types/credentials/`（materials / resolver / resolvers） |
 | Gateway 凭据四态 | `src/core/gateway/link_sys/credential.rs` |
 | Gateway TLS 组装 | `src/core/gateway/link_sys/tls.rs` |
@@ -44,7 +44,7 @@ LinkSys CRD 与日志输出/轮转配置（用于 link_sys 运行时写日志）
 - `config` 类型由 `type` 决定：`redis` → `RedisClientConfig`、`etcd` → `EtcdClientConfig`、`elasticsearch` → `ElasticsearchClientConfig`、`webhook` → `WebhookServiceConfig`、`kafka` → `KafkaClientConfig`（占位）
 - 旧 `spec.config.type` / `spec.config.config` 嵌套写法已不再被接受
 
-`SecretReference`（`src/types/resources/common/secret_ref.rs`）与 `TlsConfig` / `TlsCerts`（`src/types/resources/common/tls.rs`）已从各 provider 模块抽公共，避免四份近似拷贝。LinkSys 各子 crate 通过 `pub use` 保持路径稳定。
+`SecretObjectReference`（`src/types/resources/common/secret_object_ref.rs`）、`SecretSlot`（`src/types/resources/common/secret_slot.rs`）与 `TlsConfig` / `TlsCerts`（`src/types/resources/common/tls.rs`）已从各 provider 模块抽公共，避免多份近似拷贝。`SecretObjectReference` 含 `group / kind / name / namespace` 四字段（前两者可选，缺省即 `core/Secret`），为将来扩展非 Secret 凭据源（Vault / ExternalSecret）保留；`SecretSlot` 是 `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` 的组合槽位，通过 `#[serde(flatten)]` 嵌入各 `*Auth`，YAML 形态不变。LinkSys 各子 crate 通过 `pub use` 保持路径稳定。
 
 ## Controller 侧处理
 
@@ -60,10 +60,11 @@ LinkSys CRD 与日志输出/轮转配置（用于 link_sys 运行时写日志）
 
 与旧版"直接透传"不同，新版 parse 会走完整的 **credential pipeline**（`resource_processor/credential/pipeline.rs`）：
 
-1. 遍历 spec 里的所有 `SecretReference` —— 按 provider 分支：
-   - Redis / Etcd：`auth.secretRef`
-   - Elasticsearch / Webhook：`auth`（tagged enum）的每个 variant 各带一个 `secretRef`
-   - 全部 provider 可选的 `tls.certs.secretRef`
+1. 通过 `AuthSpec` / `TlsSpec` trait + `drive_standard` 泛型分派，统一遍历 spec 里的所有 `SecretObjectReference`：
+   - `AuthSpec` trait 把"声明 → resolver 选择 → material 提取"绑定到具体 `*Auth` 类型（Redis/Etcd 的 `RedisAuth`/`EtcdAuth`；ES/Webhook 的 tagged enum 各 variant）
+   - `TlsSpec` trait 处理所有 provider 可选的 `tls.certs.secretRef`（`TlsConfig` 已实现此 trait，直接复用）
+   - `resolve_for_spec` 调用 `drive_standard::<A: AuthSpec, T: TlsSpec>` 折叠所有 ref 的处理
+   - 新增后端只需：(1) impl `AuthSpec`；(2) 加 `SystemConfig` 变体；(3) `resolve_for_spec` 加一行 `drive_standard(...)`；(4) 如有 TLS，`TlsConfig` 已 impl `TlsSpec` 直接复用
 2. 对每个 ref 执行七步 pipeline：
    1. 计算 effective namespace（缺省 = LinkSys 所在 ns）
    2. 在 `SecretRefManager` 登记 `owner→secret` 依赖（即使后续步骤失败也要登记，这样 Secret 出现/变更时能 requeue 自愈）

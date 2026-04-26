@@ -44,10 +44,9 @@ spec:
     - www.example.com
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: my-gateway
-        namespace: default
+    gatewayRef:
+      name: my-gateway
+      namespace: default
   storage:
     secretName: example-tls-cert
   autoEdgionTls:
@@ -74,17 +73,17 @@ After creation, the Controller registers an account with the ACME service (defau
 
 ### Challenge Method: challenge
 
-| Field | Description |
-|-------|-------------|
-| `challenge.type` | `http-01` or `dns-01`. |
-| `challenge.http01` | Required for HTTP-01, must specify `gatewayRef` (the Gateway used to serve challenge responses). |
-| `challenge.dns01` | Required for DNS-01, must specify DNS provider and credentials. |
+`challenge` is a tagged enum keyed by `type`, with the type-specific fields flattened directly under `challenge`.
 
-**HTTP-01**: The ACME service will access `http://<domain>/.well-known/acme-challenge/<token>`. The Controller writes the token to EdgionAcme and syncs it to the Gateway, which responds to that path only while there are pending challenges. After validation, the path is no longer intercepted.
+**HTTP-01** (`type: http-01`):
 
-**DNS-01**: The Controller creates a `_acme-challenge.<domain>` TXT record using the DNS provider API based on the value returned by ACME, waits for propagation, then notifies ACME for validation; the TXT record is deleted after success. Wildcard domains must use DNS-01.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `gatewayRef` | **Yes** | Gateway reference that serves challenge responses. |
 
-### DNS-01 Configuration (dns01)
+The ACME service will access `http://<domain>/.well-known/acme-challenge/<token>`. The Controller writes the token to `status.activeChallenges` of the EdgionAcme and syncs it to the Gateway, which responds to that path only while there are pending challenges. After validation, the path is no longer intercepted.
+
+**DNS-01** (`type: dns-01`):
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -92,6 +91,8 @@ After creation, the Controller registers an account with the ACME service (defau
 | `credentialRef` | object | **Yes** | - | Secret reference containing DNS API credentials. |
 | `propagationTimeout` | int | No | 120 | Maximum wait time for DNS propagation (seconds). |
 | `propagationCheckInterval` | int | No | 5 | Propagation check interval (seconds). |
+
+The Controller creates a `_acme-challenge.<domain>` TXT record using the DNS provider API based on the value returned by ACME, waits for propagation, then notifies ACME for validation; the TXT record is deleted after success. Wildcard domains must use DNS-01.
 
 **Cloudflare**: The Secret must provide `api-token` (with Zone.DNS:Edit permission).
 

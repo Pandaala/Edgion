@@ -233,16 +233,16 @@ pub(crate) fn merge_default_headers(
 fn inject_auth(auth: &Option<WebhookAuth>, headers: &mut reqwest::header::HeaderMap) {
     let Some(auth) = auth else { return };
     match auth {
-        WebhookAuth::Bearer { secret, .. } => {
-            if let Some(token) = extract_secret_string(secret, "bearerToken") {
+        WebhookAuth::Bearer { slot } => {
+            if let Some(token) = extract_secret_string(&slot.secret, "bearerToken") {
                 if let Ok(val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")) {
                     headers.insert(reqwest::header::AUTHORIZATION, val);
                 }
             }
         }
-        WebhookAuth::Basic { secret, .. } => {
-            let user = extract_secret_string(secret, "username").unwrap_or_default();
-            let pass = extract_secret_string(secret, "password").unwrap_or_default();
+        WebhookAuth::Basic { slot } => {
+            let user = extract_secret_string(&slot.secret, "username").unwrap_or_default();
+            let pass = extract_secret_string(&slot.secret, "password").unwrap_or_default();
             if !user.is_empty() {
                 use base64::Engine;
                 let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
@@ -252,13 +252,12 @@ fn inject_auth(auth: &Option<WebhookAuth>, headers: &mut reqwest::header::Header
             }
         }
         WebhookAuth::ApiKey {
-            secret,
+            slot,
             r#in,
             header_name,
             query_param,
-            ..
         } => {
-            if let Some(key_val) = extract_secret_string(secret, "apiKey") {
+            if let Some(key_val) = extract_secret_string(&slot.secret, "apiKey") {
                 match r#in.as_str() {
                     "header" => {
                         if let Some(name) = header_name {
@@ -531,7 +530,7 @@ mod tests {
     /// 6. Bearer auth injection: Authorization: Bearer tok123 is sent to the server.
     #[tokio::test]
     async fn bearer_auth_injects_authorization_header() {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::SecretObjectReference;
         use crate::types::resources::link_sys::webhook::WebhookAuth;
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -547,12 +546,17 @@ mod tests {
         let secret = make_secret("bearerToken", "tok123");
         let runtime = make_runtime(format!("{}/auth", server.uri()), |c| {
             c.max_response_bytes = 1024;
+            use crate::types::resources::common::SecretSlot;
             c.auth = Some(WebhookAuth::Bearer {
-                secret_ref: SecretReference {
-                    name: "test-secret".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "test-secret".to_string(),
+                        namespace: None,
+                    },
+                    secret: Some(secret),
                 },
-                secret: Some(secret),
             });
         });
 
@@ -564,7 +568,7 @@ mod tests {
     /// 7. ApiKey header auth injection: X-API-Key: k123 is sent to the server.
     #[tokio::test]
     async fn api_key_header_auth_injects_custom_header() {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::SecretObjectReference;
         use crate::types::resources::link_sys::webhook::WebhookAuth;
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -580,12 +584,17 @@ mod tests {
         let secret = make_secret("apiKey", "k123");
         let runtime = make_runtime(format!("{}/key", server.uri()), |c| {
             c.max_response_bytes = 1024;
+            use crate::types::resources::common::SecretSlot;
             c.auth = Some(WebhookAuth::ApiKey {
-                secret_ref: SecretReference {
-                    name: "test-apikey".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "test-apikey".to_string(),
+                        namespace: None,
+                    },
+                    secret: Some(secret),
                 },
-                secret: Some(secret),
                 r#in: "header".to_string(),
                 header_name: Some("X-API-Key".to_string()),
                 query_param: None,

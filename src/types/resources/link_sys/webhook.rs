@@ -3,12 +3,10 @@
 //! Defines the connection parameters and health check settings for an external
 //! HTTP webhook service. Referenced by KeyGet::Webhook via "namespace/name".
 
-use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::common::SecretReference;
-use crate::types::resources::common::TlsConfig;
+use crate::types::resources::common::{SecretSlot, TlsConfig};
 
 // ============================================================
 // WebhookAuth — authentication configuration
@@ -22,33 +20,24 @@ use crate::types::resources::common::TlsConfig;
 pub enum WebhookAuth {
     /// Basic authentication (username + password in Secret)
     Basic {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
     /// Bearer token authentication (bearerToken in Secret)
     Bearer {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
     /// HMAC signature authentication (hmacKey in Secret)
     Hmac {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
     /// API Key authentication — injects the key as a header or query parameter.
-    ///
     /// The secret must contain a `apiKey` data key.
     ApiKey {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<k8s_openapi::api::core::v1::Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
         /// Where to inject the key: "header" or "query"
         r#in: String,
         /// Header name when `in = "header"` (e.g. "X-API-Key")
@@ -638,8 +627,8 @@ secretRef:
 "#;
         let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
         match auth {
-            WebhookAuth::Basic { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "webhook-creds");
+            WebhookAuth::Basic { slot } => {
+                assert_eq!(slot.secret_ref.name, "webhook-creds");
             }
             _ => panic!("Expected Basic auth"),
         }
@@ -655,9 +644,9 @@ secretRef:
 "#;
         let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
         match auth {
-            WebhookAuth::Bearer { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "webhook-token");
-                assert_eq!(secret_ref.namespace.as_deref(), Some("secrets"));
+            WebhookAuth::Bearer { slot } => {
+                assert_eq!(slot.secret_ref.name, "webhook-token");
+                assert_eq!(slot.secret_ref.namespace.as_deref(), Some("secrets"));
             }
             _ => panic!("Expected Bearer auth"),
         }
@@ -672,8 +661,8 @@ secretRef:
 "#;
         let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
         match auth {
-            WebhookAuth::Hmac { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "webhook-hmac-key");
+            WebhookAuth::Hmac { slot } => {
+                assert_eq!(slot.secret_ref.name, "webhook-hmac-key");
             }
             _ => panic!("Expected Hmac auth"),
         }
@@ -705,8 +694,8 @@ auth:
         let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.auth.is_some());
         match config.auth.unwrap() {
-            WebhookAuth::Bearer { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "api-token");
+            WebhookAuth::Bearer { slot } => {
+                assert_eq!(slot.secret_ref.name, "api-token");
             }
             _ => panic!("Expected Bearer auth"),
         }
@@ -741,12 +730,12 @@ headerName: X-API-Key
         let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
         match auth {
             WebhookAuth::ApiKey {
-                secret_ref,
+                slot,
                 r#in,
                 header_name,
                 ..
             } => {
-                assert_eq!(secret_ref.name, "my-api-key");
+                assert_eq!(slot.secret_ref.name, "my-api-key");
                 assert_eq!(r#in, "header");
                 assert_eq!(header_name.as_deref(), Some("X-API-Key"));
             }
@@ -771,5 +760,42 @@ queryParam: api_key
             }
             _ => panic!("Expected ApiKey auth"),
         }
+    }
+
+    #[test]
+    fn webhook_auth_basic_yaml_roundtrip() {
+        let yaml = "type: basic\nsecretRef:\n  name: w-creds";
+        let a: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match a {
+            WebhookAuth::Basic { slot } => assert_eq!(slot.secret_ref.name, "w-creds"),
+            _ => panic!("expected Basic"),
+        }
+    }
+
+    #[test]
+    fn webhook_auth_apikey_with_extras_yaml_roundtrip() {
+        let yaml = "type: apiKey\nsecretRef:\n  name: w-creds\nin: header\nheaderName: X-API-Key";
+        let a: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match a {
+            WebhookAuth::ApiKey {
+                slot,
+                r#in,
+                header_name,
+                query_param,
+            } => {
+                assert_eq!(slot.secret_ref.name, "w-creds");
+                assert_eq!(r#in, "header");
+                assert_eq!(header_name.as_deref(), Some("X-API-Key"));
+                assert!(query_param.is_none());
+            }
+            _ => panic!("expected ApiKey"),
+        }
+    }
+
+    #[test]
+    fn webhook_auth_basic_rejects_unknown_field_new() {
+        let yaml = "type: basic\nsecretRef:\n  name: x\nbogus: 1";
+        let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "expected error for unknown field, got {:?}", r);
     }
 }

@@ -8,7 +8,6 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::common::SecretReference;
 use crate::types::resources::edgion_plugins::EdgionPlugin;
 
 /// Resolve OpenID Connect secrets and register references to SecretRefManager.
@@ -25,10 +24,9 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 config.resolved_session_secret = None;
 
                 if let Some(sor) = config.client_secret_ref.clone() {
-                    let sref: SecretReference = (&sor).into();
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
+                    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
                         ResolveOutcome::Ok(secret) => {
                             let resolved = read_secret_utf8(&secret, &["clientSecret", "client_secret", "secret"]);
                             if let Some(value) = resolved {
@@ -71,10 +69,9 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 }
 
                 if let Some(sor) = config.session_secret_ref.clone() {
-                    let sref: SecretReference = (&sor).into();
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
+                    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
                         ResolveOutcome::Ok(secret) => {
                             let resolved = read_secret_utf8(&secret, &["sessionSecret", "session_secret", "secret"]);
                             if let Some(value) = resolved {

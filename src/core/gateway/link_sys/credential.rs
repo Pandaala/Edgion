@@ -27,6 +27,7 @@ use crate::types::resources::common::TlsConfig;
 use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
 use crate::types::resources::link_sys::webhook::WebhookAuth;
 use crate::types::resources::link_sys::{LinkSys, SystemConfig};
+use anyhow::{bail, Result};
 use k8s_openapi::api::core::v1::Secret;
 
 // ============================================================================
@@ -199,8 +200,8 @@ fn state_from_optional_secret<R: SecretMaterialResolver>(
 /// Non-Redis / non-Etcd `LinkSys` always return [`CredentialState::NotRequired`].
 pub fn basic_state(ls: &LinkSys) -> CredentialState<BasicAuthMaterial> {
     let (has_auth, secret) = match &ls.spec.config {
-        SystemConfig::Redis(r) => (r.auth.is_some(), r.auth.as_ref().and_then(|a| a.secret.as_ref())),
-        SystemConfig::Etcd(e) => (e.auth.is_some(), e.auth.as_ref().and_then(|a| a.secret.as_ref())),
+        SystemConfig::Redis(r) => (r.auth.is_some(), r.auth.as_ref().and_then(|a| a.slot.secret.as_ref())),
+        SystemConfig::Etcd(e) => (e.auth.is_some(), e.auth.as_ref().and_then(|a| a.slot.secret.as_ref())),
         _ => return CredentialState::NotRequired,
     };
     if !has_auth {
@@ -219,29 +220,29 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
     match &ls.spec.config {
         SystemConfig::Elasticsearch(es) => match es.auth.as_ref() {
             None => CredentialState::NotRequired,
-            Some(ElasticsearchAuth::Basic { secret, .. }) => {
-                state_from_optional_secret(secret.as_ref(), &BasicAuthResolver).map(ResolvedCredential::Basic)
+            Some(ElasticsearchAuth::Basic { slot }) => {
+                state_from_optional_secret(slot.secret.as_ref(), &BasicAuthResolver).map(ResolvedCredential::Basic)
             }
-            Some(ElasticsearchAuth::ApiKey { secret, .. }) => {
-                state_from_optional_secret(secret.as_ref(), &EsApiKeyResolver).map(ResolvedCredential::EsApiKey)
+            Some(ElasticsearchAuth::ApiKey { slot }) => {
+                state_from_optional_secret(slot.secret.as_ref(), &EsApiKeyResolver).map(ResolvedCredential::EsApiKey)
             }
-            Some(ElasticsearchAuth::Bearer { secret, .. }) => {
-                state_from_optional_secret(secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
+            Some(ElasticsearchAuth::Bearer { slot }) => {
+                state_from_optional_secret(slot.secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
             }
         },
         SystemConfig::Webhook(w) => match w.auth.as_ref() {
             None => CredentialState::NotRequired,
-            Some(WebhookAuth::Basic { secret, .. }) => {
-                state_from_optional_secret(secret.as_ref(), &BasicAuthResolver).map(ResolvedCredential::Basic)
+            Some(WebhookAuth::Basic { slot }) => {
+                state_from_optional_secret(slot.secret.as_ref(), &BasicAuthResolver).map(ResolvedCredential::Basic)
             }
-            Some(WebhookAuth::Bearer { secret, .. }) => {
-                state_from_optional_secret(secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
+            Some(WebhookAuth::Bearer { slot }) => {
+                state_from_optional_secret(slot.secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
             }
-            Some(WebhookAuth::Hmac { secret, .. }) => {
-                state_from_optional_secret(secret.as_ref(), &HmacResolver).map(ResolvedCredential::Hmac)
+            Some(WebhookAuth::Hmac { slot }) => {
+                state_from_optional_secret(slot.secret.as_ref(), &HmacResolver).map(ResolvedCredential::Hmac)
             }
-            Some(WebhookAuth::ApiKey { secret, .. }) => {
-                state_from_optional_secret(secret.as_ref(), &WebhookApiKeyResolver)
+            Some(WebhookAuth::ApiKey { slot, .. }) => {
+                state_from_optional_secret(slot.secret.as_ref(), &WebhookApiKeyResolver)
                     .map(ResolvedCredential::WebhookApiKey)
             }
         },
@@ -258,6 +259,54 @@ impl<M> CredentialState<M> {
             Self::Invalid(r) => CredentialState::Invalid(r),
             Self::Resolved(m) => CredentialState::Resolved(f(m)),
         }
+    }
+}
+
+// ============================================================================
+// Fail-fast credential helpers
+// ============================================================================
+
+/// Helper: turn a `CredentialState<BasicAuthMaterial>` into a fail-fast result.
+///
+/// - `Resolved(m)` → `Ok(Some(m))`
+/// - `NotRequired` → `Ok(None)` —— caller decides whether to flag "CRD declared
+///   auth but state is NotRequired" as an internal-bug (Redis/Etcd do).
+/// - `Pending` / `Invalid` → `bail!` with a uniform message keyed on `provider`.
+pub fn require_basic_material<'a>(
+    state: &'a CredentialState<BasicAuthMaterial>,
+    provider: &'static str,
+) -> Result<Option<&'a BasicAuthMaterial>> {
+    match state {
+        CredentialState::Resolved(m) => Ok(Some(m)),
+        CredentialState::NotRequired => Ok(None),
+        CredentialState::Pending => bail!(
+            "{provider} auth is configured via secretRef but credential material \
+             has not been resolved yet; refusing to build client without credentials"
+        ),
+        CredentialState::Invalid(reason) => bail!("{provider} credential material is invalid: {reason}"),
+    }
+}
+
+/// Helper: same shape as [`require_basic_material`] but for ES/Webhook-style
+/// `CredentialState<ResolvedCredential>` where caller always requires a
+/// resolved material (no `NotRequired` early return).
+///
+/// Caller is responsible for separately checking `CredentialState::NotRequired`
+/// upstream when relevant.
+pub fn require_resolved<'a>(
+    state: &'a CredentialState<ResolvedCredential>,
+    provider: &'static str,
+) -> Result<&'a ResolvedCredential> {
+    match state {
+        CredentialState::Resolved(m) => Ok(m),
+        CredentialState::NotRequired => {
+            bail!("{provider} auth configured in CRD but credential state is NotRequired (internal bug)")
+        }
+        CredentialState::Pending => bail!(
+            "{provider} auth is configured via secretRef but credential material \
+             has not been resolved yet; refusing to build client without credentials"
+        ),
+        CredentialState::Invalid(reason) => bail!("{provider} credential material is invalid: {reason}"),
     }
 }
 
@@ -307,7 +356,7 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::{SecretReference, TlsCerts, TlsConfig as CommonTlsConfig};
+    use crate::types::resources::common::{SecretObjectReference, TlsCerts, TlsConfig as CommonTlsConfig};
     use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
     use crate::types::resources::link_sys::LinkSysSpec;
     use k8s_openapi::ByteString;
@@ -350,12 +399,17 @@ mod tests {
     }
 
     fn mk_redis_auth(secret: Option<Secret>) -> RedisAuth {
+        use crate::types::resources::common::SecretSlot;
         RedisAuth {
-            secret_ref: SecretReference {
-                name: "s".into(),
-                namespace: None,
+            slot: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                },
+                secret,
             },
-            secret,
         }
     }
 
@@ -482,12 +536,17 @@ mod tests {
 
     #[test]
     fn resolved_state_es_basic_resolved() {
+        use crate::types::resources::common::SecretSlot;
         let ls = mk_es_linksys(Some(ElasticsearchAuth::Basic {
-            secret_ref: SecretReference {
-                name: "s".into(),
-                namespace: None,
+            slot: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                },
+                secret: Some(mk_secret(&[("username", b"u"), ("password", b"p")])),
             },
-            secret: Some(mk_secret(&[("username", b"u"), ("password", b"p")])),
         }));
         let got = resolved_state(&ls);
         assert!(matches!(got, CredentialState::Resolved(ResolvedCredential::Basic(_))));
@@ -495,24 +554,34 @@ mod tests {
 
     #[test]
     fn resolved_state_es_api_key_pending() {
+        use crate::types::resources::common::SecretSlot;
         let ls = mk_es_linksys(Some(ElasticsearchAuth::ApiKey {
-            secret_ref: SecretReference {
-                name: "s".into(),
-                namespace: None,
+            slot: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                },
+                secret: None,
             },
-            secret: None,
         }));
         assert!(matches!(resolved_state(&ls), CredentialState::Pending));
     }
 
     #[test]
     fn resolved_state_es_bearer_invalid_on_missing_key() {
+        use crate::types::resources::common::SecretSlot;
         let ls = mk_es_linksys(Some(ElasticsearchAuth::Bearer {
-            secret_ref: SecretReference {
-                name: "s".into(),
-                namespace: None,
+            slot: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                },
+                secret: Some(mk_secret(&[("nope", b"x")])),
             },
-            secret: Some(mk_secret(&[("nope", b"x")])),
         }));
         assert!(matches!(
             resolved_state(&ls),
@@ -560,6 +629,48 @@ mod tests {
         assert!(!dispatch_gate(&ls));
     }
 
+    // ------------------------------------------------------------
+    // require_basic_material helpers
+    // ------------------------------------------------------------
+
+    #[test]
+    fn require_basic_resolved_returns_some() {
+        let m = BasicAuthMaterial {
+            username: Some("u".into()),
+            password: "p".into(),
+        };
+        let state = CredentialState::Resolved(m);
+        let got = require_basic_material(&state, "Redis").unwrap();
+        assert!(got.is_some());
+        assert_eq!(got.unwrap().username.as_deref(), Some("u"));
+    }
+
+    #[test]
+    fn require_basic_pending_bails() {
+        let state: CredentialState<BasicAuthMaterial> = CredentialState::Pending;
+        let err = require_basic_material(&state, "Redis").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("Redis"), "msg should include provider: {msg}");
+        assert!(msg.contains("has not been resolved yet"), "msg: {msg}");
+    }
+
+    #[test]
+    fn require_basic_invalid_bails_with_reason() {
+        let state: CredentialState<BasicAuthMaterial> =
+            CredentialState::Invalid(InvalidReason::ParseFailed("missing key".into()));
+        let err = require_basic_material(&state, "Etcd").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("Etcd credential material is invalid"), "msg: {msg}");
+        assert!(msg.contains("missing key"), "msg: {msg}");
+    }
+
+    #[test]
+    fn require_basic_not_required_returns_none() {
+        let state: CredentialState<BasicAuthMaterial> = CredentialState::NotRequired;
+        let got = require_basic_material(&state, "Redis").unwrap();
+        assert!(got.is_none());
+    }
+
     #[test]
     fn dispatch_gate_blocks_tls_ref_without_secret() {
         let ls = LinkSys {
@@ -582,7 +693,9 @@ mod tests {
                         certs: Some(TlsCerts {
                             ca_cert: None,
                             client_cert: None,
-                            secret_ref: Some(SecretReference {
+                            secret_ref: Some(SecretObjectReference {
+                                group: None,
+                                kind: None,
                                 name: "tls".into(),
                                 namespace: None,
                             }),

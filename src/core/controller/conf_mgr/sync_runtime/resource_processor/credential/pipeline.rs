@@ -19,7 +19,7 @@
 use k8s_openapi::api::core::v1::Secret;
 
 use crate::types::credentials::{ResolveError, SecretMaterialResolver};
-use crate::types::resources::common::SecretReference;
+use crate::types::resources::common::SecretObjectReference;
 
 use super::super::{format_secret_key, HandlerContext, ResourceRef};
 
@@ -93,7 +93,7 @@ pub fn fetch_secret(
     owner: &ResourceRef,
     owner_group: &str,
     owner_kind: &str,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
 ) -> ResolveOutcome<Secret> {
     // ── Step 1: compute effective namespace ──────────────────────────────
     let owner_ns = owner.namespace.as_deref().unwrap_or("default");
@@ -174,7 +174,7 @@ fn resolve_inner<R: SecretMaterialResolver>(
     owner: &ResourceRef,
     owner_group: &str,
     owner_kind: &str,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> ResolveOutcome<(Secret, R::Material)> {
     let secret = match fetch_secret(ctx, owner, owner_group, owner_kind, secret_ref) {
@@ -214,7 +214,7 @@ pub async fn resolve_secret<R: SecretMaterialResolver>(
     owner: &ResourceRef,
     owner_group: &str,
     owner_kind: &str,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> ResolveOutcome<Secret> {
     match resolve_inner(ctx, owner, owner_group, owner_kind, secret_ref, resolver) {
@@ -234,7 +234,7 @@ pub async fn resolve_credential<R: SecretMaterialResolver>(
     owner: &ResourceRef,
     owner_group: &str,
     owner_kind: &str,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> ResolveOutcome<R::Material> {
     match resolve_inner(ctx, owner, owner_group, owner_kind, secret_ref, resolver) {
@@ -313,8 +313,10 @@ mod tests {
         ResourceRef::new(ResourceKind::LinkSys, Some(ns.to_string()), name.to_string())
     }
 
-    fn secret_ref(name: &str, namespace: Option<&str>) -> SecretReference {
-        SecretReference {
+    fn secret_ref(name: &str, namespace: Option<&str>) -> SecretObjectReference {
+        SecretObjectReference {
+            group: None,
+            kind: None,
             name: name.to_string(),
             namespace: namespace.map(|s| s.to_string()),
         }

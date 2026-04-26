@@ -2,15 +2,16 @@
 //!
 //! Handles EdgionAcme resources with:
 //! - Validation (email, domains, challenge config, etc.)
-//! - DNS credential Secret reference resolution
-//! - ACME account Secret existence check + ResolvedRefs condition
-//! - SecretRefManager registration for cascading updates
+//! - DNS credential Secret reference resolution → `ResolvedRefs` condition
+//!   + SecretRefManager registration
+//! - ACME account Secret existence check → `ResolvedRefs` condition
+//!   + SecretRefManager registration
 //! - Status management
 //! - Notifying AcmeService for background certificate issuance/renewal
 //!
-//! When account credentials resolve successfully, the validated Secret is attached
-//! to [`EdgionAcmeSpec::account_secret`] so `AcmeService` can restore the ACME
-//! account without a redundant Kubernetes `GET`.
+//! Resolved Secret bytes are NOT attached to the in-memory `EdgionAcme` —
+//! `AcmeService` re-fetches via the Kubernetes API. The handler's job here is
+//! purely validation/observability + cache wiring.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
     resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
@@ -25,8 +26,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 use crate::core::controller::services::acme::notify_resource_changed;
 use crate::types::credentials::resolvers::{AcmeAccountResolver, DnsCredentialResolver};
 use crate::types::prelude_resources::EdgionAcme;
-use crate::types::resources::common::{Condition, SecretReference};
-use crate::types::resources::edgion_acme::{AcmeChallengeType, EdgionAcmeStatus};
+use crate::types::resources::common::Condition;
+use crate::types::resources::edgion_acme::{AcmeChallenge, EdgionAcmeStatus};
 use crate::types::ResourceKind;
 
 /// EdgionAcme handler
@@ -82,32 +83,21 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         }
 
         // Validate wildcard domains require DNS-01
-        if acme.has_wildcard_domains() && acme.spec.challenge.challenge_type != AcmeChallengeType::Dns01 {
+        if acme.has_wildcard_domains() && !acme.is_dns01() {
             errors.push("EdgionAcme: wildcard domains (*.example.com) require dns-01 challenge type".to_string());
         }
 
-        // Validate challenge config completeness
-        match acme.spec.challenge.challenge_type {
-            AcmeChallengeType::Http01 => {
-                if acme.spec.challenge.http01.is_none() {
-                    errors.push("EdgionAcme: http01 config is required when challenge type is http-01".to_string());
-                }
-            }
-            AcmeChallengeType::Dns01 => {
-                if acme.spec.challenge.dns01.is_none() {
-                    errors.push("EdgionAcme: dns01 config is required when challenge type is dns-01".to_string());
-                } else {
-                    let dns01 = acme.spec.challenge.dns01.as_ref().unwrap();
-                    // Validate provider name
-                    match dns01.provider.as_str() {
-                        "cloudflare" | "alidns" => {}
-                        other => {
-                            errors.push(format!(
-                                "EdgionAcme: unsupported DNS provider '{}', supported: cloudflare, alidns",
-                                other
-                            ));
-                        }
-                    }
+        // Validate provider name on DNS-01. The tagged enum already enforces
+        // that http-01 and dns-01 cannot mix fields, so no "missing http01"
+        // / "missing dns01" arms are needed.
+        if let AcmeChallenge::Dns01 { provider, .. } = &acme.spec.challenge {
+            match provider.as_str() {
+                "cloudflare" | "alidns" => {}
+                other => {
+                    errors.push(format!(
+                        "EdgionAcme: unsupported DNS provider '{}', supported: cloudflare, alidns",
+                        other
+                    ));
                 }
             }
         }
@@ -124,7 +114,6 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
 
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        acme.spec.account_secret = None;
 
         // ── Resolve ACME account credential via pipeline ────────────────────
         let outcome = resolve_secret(
@@ -164,10 +153,10 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         // Move the validated Secret into the spec for AcmeService. When the
         // outcome is anything other than `Ok`, this is a no-op. (When
         // `account_corrupted` is true, outcome is `Invalid::DecodeError` /
-        // `Invalid::InvalidSecretType`, so this `if let` never fires.)
-        if let ResolveOutcome::Ok(secret) = outcome {
-            acme.spec.account_secret = Some(secret);
-        }
+        // `Invalid::InvalidSecretType`.) The resolved Secret bytes are NOT
+        // attached to the in-memory resource; AcmeService re-fetches via
+        // the Kubernetes API.
+        let _ = outcome;
 
         if account_corrupted {
             // Return Continue so `update_status` persists `ResolvedRefs=False`
@@ -215,27 +204,21 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         //                              a future refactor that collapses both
         //                              resolve steps through a shared
         //                              `ResolvedRefsError` collector.
-        if let Some(ref dns01) = acme.spec.challenge.dns01 {
-            let dns_secret_ref = SecretReference {
-                name: dns01.credential_ref.name.clone(),
-                namespace: dns01.credential_ref.namespace.clone(),
-            };
+        if let AcmeChallenge::Dns01 {
+            provider,
+            credential_ref,
+            ..
+        } = &acme.spec.challenge
+        {
             // `validate()` already rejects unknown providers with an `Accepted=False`
             // reason, but we still reach `parse()` on the next reconcile.
             // Guard the resolver construction so unknown providers skip the
             // pipeline cleanly (no SecretRefManager pollution for an
             // unreachable resolve step).
-            match DnsCredentialResolver::from_provider(&dns01.provider) {
+            match DnsCredentialResolver::from_provider(provider) {
                 Some(resolver) => {
-                    let outcome = resolve_secret(
-                        ctx,
-                        &resource_ref,
-                        "edgion.io",
-                        "EdgionAcme",
-                        &dns_secret_ref,
-                        &resolver,
-                    )
-                    .await;
+                    let outcome =
+                        resolve_secret(ctx, &resource_ref, "edgion.io", "EdgionAcme", credential_ref, &resolver).await;
 
                     // ── Map outcome → ResolvedRefs Action (P0-07 unified) ─
                     let dns_action = outcome_to_resolved_refs_action(
@@ -243,7 +226,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                         &resource_key,
                         generation,
                         &AcmeResolveCtx::Dns {
-                            provider: dns01.provider.as_str(),
+                            provider: provider.as_str(),
                         },
                     );
                     match dns_action {
@@ -262,10 +245,6 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                             debug_assert!(false, "Dns role unexpectedly returned Abort");
                         }
                     }
-
-                    if let ResolveOutcome::Ok(secret) = outcome {
-                        acme.spec.dns_credential_secret = Some(secret);
-                    }
                 }
                 None => {
                     // Unknown provider — `validate()` already surfaces this
@@ -274,7 +253,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                     // resource that can't succeed anyway.
                     tracing::warn!(
                         edgion_acme = %resource_ref.key(),
-                        provider = %dns01.provider,
+                        provider = %provider,
                         "Unsupported DNS provider — skipping DNS credential resolution (see Accepted condition for details)"
                     );
                 }
@@ -651,12 +630,8 @@ mod tests {
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::resources::common::ParentReference;
-    use crate::types::resources::common::SecretReference;
-    use crate::types::resources::edgion_acme::AcmeChallengeConfig;
+    use crate::types::resources::common::SecretObjectReference;
     use crate::types::resources::edgion_acme::AcmeStorageConfig;
-    use crate::types::resources::edgion_acme::Dns01ChallengeConfig;
-    use crate::types::resources::edgion_acme::Http01ChallengeConfig;
-    use crate::types::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
@@ -712,25 +687,23 @@ mod tests {
             spec: crate::types::resources::edgion_acme::EdgionAcmeSpec {
                 server: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
                 email: "admin@example.com".to_string(),
-                private_key_secret_ref: SecretReference {
+                private_key_secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
                     name: secret_name.to_string(),
                     namespace: None,
                 },
                 domains: vec!["example.com".to_string()],
                 key_type: Default::default(),
-                challenge: AcmeChallengeConfig {
-                    challenge_type: AcmeChallengeType::Http01,
-                    http01: Some(Http01ChallengeConfig {
-                        gateway_ref: ParentReference {
-                            group: None,
-                            kind: None,
-                            namespace: Some("default".to_string()),
-                            name: "gw".to_string(),
-                            section_name: None,
-                            port: None,
-                        },
-                    }),
-                    dns01: None,
+                challenge: AcmeChallenge::Http01 {
+                    gateway_ref: ParentReference {
+                        group: None,
+                        kind: None,
+                        namespace: Some("default".to_string()),
+                        name: "gw".to_string(),
+                        section_name: None,
+                        port: None,
+                    },
                 },
                 renewal: Default::default(),
                 external_account_binding: None,
@@ -739,9 +712,6 @@ mod tests {
                     secret_namespace: None,
                 },
                 auto_edgion_tls: Default::default(),
-                active_challenges: None,
-                dns_credential_secret: None,
-                account_secret: None,
             },
             status: None,
         }
@@ -769,10 +739,6 @@ mod tests {
                     .find(|c| c.type_ == "ResolvedRefs")
                     .expect("ResolvedRefs condition should exist");
                 assert_eq!(resolved.status, "True");
-                assert!(
-                    acme.spec.account_secret.is_some(),
-                    "validated account Secret should be embedded on spec"
-                );
             }
             ProcessResult::Skip { reason } => {
                 panic!("expected Continue, got Skip: {reason}")
@@ -850,7 +816,8 @@ mod tests {
 
     // ========================================================================
     // Test: DecodeError (corrupt data) → Continue + ResolvedRefs=False
-    //       (no account_secret embedded, no notify to AcmeService)
+    //       (no notify to AcmeService — corrupted account is not an
+    //        actionable bootstrap state)
     // ========================================================================
 
     #[tokio::test]
@@ -864,10 +831,6 @@ mod tests {
 
         match result {
             ProcessResult::Continue(acme) => {
-                assert!(
-                    acme.spec.account_secret.is_none(),
-                    "corrupted account must not be embedded on spec"
-                );
                 let status = acme.status.expect("status should be set");
                 let resolved = status
                     .conditions
@@ -948,26 +911,24 @@ mod tests {
             spec: crate::types::resources::edgion_acme::EdgionAcmeSpec {
                 server: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
                 email: "admin@example.com".to_string(),
-                private_key_secret_ref: SecretReference {
+                private_key_secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
                     name: account_secret.to_string(),
                     namespace: None,
                 },
                 domains: vec!["*.example.com".to_string()],
                 key_type: Default::default(),
-                challenge: AcmeChallengeConfig {
-                    challenge_type: AcmeChallengeType::Dns01,
-                    http01: None,
-                    dns01: Some(Dns01ChallengeConfig {
-                        provider: dns_provider.to_string(),
-                        credential_ref: SecretObjectReference {
-                            group: None,
-                            kind: None,
-                            name: dns_secret_name.to_string(),
-                            namespace: dns_secret_ns.map(|s| s.to_string()),
-                        },
-                        propagation_timeout: 120,
-                        propagation_check_interval: 5,
-                    }),
+                challenge: AcmeChallenge::Dns01 {
+                    provider: dns_provider.to_string(),
+                    credential_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: dns_secret_name.to_string(),
+                        namespace: dns_secret_ns.map(|s| s.to_string()),
+                    },
+                    propagation_timeout: 120,
+                    propagation_check_interval: 5,
                 },
                 renewal: Default::default(),
                 external_account_binding: None,
@@ -976,9 +937,6 @@ mod tests {
                     secret_namespace: None,
                 },
                 auto_edgion_tls: Default::default(),
-                active_challenges: None,
-                dns_credential_secret: None,
-                account_secret: None,
             },
             status: None,
         }
@@ -1010,10 +968,6 @@ mod tests {
                     resolved.message.contains("DNS credential"),
                     "message should mention DNS credential, got: {}",
                     resolved.message
-                );
-                assert!(
-                    acme.spec.dns_credential_secret.is_none(),
-                    "spec.dns_credential_secret must be None when Secret missing"
                 );
                 // SecretRefManager must track the missing DNS Secret so the
                 // resource re-reconciles when it arrives.
@@ -1058,10 +1012,6 @@ mod tests {
                     "message should name the missing key, got: {}",
                     resolved.message
                 );
-                assert!(
-                    acme.spec.dns_credential_secret.is_none(),
-                    "spec.dns_credential_secret must be None when Secret is invalid"
-                );
             }
             ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
         }
@@ -1100,7 +1050,7 @@ mod tests {
     }
 
     /// DNS Secret happy path + account happy path → account's `True` survives
-    /// (DNS Ok is a no-op). `spec.dns_credential_secret` gets populated.
+    /// (DNS Ok is a no-op).
     #[tokio::test]
     async fn test_dns_credential_happy_path_preserves_true() {
         let (k1, s1) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
@@ -1113,10 +1063,6 @@ mod tests {
 
         match result {
             ProcessResult::Continue(acme) => {
-                assert!(
-                    acme.spec.dns_credential_secret.is_some(),
-                    "validated DNS credential Secret must be embedded on spec"
-                );
                 let status = acme.status.expect("status");
                 let resolved = status
                     .conditions
@@ -1155,10 +1101,6 @@ mod tests {
                     "DNS success must not override account NeedsRegistration"
                 );
                 assert_eq!(resolved.reason, "NeedsRegistration");
-                assert!(
-                    acme.spec.dns_credential_secret.is_some(),
-                    "DNS secret still populated on spec"
-                );
             }
             ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
         }
@@ -1236,10 +1178,6 @@ mod tests {
                     "cross-ns message should mention target ns, got: {}",
                     resolved.message
                 );
-                assert!(
-                    acme.spec.dns_credential_secret.is_none(),
-                    "spec.dns_credential_secret must stay None when grant missing"
-                );
             }
             ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
         }
@@ -1273,10 +1211,6 @@ mod tests {
                     .expect("ResolvedRefs");
                 // account = True, DNS resolve skipped → condition unchanged.
                 assert_eq!(resolved.status, "True");
-                assert!(
-                    acme.spec.dns_credential_secret.is_none(),
-                    "no Secret attached for unknown provider"
-                );
             }
             ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
         }

@@ -88,7 +88,8 @@ impl AcmeChallengeStore {
         resource_tokens.clear();
 
         for (key, acme) in data {
-            if let Some(challenges) = &acme.spec.active_challenges {
+            let challenges = acme.active_challenges();
+            if !challenges.is_empty() {
                 let mut keys_for_resource = Vec::new();
                 for c in challenges {
                     keys_for_resource.push(c.token.clone());
@@ -101,9 +102,7 @@ impl AcmeChallengeStore {
                         },
                     );
                 }
-                if !keys_for_resource.is_empty() {
-                    resource_tokens.insert(key.clone(), keys_for_resource);
-                }
+                resource_tokens.insert(key.clone(), keys_for_resource);
             }
         }
 
@@ -139,7 +138,8 @@ impl AcmeChallengeStore {
             }
 
             // Insert new tokens
-            if let Some(challenges) = &acme.spec.active_challenges {
+            let challenges = acme.active_challenges();
+            if !challenges.is_empty() {
                 let mut keys_for_resource = Vec::new();
                 for c in challenges {
                     keys_for_resource.push(c.token.clone());
@@ -152,9 +152,7 @@ impl AcmeChallengeStore {
                         },
                     );
                 }
-                if !keys_for_resource.is_empty() {
-                    resource_tokens.insert(key.clone(), keys_for_resource);
-                }
+                resource_tokens.insert(key.clone(), keys_for_resource);
             }
         }
     }
@@ -184,11 +182,7 @@ mod tests {
 
     /// Helper: build a minimal EdgionAcme from JSON with optional active challenges.
     fn make_acme(challenges: Vec<ActiveHttpChallenge>) -> EdgionAcme {
-        let active = if challenges.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::to_value(&challenges).unwrap()
-        };
+        let active = serde_json::to_value(&challenges).unwrap();
 
         serde_json::from_value(serde_json::json!({
             "apiVersion": "edgion.io/v1",
@@ -198,8 +192,13 @@ mod tests {
                 "email": "test@example.com",
                 "privateKeySecretRef": { "name": "test-acme-account" },
                 "domains": ["example.com"],
-                "challenge": { "type": "http-01" },
+                "challenge": {
+                    "type": "http-01",
+                    "gatewayRef": { "name": "gw" },
+                },
                 "storage": { "secretName": "test-cert" },
+            },
+            "status": {
                 "activeChallenges": active,
             }
         }))

@@ -27,16 +27,19 @@ spec:
 
 ## 凭据模型（通用）
 
-### Secret 引用：`SecretReference`
+### Secret 引用：`SecretObjectReference`
 
 ```yaml
 secretRef:
   name: my-secret           # 必填
   namespace: credentials    # 可选；缺省=LinkSys 所在 namespace
+  # group / kind 可省略，缺省即 core/Secret
+  # 保留字段，供将来扩展非 Secret 凭据源（Vault / ExternalSecret）使用
 ```
 
 - 跨 namespace（`namespace != 当前资源 namespace`）需要目标 namespace 下存在允许 `Secret` 的 Gateway API `ReferenceGrant`，否则 `ResolvedRefs=False/RefNotPermitted`。
 - Secret 的键走 **well-known 约定**（下表），CRD 不支持自定义 `usernameKey` / `passwordKey` 这类字段。
+- 底层类型为 `SecretObjectReference`（`group / kind / name / namespace`），`group` 与 `kind` 缺省即 `core/Secret`，为将来扩展非 Secret 凭据源（Vault / ExternalSecret）保留能力。
 
 ### Secret 键约定（与 resolver 对齐）
 

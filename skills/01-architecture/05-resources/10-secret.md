@@ -7,7 +7,7 @@ description: Secret 资源：存储、不同步到 Gateway、GLOBAL_SECRET_STORE
 
 > **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
 
-Secret 是 Kubernetes 核心资源，在 Edgion 中用于存储 TLS 证书、认证凭证、ACME 账户等敏感信息。Secret 属于 **no_sync_kind**，不通过 gRPC 同步到 Gateway，仅在 Controller 侧处理：一方面通过 GLOBAL_SECRET_STORE 为其他 Handler 供数，另一方面通过 `SecretRefManager` 级联 requeue 依赖资源。需要让 Gateway 用到的敏感数据，由 Controller 在 parse 阶段**内嵌**到引用它的资源 spec 中（如 `Gateway.tls.secrets`、`EdgionTls.spec.secret`、`LinkSys.spec.config.<auth>.secret` / `tls.certs.secret`、`EdgionAcme.spec.accountSecret` / `dnsCredentialSecret`），随 conf_sync 一起传过去。
+Secret 是 Kubernetes 核心资源，在 Edgion 中用于存储 TLS 证书、认证凭证、ACME 账户等敏感信息。Secret 属于 **no_sync_kind**，不通过 gRPC 同步到 Gateway，仅在 Controller 侧处理：一方面通过 GLOBAL_SECRET_STORE 为其他 Handler 供数，另一方面通过 `SecretRefManager` 级联 requeue 依赖资源。需要让 Gateway 用到的敏感数据，由 Controller 在 parse 阶段**内嵌**到引用它的资源 spec 中（如 `Gateway.tls.secrets`、`EdgionTls.spec.secret`、`LinkSys.spec.config.<auth>.secret` / `tls.certs.secret`），随 conf_sync 一起传过去。EdgionAcme 是例外：账户 / DNS 凭证由 Controller 侧的 `AcmeService` 使用，不内嵌到 spec；签发期间 `AcmeService` 通过 K8s API 直接拉取 Secret。
 
 ## 源码位置
 

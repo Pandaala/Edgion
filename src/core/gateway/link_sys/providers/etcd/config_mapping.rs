@@ -43,27 +43,12 @@ pub fn build_connect_options(
     let mut has_options = false;
 
     if crd.auth.is_some() {
-        match auth {
-            CredentialState::Resolved(m) => {
-                // `BasicAuthResolver` legitimately supports password-only
-                // secrets — username may be `None` inside a valid material.
-                let user = m.username.as_deref().unwrap_or("");
-                options = options.with_user(user, m.password.as_str());
-                has_options = true;
-            }
-            CredentialState::Pending => {
-                anyhow::bail!(
-                    "Etcd auth is configured via secretRef but credential material \
-                     has not been resolved yet; refusing to build client without credentials"
-                );
-            }
-            CredentialState::Invalid(reason) => {
-                anyhow::bail!("Etcd credential material is invalid: {reason}");
-            }
-            CredentialState::NotRequired => {
-                anyhow::bail!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)");
-            }
-        }
+        let m = crate::core::gateway::link_sys::credential::require_basic_material(auth, "Etcd")?.ok_or_else(|| {
+            anyhow::anyhow!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)")
+        })?;
+        let user = m.username.as_deref().unwrap_or("");
+        options = options.with_user(user, m.password.as_str());
+        has_options = true;
     }
 
     // TLS — parse CA / mTLS material from the CRD (inline + resolved Secret)
@@ -177,14 +162,18 @@ mod tests {
     }
 
     fn crd_with_secret_ref() -> EtcdClientConfig {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         EtcdClientConfig {
             auth: Some(EtcdAuth {
-                secret_ref: SecretReference {
-                    name: "etcd-creds".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "etcd-creds".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         }

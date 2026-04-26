@@ -56,27 +56,12 @@ pub fn build_fred_config(crd: &RedisClientConfig, auth: &CredentialState<BasicAu
     }
 
     if crd.auth.is_some() {
-        match auth {
-            CredentialState::Resolved(m) => {
-                config.username = m.username.clone();
-                config.password = Some(m.password.clone());
-            }
-            CredentialState::Pending => {
-                anyhow::bail!(
-                    "Redis auth is configured via secretRef but credential material \
-                     has not been resolved yet; refusing to build client without credentials"
-                );
-            }
-            CredentialState::Invalid(reason) => {
-                anyhow::bail!("Redis credential material is invalid: {reason}");
-            }
-            CredentialState::NotRequired => {
-                // CRD declares auth, but state says NotRequired — internal bug
-                // (resolver / dispatcher inconsistency). Fail hard rather than
-                // authenticate anonymously.
-                anyhow::bail!("Redis auth configured in CRD but credential state is NotRequired (internal bug)");
-            }
-        }
+        let m =
+            crate::core::gateway::link_sys::credential::require_basic_material(auth, "Redis")?.ok_or_else(|| {
+                anyhow::anyhow!("Redis auth configured in CRD but credential state is NotRequired (internal bug)")
+            })?;
+        config.username = m.username.clone();
+        config.password = Some(m.password.clone());
     }
 
     Ok(config)
@@ -373,14 +358,18 @@ mod tests {
     }
 
     fn crd_with_secret_ref() -> RedisClientConfig {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         RedisClientConfig {
             auth: Some(RedisAuth {
-                secret_ref: SecretReference {
-                    name: "redis-creds".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "redis-creds".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..minimal_config(vec!["redis://localhost:6379".to_string()])
         }

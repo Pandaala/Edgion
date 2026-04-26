@@ -167,33 +167,7 @@ pub struct GatewayTLSConfig {
     pub resolved_frontend_ca_secrets: Option<Vec<Secret>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SecretObjectReference {
-    /// Group is the group of the referent
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
-
-    /// Kind is kind of the referent
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-
-    /// Name is the name of the referent
-    pub name: String,
-
-    /// Namespace is the namespace of the referent
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-}
-
-impl From<&SecretObjectReference> for super::common::SecretReference {
-    fn from(value: &SecretObjectReference) -> Self {
-        Self {
-            name: value.name.clone(),
-            namespace: value.namespace.clone(),
-        }
-    }
-}
+pub use crate::types::resources::common::SecretObjectReference;
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]

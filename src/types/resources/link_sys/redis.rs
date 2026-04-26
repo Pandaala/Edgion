@@ -1,12 +1,10 @@
 //! Redis client configuration types
 
-use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::common::SecretReference;
-use crate::types::resources::common::TlsConfig;
+use crate::types::resources::common::{SecretSlot, TlsConfig};
 
 /// Redis client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -55,15 +53,10 @@ pub struct RedisClientConfig {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RedisAuth {
-    /// Secret reference for credentials (required).
-    /// The referenced Secret should contain `username` and/or `password` keys.
-    #[serde(rename = "secretRef")]
-    pub secret_ref: SecretReference,
-
-    /// Resolved Secret object (filled by controller, not from YAML).
-    /// Serialized to the Gateway via conf_sync; never persisted into K8s `spec`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret: Option<Secret>,
+    /// Embedded Secret slot (`secretRef` + resolved `secret`).
+    /// `#[serde(flatten)]` keeps the YAML form unchanged at the parent level.
+    #[serde(flatten)]
+    pub slot: SecretSlot,
 }
 
 /// Redis timeout configuration (in milliseconds)
@@ -241,8 +234,8 @@ secretRef:
   name: redis-creds
 "#;
         let auth: RedisAuth = serde_yaml::from_str(yaml).expect("should deserialize");
-        assert_eq!(auth.secret_ref.name, "redis-creds");
-        assert!(auth.secret_ref.namespace.is_none());
+        assert_eq!(auth.slot.secret_ref.name, "redis-creds");
+        assert!(auth.slot.secret_ref.namespace.is_none());
     }
 
     #[test]
@@ -253,8 +246,8 @@ secretRef:
   namespace: credentials
 "#;
         let auth: RedisAuth = serde_yaml::from_str(yaml).expect("should deserialize");
-        assert_eq!(auth.secret_ref.name, "redis-creds");
-        assert_eq!(auth.secret_ref.namespace.as_deref(), Some("credentials"));
+        assert_eq!(auth.slot.secret_ref.name, "redis-creds");
+        assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("credentials"));
     }
 
     #[test]
@@ -276,5 +269,22 @@ secretRef:
         let yaml = "{}";
         let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
         assert!(r.is_err(), "secretRef 是必需字段");
+    }
+
+    #[test]
+    fn redis_auth_yaml_roundtrip_unchanged() {
+        // 改造前后 YAML 形态必须一致（#[serde(flatten)] 验证）
+        let yaml = "secretRef:\n  name: redis-creds\n  namespace: default";
+        let auth: super::RedisAuth = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(auth.slot.secret_ref.name, "redis-creds");
+        assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("default"));
+        assert!(auth.slot.secret.is_none());
+    }
+
+    #[test]
+    fn redis_auth_rejects_unknown_field() {
+        let yaml = "secretRef:\n  name: x\nbogus: 1";
+        let r: Result<super::RedisAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err());
     }
 }

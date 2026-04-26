@@ -868,7 +868,7 @@ mod tests {
     }
 
     fn create_redis_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> LinkSys {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
         use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
         use k8s_openapi::api::core::v1::Secret;
@@ -905,11 +905,15 @@ mod tests {
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://127.0.0.1:6379".to_string()],
                     auth: Some(RedisAuth {
-                        secret_ref: SecretReference {
-                            name: "creds".to_string(),
-                            namespace: None,
+                        slot: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "creds".to_string(),
+                                namespace: None,
+                            },
+                            secret,
                         },
-                        secret,
                     }),
                     db: None,
                     timeout: None,

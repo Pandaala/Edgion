@@ -4,6 +4,7 @@
 //! Handlers are stateless and only define processing logic - state management
 //! is handled by ResourceProcessor.
 
+pub mod auth_spec;
 mod backend_tls_policy;
 mod configmap;
 mod edgion_acme;

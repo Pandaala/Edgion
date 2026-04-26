@@ -4,8 +4,7 @@
 //! Supports HTTP-01 and DNS-01 challenges with automatic EdgionTls/Secret creation.
 
 use super::common::Condition;
-use super::common::{ParentReference, SecretReference};
-use super::gateway::SecretObjectReference;
+use super::common::{ParentReference, SecretObjectReference};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20,48 +19,59 @@ pub const EDGION_ACME_KIND: &str = "EdgionAcme";
 // ACME Challenge types
 // ============================================================================
 
-/// ACME challenge type
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-pub enum AcmeChallengeType {
-    /// HTTP-01 challenge: ACME server validates domain ownership via HTTP request
-    #[serde(rename = "http-01")]
-    #[default]
-    Http01,
-    /// DNS-01 challenge: ACME server validates domain ownership via DNS TXT record
-    #[serde(rename = "dns-01")]
-    Dns01,
-}
-
-/// HTTP-01 challenge configuration
+/// ACME challenge configuration.
+///
+/// Tagged enum with `type: http-01 | dns-01` discriminator. The fields specific
+/// to each challenge are flat under the discriminator, so non-applicable fields
+/// cannot be expressed in YAML at all (the type system prevents the
+/// "type=http-01 + dns01 fields" misconfiguration).
+///
+/// ```yaml
+/// challenge:
+///   type: http-01
+///   gatewayRef:
+///     name: my-gateway
+/// ```
+///
+/// ```yaml
+/// challenge:
+///   type: dns-01
+///   provider: cloudflare
+///   credentialRef:
+///     name: cf-api-token
+///   propagationTimeout: 180
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Http01ChallengeConfig {
-    /// Gateway reference for serving challenge responses.
-    /// The challenge handler is activated on this Gateway's HTTP listeners
-    /// only when there are active challenges.
-    pub gateway_ref: ParentReference,
-}
+#[serde(tag = "type")]
+pub enum AcmeChallenge {
+    /// HTTP-01 challenge: ACME server validates domain ownership via HTTP request.
+    #[serde(rename = "http-01", rename_all = "camelCase")]
+    Http01 {
+        /// Gateway reference for serving challenge responses.
+        /// The challenge handler is activated on this Gateway's HTTP listeners
+        /// only when there are active challenges.
+        gateway_ref: ParentReference,
+    },
+    /// DNS-01 challenge: ACME server validates domain ownership via DNS TXT record.
+    #[serde(rename = "dns-01", rename_all = "camelCase")]
+    Dns01 {
+        /// DNS provider name: "cloudflare" or "alidns"
+        provider: String,
 
-/// DNS-01 challenge configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Dns01ChallengeConfig {
-    /// DNS provider name: "cloudflare" or "alidns"
-    pub provider: String,
+        /// Secret reference containing DNS provider API credentials.
+        /// Expected Secret keys vary by provider:
+        ///   - cloudflare: "api-token"
+        ///   - alidns: "access-key-id", "access-key-secret"
+        credential_ref: SecretObjectReference,
 
-    /// Secret reference containing DNS provider API credentials.
-    /// Expected Secret keys vary by provider:
-    ///   - cloudflare: "api-token"
-    ///   - alidns: "access-key-id", "access-key-secret"
-    pub credential_ref: SecretObjectReference,
+        /// DNS propagation timeout in seconds (default: 120)
+        #[serde(default = "default_propagation_timeout")]
+        propagation_timeout: u64,
 
-    /// DNS propagation timeout in seconds (default: 120)
-    #[serde(default = "default_propagation_timeout")]
-    pub propagation_timeout: u64,
-
-    /// DNS propagation check interval in seconds (default: 5)
-    #[serde(default = "default_propagation_check_interval")]
-    pub propagation_check_interval: u64,
+        /// DNS propagation check interval in seconds (default: 5)
+        #[serde(default = "default_propagation_check_interval")]
+        propagation_check_interval: u64,
+    },
 }
 
 fn default_propagation_timeout() -> u64 {
@@ -70,23 +80,6 @@ fn default_propagation_timeout() -> u64 {
 
 fn default_propagation_check_interval() -> u64 {
     5
-}
-
-/// ACME challenge configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AcmeChallengeConfig {
-    /// Challenge type (default: http-01)
-    #[serde(default, rename = "type")]
-    pub challenge_type: AcmeChallengeType,
-
-    /// HTTP-01 challenge configuration (required when type is http-01)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub http01: Option<Http01ChallengeConfig>,
-
-    /// DNS-01 challenge configuration (required when type is dns-01)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dns01: Option<Dns01ChallengeConfig>,
 }
 
 // ============================================================================
@@ -212,10 +205,11 @@ fn default_true() -> bool {
 }
 
 // ============================================================================
-// Active challenge (runtime, filled by Controller)
+// Active challenge (status-only, written by AcmeService, observed by Gateway)
 // ============================================================================
 
-/// An active ACME HTTP-01 challenge token (filled by Controller at runtime)
+/// An active ACME HTTP-01 challenge token, published in `EdgionAcmeStatus`
+/// by the controller's AcmeService for the Gateway to serve.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveHttpChallenge {
@@ -265,7 +259,7 @@ pub struct EdgionAcmeSpec {
     /// - Patch the `accountCredentials` key if the Secret exists but key is missing (self-managed scenario)
     ///
     /// See cert-manager's Issuer.spec.acme.privateKeySecretRef for the same pattern.
-    pub private_key_secret_ref: SecretReference,
+    pub private_key_secret_ref: SecretObjectReference,
 
     /// Domain names to obtain certificates for.
     /// Wildcard domains (e.g., "*.example.com") require DNS-01 challenge.
@@ -276,7 +270,7 @@ pub struct EdgionAcmeSpec {
     pub key_type: AcmeKeyType,
 
     /// Challenge configuration
-    pub challenge: AcmeChallengeConfig,
+    pub challenge: AcmeChallenge,
 
     /// Certificate renewal configuration
     #[serde(default)]
@@ -292,22 +286,6 @@ pub struct EdgionAcmeSpec {
     /// Automatically create/update EdgionTls resource for the issued certificate
     #[serde(default)]
     pub auto_edgion_tls: AcmeAutoEdgionTlsConfig,
-
-    // =========================================================================
-    // Runtime fields (filled by Controller, not from YAML)
-    // =========================================================================
-    /// Active HTTP-01 challenges (filled by Controller for Gateway to serve).
-    /// Gateway checks this field to respond to ACME validation requests.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub active_challenges: Option<Vec<ActiveHttpChallenge>>,
-
-    /// DNS provider credential Secret (resolved by Controller, not from YAML)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub dns_credential_secret: Option<k8s_openapi::api::core::v1::Secret>,
-
-    /// ACME account Secret (resolved by Controller, not from YAML)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub account_secret: Option<k8s_openapi::api::core::v1::Secret>,
 }
 
 fn default_acme_server() -> String {
@@ -379,6 +357,15 @@ pub struct EdgionAcmeStatus {
     /// ACME account URI (after registration)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_uri: Option<String>,
+
+    /// Active HTTP-01 challenge tokens.
+    ///
+    /// Written by the Controller's AcmeService through the `/status` subresource
+    /// (separate field manager `edgion-acme-challenges`) and observed by the
+    /// Gateway to serve `/.well-known/acme-challenge/<token>` responses.
+    /// Empty (or absent) when no challenge is in flight.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_challenges: Vec<ActiveHttpChallenge>,
 }
 
 // ============================================================================
@@ -388,12 +375,12 @@ pub struct EdgionAcmeStatus {
 impl EdgionAcme {
     /// Check if this ACME config uses HTTP-01 challenge
     pub fn is_http01(&self) -> bool {
-        self.spec.challenge.challenge_type == AcmeChallengeType::Http01
+        matches!(self.spec.challenge, AcmeChallenge::Http01 { .. })
     }
 
     /// Check if this ACME config uses DNS-01 challenge
     pub fn is_dns01(&self) -> bool {
-        self.spec.challenge.challenge_type == AcmeChallengeType::Dns01
+        matches!(self.spec.challenge, AcmeChallenge::Dns01 { .. })
     }
 
     /// Check if any domain requires DNS-01 (wildcard domains)
@@ -420,9 +407,12 @@ impl EdgionAcme {
             .unwrap_or_else(|| format!("acme-{}", self.metadata.name.as_deref().unwrap_or("unknown")))
     }
 
-    /// Get active challenges (returns empty slice if none)
+    /// Get active challenges from status (empty slice when none in flight).
     pub fn active_challenges(&self) -> &[ActiveHttpChallenge] {
-        self.spec.active_challenges.as_deref().unwrap_or_default()
+        self.status
+            .as_ref()
+            .map(|s| s.active_challenges.as_slice())
+            .unwrap_or_default()
     }
 }
 
@@ -447,10 +437,9 @@ spec:
     - www.example.com
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: my-gateway
-        namespace: default
+    gatewayRef:
+      name: my-gateway
+      namespace: default
   storage:
     secretName: acme-cert-example
   autoEdgionTls:
@@ -492,12 +481,11 @@ spec:
   keyType: ecdsa-p384
   challenge:
     type: dns-01
-    dns01:
-      provider: cloudflare
-      credentialRef:
-        name: cf-api-token
-        namespace: default
-      propagationTimeout: 180
+    provider: cloudflare
+    credentialRef:
+      name: cf-api-token
+      namespace: default
+    propagationTimeout: 180
   renewal:
     renewBeforeDays: 14
     checkInterval: 43200
@@ -516,9 +504,17 @@ spec:
         assert_eq!(acme.spec.renewal.renew_before_days, 14);
         assert_eq!(acme.spec.renewal.check_interval, 43200);
 
-        let dns01 = acme.spec.challenge.dns01.as_ref().unwrap();
-        assert_eq!(dns01.provider, "cloudflare");
-        assert_eq!(dns01.propagation_timeout, 180);
+        match &acme.spec.challenge {
+            AcmeChallenge::Dns01 {
+                provider,
+                propagation_timeout,
+                ..
+            } => {
+                assert_eq!(provider, "cloudflare");
+                assert_eq!(*propagation_timeout, 180);
+            }
+            other => panic!("expected Dns01 variant, got {:?}", other),
+        }
     }
 
     #[test]
@@ -537,11 +533,11 @@ spec:
     - example.com
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: my-gateway
+    gatewayRef:
+      name: my-gateway
   storage:
     secretName: test-cert
+status:
   activeChallenges:
     - domain: example.com
       token: "abc123token"
@@ -573,9 +569,8 @@ spec:
     - a.com
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: gw
+    gatewayRef:
+      name: gw
   storage:
     secretName: cert
 "#;
@@ -587,7 +582,7 @@ spec:
         assert_eq!(acme.spec.renewal.check_interval, 86400);
         assert_eq!(acme.spec.renewal.fail_backoff, 300);
         assert!(acme.spec.auto_edgion_tls.enabled);
-        assert!(acme.spec.active_challenges.is_none());
+        assert!(acme.status.is_none());
         assert!(acme.spec.external_account_binding.is_none());
     }
 
@@ -606,9 +601,8 @@ spec:
   domains: [a.com]
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: gw
+    gatewayRef:
+      name: gw
   storage:
     secretName: cert
 "#;
@@ -632,9 +626,8 @@ spec:
   domains: [example.com]
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: gw
+    gatewayRef:
+      name: gw
   storage:
     secretName: cert
 "#;
@@ -658,9 +651,8 @@ spec:
   domains: [example.com]
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: gw
+    gatewayRef:
+      name: gw
   storage:
     secretName: cert
 "#;

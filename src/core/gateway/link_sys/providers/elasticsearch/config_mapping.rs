@@ -60,95 +60,91 @@ pub fn build_es_client(
     auth: &CredentialState<ResolvedCredential>,
 ) -> Result<(Client, HeaderMap)> {
     let mut builder = ClientBuilder::new();
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    // ── Connection pool ────────────────────────────────────────────
+    builder = apply_pool(builder, crd);
+    builder = apply_timeouts(builder, crd);
+    apply_auth(&mut headers, crd, auth)?;
+    builder = builder.default_headers(headers.clone());
+    builder = apply_tls(builder, crd)?;
+
+    let client = builder.build().context("failed to build reqwest client")?;
+    Ok((client, headers))
+}
+
+fn apply_pool(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> ClientBuilder {
     let idle_per_host = crd
         .pool
         .as_ref()
         .and_then(|p| p.max_idle_per_host)
         .map(|n| n.min(MAX_IDLE_PER_HOST))
         .unwrap_or(DEFAULT_IDLE_PER_HOST);
-    builder = builder.pool_max_idle_per_host(idle_per_host);
-
     let idle_timeout = crd
         .pool
         .as_ref()
         .and_then(|p| p.idle_timeout)
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_MS);
-    builder = builder.pool_idle_timeout(Duration::from_millis(idle_timeout));
+    builder
+        .pool_max_idle_per_host(idle_per_host)
+        .pool_idle_timeout(Duration::from_millis(idle_timeout))
+}
 
-    // ── Timeouts ───────────────────────────────────────────────────
+fn apply_timeouts(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> ClientBuilder {
     let connect_timeout = crd
         .timeout
         .as_ref()
         .and_then(|t| t.connect)
         .map(|ms| ms.min(MAX_CONNECT_TIMEOUT_MS))
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
-    builder = builder.connect_timeout(Duration::from_millis(connect_timeout));
-
     let request_timeout = crd
         .timeout
         .as_ref()
         .and_then(|t| t.request)
         .map(|ms| ms.min(MAX_REQUEST_TIMEOUT_MS))
         .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
-    builder = builder.timeout(Duration::from_millis(request_timeout));
+    builder
+        .connect_timeout(Duration::from_millis(connect_timeout))
+        .timeout(Duration::from_millis(request_timeout))
+}
 
-    // ── Default headers ────────────────────────────────────────────
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-    // ── Authentication: secretRef in CRD; material carried by CredentialState ──
-    //
-    // `resolved_state` picks the resolver by auth variant, so a `Resolved`
-    // value always matches the CRD's auth kind. The match on `Resolved` below
-    // rejects the HMAC variant (which is only produced for Webhook auth), but
-    // that arm is unreachable for a well-formed ES config — it exists so the
-    // match is exhaustive over `ResolvedCredential`.
-    if crd.auth.is_some() {
-        let auth_header = match auth {
-            CredentialState::Resolved(ResolvedCredential::Basic(m)) => {
-                let u = m.username.as_deref().unwrap_or("");
-                let encoded = BASE64.encode(format!("{}:{}", u, m.password.as_str()));
-                format!("Basic {}", encoded)
-            }
-            CredentialState::Resolved(ResolvedCredential::EsApiKey(m)) => {
-                let encoded = BASE64.encode(format!("{}:{}", m.api_key_id, m.api_key_secret));
-                format!("ApiKey {}", encoded)
-            }
-            CredentialState::Resolved(ResolvedCredential::Bearer(m)) => {
-                format!("Bearer {}", m.token)
-            }
-            CredentialState::Resolved(ResolvedCredential::Hmac(_)) => anyhow::bail!(
-                "Elasticsearch auth does not support HMAC material (internal bug: resolver selected wrong variant)"
-            ),
-            CredentialState::Resolved(ResolvedCredential::WebhookApiKey(_)) => anyhow::bail!(
-                "Elasticsearch auth does not support WebhookApiKey material (internal bug: resolver selected wrong variant)"
-            ),
-            CredentialState::Pending => anyhow::bail!(
-                "Elasticsearch auth is configured via secretRef but credential material \
-                 has not been resolved yet; refusing to build client without credentials"
-            ),
-            CredentialState::Invalid(reason) => {
-                anyhow::bail!("Elasticsearch credential material is invalid: {reason}");
-            }
-            CredentialState::NotRequired => {
-                anyhow::bail!("Elasticsearch auth configured in CRD but credential state is NotRequired (internal bug)")
-            }
-        };
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&auth_header).context("invalid auth header value")?,
-        );
+fn apply_auth(
+    headers: &mut HeaderMap,
+    crd: &ElasticsearchClientConfig,
+    auth: &CredentialState<ResolvedCredential>,
+) -> Result<()> {
+    if crd.auth.is_none() {
+        return Ok(());
     }
+    let resolved = crate::core::gateway::link_sys::credential::require_resolved(auth, "Elasticsearch")?;
+    let auth_header = match resolved {
+        ResolvedCredential::Basic(m) => {
+            let u = m.username.as_deref().unwrap_or("");
+            format!("Basic {}", BASE64.encode(format!("{}:{}", u, m.password.as_str())))
+        }
+        ResolvedCredential::EsApiKey(m) => {
+            format!(
+                "ApiKey {}",
+                BASE64.encode(format!("{}:{}", m.api_key_id, m.api_key_secret))
+            )
+        }
+        ResolvedCredential::Bearer(m) => format!("Bearer {}", m.token),
+        ResolvedCredential::Hmac(_) => anyhow::bail!(
+            "Elasticsearch auth does not support HMAC material (internal bug: resolver selected wrong variant)"
+        ),
+        ResolvedCredential::WebhookApiKey(_) => anyhow::bail!(
+            "Elasticsearch auth does not support WebhookApiKey material (internal bug: resolver selected wrong variant)"
+        ),
+    };
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&auth_header).context("invalid auth header value")?,
+    );
+    Ok(())
+}
 
-    builder = builder.default_headers(headers.clone());
-
-    // ── TLS ────────────────────────────────────────────────────────
-    // Gate on `tls.enabled` to match Redis/Etcd semantics: TLS material is
-    // only applied when the operator opts in. For `https://` endpoints the
-    // transport itself is still TLS via reqwest's defaults; `enabled: true`
-    // only adds custom CA / client mTLS / insecure_skip_verify on top.
+fn apply_tls(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> Result<ClientBuilder> {
+    let mut builder = builder;
     if let Some(tls) = &crd.tls {
         if tls.enabled {
             if let Some(true) = tls.insecure_skip_verify {
@@ -166,8 +162,6 @@ pub fn build_es_client(
                 );
                 builder = builder.danger_accept_invalid_certs(true);
             }
-
-            // CA + client mTLS from inline PEM and/or embedded K8s Secret.
             if let Some(material) = tls_helper::build_material(tls) {
                 if let Some(ca_pem) = &material.ca_pem {
                     let cert = Certificate::from_pem(ca_pem).context("invalid ES CA certificate PEM")?;
@@ -180,9 +174,7 @@ pub fn build_es_client(
             }
         }
     }
-
-    let client = builder.build().context("failed to build reqwest client")?;
-    Ok((client, headers))
+    Ok(builder)
 }
 
 // ============================================================================
@@ -263,14 +255,18 @@ mod tests {
     }
 
     fn basic_auth_crd() -> ElasticsearchClientConfig {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::Basic {
-                secret_ref: SecretReference {
-                    name: "es-creds".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "es-creds".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..Default::default()
         }
@@ -299,14 +295,18 @@ mod tests {
 
     #[test]
     fn test_build_es_client_api_key_auth() {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         let crd = ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::ApiKey {
-                secret_ref: SecretReference {
-                    name: "es-api-key".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "es-api-key".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..Default::default()
         };
@@ -357,14 +357,18 @@ mod tests {
 
     #[test]
     fn test_build_es_client_bearer_auth() {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         let crd = ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::Bearer {
-                secret_ref: SecretReference {
-                    name: "es-token".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "es-token".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..Default::default()
         };

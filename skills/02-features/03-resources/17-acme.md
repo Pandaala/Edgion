@@ -26,19 +26,19 @@ spec:
 
   keyType: ecdsa-p256                                          # 证书密钥算法
 
-  challenge:
-    challengeType: http-01                                     # http-01 | dns-01
-    http01:
-      gatewayRef:                                              # HTTP-01 需要的 Gateway 引用
-        name: my-gateway
-        namespace: default
-    # dns01:                                                   # DNS-01 配置
-    #   provider: cloudflare                                   # cloudflare | alidns
-    #   credentialRef:
-    #     name: cloudflare-api-token
-    #     namespace: default
-    #   propagationTimeout: 120
-    #   propagationCheckInterval: 5
+  challenge:                                                   # tagged enum: type=http-01 | dns-01
+    type: http-01
+    gatewayRef:                                                # HTTP-01 需要的 Gateway 引用
+      name: my-gateway
+      namespace: default
+    # 切换到 DNS-01 时整段替换为：
+    # type: dns-01
+    # provider: cloudflare                                     # cloudflare | alidns
+    # credentialRef:
+    #   name: cloudflare-api-token
+    #   namespace: default
+    # propagationTimeout: 120
+    # propagationCheckInterval: 5
 
   renewal:
     renewBeforeDays: 30                                        # 到期前多少天续期
@@ -81,24 +81,22 @@ spec:
 
 ### challenge — 挑战配置
 
+`challenge` 是 `#[serde(tag = "type")]` 内部标签枚举，对应 Rust `AcmeChallenge`。`type` 决定形态，相应字段直接平铺在 `challenge` 下；不存在 `http01:` / `dns01:` 子字段。两组字段类型级互斥。
+
+**HTTP-01** (`type: http-01`):
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `gatewayRef` | `ParentReference` | 是 | 用于响应 ACME 挑战的 Gateway |
+
+**DNS-01** (`type: dns-01`):
+
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `challengeType` | `String` | `http-01` | `http-01` / `dns-01` |
-
-**HTTP-01**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `http01.gatewayRef` | `ParentReference` | 用于响应 ACME 挑战的 Gateway |
-
-**DNS-01**:
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `dns01.provider` | `String` | — | DNS 提供商：`cloudflare` / `alidns` |
-| `dns01.credentialRef` | `SecretObjectReference` | — | API 凭证 Secret |
-| `dns01.propagationTimeout` | `u64` | `120` | DNS 传播超时（秒） |
-| `dns01.propagationCheckInterval` | `u64` | `5` | 传播检查间隔（秒） |
+| `provider` | `String` | — | DNS 提供商：`cloudflare` / `alidns` |
+| `credentialRef` | `SecretObjectReference` | — | API 凭证 Secret |
+| `propagationTimeout` | `u64` | `120` | DNS 传播超时（秒） |
+| `propagationCheckInterval` | `u64` | `5` | 传播检查间隔（秒） |
 
 ### renewal — 续期配置
 
@@ -136,7 +134,14 @@ status:
   secretName: "my-acme-cert"
   edgionTlsName: "acme-my-acme"
   accountUri: "https://acme-v02.api.letsencrypt.org/acme/acct/123"
+  activeChallenges:                                # HTTP-01 在飞期间的挑战 token
+    - domain: "example.com"
+      token: "..."
+      keyAuthorization: "..."
+      expireAt: 1700000000
 ```
+
+`activeChallenges` 由 `AcmeService` 通过 `/status` 子资源 SSA 写入（独立 fieldManager `edgion-acme-challenges`），Gateway 通过 `EdgionAcme.active_challenges()` helper 读取来 serve `/.well-known/acme-challenge/<token>`。仅 HTTP-01 在飞期间非空。Operator 不应手写。
 
 **AcmeCertPhase 枚举**:
 

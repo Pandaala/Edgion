@@ -5,14 +5,16 @@
 //! 2. Drives the full ACME flow (account → order → challenge → certificate)
 //! 3. Creates/updates K8s Secrets with issued certificates
 //! 4. Creates/updates EdgionTls resources for Gateway TLS termination
-//! 5. Pushes HTTP-01 challenge tokens via CRD spec (propagated to Gateway via gRPC)
+//! 5. Publishes HTTP-01 challenge tokens on `status.activeChallenges`
+//!    (propagated to Gateway via gRPC)
 //! 6. Schedules periodic renewal checks
 //!
 //! ## Design
 //!
 //! - Global singleton via `Mutex<Option<...>>` + `mpsc::channel` (re-initializable)
 //! - In-memory tracking of in-flight operations (prevents duplicate processing)
-//! - K8s CRD as the source of truth (challenge tokens, status, account)
+//! - K8s CRD as the source of truth (status, account); active challenges live
+//!   on `status.activeChallenges` written via the `/status` subresource
 //! - Account credentials persisted in a dedicated K8s Secret
 
 use parking_lot::{Mutex, RwLock};
@@ -35,8 +37,9 @@ use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
 };
+use crate::types::resources::common::SecretObjectReference;
 use crate::types::resources::edgion_acme::{
-    AcmeCertPhase, AcmeChallengeType, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
+    AcmeCertPhase, AcmeChallenge, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
 };
 
 // ============================================================================
@@ -389,11 +392,21 @@ impl AcmeServiceWorker {
                     // Update status to Failed
                     if let Some((ns, name)) = parse_resource_key(&key_owned) {
                         let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
-                        let _ = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
+                        if let Err(status_err) = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
                             status.last_failure_reason = Some(format!("{:#}", e));
                             status.last_failure_time = Some(chrono::Utc::now().to_rfc3339());
                         })
-                        .await;
+                        .await
+                        {
+                            // Without this, phase stays in Issuing/Renewing and operators
+                            // cannot see that the flow failed.
+                            tracing::warn!(
+                                component = "acme_service",
+                                key = %key_owned,
+                                error = %status_err,
+                                "Failed to write Failed status back to EdgionAcme"
+                            );
+                        }
                     }
 
                     // Schedule retry with exponential backoff (if under limit)
@@ -471,9 +484,9 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
     let acme_client = get_or_create_acme_account(&client, acme).await?;
 
     // 3. Execute challenge-specific flow and obtain certificate
-    let cert_result = match acme.spec.challenge.challenge_type {
-        AcmeChallengeType::Http01 => execute_http01_flow(&client, &api, name, &acme_client, acme).await?,
-        AcmeChallengeType::Dns01 => execute_dns01_flow(&client, &acme_client, acme).await?,
+    let cert_result = match &acme.spec.challenge {
+        AcmeChallenge::Http01 { .. } => execute_http01_flow(&client, &api, name, &acme_client, acme).await?,
+        AcmeChallenge::Dns01 { .. } => execute_dns01_flow(&client, &acme_client, acme).await?,
     };
 
     // 4. Store certificate in K8s Secret
@@ -629,29 +642,33 @@ async fn execute_http01_flow(
 // ============================================================================
 
 async fn execute_dns01_flow(
-    _client: &Client,
+    client: &Client,
     acme_client: &AcmeClient,
     acme: &EdgionAcme,
 ) -> Result<AcmeCertificateResult> {
     let name = acme.metadata.name.as_deref().unwrap_or("unknown");
-    let dns01_config = acme
-        .spec
-        .challenge
-        .dns01
-        .as_ref()
-        .context("DNS-01 config is required")?;
+    let AcmeChallenge::Dns01 {
+        provider,
+        credential_ref,
+        propagation_timeout,
+        ..
+    } = &acme.spec.challenge
+    else {
+        anyhow::bail!("execute_dns01_flow called on a non-DNS-01 EdgionAcme");
+    };
 
     tracing::info!(
         component = "acme_service",
         name = %name,
         domains = ?acme.spec.domains,
-        provider = %dns01_config.provider,
+        provider = %provider,
         "Starting DNS-01 challenge flow"
     );
 
-    // Phase 1: Extract credentials and prepare order (does NOT notify ACME server yet)
-    let credentials = extract_dns_credentials(acme)?;
-    let dns_provider = create_dns_provider(&dns01_config.provider, &credentials)?;
+    // Phase 1: Fetch DNS credential Secret + prepare order (does NOT notify ACME server yet)
+    let owner_ns = acme.metadata.namespace.as_deref().unwrap_or("default");
+    let credentials = fetch_dns_credentials(client, credential_ref, owner_ns).await?;
+    let dns_provider = create_dns_provider(provider, &credentials)?;
 
     let (pending, mut order_ctx) = acme_client
         .prepare_dns01_order(&acme.spec.domains)
@@ -671,7 +688,7 @@ async fn execute_dns01_flow(
     // Phase 3: Wait for DNS propagation before notifying ACME server.
     // Use `propagation_timeout` (default 120s) as the wait duration, NOT `propagation_check_interval`.
     // DNS TXT records can take time to propagate globally; waiting too briefly causes validation failure.
-    let wait_secs = dns01_config.propagation_timeout.max(10);
+    let wait_secs = (*propagation_timeout).max(10);
     tracing::info!(
         component = "acme_service",
         name = %name,
@@ -713,23 +730,31 @@ async fn execute_dns01_flow(
     cert_result.context("Failed to complete DNS-01 ACME order")
 }
 
-/// Extract DNS credentials from the resolved Secret in the EdgionAcme spec
-fn extract_dns_credentials(acme: &EdgionAcme) -> Result<HashMap<String, String>> {
-    let secret = acme
-        .spec
-        .dns_credential_secret
-        .as_ref()
-        .context("DNS credential Secret not resolved yet")?;
+/// Fetch DNS credentials from the K8s Secret referenced by the EdgionAcme spec.
+async fn fetch_dns_credentials(
+    client: &Client,
+    credential_ref: &SecretObjectReference,
+    owner_ns: &str,
+) -> Result<HashMap<String, String>> {
+    let secret_ns = credential_ref.effective_namespace(owner_ns);
+    let secret_api: Api<Secret> = Api::namespaced(client.clone(), secret_ns);
+    let secret = secret_api.get(&credential_ref.name).await.with_context(|| {
+        format!(
+            "Failed to fetch DNS credential Secret {}/{}",
+            secret_ns, credential_ref.name
+        )
+    })?;
 
     let mut credentials = HashMap::new();
-
-    if let Some(ref data) = secret.data {
+    if let Some(data) = secret.data {
         for (key, value) in data {
-            credentials.insert(
-                key.clone(),
-                String::from_utf8(value.0.clone())
-                    .unwrap_or_else(|_| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &value.0)),
-            );
+            let s = String::from_utf8(value.0).map_err(|_| {
+                anyhow::anyhow!(
+                    "DNS credential key '{}' is not valid UTF-8; binary credentials are not supported",
+                    key
+                )
+            })?;
+            credentials.insert(key, s);
         }
     }
 
@@ -740,22 +765,9 @@ fn extract_dns_credentials(acme: &EdgionAcme) -> Result<HashMap<String, String>>
 // ACME Account Management
 // ============================================================================
 
-/// Extract ACME account JSON from [`EdgionAcmeSpec::account_secret`] without calling the Kubernetes API.
-fn embedded_account_json(acme: &EdgionAcme) -> Result<Option<Zeroizing<String>>> {
-    let Some(ref embedded) = acme.spec.account_secret else {
-        return Ok(None);
-    };
-    let Some(ref map) = embedded.data else {
-        return Ok(None);
-    };
-    extract_account_json_string(map)
-}
-
 /// Get or create an ACME account for the given resource.
 ///
 /// Uses `spec.privateKeySecretRef` and the `accountCredentials` data key (see `ACME_ACCOUNT_KEY`).
-/// When [`EdgionAcmeSpec::account_secret`] is populated by the sync handler, restores from that
-/// blob first (no redundant Secret `GET`).
 /// - Secret not found: register, then create Secret (with ownerReferences when uid is set).
 /// - Secret exists with valid `accountCredentials` (or legacy `credentials`):
 ///   restore — **no overwrite** (backup / operator restore).
@@ -773,28 +785,6 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
 
     let eab_kid = acme.spec.external_account_binding.as_ref().map(|e| e.key_id.as_str());
     let eab_hmac = acme.spec.external_account_binding.as_ref().map(|e| e.hmac_key.as_str());
-
-    if let Some(zjson) = embedded_account_json(acme)? {
-        let creds = account_credentials_from_json(&zjson)?;
-        tracing::info!(
-            component = "acme_service",
-            name = %acme_name,
-            "Restored ACME account from embedded account Secret"
-        );
-        return AcmeClient::from_credentials(creds).await;
-    }
-
-    // `spec.account_secret` is absent on the normal first-registration path
-    // (handler only embeds on `ResolveOutcome::Ok`; NeedsRegistration / SecretNotFound /
-    // MissingKeys all fall through here). Keep this at debug to avoid log spam —
-    // operator-facing signal already lives on the `ResolvedRefs` condition.
-    if acme.spec.account_secret.is_none() {
-        tracing::debug!(
-            component = "acme_service",
-            name = %acme_name,
-            "EdgionAcme spec.account_secret absent; resolving account Secret via Kubernetes API"
-        );
-    }
 
     match secret_api.get(secret_name).await {
         Ok(secret) => {
@@ -857,22 +847,34 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
 // K8s Resource Operations
 // ============================================================================
 
-/// Patch the EdgionAcme CRD's activeChallenges field
+/// Publish the in-flight HTTP-01 challenge tokens on `status.activeChallenges`
+/// via Server-Side Apply against the `/status` subresource.
+///
+/// Uses a dedicated field manager (`edgion-acme-challenges`) so this writer
+/// does not collide with `update_acme_status`, which uses
+/// `edgion-acme-controller` and never touches `activeChallenges`.
+///
+/// Pass `None` (or an empty slice) to clear the field — sending an empty array
+/// keeps ownership under our manager and zeroes the observable token list.
 async fn patch_active_challenges(
     api: &Api<EdgionAcme>,
     name: &str,
     challenges: Option<&[ActiveHttpChallenge]>,
 ) -> Result<()> {
+    let active = challenges.unwrap_or(&[]);
     let patch = serde_json::json!({
-        "spec": {
-            "activeChallenges": challenges
+        "apiVersion": "edgion.io/v1",
+        "kind": "EdgionAcme",
+        "metadata": { "name": name },
+        "status": {
+            "activeChallenges": active,
         }
     });
 
-    let pp = PatchParams::apply("edgion-acme-controller");
-    api.patch(name, &pp, &Patch::Merge(patch))
+    let pp = PatchParams::apply("edgion-acme-challenges").force();
+    api.patch_status(name, &pp, &Patch::Apply(patch))
         .await
-        .context("Failed to patch activeChallenges")?;
+        .context("Failed to patch activeChallenges into status")?;
 
     Ok(())
 }
@@ -1073,65 +1075,6 @@ fn parse_resource_key(key: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::credentials::ACME_ACCOUNT_KEY;
-    use k8s_openapi::ByteString;
-    use std::collections::BTreeMap;
-
-    const MINIMAL_ACME_YAML: &str = r#"
-apiVersion: edgion.io/v1
-kind: EdgionAcme
-metadata:
-  name: t
-  namespace: default
-spec:
-  email: a@b.com
-  privateKeySecretRef:
-    name: acc
-  domains:
-    - x.com
-  challenge:
-    type: http-01
-    http01:
-      gatewayRef:
-        name: gw
-        namespace: default
-  storage:
-    secretName: cert
-"#;
-
-    #[test]
-    fn embedded_account_json_none_when_not_embedded() {
-        let acme: EdgionAcme = serde_yaml::from_str(MINIMAL_ACME_YAML).unwrap();
-        assert!(embedded_account_json(&acme).unwrap().is_none());
-    }
-
-    #[test]
-    fn embedded_account_json_reads_embedded_secret_without_kube() {
-        let mut acme: EdgionAcme = serde_yaml::from_str(MINIMAL_ACME_YAML).unwrap();
-        let mut data = BTreeMap::new();
-        data.insert(
-            ACME_ACCOUNT_KEY.to_string(),
-            ByteString(br#"{"account_url":"https://example/acct","key_pem":"test"}"#.to_vec()),
-        );
-        acme.spec.account_secret = Some(Secret {
-            metadata: Default::default(),
-            data: Some(data),
-            ..Default::default()
-        });
-        let z = embedded_account_json(&acme).unwrap().expect("expected JSON blob");
-        assert!(z.contains("account_url"));
-    }
-
-    #[test]
-    fn embedded_account_json_none_when_embedded_has_no_account_keys() {
-        let mut acme: EdgionAcme = serde_yaml::from_str(MINIMAL_ACME_YAML).unwrap();
-        acme.spec.account_secret = Some(Secret {
-            metadata: Default::default(),
-            data: Some(BTreeMap::new()),
-            ..Default::default()
-        });
-        assert!(embedded_account_json(&acme).unwrap().is_none());
-    }
 
     // ================================================================
     // exponential_backoff

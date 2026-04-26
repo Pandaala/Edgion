@@ -17,15 +17,12 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, resolved_refs_condition, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
-use crate::types::credentials::resolvers::{
-    BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver, WebhookApiKeyResolver,
-};
 use crate::types::credentials::SecretMaterialResolver;
 use crate::types::prelude_resources::LinkSys;
-use crate::types::resources::common::{SecretReference, TlsConfig};
-use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
-use crate::types::resources::link_sys::webhook::WebhookAuth;
+use crate::types::resources::common::SecretObjectReference;
 use crate::types::resources::link_sys::{LinkSysStatus, SystemConfig};
+
+use super::auth_spec::{AuthSpec, TlsSpec};
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
 
@@ -201,6 +198,26 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
 // Helper functions: resolve Secret per auth variant and inject into spec
 // ============================================================================
 
+async fn drive_standard<A: AuthSpec, T: TlsSpec>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    auth: Option<&mut A>,
+    tls: Option<&mut T>,
+) -> Vec<ResolvedRefsError> {
+    let mut errs = Vec::new();
+    if let Some(a) = auth {
+        if let Some(e) = a.resolve(ctx, owner).await {
+            errs.push(e);
+        }
+    }
+    if let Some(t) = tls {
+        if let Some(e) = t.resolve(ctx, owner).await {
+            errs.push(e);
+        }
+    }
+    errs
+}
+
 /// Attempt to resolve every Secret reference inside `config` and attach the
 /// resolved Secret onto the corresponding `auth.secret` / `tls.certs.secret`
 /// field. Returns the collected `ResolvedRefsError`s (empty on full success).
@@ -222,114 +239,19 @@ async fn resolve_for_spec(
     owner: &ResourceRef,
     config: &mut SystemConfig,
 ) -> Vec<ResolvedRefsError> {
-    let mut errors = Vec::new();
     match config {
-        SystemConfig::Redis(r) => {
-            if let Some(auth) = &mut r.auth {
-                match resolve_one(ctx, owner, &auth.secret_ref, &BasicAuthResolver).await {
-                    Ok(s) => auth.secret = s,
-                    Err(e) => errors.push(e),
-                }
-            }
-            if let Some(e) = resolve_tls(ctx, owner, r.tls.as_mut()).await {
-                errors.push(e);
-            }
-        }
-        SystemConfig::Etcd(e) => {
-            if let Some(auth) = &mut e.auth {
-                match resolve_one(ctx, owner, &auth.secret_ref, &BasicAuthResolver).await {
-                    Ok(s) => auth.secret = s,
-                    Err(err) => errors.push(err),
-                }
-            }
-            if let Some(err) = resolve_tls(ctx, owner, e.tls.as_mut()).await {
-                errors.push(err);
-            }
-        }
-        SystemConfig::Elasticsearch(es) => {
-            if let Some(auth) = &mut es.auth {
-                let res = match auth {
-                    ElasticsearchAuth::Basic { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver)
-                            .await
-                            .map(|s| *secret = s)
-                    }
-                    ElasticsearchAuth::ApiKey { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &EsApiKeyResolver)
-                            .await
-                            .map(|s| *secret = s)
-                    }
-                    ElasticsearchAuth::Bearer { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BearerResolver)
-                            .await
-                            .map(|s| *secret = s)
-                    }
-                };
-                if let Err(e) = res {
-                    errors.push(e);
-                }
-            }
-            if let Some(e) = resolve_tls(ctx, owner, es.tls.as_mut()).await {
-                errors.push(e);
-            }
-        }
-        SystemConfig::Webhook(w) => {
-            if let Some(auth) = &mut w.auth {
-                let res = match auth {
-                    WebhookAuth::Basic { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver)
-                            .await
-                            .map(|s| *secret = s)
-                    }
-                    WebhookAuth::Bearer { secret_ref, secret } => resolve_one(ctx, owner, secret_ref, &BearerResolver)
-                        .await
-                        .map(|s| *secret = s),
-                    WebhookAuth::Hmac { secret_ref, secret } => resolve_one(ctx, owner, secret_ref, &HmacResolver)
-                        .await
-                        .map(|s| *secret = s),
-                    WebhookAuth::ApiKey { secret_ref, secret, .. } => {
-                        resolve_one(ctx, owner, secret_ref, &WebhookApiKeyResolver)
-                            .await
-                            .map(|s| *secret = s)
-                    }
-                };
-                if let Err(e) = res {
-                    errors.push(e);
-                }
-            }
-            if let Some(e) = resolve_tls(ctx, owner, w.tls.as_mut()).await {
-                errors.push(e);
-            }
-        }
-        SystemConfig::Kafka(_) => {}
-    }
-    errors
-}
-
-/// Resolve `tls.certs.secretRef` (if present) into `tls.certs.secret` using the
-/// shared `TlsCertsResolver`. Returns `Some(error)` on failure; `None` when
-/// there is nothing to resolve or resolution succeeded.
-async fn resolve_tls(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
-    tls: Option<&mut TlsConfig>,
-) -> Option<ResolvedRefsError> {
-    let tls = tls?;
-    let certs = tls.certs.as_mut()?;
-    let secret_ref = certs.secret_ref.as_ref()?;
-    match resolve_one(ctx, owner, secret_ref, &TlsCertsResolver).await {
-        Ok(s) => {
-            certs.secret = s;
-            None
-        }
-        Err(e) => Some(e),
+        SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
+        SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
+        SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
+        SystemConfig::Webhook(w) => drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await,
+        SystemConfig::Kafka(_) => Vec::new(),
     }
 }
 
-async fn resolve_one<R: SecretMaterialResolver>(
+pub(super) async fn resolve_one<R: SecretMaterialResolver>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> Result<Option<Secret>, ResolvedRefsError> {
     let outcome = resolve_secret(ctx, owner, "edgion.io", "LinkSys", secret_ref, resolver).await;
@@ -347,7 +269,8 @@ mod tests {
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::credentials::resolvers::{BasicAuthResolver, EsApiKeyResolver};
-    use crate::types::resources::common::Condition;
+    use crate::types::resources::common::{Condition, SecretSlot};
+    use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
     use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
     use crate::types::resources::link_sys::LinkSysSpec;
     use k8s_openapi::api::core::v1::Secret;
@@ -406,11 +329,15 @@ mod tests {
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://localhost:6379".to_string()],
                     auth: Some(RedisAuth {
-                        secret_ref: SecretReference {
-                            name: secret_name.to_string(),
-                            namespace: secret_ns.map(|s| s.to_string()),
+                        slot: crate::types::resources::common::SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: secret_name.to_string(),
+                                namespace: secret_ns.map(|s| s.to_string()),
+                            },
+                            secret: None,
                         },
-                        secret: None,
                     }),
                     db: None,
                     timeout: None,
@@ -438,11 +365,15 @@ mod tests {
                 config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                     endpoints: vec!["http://localhost:9200".to_string()],
                     auth: Some(ElasticsearchAuth::ApiKey {
-                        secret_ref: SecretReference {
-                            name: secret_name.to_string(),
-                            namespace: None,
+                        slot: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: secret_name.to_string(),
+                                namespace: None,
+                            },
+                            secret: None,
                         },
-                        secret: None,
                     }),
                     tls: None,
                     timeout: None,
@@ -476,7 +407,7 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth should be present"),
                     _ => panic!("expected Redis"),
                 };
-                let secret = auth.secret.as_ref().expect("secret should be attached");
+                let secret = auth.slot.secret.as_ref().expect("secret should be attached");
                 // parse material from embedded secret via resolver
                 let data = secret.data.as_ref().expect("secret data");
                 let m = BasicAuthResolver.parse(data).expect("parse material");
@@ -504,7 +435,7 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth should be present"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret should be None while pending");
+                assert!(auth.slot.secret.is_none(), "secret should be None while pending");
                 let refs = ctx.secret_ref_manager().get_refs("default/missing-secret");
                 let owner = ResourceRef::new(
                     ResourceKind::LinkSys,
@@ -539,10 +470,10 @@ mod tests {
                     SystemConfig::Elasticsearch(es) => es.auth.as_ref().expect("auth"),
                     _ => panic!("expected Elasticsearch"),
                 };
-                let ElasticsearchAuth::ApiKey { secret, .. } = auth else {
+                let ElasticsearchAuth::ApiKey { slot } = auth else {
                     panic!("expected ApiKey variant");
                 };
-                let data = secret.as_ref().expect("secret").data.as_ref().expect("data");
+                let data = slot.secret.as_ref().expect("secret").data.as_ref().expect("data");
                 let m = EsApiKeyResolver.parse(data).expect("parse");
                 assert_eq!(m.api_key_id, "abc123");
                 assert_eq!(m.api_key_secret, "secretXYZ");
@@ -594,7 +525,7 @@ mod tests {
                     _ => panic!("expected Redis"),
                 };
                 assert!(
-                    auth.secret.is_none(),
+                    auth.slot.secret.is_none(),
                     "secret must not be embedded while cross-ns reference is not permitted"
                 );
                 let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs");
@@ -699,7 +630,7 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret must not be attached on Invalid");
+                assert!(auth.slot.secret.is_none(), "secret must not be attached on Invalid");
             }
             ProcessResult::Skip { reason } => panic!("expected Continue so status persists, got Skip: {reason}"),
         }
@@ -739,7 +670,7 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret must not be attached on DecodeError");
+                assert!(auth.slot.secret.is_none(), "secret must not be attached on DecodeError");
             }
             ProcessResult::Skip { reason } => panic!("expected Continue so status persists, got Skip: {reason}"),
         }
@@ -778,7 +709,7 @@ mod tests {
                     _ => panic!("expected Redis"),
                 };
                 assert!(
-                    auth.secret.is_none(),
+                    auth.slot.secret.is_none(),
                     "secret must not be attached on InvalidSecretType"
                 );
             }
@@ -908,7 +839,9 @@ mod tests {
                 certs: Some(TlsCerts {
                     ca_cert: None,
                     client_cert: None,
-                    secret_ref: Some(SecretReference {
+                    secret_ref: Some(SecretObjectReference {
+                        group: None,
+                        kind: None,
                         name: "redis-tls".to_string(),
                         namespace: None,
                     }),
@@ -978,11 +911,15 @@ mod tests {
         ls.spec.config = SystemConfig::Redis(RedisClientConfig {
             endpoints: vec!["rediss://localhost:6380".to_string()],
             auth: Some(RedisAuth {
-                secret_ref: SecretReference {
-                    name: "missing-auth".to_string(),
-                    namespace: None,
+                slot: crate::types::resources::common::SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "missing-auth".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             db: None,
             timeout: None,
@@ -994,7 +931,9 @@ mod tests {
                 certs: Some(TlsCerts {
                     ca_cert: None,
                     client_cert: None,
-                    secret_ref: Some(SecretReference {
+                    secret_ref: Some(SecretObjectReference {
+                        group: None,
+                        kind: None,
                         name: "redis-tls-bad-type".to_string(),
                         namespace: None,
                     }),
@@ -1015,7 +954,7 @@ mod tests {
         match &ls.spec.config {
             SystemConfig::Redis(r) => {
                 assert!(
-                    r.auth.as_ref().unwrap().secret.is_none(),
+                    r.auth.as_ref().unwrap().slot.secret.is_none(),
                     "auth.secret must remain None when auth resolution failed"
                 );
                 assert!(
@@ -1073,7 +1012,7 @@ mod tests {
             SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
             _ => panic!("expected Redis"),
         };
-        let data = auth.secret.as_ref().expect("secret").data.as_ref().expect("data");
+        let data = auth.slot.secret.as_ref().expect("secret").data.as_ref().expect("data");
         let m = BasicAuthResolver.parse(data).expect("parse material");
         assert_eq!(m.password, "s3cr3t");
         let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs");

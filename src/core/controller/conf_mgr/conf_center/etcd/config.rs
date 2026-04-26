@@ -12,7 +12,7 @@ use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
 use crate::core::gateway::link_sys::credential::CredentialState;
 use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-use crate::types::resources::common::{SecretReference, TlsCerts, TlsConfig};
+use crate::types::resources::common::{SecretObjectReference, SecretSlot, TlsCerts, TlsConfig};
 use crate::types::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
 
 // ============================================================================
@@ -127,7 +127,7 @@ impl EtcdConfig {
     /// TLS certificate file paths are read from disk and embedded as PEM strings.
     ///
     /// Auth note: Controller's ConfCenter uses file-based credentials (TOML
-    /// `[conf_center.auth]`), not `SecretReference`. To reuse the same
+    /// `[conf_center.auth]`), not `SecretObjectReference`. To reuse the same
     /// `build_connect_options` code path as the LinkSys CRD flow, we:
     /// - fill `EtcdClientConfig.auth` with a synthetic `EtcdAuth` placeholder
     ///   (the `secret_ref` is never read by the Gateway provider; only
@@ -145,15 +145,19 @@ impl EtcdConfig {
         let (auth, auth_state): (Option<EtcdAuth>, CredentialState<BasicAuthMaterial>) = match &self.auth {
             Some(cfg) => (
                 Some(EtcdAuth {
-                    // Placeholder `secret_ref` — not used by the provider. The
+                    // Placeholder slot — `secret_ref` not used by the provider. The
                     // provider only checks `crd.auth.is_some()` to decide
                     // whether to authenticate; the material comes from
                     // `auth_state`, not from `secret_ref`.
-                    secret_ref: SecretReference {
-                        name: "conf-center-toml".to_string(),
-                        namespace: None,
+                    slot: SecretSlot {
+                        secret_ref: SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "conf-center-toml".to_string(),
+                            namespace: None,
+                        },
+                        secret: None,
                     },
-                    secret: None,
                 }),
                 CredentialState::Resolved(BasicAuthMaterial {
                     username: Some(cfg.username.clone()),

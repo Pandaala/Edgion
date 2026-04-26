@@ -33,7 +33,7 @@ use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::SecretReference;
+use super::SecretObjectReference;
 
 /// TLS configuration shared by all LinkSys backend connections.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -80,7 +80,7 @@ pub struct TlsCerts {
     /// Recommended secret type: `kubernetes.io/tls` with keys `tls.crt` /
     /// `tls.key`; optional `ca.crt`. `Opaque` is also accepted for compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
+    pub secret_ref: Option<SecretObjectReference>,
 
     /// Resolved Secret object (filled by Controller, never from user YAML).
     ///
@@ -141,7 +141,9 @@ clientKey: "-----BEGIN PRIVATE KEY-----"
         let certs = TlsCerts {
             ca_cert: None,
             client_cert: None,
-            secret_ref: Some(SecretReference {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
                 name: "my-tls".to_string(),
                 namespace: None,
             }),

@@ -10,7 +10,6 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::common::SecretReference;
 use crate::types::resources::edgion_plugins::plugin_configs::HmacCredential;
 use crate::types::resources::edgion_plugins::EdgionPlugin;
 
@@ -36,10 +35,9 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 let mut resolved: HashMap<String, HmacCredential> = HashMap::new();
 
                 for sor in &secret_refs {
-                    let sref: SecretReference = sor.into();
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                    let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
+                    let secret = match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", sor) {
                         ResolveOutcome::Ok(s) => s,
                         ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
                             tracing::info!(

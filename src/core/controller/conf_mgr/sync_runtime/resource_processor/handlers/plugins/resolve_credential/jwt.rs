@@ -11,7 +11,6 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::common::SecretReference;
 use crate::types::resources::edgion_plugins::plugin_configs::ResolvedJwtCredential;
 use crate::types::resources::edgion_plugins::EdgionPlugin;
 
@@ -27,10 +26,9 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
             if let EdgionPlugin::JwtAuth(ref mut config) = entry.plugin {
                 // Resolve single secret_ref
                 if let Some(ref sor) = config.secret_ref.clone() {
-                    let sref: SecretReference = sor.into();
                     let secret_key =
                         format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
+                    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", sor) {
                         ResolveOutcome::Ok(secret) => {
                             if let Some(data) = &secret.data {
                                 let mut cred = ResolvedJwtCredential::default();
@@ -80,10 +78,9 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                 if let Some(ref secret_refs) = config.secret_refs.clone() {
                     let mut resolved = HashMap::new();
                     for sor in secret_refs {
-                        let sref: SecretReference = sor.into();
                         let secret_key =
                             format_secret_key(sor.namespace.as_ref().or(ep.metadata.namespace.as_ref()), &sor.name);
-                        match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sref) {
+                        match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", sor) {
                             ResolveOutcome::Ok(secret) => {
                                 if let Some(data) = &secret.data {
                                     let mut cred = ResolvedJwtCredential::default();
