@@ -1,6 +1,8 @@
-# ClusterRegionRoute PluginMetaData for center integration test — controller 2
-# Same pm_key (default/test-cluster-route) as controller 1 but myRegion=west.
-# Center consistency check should detect the myRegion conflict.
+# ClusterRegionRoute PluginMetaData for center integration test — controller 2.
+# Same pm_key as controller 1 but with intentional differences:
+#   - myRegion=west (per-controller identity, NOT compared by consistency handler)
+#   - extra 'south' region → makes regions.length differ, which the consistency handler DOES compare.
+# Test 5 (consistency_detect) expects a regions.length conflict.
 apiVersion: edgion.io/v1
 kind: PluginMetaData
 metadata:
@@ -19,6 +21,10 @@ spec:
         - name: west
           hashRange: [500, 999]
           backendEndpoint: "127.0.0.1:30002"
+          tls: false
+        - name: south
+          hashRange: [1000, 1499]
+          backendEndpoint: "127.0.0.1:30003"
           tls: false
       keyGet:
         - type: header

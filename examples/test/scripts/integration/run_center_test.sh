@@ -18,7 +18,7 @@
 #   2. metadata_store_cluster      — metadata-store clusterRoutes has controllerCount >= 2
 #   3. metadata_store_service      — metadata-store serviceRoutes has >= 3 entries
 #   4. failover_fanout             — POST failover, wait 2s, verify center + controller sides
-#   5. consistency_detect          — consistency endpoint detects my_region conflict
+#   5. consistency_detect          — consistency endpoint detects regions.length conflict
 #   6. svc_consistency_ok          — service-region-routes consistency is all consistent
 #
 # Test cases — GlobalConnectionIpRestriction (7):
@@ -580,7 +580,7 @@ for r in reports:
     if r.get('name') == 'test-cluster-route' and not r.get('consistent', True):
         conflicts = r.get('conflicts', [])
         for c in conflicts:
-            if c.get('field') == 'my_region':
+            if c.get('field') == 'regions.length':
                 print('found')
                 sys.exit(0)
 print('not_found')
@@ -588,7 +588,7 @@ print('not_found')
   if [[ "$has_conflict" == "found" ]]; then
     pass "consistency_detect"
   else
-    fail "consistency_detect" "expected my_region conflict for test-cluster-route. Response: $out"
+    fail "consistency_detect" "expected regions.length conflict for test-cluster-route. Response: $out"
   fi
 fi
 

@@ -1,6 +1,8 @@
-# ClusterRegionRoute PluginMetaData for center integration test — controller 1
-# myRegion=east — controller 2 uses myRegion=west for the same pm_key,
-# which triggers a consistency conflict.
+# ClusterRegionRoute PluginMetaData for center integration test — controller 1.
+# Differs from controller 2 in two ways:
+#   - myRegion=east (vs west)        → per-controller identity, NOT compared
+#   - regions count = 2 (vs 3)        → triggers consistency check's regions.length conflict
+# Test 5 (consistency_detect) expects a regions.length conflict.
 apiVersion: edgion.io/v1
 kind: PluginMetaData
 metadata:
