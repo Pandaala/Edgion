@@ -86,6 +86,9 @@ impl CtxSet {
             TemplateVarType::Cookie => var_name.and_then(|n| session.get_cookie(n)).unwrap_or_default(),
             TemplateVarType::Ctx => var_name.and_then(|n| session.get_ctx_var(n)).unwrap_or_default(),
             TemplateVarType::Path => session.get_path().to_string(),
+            TemplateVarType::Uri => session.get_uri(),
+            TemplateVarType::RequestPath => session.get_request_path().to_string(),
+            TemplateVarType::RequestUri => session.get_request_uri(),
             TemplateVarType::Method => session.get_method().to_string(),
             TemplateVarType::ClientIp => session.remote_addr().to_string(),
         }
@@ -629,6 +632,82 @@ vars:
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("key var1 set") && plugin_log.contains("key var2 set"));
+    }
+
+    #[tokio::test]
+    async fn test_template_uri_returns_normalized_current_full() {
+        let yaml = r#"
+vars:
+  - name: current_uri
+    template: "${uri}"
+"#;
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+        config.validate();
+        let plugin = CtxSet::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("CtxSet");
+
+        mock_session.expect_get_uri().return_const("/admin?x=1".to_string());
+        mock_session
+            .expect_set_ctx_var()
+            .withf(|key, value| key == "current_uri" && value == "/admin?x=1")
+            .returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn test_template_request_path_returns_entry_raw() {
+        let yaml = r#"
+vars:
+  - name: entry_path
+    template: "${requestPath}"
+"#;
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+        config.validate();
+        let plugin = CtxSet::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("CtxSet");
+
+        mock_session
+            .expect_get_request_path()
+            .return_const("/%61dmin".to_string());
+        mock_session
+            .expect_set_ctx_var()
+            .withf(|key, value| key == "entry_path" && value == "/%61dmin")
+            .returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn test_template_request_uri_returns_entry_raw_full() {
+        let yaml = r#"
+vars:
+  - name: entry_uri
+    template: "${requestUri}"
+"#;
+        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
+        config.validate();
+        let plugin = CtxSet::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("CtxSet");
+
+        mock_session
+            .expect_get_request_uri()
+            .return_const("/%61dmin?x=1".to_string());
+        mock_session
+            .expect_set_ctx_var()
+            .withf(|key, value| key == "entry_uri" && value == "/%61dmin?x=1")
+            .returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
     #[tokio::test]

@@ -331,7 +331,14 @@ pub enum TemplateVarType {
     Query,
     Cookie,
     Ctx,
+    /// Current normalized path (without query string).
     Path,
+    /// Current normalized full URI (current path + current query).
+    Uri,
+    /// Entry-time raw path (frozen, immune to rewrites).
+    RequestPath,
+    /// Entry-time raw full URI (frozen).
+    RequestUri,
     Method,
     ClientIp,
 }
@@ -344,6 +351,9 @@ impl TemplateVarType {
             "cookie" => Ok(Self::Cookie),
             "ctx" => Ok(Self::Ctx),
             "path" => Ok(Self::Path),
+            "uri" => Ok(Self::Uri),
+            "requestPath" => Ok(Self::RequestPath),
+            "requestUri" => Ok(Self::RequestUri),
             "method" => Ok(Self::Method),
             "clientIp" => Ok(Self::ClientIp),
             _ => Err(format!("unknown variable type: {}", s)),

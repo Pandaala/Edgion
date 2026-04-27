@@ -124,6 +124,8 @@ pub enum BuiltinId {
     ReqScheme,
     ReqHost,
     ReqUri,
+    ReqRequestPath,
+    ReqRequestUri,
     ReqContentType,
     ReqHasHeader,
 

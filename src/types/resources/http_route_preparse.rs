@@ -2,6 +2,7 @@
 //! These structures are not serialized, only used for runtime analysis
 
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
+use crate::core::gateway::path_normalization::normalize_config_path;
 use crate::core::gateway::plugins::PluginRuntime;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -93,6 +94,10 @@ impl HTTPRoute {
     /// route.parse_hidden_logic();
     /// ```
     pub fn preparse(&mut self) {
+        // Normalize path matcher values before any other processing so downstream
+        // logic always sees the canonical path representation.
+        self.normalize_path_matchers();
+
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
@@ -150,6 +155,51 @@ impl HTTPRoute {
 
                 if rule.parsed_timeouts.is_some() {
                     tracing::debug!("Parsed route-level timeouts for HTTPRoute rule");
+                }
+            }
+        }
+    }
+
+    /// Normalize path matcher values for all rules at load time.
+    ///
+    /// For `Exact` and `PathPrefix` match types, applies [`normalize_config_path`] so the
+    /// stored value inhabits the same normalized space as the request-side path produced by
+    /// Group E (which reads `ctx.path()`, the already-normalized current path).
+    ///
+    /// `RegularExpression` patterns are left unchanged — regex patterns cannot be
+    /// machine-normalized; correctness is the operator's responsibility.
+    pub fn normalize_path_matchers(&mut self) {
+        let route_ns = self.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = self.metadata.name.as_deref().unwrap_or("");
+
+        let Some(rules) = self.spec.rules.as_mut() else {
+            return;
+        };
+
+        for rule in rules.iter_mut() {
+            let Some(matches) = rule.matches.as_mut() else {
+                continue;
+            };
+            for m in matches.iter_mut() {
+                let Some(path) = m.path.as_mut() else {
+                    continue;
+                };
+                // Only normalize Exact and PathPrefix; skip RegularExpression and unknown types.
+                let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
+                if match_type == "Exact" || match_type == "PathPrefix" {
+                    if let Some(value) = path.value.as_mut() {
+                        let normalized = normalize_config_path(value);
+                        if normalized != *value {
+                            tracing::info!(
+                                route = %format!("{}/{}", route_ns, route_name),
+                                match_type = %match_type,
+                                original = %value,
+                                normalized = %normalized,
+                                "HTTPRoute path matcher value normalized at load time"
+                            );
+                            *value = normalized;
+                        }
+                    }
                 }
             }
         }
@@ -315,5 +365,93 @@ mod tests {
                 "x-user-id".to_string()
             )))
         );
+    }
+
+    // =========================================================================
+    // Group J: HTTPRoute path matcher normalization tests
+    // =========================================================================
+
+    fn make_route_with_path(match_type: &str, value: &str) -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "test", "namespace": "default"},
+            "spec": {
+                "rules": [{
+                    "matches": [{
+                        "path": {"type": match_type, "value": value}
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize")
+    }
+
+    fn get_path_value(route: &HTTPRoute) -> &str {
+        route.spec.rules.as_ref().unwrap()[0].matches.as_ref().unwrap()[0]
+            .path
+            .as_ref()
+            .unwrap()
+            .value
+            .as_deref()
+            .unwrap()
+    }
+
+    #[test]
+    fn http_route_path_match_exact_normalized() {
+        // Trailing slash should be removed by dot-segment/normalization logic.
+        // normalize_config_path("/admin/") should produce "/admin/" — actually trailing
+        // slash is not removed by the BASE algorithm; test with a genuine normalizable input.
+        // Input with percent-encoded slash: "/api%2Fv1" → "/api/v1"
+        let mut route = make_route_with_path("Exact", "/admin/");
+        route.normalize_path_matchers();
+        // "/admin/" has no dot-segments or percent-encoding; normalize is a no-op → unchanged
+        assert_eq!(get_path_value(&route), "/admin/");
+
+        // A value that genuinely needs normalization (double slash collapsed)
+        let mut route2 = make_route_with_path("Exact", "/admin//foo");
+        route2.normalize_path_matchers();
+        assert_eq!(get_path_value(&route2), "/admin/foo");
+    }
+
+    #[test]
+    fn http_route_path_match_exact_percent_encoded_normalized() {
+        // Percent-encoded slash should be decoded: "/api%2Fv1" → "/api/v1"
+        let mut route = make_route_with_path("Exact", "/api%2Fv1");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1");
+    }
+
+    #[test]
+    fn http_route_path_match_pathprefix_normalized() {
+        // Percent-encoded slash decoded: "/api%2Fv1" → "/api/v1"
+        let mut route = make_route_with_path("PathPrefix", "/api%2Fv1");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1");
+    }
+
+    #[test]
+    fn http_route_path_match_regex_not_normalized() {
+        // RegularExpression values must not be modified
+        let input = "/admin%2F.*";
+        let mut route = make_route_with_path("RegularExpression", input);
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), input);
+    }
+
+    #[test]
+    fn http_route_path_match_already_normalized_unchanged() {
+        // Already-normalized value — normalize_config_path is a no-op
+        let mut route = make_route_with_path("Exact", "/api/v1");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1");
+    }
+
+    #[test]
+    fn http_route_path_match_dot_segment_normalized() {
+        // Dot segments should be resolved: "/api/v1/./foo" → "/api/v1/foo"
+        let mut route = make_route_with_path("PathPrefix", "/api/v1/./foo");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1/foo");
     }
 }

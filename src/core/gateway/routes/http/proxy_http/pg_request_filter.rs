@@ -292,9 +292,6 @@ async fn build_request_metadata(
         return Ok(true); // Response sent
     }
 
-    // Extract request path
-    ctx.request_info.path = req_header.uri.path().to_string();
-
     // Try to get X-Trace-Id from request headers, generate if not present
     ctx.request_info.x_trace_id = req_header
         .headers

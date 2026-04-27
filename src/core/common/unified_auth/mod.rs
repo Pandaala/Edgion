@@ -133,9 +133,7 @@ impl UnifiedAuthState {
         // or is_integration_testing_mode() (gateway side), so they cannot leak into
         // production builds. Either flag triggers the skip — both are set together
         // by gateway startup; controller only sets test_mode.
-        if crate::core::common::config::is_test_mode()
-            || crate::core::common::config::is_integration_testing_mode()
-        {
+        if crate::core::common::config::is_test_mode() || crate::core::common::config::is_integration_testing_mode() {
             skip_paths.insert("/api/v1/debug/store-stats".to_string());
             skip_paths.insert("/api/v1/admin/wipe-all".to_string());
         }

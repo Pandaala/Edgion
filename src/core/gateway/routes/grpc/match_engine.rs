@@ -1,6 +1,7 @@
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
+use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::resources::grpc_route::GRPCMethodMatchType;
 use pingora_proxy::Session;
@@ -219,10 +220,11 @@ impl GrpcMatchEngine {
     pub fn match_route(
         &self,
         session: &Session,
+        ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
-        let path = session.req_header().uri.path();
+        let path = ctx.path();
         let (service, method) = parse_grpc_path(path)?;
 
         // Priority 1: Exact service + Exact method

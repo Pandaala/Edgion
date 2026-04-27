@@ -304,7 +304,11 @@ fn test_log_warn() {
     let mut s = session;
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.contains("something suspicious"), "log_warn value not recorded: {:?}", log.log);
+    assert!(
+        log.contains("something suspicious"),
+        "log_warn value not recorded: {:?}",
+        log.log
+    );
 }
 
 #[test]
@@ -320,7 +324,11 @@ fn test_log_error() {
     let mut s = session;
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.contains("critical failure"), "log_error value not recorded: {:?}", log.log);
+    assert!(
+        log.contains("critical failure"),
+        "log_error value not recorded: {:?}",
+        log.log
+    );
 }
 
 #[test]
@@ -337,7 +345,10 @@ fn test_log_warn_replace_mode() {
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(log.contains("***"), "expected masked output: {:?}", log.log);
-    assert!(!log.contains("super-secret-value"), "plaintext must not appear in replace mode");
+    assert!(
+        !log.contains("super-secret-value"),
+        "plaintext must not appear in replace mode"
+    );
 }
 
 #[test]
@@ -353,7 +364,11 @@ fn test_log_warn_wrap_mode() {
     let mut s = session;
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.contains("<E>super-secret-value</E>"), "expected wrapped output: {:?}", log.log);
+    assert!(
+        log.contains("<E>super-secret-value</E>"),
+        "expected wrapped output: {:?}",
+        log.log
+    );
 }
 
 #[test]
@@ -370,7 +385,10 @@ fn test_log_error_replace_mode() {
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(log.contains("***"), "expected masked output: {:?}", log.log);
-    assert!(!log.contains("super-secret-value"), "plaintext must not appear in replace mode");
+    assert!(
+        !log.contains("super-secret-value"),
+        "plaintext must not appear in replace mode"
+    );
 }
 
 #[test]
@@ -386,7 +404,11 @@ fn test_log_error_wrap_mode() {
     let mut s = session;
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.contains("<E>super-secret-value</E>"), "expected wrapped output: {:?}", log.log);
+    assert!(
+        log.contains("<E>super-secret-value</E>"),
+        "expected wrapped output: {:?}",
+        log.log
+    );
 }
 
 #[test]

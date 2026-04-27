@@ -38,3 +38,4 @@ description: 配置 Schema 参考：Controller/Gateway TOML 配置和 EdgionGate
 | 全局真实 IP 提取 | EdgionGatewayConfig CRD `spec.realIp` |
 | 全局安全防护（XFF 限制、SNI 匹配） | EdgionGatewayConfig CRD `spec.securityProtect` |
 | 全局插件 | EdgionGatewayConfig CRD `spec.globalPluginsRef` |
+| Path 规范化（拒绝含 `%2F` / 非法 percent-encoding 的请求） | EdgionGatewayConfig CRD `spec.pathNormalization` |

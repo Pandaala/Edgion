@@ -248,6 +248,44 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 如果你在调试“ExtensionRef 没生效 / 嵌套插件日志不见了 / 递归引用”，先从这里追。
 
+## 读取请求 Path
+
+> 架构权威文档：[uri-normalization/SKILL.md](uri-normalization/SKILL.md)
+
+path normalization 启用后，session trait 提供 5 个 path/uri 读方法。选错视图会导致 ACL 绕过或审计信息丢失。
+
+| 方法 | 视图 | 返回类型 | 何时使用 |
+|------|------|----------|----------|
+| `session.get_path()` | current（规范化） | `&str` | ACL 决策、路由匹配（**首选**，零额外 alloc） |
+| `session.get_request_path()` | entry（冻结） | `&str` | 审计、安全调查、需要客户端原始 path 的场景 |
+| `session.get_uri()` | current（规范化） | `String` | 需要 path + query 的完整 URI（1 alloc） |
+| `session.get_request_uri()` | entry（冻结） | `String` | 审计完整 URI（入口 raw，含 query） |
+| `session.get_query()` | current | `Option<String>` | 取当前 query（不规范化） |
+
+**默认选 `get_path()`**。只有明确需要客户端原始形态时才用 `get_request_path()` / `get_request_uri()`。
+
+## 修改请求 Path（Rewrite 插件）
+
+**唯一正确写法**：使用 trait 方法 `session.set_upstream_uri(&new_uri)`。
+
+```rust
+// ✅ 正确：通过 trait 方法改写 path
+let new_uri = format!("/v2{}", session.get_path());
+session.set_upstream_uri(&new_uri)?;
+
+// ❌ 严禁：直接操作 pingora 原始字段
+// session.req_header_mut().set_uri(parsed_uri);  // 不可用！
+```
+
+**为什么禁止裸调 `req_header_mut().set_uri()`**：
+
+- ctx 缓存（`normalized_current_path`）不会自动刷新
+- 后续 `session.get_path()` 返回 **stale**（旧 path）
+- access_log `$uri` 记录旧 path
+- 路由决策、ACL 插件读到错误 path
+
+`session.set_upstream_uri()` 内部实现（`session_adapter.rs:443`）自动调用 `ctx.refresh_normalized_path()`，保证缓存一致。所有 rewrite 插件（`proxy_rewrite`、`url_rewrite`、`request_redirect`、DSL `req.set_uri` 等）已走此路径，**插件层零改造**。
+
 ## `PluginSession` 和常用 API
 
 最常用的读写入口在：
@@ -257,7 +295,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 高频 API：
 
 - `header_value()` / `request_headers()`
-- `get_path()` / `get_query_param()` / `get_cookie()`
+- `get_path()` / `get_request_path()` / `get_uri()` / `get_request_uri()` / `get_query()`
 - `client_addr()` / `remote_addr()` / `client_cert_info()`
 - `set_request_header()` / `append_request_header()` / `remove_request_header()`
 - `set_upstream_uri()` / `set_upstream_host()` / `set_upstream_method()`

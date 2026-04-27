@@ -262,6 +262,30 @@ RateLimit 插件可以使用 `ctx` 作为限流键的数据源。通过 CtxSet�
           default: "false"
 ```
 
+## 模板变量（path normalization 后新增）
+
+除 `from` 数据源外，`template` 字段中可使用以下内建模板变量（camelCase 命名，与 `${clientIp}` 保持一致）：
+
+| 变量 | 含义 | 视图 |
+|------|------|------|
+| `${path}` | 规范化后当前 path（post-rewrite） | current |
+| `${uri}` | 规范化后当前 path + 当前 query | current |
+| `${query}` | 当前 query | current |
+| `${requestPath}` | 客户端入口 raw path（冻结） | entry |
+| `${requestUri}` | 客户端入口 raw path + raw query（冻结） | entry |
+
+示例：记录完整入口 URI 到自定义 header：
+
+```yaml
+- type: CtxSet
+  config:
+    rules:
+      - name: entry_uri
+        template: "entry=${requestUri}"
+```
+
+> **注意**：`${path}` / `${uri}` 语义已切换为「规范化后 current 视图」。若需要客户端原始形态，改用 `${requestPath}` / `${requestUri}`。
+
 ## 相关文档
 
 - [ProxyRewrite 插件](../http-route/filters/edgion-plugins/proxy-rewrite.md) - 请求改写插件

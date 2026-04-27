@@ -36,7 +36,8 @@
 |------|------|
 | `client-addr` | TCP 直连 IP |
 | `remote-addr` | 真实客户端 IP（经 RealIp 插件处理后） |
-| `host` / `path` | 请求 host 和 path |
+| `host` / `path` | 请求 host 和 **规范化后** current path（不含 query） |
+| `request_uri` | **可选**——客户端入口 **raw URI**（raw path + raw query），仅当 `[access_log_options] include_raw_uri = true` 时输出 |
 | `x-trace-id` | trace id（客户端传入或自动生成 UUID） |
 | `status` | 最终响应状态码 |
 | `sni` | TLS SNI（HTTPS 连接） |
@@ -223,6 +224,81 @@ log.push(&format!("Rewrite -> {}; ", new_path));
 | 排查中间步骤 | `tracing::debug!()` → 系统日志 |
 | 异常/告警 | `tracing::warn!()` / `tracing::error!()` → 系统日志 |
 | 性能数据 | `Gauge` / `Counter` in `metrics.rs` → Prometheus |
+
+---
+
+---
+
+## Path / URI 变量语义（path normalization 后）
+
+### 变量速查
+
+| 变量 | 视图 | 含义 | 受 rewrite 影响 |
+|------|------|------|----------------|
+| `$path` | current | 规范化后当前 path（post-rewrite） | 是 |
+| `$uri` | current | 规范化后当前 path + 当前 query | 是 |
+| `$query` | current | 当前 query（不规范化） | 是 |
+| `$request_path` | entry（冻结） | 客户端入口 raw path | 否 |
+| `$request_uri` | entry（冻结） | 客户端入口 raw path + raw query | 否 |
+
+### 行为变更（迁移提示）
+
+- **`$path` / `$uri`** 语义由「raw current」切换为「normalized current」。对于已规范化的请求，行为不变；对含编码字符 / 双斜杠 / dot-segment 的请求，值会不同
+- **`$request_path` / `$request_uri`** 是新增变量，反映客户端原始形态，冻结不受 rewrite 影响
+
+### rewrite 后的行为
+
+proxy_rewrite / url_rewrite 等插件修改 path 后：
+
+- `$uri` 反映**新 path**（ctx 缓存已通过 `session.set_upstream_uri` 自动 refresh）
+- `$request_uri` 仍反映**入口 raw**
+
+示例（请求 `GET /%61dmin/data`，proxy_rewrite 改 path 为 `/backend/data`）：
+
+```
+$path         = /backend/data   （rewrite 后的新 path，已规范化）
+$uri          = /backend/data   （同上，无 query）
+$request_path = /%61dmin/data   （入口 raw，冻结）
+$request_uri  = /%61dmin/data   （入口 raw + query，冻结）
+```
+
+### query 视图不对称（已知 gap）
+
+`$request_query`（entry query）**不存在**。若需要审计 entry query，从 `$request_uri` split 即可。
+
+- 需要「客户端实际发送的完整 URI」→ 用 `$request_uri` ✓
+- 需要「rewrite 后转发到上游的 URI」→ 用 `$uri` ✓
+- 需要单独取 entry query → 自行从 `$request_uri` 中 split
+
+### Access log JSON 中的字段
+
+JSON access log 默认只输出 **规范化** path，没有 raw 形态字段、不带 query：
+
+```json
+{ "ts": ..., "path": "/api/users/data", "host": "...", "status": 200, ... }
+```
+
+需要「原始客户端发送的完整 URI」（含 query）时，开启全局选项：
+
+```toml
+[access_log_options]
+include_raw_uri = true
+```
+
+输出多一个 `request_uri` 字段，值为 entry raw path + entry raw query：
+
+```json
+{ "ts": ..., "path": "/api/users/data",
+  "request_uri": "/api/users;v=1/data?from=foo",
+  "host": "...", "status": 200, ... }
+```
+
+字段语义：
+
+| 字段 | 视图 | 是否默认输出 |
+|------|------|--------------|
+| `path` | normalized current（不含 query） | ✅ |
+| `request_uri` | raw entry path + raw entry query | ❌（默认隐藏，需开关） |
 
 ---
 

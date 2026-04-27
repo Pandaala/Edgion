@@ -29,6 +29,15 @@ pub struct AccessLogEntry<'a> {
 
     pub request_info: &'a RequestInfo,
 
+    /// Entry-time raw URI (raw path + raw query). Populated only when
+    /// `[access_log_options] include_raw_uri = true`. Carries the exact URI
+    /// the client sent, before any path normalization.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+    )]
+    pub request_uri: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_info: Option<RouteMatchInfo<'a>>,
 
@@ -60,9 +69,18 @@ impl<'a> AccessLogEntry<'a> {
                 .map(|gru| RouteMatchInfo::Grpc(&gru.matched_info))
         };
 
+        let request_uri = if crate::core::gateway::cli::config::get_access_log_options().include_raw_uri
+            && !ctx.request_info.entry_raw_path.is_empty()
+        {
+            Some(ctx.request_uri())
+        } else {
+            None
+        };
+
         Self {
             timestamp: chrono::Utc::now().timestamp_millis(),
             request_info: &ctx.request_info,
+            request_uri,
             match_info,
             errors: &ctx.edgion_status,
             backend_context: ctx.backend_context.as_ref(),
@@ -106,7 +124,7 @@ impl<'a> AccessLogEntry<'a> {
                 .map(|dt| dt.format("%d/%b/%Y:%H:%M:%S %z").to_string())
                 .unwrap_or_else(|| "-".to_string()),
             "GET",
-            self.request_info.path,
+            self.request_info.normalized_current_path,
             self.request_info
                 .status
                 .map(|s| s.to_string())

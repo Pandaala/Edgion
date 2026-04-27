@@ -97,6 +97,11 @@ spec:
   # ─── ReferenceGrant 校验 ───
   enableReferenceGrantValidation: false     # bool
 
+  # ─── Path 规范化 ───
+  pathNormalization:
+    rejectEscapedSlashes: false             # bool, 含 %2F / %5C 的请求是否直接 400 拒绝。默认 false。
+    rejectInvalidPercentEncoding: false     # bool, 含非法 percent-encoding（非法 hex 或 decode 后非 UTF-8）的请求是否直接 400 拒绝。默认 false。
+
   # ─── LinkSys 全局配置 ───
   linkSys:
     webhookMaxResponseBytes: 16384          # usize, webhook 响应体硬上限（默认 16 KiB）
@@ -158,6 +163,19 @@ spec:
 |------|------|------|------|
 | `mode` | `String` | `cors-standard` | `cors-standard`：OPTIONS + Origin + ACRM；`all-options`：所有 OPTIONS 请求 |
 | `statusCode` | `u16` | `204` | 无 CORS 插件时的 preflight 响应状态码 |
+
+### spec.pathNormalization
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `rejectEscapedSlashes` | `bool` | `false` | 含 `%2F` / `%5C` 的请求直接 400 拒绝。高安全场景（要求 path 中不允许字面 `/` 字符出现）可开启。注意：会影响合法 API（如 base64 URL 参数含 `/`）。 |
+| `rejectInvalidPercentEncoding` | `bool` | `false` | 含非法 percent-encoding（非法 hex 或 decode 后非 UTF-8）的请求直接 400 拒绝。开启后捕获 IIS-style overlong UTF-8（`%c0%ae`）等异常输入，扩大安全承诺范围。 |
+
+**重要说明**：
+
+- **无 `enabled` 字段**——path normalization 是 Edgion 默认行为，**不可禁用**
+- **无 per-Gateway / per-Listener 覆盖**——这两个开关是全局的
+- 安全承诺范围详见 spec §1.4：[docs/superpowers/specs/2026-04-26-uri-normalization-design.md](../../../docs/superpowers/specs/2026-04-26-uri-normalization-design.md)
 
 ### spec.linkSys
 

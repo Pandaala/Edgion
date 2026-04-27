@@ -88,7 +88,7 @@ impl RegexRoutesEngine {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
     ) -> Result<Option<RouteMatchResult>, EdError> {
-        let path = session.req_header().uri.path();
+        let path = ctx.path();
 
         if let Some(ref regex_set) = self.regex_set {
             let matches: Vec<usize> = regex_set.matches(path).into_iter().collect();

@@ -142,7 +142,10 @@ impl<'a> PingoraSessionAdapter<'a> {
         if let Some(pattern) = pattern {
             // Only parse if pattern contains parameters
             if pattern.contains(':') {
-                let actual_path = self.inner.req_header().uri.path();
+                // Use normalized current path so :param extraction matches the
+                // view the route matcher used (strips ;param, merges //, decodes
+                // unreserved %xx, removes /./ /../).
+                let actual_path = self.ctx.path();
                 params = Self::parse_path_params(pattern, actual_path);
             }
         }
@@ -284,7 +287,19 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_path(&self) -> &str {
-        self.inner.req_header().uri.path()
+        self.ctx.path()
+    }
+
+    fn get_request_path(&self) -> &str {
+        self.ctx.request_path()
+    }
+
+    fn get_uri(&self) -> String {
+        self.ctx.uri(self.inner.req_header())
+    }
+
+    fn get_request_uri(&self) -> String {
+        self.ctx.request_uri()
     }
 
     fn get_query(&self) -> Option<String> {
@@ -443,6 +458,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
         let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_uri(parsed_uri);
+        self.ctx.refresh_normalized_path(self.inner.req_header());
         Ok(())
     }
 

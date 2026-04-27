@@ -39,6 +39,16 @@ pub trait PluginSession: Send + Sync {
     /// Get the request path (without query string)
     fn get_path(&self) -> &str;
 
+    /// Get the entry-time raw path (frozen, immune to rewrites).
+    /// Use for audit, security investigation, special raw-form deny rules.
+    fn get_request_path(&self) -> &str;
+
+    /// Get the current normalized full URI (current path + current query).
+    fn get_uri(&self) -> String;
+
+    /// Get the entry-time raw full URI (entry path + entry query, frozen).
+    fn get_request_uri(&self) -> String;
+
     /// Get the request query string (without leading '?')
     fn get_query(&self) -> Option<String>;
 

@@ -24,6 +24,7 @@ use crate::core::common::jwt_common::{
 };
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
+use crate::core::gateway::path_normalization::normalize_config_path;
 use crate::core::gateway::plugins::http::common::auth_common::{
     send_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
@@ -141,38 +142,52 @@ pub struct OpenidConnect {
 
 impl OpenidConnect {
     pub fn new(config: &OpenidConnectConfig, plugin_namespace: String) -> Self {
+        // Normalize request-path-matched config fields at construction time so that
+        // config-side and request-side paths inhabit the same normalized space.
+        // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
+        let mut config = config.clone();
+        let normalized_logout_path = normalize_config_path(&config.logout_path);
+        if normalized_logout_path != config.logout_path {
+            tracing::info!(
+                "openid_connect: config path normalized: {:?} -> {:?}",
+                config.logout_path,
+                normalized_logout_path
+            );
+            config.logout_path = normalized_logout_path;
+        }
+
+        // Extract cache parameters before config is moved into Self.
+        let introspection_capacity = if config.introspection.lru_cache.capacity == 0 {
+            get_default_lru_cache_capacity()
+        } else {
+            config.introspection.lru_cache.capacity
+        };
+        let introspection_shards = if config.introspection.lru_cache.shards > 0 {
+            config.introspection.lru_cache.shards
+        } else {
+            get_default_lru_cache_shards()
+        };
+        let access_token_capacity = if config.access_token.lru_cache.capacity == 0 {
+            get_default_lru_cache_capacity()
+        } else {
+            config.access_token.lru_cache.capacity
+        };
+        let access_token_shards = if config.access_token.lru_cache.shards > 0 {
+            config.access_token.lru_cache.shards
+        } else {
+            get_default_lru_cache_shards()
+        };
+
         Self {
             name: "OpenidConnect".to_string(),
-            config: config.clone(),
+            config,
             plugin_namespace,
             discovery_doc: Arc::new(RwLock::new(None)),
             discovery_refresh: Arc::new(Mutex::new(())),
             jwks_state: Arc::new(RwLock::new(JwksState::default())),
             jwks_refresh: Arc::new(Mutex::new(())),
-            introspection_cache: Arc::new(ShardedLruCache::new(
-                if config.introspection.lru_cache.capacity == 0 {
-                    get_default_lru_cache_capacity()
-                } else {
-                    config.introspection.lru_cache.capacity
-                },
-                if config.introspection.lru_cache.shards > 0 {
-                    config.introspection.lru_cache.shards
-                } else {
-                    get_default_lru_cache_shards()
-                },
-            )),
-            access_token_cache: Arc::new(ShardedLruCache::new(
-                if config.access_token.lru_cache.capacity == 0 {
-                    get_default_lru_cache_capacity()
-                } else {
-                    config.access_token.lru_cache.capacity
-                },
-                if config.access_token.lru_cache.shards > 0 {
-                    config.access_token.lru_cache.shards
-                } else {
-                    get_default_lru_cache_shards()
-                },
-            )),
+            introspection_cache: Arc::new(ShardedLruCache::new(introspection_capacity, introspection_shards)),
+            access_token_cache: Arc::new(ShardedLruCache::new(access_token_capacity, access_token_shards)),
             refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),
             refresh_singleflight_results: Arc::new(Mutex::new(HashMap::new())),
         }

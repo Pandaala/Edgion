@@ -266,6 +266,12 @@ impl EdgionGatewayCli {
         config::init_request_duration_config(config.metrics.request_duration.clone());
         config::init_backend_requests_config(config.metrics.backend_requests.clone());
 
+        // 5.3 Initialize path normalization config (global OnceLock for hot-path access)
+        config::init_path_normalization_config(config.path_normalization.clone());
+
+        // 5.4 Initialize access log options (global OnceLock for hot-path access)
+        config::init_access_log_options(config.access_log_options.clone());
+
         // 6. Start auxiliary services
         // Create shutdown channel for auxiliary services
         let (aux_shutdown_tx, aux_shutdown_rx) = tokio::sync::watch::channel(false);

@@ -27,6 +27,7 @@ description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TL
 | [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md) | HTTP 插件开发指南 | 开发新的 EdgionPlugin |
 | [13-stream-plugin-dev.md](13-stream-plugin-dev.md) | Stream 插件开发指南 | 开发 TCP/TLS 层插件 |
 | [14-link-sys-dev.md](14-link-sys-dev.md) | LinkSys 连接器开发指南 | 开发新的外部系统连接器 |
+| [uri-normalization/SKILL.md](uri-normalization/SKILL.md) | URI 规范化架构（全栈命名表、双视图、铁律、安全承诺） | 开发插件读写 path、审查 ACL 代码、排查路径绕过 |
 
 ## 架构总览
 

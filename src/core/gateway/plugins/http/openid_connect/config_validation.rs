@@ -38,13 +38,16 @@ impl OpenidConnect {
             .as_deref()
             .filter(|v| !v.is_empty())
             .unwrap_or("/.edgion/oidc/callback");
-        if configured.starts_with('/') {
-            return configured.to_string();
-        }
-        if let Ok(url) = Url::parse(configured) {
-            return url.path().to_string();
-        }
-        "/.edgion/oidc/callback".to_string()
+        let raw_path = if configured.starts_with('/') {
+            configured.to_string()
+        } else if let Ok(url) = Url::parse(configured) {
+            url.path().to_string()
+        } else {
+            "/.edgion/oidc/callback".to_string()
+        };
+        // Normalize the path so config-side and request-side inhabit the same
+        // normalized space. See §3.5 of the URI normalization spec.
+        normalize_config_path(&raw_path)
     }
 
     pub(super) fn resolve_redirect_uri(&self, session: &dyn PluginSession) -> VerifyResult<String> {

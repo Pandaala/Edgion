@@ -1,4 +1,5 @@
 use crate::core::gateway::observe::logs::LogBuffer;
+use crate::core::gateway::path_normalization::normalize_path;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
@@ -238,9 +239,26 @@ pub struct RequestInfo {
     /// Construct via `NormalizedHostname::new()` — never apply `to_lowercase()` again.
     #[serde(rename = "host")]
     pub hostname: NormalizedHostname,
-    /// Request path from URI
-    #[serde(serialize_with = "crate::types::sensitive::masked::serialize")]
-    pub path: String,
+    /// Snapshot of req_header().uri.path() at request entry. Frozen for the request lifetime.
+    /// Source for `request_path()` / `request_uri()` views.
+    /// Not serialized into access_log directly; surfaced via the optional
+    /// `request_uri` field on `AccessLogEntry` when `include_raw_uri` is on.
+    #[serde(skip)]
+    pub entry_raw_path: String,
+
+    /// Snapshot of req_header().uri.query() at request entry. Frozen for the request lifetime.
+    /// Source for `request_uri()` view.
+    /// Not serialized into access_log directly; surfaced via the optional
+    /// `request_uri` field on `AccessLogEntry` when `include_raw_uri` is on.
+    #[serde(skip)]
+    pub entry_raw_query: Option<String>,
+
+    /// Cache of normalized current path. Populated at entry from entry_raw_path,
+    /// refreshed by session_adapter::set_upstream_uri after rewrite.
+    /// Source for `path()` / `uri()` views.
+    /// Serializes as JSON field "path" for backward-compatible access_log output.
+    #[serde(rename = "path", serialize_with = "crate::types::sensitive::masked::serialize")]
+    pub normalized_current_path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
@@ -735,6 +753,58 @@ impl EdgionHttpContext {
     pub fn has_ctx_var(&self, key: &str) -> bool {
         self.ctx_map.contains_key(key)
     }
+
+    // ===== URI/path canonical accessors =====
+    // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.2
+
+    /// Current normalized path. Reflects post-rewrite state (cache refreshed by
+    /// session_adapter::set_upstream_uri after each rewrite). Default view for
+    /// routing matchers, ACL plugins, access_log.
+    pub fn path(&self) -> &str {
+        &self.request_info.normalized_current_path
+    }
+
+    /// Entry-time raw path. Frozen for the request lifetime.
+    /// Use for audit, security investigation, special raw-form deny rules.
+    pub fn request_path(&self) -> &str {
+        &self.request_info.entry_raw_path
+    }
+
+    /// Current query string (passthrough; never normalized).
+    pub fn query<'a>(&self, req_header: &'a pingora_http::RequestHeader) -> Option<&'a str> {
+        req_header.uri.query()
+    }
+
+    /// Current normalized full URI (current path + current query).
+    pub fn uri(&self, req_header: &pingora_http::RequestHeader) -> String {
+        compose_uri(self.path(), self.query(req_header))
+    }
+
+    /// Entry-time raw full URI (entry raw path + entry raw query). Frozen.
+    pub fn request_uri(&self) -> String {
+        compose_uri(
+            &self.request_info.entry_raw_path,
+            self.request_info.entry_raw_query.as_deref(),
+        )
+    }
+
+    /// Refresh `normalized_current_path` from current `req_header.uri.path()`.
+    /// Called by session_adapter::set_upstream_uri after rewrite, or by entry filter.
+    /// Business code should NOT call this directly.
+    pub fn refresh_normalized_path(&mut self, req_header: &pingora_http::RequestHeader) {
+        let raw = req_header.uri.path();
+        self.request_info.normalized_current_path = match normalize_path(raw) {
+            Some(s) => s,
+            None => raw.to_string(),
+        };
+    }
+}
+
+fn compose_uri(path: &str, query: Option<&str>) -> String {
+    match query {
+        Some(q) if !q.is_empty() => format!("{}?{}", path, q),
+        _ => path.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -800,7 +870,8 @@ mod sensitive_tests {
         let ri = RequestInfo {
             client_addr: "127.0.0.1".to_string(),
             remote_addr: "10.0.0.1".to_string(),
-            path: "/api/users/alice".to_string(),
+            entry_raw_path: "/api/users/alice".to_string(),
+            normalized_current_path: "/api/users/alice".to_string(),
             x_forwarded_for: Some("203.0.113.5, 10.0.0.1".to_string()),
             sni: Some("example.com".to_string()),
             ..Default::default()
@@ -819,7 +890,8 @@ mod sensitive_tests {
         let ri = RequestInfo {
             client_addr: "127.0.0.1".to_string(),
             remote_addr: "10.0.0.1".to_string(),
-            path: "/api/users/alice".to_string(),
+            entry_raw_path: "/api/users/alice".to_string(),
+            normalized_current_path: "/api/users/alice".to_string(),
             ..Default::default()
         };
         let json = serde_json::to_string(&ri).unwrap();
@@ -827,5 +899,49 @@ mod sensitive_tests {
         assert!(!json.contains("10.0.0.1"), "remote_addr leaked: {}", json);
         assert!(!json.contains("/api/users/alice"), "path leaked: {}", json);
         assert!(json.contains("***"), "replace_with not found: {}", json);
+    }
+}
+
+#[cfg(test)]
+mod path_view_tests {
+    use super::*;
+    use pingora_http::RequestHeader;
+
+    fn make_ctx(entry_path: &str, entry_query: Option<&str>) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.entry_raw_path = entry_path.to_string();
+        ctx.request_info.entry_raw_query = entry_query.map(str::to_string);
+        ctx.request_info.normalized_current_path = match normalize_path(entry_path) {
+            Some(s) => s,
+            None => entry_path.to_string(),
+        };
+        ctx
+    }
+
+    #[test]
+    fn path_returns_normalized_current() {
+        let ctx = make_ctx("/%61dmin", None);
+        assert_eq!(ctx.path(), "/admin");
+    }
+
+    #[test]
+    fn request_path_returns_entry_raw() {
+        let ctx = make_ctx("/%61dmin", None);
+        assert_eq!(ctx.request_path(), "/%61dmin");
+    }
+
+    #[test]
+    fn request_uri_composes_entry() {
+        let ctx = make_ctx("/%61dmin", Some("x=1"));
+        assert_eq!(ctx.request_uri(), "/%61dmin?x=1");
+    }
+
+    #[test]
+    fn refresh_after_rewrite() {
+        let mut ctx = make_ctx("/api/old", None);
+        let req = RequestHeader::build("GET", b"/api/new", None).unwrap();
+        ctx.refresh_normalized_path(&req);
+        assert_eq!(ctx.path(), "/api/new");
+        assert_eq!(ctx.request_path(), "/api/old");
     }
 }

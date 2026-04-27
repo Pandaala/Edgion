@@ -97,7 +97,7 @@ impl RadixRouteMatchEngine {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
     ) -> Result<RouteMatchResult, EdError> {
-        let path = session.req_header().uri.path();
+        let path = ctx.path();
         let all_results = self.tree.match_all_ext(path);
 
         if all_results.is_empty() {

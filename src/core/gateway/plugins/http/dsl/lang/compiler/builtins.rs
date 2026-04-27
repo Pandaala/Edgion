@@ -19,6 +19,8 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         ("req", "scheme") => Some(BuiltinId::ReqScheme),
         ("req", "host") => Some(BuiltinId::ReqHost),
         ("req", "uri") => Some(BuiltinId::ReqUri),
+        ("req", "request_path") => Some(BuiltinId::ReqRequestPath),
+        ("req", "request_uri") => Some(BuiltinId::ReqRequestUri),
         ("req", "content_type") => Some(BuiltinId::ReqContentType),
         ("req", "has_header") => Some(BuiltinId::ReqHasHeader),
 
@@ -77,6 +79,8 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         | BuiltinId::ReqScheme
         | BuiltinId::ReqHost
         | BuiltinId::ReqUri
+        | BuiltinId::ReqRequestPath
+        | BuiltinId::ReqRequestUri
         | BuiltinId::ReqContentType
         | BuiltinId::ReqProtocol
         | BuiltinId::ReqGrpcService

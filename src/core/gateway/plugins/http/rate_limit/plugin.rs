@@ -283,7 +283,10 @@ impl RequestFilter for RateLimit {
 
         // Add rate limit headers
         self.add_headers(session, remaining, interval);
-        plugin_log.push_fmt("Allow kl={} r={}", la![kl.to_string().as_str(), remaining.max(0).to_string().as_str()]);
+        plugin_log.push_fmt(
+            "Allow kl={} r={}",
+            la![kl.to_string().as_str(), remaining.max(0).to_string().as_str()],
+        );
         PluginRunningResult::GoodNext
     }
 }

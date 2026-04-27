@@ -176,8 +176,7 @@ fn test_req_scheme() {
 #[test]
 fn test_req_uri() {
     let mut session = MockPluginSession::new();
-    session.expect_get_path().return_const("/api".to_string());
-    session.expect_get_query().returning(|| Some("x=1".to_string()));
+    session.expect_get_uri().return_const("/api?x=1".to_string());
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-U" && v == "/api?x=1")
@@ -250,5 +249,33 @@ fn test_req_header_names_for_in() {
         ]
     });
     let result = run(r#"for name in req.header_names { log(name) }"#, session);
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn req_request_path_returns_entry_raw() {
+    let mut session = MockPluginSession::new();
+    session.expect_get_request_path().return_const("/%61dmin".to_string());
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-RP" && v == "/%61dmin")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(r#"req.set_header("X-RP", req.request_path)"#, session);
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn req_request_uri_returns_entry_raw() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_request_uri()
+        .return_const("/%61dmin?x=1".to_string());
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-RU" && v == "/%61dmin?x=1")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(r#"req.set_header("X-RU", req.request_uri)"#, session);
     assert_eq!(result, good_next());
 }

@@ -61,6 +61,15 @@ pub struct EdgionGatewayConfig {
     #[serde(default, skip_serializing)]
     pub access_log_sensitive: crate::types::sensitive::SensitiveMaskConfig,
 
+    /// Access log output options that don't fit into the shared `LogConfig`.
+    ///
+    /// TOML example:
+    ///   [access_log_options]
+    ///   include_raw_uri = true
+    #[arg(skip)]
+    #[serde(default)]
+    pub access_log_options: crate::types::observe::AccessLogOptions,
+
     #[arg(skip)]
     #[serde(default = "default_ssl_log_config")]
     pub ssl_log: LogConfig,
@@ -116,6 +125,19 @@ pub struct EdgionGatewayConfig {
     #[arg(skip)]
     #[serde(default)]
     pub conf_sync_security: crate::core::common::config::ConfSyncSecurityConfig,
+
+    /// URI path normalization configuration.
+    ///
+    /// Controls rejection behaviour for unusual but technically valid encodings.
+    /// Both flags default to `false`; the BASE normalization algorithm always runs.
+    ///
+    /// TOML example:
+    ///   [path_normalization]
+    ///   reject_escaped_slashes = true
+    ///   reject_invalid_percent_encoding = false
+    #[arg(skip)]
+    #[serde(default)]
+    pub path_normalization: crate::core::gateway::path_normalization::PathNormalizationConfig,
 }
 
 /// Gateway configuration
@@ -425,6 +447,51 @@ pub fn init_backend_requests_config(config: BackendRequestsConfig) {
 #[inline]
 pub fn get_backend_requests_config() -> &'static BackendRequestsConfig {
     BACKEND_REQUESTS_CONFIG.get_or_init(BackendRequestsConfig::default)
+}
+
+// ============================================
+// Path Normalization Global Configuration
+// ============================================
+
+/// Global path normalization config, initialized once at startup.
+static PATH_NORMALIZATION_CONFIG: OnceLock<crate::core::gateway::path_normalization::PathNormalizationConfig> =
+    OnceLock::new();
+
+/// Initialize the global path normalization config (call once at startup).
+pub fn init_path_normalization_config(config: crate::core::gateway::path_normalization::PathNormalizationConfig) {
+    let _ = PATH_NORMALIZATION_CONFIG.set(config);
+}
+
+/// Get the global path normalization config (zero-cost after init).
+///
+/// Returns the default config (both reject flags off) if
+/// `init_path_normalization_config` was not called (e.g., unit tests that
+/// don't boot the full Gateway). Production paths always initialize before
+/// the first request.
+#[inline]
+pub fn get_path_normalization_config() -> &'static crate::core::gateway::path_normalization::PathNormalizationConfig {
+    PATH_NORMALIZATION_CONFIG.get_or_init(crate::core::gateway::path_normalization::PathNormalizationConfig::default)
+}
+
+// ============================================
+// Access Log Options Global Configuration
+// ============================================
+
+/// Global access log options, initialized once at startup.
+static ACCESS_LOG_OPTIONS: OnceLock<crate::types::observe::AccessLogOptions> = OnceLock::new();
+
+/// Initialize the global access log options (call once at startup).
+pub fn init_access_log_options(options: crate::types::observe::AccessLogOptions) {
+    let _ = ACCESS_LOG_OPTIONS.set(options);
+}
+
+/// Get the global access log options (zero-cost after init).
+///
+/// Returns the default (all flags off) if `init_access_log_options` was not
+/// called, e.g. unit tests that don't boot the full Gateway.
+#[inline]
+pub fn get_access_log_options() -> &'static crate::types::observe::AccessLogOptions {
+    ACCESS_LOG_OPTIONS.get_or_init(crate::types::observe::AccessLogOptions::default)
 }
 
 // ============================================

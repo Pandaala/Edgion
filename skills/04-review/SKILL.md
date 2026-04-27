@@ -48,6 +48,8 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
 - 审查 Redis 限流 "fail-open 应改 fail-close / 改默认为 Deny" 类 finding 时，先看 [rate-limit/redis-fail-open.md](rate-limit/redis-fail-open.md)——运维权衡，`onRedisFailure: Deny` 已可配置，Kong / APISIX 同样默认 fail-open；不接受"改默认为 Deny"修复建议
 - 审查 Webhook Key Resolver "响应无签名 / 应加 HMAC 校验"类 finding 时，先看 [webhook-key/response-signature-not-needed.md](webhook-key/response-signature-not-needed.md)——Edgion 主动调外部服务属 OAuth Introspection / OPA ExtAuthz 模式（业界一致依赖 TLS 而非响应签名）；URI 由 operator 静态配置；响应签名唯一价值场景 = TLS 配错兜底，属操作失误而非代码缺口，不接受引入 `responseSignature` 字段类修复建议
 
+- 审查路径类 ACL 安全（`req.request_path` 误用、`req_header().uri.path()` 直读、`req_header_mut().set_uri()` 裸写、`RegularExpression` 含 `%XX` 字面量、承诺范围外攻击）时，先看 [uri-normalization/SKILL.md](uri-normalization/SKILL.md)
+
 使用原则：
 
 - 只有当结论已经结合当前代码和设计语义核实过，才写入这里

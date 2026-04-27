@@ -166,7 +166,10 @@ impl RegionRoute {
 
         match regions.iter().enumerate().find(|(_, r)| r.name == target_name) {
             Some((target_idx, target_region)) => {
-                log.push_fmt("redirect {}→{}", la![sensitive(&region.name), sensitive(&target_region.name)]);
+                log.push_fmt(
+                    "redirect {}→{}",
+                    la![sensitive(&region.name), sensitive(&target_region.name)],
+                );
                 (target_idx, target_region)
             }
             None => {
@@ -201,7 +204,10 @@ impl RegionRoute {
             .to_string();
 
         log.push("proxy pass");
-        log.push_fmt("→{} {}:{}", la![sensitive(&region.name), sensitive(host), sensitive(&port.to_string())]);
+        log.push_fmt(
+            "→{} {}:{}",
+            la![sensitive(&region.name), sensitive(host), sensitive(&port.to_string())],
+        );
 
         session.set_external_jump(ExternalJumpPreset {
             domain: host.to_string(),
@@ -227,7 +233,10 @@ impl RegionRoute {
                 if let Ok(v) = raw.parse::<u16>() {
                     if v < modulo {
                         let src_s = src.as_log_str();
-                        log.push_fmt("hash_pass={} from:{}", la![sensitive(&v.to_string()), sensitive(&src_s)]);
+                        log.push_fmt(
+                            "hash_pass={} from:{}",
+                            la![sensitive(&v.to_string()), sensitive(&src_s)],
+                        );
                         return Self::lookup_region(&cluster.regions, v);
                     }
                 }
@@ -257,7 +266,10 @@ impl RegionRoute {
 
         let hash_val = compute_hash(&key, &calc.algorithm, calc.modulo);
         let src_s = src.as_log_str();
-        log.push_fmt("key={} hash={}", la![sensitive(&src_s), sensitive(&hash_val.to_string())]);
+        log.push_fmt(
+            "key={} hash={}",
+            la![sensitive(&src_s), sensitive(&hash_val.to_string())],
+        );
 
         if !calc.write_back.is_empty() {
             let mut targets = String::new();

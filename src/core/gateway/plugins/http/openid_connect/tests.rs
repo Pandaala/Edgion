@@ -1220,3 +1220,64 @@ async fn test_remove_cached_access_token() {
     // No-op on empty string
     oidc.remove_cached_access_token("").await; // should not panic
 }
+
+// ── Group I: load-time path normalization ─────────────────────────────────────
+
+#[test]
+fn config_logout_path_normalized_at_load() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        logout_path: "/auth//logout".to_string(),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    // Double-slash must be collapsed at construction time.
+    assert_eq!(plugin.config.logout_path, "/auth/logout");
+}
+
+#[test]
+fn config_logout_path_already_normalized_unchanged() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        logout_path: "/auth/logout".to_string(),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    assert_eq!(plugin.config.logout_path, "/auth/logout");
+}
+
+#[test]
+fn callback_path_normalized_for_path_only_redirect_uri() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        redirect_uri: Some("/auth//oidc//callback".to_string()),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    // callback_path() normalizes on the fly — double-slashes must be collapsed.
+    assert_eq!(plugin.callback_path(), "/auth/oidc/callback");
+}
+
+#[test]
+fn callback_path_normalized_for_absolute_url_redirect_uri() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        redirect_uri: Some("https://app.example.com/auth//callback".to_string()),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    // The URL parser extracts the path; normalize_config_path then collapses it.
+    assert_eq!(plugin.callback_path(), "/auth/callback");
+}

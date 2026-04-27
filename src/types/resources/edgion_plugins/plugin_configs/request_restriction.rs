@@ -11,6 +11,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::core::gateway::path_normalization::normalize_config_path;
+
 /// Threshold for pre-compiling values into a HashSet for O(1) lookup.
 /// When values.len() > this threshold, a HashSet will be built during compilation.
 pub const VALUES_HASHSET_THRESHOLD: usize = 16;
@@ -167,6 +169,8 @@ pub enum RestrictionSource {
     Query,
     /// Request path (no key needed)
     Path,
+    /// Entry-time raw path (frozen). For audit / special raw-form deny.
+    RequestPath,
     /// HTTP method (no key needed)
     Method,
     /// Referer header (no key needed)
@@ -281,7 +285,10 @@ impl RequestRestrictionConfig {
                         ));
                     }
                 }
-                RestrictionSource::Path | RestrictionSource::Method | RestrictionSource::Referer => {
+                RestrictionSource::Path
+                | RestrictionSource::RequestPath
+                | RestrictionSource::Method
+                | RestrictionSource::Referer => {
                     // Key is not needed for these sources
                 }
             }
@@ -305,8 +312,48 @@ impl RequestRestrictionConfig {
 }
 
 impl RestrictionRule {
-    /// Compile the rule: build HashSets and merge regex patterns
+    /// Compile the rule: build HashSets and merge regex patterns.
+    ///
+    /// For `Path`-source rules, exact-match `allow` / `deny` values are normalized
+    /// at load time via [`normalize_config_path`] so they inhabit the same normalized
+    /// space as the request path produced by `session.get_path()`.
+    /// `RequestPath`-source and all other sources are left as-is (raw form).
+    /// Regex patterns are never normalized.
     pub fn compile(&mut self) -> Result<(), String> {
+        let rule_name = self.name.as_deref().unwrap_or("<unnamed>");
+
+        // For Path source, normalize exact-match values at load time.
+        if self.source == RestrictionSource::Path {
+            if let Some(values) = self.allow.as_mut() {
+                for v in values.iter_mut() {
+                    let normalized = normalize_config_path(v);
+                    if normalized != *v {
+                        tracing::info!(
+                            "request_restriction rule '{}': Path allow value normalized: {:?} -> {:?}",
+                            rule_name,
+                            v,
+                            normalized
+                        );
+                        *v = normalized;
+                    }
+                }
+            }
+            if let Some(values) = self.deny.as_mut() {
+                for v in values.iter_mut() {
+                    let normalized = normalize_config_path(v);
+                    if normalized != *v {
+                        tracing::info!(
+                            "request_restriction rule '{}': Path deny value normalized: {:?} -> {:?}",
+                            rule_name,
+                            v,
+                            normalized
+                        );
+                        *v = normalized;
+                    }
+                }
+            }
+        }
+
         // Compile allow values
         if let Some(values) = &self.allow {
             if values.is_empty() {
@@ -815,5 +862,92 @@ mod tests {
         config.validate();
         assert!(!config.is_valid());
         assert!(config.get_validation_error().unwrap().contains("at least one"));
+    }
+
+    // ------------------------------------------------------------------
+    // Group H: normalize_config_path integration
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn path_deny_values_normalized_at_compile() {
+        // "/admin/./" → mid-string `/./` removed; trailing `/` preserved (not a terminal `/.`)
+        // "/api%2Fv1" → %2F decoded to "/api/v1"
+        let mut rule = RestrictionRule {
+            name: Some("test-path-norm".to_string()),
+            source: RestrictionSource::Path,
+            deny: Some(vec!["/admin/./".to_string(), "/api%2Fv1".to_string()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let deny = rule.deny.as_ref().expect("deny should be Some");
+        // Trailing `/` preserved — `/./` is mid-string, not a terminal dot-segment.
+        assert_eq!(deny[0], "/admin/", "mid-string `/./` removed; trailing `/` preserved");
+        // "/api%2Fv1" → %2F decoded → "/api/v1"
+        assert_eq!(deny[1], "/api/v1", "encoded slash should be decoded");
+    }
+
+    #[test]
+    fn path_allow_values_normalized_at_compile() {
+        let mut rule = RestrictionRule {
+            name: Some("test-path-allow-norm".to_string()),
+            source: RestrictionSource::Path,
+            allow: Some(vec!["/%61dmin".to_string()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let allow = rule.allow.as_ref().expect("allow should be Some");
+        // "/%61dmin" → %61 = 'a' → "/admin"
+        assert_eq!(allow[0], "/admin", "unreserved percent-encoded char should be decoded");
+    }
+
+    #[test]
+    fn request_path_deny_values_kept_raw() {
+        // RequestPath source: values must NOT be normalized
+        let raw = "/api%2Fv1".to_string();
+        let mut rule = RestrictionRule {
+            name: Some("test-rp-raw".to_string()),
+            source: RestrictionSource::RequestPath,
+            deny: Some(vec![raw.clone()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let deny = rule.deny.as_ref().expect("deny should be Some");
+        assert_eq!(deny[0], raw, "RequestPath deny values must be kept as-is (raw form)");
+    }
+
+    #[test]
+    fn path_regex_not_normalized() {
+        // Regex patterns must never be touched by normalization
+        let pattern = "^/api%2Fv[0-9]+/.*".to_string();
+        let mut rule = RestrictionRule {
+            name: Some("test-regex-untouched".to_string()),
+            source: RestrictionSource::Path,
+            deny_regex: Some(vec![pattern.clone()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let deny_regex = rule.deny_regex.as_ref().expect("deny_regex should be Some");
+        assert_eq!(deny_regex[0], pattern, "deny_regex patterns must not be normalized");
+    }
+
+    #[test]
+    fn request_path_source_check_value_raw_match() {
+        // RequestPath rule with raw deny value should match raw input literally
+        let mut rule = RestrictionRule {
+            name: Some("test-rp-check".to_string()),
+            source: RestrictionSource::RequestPath,
+            deny: Some(vec!["/%61dmin".to_string()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        // Exact raw form matches
+        assert_eq!(rule.check_value(Some("/%61dmin")), Some(true));
+        // Normalized form does NOT match (kept raw)
+        assert_eq!(rule.check_value(Some("/admin")), Some(false));
     }
 }

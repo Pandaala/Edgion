@@ -93,6 +93,7 @@ impl RequestRestriction {
                 session.get_query_param(key)
             }
             RestrictionSource::Path => Some(session.get_path().to_string()),
+            RestrictionSource::RequestPath => Some(session.get_request_path().to_string()),
             RestrictionSource::Method => Some(session.get_method().to_string()),
             RestrictionSource::Referer => session.header_value("Referer"),
         }
@@ -183,6 +184,7 @@ impl RequestFilter for RequestRestriction {
             let deny_msg = match denied_source {
                 Some(RestrictionSource::Method) => "Deny method",
                 Some(RestrictionSource::Path) => "Deny path",
+                Some(RestrictionSource::RequestPath) => "Deny request path",
                 Some(RestrictionSource::Header) => "Deny header",
                 Some(RestrictionSource::Cookie) => "Deny cookie",
                 Some(RestrictionSource::Query) => "Deny query",
@@ -546,6 +548,69 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("Deny"));
+    }
+
+    #[tokio::test]
+    async fn test_request_path_source_uses_entry_raw() {
+        // RequestPath source must call get_request_path(), not get_path().
+        // The deny list value is kept raw (/%61dmin) and must match the raw entry path.
+        let mut config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                name: Some("deny-raw-path".to_string()),
+                source: RestrictionSource::RequestPath,
+                deny: Some(vec!["/%61dmin".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        config.validate();
+        assert!(config.is_valid());
+
+        let plugin = RequestRestriction::create(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("RequestRestriction");
+
+        // Entry-time raw path is "/%61dmin" — should be denied
+        mock_session
+            .expect_get_request_path()
+            .return_const("/%61dmin".to_string());
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.contains("Deny"));
+    }
+
+    #[tokio::test]
+    async fn test_request_path_source_normalized_form_not_denied() {
+        // When entry-time path is normalized form "/admin", the raw deny "/%61dmin" does NOT match.
+        let mut config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                name: Some("deny-raw-path".to_string()),
+                source: RestrictionSource::RequestPath,
+                deny: Some(vec!["/%61dmin".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        config.validate();
+        assert!(config.is_valid());
+
+        let plugin = RequestRestriction::create(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("RequestRestriction");
+
+        // Already normalized path at entry — should NOT match the raw deny value
+        mock_session
+            .expect_get_request_path()
+            .return_const("/admin".to_string());
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.contains("Allow"));
     }
 
     #[tokio::test]

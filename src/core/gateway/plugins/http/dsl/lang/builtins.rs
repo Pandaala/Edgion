@@ -89,17 +89,11 @@ impl Vm {
                 checked_value_str(scheme, self.limits.max_string_len)
             }
             BuiltinId::ReqHost => checked_value_opt_str(session.header_value("Host"), self.limits.max_string_len),
-            BuiltinId::ReqUri => {
-                let path = session.get_path().to_string();
-                match session.get_query() {
-                    Some(q) if !q.is_empty() => {
-                        let uri = format!("{}?{}", path, q);
-                        check_string_len(&uri, self.limits.max_string_len)?;
-                        Ok(Value::Str(uri))
-                    }
-                    _ => checked_value_str(path, self.limits.max_string_len),
-                }
+            BuiltinId::ReqUri => checked_value_str(session.get_uri(), self.limits.max_string_len),
+            BuiltinId::ReqRequestPath => {
+                checked_value_str(session.get_request_path().to_string(), self.limits.max_string_len)
             }
+            BuiltinId::ReqRequestUri => checked_value_str(session.get_request_uri(), self.limits.max_string_len),
             BuiltinId::ReqContentType => {
                 checked_value_opt_str(session.header_value("Content-Type"), self.limits.max_string_len)
             }

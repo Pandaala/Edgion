@@ -201,7 +201,10 @@ fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) ->
                 .iter()
                 .map(|s| crate::types::sensitive::apply_sensitive(s, |w| w.to_string()))
                 .collect();
-            return Err(format!("mTLS SAN whitelist failed: subject={}, sans={:?}", subject, sans));
+            return Err(format!(
+                "mTLS SAN whitelist failed: subject={}, sans={:?}",
+                subject, sans
+            ));
         }
     }
 

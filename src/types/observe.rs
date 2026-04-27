@@ -45,6 +45,19 @@ impl LogConfig {
     }
 }
 
+/// Access log output options that are not part of the generic [`LogConfig`].
+///
+/// Sits alongside `[access_log]` in TOML (e.g. `[access_log_options]`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AccessLogOptions {
+    /// When `true`, the access log entry includes a `request_uri` field carrying
+    /// the entry-time raw path + raw query (the original URI the client sent).
+    /// Default `false` — the access log emits only the current normalized
+    /// `path` field, no raw path or query.
+    pub include_raw_uri: bool,
+}
+
 /// Log type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogType {
