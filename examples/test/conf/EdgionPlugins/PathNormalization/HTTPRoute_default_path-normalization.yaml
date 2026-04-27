@@ -1,0 +1,96 @@
+# HTTPRoute for PathNormalization integration tests
+# Hostname: path-norm.example.com
+# Gateway: reuses edgion-plugins-gateway (edgion-test namespace)
+#
+# Test coverage:
+#   /test/restriction/...  — RequestRestriction plugin (Path + RequestPath sources)
+#   /admin                 — Exact match; verifies /%61dmin normalizes to /admin and matches
+#   /api                   — PathPrefix match; verifies /api//v1//users double-slash collapse
+#   /regex/v[0-9]+         — RegularExpression match on normalized path
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: path-norm-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "path-norm.example.com"
+  rules:
+    # Rule 1: RequestRestriction path normalization tests
+    # - /test/restriction/admin        → 403 (Path deny "/admin" after normalization)
+    # - /test/restriction/%61dmin      → 403 (normalized to /admin, caught by Path deny)
+    # - /test/restriction/admin%2Fextra → 403 (RequestPath denyRegex "%2[fF]" hits raw)
+    # - /test/restriction/safe         → 200 (no deny match)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/restriction
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: path-norm-request-restriction-deny
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 2: Exact /admin — tests that /%61dmin routes here after normalization
+    # Expected: GET /%61dmin → normalized to /admin → Exact match → 200
+    - matches:
+        - path:
+            type: Exact
+            value: /admin
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 3: PathPrefix /api — tests that /api//v1//users collapses to /api/v1/users
+    # Expected: GET /api//v1//users → normalized to /api/v1/users → PathPrefix /api matches → 200
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 4: RegularExpression on normalized path
+    # Pattern ^/regex/v[0-9]+/.*$ is matched against the normalized path.
+    # Expected:
+    #   GET /regex/v1/users          → 200 (plain, already normalized)
+    #   GET /regex%2Fv1%2Fusers      → 200 (%2F decoded to /, normalized to /regex/v1/users, matches)
+    #   GET /regex/v1%2Fusers        → 200 (%2F decoded to /, then matches)
+    # Non-match (never routes here):
+    #   A regex written as "^/regex/v[0-9]+%2F" would never match because %2F is decoded
+    #   before matching — operator must write regex against normalized form.
+    - matches:
+        - path:
+            type: RegularExpression
+            value: "^/regex/v[0-9]+/.*$"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 5: Path-parameter bypass test (A3 — strip_path_parameters)
+    # /admin/..;jsessionid=x/secret → after strip_path_parameters: /admin/../secret
+    #                               → after dot-segment removal: /secret
+    # This rule uses Exact /secret to verify the normalization caught the bypass.
+    # Expected:
+    #   GET /admin/..;jsessionid=x/secret → normalized to /secret → Exact /secret → 200
+    #   GET /secret                        → 200 (plain)
+    - matches:
+        - path:
+            type: Exact
+            value: /secret
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
