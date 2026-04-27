@@ -324,9 +324,10 @@ impl RestrictionRule {
 
         // For Path source, normalize exact-match values at load time.
         if self.source == RestrictionSource::Path {
+            let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
             if let Some(values) = self.allow.as_mut() {
                 for v in values.iter_mut() {
-                    let normalized = normalize_config_path(v);
+                    let normalized = normalize_config_path(v, path_cfg);
                     if normalized != *v {
                         tracing::info!(
                             "request_restriction rule '{}': Path allow value normalized: {:?} -> {:?}",
@@ -340,7 +341,7 @@ impl RestrictionRule {
             }
             if let Some(values) = self.deny.as_mut() {
                 for v in values.iter_mut() {
-                    let normalized = normalize_config_path(v);
+                    let normalized = normalize_config_path(v, path_cfg);
                     if normalized != *v {
                         tracing::info!(
                             "request_restriction rule '{}': Path deny value normalized: {:?} -> {:?}",

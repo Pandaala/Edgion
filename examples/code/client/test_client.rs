@@ -273,6 +273,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
         "LinkSys/Status" => "EdgionPlugins",
         "EdgionPlugins/OpenidConnect" => "EdgionPlugins",
+        "EdgionPlugins/PathNormalization" => "EdgionPlugins",
+        "EdgionPlugins/PathNormalization/PreserveParam" => "EdgionPlugins",
+        "EdgionPlugins/PathNormalization/ForwardView" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
@@ -947,6 +950,39 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::OpenidConnectTestSuite));
+        }
+        "EdgionPlugins/PathNormalization" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PathNormalization tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PathNormalizationTestSuite));
+        }
+        "EdgionPlugins/PathNormalization/PreserveParam" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PathNormalization/PreserveParam tests require --gateway flag");
+                std::process::exit(1);
+            }
+            // NOTE: This suite requires the gateway to be started with
+            // preserve_path_parameters = true in [path_normalization] TOML config.
+            // TC-C is excluded from automation (manual curl verifies preserve-mode bypass
+            // behaviour, see fixture); TC-B is mode-agnostic and passes in both strip and
+            // preserve modes.
+            runner.add_suite(Box::new(suites::PathNormalizationPreserveParamTestSuite));
+        }
+        "EdgionPlugins/PathNormalization/ForwardView" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PathNormalization/ForwardView tests require --gateway flag");
+                std::process::exit(1);
+            }
+            // Verifies which path the gateway forwards to upstream based on:
+            //   TC-A: default (no annotation) → normalized path forwarded
+            //   TC-B: annotation forward-raw-path: "true" → raw path forwarded
+            //   TC-C: annotation forward-raw-path: "false" → normalized path forwarded
+            // Scenarios that require gateway TOML restart (global forward_normalized_path = false,
+            // region_route with no annotation) are documented in the fixture YAMLs and suite
+            // header comment for manual verification.
+            runner.add_suite(Box::new(suites::PathNormalizationForwardViewTestSuite));
         }
         "EdgionPlugins/BandwidthLimit" => {
             if !gateway {

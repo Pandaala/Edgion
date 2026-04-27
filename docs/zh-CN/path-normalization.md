@@ -175,3 +175,44 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 - 技术规格：`docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
 - 配置参考：`skills/02-features/02-config/02-edgion-gateway-config.md`（`spec.pathNormalization`）
 - RequestRestriction 插件：[user-guide/http-route/filters/edgion-plugins/request-restriction.md](user-guide/http-route/filters/edgion-plugins/request-restriction.md)
+
+---
+
+## Upstream 收到什么 path（v4）
+
+Edgion v4 起默认把规范化后的 path 转发到上游，与 Envoy / Kong 行为对齐。决策按以下优先级：
+
+| 优先级 | 通道 | 来源 | 默认 |
+|---|---|---|---|
+| 0 | rewrite 类插件已写过 path | `url_rewrite` / `proxy_rewrite` / DSL `req.set_uri` 等 | 用 rewrite 后的 path（终态） |
+| 1 | per-route 注解 `edgion.io/forward-raw-path` | HTTPRoute `metadata.annotations` | `"true"` 强制 raw / `"false"` 强制 normalized |
+| 2 | 网关互转（region_route） | `region_route` 插件 | raw（避免与对端二次规范化冲突） |
+| 3 | 全局开关 `forward_normalized_path` | `[path_normalization]` 配置段 | `true`（normalized）|
+| 默认 | 兜底 | — | normalized |
+
+### 与 Envoy / Kong 对比
+
+| Gateway | 默认 upstream 视图 | 是否可关 |
+|---|---|---|
+| Envoy `normalize_path` | normalized | 是 |
+| Kong Traditional router | normalized | 是 |
+| **Edgion v4** | **normalized**（v4 与业界对齐）| 是（`forward_normalized_path = false`）|
+| Edgion v3.1 及更早 | raw | — |
+
+### 升级注意
+
+如果你的上游服务对 path 字面敏感（例如对 `%2F` 字面有特定路由逻辑），升级到 v4 后默认会收到 decode 后的形态。两种解决：
+
+1. **per-route opt-out**：在受影响的 HTTPRoute 加 `edgion.io/forward-raw-path: "true"` 注解
+2. **全局回退**：在 `[path_normalization]` 设 `forward_normalized_path = false`（影响所有路由）
+
+### `;param` 兼容场景
+
+如果你的上游应用依赖 path-parameter（如 `;jsessionid=xxx`），可启用：
+
+```toml
+[path_normalization]
+preserve_path_parameters = true
+```
+
+注意：开启后 `..;/` 类绕过攻击不再被默认拦截（参见 spec §14.4）。建议同时用 `RestrictionSource::RequestPath` regex 拦截 `;` 字符的可疑模式。

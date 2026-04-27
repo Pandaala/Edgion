@@ -171,5 +171,32 @@ reject_invalid_percent_encoding = true # 拦截含非 UTF-8 / 非法 hex percent
 | rewrite 后记录新 path | current（已 refresh） | `$uri` |
 | rewrite 后仍需原始 path | entry | `$request_uri` |
 | 改写请求 path | — | `session.set_upstream_uri(&new_uri)` |
+| 默认 upstream 转发 path 视图 | current normalized | 自动（v4 spec §14）|
+| 路由级 force raw 转发 | entry view | annotation `edgion.io/forward-raw-path: "true"` |
+| 路由级 force normalized 转发（盖 region_route）| current normalized | annotation `edgion.io/forward-raw-path: "false"` |
 
 **性能提示**：热路径上优先用 `path` / `request_path`（`&str`，零额外 alloc）而非 `uri` / `request_uri`（format alloc）。
+
+---
+
+## Upstream Path Forwarding 决策（v4）
+
+`pg_upstream_peer::upstream_peer_http` 入口单点决策，5 通道优先级：
+
+| 通道 | 触发 | 效果 |
+|---|---|---|
+| 0（隐含最高）| `ctx.uri_finalized` 已 true | 跳过决策（rewrite 终态 / 已决策） |
+| 1 | 注解 `edgion.io/forward-raw-path: "true"` | 强制 raw |
+| 1 | 注解 `edgion.io/forward-raw-path: "false"` | 强制 normalized（盖过 region_route） |
+| 2 | `external_jump.preserve_raw_path = true`（region_route 类）| raw |
+| 3 | 全局 `forward_normalized_path = false` | raw |
+| 默认 | 以上都不命中 | normalized |
+
+`uri_finalized` 单 flag 覆盖 rewrite 终态 + 单点决策已落定 + 重试 / mirror / fan-out 一致性。
+
+合法 `req_header_mut().set_uri()` 写入仅 2 处（lint Rule 2）：
+- `session_adapter::set_upstream_uri`（rewrite 类）
+- `pg_upstream_peer::upstream_peer_http` 单点决策块（v4）
+两处都必须紧随 `ctx.uri_finalized = true`。
+
+详情见 spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14。

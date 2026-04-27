@@ -14,8 +14,36 @@ source semantics).
 
 | File | Resource | Purpose |
 |---|---|---|
-| `01_EdgionPlugins_request-restriction-path-deny.yaml` | `EdgionPlugins/path-norm-request-restriction-deny` | RequestRestriction with `Path` + `RequestPath` deny rules |
-| `HTTPRoute_default_path-normalization.yaml` | `HTTPRoute/path-norm-route` | Routes wiring the plugin and testing match types |
+| `01_EdgionPlugins_request-restriction-path-deny.yaml` | `EdgionPlugins/path-norm-request-restriction-deny` | RequestRestriction with `Path` + `RequestPath` deny rules (default strip mode) |
+| `HTTPRoute_default_path-normalization.yaml` | `HTTPRoute/path-norm-route` | Routes for scenario 01 (default strip mode) |
+| `PreserveParam/02_EdgionPlugins_preserve-path-parameters.yaml` | `EdgionPlugins/path-norm-preserve-param` | RequestRestriction for scenario 02 (preserve_path_parameters opt-out) |
+| `PreserveParam/HTTPRoute_preserve-path-parameters.yaml` | `HTTPRoute/path-norm-preserve-route` | Routes for scenario 02 (preserve opt-out, host: `path-norm-preserve.example.com`) |
+| `ForwardView/03_HTTPRoute_default-normalized-forward.yaml` | `HTTPRoute/forward-view-default` | Default (no annotation) route for scenario 03, host: `path-fwd-default.example.com` |
+| `ForwardView/03_HTTPRoute_annotation-raw-true.yaml` | `HTTPRoute/forward-view-raw` | `forward-raw-path: "true"` route for scenario 03, host: `path-fwd-raw.example.com` |
+| `ForwardView/03_HTTPRoute_annotation-norm-false.yaml` | `HTTPRoute/forward-view-norm-override` | `forward-raw-path: "false"` route for scenario 03, host: `path-fwd-norm.example.com` |
+
+### Scenario 01: Default strip mode (`preserve_path_parameters = false`)
+
+Item: `EdgionPlugins/PathNormalization` — runs with default gateway config.
+
+### Scenario 02: preserve_path_parameters opt-out (`preserve_path_parameters = true`)
+
+Item: `EdgionPlugins/PathNormalization/PreserveParam`
+
+### Scenario 03: Upstream forwarding decision (ForwardView)
+
+Item: `EdgionPlugins/PathNormalization/ForwardView`
+
+Tests the spec §14 single-point upstream forwarding decision: per-route
+`edgion.io/forward-raw-path` annotation tri-state (`"true"` force raw / `"false"` force
+normalized / absent default flow). Uses the **default** gateway TOML config — no special
+`[path_normalization]` settings required.
+
+The global `forward_normalized_path` rollback switch is documented in Scenario 04 below
+and requires a gateway restart with custom TOML; the region_route default-raw behavior is
+documented in Scenario 05. See
+`docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14 for the full decision
+matrix.
 
 ---
 
@@ -171,9 +199,121 @@ curl -i -H "Host: path-norm.example.com" \
 
 ---
 
+## Scenario 03: ForwardView — Upstream Path Forwarding Decision
+
+Item: `EdgionPlugins/PathNormalization/ForwardView`
+
+Tests which path representation the gateway forwards to upstream for a percent-encoded
+request (`/%61pi/data`, where `%61` = `a`). Route matching always uses the normalized
+path; only the forwarding view differs.
+
+### TC-A: Default (no annotation) — upstream receives normalized path
+
+```bash
+curl -i -H "Host: path-fwd-default.example.com" \
+     "http://localhost:31180/%61pi/data?x=1"
+# Expected: backend echoes Path: /api/data (normalized; %61 decoded to 'a')
+# Query string ?x=1 passes through unchanged.
+```
+
+### TC-B: Annotation `forward-raw-path: "true"` — upstream receives raw path
+
+```bash
+curl -i -H "Host: path-fwd-raw.example.com" \
+     "http://localhost:31180/%61pi/data?x=1"
+# Expected: backend echoes Path: /%61pi/data (raw, percent-encoding preserved)
+# Route matching still uses normalized /api/data to hit PathPrefix /api.
+```
+
+### TC-C: Annotation `forward-raw-path: "false"` — upstream receives normalized path
+
+```bash
+curl -i -H "Host: path-fwd-norm.example.com" \
+     "http://localhost:31180/%61pi/data?x=1"
+# Expected: backend echoes Path: /api/data (annotation forces normalized forwarding)
+# This annotation also overrides region_route's preserve_raw_path = true if configured.
+```
+
+### TC-D: URLRewrite filter wins over annotation (spec §14 channel 0 priority)
+
+Route has BOTH a `URLRewrite` filter (replaces `/api` → `/rewritten`) AND
+`edgion.io/forward-raw-path: "true"` annotation. When the rewrite filter executes,
+it sets `ctx.uri_finalized = true`, which causes the single-point decision to skip
+entirely — the rewrite result is the terminal form, annotation is ignored.
+
+```bash
+curl -i -H "Host: path-fwd-rewrite.example.com" \
+     "http://localhost:31180/%61pi/data?q=1"
+# Expected: backend echoes Path: /rewritten/data (rewrite wins)
+# NOT /%61pi/data (annotation alone would have produced this)
+# NOT /api/data (single-point decision alone would have produced this)
+```
+
+### TC-E: Multi-step normalization chains end-to-end to upstream
+
+Single request triggers all algorithm steps in sequence: percent-decode +
+merge_slashes + dot-segment. All three steps must propagate to the upstream
+under default forwarding mode.
+
+```bash
+curl -i -H "Host: path-fwd-default.example.com" \
+     "http://localhost:31180/%61pi//foo/./bar?q=1"
+# Expected: backend echoes Path: /api/foo/bar (?q=1 preserved)
+# Demonstrates: %61→'a' (decode) + //→/ (merge) + /./→/ (dot-segment) all chain
+```
+
+### TC-F: Invalid annotation value falls through to default flow
+
+Annotation value `"yes"` is not in the strict tri-state set (`"true"` / `"false"`
+only). The controller logs INFO and treats invalid values as None → default flow
+applies (normalized forwarding).
+
+```bash
+curl -i -H "Host: path-fwd-invalid.example.com" \
+     "http://localhost:31180/%61pi/data?x=1"
+# Expected: backend echoes Path: /api/data (normalized — same as no-annotation TC-A)
+# NOT raw /%61pi/data which would mean 'yes' was misinterpreted as truthy
+```
+
+### Non-automatable scenarios (require gateway TOML restart)
+
+**Scenario 04**: Global `forward_normalized_path = false` in gateway TOML — all routes
+forward raw by default.
+
+```toml
+# gateway TOML config
+[path_normalization]
+forward_normalized_path = false
+```
+
+```bash
+# With forward_normalized_path = false:
+curl -i -H "Host: path-fwd-default.example.com" \
+     "http://localhost:31180/%61pi/data?x=1"
+# Expected: backend echoes Path: /%61pi/data (global default is now raw)
+```
+
+Per-route annotation `forward-raw-path: "false"` overrides this global flag:
+
+```bash
+# With forward_normalized_path = false but annotation "false" on route:
+curl -i -H "Host: path-fwd-norm.example.com" \
+     "http://localhost:31180/%61pi/data?x=1"
+# Expected: backend echoes Path: /api/data (annotation wins over global default)
+```
+
+**Scenario 05**: `region_route` plugin with no `forward-raw-path` annotation — upstream
+receives whichever path the global `forward_normalized_path` setting dictates.
+To verify, attach a region_route plugin to a route that has no `forward-raw-path`
+annotation and observe that the region_route plugin's routing decision is independent
+of the upstream forwarding view. See `examples/test/conf/EdgionPlugins/RegionRoute/`
+for the region_route test setup.
+
+---
+
 ## Notes on Global-Only Config Options
 
-Two options in `[path_normalization]` are **global gateway config** (`EdgionGatewayConfig`) and
+Two options in `[path_normalization]` are **global gateway config** (gateway TOML config) and
 cannot be toggled per-scenario without a dedicated gateway instance:
 
 - `reject_escaped_slashes = true` — returns 400 for requests whose raw path contains `%2F`/`%5C`

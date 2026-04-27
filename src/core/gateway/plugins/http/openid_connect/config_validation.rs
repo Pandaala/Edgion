@@ -47,7 +47,8 @@ impl OpenidConnect {
         };
         // Normalize the path so config-side and request-side inhabit the same
         // normalized space. See §3.5 of the URI normalization spec.
-        normalize_config_path(&raw_path)
+        let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+        normalize_config_path(&raw_path, path_cfg)
     }
 
     pub(super) fn resolve_redirect_uri(&self, session: &dyn PluginSession) -> VerifyResult<String> {

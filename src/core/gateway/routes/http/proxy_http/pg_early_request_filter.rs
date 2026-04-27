@@ -38,7 +38,7 @@ pub async fn early_request_filter(
 
     ctx.request_info.entry_raw_path = raw_path;
     ctx.request_info.entry_raw_query = raw_query;
-    ctx.refresh_normalized_path(session.req_header());
+    ctx.refresh_normalized_path(session.req_header(), path_norm_cfg);
 
     // Set client timeouts from pre-parsed config (no runtime overhead)
     let client_timeout = &edgion_http.parsed_timeouts.client;

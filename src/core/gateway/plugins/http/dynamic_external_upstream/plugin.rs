@@ -123,6 +123,9 @@ impl RequestFilter for DynamicExternalUpstream {
             port: target.effective_port(),
             use_tls: target.tls,
             sni: target.effective_sni().to_string(),
+            // Regular external server (not another gateway): let the global
+            // `forward_normalized_path` / per-route annotation policy decide.
+            preserve_raw_path: false,
         };
         session.set_external_jump(info);
 

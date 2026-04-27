@@ -214,6 +214,9 @@ impl RegionRoute {
             port,
             use_tls: region.tls,
             sni,
+            // Cross-region gateway-to-gateway forwarding: the peer gateway runs
+            // its own path normalization, so forward raw to avoid double work.
+            preserve_raw_path: true,
         });
 
         PluginRunningResult::GoodNext

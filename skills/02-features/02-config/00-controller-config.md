@@ -256,6 +256,17 @@ local_auth:
 > `unified_auth_middleware` 的 initializing 分支）。详见
 > `skills/02-features/02-config/03-auth-bootstrap.md`。
 
+## `[path_normalization]` — 路径规范化（Gateway 侧配置）
+
+路径规范化配置由 Gateway 侧读取（`src/core/gateway/path_normalization/config.rs`），Controller config 不直接拥有此段，但 skills 文档统一记录于此。
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `reject_escaped_slashes` | `bool` | `false` | 拦截含 `%2F` / `%5C` 请求（高安全场景） |
+| `reject_invalid_percent_encoding` | `bool` | `false` | 拦截含非法 percent-encoding（overlong UTF-8 等）请求 |
+| `forward_normalized_path` | `bool` | `true` | (v4) 默认转发 normalized path 到上游。设为 false 时所有路由默认转发 raw（兼容 v3.1 行为，软回退通道）。per-route 覆盖见注解 `edgion.io/forward-raw-path`。 |
+| `preserve_path_parameters` | `bool` | `false` | (v4) 保留 path-parameter 字面（`;param=...`）。默认 false（剥除，与 v3.1 一致，保持 §1.4 path-parameter 绕过承诺）。设为 true 后 `..;/` 类绕过移出默认承诺范围（详见 spec §14.4）。 |
+
 ## 当前项目里最常见的 Controller 配置改动
 
 - 本地测试切换配置目录：改 `conf_center.type = "file_system"` + `conf_dir`

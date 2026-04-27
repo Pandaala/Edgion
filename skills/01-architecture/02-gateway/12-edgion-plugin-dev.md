@@ -283,8 +283,31 @@ session.set_upstream_uri(&new_uri)?;
 - 后续 `session.get_path()` 返回 **stale**（旧 path）
 - access_log `$uri` 记录旧 path
 - 路由决策、ACL 插件读到错误 path
+- **(v4)** `ctx.uri_finalized` flag 不会被置位，导致 `pg_upstream_peer::upstream_peer_http` 单点决策可能再次写入，覆盖 rewrite 结果
 
-`session.set_upstream_uri()` 内部实现（`session_adapter.rs:443`）自动调用 `ctx.refresh_normalized_path()`，保证缓存一致。所有 rewrite 插件（`proxy_rewrite`、`url_rewrite`、`request_redirect`、DSL `req.set_uri` 等）已走此路径，**插件层零改造**。
+`session.set_upstream_uri()` 内部实现（`session_adapter::set_upstream_uri`）自动调用 `ctx.refresh_normalized_path()` **并置 `ctx.uri_finalized = true`**，保证缓存一致 + 单点决策跳过重写。所有 rewrite 插件（`proxy_rewrite`、`url_rewrite`、`request_redirect`、DSL `req.set_uri` 等）已走此路径，**插件层零改造**。
+
+**(v4) `req_header_mut().set_uri()` 在整个 codebase 仅 2 处合法写入**（lint Rule 2）：
+
+1. `session_adapter::set_upstream_uri`（封装层，rewrite 插件入口）
+2. `pg_upstream_peer::upstream_peer_http` 单点决策块（spec §14，写 normalized 终态到 upstream）
+
+两处都必须紧随 `ctx.uri_finalized = true`。任何第 3 处都是违规——审查时强报，详见 `skills/04-review/uri-normalization/SKILL.md` Rule 2。
+
+**(v4) Path 转发到 upstream 的视图决策**（如果你的插件涉及上游路径选择）：
+
+`upstream_peer_http` 入口处单点决定上游收到 raw 还是 normalized path，5 通道优先级：
+
+1. `ctx.uri_finalized` 已 true（rewrite 插件已写）→ 不动
+2. HTTPRoute 注解 `edgion.io/forward-raw-path: "true"|"false"` → 强制
+3. `external_jump.preserve_raw_path = true`（region_route 类网关互转）→ raw
+4. 全局 `forward_normalized_path = false` → raw
+5. 默认 → 写 normalized
+
+**插件交互要点**：
+- 你的 rewrite-class 插件输出（`set_upstream_uri`）**最高优先级**——单点决策见 `uri_finalized = true` 即跳过
+- 设置 `external_jump`（如 region_route / dynamic_external_upstream 类）的插件需要明确选择 `preserve_raw_path`：网关互转选 `true`，普通外部 server 选 `false`
+- 详见 spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14
 
 ## `PluginSession` 和常用 API
 

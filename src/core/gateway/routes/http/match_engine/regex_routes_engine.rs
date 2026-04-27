@@ -183,6 +183,7 @@ mod tests {
             plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
             parsed_retry: None,
+            parsed_forward_raw_path: None,
         });
 
         let regex = Regex::new(regex_pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", regex_pattern));

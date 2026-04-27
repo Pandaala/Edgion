@@ -44,6 +44,38 @@ Notes:
 - Retry configuration uses the standard Gateway API `spec.rules[*].retry` field (see HTTPRoute/GRPCRoute resource docs). Runtime precedence: `rule.retry.attempts > EdgionGatewayConfig.spec.maxRetries`.
 - `edgion.io/hostname-resolution` is currently injected on `HTTPRoute` and `GRPCRoute`.
 
+### `edgion.io/forward-raw-path`
+
+- **生效粒度**：HTTPRoute（应用到该 HTTPRoute 下所有 rules）
+- **有效值**：
+  - `"true"` —— 强制 raw 转发（盖过全局 `forward_normalized_path` / region_route 默认）
+  - `"false"` —— 强制 normalized 转发（盖过 region_route 类的 `preserve_raw_path = true`）
+  - 缺省 —— 走默认流程（rewrite 终态 → external_jump → 全局开关 → 默认 normalized）
+- **解析时机**：HTTPRoute 加载（`http_route_preparse.rs`）
+- **存储位置**：`HTTPRouteRule.parsed_forward_raw_path: Option<bool>`
+- **非法值处理**：tracing INFO 日志（含 ns / name / value）+ 当作缺省，不 reject route
+- **优先级**：注解最高，盖过 `external_jump.preserve_raw_path` 与全局 `forward_normalized_path`
+- **示例**：
+
+  ```yaml
+  apiVersion: gateway.networking.k8s.io/v1
+  kind: HTTPRoute
+  metadata:
+    name: legacy-app-raw-path
+    namespace: production
+    annotations:
+      edgion.io/forward-raw-path: "true"   # 上游对 path 字面格式敏感，禁止规范化
+  spec:
+    rules:
+      - matches:
+          - path:
+              type: PathPrefix
+              value: /legacy
+        backendRefs:
+          - name: legacy-server
+            port: 8080
+  ```
+
 ## TCPRoute / TLSRoute `metadata.annotations`
 
 | Key | Resource | Value | Default | Effect |

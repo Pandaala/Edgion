@@ -105,11 +105,35 @@ impl HTTPRoute {
         // Get namespace for ExtensionRef lookups
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
 
+        // Parse `edgion.io/forward-raw-path` annotation. Three-state:
+        // "true" / "false" / absent. Invalid values logged INFO and treated as None.
+        let parsed_forward_raw_path: Option<bool> = self
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(crate::types::constants::annotations::edgion::FORWARD_RAW_PATH))
+            .and_then(|v| match v.as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                other => {
+                    tracing::info!(
+                        route_namespace = %self.metadata.namespace.as_deref().unwrap_or("default"),
+                        route_name = %self.metadata.name.as_deref().unwrap_or(""),
+                        annotation = %crate::types::constants::annotations::edgion::FORWARD_RAW_PATH,
+                        value = %other,
+                        "ignored: expected \"true\" or \"false\""
+                    );
+                    None
+                }
+            });
+
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
                 rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
             }
+
+            rule.parsed_forward_raw_path = parsed_forward_raw_path;
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
                 continue;
@@ -176,6 +200,7 @@ impl HTTPRoute {
             return;
         };
 
+        let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
         for rule in rules.iter_mut() {
             let Some(matches) = rule.matches.as_mut() else {
                 continue;
@@ -188,7 +213,7 @@ impl HTTPRoute {
                 let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
                 if match_type == "Exact" || match_type == "PathPrefix" {
                     if let Some(value) = path.value.as_mut() {
-                        let normalized = normalize_config_path(value);
+                        let normalized = normalize_config_path(value, path_cfg);
                         if normalized != *value {
                             tracing::info!(
                                 route = %format!("{}/{}", route_ns, route_name),
@@ -453,5 +478,129 @@ mod tests {
         let mut route = make_route_with_path("PathPrefix", "/api/v1/./foo");
         route.normalize_path_matchers();
         assert_eq!(get_path_value(&route), "/api/v1/foo");
+    }
+
+    // =========================================================================
+    // forward-raw-path annotation parsing tests
+    // =========================================================================
+
+    fn make_test_http_route() -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "test-route", "namespace": "default"},
+            "spec": {
+                "rules": [
+                    {
+                        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]
+                    }
+                ]
+            }
+        }))
+        .expect("test HTTPRoute should deserialize")
+    }
+
+    #[test]
+    fn parses_forward_raw_path_true() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "true".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, Some(true));
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_false() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "false".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, Some(false));
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_absent_is_none() {
+        let mut route = make_test_http_route();
+        route.metadata.annotations = None;
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_invalid_is_none() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "yes".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_uppercase_is_invalid() {
+        // Strict match: only lowercase "true" / "false" accepted.
+        // "True" / "TRUE" / "False" all log INFO and treat as None.
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "True".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_with_whitespace_is_invalid() {
+        // Whitespace not trimmed: "  true  " is invalid.
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "  true  ".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_empty_is_invalid() {
+        // Empty value: "" is invalid (operator likely meant to delete the annotation).
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            String::new(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
     }
 }

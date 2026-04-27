@@ -1,5 +1,4 @@
 use crate::core::gateway::observe::logs::LogBuffer;
-use crate::core::gateway::path_normalization::normalize_path;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
@@ -459,6 +458,19 @@ pub struct ExternalJumpPreset {
     pub use_tls: bool,
     /// TLS SNI (Server Name Indication)
     pub sni: String,
+    /// True when this jump represents gateway-to-gateway forwarding (e.g.,
+    /// `region_route` cross-region traffic). The upstream gateway will run its
+    /// own path normalization, so the path should be forwarded raw to avoid
+    /// double-normalization conflicts.
+    ///
+    /// Set to `true` only by plugins that route traffic to another Edgion-like
+    /// gateway. Plugins that target a regular external server (e.g.,
+    /// `dynamic_external_upstream`) should set `false` so the global
+    /// `forward_normalized_path` / per-route annotation policy applies.
+    ///
+    /// Default `false`: a future plugin that forgets to set this explicitly
+    /// will not silently degrade to raw-forwarding behavior.
+    pub preserve_raw_path: bool,
 }
 
 /// Stored direct endpoint info (lightweight, survives retries via Clone)
@@ -594,6 +606,20 @@ pub struct EdgionHttpContext {
     /// during request_filter.
     pub external_jump: Option<ExternalJumpPreset>,
 
+    /// True when `req_header.uri` is already in its upstream-forwarded final form;
+    /// further writes are forbidden.
+    ///
+    /// Set in exactly two locations (matching the §9 Rule 2 lint allowlist):
+    ///   1. `session_adapter::set_upstream_uri` — set after rewrite-class plugin writes
+    ///   2. `pg_upstream_peer::upstream_peer_http` single-point decision block —
+    ///      set after the default-normalized vs raw decision is finalized
+    ///
+    /// Set at most once per request lifecycle. Covers:
+    ///   - rewrite plugin "final form" semantics
+    ///   - single-point decision idempotency (retries don't re-decide)
+    ///   - mirror / fan-out consumers see consistent `req_header.uri`
+    pub uri_finalized: bool,
+
     /// Response headers to add (queued from request stage)
     pub response_headers_to_add: Vec<(String, String)>,
 
@@ -647,6 +673,7 @@ impl EdgionHttpContext {
             direct_endpoint: None,
             internal_jump: None,
             external_jump: None,
+            uri_finalized: false,
             response_headers_to_add: Vec::new(),
             mirror_state: None,
             sp_state: SessionPersistenceState::Inactive,
@@ -791,12 +818,17 @@ impl EdgionHttpContext {
     /// Refresh `normalized_current_path` from current `req_header.uri.path()`.
     /// Called by session_adapter::set_upstream_uri after rewrite, or by entry filter.
     /// Business code should NOT call this directly.
-    pub fn refresh_normalized_path(&mut self, req_header: &pingora_http::RequestHeader) {
+    pub fn refresh_normalized_path(
+        &mut self,
+        req_header: &pingora_http::RequestHeader,
+        cfg: &crate::core::gateway::path_normalization::PathNormalizationConfig,
+    ) {
         let raw = req_header.uri.path();
-        self.request_info.normalized_current_path = match normalize_path(raw) {
-            Some(s) => s,
-            None => raw.to_string(),
-        };
+        self.request_info.normalized_current_path =
+            match crate::core::gateway::path_normalization::normalize_path(raw, cfg) {
+                Some(s) => s,
+                None => raw.to_string(),
+            };
     }
 }
 
@@ -911,10 +943,12 @@ mod path_view_tests {
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.entry_raw_path = entry_path.to_string();
         ctx.request_info.entry_raw_query = entry_query.map(str::to_string);
-        ctx.request_info.normalized_current_path = match normalize_path(entry_path) {
-            Some(s) => s,
-            None => entry_path.to_string(),
-        };
+        let path_cfg = crate::core::gateway::path_normalization::PathNormalizationConfig::default();
+        ctx.request_info.normalized_current_path =
+            match crate::core::gateway::path_normalization::normalize_path(entry_path, &path_cfg) {
+                Some(s) => s,
+                None => entry_path.to_string(),
+            };
         ctx
     }
 
@@ -940,7 +974,8 @@ mod path_view_tests {
     fn refresh_after_rewrite() {
         let mut ctx = make_ctx("/api/old", None);
         let req = RequestHeader::build("GET", b"/api/new", None).unwrap();
-        ctx.refresh_normalized_path(&req);
+        let path_cfg = crate::core::gateway::path_normalization::PathNormalizationConfig::default();
+        ctx.refresh_normalized_path(&req, &path_cfg);
         assert_eq!(ctx.path(), "/api/new");
         assert_eq!(ctx.request_path(), "/api/old");
     }

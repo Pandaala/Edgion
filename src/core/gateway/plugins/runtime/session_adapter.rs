@@ -458,7 +458,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
         let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_uri(parsed_uri);
-        self.ctx.refresh_normalized_path(self.inner.req_header());
+        let cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+        self.ctx.refresh_normalized_path(self.inner.req_header(), cfg);
+        self.ctx.uri_finalized = true;
         Ok(())
     }
 

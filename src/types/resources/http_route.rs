@@ -117,6 +117,19 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_retry: Option<ParsedRouteRetry>,
+
+    /// Pre-parsed `edgion.io/forward-raw-path` annotation from parent HTTPRoute.metadata.
+    ///   - `None` — annotation absent (default flow)
+    ///   - `Some(true)` — annotation `"true"` (force raw forward)
+    ///   - `Some(false)` — annotation `"false"` (force normalized forward, overrides
+    ///     region_route's `preserve_raw_path`)
+    ///
+    /// Parsed in `http_route_preparse.rs` at HTTPRoute load time and copied to
+    /// every rule under that route. Invalid annotation values are logged at INFO
+    /// and treated as `None`.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_forward_raw_path: Option<bool>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -135,6 +148,7 @@ impl Clone for HTTPRouteRule {
             plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
+            parsed_forward_raw_path: self.parsed_forward_raw_path,
         }
     }
 }
@@ -151,6 +165,7 @@ impl fmt::Debug for HTTPRouteRule {
             .field("session_persistence", &self.session_persistence)
             .field("lb", &"<skipped>")
             .field("plugin_runtime", &self.plugin_runtime)
+            .field("parsed_forward_raw_path", &self.parsed_forward_raw_path)
             .finish()
     }
 }

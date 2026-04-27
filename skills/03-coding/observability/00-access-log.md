@@ -262,6 +262,27 @@ $request_path = /%61dmin/data   （入口 raw，冻结）
 $request_uri  = /%61dmin/data   （入口 raw + query，冻结）
 ```
 
+### (v4) `$uri` 与 upstream 实际收到的 path 关系
+
+v4 起 Edgion 默认把规范化 path 转发到上游（与 Envoy / Kong 对齐）。多数情况下 `$uri` 反映的就是 upstream 收到的形态。但**两种 raw forward opt-out 场景**会让 `$uri`（normalized）与 upstream 收到的 path 分歧：
+
+| 场景 | 触发 | `$uri` 值 | upstream 收到 |
+|---|---|---|---|
+| 默认 | 无注解、无 region_route、`forward_normalized_path=true` | normalized | normalized（一致） |
+| HTTPRoute 注解 force raw | `edgion.io/forward-raw-path: "true"` | normalized | **raw**（分歧！） |
+| `region_route` 命中 | 命中 region 互转规则、无注解覆盖 | normalized | **raw**（分歧！） |
+| 全局回退 | `forward_normalized_path = false` | normalized | **raw**（分歧！） |
+
+**对审计/observability 的含义**：
+- `$uri` 始终是规范化视图，可控的 cardinality，适合 Prometheus 标签 / 聚合查询
+- 如需审计「客户端到底发了什么」，用 `$request_uri`（entry raw 视图，永远冻结）
+- 如需审计「upstream 到底收到了什么」——**这两者都不直接等于**。需要：
+  1. 检查路由是否带 `forward-raw-path: "true"` 注解（access log 可加 `route_namespace` / `route_name` tag 后查 K8s）
+  2. 或在 upstream 应用层记录其收到的 path
+  3. 或参考 spec §14.5「mirror 与 upstream 视图分歧」相关说明
+
+详细决策矩阵见 spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14。
+
 ### query 视图不对称（已知 gap）
 
 `$request_query`（entry query）**不存在**。若需要审计 entry query，从 `$request_uri` split 即可。

@@ -17,6 +17,7 @@ description: URI 规范化相关 review 判定规则：哪些场景已关闭、�
 - HTTPRoute / TLSRoute / GRPCRoute 用 `Exact` / `PathPrefix` 路径匹配——配置侧加载时规范化 + 请求侧规范化，匹配在同一 normalized space 上进行
 - HTTPRoute `RegularExpression` 匹配——请求侧已规范化（注意：regex 模式本身不规范化，operator 负责把 regex 写在 normalized space 上，见「仍要报场景」第 5 条）
 - path-parameter `..;/` 类绕过——`strip_path_parameters` 算法（步骤 A3）已处理
+  - **注脚 (v4)**：仅在 `preserve_path_parameters=false`（默认）时关闭。若 operator 启用 opt-out (`preserve_path_parameters=true`)，承诺退化，此类 finding 仍要报，提示 operator 用 `RestrictionSource::RequestPath` regex 拦截 `;` 模式或修正 ACL 规则。
 - 标准 percent-encoding 绕过、双斜杠绕过、dot-segment 绕过——均在承诺范围内，已被规范化算法覆盖
 
 ---
@@ -36,6 +37,10 @@ description: URI 规范化相关 review 判定规则：哪些场景已关闭、�
 5. **`RegularExpression` 路径配置中含 `%XX` / `//` / `/.` / `..;` 字面量**——请求侧已规范化，含上述字面量的 regex 永远不命中（静默失效）；operator 必须把 regex 改写为 normalized 等价形态
 
 6. **承诺范围外攻击**（overlong UTF-8 / 双重 percent-encoding / 非合规上游解析分歧）——若发现明确攻击场景，提示 operator 启用 `reject_invalid_percent_encoding = true`（扩大承诺范围）。这不是代码 bug，是已知设计边界（见 spec §1.4）
+
+7. **HTTPRoute 注解 `edgion.io/forward-raw-path` 值非 "true" / "false"**——配置非法值，gateway 当作 None 处理但实际 operator 意图丢失；提示修正为合法值
+
+8. **`forward_normalized_path = false` + 业务 ACL 规则同时混用 `Path` 和 `RequestPath`**——全局 raw 模式下 `Path` 视图与 `RequestPath` 视图实际上都是 raw（`Path` 仍走规范化但 upstream 收到 raw），混用可能掩盖 raw forward 副作用
 
 ---
 
@@ -79,7 +84,17 @@ self.inner.req_header_mut().set_uri(parsed);
 
 **后果**：ctx 缓存（`normalized_current_path`）与 pingora uri 不一致，导致 ACL / access_log / 路由决策读到 stale path。
 
-**唯一合法位置**：`session_adapter::set_upstream_uri` 实现（`src/core/gateway/plugins/runtime/session_adapter.rs:443`），且必须紧跟 `self.ctx.refresh_normalized_path(...)` 调用。
+**v4 起合法位置 2 处**（且每处都必须紧随 `ctx.uri_finalized = true`）：
+
+1. `src/core/gateway/plugins/runtime/session_adapter.rs::set_upstream_uri`
+   - rewrite 类插件触发（url_rewrite / proxy_rewrite / DSL `req.set_uri` / Gateway API URLRewrite filter）
+   - 写入次序：`set_uri(parsed)` → `refresh_normalized_path(req, cfg)` → `uri_finalized = true`
+
+2. `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer_http` 单点决策块（v4 新增）
+   - 入门检查 `!ctx.uri_finalized`
+   - 写入次序（仅 `want_raw=false` 分支会 set_uri）：`set_uri(normalized)` → `uri_finalized = true`（无条件置位）
+
+**Rule 2.1** (v4)：上述两处合法位置的 `set_uri` 调用未紧随 `uri_finalized = true` → 强报。
 
 **所有 rewrite 插件**改 path 必须走 trait 方法 `session.set_upstream_uri()`，不能裸调。
 

@@ -23,6 +23,7 @@ mod jwt_auth;
 mod key_auth;
 mod ldap_auth;
 mod openid_connect;
+mod path_normalization;
 mod plugin_condition;
 mod plugin_metadata_managed;
 mod plugin_metadata_status;
@@ -56,6 +57,9 @@ pub use jwt_auth::JwtAuthTestSuite;
 pub use key_auth::KeyAuthTestSuite;
 pub use ldap_auth::LdapAuthTestSuite;
 pub use openid_connect::OpenidConnectTestSuite;
+pub use path_normalization::{
+    PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
+};
 pub use plugin_condition::{AllConditionsTestSuite, PluginConditionTestSuite};
 pub use plugin_metadata_managed::PluginMetaDataManagedTestSuite;
 pub use plugin_metadata_status::{

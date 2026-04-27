@@ -146,7 +146,8 @@ impl OpenidConnect {
         // config-side and request-side paths inhabit the same normalized space.
         // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
         let mut config = config.clone();
-        let normalized_logout_path = normalize_config_path(&config.logout_path);
+        let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+        let normalized_logout_path = normalize_config_path(&config.logout_path, path_cfg);
         if normalized_logout_path != config.logout_path {
             tracing::info!(
                 "openid_connect: config path normalized: {:?} -> {:?}",

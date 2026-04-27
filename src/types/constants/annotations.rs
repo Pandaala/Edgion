@@ -21,6 +21,14 @@ pub mod edgion {
     /// Value: "v2" to enable PP2.
     pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
 
+    /// Per-route opt-out / opt-in for upstream path forwarding view.
+    /// Three-state on HTTPRoute.metadata.annotations:
+    ///   "true"  — force raw forward (overrides global forward_normalized_path / region_route default)
+    ///   "false" — force normalized forward (overrides region_route's preserve_raw_path)
+    ///   absent  — fall through to default flow
+    /// Invalid values are logged at INFO and treated as absent.
+    pub const FORWARD_RAW_PATH: &str = "edgion.io/forward-raw-path";
+
     /// Max upstream connect retries for TLS/TCP routes.
     /// Value: unsigned integer string (default: 1, i.e. no retry).
     /// Gateway API TLSRoute has no retry spec, so this is Edgion-specific.

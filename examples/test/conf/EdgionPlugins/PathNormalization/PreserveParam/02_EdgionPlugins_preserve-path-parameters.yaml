@@ -1,0 +1,36 @@
+# Path Normalization - preserve_path_parameters opt-out scenario
+#
+# 验证启用 preservePathParameters 后 ;param 字面被保留；
+# 同时验证 §14.4 path-parameter 绕过承诺退化（operator 显式接受副作用）。
+#
+# 配置要求：
+#   此场景要求网关以 preserve_path_parameters = true 启动（gateway TOML 配置）。
+#   默认集成测试使用 strip 模式（false），;param 会被剥离，..;/ 旁路会被阻断。
+#
+# 行为说明（preserve_path_parameters = true 时）：
+#   - /api/users;v=1/data               → 上游看到 ;v=1 字面量，未被剥离
+#   - /admin/..;jsessionid=x/secret     → NOT 归一化为 /secret
+#                                          ACL Path deny "/secret" 不命中 → 200
+#                                          （operator 显式接受此旁路风险）
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: path-norm-preserve-param
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        rules:
+          - name: "block-secret-normalized"
+            # Path source: 与归一化后当前路径比较。
+            # 当 preserve_path_parameters = false（默认）时：
+            #   /admin/..;jsessionid=x/secret → 归一化为 /secret → 命中 deny → 403
+            # 当 preserve_path_parameters = true（opt-out）时：
+            #   /admin/..;jsessionid=x/secret 保留原样 → /secret deny 不命中 → 200
+            source: Path
+            deny:
+              - "/secret"
+            onMissing: Allow
+        status: 403

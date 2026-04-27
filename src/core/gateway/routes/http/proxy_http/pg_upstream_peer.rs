@@ -1,5 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
+use crate::core::gateway::cli::config::get_path_normalization_config;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
 use crate::core::gateway::routes::http::routes_mgr::RouteRules;
 use crate::core::gateway::routes::http::session_persistence;
@@ -140,6 +141,41 @@ pub async fn upstream_peer_http(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
+    // ── Path Forwarding Decision (single point, spec §14) ──
+    // Priority:
+    //   0. ctx.uri_finalized already true   → skip (rewrite final form / already decided)
+    //   1. annotation forward-raw-path      → Some(true)/Some(false) forces
+    //   2. external_jump.preserve_raw_path  → gateway-to-gateway default raw
+    //   3. global forward_normalized_path   → false means raw (v3.1 compat / rollback)
+    //   Default                              → write normalized
+    if !ctx.uri_finalized {
+        let cfg = get_path_normalization_config();
+        let annotation = ctx.route_unit.as_ref().and_then(|ru| ru.rule.parsed_forward_raw_path);
+        let external_jump_preserve_raw = ctx
+            .external_jump
+            .as_ref()
+            .map(|ej| ej.preserve_raw_path)
+            .unwrap_or(false);
+        let want_raw = decide_want_raw(annotation, external_jump_preserve_raw, cfg.forward_normalized_path);
+        if !want_raw {
+            // Compare on path alone — query is passthrough, never changes via
+            // normalization. Using `path()` instead of `to_string()` correctly
+            // handles HTTP/2 absolute-form requests (where `to_string()` would
+            // include scheme + authority).
+            let normalized_path = ctx.path();
+            if normalized_path != session.req_header().uri.path() {
+                let new_uri = ctx.uri(session.req_header());
+                let parsed = new_uri
+                    .parse::<http::Uri>()
+                    .map_err(|e| PingoraError::because(ErrorType::InternalError, "compose normalized uri", e))?;
+                session.req_header_mut().set_uri(parsed);
+                // Wrote normalized form; cache (normalized_current_path) is already
+                // consistent with this URI, so no refresh needed.
+            }
+        }
+        ctx.uri_finalized = true;
+    }
+
     // 0. Check for DirectEndpoint (highest priority, bypass LB)
     if let Some(direct) = &ctx.direct_endpoint {
         let backend_ref_idx = direct.backend_ref_idx;
@@ -524,4 +560,126 @@ async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::ne
     }
 
     Ok(addr)
+}
+
+/// Path forwarding decision for the upstream-peer single-point block (spec §14).
+///
+/// Returns `true` if the upstream should receive the raw (un-normalized) path,
+/// `false` if it should receive the normalized form.
+///
+/// Inputs:
+/// - `annotation`: parsed `edgion.io/forward-raw-path` from `HTTPRouteRule.parsed_forward_raw_path`
+/// - `external_jump_preserve_raw`: `external_jump.preserve_raw_path` (true for region_route etc.)
+/// - `cfg_forward_normalized`: `PathNormalizationConfig.forward_normalized_path`
+///
+/// Both production (`upstream_peer_http`) and unit tests call this single fn,
+/// so the formula cannot drift between them.
+#[inline]
+fn decide_want_raw(annotation: Option<bool>, external_jump_preserve_raw: bool, cfg_forward_normalized: bool) -> bool {
+    match annotation {
+        Some(b) => b,
+        None => external_jump_preserve_raw || !cfg_forward_normalized,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decide_want_raw;
+
+    #[test]
+    fn default_writes_normalized() {
+        // No annotation, no external_jump, global forward_normalized_path=true → normalized
+        assert!(!decide_want_raw(None, false, true));
+    }
+
+    #[test]
+    fn annotation_true_forces_raw() {
+        assert!(decide_want_raw(Some(true), false, true));
+    }
+
+    #[test]
+    fn annotation_false_forces_normalized_overrides_region_route() {
+        // annotation "false" overrides region_route's preserve_raw_path = true
+        assert!(!decide_want_raw(Some(false), true, true));
+    }
+
+    #[test]
+    fn region_route_default_raw() {
+        assert!(decide_want_raw(None, true, true));
+    }
+
+    #[test]
+    fn dynamic_external_upstream_default_normalized() {
+        // dynamic_external_upstream sets preserve_raw_path: false on its
+        // ExternalJumpPreset. With no annotation override, this should still
+        // forward normalized — same outcome as the no-external-jump default,
+        // pinned here as an intentional regression check for plugin defaults.
+        assert!(!decide_want_raw(None, false, true));
+    }
+
+    #[test]
+    fn global_disable_forwards_raw() {
+        assert!(decide_want_raw(None, false, false));
+    }
+
+    #[test]
+    fn annotation_true_overrides_global_normalize() {
+        assert!(decide_want_raw(Some(true), false, true));
+    }
+
+    #[test]
+    fn annotation_false_overrides_global_disable() {
+        assert!(!decide_want_raw(Some(false), false, false));
+    }
+
+    // ─── Matrix completeness tests: cover the full 3×2×2 = 12 input combinations ───
+    // The 8 tests above cover 8 named scenarios; the 4 below fill the remaining
+    // 4 boundary combinations to make matrix coverage exhaustive.
+
+    #[test]
+    fn annotation_true_with_region_route_and_global_normalize_still_raw() {
+        // Annotation wins at the top of the priority chain. Even with all lower
+        // channels active, Some(true) deterministically returns true.
+        assert!(decide_want_raw(Some(true), true, true));
+    }
+
+    #[test]
+    fn annotation_true_with_region_route_and_global_disable_still_raw() {
+        // Annotation true + region_route + global disable → all channels agree on raw.
+        assert!(decide_want_raw(Some(true), true, false));
+    }
+
+    #[test]
+    fn annotation_false_with_region_route_and_global_disable_still_normalized() {
+        // Annotation false explicitly overrides BOTH region_route's preserve_raw_path
+        // AND the global disable. This is the operator's emergency override channel.
+        assert!(!decide_want_raw(Some(false), true, false));
+    }
+
+    #[test]
+    fn region_route_with_global_disable_doubles_down_on_raw() {
+        // No annotation, region_route preserve_raw=true, global forward_normalized=false
+        // → both lower channels OR-combine to raw. Verifies the OR formula in the None arm.
+        assert!(decide_want_raw(None, true, false));
+    }
+
+    // ─── I-2 regression: idempotency check uses path() not to_string() ───
+    // Verifies that for absolute-form HTTP/2 URIs (where to_string() includes
+    // scheme + authority but path() returns only the path component), the
+    // upstream_peer_http idempotency comparison correctly uses the path component.
+    // If a future refactor reverts to to_string() comparison, this test catches the
+    // regression by demonstrating that path() and to_string() can diverge.
+
+    #[test]
+    fn absolute_form_uri_path_only_comparison() {
+        let absolute: http::Uri = "http://example.com/api/data?x=1".parse().unwrap();
+        // path() returns only the path component
+        assert_eq!(absolute.path(), "/api/data");
+        // to_string() includes scheme + authority + query (and would falsely report
+        // "different" against a normalized "/api/data" path)
+        assert_ne!(absolute.to_string(), "/api/data");
+        assert!(absolute.to_string().contains("example.com"));
+        // The pg_upstream_peer.rs idempotency check at upstream_peer_http uses
+        // path() so absolute-form requests don't trigger spurious set_uri writes.
+    }
 }

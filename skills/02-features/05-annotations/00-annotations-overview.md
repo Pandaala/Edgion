@@ -30,6 +30,10 @@ description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* �
 |------|---|------|
 | `edgion.io/hostname-resolution` | — | 系统管理（不要手动设置） |
 
+- `edgion.io/forward-raw-path` (HTTPRoute) — 三态控制 upstream path 转发视图：
+  - `"true"` 强制 raw，`"false"` 强制 normalized（盖过 region_route），缺省走默认流程
+  - 详见 spec §14.6 / metadata 参考
+
 ### TCPRoute / TLSRoute
 
 | 注解 | 值 | 说明 |

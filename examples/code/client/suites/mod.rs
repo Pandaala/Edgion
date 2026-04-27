@@ -56,12 +56,13 @@ pub use edgion_plugins::{
     DirectEndpointTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite,
     DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite,
     GlobalConnectionIpRestrictionTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite,
-    JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite,
-    PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite, PmdFlapInitialTestSuite,
-    PmdFlapInvalidTestSuite, PmdFlapValidTestSuite, ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite,
-    RateLimitDynamicUpdateTestSuite, RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite,
-    RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite, ResponseRewriteTestSuite,
-    WebhookKeyGetTestSuite,
+    JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
+    PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
+    PluginConditionTestSuite, PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite,
+    PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite, ProxyRewriteTestSuite,
+    RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
+    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
+    ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

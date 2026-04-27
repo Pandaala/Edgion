@@ -10,18 +10,20 @@
 //! the full specification, whitelist table, edge-case handling, and security
 //! commitment scope.
 
+use super::config::PathNormalizationConfig;
+
 /// Returns `true` if `path` is not already in normalized form and would change
 /// after [`do_normalize`].
 ///
 /// O(n) byte scan, zero allocation.
-pub fn needs_normalization(path: &str) -> bool {
+pub fn needs_normalization(path: &str, cfg: &PathNormalizationConfig) -> bool {
     let bytes = path.as_bytes();
     // Contains percent-encoding
     if bytes.contains(&b'%') {
         return true;
     }
-    // Contains path-parameter marker
-    if bytes.contains(&b';') {
+    // Only treat `;` as a normalization trigger when path-parameter stripping is enabled.
+    if !cfg.preserve_path_parameters && bytes.contains(&b';') {
         return true;
     }
     // Contains consecutive slashes
@@ -44,21 +46,18 @@ pub fn needs_normalization(path: &str) -> bool {
 /// Returns `Some(normalized)` when the path changes after normalization.
 /// Returns `None` when the path is already in normalized form (caller may use
 /// `raw` as-is with zero allocation).
-pub fn normalize_path(raw: &str) -> Option<String> {
-    if !needs_normalization(raw) {
+pub fn normalize_path(raw: &str, cfg: &PathNormalizationConfig) -> Option<String> {
+    if !needs_normalization(raw, cfg) {
         return None;
     }
-    Some(do_normalize(raw))
+    Some(do_normalize(raw, cfg))
 }
 
 /// Normalize a config-side path string at load time.
 /// Returns normalized form when normalization changes the path; returns input as-is otherwise.
 /// Use to keep config-side and request-side in the same normalized space.
-pub fn normalize_config_path(s: &str) -> String {
-    match normalize_path(s) {
-        Some(n) => n,
-        None => s.to_string(),
-    }
+pub fn normalize_config_path(s: &str, cfg: &PathNormalizationConfig) -> String {
+    normalize_path(s, cfg).unwrap_or_else(|| s.to_string())
 }
 
 /// Returns `true` if `path` contains `%2F` or `%5C` (case-insensitive).
@@ -119,9 +118,15 @@ pub fn has_invalid_percent_encoding(path: &str) -> bool {
 /// Callers should prefer [`normalize_path`] (which short-circuits via
 /// [`needs_normalization`]).  This function is `pub(crate)` so that tests in
 /// sibling modules can call it directly.
-pub(crate) fn do_normalize(raw: &str) -> String {
-    let step1 = strip_path_parameters(raw);
-    let step2 = percent_decode_whitelist(&step1);
+pub(crate) fn do_normalize(raw: &str, cfg: &PathNormalizationConfig) -> String {
+    let step1_owned: String;
+    let step1: &str = if cfg.preserve_path_parameters {
+        raw
+    } else {
+        step1_owned = strip_path_parameters(raw);
+        &step1_owned
+    };
+    let step2 = percent_decode_whitelist(step1);
     let step3 = merge_slashes(&step2);
     remove_dot_segments(&step3)
 }
@@ -338,6 +343,7 @@ fn hex_val(b: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use super::PathNormalizationConfig;
     use super::*;
 
     // ------------------------------------------------------------------
@@ -346,73 +352,121 @@ mod tests {
 
     #[test]
     fn no_change_for_normalized_path() {
-        assert_eq!(normalize_path("/api/users"), None);
-        assert_eq!(normalize_path("/"), None);
-        assert_eq!(normalize_path(""), None);
-        assert_eq!(normalize_path("/api/users/123"), None);
+        assert_eq!(normalize_path("/api/users", &PathNormalizationConfig::default()), None);
+        assert_eq!(normalize_path("/", &PathNormalizationConfig::default()), None);
+        assert_eq!(normalize_path("", &PathNormalizationConfig::default()), None);
+        assert_eq!(
+            normalize_path("/api/users/123", &PathNormalizationConfig::default()),
+            None
+        );
     }
 
     #[test]
     fn percent_decode_unreserved() {
         // %61 = 'a'
-        assert_eq!(normalize_path("/%61dmin"), Some("/admin".to_string()));
+        assert_eq!(
+            normalize_path("/%61dmin", &PathNormalizationConfig::default()),
+            Some("/admin".to_string())
+        );
         // %2D = '-'
-        assert_eq!(normalize_path("/foo%2Dbar"), Some("/foo-bar".to_string()));
+        assert_eq!(
+            normalize_path("/foo%2Dbar", &PathNormalizationConfig::default()),
+            Some("/foo-bar".to_string())
+        );
         // %5F = '_'
-        assert_eq!(normalize_path("/foo%5Fbar"), Some("/foo_bar".to_string()));
+        assert_eq!(
+            normalize_path("/foo%5Fbar", &PathNormalizationConfig::default()),
+            Some("/foo_bar".to_string())
+        );
         // %7E = '~'
-        assert_eq!(normalize_path("/foo%7Ebar"), Some("/foo~bar".to_string()));
+        assert_eq!(
+            normalize_path("/foo%7Ebar", &PathNormalizationConfig::default()),
+            Some("/foo~bar".to_string())
+        );
         // %2E = '.'
-        assert_eq!(normalize_path("/foo%2Ebar"), Some("/foo.bar".to_string()));
+        assert_eq!(
+            normalize_path("/foo%2Ebar", &PathNormalizationConfig::default()),
+            Some("/foo.bar".to_string())
+        );
     }
 
     #[test]
     fn percent_decode_slash_and_backslash() {
-        assert_eq!(normalize_path("/admin%2Fextra"), Some("/admin/extra".to_string()));
-        assert_eq!(normalize_path("/admin%5Cextra"), Some("/admin\\extra".to_string()));
+        assert_eq!(
+            normalize_path("/admin%2Fextra", &PathNormalizationConfig::default()),
+            Some("/admin/extra".to_string())
+        );
+        assert_eq!(
+            normalize_path("/admin%5Cextra", &PathNormalizationConfig::default()),
+            Some("/admin\\extra".to_string())
+        );
     }
 
     #[test]
     fn reserved_chars_kept_encoded() {
         // %3F = '?', %23 = '#' — kept encoded
-        let result = normalize_path("/path%3Fquery").unwrap();
+        let result = normalize_path("/path%3Fquery", &PathNormalizationConfig::default()).unwrap();
         assert!(result.contains("%3F"));
 
-        let result = normalize_path("/path%23frag").unwrap();
+        let result = normalize_path("/path%23frag", &PathNormalizationConfig::default()).unwrap();
         assert!(result.contains("%23"));
 
         // sub-delim %21 = '!' — kept encoded
-        let result = normalize_path("/path%21x").unwrap();
+        let result = normalize_path("/path%21x", &PathNormalizationConfig::default()).unwrap();
         assert!(result.contains("%21"));
     }
 
     #[test]
     fn merge_double_slash() {
-        assert_eq!(normalize_path("/foo//bar"), Some("/foo/bar".to_string()));
-        assert_eq!(normalize_path("/foo///bar"), Some("/foo/bar".to_string()));
-        assert_eq!(normalize_path("//"), Some("/".to_string()));
+        assert_eq!(
+            normalize_path("/foo//bar", &PathNormalizationConfig::default()),
+            Some("/foo/bar".to_string())
+        );
+        assert_eq!(
+            normalize_path("/foo///bar", &PathNormalizationConfig::default()),
+            Some("/foo/bar".to_string())
+        );
+        assert_eq!(
+            normalize_path("//", &PathNormalizationConfig::default()),
+            Some("/".to_string())
+        );
     }
 
     #[test]
     fn remove_dot_segments_basic() {
-        assert_eq!(normalize_path("/foo/./bar"), Some("/foo/bar".to_string()));
-        assert_eq!(normalize_path("/foo/../bar"), Some("/bar".to_string()));
-        assert_eq!(normalize_path("/foo/bar/."), Some("/foo/bar".to_string()));
-        assert_eq!(normalize_path("/foo/bar/.."), Some("/foo".to_string()));
+        assert_eq!(
+            normalize_path("/foo/./bar", &PathNormalizationConfig::default()),
+            Some("/foo/bar".to_string())
+        );
+        assert_eq!(
+            normalize_path("/foo/../bar", &PathNormalizationConfig::default()),
+            Some("/bar".to_string())
+        );
+        assert_eq!(
+            normalize_path("/foo/bar/.", &PathNormalizationConfig::default()),
+            Some("/foo/bar".to_string())
+        );
+        assert_eq!(
+            normalize_path("/foo/bar/..", &PathNormalizationConfig::default()),
+            Some("/foo".to_string())
+        );
     }
 
     #[test]
     fn does_not_misinterpret_dotdot_prefix() {
         // /foo/..bar must NOT be treated as parent-traversal
-        assert_eq!(normalize_path("/foo/..bar"), None);
-        assert_eq!(normalize_path("/foo/.bar"), None);
+        assert_eq!(normalize_path("/foo/..bar", &PathNormalizationConfig::default()), None);
+        assert_eq!(normalize_path("/foo/.bar", &PathNormalizationConfig::default()), None);
     }
 
     #[test]
     fn strip_path_parameters_basic() {
-        assert_eq!(normalize_path("/admin;jsessionid=x"), Some("/admin".to_string()));
         assert_eq!(
-            normalize_path("/api/users;v=1/data;type=json"),
+            normalize_path("/admin;jsessionid=x", &PathNormalizationConfig::default()),
+            Some("/admin".to_string())
+        );
+        assert_eq!(
+            normalize_path("/api/users;v=1/data;type=json", &PathNormalizationConfig::default()),
             Some("/api/users/data".to_string())
         );
     }
@@ -421,22 +475,31 @@ mod tests {
     fn dotdot_with_path_parameter() {
         // /admin/..;/secret → strip param → /admin/../secret → dot-segment → /secret
         assert_eq!(
-            normalize_path("/admin/..;jsessionid=x/secret"),
+            normalize_path("/admin/..;jsessionid=x/secret", &PathNormalizationConfig::default()),
             Some("/secret".to_string())
         );
-        assert_eq!(normalize_path("/admin/..;/secret"), Some("/secret".to_string()));
+        assert_eq!(
+            normalize_path("/admin/..;/secret", &PathNormalizationConfig::default()),
+            Some("/secret".to_string())
+        );
     }
 
     #[test]
     fn encoded_dotdot_traversal() {
         // %2E%2E = '..' after decode, then dot-segment processing → /secret
-        assert_eq!(normalize_path("/admin/%2E%2E/secret"), Some("/secret".to_string()));
+        assert_eq!(
+            normalize_path("/admin/%2E%2E/secret", &PathNormalizationConfig::default()),
+            Some("/secret".to_string())
+        );
     }
 
     #[test]
     fn combined_attack_variants() {
         // /admin%2F%2F../etc → decode %2F → /admin///../etc → merge → /admin/../etc → /etc
-        assert_eq!(normalize_path("/admin%2F%2F../etc"), Some("/etc".to_string()));
+        assert_eq!(
+            normalize_path("/admin%2F%2F../etc", &PathNormalizationConfig::default()),
+            Some("/etc".to_string())
+        );
     }
 
     // ------------------------------------------------------------------
@@ -446,18 +509,27 @@ mod tests {
     #[test]
     fn invalid_hex_preserved() {
         // %XY where Y is not hex — kept as literal
-        assert_eq!(normalize_path("/admin%XY/x"), Some("/admin%XY/x".to_string()));
+        assert_eq!(
+            normalize_path("/admin%XY/x", &PathNormalizationConfig::default()),
+            Some("/admin%XY/x".to_string())
+        );
         // % at end of path
-        assert_eq!(normalize_path("/admin%"), Some("/admin%".to_string()));
+        assert_eq!(
+            normalize_path("/admin%", &PathNormalizationConfig::default()),
+            Some("/admin%".to_string())
+        );
         // % followed by single hex digit only
-        assert_eq!(normalize_path("/admin%2"), Some("/admin%2".to_string()));
+        assert_eq!(
+            normalize_path("/admin%2", &PathNormalizationConfig::default()),
+            Some("/admin%2".to_string())
+        );
     }
 
     #[test]
     fn overlong_utf8_preserved_encoded() {
         // %C0%80 = overlong encoding of NUL — not in is_decodable whitelist,
         // so bytes are kept encoded.  Result still contains %C0 and %80.
-        let result = normalize_path("/admin/%C0%80/secret");
+        let result = normalize_path("/admin/%C0%80/secret", &PathNormalizationConfig::default());
         assert!(result.is_some());
         let r = result.unwrap();
         assert!(
@@ -477,7 +549,7 @@ mod tests {
         // Result: /admin/%252E%252E/secret is unchanged by percent_decode_whitelist.
         // needs_normalization sees %, returns true.
         // do_normalize strip + decode + merge + dot-segment all leave it unchanged.
-        let result = normalize_path("/admin/%252E%252E/secret");
+        let result = normalize_path("/admin/%252E%252E/secret", &PathNormalizationConfig::default());
         assert!(result.is_some());
         let r = result.unwrap();
         // Must NOT collapse to /secret (no recursive decoding)
@@ -521,30 +593,34 @@ mod tests {
 
     #[test]
     fn empty_and_root_paths_not_normalized() {
-        assert_eq!(normalize_path(""), None);
-        assert_eq!(normalize_path("/"), None);
+        assert_eq!(normalize_path("", &PathNormalizationConfig::default()), None);
+        assert_eq!(normalize_path("/", &PathNormalizationConfig::default()), None);
     }
 
     #[test]
     fn needs_normalization_negative_cases() {
-        assert!(!needs_normalization("/api/users"));
+        assert!(!needs_normalization("/api/users", &PathNormalizationConfig::default()));
         // /foo/..bar must NOT trigger (the `/../` check is used, not `/..`)
-        assert!(!needs_normalization("/foo/..bar"));
+        assert!(!needs_normalization("/foo/..bar", &PathNormalizationConfig::default()));
         // /foo/.bar must NOT trigger
-        assert!(!needs_normalization("/foo/.bar"));
-        assert!(!needs_normalization(""));
-        assert!(!needs_normalization("/"));
+        assert!(!needs_normalization("/foo/.bar", &PathNormalizationConfig::default()));
+        assert!(!needs_normalization("", &PathNormalizationConfig::default()));
+        assert!(!needs_normalization("/", &PathNormalizationConfig::default()));
     }
 
     #[test]
     fn needs_normalization_positive_cases() {
-        assert!(needs_normalization("/%61dmin")); // %
-        assert!(needs_normalization("/admin;session")); // ;
-        assert!(needs_normalization("/foo//bar")); // //
-        assert!(needs_normalization("/foo/./bar")); // /./
-        assert!(needs_normalization("/foo/../bar")); // /../
-        assert!(needs_normalization("/foo/.")); // ends_with /.
-        assert!(needs_normalization("/foo/..")); // ends_with /..
+        assert!(needs_normalization("/%61dmin", &PathNormalizationConfig::default())); // %
+        assert!(needs_normalization(
+            "/admin;session",
+            &PathNormalizationConfig::default()
+        )); // ;
+        assert!(needs_normalization("/foo//bar", &PathNormalizationConfig::default())); // //
+        assert!(needs_normalization("/foo/./bar", &PathNormalizationConfig::default())); // /./
+        assert!(needs_normalization("/foo/../bar", &PathNormalizationConfig::default())); // /../
+        assert!(needs_normalization("/foo/.", &PathNormalizationConfig::default())); // ends_with /.
+        assert!(needs_normalization("/foo/..", &PathNormalizationConfig::default()));
+        // ends_with /..
     }
 
     // ------------------------------------------------------------------
@@ -558,7 +634,10 @@ mod tests {
         //                     → step2: %2F→/ → /admin///../etc
         //                     → step3: merge → /admin/../etc
         //                     → step4: dot  → /etc
-        assert_eq!(do_normalize("/admin%2F%2F../etc"), "/etc");
+        assert_eq!(
+            do_normalize("/admin%2F%2F../etc", &PathNormalizationConfig::default()),
+            "/etc"
+        );
     }
 
     #[test]
@@ -566,7 +645,7 @@ mod tests {
         // %C0 and %80 are not is_decodable, so they stay encoded throughout.
         // The String::from_utf8 fallback is only triggered if we accidentally
         // push non-UTF-8 bytes, which we should not since we check is_decodable.
-        let result = do_normalize("/x/%C0%80/y");
+        let result = do_normalize("/x/%C0%80/y", &PathNormalizationConfig::default());
         assert!(result.contains("%C0") || result.contains("%c0"));
     }
 
@@ -579,13 +658,19 @@ mod tests {
         // split by '/': ["", "api", "users;v=1%2F", "data"]
         // segment "users;v=1%2F" → strip at ';' → "users"
         // result: /api/users/data
-        assert_eq!(do_normalize("/api/users;v=1%2F/data"), "/api/users/data");
+        assert_eq!(
+            do_normalize("/api/users;v=1%2F/data", &PathNormalizationConfig::default()),
+            "/api/users/data"
+        );
     }
 
     #[test]
     fn root_traversal_clamped() {
         // Going above root stays at root
-        assert_eq!(do_normalize("/../../etc/passwd"), "/etc/passwd");
+        assert_eq!(
+            do_normalize("/../../etc/passwd", &PathNormalizationConfig::default()),
+            "/etc/passwd"
+        );
     }
 
     // ----------------------------------------------------------------------
@@ -599,42 +684,164 @@ mod tests {
     #[test]
     fn merge_slashes_preserves_trailing_slash() {
         // `/admin//` → merge to `/admin/`; trailing `/` must survive
-        assert_eq!(normalize_path("/admin//"), Some("/admin/".to_string()));
+        assert_eq!(
+            normalize_path("/admin//", &PathNormalizationConfig::default()),
+            Some("/admin/".to_string())
+        );
         // `/admin///` → merge to `/admin/`; same
-        assert_eq!(normalize_path("/admin///"), Some("/admin/".to_string()));
+        assert_eq!(
+            normalize_path("/admin///", &PathNormalizationConfig::default()),
+            Some("/admin/".to_string())
+        );
         // `/foo//bar/` (mid-double + trailing) → `/foo/bar/`
-        assert_eq!(normalize_path("/foo//bar/"), Some("/foo/bar/".to_string()));
+        assert_eq!(
+            normalize_path("/foo//bar/", &PathNormalizationConfig::default()),
+            Some("/foo/bar/".to_string())
+        );
     }
 
     #[test]
     fn mid_string_dot_segments_preserve_trailing_slash() {
         // `/foo/./bar/` → `/foo/bar/` — mid `/./` resolves but does NOT strip trailing `/`
-        assert_eq!(normalize_path("/foo/./bar/"), Some("/foo/bar/".to_string()));
+        assert_eq!(
+            normalize_path("/foo/./bar/", &PathNormalizationConfig::default()),
+            Some("/foo/bar/".to_string())
+        );
         // `/foo/bar/../` → `/foo/` — mid `/../` resolves but trailing `/` is part of input
-        assert_eq!(normalize_path("/foo/bar/../"), Some("/foo/".to_string()));
+        assert_eq!(
+            normalize_path("/foo/bar/../", &PathNormalizationConfig::default()),
+            Some("/foo/".to_string())
+        );
     }
 
     #[test]
     fn terminal_dot_segments_strip_trailing_slash() {
         // `/foo/.` → `/foo` (terminal `/.` consumed; trailing `/` stripped) — existing behavior
-        assert_eq!(normalize_path("/foo/."), Some("/foo".to_string()));
+        assert_eq!(
+            normalize_path("/foo/.", &PathNormalizationConfig::default()),
+            Some("/foo".to_string())
+        );
         // `/foo/..` → `/` (pop_last + strip trailing) — output is `/`, len <=1 so untouched
-        assert_eq!(normalize_path("/foo/.."), Some("/".to_string()));
+        assert_eq!(
+            normalize_path("/foo/..", &PathNormalizationConfig::default()),
+            Some("/".to_string())
+        );
         // `/foo/bar/.` → `/foo/bar` (existing behavior preserved)
-        assert_eq!(normalize_path("/foo/bar/."), Some("/foo/bar".to_string()));
+        assert_eq!(
+            normalize_path("/foo/bar/.", &PathNormalizationConfig::default()),
+            Some("/foo/bar".to_string())
+        );
         // `/foo/bar/..` → `/foo` (existing behavior preserved)
-        assert_eq!(normalize_path("/foo/bar/.."), Some("/foo".to_string()));
+        assert_eq!(
+            normalize_path("/foo/bar/..", &PathNormalizationConfig::default()),
+            Some("/foo".to_string())
+        );
     }
 
     #[test]
     fn combined_terminal_dot_after_merge_slashes() {
         // `/admin//foo/.` → merge to `/admin/foo/.` → terminal `/.` consumed → `/admin/foo`
-        assert_eq!(normalize_path("/admin//foo/."), Some("/admin/foo".to_string()));
+        assert_eq!(
+            normalize_path("/admin//foo/.", &PathNormalizationConfig::default()),
+            Some("/admin/foo".to_string())
+        );
     }
 
     #[test]
     fn percent_decoded_double_slash_preserves_trailing() {
         // `/admin%2F` → decode `%2F`=`/` → `/admin/` → no terminal dot → preserve
-        assert_eq!(normalize_path("/admin%2F"), Some("/admin/".to_string()));
+        assert_eq!(
+            normalize_path("/admin%2F", &PathNormalizationConfig::default()),
+            Some("/admin/".to_string())
+        );
+    }
+
+    #[test]
+    fn preserve_path_parameters_keeps_param_literal() {
+        let cfg = PathNormalizationConfig {
+            preserve_path_parameters: true,
+            ..Default::default()
+        };
+        // ;param segment is kept verbatim; dot-segment / merge_slashes / decode still work normally
+        assert_eq!(normalize_path("/api/users;v=1/data", &cfg), None);
+        // % still triggers normalization but ;param is not stripped
+        assert_eq!(
+            normalize_path("/%61pi/users;v=1/data", &cfg),
+            Some("/api/users;v=1/data".to_string())
+        );
+    }
+
+    #[test]
+    fn preserve_path_parameters_documents_bypass_scope_removal() {
+        // (Security scope §14.4): When preserve_path_parameters=true, the `..;/` style
+        // bypass is explicitly removed from the §1.4 commitment scope. This test pins
+        // that behavior — the path is NOT normalized to /secret because `;` is not a
+        // normalization trigger when stripping is disabled, and the dot-segment
+        // algorithm uses strict `/../` (not `/..;/`) matching.
+        let cfg = PathNormalizationConfig {
+            preserve_path_parameters: true,
+            ..Default::default()
+        };
+        assert_eq!(normalize_path("/admin/..;/secret", &cfg), None);
+    }
+
+    #[test]
+    fn strip_path_parameters_default_strips() {
+        let cfg = PathNormalizationConfig::default(); // preserve = false
+        assert_eq!(
+            normalize_path("/api/users;v=1/data", &cfg),
+            Some("/api/users/data".to_string())
+        );
+    }
+
+    #[test]
+    fn preserve_path_parameters_only_param_no_other_triggers() {
+        // Path containing only `;param` (no %, no //, no /../) under preserve=true
+        // should pass through unchanged — `needs_normalization` short-circuits to None
+        // because `;` no longer triggers normalization in preserve mode.
+        let cfg = PathNormalizationConfig {
+            preserve_path_parameters: true,
+            ..Default::default()
+        };
+        assert_eq!(normalize_path("/api/users;v=1/data", &cfg), None);
+        assert_eq!(normalize_path("/admin;jsessionid=x", &cfg), None);
+    }
+
+    #[test]
+    fn normalize_output_is_always_a_valid_uri_path() {
+        // Defensive corpus test (spec §14, addresses parse failure path):
+        // Every output of normalize_path() must be parseable as `http::Uri`
+        // (path component) without error. If a future normalize change ever emits
+        // a byte sequence that http::Uri rejects, this test catches it before
+        // production users see a 500 from the upstream_peer single-point block.
+        let cfg = PathNormalizationConfig::default();
+        let inputs: &[&str] = &[
+            "/%61dmin/data",
+            "/admin//x",
+            "/admin/../secret",
+            "/admin/..;jsessionid=abc/secret",
+            "/admin/%2E%2E/secret",
+            "/admin%2F%2F../etc",
+            "/api/users;v=1/data",
+            "/admin/.",
+            "/admin/..",
+            "//",
+            "/foo/./bar",
+            "/foo/bar/.",
+            "/admin%2Fextra",
+            "/admin%5Cextra",
+            "/.well-known/acme-challenge/abc",
+        ];
+        for input in inputs {
+            let normalized = match normalize_path(input, &cfg) {
+                Some(s) => s,
+                None => input.to_string(),
+            };
+            // Compose `path?query` style URI (mirrors `ctx.uri()` behaviour).
+            let composed = normalized.clone();
+            composed.parse::<http::Uri>().unwrap_or_else(|e| {
+                panic!("normalize output {composed:?} (from input {input:?}) failed http::Uri parse: {e}")
+            });
+        }
     }
 }

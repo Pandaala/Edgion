@@ -1,0 +1,58 @@
+# HTTPRoute for PathNormalization preserve_path_parameters opt-out scenario
+# Hostname: path-norm-preserve.example.com
+# Gateway:  reuses edgion-plugins-gateway (edgion-test namespace)
+#
+# 此路由配合 02_EdgionPlugins_preserve-path-parameters.yaml 使用。
+# 网关需以 preserve_path_parameters = true 启动，否则 ;param 会被剥离。
+#
+# 测试覆盖：
+#   /test/preserve/...  — 含 ;param 的请求（验证字面保留）
+#   /test/preserve/..;jsessionid=x/secret — 旁路验证（承诺退化场景，需 preserve 模式）
+#   /secret             — 敏感路径（被 RequestRestriction Path deny 保护）
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: path-norm-preserve-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "path-norm-preserve.example.com"
+  rules:
+    # Rule 1: preserve-param 测试端点（含 ;param 的请求）
+    # preserve_path_parameters = true 时：;v=1 字面保留，路由匹配 /test/preserve 前缀
+    # preserve_path_parameters = false 时：;v=1 被剥离，/test/preserve 前缀同样匹配
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/preserve
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: path-norm-preserve-param
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 2: /secret 端点 — 被 preserve-param 插件的 Path deny 保护
+    # 默认模式（strip）：/admin/..;jsessionid=x/secret 归一化为 /secret → 403
+    # opt-out 模式（preserve）：保留原样 → /secret deny 不命中 → 不进入此规则
+    - matches:
+        - path:
+            type: Exact
+            value: /secret
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: path-norm-preserve-param
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
