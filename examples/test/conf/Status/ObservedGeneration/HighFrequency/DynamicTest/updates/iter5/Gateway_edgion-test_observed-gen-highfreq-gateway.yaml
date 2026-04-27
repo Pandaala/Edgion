@@ -1,0 +1,12 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: observed-gen-highfreq-gateway
+  namespace: edgion-test
+  generation: 6
+spec:
+  gatewayClassName: observed-gen-highfreq-class
+  listeners:
+    - name: http-v5
+      protocol: HTTP
+      port: 31381

@@ -29,6 +29,8 @@
 //! Supporting resources:
 //! - ConfigMap_edgion-test_test-ca-configmap.yaml
 
+pub mod dynamic;
 mod status_test;
 
+pub use dynamic::{BtlspFlapInitialTestSuite, BtlspFlapInvalidTestSuite, BtlspFlapValidTestSuite};
 pub use status_test::BackendTlsStatusTestSuite;

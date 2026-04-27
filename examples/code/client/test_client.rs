@@ -198,8 +198,10 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/HealthCheck" => "HTTPRoute/Backend/HealthCheck",
         "HTTPRoute/Backend/GrpcHealthCheck" => "HTTPRoute/Backend/GrpcHealthCheck",
         "HTTPRoute/Backend/HealthCheckTransition" => "HTTPRoute/Backend/HealthCheckTransition",
+        "HTTPRoute/Backend/DnsResolutionFailure" => "HTTPRoute/Backend/DnsResolutionFailure",
         "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
         "HTTPRoute/Backend/SessionPersistence" => "HTTPRoute/Backend/SessionPersistence",
+        "HTTPRoute/Backend/SessionPersistenceBackendChange" => "HTTPRoute/Backend/SessionPersistenceBackendChange",
         "HTTPRoute/Filters/FilterConflict" => "HTTPRoute/Filters/FilterConflict",
         "HTTPRoute/Filters/PercentMirror" => "HTTPRoute/Filters/PercentMirror",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
@@ -266,6 +268,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginMetaDataManaged" | "EdgionPlugins/plugin-metadata-managed" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
         "EdgionPlugins/PluginMetaDataStatus" => "EdgionPlugins",
+        "EdgionPlugins/PluginMetaDataStatus/RefFlap" => "EdgionPlugins",
         "EdgionPlugins/ResolvedRefs" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
         "LinkSys/Status" => "EdgionPlugins",
@@ -275,6 +278,10 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslGrpcError" => "GRPCRoute/Basic",
         "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
+        "Status/RefGrant/TCPRouteCrossNsSvc" => "Status/RefGrant/TCPRouteCrossNsSvc",
+        "Status/RefGrant/TLSRouteCrossNsSvc" => "Status/RefGrant/TLSRouteCrossNsSvc",
+        "Status/ObservedGeneration/HighFrequency" => "Status/ObservedGeneration/HighFrequency",
+        "Status/BackendTLSPolicy/RefFlap" => "Status/BackendTLSPolicy/RefFlap",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
         "Gateway/PortConflict" => "Gateway/PortConflict",
         // EdgionTls
@@ -380,6 +387,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::HealthCheckTransitionTestSuite));
         }
+        "HTTPRoute/Backend/DnsResolutionFailure" => {
+            if !gateway {
+                eprintln!("Error: DnsResolutionFailure tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DnsResolutionFailureTestSuite));
+        }
         "HTTPRoute/Backend/PartiallyInvalid" => {
             if !gateway {
                 eprintln!("Error: PartiallyInvalid tests require --gateway flag");
@@ -393,6 +407,24 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
+        }
+        "HTTPRoute/Backend/SessionPersistenceBackendChange" => {
+            if !gateway {
+                eprintln!("Error: SessionPersistenceBackendChange tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::SpChangeInitialTestSuite));
+                }
+                Some("final") => {
+                    runner.add_suite(Box::new(suites::SpChangeFinalTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::SpChangeInitialTestSuite));
+                    runner.add_suite(Box::new(suites::SpChangeFinalTestSuite));
+                }
+            }
         }
         "HTTPRoute/Filters" => {
             if !gateway {
@@ -866,6 +898,28 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::PluginMetaDataStatusTestSuite));
         }
+        "EdgionPlugins/PluginMetaDataStatus/RefFlap" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginMetaDataStatus/RefFlap tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::PmdFlapInitialTestSuite));
+                }
+                Some("invalid") => {
+                    runner.add_suite(Box::new(suites::PmdFlapInvalidTestSuite));
+                }
+                Some("valid") => {
+                    runner.add_suite(Box::new(suites::PmdFlapValidTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::PmdFlapInitialTestSuite));
+                    runner.add_suite(Box::new(suites::PmdFlapInvalidTestSuite));
+                    runner.add_suite(Box::new(suites::PmdFlapValidTestSuite));
+                }
+            }
+        }
         "EdgionPlugins/ResolvedRefs" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/ResolvedRefs tests require --gateway flag");
@@ -1105,6 +1159,28 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::BackendTlsStatusTestSuite));
         }
+        "Status/BackendTLSPolicy/RefFlap" => {
+            if !gateway {
+                eprintln!("Error: Status/BackendTLSPolicy/RefFlap tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::BtlspFlapInitialTestSuite));
+                }
+                Some("invalid") => {
+                    runner.add_suite(Box::new(suites::BtlspFlapInvalidTestSuite));
+                }
+                Some("valid") => {
+                    runner.add_suite(Box::new(suites::BtlspFlapValidTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::BtlspFlapInitialTestSuite));
+                    runner.add_suite(Box::new(suites::BtlspFlapInvalidTestSuite));
+                    runner.add_suite(Box::new(suites::BtlspFlapValidTestSuite));
+                }
+            }
+        }
         "Status/GatewayFrontendValidation" => {
             if !gateway {
                 eprintln!("Error: Status/GatewayFrontendValidation tests require --gateway flag");
@@ -1139,6 +1215,38 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::ObservedGenerationStatusTestSuite));
+        }
+        "Status/ObservedGeneration/HighFrequency" => {
+            if !gateway {
+                eprintln!("Error: Status/ObservedGeneration/HighFrequency tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::HighFreqInitialTestSuite));
+                }
+                Some("final") => {
+                    runner.add_suite(Box::new(suites::HighFreqFinalTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::HighFreqInitialTestSuite));
+                    runner.add_suite(Box::new(suites::HighFreqFinalTestSuite));
+                }
+            }
+        }
+        "Status/RefGrant/TCPRouteCrossNsSvc" => {
+            if !gateway {
+                eprintln!("Error: Status/RefGrant/TCPRouteCrossNsSvc tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TcpRouteCrossNsSvcTestSuite));
+        }
+        "Status/RefGrant/TLSRouteCrossNsSvc" => {
+            if !gateway {
+                eprintln!("Error: Status/RefGrant/TLSRouteCrossNsSvc tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsRouteCrossNsSvcTestSuite));
         }
         // Services tests (ACME, etc.)
         "Services/acme" => {

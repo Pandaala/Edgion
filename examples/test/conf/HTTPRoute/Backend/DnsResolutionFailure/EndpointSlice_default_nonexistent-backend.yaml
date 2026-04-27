@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: nonexistent-backend-eps
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: nonexistent-backend
+addressType: IPv4
+ports:
+  - name: http
+    port: 80
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "192.0.2.1"
+    conditions:
+      ready: true

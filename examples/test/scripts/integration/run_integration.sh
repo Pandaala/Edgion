@@ -415,6 +415,49 @@ get_gateway_server_id() {
 }
 
 # =============================================================================
+# Verify all `role="..."` label values in /metrics are in the expected whitelist.
+# Defends against cardinality explosion from typos / new roles introduced unintentionally.
+# Returns 0 on success, 1 on bad label found.
+# =============================================================================
+verify_metrics_labels() {
+    local endpoint=$1 component=$2
+    local body
+    body=$(curl -sf -m 5 "$endpoint" 2>/dev/null)
+    if [ -z "$body" ]; then
+        log_warn "[$component] /metrics not reachable: $endpoint (skipping label check)"
+        return 0
+    fi
+
+    # Extract all role="..." label values, dedup
+    local roles
+    roles=$(echo "$body" | grep -oE 'role="[^"]+"' | sort -u)
+
+    if [ -z "$roles" ]; then
+        log_info "[$component] /metrics has no role= labels (no federation metrics emitted yet — OK)"
+        return 0
+    fi
+
+    local bad=0
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        case "$line" in
+            'role="center"'|'role="controller"')
+                ;;
+            *)
+                log_error "[$component] /metrics has unexpected role label: $line (allowed: center, controller)"
+                bad=1
+                ;;
+        esac
+    done <<< "$roles"
+
+    if [ $bad -ne 0 ]; then
+        return 1
+    fi
+    log_info "[$component] /metrics role labels validated: $(echo "$roles" | tr '\n' ' ')"
+    return 0
+}
+
+# =============================================================================
 # Trigger reload via Admin API
 # =============================================================================
 trigger_reload() {
@@ -634,6 +677,8 @@ run_all_tests() {
             Status)
                 if [ -z "$G_ITEM" ]; then
                     run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+                    run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
+                    run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
                     run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
                     run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
                     run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
@@ -695,6 +740,7 @@ run_all_tests() {
         run_test "HTTPRoute_Backend_SessionPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
         run_test "HTTPRoute_Backend_PartiallyInvalid" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/PartiallyInvalid" || test_failed=true
         run_test "HTTPRoute_Backend_GrpcHealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/GrpcHealthCheck" || test_failed=true
+        run_test "HTTPRoute_Backend_DnsResolutionFailure" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/DnsResolutionFailure" || test_failed=true
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
         run_test "HTTPRoute_Filters_HeaderModifier" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters/HeaderModifier" || test_failed=true
@@ -787,6 +833,8 @@ run_all_tests() {
         
         # Controller Status Tests
         run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+        run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
+        run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
         run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
         run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
         run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
@@ -804,11 +852,11 @@ run_all_tests() {
         run_dynamic_scenarios
     fi
 
-    # Run dynamic scenarios when narrow scope = Gateway
+    # Run dynamic scenarios when narrow scope = Gateway or Status
     if [ -n "$G_RESOURCE" ] && [ "$G_RESOURCE" = "Gateway" ]; then
         run_dynamic_scenarios
     fi
-    
+
     if $test_failed; then
         return 1
     fi
@@ -1194,6 +1242,15 @@ main() {
     
     # Finalize report
     finalize_report
+
+    # =============================================================================
+    # Final Step: Metrics Label Whitelist
+    # =============================================================================
+    log_section "Final Step: Metrics Label Whitelist"
+    if ! verify_metrics_labels "http://127.0.0.1:5800/metrics" "controller"; then
+        log_error "Metrics label validation FAILED"
+        test_failed=true
+    fi
 
     # =============================================================================
     # Final Step: Cache Residue Detection (leak detection across all scenarios)

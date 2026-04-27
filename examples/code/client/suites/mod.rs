@@ -14,11 +14,12 @@ pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    CircuitBreakerTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, H2cTestSuite, HeaderModifierTestSuite,
-    HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite,
-    HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
-    PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
-    TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    CircuitBreakerTestSuite, DnsResolutionFailureTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite,
+    H2cTestSuite, HeaderModifierTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite,
+    HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite,
+    MultiPortTestSuite, PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite,
+    SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite,
+    WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite};
@@ -56,10 +57,11 @@ pub use edgion_plugins::{
     DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite,
     GlobalConnectionIpRestrictionTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, JweDecryptTestSuite,
     JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite, PluginConditionTestSuite,
-    PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite, ProxyRewriteTestSuite,
-    RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
-    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
-    ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite, PmdFlapInitialTestSuite,
+    PmdFlapInvalidTestSuite, PmdFlapValidTestSuite, ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite,
+    RateLimitDynamicUpdateTestSuite, RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite,
+    RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite, ResponseRewriteTestSuite,
+    WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests
@@ -67,12 +69,19 @@ pub use link_sys::LinkSysStatusTestSuite;
 
 // Status tests (ReferenceGrant, BackendTLSPolicy, etc.)
 pub use status::BackendTlsStatusTestSuite;
+pub use status::BtlspFlapInitialTestSuite;
+pub use status::BtlspFlapInvalidTestSuite;
+pub use status::BtlspFlapValidTestSuite;
 pub use status::GatewayFrontendValidationStatusTestSuite;
 pub use status::GrpcRouteStatusTestSuite;
+pub use status::HighFreqFinalTestSuite;
+pub use status::HighFreqInitialTestSuite;
 pub use status::HostnameIntersectionStatusTestSuite;
 pub use status::ObservedGenerationStatusTestSuite;
 pub use status::RefGrantStatusTestSuite;
+pub use status::TcpRouteCrossNsSvcTestSuite;
 pub use status::TlsListenerModeStatusTestSuite;
+pub use status::TlsRouteCrossNsSvcTestSuite;
 pub use status::TlsRouteStatusTestSuite;
 
 // Services tests (ACME, etc.)

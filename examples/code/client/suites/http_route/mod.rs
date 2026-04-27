@@ -17,9 +17,10 @@ pub use multi_port::MultiPortTestSuite;
 
 // Export sub-module tests
 pub use backend::{
-    CircuitBreakerTestSuite, GrpcHealthCheckTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite,
-    LBConsistentHashTestSuite, LBRoundRobinTestSuite, PartiallyInvalidTestSuite, RetryOnStatusTestSuite,
-    SessionPersistenceTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
+    CircuitBreakerTestSuite, DnsResolutionFailureTestSuite, GrpcHealthCheckTestSuite, HealthCheckTestSuite,
+    HealthCheckTransitionTestSuite, LBConsistentHashTestSuite, LBRoundRobinTestSuite, PartiallyInvalidTestSuite,
+    RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite,
+    TimeoutTestSuite, WeightedBackendTestSuite,
 };
 pub use filters::{
     FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite,

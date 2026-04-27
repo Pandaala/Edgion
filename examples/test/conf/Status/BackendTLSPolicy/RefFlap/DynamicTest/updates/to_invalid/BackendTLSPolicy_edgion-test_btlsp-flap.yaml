@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: btlsp-flap
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: btlsp-flap-svc
+  validation:
+    caCertificateRefs:
+      - name: ca-missing
+        kind: ConfigMap
+        group: ""
+    hostname: backend.example.com

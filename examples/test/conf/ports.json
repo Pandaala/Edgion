@@ -1,5 +1,5 @@
 {
-  "current_max": 31338,
+  "current_max": 31383,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -184,6 +184,24 @@
     },
     "TCPRoute/GlobalConnectionIpRestriction": {
       "tcp": 31296
+    },
+    "HTTPRoute/Backend/DnsResolutionFailure": {
+      "http": 31339
+    },
+    "Status/RefGrant/TCPRouteCrossNsSvc": {
+      "tcp": 31341
+    },
+    "Status/RefGrant/TLSRouteCrossNsSvc": {
+      "tls": 31342
+    },
+    "Status/ObservedGeneration/HighFrequency": {
+      "http": 31381
+    },
+    "Status/BackendTLSPolicy/RefFlap": {
+      "http": 31382
+    },
+    "HTTPRoute/Backend/SessionPersistenceBackendChange": {
+      "http": 31383
     }
   }
 }

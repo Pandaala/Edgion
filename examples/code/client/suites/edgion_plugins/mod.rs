@@ -58,7 +58,9 @@ pub use ldap_auth::LdapAuthTestSuite;
 pub use openid_connect::OpenidConnectTestSuite;
 pub use plugin_condition::{AllConditionsTestSuite, PluginConditionTestSuite};
 pub use plugin_metadata_managed::PluginMetaDataManagedTestSuite;
-pub use plugin_metadata_status::PluginMetaDataStatusTestSuite;
+pub use plugin_metadata_status::{
+    PluginMetaDataStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
+};
 pub use proxy_rewrite::ProxyRewriteTestSuite;
 pub use rate_limit::{RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite};
 pub use real_ip::RealIpPluginTestSuite;
