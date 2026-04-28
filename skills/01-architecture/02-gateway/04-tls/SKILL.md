@@ -128,15 +128,16 @@ TLS 握手由 BoringSSL 的两个回调按状态机顺序串联：
 
 实现 `TlsAccept::certificate_callback`。pingora 用 `SSL_set_cert_cb` 把握手暂停成 async-friendly 形态。
 
+cert_cb 是**纯快照消费者**——所有 SNI 解析、Layer 1/2 匹配都在 select_cb 完成。select_cb 在 store_ssl_ctx 失败时已 fail-closed 返回 Err，所以 cert_cb 一旦被调用，快照必然存在且必然记录了一次命中。
+
 职责：
 
-1. `take_ssl_ctx` 取出 select_cb 写入的快照（消费式取出，自动清空 ex_data 槽）
-2. 快照 fast path：`matched_edgion_tls.is_some()` → 直接 `apply_edgion_tls_cert`，**不再 `match_sni`**——单点匹配避免 select_cb / cert_cb 双 match 在 hot-reload 窗口内拿到不同代资源
-3. 否则 SNI 解析（优先 snapshot.sni，再 `ssl.servername`，再 `fallback_sni`）
-4. 重试 Layer 1（防御性：覆盖非 boringssl 后端 / select_cb store 失败）
-5. Layer 2：`GatewayTlsMatcher::match_sni` → 命中 → `apply_gateway_tls_cert`
-6. 均未命中 → `err_log = "cert not found"` + `log_ssl`
-7. 命中任一后调用 `finalize_ssl_ctx` 盖 `tls_id` + 通过 `store_ssl_ctx` 写回 ex_data，供 `handshake_complete_callback` 取用
+1. `take_ssl_ctx` 取出 select_cb 写入的快照（消费式取出，自动清空 ex_data 槽）。take_ssl_ctx 返回 None 在理论上不可达（select_cb 契约保证），若发生则视为 BoringSSL 状态机违约，写 `err_log = "no snapshot"` + `log_ssl` 后退出。
+2. 命中 EdgionTls：直接 `apply_edgion_tls_cert`。
+3. 命中 GatewayTls：直接 `apply_gateway_tls_cert`。
+4. 快照存在但两者皆 None（理论不可达）：写 `err_log = "snapshot empty"` + `log_ssl` 后退出。
+5. apply 过程中 `err_log` 已被设置（cert/key 加载、install、mTLS 配置失败）：当场 `log_ssl` 并**跳过 finalize**——ex_data 保持 null（cert_cb 入口的 take_ssl_ctx 已清），BoringSSL 因 cert 未装好 abort 握手，`free_ssl_ctx` 看到 null ptr 直接 return，避免双打。
+6. apply 成功：调用 `finalize_ssl_ctx` 盖 `tls_id` + 通过 `store_ssl_ctx` 写回 ex_data，供 `handshake_complete_callback` 取用。
 
 `apply_edgion_tls_cert` 在 cert_cb 时机内只做：cert/key 安装、mTLS verify 配置、`configure_ciphers`（TLS1.2 cipher list 在 cert_cb 仍生效，因为 BoringSSL 在 cert_cb 之后才选 cipher——`handshake_server.cc:810`）。**不再处理 `min_tls_version`**。
 
@@ -148,22 +149,27 @@ TLS 握手由 BoringSSL 的两个回调按状态机顺序串联：
 
 当 select_cb 已 store 快照、但 cert_cb 永远不被调用（典型场景：版本协商失败，BoringSSL alert protocol_version 直接终止握手），`free_ssl_ctx` 这个 FFI 释放回调会在 SSL 对象销毁时触发。
 
-`free_ssl_ctx` 检测 `ssl_ctx.meta.tls_id.is_none()` —— 说明 `finalize_ssl_ctx` 没跑——则 push `err_log = "early handshake abort"`（不覆盖更具体的 err_log）+ `log_ssl`。这关闭了"被 min_tls_version 策略拒绝的连接在 ssl.log 无审计记录"的盲区。
+`free_ssl_ctx` 检测 `ssl_ctx.meta.tls_id.is_none()` —— 说明 `finalize_ssl_ctx` 没跑——则 push `err_log = "early abort"`（不覆盖更具体的 err_log）+ `log_ssl`。这关闭了"被 min_tls_version 策略拒绝的连接在 ssl.log 无审计记录"的盲区。
 
 包在 `std::panic::catch_unwind` 里防止 panic 跨 FFI 边界（与 `mtls_verify_callback` 同样模式）。
 
 ### 整体优先级
 
 ```
-ClientHello → select_cb (Layer 1 match + min_tls_version + snapshot)
+ClientHello → select_cb (SNI resolve + Layer 1/2 match + min_tls_version + snapshot)
+            ├─ no SNI / cert not found / min ver fail / store_ssl_ctx fail
+            │     → log_ssl 一次 + return Err → BoringSSL abort，cert_cb 不触发
+            └─ 命中 → snapshot stored → return Ok
             → freeze version range
-            → version negotiation (可能在此 alert 被拒，触发 free_ssl_ctx 审计)
-            → cert_cb (consume snapshot OR fallback Layer 1/2 match + apply cert/mtls/ciphers)
+            → version negotiation (可能在此 alert 被拒，触发 free_ssl_ctx "early abort" 审计)
+            → cert_cb (consume snapshot + apply cert/mtls/ciphers，不做 fallback 匹配)
+            ├─ apply 失败 → log_ssl 一次 + skip finalize → BoringSSL abort
+            └─ 成功 → finalize_ssl_ctx + store_ssl_ctx 写回 ex_data
             → cipher selection (TLS1.2)
             → handshake_complete_callback (write ssl.log)
 ```
 
-如均未匹配（Layer 1 + Layer 2）→ ssl.log `"cert not found"`。
+匹配失败由 select_cb 一处处理（`"cert not found"`），cert_cb 不再做 fallback 匹配。
 
 ## 证书来源
 

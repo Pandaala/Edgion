@@ -337,7 +337,7 @@ EOF
         -out "$TEMP_DIR/mtls-server.crt" \
         -days 365 \
         -subj "/CN=mtls.example.com" \
-        -addext "subjectAltName=DNS:mtls.example.com,DNS:mtls-optional.example.com,DNS:mtls-san.example.com,DNS:mtls-chain.example.com" \
+        -addext "subjectAltName=DNS:mtls.example.com,DNS:mtls-optional.example.com,DNS:mtls-san.example.com,DNS:mtls-chain.example.com,DNS:mtls-terminate.example.com" \
         2>/dev/null
 
     # Step 7: FrontendValidation server cert (self-signed, SAN includes fv-mtls.example.com)

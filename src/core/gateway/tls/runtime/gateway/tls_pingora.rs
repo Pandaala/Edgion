@@ -29,8 +29,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 // SslCtx: per-connection TLS context passed between callbacks via ex_data
 // ---------------------------------------------------------------------------
 
-/// Per-connection TLS context. Created in certificate_callback, taken by
-/// handshake_complete_callback and finally moved into Pingora's digest.
+/// Per-connection TLS context. Created in select_cb, consumed by cert_cb
+/// and handshake_complete_cb via SSL ex_data, finally moved into Pingora's
+/// digest extension.
 #[derive(Debug, Clone)]
 struct SslCtx {
     meta: TlsConnMeta,
@@ -98,15 +99,11 @@ mod ssl_ctx_ex_data {
         SSL_CTX_EX_DATA_IDX.load(Ordering::Acquire) >= 0
     }
 
-    /// Free callback invoked by BoringSSL when the SSL object is destroyed.
-    /// Handles the case where handshake failed before take_ssl_ctx was called.
-    ///
-    /// If the SslCtx has no `tls_id` (meaning `finalize_ssl_ctx` never ran),
-    /// this connection aborted between select_certificate_cb and cert_cb —
-    /// typically a BoringSSL alert during version negotiation when
-    /// EdgionTls min_tls_version policy rejects the client. We emit an
-    /// ssl.log entry here as a last-resort audit hook so operators can see
-    /// which connections were policy-rejected.
+    /// BoringSSL-invoked free callback for SSL ex_data. Reclaims the Box and,
+    /// when `finalize_ssl_ctx` never ran (no `tls_id`), emits an ssl.log entry
+    /// — covers the early-abort case where BoringSSL alerts during version
+    /// negotiation between select_cb and cert_cb (typical: min_tls_version
+    /// rejects the client).
     unsafe extern "C" fn free_ssl_ctx(
         _parent: *mut c_void,
         ptr: *mut c_void,
@@ -118,27 +115,18 @@ mod ssl_ctx_ex_data {
         if ptr.is_null() {
             return;
         }
-        // Reclaim the Box inside catch_unwind so any panic from log_ssl
-        // (e.g. async channel disconnect, format!, etc.) cannot cross the
-        // FFI boundary — that would be UB.
+        // catch_unwind: any panic from log_ssl crossing the FFI boundary is UB.
         let _ = std::panic::catch_unwind(|| {
             let ssl_ctx = Box::from_raw(ptr as *mut SslCtx);
-
-            // If finalize_ssl_ctx never ran (no tls_id stamped), this
-            // connection aborted between select_certificate_cb and cert_cb.
-            // Without this hook the rejection has zero audit trail in ssl.log.
             if ssl_ctx.meta.tls_id.is_none() {
                 let mut meta = ssl_ctx.meta.clone();
-                // err_log may already be set by select_cb (e.g. "min ver: …"
-                // when set_min_proto_version itself failed). Only set the
-                // generic abort marker when err_log is empty — preserves the
-                // more specific reason set upstream.
+                // Preserve a more specific upstream err_log (e.g. "min ver: …")
+                // if select_cb already set one.
                 if meta.err_log.is_none() {
-                    meta.err_log = Some("early handshake abort".to_string());
+                    meta.err_log = Some("early abort".to_string());
                 }
                 crate::core::gateway::observe::logs::ssl_log::log_ssl(&meta);
             }
-            // Box dropped here, freeing the SslCtx
         });
     }
 
@@ -258,11 +246,9 @@ pub(crate) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Opti
 // TlsCallback
 // ---------------------------------------------------------------------------
 
-/// TLS callback handler for dynamic certificate loading.
-///
-/// All SNI resolution and matching state lives in the `select_certificate_callback`
-/// closure (captured at builder time). This struct only retains `port` for
-/// TlsConnMeta logging on ex_data-failure fallback paths.
+/// TLS callback handler. All SNI resolution and matching state lives in the
+/// `select_certificate_callback` closure (captured at builder time); this
+/// struct only retains `port` for fallback TlsConnMeta logging.
 pub struct TlsCallback {
     port: u16,
 }
@@ -270,36 +256,48 @@ pub struct TlsCallback {
 #[async_trait::async_trait]
 impl TlsAccept for TlsCallback {
     async fn certificate_callback(&self, ssl: &mut TlsRef) {
-        // select_cb (set_select_certificate_callback) is the single point of
-        // SNI resolution + Layer 1 (EdgionTls) + Layer 2 (GatewayTls) matching.
-        // It only returns Ok when a match was found; on no-match it emits
-        // "cert not found" + Err, BoringSSL aborts, and we never reach cert_cb.
+        // select_cb is the single point of SNI resolution + Layer 1/2 matching
+        // and now also fail-closes on store_ssl_ctx failure. So if cert_cb
+        // runs at all, the snapshot must exist with a recorded match.
         //
-        // So if take_ssl_ctx returns Some, the snapshot MUST contain a match.
-        // If take_ssl_ctx returns None, BoringSSL's ex_data is catastrophically
-        // broken (init or store failure). Fail loud in both unexpected states
-        // rather than silently re-running matching.
+        // take_ssl_ctx returning None here means BoringSSL violated its state
+        // machine (e.g. invoked cert_cb without select_cb, or zeroed ex_data
+        // between the two callbacks). Fail loud rather than silently re-run
+        // matching — this branch is theoretically unreachable.
         let Some(mut ssl_ctx) = take_ssl_ctx(ssl) else {
             let mut ssl_ctx = SslCtx::new(self.port);
-            ssl_ctx.meta.err_log = Some("no snapshot (ex_data failure)".to_string());
+            ssl_ctx.meta.err_log = Some("no snapshot".to_string());
             log_ssl(&ssl_ctx.meta);
             return;
         };
 
+        // Each apply_*_cert only sets err_log on failure; on failure we log_ssl
+        // here and skip finalize. Without finalize, ex_data stays null (cert_cb
+        // entry's take_ssl_ctx cleared it), so free_ssl_ctx will see a null ptr
+        // and not double-emit. On success we finalize and let
+        // handshake_complete_callback emit the single ssl.log entry.
         if let Some(edgion_tls) = ssl_ctx.matched_edgion_tls.clone() {
             self.apply_edgion_tls_cert(ssl, &edgion_tls, &mut ssl_ctx);
+            if ssl_ctx.meta.err_log.is_some() {
+                log_ssl(&ssl_ctx.meta);
+                return;
+            }
             self.finalize_ssl_ctx(ssl, &mut ssl_ctx);
             return;
         }
         if let Some(gateway_tls) = ssl_ctx.matched_gateway_tls.clone() {
             self.apply_gateway_tls_cert(ssl, &gateway_tls, &mut ssl_ctx);
+            if ssl_ctx.meta.err_log.is_some() {
+                log_ssl(&ssl_ctx.meta);
+                return;
+            }
             self.finalize_ssl_ctx(ssl, &mut ssl_ctx);
             return;
         }
 
         // Snapshot present but neither match recorded — impossible state given
         // select_cb's contract. Fail loud.
-        ssl_ctx.meta.err_log = Some("snapshot empty (impossible)".to_string());
+        ssl_ctx.meta.err_log = Some("snapshot empty".to_string());
         log_ssl(&ssl_ctx.meta);
     }
 
@@ -321,9 +319,8 @@ impl TlsAccept for TlsCallback {
             return Some(Arc::new(ssl_ctx.meta));
         }
 
-        // Fallback: non-BoringSSL or ex_data store failed.
-        // Still return Some so downstream consumers (TLS proxy, HTTP proxy)
-        // can read TlsConnMeta from the digest extension.
+        // Non-BoringSSL fallback: return a minimal TlsConnMeta so downstream
+        // consumers (TLS proxy, HTTP proxy) can still read it from the digest.
         let meta = TlsConnMeta {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -349,11 +346,8 @@ impl TlsAccept for TlsCallback {
     }
 }
 
-/// Map EdgionTls `TlsVersion` (CRD enum) to BoringSSL `SslVersion`.
-///
-/// Used by both the early `select_certificate_cb` (before version negotiation)
-/// and any cert_cb-time fallback. Pulled out as a free fn so the early callback
-/// closure can call it without borrowing `&TlsCallback`.
+/// Map EdgionTls `TlsVersion` (CRD enum) to BoringSSL `SslVersion`. Free fn
+/// so the select_cb closure can call it without borrowing `&TlsCallback`.
 fn map_tls_version(v: crate::types::resources::edgion_tls::TlsVersion) -> pingora_core::tls::ssl::SslVersion {
     use crate::types::resources::edgion_tls::TlsVersion;
     use pingora_core::tls::ssl::SslVersion;
@@ -366,27 +360,12 @@ fn map_tls_version(v: crate::types::resources::edgion_tls::TlsVersion) -> pingor
 }
 
 impl TlsCallback {
-    /// Create a new TlsCallback.
-    ///
-    /// `TlsCallback` is invoked by Pingora for `cert_cb` (consume snapshot
-    /// from select_certificate_callback) and `handshake_complete_callback`.
-    /// All matching/SNI-resolution state lives in the select_cb closure
-    /// (captured at builder time), not on this struct.
-    ///
-    /// # Parameters
-    /// - `port`: The listening port (retained for TlsConnMeta logging on
-    ///   ex_data-failure fallback paths)
     pub fn new(port: u16) -> Self {
         Self { port }
     }
 
-    /// Create TLS settings with callback for the specified listener
-    ///
-    /// # Parameters
-    /// - `port`: The listening port (retained for TlsConnMeta logging)
-    /// - `listener_key`: The listener key for certificate lookup
-    /// - `edgion_gateway_config`: Gateway configuration
-    /// - `enable_http2`: Whether to enable HTTP/2 ALPN negotiation
+    /// Create TLS settings: registers `select_certificate_callback` (matching
+    /// + snapshot) and the `TlsAccept` callbacks (cert_cb + handshake_complete_cb).
     pub fn new_tls_settings_with_callback(
         port: u16,
         listener_key: ListenerKey,
@@ -437,7 +416,11 @@ impl TlsCallback {
 
                 // ── 2. Layer 1: EdgionTls ────────────────────────────────
                 if let Some(et) = match_sni(&lk, &sni) {
-                    ssl_ctx.meta.is_mtls = et.spec.client_auth.is_some();
+                    // Only Mutual / OptionalMutual actually drive mTLS verification.
+                    // Terminate mode short-circuits in configure_mtls without setting
+                    // any verify mode, so flagging is_mtls=true there would mislead
+                    // ssl.log / tls.log / access_log consumers.
+                    ssl_ctx.meta.is_mtls = et.is_mtls_enabled();
                     if let Some(min_version) = et.spec.min_tls_version {
                         if let Err(e) = ch.ssl_mut().set_min_proto_version(Some(map_tls_version(min_version))) {
                             ssl_ctx.meta.err_log = Some(format!("min ver: {e}"));
@@ -446,14 +429,22 @@ impl TlsCallback {
                         }
                     }
                     ssl_ctx.matched_edgion_tls = Some(et);
-                    let _ = store_ssl_ctx(ch.ssl_mut(), &ssl_ctx);
+                    // store_ssl_ctx failure already emits its own ssl.log entry.
+                    // Fail-closed here so cert_cb is never reached without a
+                    // snapshot — preserves the "one ssl.log per connection"
+                    // invariant.
+                    if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
+                        return Err(SelectCertError::ERROR);
+                    }
                     return Ok(());
                 }
 
                 // ── 3. Layer 2: GatewayTls ───────────────────────────────
                 if let Some(gw) = match_gateway_tls(&lk, &sni) {
                     ssl_ctx.matched_gateway_tls = Some(gw);
-                    let _ = store_ssl_ctx(ch.ssl_mut(), &ssl_ctx);
+                    if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
+                        return Err(SelectCertError::ERROR);
+                    }
                     return Ok(());
                 }
 
@@ -468,7 +459,6 @@ impl TlsCallback {
     }
 
     /// Stamp `tls_id` and store SslCtx into ex_data for handshake_complete_callback.
-    /// Replaces the inline tail of the old certificate_callback.
     fn finalize_ssl_ctx(&self, ssl: &mut SslRef, ssl_ctx: &mut SslCtx) {
         let rand: u64 = random();
         ssl_ctx.meta.tls_id = Some(format!("{:016x}-{:016x}", ssl_ctx.meta.ts, rand));
@@ -498,21 +488,19 @@ impl TlsCallback {
         let cert_pem = match edgion_tls.cert_pem() {
             Ok(pem) => pem,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("et: cert read: {e}"));
+                ssl_ctx.meta.err_log = Some(format!("cert read: {e}"));
                 return;
             }
         };
         let cert = match X509::from_pem(cert_pem.as_bytes()) {
             Ok(c) => c,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("et: bad cert: {e}"));
+                ssl_ctx.meta.err_log = Some(format!("bad cert: {e}"));
                 return;
             }
         };
-        // Runtime expiry check: cert may have expired after being loaded into the store.
-        // X509 is already parsed here, so this is just one time comparison per connection.
-        // Note: only implemented for boringssl; rustls builds rely on the TLS
-        // handshake itself to reject expired certs, but err_log will not reflect it.
+        // Runtime expiry recheck — cert may have expired after load. Mirrors
+        // validate_cert/check_expiration semantics (RFC 5280 inclusive bounds).
         #[cfg(feature = "boringssl")]
         match boring::asn1::Asn1Time::days_from_now(0) {
             Ok(now) => {
@@ -520,18 +508,16 @@ impl TlsCallback {
                     ssl_ctx.meta.err_log = Some(format!("cert_expired: not_after={}", cert.not_after()));
                     return;
                 }
-                // not_before check: reject certs that are not yet valid.
-                // Mirrors the load-time check in validate_cert/check_expiration.
                 if cert.not_before() > &now {
                     ssl_ctx.meta.err_log = Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
                     return;
                 }
             }
             Err(_e) => {
-                // days_from_now(0) can only fail due to BoringSSL internal allocation failure
-                // (effectively impossible). Log the error but allow the connection to proceed
-                // rather than causing a complete outage — the cert was already validated at
-                // load time (layer 1), and BoringSSL will reject genuinely broken certs.
+                // days_from_now(0) only fails on BoringSSL allocation failure
+                // (effectively impossible). Don't fail the connection — the
+                // cert was validated at load time and BoringSSL rejects
+                // genuinely broken certs during the handshake.
                 let _ = ssl_ctx
                     .meta
                     .log
@@ -540,26 +526,26 @@ impl TlsCallback {
             }
         }
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
-            ssl_ctx.meta.err_log = Some(format!("et: set cert: {e}"));
+            ssl_ctx.meta.err_log = Some(format!("set cert: {e}"));
             return;
         }
 
         let key_pem = match edgion_tls.key_pem() {
             Ok(pem) => pem,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("et: key read: {e}"));
+                ssl_ctx.meta.err_log = Some(format!("key read: {e}"));
                 return;
             }
         };
         let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
             Ok(k) => k,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("et: bad key: {e}"));
+                ssl_ctx.meta.err_log = Some(format!("bad key: {e}"));
                 return;
             }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
-            ssl_ctx.meta.err_log = Some(format!("et: set key: {e}"));
+            ssl_ctx.meta.err_log = Some(format!("set key: {e}"));
             return;
         }
 
@@ -620,7 +606,7 @@ impl TlsCallback {
         }
     }
 
-    /// Helper: Get Secret from global SecretStore (fallback for legacy behavior)
+    /// Resolve Secret via the global SecretStore by `certificate_refs[0]`.
     fn get_secret_from_store_or_error(
         &self,
         gateway_tls: &GatewayTlsEntry,
@@ -659,12 +645,12 @@ impl TlsCallback {
             Some(bytes) => match String::from_utf8(bytes.0.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    ssl_ctx.meta.err_log = Some(format!("gw: bad {CERT}: {e}"));
+                    ssl_ctx.meta.err_log = Some(format!("bad {CERT}: {e}"));
                     return;
                 }
             },
             None => {
-                ssl_ctx.meta.err_log = Some(format!("gw: no {CERT}"));
+                ssl_ctx.meta.err_log = Some(format!("no {CERT}"));
                 return;
             }
         };
@@ -673,12 +659,12 @@ impl TlsCallback {
             Some(bytes) => match String::from_utf8(bytes.0.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    ssl_ctx.meta.err_log = Some(format!("gw: bad {KEY}: {e}"));
+                    ssl_ctx.meta.err_log = Some(format!("bad {KEY}: {e}"));
                     return;
                 }
             },
             None => {
-                ssl_ctx.meta.err_log = Some(format!("gw: no {KEY}"));
+                ssl_ctx.meta.err_log = Some(format!("no {KEY}"));
                 return;
             }
         };
@@ -686,24 +672,24 @@ impl TlsCallback {
         let cert = match X509::from_pem(cert_pem.as_bytes()) {
             Ok(c) => c,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("gw: bad cert: {e}"));
+                ssl_ctx.meta.err_log = Some(format!("bad cert: {e}"));
                 return;
             }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
-            ssl_ctx.meta.err_log = Some(format!("gw: set cert: {e}"));
+            ssl_ctx.meta.err_log = Some(format!("set cert: {e}"));
             return;
         }
 
         let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
             Ok(k) => k,
             Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("gw: bad key: {e}"));
+                ssl_ctx.meta.err_log = Some(format!("bad key: {e}"));
                 return;
             }
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
-            ssl_ctx.meta.err_log = Some(format!("gw: set key: {e}"));
+            ssl_ctx.meta.err_log = Some(format!("set key: {e}"));
             return;
         }
     }

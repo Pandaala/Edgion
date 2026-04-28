@@ -1,0 +1,28 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-test-terminate
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: mtls-test-gateway
+      namespace: edgion-test
+      sectionName: https-mtls
+  hosts:
+    - mtls-terminate.example.com
+  secretRef:
+    name: mtls-server
+    namespace: edgion-test
+  clientAuth:
+    # Terminate mode: TLS termination only, no client certificate verification.
+    # Differs from Mutual / OptionalMutual: the server does not request a
+    # client cert, and is_mtls is recorded as false in ssl.log / tls.log /
+    # plugin context (per is_mtls_enabled() semantics).
+    mode: Terminate
+    # caSecretRef is not used for verification under Terminate mode, but
+    # configure_mtls currently reads the CA secret unconditionally, so a
+    # valid reference is required to exercise the runtime path.
+    caSecretRef:
+      name: client-ca
+      namespace: edgion-test
+    verifyDepth: 1
