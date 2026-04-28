@@ -104,24 +104,66 @@ struct TlsMatcherData {
 - 全局单例：`GATEWAY_TLS_MATCHER`。
 - 通过 `rebuild_from_gateways` 在 Gateway 配置变更时重建。
 
-## SNI 匹配流程
+## SNI 匹配流程（Phase 1 重构后）
 
-TLS 握手时，`TlsCallback::match_and_apply_cert` 按以下优先级查找证书：
+TLS 握手由 BoringSSL 的两个回调按状态机顺序串联：
+
+### 1. 早期回调 `select_certificate_callback`（ClientHello 后、版本协商前）
+
+注册位置：`new_tls_settings_with_callback`（`tls_pingora.rs`）。
+触发时机：BoringSSL `handshake_server.cc:694`，**早于** `handshake_server.cc:710` 的版本范围 freeze。
+
+职责（这是 `min_tls_version` 唯一的真实生效点）：
+
+- 从 ClientHello 提取 SNI（`ch.servername(NameType::HOST_NAME)`）
+- Layer 1 匹配：`TlsCertMatcher::match_sni(listener_key, sni)` 查 EdgionTls
+- 命中且 `et.spec.min_tls_version` 有值 → `ssl.set_min_proto_version(...)` per-connection
+  - 失败时 fail-closed：`err_log = "min ver: ..."` + `log_ssl` + 返回 `Err(SelectCertError::ERROR)`
+- 把匹配结果（`Arc<EdgionTls>` + 已 resolve 的 SNI）通过 `store_ssl_ctx` 写入 SSL ex_data 作为快照
+- 始终返回 `Ok(())`（除版本设置失败外），让握手继续到 cert_cb
+
+为什么不能在 cert_cb 里设置 `min_tls_version`：BoringSSL `handshake_server.cc:710` 注释明确——版本范围在 select_cb 之后立即冻结，cert_cb（`L759`）已晚一步。
+
+### 2. 证书回调 `certificate_callback`（cert_cb，handshake_server.cc:759）
+
+实现 `TlsAccept::certificate_callback`。pingora 用 `SSL_set_cert_cb` 把握手暂停成 async-friendly 形态。
+
+职责：
+
+1. `take_ssl_ctx` 取出 select_cb 写入的快照（消费式取出，自动清空 ex_data 槽）
+2. 快照 fast path：`matched_edgion_tls.is_some()` → 直接 `apply_edgion_tls_cert`，**不再 `match_sni`**——单点匹配避免 select_cb / cert_cb 双 match 在 hot-reload 窗口内拿到不同代资源
+3. 否则 SNI 解析（优先 snapshot.sni，再 `ssl.servername`，再 `fallback_sni`）
+4. 重试 Layer 1（防御性：覆盖非 boringssl 后端 / select_cb store 失败）
+5. Layer 2：`GatewayTlsMatcher::match_sni` → 命中 → `apply_gateway_tls_cert`
+6. 均未命中 → `err_log = "cert not found"` + `log_ssl`
+7. 命中任一后调用 `finalize_ssl_ctx` 盖 `tls_id` + 通过 `store_ssl_ctx` 写回 ex_data，供 `handshake_complete_callback` 取用
+
+`apply_edgion_tls_cert` 在 cert_cb 时机内只做：cert/key 安装、mTLS verify 配置、`configure_ciphers`（TLS1.2 cipher list 在 cert_cb 仍生效，因为 BoringSSL 在 cert_cb 之后才选 cipher——`handshake_server.cc:810`）。**不再处理 `min_tls_version`**。
+
+### 3. 完成回调 `handshake_complete_callback`
+
+`take_ssl_ctx` → 取 client cert info（如 mTLS）→ 盖 `handshake_complete_time` → `log_ssl` → 把 `Arc<TlsConnMeta>` 作为 digest 扩展返回，供 HTTP / TLS proxy 后续读取。
+
+### 4. 早期 abort 审计 hook（Task 10 引入）
+
+当 select_cb 已 store 快照、但 cert_cb 永远不被调用（典型场景：版本协商失败，BoringSSL alert protocol_version 直接终止握手），`free_ssl_ctx` 这个 FFI 释放回调会在 SSL 对象销毁时触发。
+
+`free_ssl_ctx` 检测 `ssl_ctx.meta.tls_id.is_none()` —— 说明 `finalize_ssl_ctx` 没跑——则 push `err_log = "early handshake abort"`（不覆盖更具体的 err_log）+ `log_ssl`。这关闭了"被 min_tls_version 策略拒绝的连接在 ssl.log 无审计记录"的盲区。
+
+包在 `std::panic::catch_unwind` 里防止 panic 跨 FFI 边界（与 `mtls_verify_callback` 同样模式）。
+
+### 整体优先级
 
 ```
-1. EdgionTls（TlsCertMatcher::match_sni）
-   └── 匹配成功 → 应用 EdgionTls 证书
-       ├── 配置 mTLS（如有 client_auth）
-       ├── 设置最低 TLS 版本（如有 min_tls_version）
-       └── 设置密码套件（如有 ciphers）
-
-2. Gateway TLS（GatewayTlsMatcher::match_sni）
-   └── 匹配成功 → 从 Gateway Listener 的 certificateRefs 获取 Secret
-       ├── 优先使用内联 secrets
-       └── 回退到从全局 SecretStore 查找
-
-3. 均未匹配 → 记录 "cert not found" 错误日志
+ClientHello → select_cb (Layer 1 match + min_tls_version + snapshot)
+            → freeze version range
+            → version negotiation (可能在此 alert 被拒，触发 free_ssl_ctx 审计)
+            → cert_cb (consume snapshot OR fallback Layer 1/2 match + apply cert/mtls/ciphers)
+            → cipher selection (TLS1.2)
+            → handshake_complete_callback (write ssl.log)
 ```
+
+如均未匹配（Layer 1 + Layer 2）→ ssl.log `"cert not found"`。
 
 ## 证书来源
 

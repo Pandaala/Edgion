@@ -292,6 +292,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionTls/grpctls" => "EdgionTls/grpctls",
         "EdgionTls/mTLS" => "EdgionTls/mTLS",
         "EdgionTls/cipher" => "EdgionTls/cipher",
+        "EdgionTls/fallback_sni" => "EdgionTls/fallback_sni",
         "EdgionTls/port_only" => "EdgionTls/port_only",
         "EdgionTls/BothAbsentParentRef" => "EdgionTls/BothAbsentParentRef",
         _ => suite,
@@ -1144,6 +1145,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
             runner.add_suite(Box::new(suites::MtlsTestSuite));
             runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
+            runner.add_suite(Box::new(suites::FallbackSniTestSuite));
         }
         "EdgionTls/https" => {
             if !gateway {
@@ -1172,6 +1174,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CipherTestSuite));
+        }
+        "EdgionTls/fallback_sni" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/fallback_sni tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::FallbackSniTestSuite));
         }
         // Status tests
         "Status/RefGrant" => {

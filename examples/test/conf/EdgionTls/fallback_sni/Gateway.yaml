@@ -1,0 +1,15 @@
+# fallback_sni test Gateway: single HTTPS listener accepting connections
+# whose SNI is either default.example.com (matched directly by EdgionTls)
+# or something that the gateway's security_protect.fallback_sni resolves
+# to default.example.com.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: fallback-sni-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-fallback
+      protocol: HTTPS
+      port: 31198

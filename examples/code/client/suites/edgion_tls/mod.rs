@@ -1,8 +1,9 @@
 // EdgionTls Test suite
-// Contains: https, grpctls, mTLS, cipher, port_only, both_absent_parent_ref tests
+// Contains: https, grpctls, mTLS, cipher, port_only, both_absent_parent_ref, fallback_sni tests
 
 mod both_absent_parent_ref;
 mod cipher;
+mod fallback_sni;
 mod grpctls;
 mod https;
 mod mtls;
@@ -10,6 +11,7 @@ mod port_only;
 
 pub use both_absent_parent_ref::EdgionTlsBothAbsentParentRefTestSuite;
 pub use cipher::CipherTestSuite;
+pub use fallback_sni::FallbackSniTestSuite;
 pub use grpctls::GrpcTlsTestSuite;
 pub use https::HttpsTestSuite;
 pub use mtls::MtlsTestSuite;

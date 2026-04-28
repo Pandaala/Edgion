@@ -16,11 +16,12 @@ use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::listeners::TlsAccept;
 use pingora_core::protocols::tls::TlsRef;
 use pingora_core::tls::pkey::PKey;
-use pingora_core::tls::ssl::{NameType, SslRef, SslVerifyMode};
+use pingora_core::tls::ssl::{ClientHello, NameType, SelectCertError, SslRef, SslVerifyMode};
 use pingora_core::tls::x509::store::X509StoreBuilder;
 use pingora_core::tls::x509::X509;
 use pingora_core::{Error as PingoraError, ErrorType};
 use rand::random;
+use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -34,6 +35,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 struct SslCtx {
     meta: TlsConnMeta,
     matched_edgion_tls: Option<Arc<EdgionTls>>,
+    matched_gateway_tls: Option<GatewayTlsEntry>,
 }
 
 impl SslCtx {
@@ -56,6 +58,7 @@ impl SslCtx {
                 is_mtls: false,
             },
             matched_edgion_tls: None,
+            matched_gateway_tls: None,
         }
     }
 }
@@ -97,6 +100,13 @@ mod ssl_ctx_ex_data {
 
     /// Free callback invoked by BoringSSL when the SSL object is destroyed.
     /// Handles the case where handshake failed before take_ssl_ctx was called.
+    ///
+    /// If the SslCtx has no `tls_id` (meaning `finalize_ssl_ctx` never ran),
+    /// this connection aborted between select_certificate_cb and cert_cb —
+    /// typically a BoringSSL alert during version negotiation when
+    /// EdgionTls min_tls_version policy rejects the client. We emit an
+    /// ssl.log entry here as a last-resort audit hook so operators can see
+    /// which connections were policy-rejected.
     unsafe extern "C" fn free_ssl_ctx(
         _parent: *mut c_void,
         ptr: *mut c_void,
@@ -105,9 +115,31 @@ mod ssl_ctx_ex_data {
         _argl: c_long,
         _argp: *mut c_void,
     ) {
-        if !ptr.is_null() {
-            let _ = Box::from_raw(ptr as *mut SslCtx);
+        if ptr.is_null() {
+            return;
         }
+        // Reclaim the Box inside catch_unwind so any panic from log_ssl
+        // (e.g. async channel disconnect, format!, etc.) cannot cross the
+        // FFI boundary — that would be UB.
+        let _ = std::panic::catch_unwind(|| {
+            let ssl_ctx = Box::from_raw(ptr as *mut SslCtx);
+
+            // If finalize_ssl_ctx never ran (no tls_id stamped), this
+            // connection aborted between select_certificate_cb and cert_cb.
+            // Without this hook the rejection has zero audit trail in ssl.log.
+            if ssl_ctx.meta.tls_id.is_none() {
+                let mut meta = ssl_ctx.meta.clone();
+                // err_log may already be set by select_cb (e.g. "min ver: …"
+                // when set_min_proto_version itself failed). Only set the
+                // generic abort marker when err_log is empty — preserves the
+                // more specific reason set upstream.
+                if meta.err_log.is_none() {
+                    meta.err_log = Some("early handshake abort".to_string());
+                }
+                crate::core::gateway::observe::logs::ssl_log::log_ssl(&meta);
+            }
+            // Box dropped here, freeing the SslCtx
+        });
     }
 
     /// Store SslCtx into SSL object via ex_data. Returns false and emits ssl.log on failure.
@@ -124,6 +156,16 @@ mod ssl_ctx_ex_data {
             }
             let idx = SSL_CTX_EX_DATA_IDX.load(Ordering::Acquire);
             let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
+
+            // Free any previously stored SslCtx in this slot. BoringSSL's
+            // SSL_set_ex_data does NOT invoke the registered free callback
+            // when overwriting — the free callback only fires on SSL
+            // destruction. Without this, calling store_ssl_ctx twice on the
+            // same SSL leaks the first Box<SslCtx>.
+            let prev = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
+            if !prev.is_null() {
+                let _ = Box::from_raw(prev as *mut SslCtx);
+            }
 
             let ptr = Box::into_raw(Box::new(ctx.clone())) as *mut c_void;
             if boring_sys::SSL_set_ex_data(ssl_ptr, idx, ptr) == 0 {
@@ -218,55 +260,47 @@ pub(crate) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Opti
 
 /// TLS callback handler for dynamic certificate loading.
 ///
-/// Supports listener-key-based certificate lookup for Gateway API semantics.
+/// All SNI resolution and matching state lives in the `select_certificate_callback`
+/// closure (captured at builder time). This struct only retains `port` for
+/// TlsConnMeta logging on ex_data-failure fallback paths.
 pub struct TlsCallback {
     port: u16,
-    listener_key: ListenerKey,
-    edgion_gateway_config: Arc<EdgionGatewayConfig>,
 }
 
 #[async_trait::async_trait]
 impl TlsAccept for TlsCallback {
     async fn certificate_callback(&self, ssl: &mut TlsRef) {
-        let mut ssl_ctx = SslCtx::new(self.port);
-        // 1. Resolve SNI — done ONCE per connection
-        let sni = if let Some(sni) = ssl.servername(NameType::HOST_NAME) {
-            sni.to_lowercase()
-        } else if let Some(fallback_sni) = self
-            .edgion_gateway_config
-            .spec
-            .security_protect
-            .as_ref()
-            .and_then(|sp| sp.fallback_sni.clone())
-        {
-            let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("fallback SNI");
-            fallback_sni
-        } else {
-            ssl_ctx.meta.err_log = Some("no SNI".to_string());
+        // select_cb (set_select_certificate_callback) is the single point of
+        // SNI resolution + Layer 1 (EdgionTls) + Layer 2 (GatewayTls) matching.
+        // It only returns Ok when a match was found; on no-match it emits
+        // "cert not found" + Err, BoringSSL aborts, and we never reach cert_cb.
+        //
+        // So if take_ssl_ctx returns Some, the snapshot MUST contain a match.
+        // If take_ssl_ctx returns None, BoringSSL's ex_data is catastrophically
+        // broken (init or store failure). Fail loud in both unexpected states
+        // rather than silently re-running matching.
+        let Some(mut ssl_ctx) = take_ssl_ctx(ssl) else {
+            let mut ssl_ctx = SslCtx::new(self.port);
+            ssl_ctx.meta.err_log = Some("no snapshot (ex_data failure)".to_string());
             log_ssl(&ssl_ctx.meta);
             return;
         };
 
-        ssl_ctx.meta.sni = Some(sni.clone());
-
-        // 2. Match & apply certificate — done ONCE per connection
-        if !self.match_and_apply_cert(ssl, &sni, &mut ssl_ctx) {
-            log_ssl(&ssl_ctx.meta);
+        if let Some(edgion_tls) = ssl_ctx.matched_edgion_tls.clone() {
+            self.apply_edgion_tls_cert(ssl, &edgion_tls, &mut ssl_ctx);
+            self.finalize_ssl_ctx(ssl, &mut ssl_ctx);
+            return;
+        }
+        if let Some(gateway_tls) = ssl_ctx.matched_gateway_tls.clone() {
+            self.apply_gateway_tls_cert(ssl, &gateway_tls, &mut ssl_ctx);
+            self.finalize_ssl_ctx(ssl, &mut ssl_ctx);
             return;
         }
 
-        // matched, gen tls id
-        let rand: u64 = random();
-        ssl_ctx.meta.tls_id = Some(format!("{:016x}-{:016x}", ssl_ctx.meta.ts, rand));
-
-        // 3. Store SslCtx for handshake_complete_callback
-        if !store_ssl_ctx(ssl, &ssl_ctx) {
-            let _ = ssl_ctx
-                .meta
-                .log
-                .get_or_insert_with(LogBuffer::new)
-                .push("store ctx failed");
-        }
+        // Snapshot present but neither match recorded — impossible state given
+        // select_cb's contract. Fail loud.
+        ssl_ctx.meta.err_log = Some("snapshot empty (impossible)".to_string());
+        log_ssl(&ssl_ctx.meta);
     }
 
     async fn handshake_complete_callback(&self, ssl: &TlsRef) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
@@ -315,19 +349,35 @@ impl TlsAccept for TlsCallback {
     }
 }
 
+/// Map EdgionTls `TlsVersion` (CRD enum) to BoringSSL `SslVersion`.
+///
+/// Used by both the early `select_certificate_cb` (before version negotiation)
+/// and any cert_cb-time fallback. Pulled out as a free fn so the early callback
+/// closure can call it without borrowing `&TlsCallback`.
+fn map_tls_version(v: crate::types::resources::edgion_tls::TlsVersion) -> pingora_core::tls::ssl::SslVersion {
+    use crate::types::resources::edgion_tls::TlsVersion;
+    use pingora_core::tls::ssl::SslVersion;
+    match v {
+        TlsVersion::Tls10 => SslVersion::TLS1,
+        TlsVersion::Tls11 => SslVersion::TLS1_1,
+        TlsVersion::Tls12 => SslVersion::TLS1_2,
+        TlsVersion::Tls13 => SslVersion::TLS1_3,
+    }
+}
+
 impl TlsCallback {
-    /// Create a new TlsCallback with listener key information
+    /// Create a new TlsCallback.
+    ///
+    /// `TlsCallback` is invoked by Pingora for `cert_cb` (consume snapshot
+    /// from select_certificate_callback) and `handshake_complete_callback`.
+    /// All matching/SNI-resolution state lives in the select_cb closure
+    /// (captured at builder time), not on this struct.
     ///
     /// # Parameters
-    /// - `port`: The listening port (retained for TlsConnMeta logging)
-    /// - `listener_key`: The listener key identifying the physical listener
-    /// - `edgion_gateway_config`: Gateway configuration for fallback behavior
-    pub fn new(port: u16, listener_key: ListenerKey, edgion_gateway_config: Arc<EdgionGatewayConfig>) -> Self {
-        Self {
-            port,
-            listener_key,
-            edgion_gateway_config,
-        }
+    /// - `port`: The listening port (retained for TlsConnMeta logging on
+    ///   ex_data-failure fallback paths)
+    pub fn new(port: u16) -> Self {
+        Self { port }
     }
 
     /// Create TLS settings with callback for the specified listener
@@ -343,7 +393,9 @@ impl TlsCallback {
         edgion_gateway_config: Arc<EdgionGatewayConfig>,
         enable_http2: bool,
     ) -> Result<TlsSettings> {
-        let callback = Box::new(TlsCallback::new(port, listener_key, edgion_gateway_config));
+        let lk = listener_key;
+        let gw_config = edgion_gateway_config;
+        let callback = Box::new(TlsCallback::new(port));
         let mut settings =
             TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
 
@@ -351,31 +403,82 @@ impl TlsCallback {
             settings.enable_h2();
         }
 
+        // Early callback: fires before BoringSSL freezes the version range
+        // (boringssl/src/ssl/handshake_server.cc:710) — the only place
+        // `set_min_proto_version` actually takes effect for this connection.
+        //
+        // Unified matching: performs full SNI resolution + Layer 1 (EdgionTls)
+        // + Layer 2 (GatewayTls) here. On match, snapshot into SSL ex_data so
+        // cert_cb is a pure consumer. On no-match, emit ssl.log + close the
+        // connection immediately (before version negotiation).
+        settings.deref_mut().set_select_certificate_callback(
+            move |mut ch: ClientHello<'_>| -> std::result::Result<(), SelectCertError> {
+                let mut ssl_ctx = SslCtx::new(port);
+
+                // ── 1. SNI resolution ─────────────────────────────────────
+                // Precedence: ClientHello SNI → Gateway-config fallback_sni.
+                // If neither, we cannot pick a cert; emit ssl.log and close.
+                let sni = if let Some(sni_val) = ch.servername(NameType::HOST_NAME) {
+                    sni_val.to_lowercase()
+                } else if let Some(fallback_sni) = gw_config
+                    .spec
+                    .security_protect
+                    .as_ref()
+                    .and_then(|sp| sp.fallback_sni.clone())
+                {
+                    let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("fallback SNI");
+                    fallback_sni
+                } else {
+                    ssl_ctx.meta.err_log = Some("no SNI".to_string());
+                    log_ssl(&ssl_ctx.meta);
+                    return Err(SelectCertError::ERROR);
+                };
+                ssl_ctx.meta.sni = Some(sni.clone());
+
+                // ── 2. Layer 1: EdgionTls ────────────────────────────────
+                if let Some(et) = match_sni(&lk, &sni) {
+                    ssl_ctx.meta.is_mtls = et.spec.client_auth.is_some();
+                    if let Some(min_version) = et.spec.min_tls_version {
+                        if let Err(e) = ch.ssl_mut().set_min_proto_version(Some(map_tls_version(min_version))) {
+                            ssl_ctx.meta.err_log = Some(format!("min ver: {e}"));
+                            log_ssl(&ssl_ctx.meta);
+                            return Err(SelectCertError::ERROR);
+                        }
+                    }
+                    ssl_ctx.matched_edgion_tls = Some(et);
+                    let _ = store_ssl_ctx(ch.ssl_mut(), &ssl_ctx);
+                    return Ok(());
+                }
+
+                // ── 3. Layer 2: GatewayTls ───────────────────────────────
+                if let Some(gw) = match_gateway_tls(&lk, &sni) {
+                    ssl_ctx.matched_gateway_tls = Some(gw);
+                    let _ = store_ssl_ctx(ch.ssl_mut(), &ssl_ctx);
+                    return Ok(());
+                }
+
+                // ── 4. No match: emit audit log and close connection ─────
+                ssl_ctx.meta.err_log = Some("cert not found".to_string());
+                log_ssl(&ssl_ctx.meta);
+                Err(SelectCertError::ERROR)
+            },
+        );
+
         Ok(settings)
     }
 
-    /// Match SNI against certificate stores and apply the matched cert to SSL.
-    /// Returns None when no certificate was matched.
-    ///
-    /// `apply_edgion_tls_cert` / `apply_gateway_tls_cert` handle ssl_log
-    /// population internally (cert, mtls, error fields).
-    fn match_and_apply_cert(&self, ssl: &mut SslRef, sni: &str, ssl_ctx: &mut SslCtx) -> bool {
-        // Layer 1: EdgionTls (listener-key-aware)
-        if let Some(edgion_tls) = match_sni(&self.listener_key, sni) {
-            ssl_ctx.meta.is_mtls = edgion_tls.spec.client_auth.is_some();
-            ssl_ctx.matched_edgion_tls = Some(edgion_tls.clone());
-            self.apply_edgion_tls_cert(ssl, &edgion_tls, ssl_ctx);
-            return true;
+    /// Stamp `tls_id` and store SslCtx into ex_data for handshake_complete_callback.
+    /// Replaces the inline tail of the old certificate_callback.
+    fn finalize_ssl_ctx(&self, ssl: &mut SslRef, ssl_ctx: &mut SslCtx) {
+        let rand: u64 = random();
+        ssl_ctx.meta.tls_id = Some(format!("{:016x}-{:016x}", ssl_ctx.meta.ts, rand));
+        if !store_ssl_ctx(ssl, ssl_ctx) {
+            let _ = ssl_ctx
+                .meta
+                .log
+                .get_or_insert_with(LogBuffer::new)
+                .push("store ctx failed");
         }
-
-        // Layer 2: Gateway TLS (listener-key-aware)
-        if let Some(gw) = match_gateway_tls(&self.listener_key, sni) {
-            self.apply_gateway_tls_cert(ssl, &gw, ssl_ctx);
-            return true;
-        }
-
-        ssl_ctx.meta.err_log = Some("cert not found".to_string());
-        false
     }
 
     /// Apply certificate from EdgionTls resource
@@ -463,13 +566,6 @@ impl TlsCallback {
         if let Some(ref client_auth) = edgion_tls.spec.client_auth {
             if let Err(e) = self.configure_mtls(ssl, client_auth, edgion_tls) {
                 ssl_ctx.meta.err_log = Some(format!("mtls config: {e}"));
-                return;
-            }
-        }
-
-        if let Some(min_version) = edgion_tls.spec.min_tls_version {
-            if let Err(e) = self.configure_min_tls_version(ssl, min_version) {
-                ssl_ctx.meta.err_log = Some(format!("min ver: {e}"));
                 return;
             }
         }
@@ -749,34 +845,6 @@ impl TlsCallback {
         } else {
             ssl.set_verify(verify_mode);
         }
-
-        Ok(())
-    }
-
-    /// Configure minimum TLS version (similar to Cloudflare's Minimum TLS Version)
-    fn configure_min_tls_version(
-        &self,
-        ssl: &mut SslRef,
-        min_version: crate::types::resources::edgion_tls::TlsVersion,
-    ) -> Result<(), Box<PingoraError>> {
-        use crate::types::resources::edgion_tls::TlsVersion;
-        use pingora_core::tls::ssl::SslVersion;
-
-        // TLS 1.0/1.1 deprecation warnings are surfaced at the controller level
-
-        let ssl_version = match min_version {
-            TlsVersion::Tls10 => SslVersion::TLS1,
-            TlsVersion::Tls11 => SslVersion::TLS1_1,
-            TlsVersion::Tls12 => SslVersion::TLS1_2,
-            TlsVersion::Tls13 => SslVersion::TLS1_3,
-        };
-
-        ssl.set_min_proto_version(Some(ssl_version)).map_err(|e| {
-            PingoraError::explain(
-                ErrorType::InternalError,
-                format!("Failed to set min TLS version: {}", e),
-            )
-        })?;
 
         Ok(())
     }

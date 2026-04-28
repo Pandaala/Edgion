@@ -670,6 +670,7 @@ run_all_tests() {
                     run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
                     run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
                     run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+                    run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
                     run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
@@ -833,6 +834,7 @@ run_all_tests() {
         run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
         run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
         run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
         run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
         
         # Controller Status Tests

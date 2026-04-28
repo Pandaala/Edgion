@@ -11,7 +11,12 @@ spec:
     - name: https-legacy
       protocol: HTTPS
       port: 31195
-    # Modern cipher  - TLS 1.2 + 
+    # Modern cipher  - TLS 1.2 +
     - name: https-modern
       protocol: HTTPS
       port: 31196
+    # Strict TLS1.3-only listener — hosts both strict & permissive EdgionTls
+    # to verify per-SNI minVersion policy on a single listener
+    - name: https-strict
+      protocol: HTTPS
+      port: 31197

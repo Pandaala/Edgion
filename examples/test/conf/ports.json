@@ -85,7 +85,11 @@
       "https": 31110
     },
     "EdgionTls/cipher": {
-      "https": 31195
+      "https": 31195,
+      "https_strict": 31197
+    },
+    "EdgionTls/fallback_sni": {
+      "https": 31198
     },
     "EdgionTls/port_only": {
       "https": 31285

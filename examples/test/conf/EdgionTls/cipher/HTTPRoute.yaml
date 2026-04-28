@@ -11,6 +11,8 @@ spec:
   hostnames:
     - cipher-legacy.example.com
     - cipher-modern.example.com
+    - cipher-strict.wildcard.example.com
+    - cipher-permissive.wildcard.example.com
   rules:
     - matches:
         - path:
