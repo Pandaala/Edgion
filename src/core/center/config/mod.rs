@@ -83,10 +83,6 @@ impl Default for CenterServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CenterSyncConfig {
-    /// How often to send ListRequest to each controller (seconds, default: 300 = 5min)
-    pub list_interval_secs: u64,
-    /// Timeout waiting for ListResponse (seconds, default: 30)
-    pub list_timeout_secs: u64,
     /// Timeout waiting for CommandResponse (seconds, default: 30)
     pub command_timeout_secs: u64,
     /// Heartbeat ping interval sent to controllers (seconds, default: 30)
@@ -96,8 +92,6 @@ pub struct CenterSyncConfig {
 impl Default for CenterSyncConfig {
     fn default() -> Self {
         Self {
-            list_interval_secs: 300,
-            list_timeout_secs: 30,
             command_timeout_secs: 30,
             ping_interval_secs: 30,
         }
@@ -113,9 +107,7 @@ mod tests {
         let config = CenterConfig::default();
         assert_eq!(config.server.grpc_addr, "0.0.0.0:50052");
         assert_eq!(config.server.http_addr, "0.0.0.0:5810");
-        assert_eq!(config.sync.list_interval_secs, 300);
         assert_eq!(config.sync.ping_interval_secs, 30);
-        assert_eq!(config.sync.list_timeout_secs, 30);
         assert_eq!(config.sync.command_timeout_secs, 30);
     }
 
@@ -126,11 +118,11 @@ server:
   grpc_addr: "0.0.0.0:50100"
   http_addr: "0.0.0.0:5900"
 sync:
-  list_interval_secs: 60
+  ping_interval_secs: 60
 "#;
         let config: CenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.server.grpc_addr, "0.0.0.0:50100");
-        assert_eq!(config.sync.list_interval_secs, 60);
-        assert_eq!(config.sync.ping_interval_secs, 30); // default
+        assert_eq!(config.sync.ping_interval_secs, 60);
+        assert_eq!(config.sync.command_timeout_secs, 30); // default
     }
 }

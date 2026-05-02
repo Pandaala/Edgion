@@ -4,7 +4,7 @@
 //! 1. Connect to center address
 //! 2. Open bidirectional stream (Sync RPC)
 //! 3. Send RegisterRequest as first message
-//! 4. Loop: handle CenterMessage (Ping, ListRequest, CommandRequest, RegisterAck)
+//! 4. Loop: handle CenterMessage (Ping, CommandRequest, RegisterAck, WatchRequest)
 //! 5. On error: exponential backoff, reconnect
 
 use anyhow::Result;
@@ -18,12 +18,10 @@ use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
-    FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, ListResponse, Pong, RegisterRequest,
+    FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest,
 };
 use crate::core::common::observe::fed_metrics;
-use crate::core::controller::conf_mgr::conf_center::traits::CenterApi;
 use crate::core::controller::conf_mgr::ConfMgr;
-use crate::core::controller::fed_sync::resource_collector;
 
 /// Minimum connection duration before backoff is reset.
 /// Connections shorter than this are considered unstable (e.g., Center crash-loop).
@@ -60,7 +58,6 @@ impl ReconnectBackoff {
 /// Exits only when `shutdown` is triggered.
 pub async fn run(
     config: CenterClientConfig,
-    conf_center: Arc<dyn CenterApi>,
     supported_kinds: Vec<String>,
     mut shutdown: watch::Receiver<bool>,
     admin_router: axum::Router,
@@ -112,7 +109,7 @@ pub async fn run(
                 tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
                 return;
             }
-            result = connect_and_run(&config, conf_center.clone(), &supported_kinds, admin_router.clone(), conf_mgr.clone()) => {
+            result = connect_and_run(&config, &supported_kinds, admin_router.clone(), conf_mgr.clone()) => {
                 match result {
                     Ok(()) => {
                         // Only reset backoff if connection was alive long enough.
@@ -151,7 +148,6 @@ pub async fn run(
 
 async fn connect_and_run(
     config: &CenterClientConfig,
-    conf_center: Arc<dyn CenterApi>,
     supported_kinds: &[String],
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
@@ -206,11 +202,7 @@ async fn connect_and_run(
             cluster: config.cluster.clone(),
             env: config.env.clone(),
             tag: config.tag.clone(),
-            supported_kinds: supported_kinds
-                .iter()
-                .filter(|k| !resource_collector::is_fed_no_sync_kind(k))
-                .cloned()
-                .collect(),
+            supported_kinds: supported_kinds.to_vec(),
         })),
     };
     tx.send(register).await?;
@@ -251,8 +243,6 @@ async fn connect_and_run(
                         if let Err(e) = handle_center_message(
                             payload,
                             tx.clone(),
-                            conf_center.clone(),
-                            supported_kinds,
                             admin_router.clone(),
                             conf_mgr.clone(),
                             &mut active_watch_cancel,
@@ -290,12 +280,9 @@ async fn connect_and_run(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_center_message(
     payload: CenterPayload,
     tx: Arc<tokio::sync::mpsc::Sender<ControllerMessage>>,
-    conf_center: Arc<dyn CenterApi>,
-    supported_kinds: &[String],
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
     active_watch_cancel: &mut Option<CancellationToken>,
@@ -314,28 +301,6 @@ async fn handle_center_message(
             tx.send(ControllerMessage {
                 payload: Some(CtrlPayload::Pong(Pong {
                     timestamp: ping.timestamp,
-                })),
-            })
-            .await?;
-        }
-
-        CenterPayload::ListRequest(req) => {
-            tracing::debug!(
-                component = "fed_client",
-                request_id = %req.request_id,
-                "ListRequest received"
-            );
-            let keys = match resource_collector::collect_resource_keys(conf_center.as_ref(), supported_kinds).await {
-                Ok(keys) => keys,
-                Err(e) => {
-                    tracing::error!(component = "fed_client", error = %e, "collect_resource_keys failed");
-                    vec![]
-                }
-            };
-            tx.send(ControllerMessage {
-                payload: Some(CtrlPayload::ListResponse(ListResponse {
-                    request_id: req.request_id,
-                    keys,
                 })),
             })
             .await?;

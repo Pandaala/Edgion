@@ -63,16 +63,23 @@ impl<T> HashHost<T> {
     }
 
     pub fn get(&self, k: &str) -> Option<&T> {
-        let k_lower = k.to_lowercase();
-        let k = k_lower.as_str();
+        // Avoid heap allocation when input is already ASCII-lowercase (the common
+        // case: HTTP/2 headers and TLS SNI names are always lowercase per spec).
+        // DNS hostnames are ASCII-only, so to_ascii_lowercase is sufficient.
+        if k.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.get_lower(&k.to_ascii_lowercase())
+        } else {
+            self.get_lower(k)
+        }
+    }
+
+    fn get_lower(&self, k: &str) -> Option<&T> {
         if !is_valid_domain(k) {
             return None;
         }
-
         if let Some(value) = self.map.get(k) {
             return Some(value);
         }
-
         // Optimized wildcard lookup: only probe suffix lengths that actually
         // exist among the registered wildcard keys (longest first).
         let k_len = k.len();
@@ -84,22 +91,25 @@ impl<T> HashHost<T> {
                 }
             }
         }
-
         None
     }
 
     pub fn get_mut(&mut self, k: &str) -> Option<&mut T> {
-        let k_lower = k.to_lowercase();
-        let k = k_lower.as_str();
+        if k.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.get_mut_lower(&k.to_ascii_lowercase())
+        } else {
+            self.get_mut_lower(k)
+        }
+    }
+
+    fn get_mut_lower(&mut self, k: &str) -> Option<&mut T> {
         if !is_valid_domain(k) {
             return None;
         }
-
         if self.map.contains_key(k) {
             return self.map.get_mut(k);
         }
-
-        // Optimized wildcard lookup (same strategy as get)
+        // Optimized wildcard lookup (same strategy as get_lower)
         let k_len = k.len();
         let mut matched_start = None;
         for &wk_len in &self.wildcard_key_lens {
@@ -111,7 +121,6 @@ impl<T> HashHost<T> {
                 }
             }
         }
-
         matched_start.and_then(move |pos| self.map.get_mut(&k[pos..]))
     }
 

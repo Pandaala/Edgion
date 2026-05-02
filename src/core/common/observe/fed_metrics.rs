@@ -41,8 +41,6 @@ pub mod names {
     pub const SESSION_REENTRY_TOTAL: &str = "edgion_fed_session_reentry_total";
     /// Gauge: controllers known to the aggregator, broken down by cluster.
     pub const AGGREGATOR_CONTROLLERS: &str = "edgion_fed_aggregator_controllers";
-    /// Gauge: aggregated resource-key count in Center, by kind.
-    pub const AGGREGATOR_KEYS_TOTAL: &str = "edgion_fed_aggregator_keys_total";
     /// Counter: consistency-check API detected cross-controller divergence.
     pub const CONSISTENCY_MISMATCH_TOTAL: &str = "edgion_fed_consistency_mismatch_total";
     /// Counter: fan-out patch operations' aggregate outcome.
@@ -168,12 +166,6 @@ pub fn set_aggregator_controllers(cluster: &str, count: u64) {
     gauge!(names::AGGREGATOR_CONTROLLERS, "cluster" => cluster.to_string()).set(count as f64);
 }
 
-/// Set the aggregated key count for a given resource kind.
-#[inline]
-pub fn set_aggregator_keys(kind: &str, count: u64) {
-    gauge!(names::AGGREGATOR_KEYS_TOTAL, "kind" => kind.to_string()).set(count as f64);
-}
-
 #[inline]
 pub fn record_consistency_mismatch() {
     counter!(names::CONSISTENCY_MISMATCH_TOTAL).increment(1);
@@ -265,7 +257,6 @@ mod tests {
             EVICT_STALE_TOTAL,
             SESSION_REENTRY_TOTAL,
             AGGREGATOR_CONTROLLERS,
-            AGGREGATOR_KEYS_TOTAL,
             CONSISTENCY_MISMATCH_TOTAL,
             FANOUT_TOTAL,
             READY_GATE_WAIT_LAST,
@@ -293,7 +284,6 @@ mod tests {
         super::record_evict_stale(evict_source::REGISTRY);
         super::record_session_reentry();
         super::set_aggregator_controllers("default", 3);
-        super::set_aggregator_keys("PluginMetaData", 42);
         super::record_consistency_mismatch();
         super::record_fanout(fanout_op::PATCH_ENABLE, fanout_result::OK);
         super::record_ready_gate_wait(0.25);

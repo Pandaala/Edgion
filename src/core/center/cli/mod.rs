@@ -1,9 +1,3 @@
-use anyhow::Result;
-use clap::Parser;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::watch;
-
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::api::{router, ApiState};
 use crate::core::center::commander::Commander;
@@ -12,10 +6,13 @@ use crate::core::center::fed_sync::registry::ControllerRegistry;
 use crate::core::center::fed_sync::server::FederationGrpcServer;
 use crate::core::center::metadata_store::CenterMetaDataStore;
 use crate::core::center::proxy::{PendingProxyMap, ProxyForwarder};
-use crate::core::center::scheduler;
 use crate::core::center::watch_cache::{CenterSyncClient, CenterWatchCacheRegistry};
 use crate::core::common::fed_sync::proto::federation_sync_server::FederationSyncServer;
+use anyhow::Result;
+use clap::Parser;
 use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
@@ -84,8 +81,6 @@ impl EdgionCenterCli {
 
         let registry = ControllerRegistry::new();
         let aggregator = Arc::new(ResourceAggregator::new());
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-
         let pending_proxies: PendingProxyMap = Arc::new(Mutex::new(HashMap::new()));
 
         let metadata_store = Arc::new(CenterMetaDataStore::new());
@@ -116,7 +111,6 @@ impl EdgionCenterCli {
             sync_client.clone(),
             db.clone(),
         );
-        let pending_lists = grpc_server.pending_lists.clone();
         let pending_commands = grpc_server.pending_commands.clone();
 
         let commander = Arc::new(Commander::new(
@@ -228,23 +222,13 @@ impl EdgionCenterCli {
             axum::serve(listener, app).await.unwrap();
         });
 
-        // Scheduler
-        let sched_handle = tokio::spawn(scheduler::run(
-            registry.clone(),
-            pending_lists,
-            config.sync.clone(),
-            shutdown_rx.clone(),
-        ));
-
         // Wait for any task to exit or Ctrl-C
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!(component = "center", "Ctrl-C received, shutting down");
-                let _ = shutdown_tx.send(true);
             }
             r = grpc_handle => { tracing::error!(component = "center", "gRPC server exited: {:?}", r); }
             r = http_handle => { tracing::error!(component = "center", "HTTP server exited: {:?}", r); }
-            r = sched_handle => { tracing::error!(component = "center", "Scheduler exited: {:?}", r); }
         }
 
         Ok(())

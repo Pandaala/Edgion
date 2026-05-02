@@ -100,7 +100,9 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
     // Validate username. Run dummy bcrypt regardless to equalize timing and
     // prevent side-channel enumeration of whether the username exists.
     if req.username != local_state.username {
-        let _ = bcrypt::verify(&req.password, &local_state.dummy_hash);
+        let password = req.password.clone();
+        let dummy = local_state.dummy_hash.clone();
+        let _ = tokio::task::spawn_blocking(move || bcrypt::verify(&password, &dummy)).await;
         tracing::debug!(component = "local_auth", "Login failed: unknown username");
         let body: Json<ApiResponse<LoginResponse>> =
             Json(ApiResponse::error("Invalid username or password".to_string()));
@@ -108,7 +110,18 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
     }
 
     // Validate password using bcrypt
-    match bcrypt::verify(&req.password, &local_state.password_hash) {
+    let password = req.password.clone();
+    let hash = local_state.password_hash.clone();
+    let verify_result = match tokio::task::spawn_blocking(move || bcrypt::verify(&password, &hash)).await {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::error!(component = "local_auth", "bcrypt task panicked");
+            let body: Json<ApiResponse<LoginResponse>> =
+                Json(ApiResponse::error("Internal authentication error".to_string()));
+            return (StatusCode::INTERNAL_SERVER_ERROR, body).into_response();
+        }
+    };
+    match verify_result {
         Ok(true) => {}
         Ok(false) => {
             tracing::debug!(component = "local_auth", "Login failed: wrong password");

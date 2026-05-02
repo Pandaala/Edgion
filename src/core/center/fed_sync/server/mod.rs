@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
@@ -82,18 +82,12 @@ impl FedWatchState {
     }
 }
 
-pub struct PendingListEntry {
-    pub sender: oneshot::Sender<Vec<crate::core::common::fed_sync::proto::ResourceKey>>,
-    pub created_at: std::time::Instant,
-}
-pub type PendingListMap = Arc<Mutex<HashMap<String, PendingListEntry>>>;
 pub type PendingCommandMap =
-    Arc<Mutex<HashMap<String, oneshot::Sender<crate::core::common::fed_sync::proto::CommandResponse>>>>;
+    Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::core::common::fed_sync::proto::CommandResponse>>>>;
 
 pub struct FederationGrpcServer {
     pub registry: ControllerRegistry,
     pub aggregator: Arc<ResourceAggregator>,
-    pub pending_lists: PendingListMap,
     pub pending_commands: PendingCommandMap,
     pub pending_proxies: PendingProxyMap,
     pub sync_config: CenterSyncConfig,
@@ -115,7 +109,6 @@ impl FederationGrpcServer {
         Self {
             registry,
             aggregator,
-            pending_lists: Arc::new(Mutex::new(HashMap::new())),
             pending_commands: Arc::new(Mutex::new(HashMap::new())),
             pending_proxies,
             sync_config,
@@ -230,7 +223,6 @@ impl FederationSync for FederationGrpcServer {
 
         let registry = self.registry.clone();
         let aggregator = self.aggregator.clone();
-        let pending_lists = self.pending_lists.clone();
         let pending_commands = self.pending_commands.clone();
         let pending_proxies = self.pending_proxies.clone();
         let sync_client = self.sync_client.clone();
@@ -378,12 +370,6 @@ impl FederationSync for FederationGrpcServer {
                             registry.update_last_seen(&cid);
                             match msg.payload {
                                 Some(CtrlPayload::Pong(_)) => {}
-                                Some(CtrlPayload::ListResponse(resp)) => {
-                                    if let Some(entry) = pending_lists.lock().remove(&resp.request_id) {
-                                        let _ = entry.sender.send(resp.keys.clone());
-                                    }
-                                    aggregator.update_snapshot(&cid, resp.keys);
-                                }
                                 Some(CtrlPayload::CommandResponse(resp)) => {
                                     if let Some(sender) = pending_commands.lock().remove(&resp.request_id) {
                                         let _ = sender.send(resp);

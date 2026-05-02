@@ -6,7 +6,6 @@
 //!   GET  /api/v1/server-info                              → {"mode":"center"}
 //!   GET  /api/v1/controllers                              → list all controller summaries
 //!   GET  /api/v1/clusters                                 → list distinct cluster names
-//!   GET  /api/v1/resources                                → list resource keys (query: cluster=, kind=)
 //!   POST /api/v1/controllers/{id}/reload                  → send reload command
 //!   GET  /api/v1/center/cluster-region-routes                      → aggregated ClusterRegionRoute list from MetaDataStore
 //!   GET  /api/v1/center/service-region-routes                      → aggregated ServiceRegionRoute list from MetaDataStore
@@ -28,13 +27,13 @@
 //!   ANY  /api/v1/proxy/{controller_id}/*rest                       → proxy HTTP request to controller
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{any, delete, get, patch, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 
 mod consistency_handlers;
@@ -80,7 +79,6 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/server-info", get(server_info))
         .route("/api/v1/controllers", get(list_controllers))
         .route("/api/v1/clusters", get(list_clusters))
-        .route("/api/v1/resources", get(list_resources))
         .route("/api/v1/controllers/{id}/reload", post(reload_controller))
         // MetaDataStore-backed RegionRoute endpoints
         .route(
@@ -187,55 +185,6 @@ async fn list_clusters(State(state): State<ApiState>) -> impl IntoResponse {
     clusters.sort();
     clusters.dedup();
     Json(ListResponse::success(clusters))
-}
-
-#[derive(Deserialize)]
-struct ResourceQuery {
-    cluster: Option<String>,
-    kind: Option<String>,
-}
-
-/// Serializable DTO for prost-generated ResourceKey (prost types don't impl serde::Serialize).
-#[derive(serde::Serialize)]
-struct ResourceKeyDto {
-    kind: String,
-    namespace: String,
-    name: String,
-    resource_version: String,
-    labels: std::collections::HashMap<String, String>,
-    annotations: std::collections::HashMap<String, String>,
-}
-
-impl From<crate::core::common::fed_sync::proto::ResourceKey> for ResourceKeyDto {
-    fn from(k: crate::core::common::fed_sync::proto::ResourceKey) -> Self {
-        Self {
-            kind: k.kind,
-            namespace: k.namespace,
-            name: k.name,
-            resource_version: k.resource_version,
-            labels: k.labels,
-            annotations: k.annotations,
-        }
-    }
-}
-
-async fn list_resources(State(state): State<ApiState>, Query(params): Query<ResourceQuery>) -> impl IntoResponse {
-    // Default view excludes offline controllers: their snapshots are stale and
-    // would mislead consumers into thinking the resources are still live.
-    // Operators wanting the raw persisted record can hit `GET /api/v1/center/admin/controllers`.
-    let keys = match &params.cluster {
-        Some(c) => state.aggregator.list_online_keys_by_cluster(c),
-        None => state.aggregator.list_online_keys(),
-    };
-    let keys: Vec<ResourceKeyDto> = match &params.kind {
-        Some(k) => keys
-            .into_iter()
-            .filter(|key| &key.kind == k)
-            .map(ResourceKeyDto::from)
-            .collect(),
-        None => keys.into_iter().map(ResourceKeyDto::from).collect(),
-    };
-    Json(ListResponse::success(keys))
 }
 
 async fn reload_controller(State(state): State<ApiState>, Path(id_raw): Path<String>) -> impl IntoResponse {

@@ -84,9 +84,9 @@ impl TlsRouteTable {
     /// `HashHost` handles exact-vs-wildcard priority and most-specific-wildcard
     /// ordering internally.
     pub fn match_route(&self, sni_hostname: &str) -> Option<Arc<TLSRoute>> {
-        let lower_sni = sni_hostname.to_ascii_lowercase();
-
-        if let Some(routes) = self.host_map.get(&lower_sni) {
+        // Case normalization is handled inside HashHost::get() — no need to
+        // pre-lowercase here. Callers may pass raw SNI strings.
+        if let Some(routes) = self.host_map.get(sni_hostname) {
             if let Some(route) = routes.first() {
                 return Some(route.clone());
             }

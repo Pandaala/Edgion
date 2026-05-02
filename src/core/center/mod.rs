@@ -7,5 +7,4 @@ pub mod db;
 pub mod fed_sync;
 pub mod metadata_store;
 pub mod proxy;
-pub mod scheduler;
 pub mod watch_cache;

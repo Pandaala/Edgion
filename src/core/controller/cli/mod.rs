@@ -455,9 +455,6 @@ impl EdgionControllerCli {
         let _fed_shutdown_tx = if let Some(center_config) = config.center.clone() {
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-            let center_api: Arc<dyn crate::core::controller::conf_mgr::conf_center::traits::CenterApi> =
-                conf_mgr.clone();
-
             let kinds: Vec<String> = conf_mgr
                 .runtime()
                 .processor_registry
@@ -471,7 +468,6 @@ impl EdgionControllerCli {
 
             tokio::spawn(crate::core::controller::fed_sync::fed_client::run(
                 center_config,
-                center_api,
                 kinds,
                 shutdown_rx,
                 admin_router,
