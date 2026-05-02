@@ -5,6 +5,7 @@ use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTls
 use crate::types::{ResourceMeta, TLSRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Create a TLS route handler for registration with ConfigClient.
 pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync> {
@@ -13,7 +14,8 @@ pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync
 
 impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<TLSRoute>>) {
-        tracing::info!(component = "global_tls_route_managers", cnt = data.len(), "full set");
+        let start_time = Instant::now();
+        tracing::info!(component = "global_tls_route_managers", cnt = data.len(), "full set start");
 
         self.clear_route_cache();
 
@@ -33,6 +35,11 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
         }
 
         self.rebuild_all_listener_managers();
+        tracing::info!(
+            component = "global_tls_route_managers",
+            ms = start_time.elapsed().as_millis(),
+            "full set done"
+        );
     }
 
     fn partial_update(

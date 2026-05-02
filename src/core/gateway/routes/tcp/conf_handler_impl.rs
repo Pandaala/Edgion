@@ -6,6 +6,7 @@ use crate::core::gateway::routes::tcp::routes_mgr::{
 use crate::types::{ResourceMeta, TCPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Create a handler for registration with ConfigClient.
 pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync> {
@@ -14,7 +15,8 @@ pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync
 
 impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<TCPRoute>>) {
-        tracing::info!(component = "tcp_route_manager", cnt = data.len(), "full set");
+        let start_time = Instant::now();
+        tracing::info!(component = "tcp_route_manager", cnt = data.len(), "full set start");
 
         self.clear_route_cache();
 
@@ -34,6 +36,11 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
         }
 
         self.rebuild_all_listener_managers();
+        tracing::info!(
+            component = "tcp_route_manager",
+            ms = start_time.elapsed().as_millis(),
+            "full set done"
+        );
     }
 
     fn partial_update(

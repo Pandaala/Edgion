@@ -30,7 +30,6 @@ impl TlsStore {
         // Capture count before moving
         let cert_count = data.len();
 
-        // TODO(observability): Add metric for certificate reload operations
         tracing::info!(
             component = "tls_store",
             count = cert_count,
@@ -65,7 +64,6 @@ impl TlsStore {
         // Rebuild matcher BEFORE releasing write lock to prevent race condition
         // This ensures store and matcher are always consistent
         if let Err(e) = self.rebuild_matcher_from_data(&tls_data) {
-            // TODO(observability): Add metric for matcher rebuild failures
             // This is a critical error - store updated but matcher not synced
             tracing::error!(
                 component = "tls_store",
@@ -155,7 +153,6 @@ impl TlsStore {
         // Rebuild matcher BEFORE releasing write lock to prevent race condition
         // This ensures store and matcher are always consistent
         if let Err(e) = self.rebuild_matcher_from_data(&tls_data) {
-            // TODO(observability): Add metric for matcher rebuild failures
             // This is a critical error - store updated but matcher not synced
             tracing::error!(
                 component = "tls_store",

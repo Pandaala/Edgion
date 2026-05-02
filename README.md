@@ -130,6 +130,78 @@ graph TD
     C3 --> G8[...]
 ```
 
+## Configuration Examples
+
+A minimal end-to-end setup: route HTTPS traffic, enforce JWT authentication and rate limiting, and attach a TLS certificate — each as a standalone Kubernetes resource.
+
+### HTTPRoute — path-based routing
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-api
+  namespace: default
+spec:
+  parentRefs:
+    - name: my-gateway
+  hostnames:
+    - "api.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: api-plugins
+      backendRefs:
+        - name: api-service
+          port: 8080
+```
+
+### EdgionPlugins — JWT auth + rate limiting
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: api-plugins
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JwtAuth
+      config:
+        secret: "your-jwt-secret"
+    - enable: true
+      type: RateLimit
+      config:
+        key:
+          - type: clientIp
+        limit: 100
+        window: "60s"
+```
+
+### EdgionTls — HTTPS certificate binding
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: api-tls
+  namespace: default
+spec:
+  hosts:
+    - "api.example.com"
+  secretRef:
+    name: api-tls-secret   # kubernetes.io/tls Secret
+    namespace: default
+```
+
 ## Plugins
 
 ### Built-in Plugins
@@ -162,19 +234,57 @@ Edgion takes a different approach. The DSL plugin runs scripts in a **sandboxed 
 | `maxStackDepth` | 128 | Call stack depth |
 | `maxStringLen` | 8,192 | String length |
 
-Scripts can be deployed as source code or pre-compiled to **bytecode** (Base64) for faster startup and obfuscation. A minimal example:
+Scripts can be deployed as source code or pre-compiled to **bytecode** (Base64) for faster startup and obfuscation.
+
+**Request phase — enforce an API token:**
 
 ```yaml
-requestPlugins:
-  - enable: true
-    type: Dsl
-    config:
-      name: "require-api-token"
-      source: |
-        let token = req.header("X-Api-Token")
-        if token == nil {
-          return deny(403, "missing X-Api-Token header")
-        }
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: require-token
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "require-api-token"
+        errorPolicy: Deny
+        source: |
+          let token = req.header("X-Api-Token")
+          if token == nil {
+            return deny(401, "missing X-Api-Token header")
+          }
+          ctx.set("api_token", token)
+          return next()
+```
+
+**Request phase — inject routing tag from query param:**
+
+```yaml
+        source: |
+          let region = req.query("region")
+          if region != nil {
+            req.set_header("X-Route-Region", region)
+          }
+          return next()
+```
+
+**Response phase — append upstream timing header:**
+
+```yaml
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "add-timing-header"
+        source: |
+          let token = ctx.get("api_token")
+          if token != nil {
+            resp.set_header("X-Authenticated-Token", token)
+          }
+          return next()
 ```
 
 For full DSL API reference and advanced usage, see the [DSL Plugin Documentation](docs/en/user-guide/http-route/filters/edgion-plugins/dsl/README.md).

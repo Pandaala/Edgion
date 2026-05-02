@@ -90,6 +90,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         sync_lb_policies_for_routes(&add_or_update_owned);
         cleanup_lb_policies_for_routes(&remove);
 
+        let start_time = Instant::now();
         tracing::info!(
             component = "http_route_manager",
             add = add_or_update_owned.len(),
@@ -137,7 +138,11 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         // Rebuild affected listener managers
         self.rebuild_affected_listener_managers(&affected_listeners);
 
-        tracing::info!(component = "http_route_manager", "partial update done");
+        tracing::info!(
+            component = "http_route_manager",
+            ms = start_time.elapsed().as_millis(),
+            "partial update done"
+        );
     }
 }
 

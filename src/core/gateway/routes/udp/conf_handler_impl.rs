@@ -6,6 +6,7 @@ use crate::core::gateway::routes::udp::routes_mgr::{
 use crate::types::{ResourceMeta, UDPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Create a handler for registration with ConfigClient.
 pub fn create_udp_route_handler() -> Box<dyn ConfHandler<UDPRoute> + Send + Sync> {
@@ -14,7 +15,8 @@ pub fn create_udp_route_handler() -> Box<dyn ConfHandler<UDPRoute> + Send + Sync
 
 impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<UDPRoute>>) {
-        tracing::info!(component = "udp_route_manager", cnt = data.len(), "full set");
+        let start_time = Instant::now();
+        tracing::info!(component = "udp_route_manager", cnt = data.len(), "full set start");
 
         self.clear_route_cache();
 
@@ -34,6 +36,11 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
         }
 
         self.rebuild_all_listener_managers();
+        tracing::info!(
+            component = "udp_route_manager",
+            ms = start_time.elapsed().as_millis(),
+            "full set done"
+        );
     }
 
     fn partial_update(
