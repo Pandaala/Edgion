@@ -220,6 +220,11 @@ impl LeaderElection {
                         "Failed to acquire/renew lease"
                     );
                     if self.is_leader.swap(false, Ordering::Release) {
+                        tracing::info!(
+                            component = "leader_election",
+                            identity = %self.config.identity,
+                            "Lost leadership due to lease error"
+                        );
                         controller_metrics().set_leader(false);
                         self.update_pod_leader_label(false).await;
                     }
@@ -330,6 +335,13 @@ impl LeaderElection {
     }
 
     /// Try to acquire or renew the lease
+    ///
+    /// Uses optimistic concurrency control: the `replace()` call carries the
+    /// `resourceVersion` from the prior `get()`, so if another replica writes
+    /// the Lease in between, the API server returns 409 Conflict and we
+    /// return `Ok(false)` (lost the race). This prevents split-brain at the
+    /// lease-expiry edge where two replicas could otherwise both observe
+    /// `is_expired=true` and both succeed in writing.
     async fn try_acquire_or_renew(&self, api: &Api<Lease>) -> Result<bool> {
         let lease = api.get(&self.config.lease_name).await?;
         let spec = lease.spec.as_ref();
@@ -359,39 +371,57 @@ impl LeaderElection {
             return Ok(false);
         }
 
-        // Try to update the lease
+        let now = Utc::now();
         let transitions = if is_current_holder {
             spec.and_then(|s| s.lease_transitions).unwrap_or(0)
         } else {
             spec.and_then(|s| s.lease_transitions).unwrap_or(0) + 1
         };
-
-        // Build a complete Lease object for type-safe patching
-        let updated_lease = Lease {
-            metadata: kube::api::ObjectMeta {
-                name: Some(self.config.lease_name.clone()),
-                namespace: Some(self.config.lease_namespace.clone()),
-                ..Default::default()
-            },
-            spec: Some(k8s_openapi::api::coordination::v1::LeaseSpec {
-                holder_identity: Some(self.config.identity.clone()),
-                lease_duration_seconds: Some(self.config.lease_duration_secs),
-                renew_time: Some(MicroTime(Utc::now())),
-                lease_transitions: Some(transitions),
-                // Preserve acquire_time from existing lease
-                acquire_time: spec.and_then(|s| s.acquire_time.clone()),
-                ..Default::default()
-            }),
+        let acquire_time = if is_current_holder {
+            spec.and_then(|s| s.acquire_time.clone())
+        } else {
+            // Takeover: reset acquire_time to now per K8s leader-election convention
+            Some(MicroTime(now))
         };
 
-        api.patch(
-            &self.config.lease_name,
-            &PatchParams::apply("edgion-controller").force(),
-            &Patch::Apply(&updated_lease),
-        )
-        .await?;
+        // Clone the full object so metadata.resource_version is preserved as a
+        // CAS precondition for replace(). Note: this Lease is exclusively
+        // managed by Edgion's leader election; PUT replaces the full object,
+        // so any future LeaseSpec fields (e.g., preferred_holder/strategy used
+        // by K8s coordinated leader election) would be wiped if a third party
+        // ever wrote them. Switch to SSA with explicit field ownership if that
+        // changes.
+        let mut updated = lease.clone();
+        updated.spec = Some(k8s_openapi::api::coordination::v1::LeaseSpec {
+            holder_identity: Some(self.config.identity.clone()),
+            lease_duration_seconds: Some(self.config.lease_duration_secs),
+            renew_time: Some(MicroTime(now)),
+            lease_transitions: Some(transitions),
+            acquire_time,
+            ..Default::default()
+        });
 
-        Ok(true)
+        match api
+            .replace(&self.config.lease_name, &PostParams::default(), &updated)
+            .await
+        {
+            Ok(_) => Ok(true),
+            // 409 Conflict: another writer modified the Lease between our get
+            // and replace. Lost the race — return Ok(false) so the run loop
+            // steps down and re-reads on the next tick. (We deliberately do
+            // not "debounce" by re-fetching and checking ownership here: that
+            // could re-introduce a brief split-brain window if the lease
+            // expires between this tick and the next renew.)
+            Err(kube::Error::Api(e)) if e.code == 409 => {
+                tracing::debug!(
+                    component = "leader_election",
+                    identity = %self.config.identity,
+                    "Lost lease race (409 Conflict); will retry"
+                );
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 }
 

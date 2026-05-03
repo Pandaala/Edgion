@@ -123,13 +123,17 @@ pub async fn upstream_peer_grpc(
     // 3. Initialize backend context (unified logic)
     init_backend_context_if_needed(ctx)?;
 
-    // 4. Get peer from gRPC backend
+    // 4. Push placeholder upstream so LB / TLS / CB writes during peer construction land on
+    //    a valid entry (`current_upstream_id` is None right after `init_backend_context`).
+    begin_upstream_attempt(ctx);
+
+    // 5. Get peer from gRPC backend
     let mut peer = get_peer(session, ctx, true).await?;
 
-    // 5. Force HTTP/2 for gRPC
+    // 6. Force HTTP/2 for gRPC
     peer.options.set_http_version(2, 2);
 
-    // 6. Configure peer (shared logic)
+    // 7. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     update_peer_metrics(edgion_http, &peer, ctx);
 
@@ -199,6 +203,9 @@ pub async fn upstream_peer_http(
         // Initialize backend context (for logs/metrics)
         init_backend_context_if_needed(ctx)?;
 
+        // Push placeholder upstream so subsequent ctx writes have a valid entry to land on.
+        begin_upstream_attempt(ctx);
+
         // Create peer directly
         let mut peer = Box::new(HttpPeer::new(addr, use_tls, sni));
 
@@ -233,6 +240,9 @@ pub async fn upstream_peer_http(
             ctx.init_backend_context(external.domain.clone(), "_external_".to_string());
         }
 
+        // Push placeholder upstream so update_peer_metrics has an entry to backfill.
+        begin_upstream_attempt(ctx);
+
         configure_peer_timeouts(edgion_http, &mut peer, ctx);
         update_peer_metrics(edgion_http, &peer, ctx);
         return Ok(peer);
@@ -246,7 +256,12 @@ pub async fn upstream_peer_http(
     // 3. Initialize backend context (unified logic)
     init_backend_context_if_needed(ctx)?;
 
-    // 4. Get peer — with session persistence fallback support
+    // 4. Push placeholder upstream so LB metadata / TLS / CB writes inside try_get_peer
+    //    land on a valid entry — `init_backend_context_if_needed` leaves `current_upstream_id`
+    //    as None, which would otherwise silently drop those writes (P0 g1-001).
+    begin_upstream_attempt(ctx);
+
+    // 5. Get peer — with session persistence fallback support
     //
     // When session persistence resolved a target (sp_target_addr was set), try_get_peer
     // routes directly to it. If that fails (unhealthy), fallback to normal LB unless strict.
@@ -282,7 +297,7 @@ pub async fn upstream_peer_http(
         get_peer(session, ctx, false).await?
     };
 
-    // 5. Configure peer (shared logic)
+    // 6. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     update_peer_metrics(edgion_http, &peer, ctx);
 
@@ -494,29 +509,43 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     peer.options.idle_timeout = Some(backend_timeout.idle_timeout);
 }
 
-/// Update peer address info and metrics (inline for performance)
+/// Begin a new upstream attempt: push a placeholder upstream entry so subsequent
+/// calls to `ctx.get_current_upstream_mut()` (inside try_get_peer / build_peer_from_lb_selection
+/// / record_tls_to_upstream / record_unsafe_*_attempt) actually land on a valid entry.
+/// ip/port are filled in later by [`update_peer_metrics`] once the peer is known.
+///
+/// Must be called after `init_backend_context_if_needed` and before any peer construction.
+/// On retries this also decrements LeastConn for the previous (now-completed) attempt;
+/// `leastconn_incremented_backend` is keyed independently of `current_upstream_id`, so this
+/// cleanup is safe to run before pushing the new placeholder.
 #[inline]
-pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
+pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     // P0-07: retry 时清算上一次成功建连但中途放弃的 LeastConn backend。
-    // 必须在 push_upstream 之前执行，此时 current_upstream_id 仍指向上一次 entry。
     if let Some((sk, addr)) = ctx.leastconn_incremented_backend.take() {
         crate::core::gateway::lb::runtime_state::decrement(&sk, &addr);
     }
 
-    // Increment try count
     ctx.try_cnt += 1;
+    ctx.push_upstream(None, None);
 
-    // Extract and push upstream info (ip/port saved for logging stage)
+    if ctx.upstream_start_time.is_none() {
+        ctx.upstream_start_time = Some(std::time::Instant::now());
+    }
+}
+
+/// Backfill the resolved peer ip/port onto the current placeholder upstream entry.
+/// The entry itself was created by [`begin_upstream_attempt`]; this stage only finalises
+/// address fields once `try_get_peer` has produced a peer.
+#[inline]
+pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
     let (ip, port) = peer
         .address()
         .as_inet()
         .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
         .unwrap_or((None, None));
-    ctx.push_upstream(ip, port);
-
-    // Set upstream start time on first try
-    if ctx.upstream_start_time.is_none() {
-        ctx.upstream_start_time = Some(std::time::Instant::now());
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.ip = ip;
+        upstream.port = port;
     }
 }
 

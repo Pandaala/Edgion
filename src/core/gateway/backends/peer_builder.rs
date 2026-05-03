@@ -214,18 +214,24 @@ pub(crate) fn create_tls_peer(
     Ok(Box::new(peer))
 }
 
-/// Record TLS configuration to upstream context
+/// Record TLS configuration to upstream context.
+///
+/// Writes `tls` unconditionally (Some when TLS is in use, None otherwise) so
+/// that retries / SP fallbacks reusing the same placeholder upstream entry
+/// cannot leave stale TLS metadata from an earlier attempt.
 #[inline]
 pub(crate) fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool, sni: &str) {
-    if use_tls {
-        if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.tls = Some(crate::types::BackendTlsInfo {
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.tls = if use_tls {
+            Some(crate::types::BackendTlsInfo {
                 sni: if sni.is_empty() { None } else { Some(sni.to_string()) },
                 handshake_ok: None,
                 protocol: None,
                 cipher: None,
-            });
-        }
+            })
+        } else {
+            None
+        };
     }
 }
 

@@ -309,14 +309,19 @@ fn build_peer_from_lb_selection(
         upstream.lb_backend_addr = Some(lb_addr);
         upstream.service_key = Some(service_key.to_string());
         upstream.lb_policy = lb_policy_clone;
-        if use_tls {
-            upstream.tls = Some(crate::types::BackendTlsInfo {
+        // Write unconditionally so a TLS-then-plaintext fallback (e.g. SP-target
+        // unhealthy → normal LB picks a non-TLS endpoint, or `create_tls_peer`
+        // failed and the caller retries) cannot leave stale TLS metadata behind.
+        upstream.tls = if use_tls {
+            Some(crate::types::BackendTlsInfo {
                 sni: if sni.is_empty() { None } else { Some(sni.clone()) },
                 handshake_ok: None,
                 protocol: None,
                 cipher: None,
-            });
-        }
+            })
+        } else {
+            None
+        };
     }
 
     let mut peer = create_tls_peer(peer_addr, backend_tls_policy, gateway_key_ref)?;
@@ -329,14 +334,23 @@ fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr
         .as_inet()
         .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
         .unwrap_or((None, None));
-    ctx.push_upstream(ip, port);
+    let reason = match status {
+        EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
+        EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+        _ => "unsafe upstream address",
+    };
+    // Backfill the placeholder pushed by `begin_upstream_attempt`. Fall back to
+    // pushing a fresh entry if no placeholder exists (defensive — should not happen
+    // on the normal `try_get_peer` path).
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        let reason = match status {
-            EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
-            EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
-            _ => "unsafe upstream address",
-        };
+        upstream.ip = ip;
+        upstream.port = port;
         upstream.err.push(reason.to_string());
+    } else {
+        ctx.push_upstream(ip, port);
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.err.push(reason.to_string());
+        }
     }
 }
 

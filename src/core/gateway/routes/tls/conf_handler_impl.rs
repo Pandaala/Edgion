@@ -16,7 +16,11 @@ pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync
 impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<TLSRoute>>) {
         let start_time = Instant::now();
-        tracing::info!(component = "global_tls_route_managers", cnt = data.len(), "full set start");
+        tracing::info!(
+            component = "global_tls_route_managers",
+            cnt = data.len(),
+            "full set start"
+        );
 
         self.clear_route_cache();
 

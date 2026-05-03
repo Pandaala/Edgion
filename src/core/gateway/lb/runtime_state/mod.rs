@@ -337,7 +337,7 @@ mod tests {
         increment(svc, &a);
         assert_eq!(get_count(svc, &a), 1, "A should be 1 after first connection");
 
-        // 模拟 update_peer_metrics on retry: take+decrement(A) before push_upstream(B)
+        // 模拟 begin_upstream_attempt on retry: take+decrement(A) before push placeholder for B
         decrement(svc, &a);
         assert_eq!(get_count(svc, &a), 0, "A should reach 0 after retry cleanup");
 
@@ -363,10 +363,10 @@ mod tests {
 
         // Attempt 1: connect A
         increment(svc, &a);
-        // Retry 1: update_peer_metrics cleans A, then connects B
+        // Retry 1: begin_upstream_attempt cleans A, then connects B
         decrement(svc, &a);
         increment(svc, &b);
-        // Retry 2: update_peer_metrics cleans B, then connects C
+        // Retry 2: begin_upstream_attempt cleans B, then connects C
         decrement(svc, &b);
         increment(svc, &c);
         // logging: decrement C

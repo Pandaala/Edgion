@@ -25,7 +25,7 @@ pub fn upstream_response_filter(
                 .and_then(|ru| ru.rule.session_persistence.clone());
 
             if let Some(sp) = sp_config {
-                // Use ip:port from current upstream (set by push_upstream in update_peer_metrics)
+                // Use ip:port from current upstream (backfilled by update_peer_metrics)
                 let backend_addr = ctx.get_current_upstream().and_then(|u| match (&u.ip, u.port) {
                     (Some(ip), Some(port)) => Some(format!("{}:{}", ip, port)),
                     _ => None,

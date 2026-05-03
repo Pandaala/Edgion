@@ -11,11 +11,7 @@ use std::time::Instant;
 impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<GRPCRoute>>) {
         let start_time = Instant::now();
-        tracing::info!(
-            component = "grpc_route_manager",
-            count = data.len(),
-            "full set start"
-        );
+        tracing::info!(component = "grpc_route_manager", count = data.len(), "full set start");
 
         // Step 1: Parse all routes and build units cache
         self.route_cache.clear();

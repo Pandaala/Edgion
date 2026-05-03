@@ -14,6 +14,9 @@
     "HTTPRoute/Backend/LBConsistentHash": {
       "http": 31121
     },
+    "HTTPRoute/Backend/LBLeastConn": {
+      "http": 31122
+    },
     "HTTPRoute/Backend/WeightedBackend": {
       "http": 31130
     },

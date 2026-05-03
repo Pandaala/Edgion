@@ -1,0 +1,27 @@
+# LeastConn 后端 EndpointSlice，3 个 endpoints
+# 利用 127.0.0.0/8 全部 loopback 命中 test_server (绑定 0.0.0.0:30001)
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: lb-lc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: lb-lc-service
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+  - addresses:
+      - "127.0.0.2"
+    conditions:
+      ready: true
+  - addresses:
+      - "127.0.0.3"
+    conditions:
+      ready: true

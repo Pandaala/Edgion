@@ -1,0 +1,10 @@
+# LeastConn 后端 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-lc-service
+  namespace: edgion-default
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
