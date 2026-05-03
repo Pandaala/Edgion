@@ -134,7 +134,7 @@ Edgion 的 Gateway 进程在**启动时**通过 `configure_listeners` 绑定所�
 - 支持 Secret 和 ConfigMap 类型的 `caCertificateRefs`
 - 同一 Service 多 Policy 冲突检测（按 creationTimestamp + name 排序）
 - Status reason 值符合 conformance 精确要求（`InvalidKind`、`InvalidCACertificateRef`、`Conflicted`）
-- Route on_change/on_delete 自动 requeue 关联的 BTP 以更新 ancestor 状态
+- Route on_change/on_delete 自动 requeue 关联的 BackendTLSPolicy 以更新 ancestor 状态
 
 Status 报告的局限性：`ancestorRef` 指向 Gateway 表示"控制面认为该 Policy 在此 Gateway 上生效"，但不代表数据面 TLS 连接一定成功（证书不匹配、后端不支持 TLS 等运行时问题无法通过 status 反映）。
 
@@ -142,13 +142,19 @@ Status 报告的局限性：`ancestorRef` 指向 Gateway 表示"控制面认为�
 
 ## BackendTrafficPolicy (BTP)
 
-**决定：暂不实现（等 GA）**
+**决定：暂不实现（仍为 Experimental，等 Standard/GA）**
 
-Gateway API v1.4 引入实验性 BackendTrafficPolicy CRD，统一管理连接池、熔断器、健康检查、重试策略。
+Gateway API v1.3 引入实验性 BackendTrafficPolicy（当前 v1.5 experimental
+CRD 中仍以 `XBackendTrafficPolicy` 暴露在 `gateway.networking.x-k8s.io`
+API group 下）。Gateway API v1.5 将多个特性提升到 Standard channel，但
+BackendTrafficPolicy 不在 v1.5 的 Standard/GA promotion 列表中。
+
+BackendTrafficPolicy 的方向是统一管理后端流量行为（例如 retry budget 等；
+后续可能扩展到连接池、熔断器、健康检查、重试策略）。
 
 Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-breaker`、`health_check.rs`、`edgion_gateway_config.rs`），功能完整，但不通过标准 BTP CRD 暴露。
 
-- 等 BTP 从实验性毕业到 GA 后再考虑统一到标准 CRD
+- 等 BTP 从 Experimental 毕业到 Standard/GA 后再考虑统一到标准 CRD
 - 当前 annotation 方式对用户可用，不影响实际功能
 - 相关任务见 `tasks/todo/gateway-api-conformance/06-policy-and-experimental.md`（规划中）
 

@@ -1,13 +1,13 @@
 ---
 name: resource-udp-route
-description: UDPRoute 资源：L4 UDP 路由、per-listener 路由表、无状态 per-packet 转发。
+description: UDPRoute 资源：L4 UDP 路由、per-listener 路由表、客户端会话响应路径。
 ---
 
 # UDPRoute 资源
 
 > **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
 
-UDPRoute 定义 L4 UDP 层的路由规则，将 UDP 数据包转发到后端 Service。UDP 是无状态协议，路由工作在端口级别，采用 per-packet 转发模式。
+UDPRoute 定义 L4 UDP 层的路由规则，将 UDP 数据包转发到后端 Service。UDP 协议本身无连接；Gateway 在 client→backend 方向按包查路由，在 backend→client 响应方向维护客户端会话。
 
 ## 源码位置
 
@@ -50,7 +50,16 @@ UDPRoute 的 ConfHandler 将路由编译到 `GlobalUdpRouteManagers`：
 1. **路由初始化**：调用 `initialize_route()` 验证并准备路由数据
 2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
 3. **全量/增量更新**：full_set 时清空并重建；partial_update 时收集受影响 listener 仅重建这些 listener
-4. **无状态转发**：UDP 为 per-packet 转发，每个数据包独立路由到后端
+4. **数据面模型**：client→backend 每个包独立加载当前路由表并选择后端；backend→client 依赖客户端会话回写响应
+
+### 数据面会话
+
+- 会话键为客户端地址；首次收到客户端包时创建会话，并为该会话绑定一个独立 upstream UDP socket
+- 会话上限 `MAX_UDP_SESSIONS = 10000`，超过后新客户端包记录 `SessionLimitReached` 并丢弃
+- `SESSION_TIMEOUT = 60s`，以双向包活动刷新；清理循环每 10s 移除超时会话并写 UDP access log
+- 主监听退出时取消清理循环和所有 per-session upstream 接收任务
+
+运维上需按并发客户端数预估 fd、任务和内存占用；会话不是纯无状态转发，后端响应必须经对应 upstream socket 关联回客户端。
 
 ## 跨资源关联
 

@@ -24,7 +24,7 @@ Edgion 采用**单一数据源 + 宏生成**的架构：
 
 - 始终以"最新/最稳定版本"为存储版（storageVersion）。旧版只作为输入格式，统一向新版本/内部模型转换，禁止"降级"写回旧版。
 - Gateway API 已 GA 的资源（Gateway/GatewayClass/HTTPRoute/GRPCRoute 等）保持 `v1`，除非上游发布新主版本并提供明确迁移路径。
-- 处于 Alpha/Beta 的资源（如 BackendTLSPolicy 当前 `v1alpha3`，需兼容历史 `v1alpha2`）推荐：
+- 处于 Alpha/Beta 的资源（例如 Gateway API Experimental 资源 `XBackendTrafficPolicy`）推荐：
   - CRD 多版本：storage = 最新，旧版标记为 served。
   - 有条件时使用 Conversion Webhook，由 API Server 统一转换；否则在控制器中同时 watch 多版本，转换为单一内部模型。
   - 新增字段在旧版转换时要有安全默认值；重命名/类型变化需显式映射并记录日志。

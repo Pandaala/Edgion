@@ -134,6 +134,7 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in `tru
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener-level 421 Misdirected Request detection; rejects requests where SNI does not match the Host header |
 | `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI |
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
+| `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
 
 ### spec.globalPluginsRef
 

@@ -56,7 +56,7 @@ requeue 当前 siblings（共享同一 target 的其他 BackendTLSPolicy），�
 - `ResolvedRefs`：校验所有 caCertificateRef 的 kind/group 合法性、CA Secret/ConfigMap 是否已解析、客户端证书 Secret 是否存在且包含 tls.crt 和 tls.key
 - 不设置 Programmed/Ready Condition（需要数据面反馈，当前架构不支持）
 
-**已修复**：`ancestorRef` 通过 ServiceRefManager + GatewayRouteIndex 做 `Service → Route → Gateway` 三步查询，正确指向关联的 Gateway。Route on_change/on_delete 自动 requeue 关联的 BTP 以保持 ancestor 状态一致。
+**已修复**：`ancestorRef` 通过 ServiceRefManager + GatewayRouteIndex 做 `Service → Route → Gateway` 三步查询，正确指向关联的 Gateway。Route on_change/on_delete 自动 requeue 关联的 BackendTLSPolicy 以保持 ancestor 状态一致。
 
 ### 冲突检测机制
 

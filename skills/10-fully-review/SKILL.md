@@ -60,6 +60,14 @@ description: Edgion 全局代码 Review 指南。包含 AI 执行全量 review �
 - CRC32 碰撞概率在千用户规模不可接受，不适合用作认证 cache key
 - 若内存安全不是合规强制要求，该问题可降为观察项
 
+### Upstream 地址安全
+
+审查会改写或选择 upstream 的路径时，加载 [04-review/ssrf/upstream-address-safety.md](../04-review/ssrf/upstream-address-safety.md)。重点区分：
+
+- `domainMap` / `backendRefs` / RegionRoute PM 是授权边界，不等于最终拨号地址安全。
+- 生产 upstream 最终拨号地址默认拒绝 loopback 与 link-local / metadata；Endpoint 派生路径只有 integration testing mode 可为本地 fixture 放行 loopback。
+- RFC1918 私网是合法 K8s / 跨集群 / 内网 API 目标，不应一刀切阻断。
+
 ---
 
 ## 维度二：正确性

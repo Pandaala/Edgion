@@ -82,7 +82,7 @@ Notes:
 |-----|----------|-------|---------|--------|
 | `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. |
 | `edgion.io/proxy-protocol` | `TLSRoute` | currently `"v2"` is recognized | disabled | Sends Proxy Protocol v2 to upstream. Other values are ignored. |
-| `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `1` | Max upstream connect attempts. Values below `1` are normalized to `1`. |
+| `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `2` | Max upstream connect attempts. Values below `1` are normalized to `1`; values above `5` are capped to `5`. |
 
 Current implementation note:
 

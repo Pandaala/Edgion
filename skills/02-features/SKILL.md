@@ -56,7 +56,7 @@ Edgion 基于 **Gateway API v1.5.0**，支持范围：
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
 | TLSRoute | `gateway.networking.k8s.io/v1` | Standard（旧 alpha 版本兼容取决于安装清单） |
 | UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
-| BackendTLSPolicy | `gateway.networking.k8s.io/v1`（`v1alpha3` 兼容） | Experimental / 多版本兼容 |
+| BackendTLSPolicy | `gateway.networking.k8s.io/v1`（`v1alpha3` 兼容） | Standard / 多版本兼容 |
 
 Edgion 扩展资源（API group: `edgion.io`）：
 

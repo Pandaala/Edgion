@@ -49,7 +49,7 @@ Edgion 扩展 CRD 通过 Edgion 自有的部署清单安装。
 
 ## 一致性测试
 
-Edgion 使用官方 `sigs.k8s.io/gateway-api` v1.5.0 提供的 Go 测试套件进行一致性测试。
+Edgion 使用官方 `sigs.k8s.io/gateway-api/conformance` v1.5.1 提供的 Go 测试套件进行一致性测试。
 
 ### 运行方式
 

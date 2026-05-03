@@ -156,6 +156,7 @@ spec:
 | `requireSniHostMatch` | `bool` | `true` | HTTPS listener 级别 421 Misdirected Request 检测（可通过 Gateway 注解 per-Gateway 开启） |
 | `fallbackSni` | `String?` | — | 客户端未提供 SNI 时的备用主机名 |
 | `tlsProxyLogRecord` | `bool` | `true` | 记录 TLS 代理连接日志 |
+| `allowLoopbackUpstream` | `bool` | `false` | 显式放行 loopback upstream；不放行 link-local / metadata |
 
 ### spec.preflightPolicy
 
@@ -175,7 +176,7 @@ spec:
 
 - **无 `enabled` 字段**——path normalization 是 Edgion 默认行为，**不可禁用**
 - **无 per-Gateway / per-Listener 覆盖**——这两个开关是全局的
-- 安全承诺范围详见 spec §1.4：[docs/superpowers/specs/2026-04-26-uri-normalization-design.md](../../../docs/superpowers/specs/2026-04-26-uri-normalization-design.md)
+- 安全承诺范围详见 spec §1.4：[tasks/todo/uri-normalization.md](../../../tasks/todo/uri-normalization.md)
 
 ### spec.linkSys
 

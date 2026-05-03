@@ -10,7 +10,7 @@ A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/
 
 - **Rust-native performance** — Built on Cloudflare's Pingora and Tokio. Memory-safe, no GC pauses, predictable latency under load.
 - **Gateway API support** — Native implementation of the Kubernetes Gateway API standard. Runs in Kubernetes or standalone mode from the same binary.
-  - `v1` GA: GatewayClass · Gateway · HTTPRoute · GRPCRoute · TLSRoute · ReferenceGrant
+  - `v1` GA: GatewayClass · Gateway · HTTPRoute · GRPCRoute · TLSRoute · ReferenceGrant · BackendTLSPolicy
   - `v1alpha2` Experimental: TCPRoute · UDPRoute
 - **Multi-protocol** — HTTP/1.1, HTTP/2, gRPC, TCP, UDP, WebSocket, SNI proxy.
 - **Dynamic hot reload** — Every change to routes, backends, plugins, or certificates propagates across all gateways instantly. No restart.
@@ -43,6 +43,7 @@ Edgion implements the Kubernetes Gateway API spec. Currently supports **v1.5.1**
 - [`v1.GRPCRoute`](docs/en/user-guide/grpc-route/overview.md)
 - [`v1.TLSRoute`](docs/en/ops-guide/gateway/tls/tls-termination.md)
 - [`v1.ReferenceGrant`](docs/en/ops-guide/infrastructure/reference-grant.md)
+- [`v1.BackendTLSPolicy`](docs/en/user-guide/http-route/backends/backend-tls.md)
 - [`v1alpha2.TCPRoute`](docs/en/user-guide/tcp-route/overview.md)
 - [`v1alpha2.UDPRoute`](docs/en/user-guide/udp-route/overview.md)
 

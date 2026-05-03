@@ -30,7 +30,7 @@ metadata:
   annotations:
     edgion.io/edgion-stream-plugins: "default/my-stream-plugins"
     edgion.io/proxy-protocol: "2"
-    edgion.io/max-connect-retries: "3"
+    edgion.io/max-connect-retries: "3"             # 可选；默认 2，最高 5
 spec:
   parentRefs:
     - name: my-gateway
@@ -78,7 +78,7 @@ spec:
 |------|------|------|------|
 | `edgion.io/edgion-stream-plugins` | `ns/name` | — | 绑定 EdgionStreamPlugins |
 | `edgion.io/proxy-protocol` | `"1"\|"2"` | — | 向上游发送 Proxy Protocol |
-| `edgion.io/max-connect-retries` | `u32` | `1` | 最大上游连接重试次数 |
+| `edgion.io/max-connect-retries` | `u32` | `2` | 最大上游连接尝试次数，低于 `1` 归一化为 `1`，高于 `5` 封顶为 `5` |
 
 ## 与 Gateway TLS 的配合
 

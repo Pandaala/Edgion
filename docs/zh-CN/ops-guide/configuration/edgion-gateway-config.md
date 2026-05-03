@@ -134,6 +134,7 @@ spec:
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener 级别 421 Misdirected Request 检测，SNI 与 Host 不匹配时拒绝请求 |
 | `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名 |
 | `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
+| `allowLoopbackUpstream` | `Boolean` | `false` | 显式放行该 GatewayClass 的 loopback upstream；link-local / metadata 仍然拒绝 |
 
 ### spec.globalPluginsRef
 
