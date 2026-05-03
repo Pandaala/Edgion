@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::net::IpAddr;
 
-use crate::core::gateway::backends::validate_endpoint_in_route;
+use crate::core::gateway::backends::{validate_endpoint_backend_addr, validate_endpoint_in_route};
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -29,6 +29,7 @@ impl DirectEndpoint {
         raw_value: String,
         backend_refs: &[HTTPBackendRef],
         route_ns: &str,
+        allow_loopback_upstream: bool,
     ) -> Result<DirectEndpointPreset, ResolutionError> {
         // 1. Apply regex extraction if configured
         let endpoint_str = if let Some(ref extract) = self.config.extract {
@@ -65,6 +66,17 @@ impl DirectEndpoint {
         };
 
         let addr = std::net::SocketAddr::new(target_ip, effective_port);
+        if validate_endpoint_backend_addr(
+            &pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
+            allow_loopback_upstream,
+        )
+        .is_err()
+        {
+            return Err(ResolutionError::Invalid(
+                "loopback/link-local/metadata endpoint address rejected".to_string(),
+            ));
+        }
+
         Ok(DirectEndpointPreset {
             addr,
             use_tls,
@@ -130,7 +142,7 @@ impl RequestFilter for DirectEndpoint {
         };
 
         // 4. Resolve endpoint info
-        match self.resolve(raw_value, backend_refs, route_ns) {
+        match self.resolve(raw_value, backend_refs, route_ns, session.ctx().allow_loopback_upstream) {
             Ok(info) => {
                 let addr_str = format!("{}", info.addr);
                 log.push_fmt("endpoint {}", la![sensitive(&addr_str)]);
@@ -222,15 +234,4 @@ mod tests {
         );
         assert!(parse_endpoint("invalid").is_err());
     }
-
-    // Since validate_endpoint_in_route calls global store which is hard to mock,
-    // we assume validate_endpoint_in_route is tested in validation.rs.
-    // However, we can test regex extraction and parsing logic if we mock validation or avoid it.
-    // But validate_endpoint_in_route is called inside resolve.
-    // So resolve is hard to unit test without mocking global state.
-    //
-    // But we can test regex extraction logic if we split resolve further.
-    // Or we leave it to integration tests.
-    //
-    // Let's rely on integration tests for full flow, and unit tests for helpers.
 }

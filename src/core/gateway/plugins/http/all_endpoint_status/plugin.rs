@@ -20,6 +20,7 @@ use tokio::sync::Semaphore;
 
 use crate::core::gateway::backends::discovery::endpoint::{get_endpoint_roundrobin_store, EndpointExt};
 use crate::core::gateway::backends::discovery::endpoint_slice::{get_roundrobin_store, EndpointSliceExt};
+use crate::core::gateway::backends::validate_endpoint_backend_addr;
 use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -231,6 +232,20 @@ struct ResolvedEndpoint {
     use_tls: bool,
 }
 
+fn resolved_endpoint_from_backend(
+    backend: pingora_load_balancing::Backend,
+    backend_name: &str,
+    use_tls: bool,
+    allow_loopback_upstream: bool,
+) -> Result<ResolvedEndpoint, ()> {
+    validate_endpoint_backend_addr(&backend.addr, allow_loopback_upstream).map_err(|_| ())?;
+    Ok(ResolvedEndpoint {
+        address: backend.addr.to_string(),
+        backend_name: backend_name.to_string(),
+        use_tls,
+    })
+}
+
 /// Resolve all endpoint addresses for a backend reference.
 /// Tries EndpointSlice first (newer K8s API), falls back to Endpoints.
 fn resolve_endpoints(
@@ -238,7 +253,8 @@ fn resolve_endpoints(
     backend_namespace: &str,
     backend_port: u16,
     use_tls: bool,
-) -> Vec<ResolvedEndpoint> {
+    allow_loopback_upstream: bool,
+) -> (Vec<ResolvedEndpoint>, usize) {
     let service_key = format!("{}/{}", backend_namespace, backend_name);
 
     // Try EndpointSlice first (preferred, newer K8s API)
@@ -249,32 +265,44 @@ fn resolve_endpoints(
             backends.extend(slice.build_backends(backend_port));
         }
         if !backends.is_empty() {
-            return backends
+            let mut unsafe_count = 0;
+            let endpoints = backends
                 .into_iter()
-                .map(|b| ResolvedEndpoint {
-                    address: b.addr.to_string(),
-                    backend_name: backend_name.to_string(),
-                    use_tls,
+                .filter_map(|b| {
+                    match resolved_endpoint_from_backend(b, backend_name, use_tls, allow_loopback_upstream) {
+                        Ok(endpoint) => Some(endpoint),
+                        Err(()) => {
+                            unsafe_count += 1;
+                            None
+                        }
+                    }
                 })
                 .collect();
+            return (endpoints, unsafe_count);
         }
     }
 
     // Fallback to Endpoints
     let ep_store = get_endpoint_roundrobin_store();
     if let Some(endpoints) = ep_store.get_endpoint_for_service(&service_key) {
-        return endpoints
+        let mut unsafe_count = 0;
+        let resolved = endpoints
             .build_backends(backend_port)
             .into_iter()
-            .map(|b| ResolvedEndpoint {
-                address: b.addr.to_string(),
-                backend_name: backend_name.to_string(),
-                use_tls,
-            })
+            .filter_map(
+                |b| match resolved_endpoint_from_backend(b, backend_name, use_tls, allow_loopback_upstream) {
+                    Ok(endpoint) => Some(endpoint),
+                    Err(()) => {
+                        unsafe_count += 1;
+                        None
+                    }
+                },
+            )
             .collect();
+        return (resolved, unsafe_count);
     }
 
-    vec![] // No endpoints found
+    (vec![], 0) // No endpoints found
 }
 
 // ============================================================
@@ -558,13 +586,16 @@ impl RequestFilter for AllEndpointStatus {
         let mut all_backend_results: Vec<BackendResult> = Vec::new();
         let mut all_endpoints: Vec<ResolvedEndpoint> = Vec::new();
         let mut total_truncated = false;
+        let mut unsafe_endpoint_count = 0usize;
 
         for backend_ref in &backend_refs {
             let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_namespace);
             let port = backend_ref.port.map(|p| p as u16).unwrap_or(80);
             let use_tls = backend_ref.backend_tls_policy.is_some();
 
-            let resolved = resolve_endpoints(&backend_ref.name, namespace, port, use_tls);
+            let (resolved, unsafe_count) =
+                resolve_endpoints(&backend_ref.name, namespace, port, use_tls, ctx.allow_loopback_upstream);
+            unsafe_endpoint_count += unsafe_count;
 
             all_backend_results.push(BackendResult {
                 name: backend_ref.name.clone(),
@@ -575,6 +606,10 @@ impl RequestFilter for AllEndpointStatus {
             });
 
             all_endpoints.extend(resolved);
+        }
+
+        if unsafe_endpoint_count > 0 {
+            log.push_err("unsafe upstream");
         }
 
         // Apply max_endpoints limit

@@ -24,6 +24,7 @@ pub use endpoint_mode::{
 };
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
+pub(crate) use peer_builder::validate_endpoint_backend_addr;
 pub use policy::{
     create_backend_tls_policy_handler, get_global_backend_tls_policy_store, query_backend_tls_policy_for_service,
     BackendTLSPolicyStore,
@@ -174,7 +175,10 @@ pub(crate) fn try_get_peer(
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
 
             // Security check: reject loopback / link-local / metadata (SSRF defense)
-            validate_backend_addr(&addr)?;
+            if let Err(status) = validate_backend_addr(&addr, ctx.allow_loopback_upstream) {
+                record_unsafe_upstream_attempt(ctx, &addr, status);
+                return Err(status);
+            }
 
             // Extract TLS configuration and record to upstream
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
@@ -215,7 +219,10 @@ pub(crate) fn try_get_peer(
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
 
             // Security check: reject loopback / link-local / metadata (SSRF defense)
-            validate_backend_addr(&addr)?;
+            if let Err(status) = validate_backend_addr(&addr, ctx.allow_loopback_upstream) {
+                record_unsafe_upstream_attempt(ctx, &addr, status);
+                return Err(status);
+            }
 
             // Extract TLS configuration and record to upstream
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
@@ -284,6 +291,10 @@ fn build_peer_from_lb_selection(
     let lb_addr = backend.addr.clone();
     let mut peer_addr = lb_addr.clone();
     resolve_target_port(&mut peer_addr, br_port, service_key, port_source);
+    if let Err(status) = validate_endpoint_backend_addr(&peer_addr, ctx.allow_loopback_upstream) {
+        record_unsafe_upstream_attempt(ctx, &peer_addr, status);
+        return Err(status);
+    }
 
     let (use_tls, sni) = extract_tls_config(backend_tls_policy);
     let lb_policy_clone = lb_policy.clone();
@@ -311,6 +322,22 @@ fn build_peer_from_lb_selection(
     let mut peer = create_tls_peer(peer_addr, backend_tls_policy, gateway_key_ref)?;
     apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
     Ok(peer)
+}
+
+fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr, status: EdgionStatus) {
+    let (ip, port) = addr
+        .as_inet()
+        .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
+        .unwrap_or((None, None));
+    ctx.push_upstream(ip, port);
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        let reason = match status {
+            EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
+            EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+            _ => "unsafe upstream address",
+        };
+        upstream.err.push(reason.to_string());
+    }
 }
 
 /// Get HTTP peer from service and endpoint slice stores using load balancing

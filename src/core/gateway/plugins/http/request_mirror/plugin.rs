@@ -10,6 +10,9 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
+use crate::core::gateway::backends::{
+    resolve_target_port, select_roundrobin_backend, validate_endpoint_backend_addr, PortLookupSource,
+};
 use crate::core::gateway::observe::metrics::record_mirror_metric;
 use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -111,7 +114,7 @@ impl RequestMirrorPlugin {
         }
     }
 
-    fn resolve_target(&self) -> Result<(String, String), String> {
+    fn resolve_target(&self, allow_loopback_upstream: bool) -> Result<(String, String), String> {
         let port = self
             .config
             .backend_ref
@@ -136,16 +139,17 @@ impl RequestMirrorPlugin {
 
         // Use the gateway's standard backend resolution which respects EndpointMode,
         // performs round-robin LB across endpoints, and honours health checks.
-        if let Some(backend) = crate::core::gateway::backends::select_roundrobin_backend(&service_key) {
-            let target = format!("{}", backend.addr);
+        if let Some(backend) = select_roundrobin_backend(&service_key) {
+            let mut addr = backend.addr;
+            resolve_target_port(&mut addr, Some(port), &service_key, PortLookupSource::Auto);
+            if validate_endpoint_backend_addr(&addr, allow_loopback_upstream).is_err() {
+                return Err("mirror backend resolved to loopback/link-local/metadata address (rejected)".to_string());
+            }
+            let target = format!("{}", addr);
             return Ok((target.clone(), format!("{scheme}://{target}")));
         }
 
-        // Fallback to Kubernetes DNS when the endpoint store has no data yet
-        // (e.g. startup race, or the Service hasn't been synced).
-        let host = format!("{}.{}.svc.cluster.local", self.config.backend_ref.name, ns);
-        let target = format!("{}:{}", host, port);
-        Ok((target, format!("{scheme}://{host}:{port}")))
+        Err("mirror backend has no selectable endpoint".to_string())
     }
 
     fn build_headers(&self, session: &dyn PluginSession, target: &str) -> HeaderMap {
@@ -187,7 +191,7 @@ impl RequestFilter for RequestMirrorPlugin {
             }
         };
 
-        let (target, base_url) = match self.resolve_target() {
+        let (target, base_url) = match self.resolve_target(session.ctx().allow_loopback_upstream) {
             Ok(v) => v,
             Err(_e) => {
                 log.push_err("mirror resolve error");

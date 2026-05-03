@@ -237,10 +237,33 @@ pub(crate) fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool,
 ///
 /// RFC1918 private ranges are **not** blocked; cluster-internal pod/service IPs live there.
 #[inline]
-pub(crate) fn validate_backend_addr(addr: &SocketAddr) -> Result<(), EdgionStatus> {
+pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: bool) -> Result<(), EdgionStatus> {
     match classify_backend_addr(addr) {
         None => Ok(()),
+        Some(BlockedBackendReason::Localhost) if allow_loopback_upstream => Ok(()),
         Some(BlockedBackendReason::Localhost) => Err(EdgionStatus::BackendLocalhostNotAllowed),
         Some(BlockedBackendReason::LinkLocal) => Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
+    }
+}
+
+/// Validate endpoint-derived backend addresses for metadata/link-local safety.
+///
+/// Loopback is allowed only in explicit integration testing mode because local
+/// integration fixtures use 127.0.0.1 endpoints. Production endpoint-derived
+/// upstreams reject both loopback and link-local ranges.
+#[inline]
+pub(crate) fn validate_endpoint_backend_addr(
+    addr: &SocketAddr,
+    allow_loopback_upstream: bool,
+) -> Result<(), EdgionStatus> {
+    match classify_backend_addr(addr) {
+        Some(BlockedBackendReason::Localhost)
+            if allow_loopback_upstream || crate::core::common::config::is_integration_testing_mode() =>
+        {
+            Ok(())
+        }
+        Some(BlockedBackendReason::Localhost) => Err(EdgionStatus::BackendLocalhostNotAllowed),
+        Some(BlockedBackendReason::LinkLocal) => Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
+        None => Ok(()),
     }
 }

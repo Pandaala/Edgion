@@ -1,13 +1,14 @@
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::core::gateway::backends::select_roundrobin_backend;
+use crate::core::gateway::backends::{select_roundrobin_backend, validate_endpoint_backend_addr};
 use crate::core::gateway::observe::{log_udp, UdpLogEntry};
 use crate::core::gateway::routes::udp::UdpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -23,8 +24,11 @@ const MAX_UDP_PACKET_SIZE: usize = 65535;
 /// Prevents resource exhaustion from UDP reflection/amplification attacks.
 const MAX_UDP_SESSIONS: usize = 10000;
 
+const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
+
 /// Client session information with statistics
 struct ClientSession {
+    session_permit: Mutex<Option<OwnedSemaphorePermit>>,
     upstream_socket: Arc<UdpSocket>,
     upstream_addr: std::net::SocketAddr,
     last_activity: Arc<Mutex<Instant>>,
@@ -33,6 +37,12 @@ struct ClientSession {
     packets_received: Arc<AtomicU64>,
     bytes_sent: Arc<AtomicU64>,
     bytes_received: Arc<AtomicU64>,
+}
+
+impl ClientSession {
+    fn release_permit(&self) {
+        self.session_permit.lock().take();
+    }
 }
 
 /// UDP proxy service for Gateway UDP listeners.
@@ -51,6 +61,7 @@ pub struct EdgionUdpProxy {
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     pub socket: Arc<UdpSocket>,
     client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
+    session_permits: Arc<Semaphore>,
     cancel_token: CancellationToken,
 }
 
@@ -70,6 +81,7 @@ impl EdgionUdpProxy {
             edgion_gateway_config,
             socket: Arc::new(socket),
             client_sessions: Arc::new(DashMap::new()),
+            session_permits: Arc::new(Semaphore::new(MAX_UDP_SESSIONS)),
             cancel_token,
         }
     }
@@ -94,11 +106,11 @@ impl EdgionUdpProxy {
                 result = self.socket.recv_from(&mut buf) => {
                     match result {
                         Ok((len, client_addr)) => {
-                            let data = buf[..len].to_vec();
-                            let this = self.clone();
-                            tokio::spawn(async move {
-                                this.handle_client_packet(data, client_addr).await;
-                            });
+                            tokio::select! {
+                                biased;
+                                _ = self.cancel_token.cancelled() => break,
+                                _ = self.handle_client_packet(&buf[..len], client_addr) => {}
+                            }
                         }
                         Err(_) => break,
                     }
@@ -111,7 +123,7 @@ impl EdgionUdpProxy {
         self.cancel_token.cancel();
     }
 
-    async fn handle_client_packet(&self, data: Vec<u8>, client_addr: std::net::SocketAddr) {
+    async fn handle_client_packet(&self, data: &[u8], client_addr: std::net::SocketAddr) {
         let client_ip = client_addr.ip().to_string();
         let client_port = client_addr.port();
 
@@ -185,6 +197,18 @@ impl EdgionUdpProxy {
         if let Some(port) = backend_ref.port {
             upstream_addr.set_port(port as u16);
         }
+        if validate_endpoint_backend_addr(&PingoraSocketAddr::Inet(upstream_addr), self.allow_loopback_upstream())
+            .is_err()
+        {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                client_ip,
+                client_port,
+                UNSAFE_UPSTREAM_ADDRESS_LOG,
+            ))
+            .await;
+            return;
+        }
 
         let session = match self.get_or_create_session(client_addr, upstream_addr).await {
             Ok(session) => session,
@@ -200,12 +224,8 @@ impl EdgionUdpProxy {
             }
         };
 
-        let data_len = data.len() as u64;
-        let _ = session.upstream_socket.send_to(&data, session.upstream_addr).await;
-
-        session.packets_sent.fetch_add(1, Ordering::Relaxed);
-        session.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
-        *session.last_activity.lock() = Instant::now();
+        let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
+        Self::record_upstream_send_result(send_result, &session, self.listener_port, client_ip, client_port).await;
     }
 
     /// Get or create a client session.
@@ -221,9 +241,15 @@ impl EdgionUdpProxy {
             return Ok(session.value().clone());
         }
 
-        if self.client_sessions.len() >= MAX_UDP_SESSIONS {
-            return Err(());
-        }
+        let session_permit = match self.session_permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                if let Some(session) = self.client_sessions.get(&client_addr) {
+                    return Ok(session.value().clone());
+                }
+                return Err(());
+            }
+        };
 
         let upstream_socket = match UdpSocket::bind("0.0.0.0:0").await {
             Ok(socket) => Arc::new(socket),
@@ -231,6 +257,7 @@ impl EdgionUdpProxy {
         };
 
         let session = Arc::new(ClientSession {
+            session_permit: Mutex::new(Some(session_permit)),
             upstream_socket: upstream_socket.clone(),
             upstream_addr,
             last_activity: Arc::new(Mutex::new(Instant::now())),
@@ -241,15 +268,19 @@ impl EdgionUdpProxy {
             bytes_received: Arc::new(AtomicU64::new(0)),
         });
 
-        self.client_sessions.insert(client_addr, session.clone());
+        let session = match self.client_sessions.entry(client_addr) {
+            Entry::Occupied(existing) => return Ok(existing.get().clone()),
+            Entry::Vacant(vacant) => vacant.insert(session).clone(),
+        };
 
         let sessions_ref = self.client_sessions.clone();
         let downstream = self.socket.clone();
         let sess = session.clone();
         let cancel = self.cancel_token.clone();
+        let listener_port = self.listener_port;
 
         tokio::spawn(async move {
-            Self::handle_upstream_packets(client_addr, downstream, sessions_ref, sess, cancel).await;
+            Self::handle_upstream_packets(client_addr, downstream, sessions_ref, sess, cancel, listener_port).await;
         });
 
         Ok(session)
@@ -265,6 +296,7 @@ impl EdgionUdpProxy {
         client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
         session: Arc<ClientSession>,
         cancel: CancellationToken,
+        listener_port: u16,
     ) {
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
@@ -279,15 +311,68 @@ impl EdgionUdpProxy {
                 result = tokio::time::timeout(Duration::from_secs(1), session.upstream_socket.recv_from(&mut buf)) => {
                     match result {
                         Ok(Ok((len, _))) => {
-                            let _ = downstream_socket.send_to(&buf[..len], client_addr).await;
-                            session.packets_received.fetch_add(1, Ordering::Relaxed);
-                            session.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
-                            *session.last_activity.lock() = Instant::now();
+                            let send_result = downstream_socket.send_to(&buf[..len], client_addr).await;
+                            Self::record_downstream_send_result(
+                                send_result,
+                                &session,
+                                listener_port,
+                                client_addr,
+                            )
+                            .await;
                         }
                         Ok(Err(_)) => break,
                         Err(_) => continue,
                     }
                 }
+            }
+        }
+    }
+
+    async fn record_upstream_send_result(
+        result: std::io::Result<usize>,
+        session: &ClientSession,
+        listener_port: u16,
+        client_ip: String,
+        client_port: u16,
+    ) {
+        match result {
+            Ok(bytes_sent) => {
+                session.packets_sent.fetch_add(1, Ordering::Relaxed);
+                session.bytes_sent.fetch_add(bytes_sent as u64, Ordering::Relaxed);
+                *session.last_activity.lock() = Instant::now();
+            }
+            Err(_) => {
+                log_udp(&UdpLogEntry::failure(
+                    listener_port,
+                    client_ip,
+                    client_port,
+                    "UpstreamSendError",
+                ))
+                .await;
+            }
+        }
+    }
+
+    async fn record_downstream_send_result(
+        result: std::io::Result<usize>,
+        session: &ClientSession,
+        listener_port: u16,
+        client_addr: std::net::SocketAddr,
+    ) {
+        match result {
+            Ok(bytes_sent) => {
+                session.packets_received.fetch_add(1, Ordering::Relaxed);
+                session.bytes_received.fetch_add(bytes_sent as u64, Ordering::Relaxed);
+                *session.last_activity.lock() = Instant::now();
+            }
+            Err(_) => {
+                log_udp(&UdpLogEntry::failure(
+                    listener_port,
+                    client_addr.ip().to_string(),
+                    client_addr.port(),
+                    "DownstreamSendError",
+                ))
+                .await;
             }
         }
     }
@@ -334,7 +419,9 @@ impl EdgionUdpProxy {
             );
 
             log_udp(&log_entry).await;
-            self.client_sessions.remove(&client_addr);
+            if let Some((_, removed)) = self.client_sessions.remove(&client_addr) {
+                removed.release_permit();
+            }
         }
     }
 
@@ -342,6 +429,15 @@ impl EdgionUdpProxy {
     #[cfg(test)]
     pub(crate) fn session_count(&self) -> usize {
         self.client_sessions.len()
+    }
+
+    fn allow_loopback_upstream(&self) -> bool {
+        self.edgion_gateway_config
+            .spec
+            .security_protect
+            .as_ref()
+            .map(|s| s.allow_loopback_upstream)
+            .unwrap_or(false)
     }
 }
 
@@ -478,6 +574,13 @@ mod tests {
         let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let expired_time = Instant::now() - Duration::from_secs(120);
         let session = Arc::new(ClientSession {
+            session_permit: Mutex::new(Some(
+                proxy
+                    .session_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("test session permit"),
+            )),
             upstream_socket,
             upstream_addr: "127.0.0.1:8080".parse().unwrap(),
             last_activity: Arc::new(Mutex::new(expired_time)),
@@ -514,6 +617,13 @@ mod tests {
         // Insert an active session (recent last_activity)
         let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let session = Arc::new(ClientSession {
+            session_permit: Mutex::new(Some(
+                proxy
+                    .session_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("test session permit"),
+            )),
             upstream_socket,
             upstream_addr: "127.0.0.1:8080".parse().unwrap(),
             last_activity: Arc::new(Mutex::new(Instant::now())),

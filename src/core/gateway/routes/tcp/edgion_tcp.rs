@@ -10,7 +10,7 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::core::gateway::backends::select_roundrobin_backend;
+use crate::core::gateway::backends::{select_roundrobin_backend, validate_endpoint_backend_addr};
 use crate::core::gateway::observe::{log_tcp, TcpLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
@@ -39,6 +39,7 @@ pub enum TcpStatus {
     PluginDenied,
     NoBackendSelected,
     NoBackendResolved,
+    UnsafeUpstreamAddress,
     UpstreamConnectionFailed,
     UpstreamReadError,
     UpstreamWriteError,
@@ -161,6 +162,10 @@ impl EdgionTcpProxy {
         }
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
+        if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
+            ctx.status = TcpStatus::UnsafeUpstreamAddress;
+            return;
+        }
 
         // 7. Connect to upstream
         let peer = BasicPeer::new(&upstream_addr_str);
@@ -196,10 +201,6 @@ impl EdgionTcpProxy {
                                 ctx.status = TcpStatus::UpstreamWriteError;
                                 break;
                             }
-                            if (upstream.flush().await).is_err() {
-                                ctx.status = TcpStatus::UpstreamWriteError;
-                                break;
-                            }
                         }
                         Err(_) => {
                             ctx.status = TcpStatus::DownstreamReadError;
@@ -218,6 +219,7 @@ impl EdgionTcpProxy {
                                 ctx.status = TcpStatus::DownstreamWriteError;
                                 break;
                             }
+                            // Listener streams buffer writes; flush client-facing bytes promptly.
                             if (downstream.flush().await).is_err() {
                                 ctx.status = TcpStatus::DownstreamWriteError;
                                 break;
@@ -236,5 +238,14 @@ impl EdgionTcpProxy {
     async fn log_connection(&self, ctx: &TcpContext) {
         let log_entry = TcpLogEntry::from_context(ctx);
         log_tcp(&log_entry).await;
+    }
+
+    fn allow_loopback_upstream(&self) -> bool {
+        self.edgion_gateway_config
+            .spec
+            .security_protect
+            .as_ref()
+            .map(|s| s.allow_loopback_upstream)
+            .unwrap_or(false)
     }
 }

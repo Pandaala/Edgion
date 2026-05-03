@@ -291,6 +291,13 @@ pub struct SecurityProtectConfig {
     /// access log entries for TLS proxy connections are suppressed. (default: true)
     #[serde(default = "default_tls_proxy_log_record")]
     pub tls_proxy_log_record: bool,
+
+    /// Allow loopback upstream addresses for this Gateway.
+    ///
+    /// Default false. This is an explicit operator override for local sidecar or
+    /// node-local deployments. Link-local / cloud metadata ranges remain blocked.
+    #[serde(default)]
+    pub allow_loopback_upstream: bool,
 }
 
 fn default_xff_limit() -> usize {

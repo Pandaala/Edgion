@@ -1,3 +1,4 @@
+use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
@@ -97,11 +98,21 @@ impl GlobalTlsRouteManagers {
 
         let store_key = Self::resolve_stream_plugin_store_key(&route);
 
-        let max_connect_retries = annotations
+        let configured_max_connect_retries = annotations
             .and_then(|a| a.get(crate::types::constants::annotations::edgion::MAX_CONNECT_RETRIES))
             .and_then(|v| v.trim().parse::<u32>().ok())
             .map(|v| v.max(1))
-            .unwrap_or(1);
+            .unwrap_or(DEFAULT_TLS_CONNECT_RETRIES);
+        let max_connect_retries = cap_tls_connect_retries(configured_max_connect_retries);
+
+        if configured_max_connect_retries > MAX_TLS_CONNECT_RETRIES {
+            tracing::warn!(
+                route = %route_key,
+                configured_max_connect_retries,
+                max_connect_retries,
+                "TLSRoute max_connect_retries capped"
+            );
+        }
 
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
@@ -432,6 +443,7 @@ mod tests {
         let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
         assert_eq!(rule.proxy_protocol_version, None);
         assert!(rule.stream_plugin_store_key.is_none());
+        assert_eq!(rule.max_connect_retries, 2);
     }
 
     #[test]

@@ -7,6 +7,8 @@
 //! - ClientHello SNI extraction ([`sni_parser`])
 //! - Per-port route table ([`gateway_tls_routes`])
 
+use std::time::Duration;
+
 mod conf_handler_impl;
 pub(crate) mod gateway_tls_routes;
 mod routes_mgr;
@@ -23,6 +25,23 @@ pub use conf_handler_impl::create_tls_route_handler;
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
 use proxy::TlsContext;
+
+pub(super) const MAX_TLS_CONNECT_RETRIES: u32 = 5;
+pub(super) const DEFAULT_TLS_CONNECT_RETRIES: u32 = 2;
+const TLS_CONNECT_RETRY_BACKOFF_BASE_MS: u64 = 25;
+const TLS_CONNECT_RETRY_BACKOFF_MAX_MS: u64 = 250;
+
+pub(super) fn cap_tls_connect_retries(attempts: u32) -> u32 {
+    attempts.clamp(1, MAX_TLS_CONNECT_RETRIES)
+}
+
+pub(super) fn tls_connect_retry_backoff(attempt: u32) -> Duration {
+    let multiplier = 1u64.checked_shl(attempt.min(31)).unwrap_or(u64::MAX);
+    let millis = TLS_CONNECT_RETRY_BACKOFF_BASE_MS
+        .saturating_mul(multiplier)
+        .min(TLS_CONNECT_RETRY_BACKOFF_MAX_MS);
+    Duration::from_millis(millis)
+}
 
 /// Shared Stage 2 TLS route plugin execution.
 ///

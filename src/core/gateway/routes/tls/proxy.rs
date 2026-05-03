@@ -14,7 +14,9 @@ use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
-use crate::core::gateway::backends::{resolve_target_port, select_roundrobin_backend, PortLookupSource};
+use crate::core::gateway::backends::{
+    resolve_target_port, select_roundrobin_backend, validate_endpoint_backend_addr, PortLookupSource,
+};
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::observe::AccessLogger;
@@ -22,6 +24,10 @@ use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::{ListenerKey, MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use serde::Serialize;
+
+use super::tls_connect_retry_backoff;
+
+const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
 
 fn is_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
     let group_ok = matches!(group, None | Some("") | Some("core"));
@@ -292,6 +298,10 @@ impl EdgionTlsTcpProxy {
                 proxy_protocol_sent: false,
                 upstream_protocol: Some("TCP".to_string()),
             });
+            if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
+                ctx.err_log = Some(UNSAFE_UPSTREAM_ADDRESS_LOG.to_string());
+                return;
+            }
 
             // 4c. TCP connect
             let peer = BasicPeer::new(&upstream_addr_str);
@@ -313,6 +323,7 @@ impl EdgionTlsTcpProxy {
                     last_err = format!("connect failed: {upstream_addr_str}: {e}");
                     if attempt + 1 < max_attempts {
                         ctx.push_log(&format!("retry {}/{max_attempts}: {last_err}", attempt + 1));
+                        tokio::time::sleep(tls_connect_retry_backoff(attempt)).await;
                     }
                 }
             }
@@ -410,10 +421,6 @@ impl EdgionTlsTcpProxy {
                                 ctx.err_log = Some("upstream write err".to_string());
                                 return;
                             }
-                            if (upstream.flush().await).is_err() {
-                                ctx.err_log = Some("upstream flush err".to_string());
-                                return;
-                            }
                         }
                         Err(_) => {
                             ctx.err_log = Some("downstream read err".to_string());
@@ -435,6 +442,7 @@ impl EdgionTlsTcpProxy {
                                 ctx.err_log = Some("downstream write err".to_string());
                                 return;
                             }
+                            // Listener streams buffer writes; flush client-facing bytes promptly.
                             if (downstream.flush().await).is_err() {
                                 ctx.err_log = Some("downstream flush err".to_string());
                                 return;
@@ -456,6 +464,15 @@ impl EdgionTlsTcpProxy {
             .security_protect
             .as_ref()
             .is_none_or(|sp| sp.tls_proxy_log_record)
+    }
+
+    fn allow_loopback_upstream(&self) -> bool {
+        self.edgion_gateway_config
+            .spec
+            .security_protect
+            .as_ref()
+            .map(|s| s.allow_loopback_upstream)
+            .unwrap_or(false)
     }
 
     /// Log connection disconnection event

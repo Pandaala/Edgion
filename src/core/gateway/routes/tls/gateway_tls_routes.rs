@@ -39,7 +39,8 @@ impl TlsRouteTable {
     /// When the controller has set `resolved_listeners`, we use
     /// `effective_hostnames` (the route×listener intersection) for bucketing.
     /// Otherwise we fall back to raw `spec.hostnames` for backward compat.
-    /// Routes with no effective hostnames go to `catch_all_routes`.
+    /// A processed route with explicit hostnames but an empty intersection must
+    /// not become catch-all.
     pub fn from_routes(routes: &HashMap<String, Arc<TLSRoute>>) -> Self {
         let mut buckets: HashMap<String, Vec<Arc<TLSRoute>>> = HashMap::new();
         let mut catch_all: Vec<Arc<TLSRoute>> = Vec::new();
@@ -47,9 +48,6 @@ impl TlsRouteTable {
         for route in routes.values() {
             let hostnames: Vec<String> = if route.spec.resolved_listeners.is_some() {
                 // Controller has processed this route; use the computed intersection.
-                // Empty effective_hostnames means no valid intersection — route
-                // should not match anything, so it falls into catch_all (which is
-                // only consulted after exact/wildcard misses).
                 route.spec.effective_hostnames.as_ref().cloned().unwrap_or_default()
             } else {
                 // Legacy path: route not yet processed by the new controller.
@@ -57,6 +55,11 @@ impl TlsRouteTable {
             };
 
             if hostnames.is_empty() {
+                if route.spec.resolved_listeners.is_some()
+                    && route.spec.hostnames.as_ref().is_some_and(|hs| !hs.is_empty())
+                {
+                    continue;
+                }
                 catch_all.push(route.clone());
                 continue;
             }

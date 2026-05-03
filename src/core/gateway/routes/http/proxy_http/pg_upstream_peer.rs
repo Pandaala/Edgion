@@ -1,15 +1,17 @@
 use super::EdgionHttpProxy;
+use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReason};
 use crate::core::gateway::backends::{get_peer, try_get_peer};
 use crate::core::gateway::cli::config::get_path_normalization_config;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
 use crate::core::gateway::routes::http::routes_mgr::RouteRules;
 use crate::core::gateway::routes::http::session_persistence;
-use crate::core::gateway::{end_response_500, end_response_grpc_unavailable};
+use crate::core::gateway::{end_response_500, end_response_503, end_response_grpc_unavailable};
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
 use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_core::prelude::HttpPeer;
+use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::upstreams::peer::Peer;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
@@ -210,6 +212,17 @@ pub async fn upstream_peer_http(
     // 1. Check for ExternalJump (external domain, second priority)
     if let Some(ref external) = ctx.external_jump {
         let addr = resolve_domain(&external.domain, external.port).await?;
+        if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
+            if ctx.backend_context.is_none() {
+                ctx.init_backend_context(external.domain.clone(), "_external_".to_string());
+            }
+            record_unsafe_resolved_upstream_attempt(ctx, addr, status);
+            ctx.add_error(status);
+            return Err(PingoraError::explain(
+                ErrorType::ConnectError,
+                "external upstream resolved to unsafe address",
+            ));
+        }
 
         // Build HttpPeer from resolved address
         let mut peer = Box::new(HttpPeer::new(addr, external.use_tls, external.sni.clone()));
@@ -245,19 +258,28 @@ pub async fn upstream_peer_http(
         .and_then(|sp| sp.strict)
         .unwrap_or(false);
 
-    let mut peer = match try_get_peer(ctx, session, false) {
-        Ok(peer) => peer,
-        Err(_) if sp_had_target && !sp_strict => {
-            // Session persistence fallback: target was unhealthy, retry with normal LB
-            ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
-            ctx.sp_state = SessionPersistenceState::InjectUpdate; // update token in response
-                                                                  // Retry with normal LB
-            get_peer(session, ctx, false).await?
+    let mut peer = if sp_had_target {
+        match try_get_peer(ctx, session, false) {
+            Ok(peer) => peer,
+            Err(status @ (EdgionStatus::BackendLocalhostNotAllowed | EdgionStatus::BackendAddrLinkLocalNotAllowed)) => {
+                ctx.add_error(status);
+                end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+            Err(_) if !sp_strict => {
+                // Session persistence fallback: target was unhealthy, retry with normal LB
+                ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
+                ctx.sp_state = SessionPersistenceState::InjectUpdate; // update token in response
+                                                                      // Retry with normal LB
+                get_peer(session, ctx, false).await?
+            }
+            Err(_) => {
+                // No fallback (strict mode, no session persistence, or no target) — error response
+                get_peer(session, ctx, false).await?
+            }
         }
-        Err(_) => {
-            // No fallback (strict mode, no session persistence, or no target) — error response
-            get_peer(session, ctx, false).await?
-        }
+    } else {
+        get_peer(session, ctx, false).await?
     };
 
     // 5. Configure peer (shared logic)
@@ -535,8 +557,6 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
 ///
 /// Uses tokio's async DNS resolver to avoid blocking the event loop.
 /// Returns the first resolved address.
-///
-/// Security: After resolution, validates the address is not localhost.
 async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::net::SocketAddr> {
     let addr_str = format!("{}:{}", domain, port);
 
@@ -552,14 +572,58 @@ async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::ne
         .next()
         .ok_or_else(|| PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain)))?;
 
-    if addr.ip().is_loopback() {
-        return Err(PingoraError::explain(
-            ErrorType::ConnectError,
-            format!("Domain {} resolved to localhost (rejected)", domain),
-        ));
+    Ok(addr)
+}
+
+fn validate_resolved_domain_addr(
+    addr: &std::net::SocketAddr,
+    allow_loopback_upstream: bool,
+) -> Result<(), EdgionStatus> {
+    match classify_backend_addr(&PingoraSocketAddr::Inet(*addr)) {
+        None => {}
+        Some(BlockedBackendReason::Localhost) if allow_loopback_upstream => {}
+        Some(BlockedBackendReason::Localhost) => return Err(EdgionStatus::BackendLocalhostNotAllowed),
+        Some(BlockedBackendReason::LinkLocal) => return Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
     }
 
+    Ok(())
+}
+
+#[cfg(test)]
+async fn resolve_domain_checked(
+    domain: &str,
+    port: u16,
+    allow_loopback_upstream: bool,
+) -> pingora_core::Result<std::net::SocketAddr> {
+    let addr = resolve_domain(domain, port).await?;
+    validate_resolved_domain_addr(&addr, allow_loopback_upstream).map_err(|status| {
+        let reason = match status {
+            EdgionStatus::BackendLocalhostNotAllowed => "localhost",
+            EdgionStatus::BackendAddrLinkLocalNotAllowed => "link-local/metadata",
+            _ => "unsafe",
+        };
+        PingoraError::explain(
+            ErrorType::ConnectError,
+            format!("Domain {} resolved to {} address (rejected)", domain, reason),
+        )
+    })?;
     Ok(addr)
+}
+
+fn record_unsafe_resolved_upstream_attempt(
+    ctx: &mut EdgionHttpContext,
+    addr: std::net::SocketAddr,
+    status: EdgionStatus,
+) {
+    ctx.push_upstream(Some(addr.ip().to_string()), Some(addr.port()));
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        let reason = match status {
+            EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
+            EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+            _ => "unsafe upstream address",
+        };
+        upstream.err.push(reason.to_string());
+    }
 }
 
 /// Path forwarding decision for the upstream-peer single-point block (spec §14).
