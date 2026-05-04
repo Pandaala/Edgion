@@ -1,5 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReason};
+use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
 use crate::core::gateway::cli::config::get_path_normalization_config;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
@@ -8,7 +9,7 @@ use crate::core::gateway::routes::http::session_persistence;
 use crate::core::gateway::{end_response_500, end_response_503, end_response_grpc_unavailable};
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
-use crate::types::{EdgionHttpContext, EdgionStatus, ServiceIdentity, SessionPersistenceState};
+use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
@@ -347,9 +348,10 @@ fn sp_resolve_target(
 ) {
     let Some(token) = token else { return };
 
-    let id = ServiceIdentity::from_http_backend_ref(backend_ref, route_ns);
-    let backends = crate::core::gateway::backends::get_backends_for_service(&id);
-    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build(&id, &backends);
+    let ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+    let service_key = format!("{}/{}", ns, backend_ref.name);
+    let backends = crate::core::gateway::backends::selector::get_backends_for_service_key(&service_key);
+    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, &backends);
 
     if let Some(&addr) = affinity_map.get(token) {
         ctx.sp_target_addr = Some(addr);
@@ -556,7 +558,13 @@ async fn try_external_jump_peer(
 
     if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
         if ctx.backend_context.is_none() {
-            ctx.init_backend_context(ServiceIdentity::new(domain, "_external_"));
+            let service_key = format!("{}/{}", "_external_", domain);
+            let rsc = crate::types::Rsc {
+                kind: "Service".to_string(),
+                ns: "_external_".to_string(),
+                name: domain.clone(),
+            };
+            ctx.init_backend_context(rsc, service_key, EdgionService::Service);
         }
         record_unsafe_resolved_upstream_attempt(ctx, addr, status);
         ctx.add_error(status);
@@ -570,7 +578,13 @@ async fn try_external_jump_peer(
     // finish_static_peer so init_backend_context_if_needed becomes a no-op.
     // Use domain as "name" and "_external_" as namespace marker.
     if ctx.backend_context.is_none() {
-        ctx.init_backend_context(ServiceIdentity::new(domain, "_external_"));
+        let service_key = format!("{}/{}", "_external_", domain);
+        let rsc = crate::types::Rsc {
+            kind: "Service".to_string(),
+            ns: "_external_".to_string(),
+            name: domain.clone(),
+        };
+        ctx.init_backend_context(rsc, service_key, EdgionService::Service);
     }
 
     let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
@@ -593,33 +607,44 @@ pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx:
     }
 }
 
-/// Initialize backend context if not yet initialized (inline for performance)
-/// This function handles both gRPC and HTTP backends
+/// Initialize backend context if not yet initialized (inline for performance).
+/// This function handles both gRPC and HTTP backends.
 #[inline]
 fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
     if ctx.backend_context.is_some() {
         return Ok(());
     }
 
-    let identity = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
+    let (name, namespace, kind_str) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
         let route_ns = ctx
             .grpc_route_unit
             .as_ref()
             .map(|unit| unit.matched_info.rsc.ns.as_str())
-            .unwrap_or_default();
-        ServiceIdentity::from_grpc_backend_ref(grpc_br, route_ns)
+            .unwrap_or_default()
+            .to_string();
+        let ns = grpc_br.namespace.clone().unwrap_or(route_ns);
+        (grpc_br.name.clone(), ns, grpc_br.kind.clone())
     } else if let Some(http_br) = ctx.selected_backend.as_ref() {
         let route_ns = ctx
             .route_unit
             .as_ref()
             .map(|unit| unit.matched_info.rsc.ns.as_str())
-            .unwrap_or_default();
-        ServiceIdentity::from_http_backend_ref(http_br, route_ns)
+            .unwrap_or_default()
+            .to_string();
+        let ns = http_br.namespace.clone().unwrap_or(route_ns);
+        (http_br.name.clone(), ns, http_br.kind.clone())
     } else {
         return Err(PingoraError::new(ErrorType::InternalError));
     };
 
-    ctx.init_backend_context(identity);
+    let service_key = format!("{}/{}", namespace, name);
+    let rsc = crate::types::Rsc {
+        kind: "Service".to_string(),
+        ns: namespace,
+        name,
+    };
+    let service_kind = EdgionService::from_kind(kind_str.as_ref());
+    ctx.init_backend_context(rsc, service_key, service_kind);
     Ok(())
 }
 

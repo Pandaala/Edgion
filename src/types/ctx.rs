@@ -1,3 +1,4 @@
+use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
@@ -5,7 +6,7 @@ use crate::core::gateway::routes::HttpRouteRuleUnit;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::http_route_preparse::ParsedLBPolicy;
-use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch, ServiceIdentity};
+use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use serde::{Deserialize, Serialize};
@@ -404,9 +405,12 @@ impl UpstreamInfo {
 pub struct BackendContext {
     /// Resource identifier (kind="Service")
     pub rsc: Rsc,
-    /// Service identity with cached key — used by service-scoped stores.
+    /// LB store index key: `"namespace/name"`.
     #[serde(skip)]
-    pub identity: ServiceIdentity,
+    pub service_key: String,
+    /// Routing path (ClusterIP / Endpoint / EPS / ExternalName).
+    #[serde(skip)]
+    pub service_kind: EdgionService,
     /// List of upstream connection attempts (for retry tracking and access log)
     pub upstreams: Vec<UpstreamInfo>,
     /// Current upstream index (for status updates)
@@ -780,11 +784,12 @@ impl EdgionHttpContext {
             })
     }
 
-    /// Initialize backend context with a service identity (call once)
-    pub fn init_backend_context(&mut self, identity: ServiceIdentity) {
+    /// Initialize backend context with flat service fields (call once).
+    pub fn init_backend_context(&mut self, rsc: Rsc, service_key: String, service_kind: EdgionService) {
         self.backend_context = Some(BackendContext {
-            rsc: Rsc::from(&identity),
-            identity,
+            rsc,
+            service_key,
+            service_kind,
             upstreams: Vec::new(),
             current_upstream_id: None,
         });

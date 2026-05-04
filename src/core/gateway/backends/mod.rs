@@ -62,7 +62,7 @@ pub(crate) fn try_get_peer(
     let gateway_key_ref = Some(gateway_key.as_str());
 
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
-    let (br_port, br_kind, lb_policy, backend_tls_policy) = if is_grpc {
+    let (br_port, lb_policy, backend_tls_policy) = if is_grpc {
         // gRPC backend
         let grpc_br = ctx
             .selected_grpc_backend
@@ -70,7 +70,6 @@ pub(crate) fn try_get_peer(
             .ok_or(EdgionStatus::GrpcUpstreamNotBackendRefs)?;
         (
             grpc_br.port,
-            grpc_br.kind.as_ref(),
             &grpc_br.extension_info.lb_policy,
             &grpc_br.backend_tls_policy,
         )
@@ -82,19 +81,16 @@ pub(crate) fn try_get_peer(
             .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
         (
             http_br.port,
-            http_br.kind.as_ref(),
             &http_br.extension_info.lb_policy,
             &http_br.backend_tls_policy,
         )
     };
 
-    let service_type = EdgionService::from_kind(br_kind);
-
-    // Read service_key from cached identity while immutable borrows of ctx are still alive.
-    let service_key = ctx
+    // Read service_key and service_kind from BackendContext (set by init_backend_context_if_needed).
+    let (service_key, service_type) = ctx
         .backend_context
         .as_ref()
-        .map(|bc| bc.identity.key().to_string())
+        .map(|bc| (bc.service_key.clone(), bc.service_kind.clone()))
         .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
 
     // Clone only the fields we hand to build_peer_from_lb_selection as owned values
