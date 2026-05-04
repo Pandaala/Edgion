@@ -17,6 +17,18 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
+# Coverage mode: switch to instrumented binary directory and export coverage env to children.
+# LLVM_PROFILE_FILE override is critical: show-env defaults to target/Edgion-*.profraw,
+# but cargo llvm-cov report only scans target/llvm-cov-target/*.profraw — keep them aligned.
+if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+    eval $(cargo llvm-cov show-env --export-prefix 2>/dev/null)
+    export CARGO_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target"
+    export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
+    BIN_DIR="${PROJECT_ROOT}/target/llvm-cov-target/debug"
+else
+    BIN_DIR="${PROJECT_ROOT}/target/debug"
+fi
+
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/integration_testing/testing_${TIMESTAMP}"
@@ -105,17 +117,17 @@ check_binaries() {
     
     local missing=false
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/edgion-controller" ]; then
+    if [ ! -f "${BIN_DIR}/edgion-controller" ]; then
         log_error "edgion-controller Build"
         missing=true
     fi
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/edgion-gateway" ]; then
+    if [ ! -f "${BIN_DIR}/edgion-gateway" ]; then
         log_error "edgion-gateway Build"
         missing=true
     fi
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/examples/test_server" ]; then
+    if [ ! -f "${BIN_DIR}/examples/test_server" ]; then
         log_error "test_server Build"
         missing=true
     fi
@@ -192,7 +204,7 @@ wait_for_health() {
 start_test_server() {
     log_section "Start test_server"
     
-    "${PROJECT_ROOT}/target/debug/examples/test_server" \
+    "${BIN_DIR}/examples/test_server" \
         --http-ports "30001,30002,30003" \
         --grpc-ports "30021,30022,30023" \
         --websocket-port 30005 \
@@ -227,7 +239,7 @@ start_test_server() {
 start_controller() {
     log_section "Start edgion-controller"
     
-    "${PROJECT_ROOT}/target/debug/edgion-controller" \
+    "${BIN_DIR}/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
         --work-dir "$PROJECT_ROOT" \
         --conf-dir "$CONFIG_DIR" \
@@ -262,7 +274,7 @@ start_gateway() {
     
     EDGION_ACCESS_LOG="${LOG_DIR}/edgion_access.log" \
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
-    "${PROJECT_ROOT}/target/debug/edgion-gateway" \
+    "${BIN_DIR}/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --integration-testing-mode \
         > "${LOG_DIR}/gateway.log" 2>&1 &

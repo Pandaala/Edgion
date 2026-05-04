@@ -33,10 +33,26 @@ log_success() {
 force_kill() {
     local pattern=$1
     local service_name=$2
-    
+
+    if ! pgrep -f "$pattern" > /dev/null 2>&1; then
+        return
+    fi
+
+    # Send SIGTERM first so the process runs atexit handlers (LLVM coverage profraw
+    # flush relies on this — pkill -9 / SIGKILL bypasses atexit and loses coverage data).
+    pkill -TERM -f "$pattern" 2>/dev/null || true
+    log_info "Stop $service_name (SIGTERM)"
+
+    # Wait up to 5s for graceful exit; escalate to SIGKILL if still alive.
+    local waited=0
+    while [ $waited -lt 5 ] && pgrep -f "$pattern" > /dev/null 2>&1; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+
     if pgrep -f "$pattern" > /dev/null 2>&1; then
         pkill -9 -f "$pattern" 2>/dev/null || true
-        log_info "Stop $service_name"
+        log_info "Escalated $service_name (SIGKILL after ${waited}s)"
     fi
 }
 

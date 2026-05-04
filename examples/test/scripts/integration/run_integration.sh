@@ -874,7 +874,13 @@ main() {
     local do_start=true
     local suites=""
     local with_reload=false
-    
+
+    # Coverage mode notification (heavy lifting done by prepare.sh / start_all.sh)
+    if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+        log_info "Coverage mode: profraw will accumulate under target/"
+        log_info "Run 'make coverage-report' after this completes to generate HTML"
+    fi
+
     # Parse args
     while [[ $# -gt 0 ]]; do
         case $1 in

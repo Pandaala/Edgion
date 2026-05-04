@@ -71,7 +71,25 @@ main() {
     echo -e "Mode: Debug"
     
     cd "$PROJECT_ROOT"
-    
+
+    # Coverage mode: inject cargo-llvm-cov instrumentation env.
+    # NOTE: cargo-llvm-cov 0.8.x's show-env does NOT set CARGO_TARGET_DIR — it relies on
+    # RUSTC_WRAPPER, which cargo's incremental check ignores, so a plain `cargo build`
+    # after eval would reuse non-instrumented .rlib cache from target/debug/.
+    # We force CARGO_TARGET_DIR=target/llvm-cov-target to isolate the build cache and
+    # guarantee a clean instrumented build. start_all.sh switches BIN_DIR accordingly.
+    if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+        log_info "Coverage mode enabled — using cargo-llvm-cov instrumentation"
+        eval $(cargo llvm-cov show-env --export-prefix 2>/dev/null)
+        export CARGO_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target"
+        # show-env's LLVM_PROFILE_FILE points to target/Edgion-*.profraw, but cargo llvm-cov
+        # report only scans target/llvm-cov-target/*.profraw. Force LLVM_PROFILE_FILE into
+        # the right directory so report can find runtime profraw.
+        export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
+        log_info "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+        log_info "LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}"
+    fi
+
     # Build Controller (exit immediately on failure)
     log_section "Build edgion-controller"
     if ! build_binary "edgion-controller" "--bin edgion-controller"; then
