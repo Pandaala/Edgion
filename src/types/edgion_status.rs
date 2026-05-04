@@ -15,11 +15,20 @@ pub enum EdgionStatus {
     /// Practically unreachable — the entry struct contains only primitives.
     AccessLogSerializeFailed = 999_02,
 
+    /// ACME HTTP-01 challenge served locally by the gateway (HTTP 200)
+    AcmeChallengeServed = 200_01,
+
     /// Missing Host header (HTTP 400)
     HostMissing = 400_01,
 
     /// X-Forwarded-For header too long (HTTP 400)
     XffHeaderTooLong = 400_02,
+
+    /// Path contains escaped slash/backslash rejected by path normalization policy (HTTP 400)
+    PathEscapedSlashRejected = 400_03,
+
+    /// Path contains invalid percent-encoding rejected by path normalization policy (HTTP 400)
+    PathInvalidPercentEncoding = 400_04,
 
     /// Route Not Found
     RouteNotFound = 404_01,

@@ -42,6 +42,9 @@ pub struct AccessLogEntry<'a> {
     pub match_info: Option<RouteMatchInfo<'a>>,
 
     #[serde(skip_serializing_if = "is_empty")]
+    pub info: &'a [EdgionStatus],
+
+    #[serde(skip_serializing_if = "is_empty")]
     pub errors: &'a [EdgionStatus],
 
     pub backend_context: Option<&'a BackendContext>,
@@ -82,6 +85,7 @@ impl<'a> AccessLogEntry<'a> {
             request_info: &ctx.request_info,
             request_uri,
             match_info,
+            info: &ctx.info,
             errors: &ctx.edgion_status,
             backend_context: ctx.backend_context.as_ref(),
             stage_logs: &ctx.stage_logs,
@@ -132,5 +136,28 @@ impl<'a> AccessLogEntry<'a> {
             latency_ms,
             self.request_info.x_trace_id.as_deref().unwrap_or("-"),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_log_includes_acme_local_response_status() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.status = Some(200);
+        ctx.add_info(EdgionStatus::AcmeChallengeServed);
+
+        let json = AccessLogEntry::from_context(&ctx).to_json();
+
+        assert!(
+            json.contains(r#""info":["AcmeChallengeServed"]"#),
+            "access log must include ACME local response status, got: {json}"
+        );
+        assert!(
+            !json.contains(r#""errors""#),
+            "ACME local response should not be reported as an error, got: {json}"
+        );
     }
 }

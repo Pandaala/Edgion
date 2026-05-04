@@ -1,16 +1,19 @@
 //! ACME HTTP-01 Challenge Token Store (Gateway side)
 //!
 //! Maintains an in-memory store of active ACME challenge tokens.
-//! Checked in `early_request_filter` to serve HTTP-01 challenge responses.
+//! Checked in `request_filter` after request metadata is populated to serve
+//! HTTP-01 challenge responses.
 //!
 //! The store is populated by the ConfHandler when EdgionAcme resources
 //! with active_challenges are synced from the Controller.
 
 use crate::core::gateway::observe::metrics::record_acme_challenge_lookup;
 use crate::types::resources::edgion_acme::EdgionAcme;
+use arc_swap::ArcSwap;
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A single challenge entry in the store.
@@ -25,41 +28,52 @@ pub struct ChallengeEntry {
     pub expire_at: u64,
 }
 
+type ChallengeTokenMap = HashMap<String, ChallengeEntry>;
+type ResourceTokenMap = HashMap<String, Vec<String>>;
+
 /// Global challenge token store
 ///
 /// Thread-safe store designed for extremely fast lookup in the request hot path:
-/// - `is_empty()` check is O(1) and the common case (no active challenges)
-/// - Token lookup is O(1) HashMap access
+/// - `is_empty()` is an O(1) ArcSwap snapshot load in the common case
+/// - Token lookup is an O(1) ArcSwap snapshot load + HashMap access
 ///
 /// Internally tracks tokens per resource key so that `partial_update` can
 /// correctly add/remove tokens without losing challenges from other resources.
 pub struct AcmeChallengeStore {
-    /// Flat map: token -> ChallengeEntry (for fast lookup in hot path)
-    tokens: RwLock<HashMap<String, ChallengeEntry>>,
+    /// Flat map: token -> ChallengeEntry (lock-free snapshot reads in hot path)
+    tokens: ArcSwap<ChallengeTokenMap>,
     /// Per-resource tracking: resource_key -> list of token strings
     /// Used to correctly remove tokens when a resource is updated or deleted.
-    resource_tokens: RwLock<HashMap<String, Vec<String>>>,
+    resource_tokens: RwLock<ResourceTokenMap>,
 }
 
 impl AcmeChallengeStore {
     pub fn new() -> Self {
         Self {
-            tokens: RwLock::new(HashMap::new()),
+            tokens: ArcSwap::from_pointee(HashMap::new()),
             resource_tokens: RwLock::new(HashMap::new()),
         }
     }
 
+    fn build_entry(domain: &str, key_authorization: &str, expire_at: u64) -> ChallengeEntry {
+        ChallengeEntry {
+            domain: domain.to_string(),
+            key_authorization: Bytes::from(key_authorization.to_string()),
+            expire_at,
+        }
+    }
+
     /// Check if the store has any active challenges.
-    /// This is the fast path check in early_request_filter.
+    /// This is the fast path check in the ACME request short-circuit.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.tokens.read().is_empty()
+        self.tokens.load().is_empty()
     }
 
     /// Look up a challenge token and return the key authorization if found and not expired.
     /// Also validates the domain matches.
     pub fn lookup(&self, token: &str, host: &str) -> Option<Bytes> {
-        let tokens = self.tokens.read();
+        let tokens = self.tokens.load();
         if let Some(entry) = tokens.get(token) {
             // Check expiry
             let now = SystemTime::now()
@@ -87,10 +101,8 @@ impl AcmeChallengeStore {
     /// Replace all tokens with a new set from EdgionAcme resources.
     /// Called by the ConfHandler on full_set.
     pub fn full_set(&self, data: &HashMap<String, EdgionAcme>) {
-        let mut tokens = self.tokens.write();
-        let mut resource_tokens = self.resource_tokens.write();
-        tokens.clear();
-        resource_tokens.clear();
+        let mut new_tokens: ChallengeTokenMap = HashMap::new();
+        let mut new_resource_tokens: ResourceTokenMap = HashMap::new();
 
         for (key, acme) in data {
             let challenges = acme.active_challenges();
@@ -98,21 +110,25 @@ impl AcmeChallengeStore {
                 let mut keys_for_resource = Vec::new();
                 for c in challenges {
                     keys_for_resource.push(c.token.clone());
-                    tokens.insert(
+                    new_tokens.insert(
                         c.token.clone(),
-                        ChallengeEntry {
-                            domain: c.domain.clone(),
-                            key_authorization: Bytes::from(c.key_authorization.clone()),
-                            expire_at: c.expire_at,
-                        },
+                        Self::build_entry(&c.domain, &c.key_authorization, c.expire_at),
                     );
                 }
-                resource_tokens.insert(key.clone(), keys_for_resource);
+                new_resource_tokens.insert(key.clone(), keys_for_resource);
             }
         }
 
-        if !tokens.is_empty() {
-            tracing::info!(count = tokens.len(), "ACME challenge store updated (full_set)");
+        let token_count = new_tokens.len();
+
+        {
+            let mut resource_tokens = self.resource_tokens.write();
+            *resource_tokens = new_resource_tokens;
+            self.tokens.store(Arc::new(new_tokens));
+        }
+
+        if token_count != 0 {
+            tracing::info!(count = token_count, "ACME challenge store updated (full_set)");
         }
     }
 
@@ -121,14 +137,15 @@ impl AcmeChallengeStore {
     /// - `upsert`: resources that were added or updated — replace their tokens
     /// - `remove_keys`: resource keys that were deleted — remove their tokens
     pub fn partial_update(&self, upsert: &HashMap<String, EdgionAcme>, remove_keys: &HashSet<String>) {
-        let mut tokens = self.tokens.write();
         let mut resource_tokens = self.resource_tokens.write();
+        let current = self.tokens.load();
+        let mut new_tokens: ChallengeTokenMap = (**current).clone();
 
         // Remove tokens for deleted resources
         for key in remove_keys {
             if let Some(old_tokens) = resource_tokens.remove(key) {
                 for t in old_tokens {
-                    tokens.remove(&t);
+                    new_tokens.remove(&t);
                 }
             }
         }
@@ -138,7 +155,7 @@ impl AcmeChallengeStore {
             // Remove old tokens for this resource first
             if let Some(old_tokens) = resource_tokens.remove(key) {
                 for t in &old_tokens {
-                    tokens.remove(t);
+                    new_tokens.remove(t);
                 }
             }
 
@@ -148,18 +165,16 @@ impl AcmeChallengeStore {
                 let mut keys_for_resource = Vec::new();
                 for c in challenges {
                     keys_for_resource.push(c.token.clone());
-                    tokens.insert(
+                    new_tokens.insert(
                         c.token.clone(),
-                        ChallengeEntry {
-                            domain: c.domain.clone(),
-                            key_authorization: Bytes::from(c.key_authorization.clone()),
-                            expire_at: c.expire_at,
-                        },
+                        Self::build_entry(&c.domain, &c.key_authorization, c.expire_at),
                     );
                 }
                 resource_tokens.insert(key.clone(), keys_for_resource);
             }
         }
+
+        self.tokens.store(Arc::new(new_tokens));
     }
 }
 
@@ -384,5 +399,97 @@ mod tests {
 
         assert!(store.lookup("token-old", "a.com").is_none());
         assert!(store.lookup("token-new", "a.com").is_some());
+    }
+
+    #[test]
+    fn test_partial_update_after_full_set_uses_latest_resource_index() {
+        let store = AcmeChallengeStore::new();
+        let ft = future_time();
+
+        let mut data_a = HashMap::new();
+        data_a.insert(
+            "ns/a".to_string(),
+            make_acme(vec![challenge("a.com", "token-a", "auth-a", ft)]),
+        );
+        store.full_set(&data_a);
+
+        let mut data_b = HashMap::new();
+        data_b.insert(
+            "ns/b".to_string(),
+            make_acme(vec![challenge("b.com", "token-b", "auth-b", ft)]),
+        );
+        store.full_set(&data_b);
+
+        assert!(store.lookup("token-a", "a.com").is_none());
+        assert_eq!(store.lookup("token-b", "b.com"), Some(Bytes::from_static(b"auth-b")));
+
+        let mut remove = HashSet::new();
+        remove.insert("ns/b".to_string());
+        store.partial_update(&HashMap::new(), &remove);
+
+        assert!(store.is_empty());
+        assert!(store.lookup("token-a", "a.com").is_none());
+        assert!(store.lookup("token-b", "b.com").is_none());
+    }
+
+    #[test]
+    fn test_concurrent_reads_during_snapshot_updates() {
+        use std::sync::mpsc;
+        use std::sync::Arc as StdArc;
+        use std::thread;
+        use std::time::Duration;
+
+        let store = StdArc::new(AcmeChallengeStore::new());
+        let ft = future_time();
+        let (published_tx, published_rx) = mpsc::channel::<usize>();
+        let (ack_tx, ack_rx) = mpsc::channel::<()>();
+
+        let reader_store = StdArc::clone(&store);
+        let reader = thread::spawn(move || {
+            let mut reads = 0;
+
+            while let Ok(i) = published_rx.recv() {
+                assert!(!reader_store.is_empty());
+                if i % 2 == 0 {
+                    assert_eq!(
+                        reader_store.lookup("token-a", "a.com"),
+                        Some(Bytes::from_static(b"auth-a"))
+                    );
+                    assert!(reader_store.lookup("token-b", "b.com").is_none());
+                } else {
+                    assert_eq!(
+                        reader_store.lookup("token-b", "b.com"),
+                        Some(Bytes::from_static(b"auth-b"))
+                    );
+                    assert!(reader_store.lookup("token-a", "a.com").is_none());
+                }
+
+                reads += 1;
+                ack_tx.send(()).unwrap();
+            }
+
+            reads
+        });
+
+        for i in 0..500 {
+            let mut data = HashMap::new();
+            let token = if i % 2 == 0 { "token-a" } else { "token-b" };
+            let domain = if i % 2 == 0 { "a.com" } else { "b.com" };
+            let auth = if i % 2 == 0 { "auth-a" } else { "auth-b" };
+            data.insert(
+                format!("ns/{}", token),
+                make_acme(vec![challenge(domain, token, auth, ft)]),
+            );
+            store.full_set(&data);
+            published_tx.send(i).unwrap();
+            ack_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+
+        drop(published_tx);
+        let reads = reader.join().unwrap();
+
+        assert_eq!(reads, 500);
+        assert!(store.lookup("token-a", "a.com").is_none());
+        assert_eq!(store.lookup("token-b", "b.com"), Some(Bytes::from_static(b"auth-b")));
     }
 }

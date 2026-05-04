@@ -532,6 +532,9 @@ pub struct EdgionHttpContext {
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
 
+    /// Informational statuses collected during request processing
+    pub info: Vec<EdgionStatus>,
+
     /// Error codes collected during request processing
     pub edgion_status: Vec<EdgionStatus>,
 
@@ -669,6 +672,7 @@ impl EdgionHttpContext {
             start_time: Instant::now(),
             gateway_info: GatewayInfo::default(),
             request_info: RequestInfo::default(),
+            info: Vec::with_capacity(3),
             edgion_status: Vec::with_capacity(5),
             route_unit: None,
             selected_backend: None,
@@ -703,6 +707,11 @@ impl EdgionHttpContext {
     /// Add an error code to the context
     pub fn add_error(&mut self, err_code: EdgionStatus) {
         self.edgion_status.push(err_code);
+    }
+
+    /// Add an informational status to the context
+    pub fn add_info(&mut self, info_code: EdgionStatus) {
+        self.info.push(info_code);
     }
 
     /// Resolve the route-level `request_timeout`, preferring HTTP `route_unit`

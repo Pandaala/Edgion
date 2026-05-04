@@ -1,10 +1,15 @@
 use super::EdgionHttpProxy;
+use crate::core::gateway::cli::config::get_path_normalization_config;
+use crate::core::gateway::path_normalization::{
+    contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
+};
 use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_match_grpc_route};
 use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
 use crate::core::gateway::runtime::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::core::gateway::runtime::store::listener_gateway_info::format_gateway_key;
+use crate::core::gateway::services::acme::challenge_store::get_global_challenge_store;
 use crate::core::gateway::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
 };
@@ -12,8 +17,12 @@ use crate::types::ctx::NormalizedHostname;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
 use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
+use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
 use std::sync::Arc;
+
+/// ACME HTTP-01 challenge path prefix
+const ACME_CHALLENGE_PREFIX: &str = "/.well-known/acme-challenge/";
 
 #[inline]
 pub async fn request_filter(
@@ -221,6 +230,9 @@ async fn build_request_metadata(
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
     let req_header = session.req_header();
+    let raw_path = req_header.uri.path().to_string();
+    let raw_query = req_header.uri.query().map(str::to_string);
+    let path_norm_cfg = get_path_normalization_config();
 
     // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
     if ctx.request_info.discover_protocol.is_none() {
@@ -285,13 +297,6 @@ async fn build_request_metadata(
         })
         .unwrap_or_default();
 
-    // Validate hostname is present (not required for gRPC requests)
-    if !ctx.request_info.is_grpc_request && ctx.request_info.hostname.is_empty() {
-        ctx.add_error(EdgionStatus::HostMissing);
-        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
-        return Ok(true); // Response sent
-    }
-
     // Try to get X-Trace-Id from request headers, generate if not present
     ctx.request_info.x_trace_id = req_header
         .headers
@@ -333,6 +338,23 @@ async fn build_request_metadata(
         }
     }
 
+    if let Some(status) = apply_path_normalization_entry(ctx, &raw_path, raw_query, path_norm_cfg) {
+        ctx.add_error(status);
+        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
+
+    if try_serve_acme_challenge(edgion_http, session, ctx).await? {
+        return Ok(true);
+    }
+
+    // Validate hostname is present (not required for gRPC requests)
+    if !ctx.request_info.is_grpc_request && ctx.request_info.hostname.is_empty() {
+        ctx.add_error(EdgionStatus::HostMissing);
+        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true); // Response sent
+    }
+
     // Validate X-Forwarded-For length against security configuration
     if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
         if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
@@ -347,6 +369,86 @@ async fn build_request_metadata(
     }
 
     Ok(false) // Continue processing
+}
+
+/// Serve ACME HTTP-01 challenge response if there is an active challenge matching the request.
+///
+/// Called after request metadata and path normalization entry are populated so
+/// the access log retains client/host/trace/raw URI context for challenge hits.
+#[inline]
+async fn try_serve_acme_challenge(
+    edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<bool> {
+    let store = get_global_challenge_store();
+    if store.is_empty() {
+        return Ok(false);
+    }
+
+    let Some((token, host)) = acme_challenge_token_and_host(session.req_header()) else {
+        return Ok(false);
+    };
+
+    let key_auth = match store.lookup(token, &host) {
+        Some(v) => v,
+        None => return Ok(false),
+    };
+
+    ctx.add_info(EdgionStatus::AcmeChallengeServed);
+    ctx.request_info.status = Some(200);
+    ctx.request_info.response_committed = true;
+
+    let mut resp = ResponseHeader::build(200, None)?;
+    edgion_http.server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "text/plain")?;
+    resp.insert_header("Content-Length", key_auth.len().to_string())?;
+
+    session.write_response_header(Box::new(resp), false).await?;
+    session.write_response_body(Some(key_auth), true).await?;
+
+    Ok(true)
+}
+
+fn acme_challenge_token_and_host(req_header: &RequestHeader) -> Option<(&str, String)> {
+    let token = match req_header.uri.path().strip_prefix(ACME_CHALLENGE_PREFIX) {
+        Some(t) if !t.is_empty() => t,
+        _ => return None,
+    };
+
+    let host = req_header
+        .headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    Some((token, host))
+}
+
+fn apply_path_normalization_entry(
+    ctx: &mut EdgionHttpContext,
+    raw_path: &str,
+    raw_query: Option<String>,
+    cfg: &PathNormalizationConfig,
+) -> Option<EdgionStatus> {
+    ctx.request_info.entry_raw_path = raw_path.to_string();
+    ctx.request_info.entry_raw_query = raw_query;
+
+    if cfg.reject_escaped_slashes && contains_escaped_slash(raw_path) {
+        return Some(EdgionStatus::PathEscapedSlashRejected);
+    }
+
+    if cfg.reject_invalid_percent_encoding && has_invalid_percent_encoding(raw_path) {
+        return Some(EdgionStatus::PathInvalidPercentEncoding);
+    }
+
+    ctx.request_info.normalized_current_path = normalize_path(raw_path, cfg).unwrap_or_else(|| raw_path.to_string());
+
+    None
 }
 
 /// Append client IP to X-Forwarded-For header (inline for performance)
@@ -377,6 +479,58 @@ fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
 fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
     let req_header_mut = session.req_header_mut();
     let _ = req_header_mut.insert_header("X-Real-IP", &ctx.request_info.remote_addr);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pingora_http::RequestHeader;
+
+    #[test]
+    fn acme_challenge_token_and_host_extracts_token_and_strips_host_port() {
+        let mut req = RequestHeader::build("GET", b"/.well-known/acme-challenge/token-1", None).unwrap();
+        req.insert_header("host", "example.com:80").unwrap();
+
+        let (token, host) = acme_challenge_token_and_host(&req).unwrap();
+
+        assert_eq!(token, "token-1");
+        assert_eq!(host, "example.com");
+    }
+
+    #[test]
+    fn acme_challenge_token_and_host_ignores_non_challenge_paths() {
+        let req = RequestHeader::build("GET", b"/api/.well-known/acme-challenge/token-1", None).unwrap();
+
+        assert!(acme_challenge_token_and_host(&req).is_none());
+    }
+
+    #[test]
+    fn path_reject_freezes_entry_raw_uri_for_access_log() {
+        let mut ctx = EdgionHttpContext::new();
+        let cfg = PathNormalizationConfig {
+            reject_escaped_slashes: true,
+            reject_invalid_percent_encoding: true,
+            ..Default::default()
+        };
+
+        let status = apply_path_normalization_entry(&mut ctx, "/admin%2Fsecret", Some("trace=1".to_string()), &cfg);
+
+        assert_eq!(status, Some(EdgionStatus::PathEscapedSlashRejected));
+        assert_eq!(ctx.request_path(), "/admin%2Fsecret");
+        assert_eq!(ctx.request_uri(), "/admin%2Fsecret?trace=1");
+    }
+
+    #[test]
+    fn path_normalization_entry_refreshes_normalized_current_path() {
+        let mut ctx = EdgionHttpContext::new();
+        let cfg = PathNormalizationConfig::default();
+
+        let status = apply_path_normalization_entry(&mut ctx, "/admin//../secret", None, &cfg);
+
+        assert_eq!(status, None);
+        assert_eq!(ctx.request_path(), "/admin//../secret");
+        assert_eq!(ctx.path(), "/secret");
+    }
 }
 
 /// Extract CORS configuration dynamically from route filters
