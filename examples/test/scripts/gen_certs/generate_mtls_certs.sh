@@ -79,6 +79,28 @@ all_required_certs_exist() {
     return 0
 }
 
+# Verify the server cert's SANs match what the script generates.
+# This catches the case where the SAN list was updated but old cert files still exist.
+mtls_server_cert_sans_valid() {
+    local expected_sans=(
+        "mtls.example.com"
+        "mtls-optional.example.com"
+        "mtls-san.example.com"
+        "mtls-chain.example.com"
+        "mtls-terminate.example.com"
+    )
+    local san_output
+    san_output=$(openssl x509 -in "$CERTS_DIR/mtls-server.crt" -noout -text 2>/dev/null)
+    local san
+    for san in "${expected_sans[@]}"; do
+        if ! echo "$san_output" | grep -q "DNS:$san"; then
+            log_warning "mtls-server.crt is missing SAN: $san — regenerating cert set."
+            return 1
+        fi
+    done
+    return 0
+}
+
 write_mtls_suite_secrets() {
     if [ ! -f "$CERTS_DIR/client-ca.crt" ] || [ ! -f "$CERTS_DIR/intermediate-ca.crt" ]; then
         log_error "Missing client CA files for mTLS Secret generation."
@@ -414,7 +436,7 @@ log_info "runtime mTLS secret dir: $MTLS_SECRET_DIR"
 log_info "runtime BackendTLS secret dir: $BACKEND_TLS_SECRET_DIR"
 log_info "runtime HeaderCertAuth secret dir: $HEADER_CERT_AUTH_SECRET_DIR"
 
-if all_required_certs_exist; then
+if all_required_certs_exist && mtls_server_cert_sans_valid; then
     log_info "Found existing mTLS cert set, reusing it."
 else
     generate_mtls_certs

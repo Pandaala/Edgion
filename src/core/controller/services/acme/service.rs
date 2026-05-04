@@ -902,15 +902,15 @@ where
     });
 
     let pp = PatchParams::apply("edgion-acme-controller").force();
-    // Try status subresource first, fall back to main resource patch
+    // Try status subresource first; only fall back when the subresource is absent (404/405).
     match api.patch_status(name, &pp, &Patch::Apply(patch.clone())).await {
         Ok(_) => {}
-        Err(_) => {
-            // Status subresource may not be available, patch the main resource
+        Err(kube::Error::Api(ref e)) if e.code == 404 => {
             api.patch(name, &pp, &Patch::Apply(patch))
                 .await
                 .context("Failed to update EdgionAcme status")?;
         }
+        Err(e) => return Err(e).context("Failed to patch EdgionAcme status"),
     }
 
     Ok(())

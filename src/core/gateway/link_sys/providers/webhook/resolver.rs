@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use crate::core::gateway::observe::metrics::record_webhook_resolve_error;
 use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
 use crate::core::gateway::plugins::runtime::PluginSession;
 use crate::types::common::WebhookExtract;
@@ -25,7 +26,7 @@ pub async fn resolve_webhook_key(
     let runtime = match get_webhook_manager().get(webhook_ref).await {
         Some(rt) => rt,
         None => {
-            tracing::warn!(webhook = %webhook_ref, "Webhook not found in manager");
+            record_webhook_resolve_error("not_found");
             return None;
         }
     };
@@ -66,19 +67,19 @@ pub async fn resolve_webhook_key(
     match webhook_call(&runtime, req, get_webhook_global_max()).await {
         Ok(result) => extract_value(&result, extract),
         Err(WebhookCallError::Unhealthy) => {
-            tracing::debug!(webhook = %webhook_ref, "Webhook unhealthy, skipping");
+            record_webhook_resolve_error("unhealthy");
             None
         }
         Err(WebhookCallError::RateLimited) => {
-            tracing::debug!(webhook = %webhook_ref, "Webhook rate limited, skipping");
+            record_webhook_resolve_error("rate_limited");
             None
         }
-        Err(WebhookCallError::StatusNotSuccess { status, .. }) => {
-            tracing::debug!(webhook = %webhook_ref, status, "Webhook non-success status");
+        Err(WebhookCallError::StatusNotSuccess { .. }) => {
+            record_webhook_resolve_error("status_error");
             None
         }
-        Err(e) => {
-            tracing::warn!(webhook = %webhook_ref, error = ?e, "Webhook call failed");
+        Err(_) => {
+            record_webhook_resolve_error("call_failed");
             None
         }
     }

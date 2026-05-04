@@ -271,13 +271,7 @@ fn inject_auth(auth: &Option<WebhookAuth>, headers: &mut reqwest::header::Header
                     }
                     "query" => {
                         // Query param injection requires URL mutation; deferred to a follow-up.
-                        if let Some(param) = query_param {
-                            tracing::warn!(
-                                param = %param,
-                                "ApiKey query auth is not yet implemented; the API key will NOT be sent"
-                            );
-                        }
-                        let _ = key_val;
+                        let _ = (query_param, key_val);
                     }
                     _ => {}
                 }

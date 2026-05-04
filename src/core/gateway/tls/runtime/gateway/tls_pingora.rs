@@ -589,6 +589,9 @@ impl TlsCallback {
             self.get_secret_from_store_or_error(gateway_tls, ssl_ctx)
         };
 
+        if ssl_ctx.meta.err_log.is_some() {
+            return;
+        }
         self.apply_secret_to_ssl(ssl, &secret, ssl_ctx);
 
         // Skip mTLS if server cert setup failed

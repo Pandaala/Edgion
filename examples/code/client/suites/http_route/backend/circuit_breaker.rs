@@ -160,7 +160,27 @@ impl CircuitBreakerTestSuite {
                             .as_nanos()
                     );
 
-                    // Reset CB test state
+                    // Wait for the backend to be available before starting the ejection setup.
+                    // The previous test (consecutive_failures_eject) may have ejected the backend
+                    // for ejectionSeconds=3; if we proceed while it is still ejected, the gateway
+                    // returns 503 without forwarding, so the test-server counter never advances and
+                    // the subsequent "recovery" requests all get 502s (attempt <= fail_count).
+                    // Poll with fail_count=0 (always 200) until the backend is reachable.
+                    let probe_url = format!("{}/cb-fail/probe/0", ctx.http_url());
+                    for _ in 0..40 {
+                        match ctx
+                            .http_client
+                            .get(&probe_url)
+                            .header("Host", "cb-test.example.com")
+                            .send()
+                            .await
+                        {
+                            Ok(r) if r.status().as_u16() == 200 => break,
+                            _ => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+                        }
+                    }
+
+                    // Reset CB test state (server-side counter)
                     let reset_url = format!("{}/cb-reset", ctx.http_url());
                     ctx.http_client
                         .get(&reset_url)

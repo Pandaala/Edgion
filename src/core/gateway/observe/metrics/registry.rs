@@ -55,6 +55,8 @@ pub mod names {
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
     // LDAP auth plugin: cache hit ratio gauge (0.0–1.0), updated every 30 s
     pub const LDAP_CACHE_HIT_RATE: &str = "edgion_ldap_cache_hit_rate";
+    // Webhook key resolver: per-resolve failure counter by reason
+    pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
 }
 
 /// Global metrics singleton
@@ -495,6 +497,14 @@ pub fn record_ldap_auth_error(kind: &'static str) {
 /// The metric is only interpretable when a single LDAP plugin instance is running.
 pub fn set_ldap_cache_hit_rate(ratio: f64) {
     gauge!(names::LDAP_CACHE_HIT_RATE).set(ratio);
+}
+
+/// Record a webhook key-resolver failure.
+///
+/// `reason` must be one of: `"not_found"`, `"unhealthy"`, `"rate_limited"`,
+/// `"status_error"`, `"call_failed"`. Fixed cardinality — safe as a label.
+pub fn record_webhook_resolve_error(reason: &'static str) {
+    counter!(names::WEBHOOK_RESOLVE_ERRORS_TOTAL, "reason" => reason).increment(1);
 }
 
 #[cfg(test)]

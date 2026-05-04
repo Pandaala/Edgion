@@ -292,8 +292,18 @@ impl Vm {
                 }
             }
             BuiltinId::Substr => {
-                let end = state.pop()?.as_int().unwrap_or(0).max(0) as usize;
-                let start = state.pop()?.as_int().unwrap_or(0).max(0) as usize;
+                let end_val = state.pop()?;
+                let end = match &end_val {
+                    Value::Int(n) => (*n).max(0) as usize,
+                    Value::Nil => 0,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: end_val.type_name(), operation: "substr()" }),
+                };
+                let start_val = state.pop()?;
+                let start = match &start_val {
+                    Value::Int(n) => (*n).max(0) as usize,
+                    Value::Nil => 0,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: start_val.type_name(), operation: "substr()" }),
+                };
                 let s = state.pop()?;
                 match &s {
                     Value::Str(s) => {
@@ -478,8 +488,18 @@ impl Vm {
                 Ok(Value::List(parts))
             }
             BuiltinId::Range => {
-                let end = state.pop()?.as_int().unwrap_or(0);
-                let start = state.pop()?.as_int().unwrap_or(0);
+                let end_val = state.pop()?;
+                let end = match &end_val {
+                    Value::Int(n) => *n,
+                    Value::Nil => 0,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: end_val.type_name(), operation: "range()" }),
+                };
+                let start_val = state.pop()?;
+                let start = match &start_val {
+                    Value::Int(n) => *n,
+                    Value::Nil => 0,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: start_val.type_name(), operation: "range()" }),
+                };
                 let count = (end - start).max(0).min(1000) as usize;
                 let list: Vec<String> = (start..start + count as i64).map(|i| i.to_string()).collect();
                 Ok(Value::List(list))
@@ -592,7 +612,12 @@ impl Vm {
                         message: format!("format string too long: {} (max 256)", format.len()),
                     });
                 }
-                let timestamp = state.pop()?.as_int().unwrap_or(0);
+                let ts_val = state.pop()?;
+                let timestamp = match &ts_val {
+                    Value::Int(n) => *n,
+                    Value::Nil => return Ok(Value::Nil),
+                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: ts_val.type_name(), operation: "time_format()" }),
+                };
                 let dt = chrono::DateTime::from_timestamp(timestamp, 0);
                 match dt {
                     Some(dt) => {

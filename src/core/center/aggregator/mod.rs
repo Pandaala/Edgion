@@ -62,10 +62,25 @@ impl ResourceAggregator {
     /// Remove a controller's snapshot entirely. Used by Admin DELETE cascade.
     pub fn remove(&self, controller_id: &str) -> bool {
         let mut map = self.inner.write();
+        // Capture the cluster before removal so we can zero the gauge if it disappears.
+        let removed_cluster = map.get(controller_id).map(|s| {
+            if s.info.cluster.is_empty() { "unknown".to_string() } else { s.info.cluster.clone() }
+        });
         let removed = map.remove(controller_id).is_some();
         if removed {
             fed_metrics::record_evict_stale(fed_metrics::labels::evict_source::AGGREGATOR);
             Self::refresh_controller_gauges(&map);
+            // Pre-seeding cannot see a fully-removed entry; emit zero explicitly when the
+            // last controller for this cluster is gone.
+            if let Some(cluster) = removed_cluster {
+                let still_present = map.values().any(|s| {
+                    let c = if s.info.cluster.is_empty() { "unknown" } else { s.info.cluster.as_str() };
+                    c == cluster
+                });
+                if !still_present {
+                    fed_metrics::set_aggregator_controllers(&cluster, 0);
+                }
+            }
         }
         removed
     }
@@ -74,6 +89,11 @@ impl ResourceAggregator {
     /// Caller must hold the write lock.
     fn refresh_controller_gauges(map: &HashMap<String, ControllerSnapshot>) {
         let mut by_cluster: HashMap<String, u64> = HashMap::new();
+        // Pre-seed all known clusters with 0 so disappeared clusters are zeroed out.
+        for snap in map.values() {
+            let cluster = if snap.info.cluster.is_empty() { "unknown" } else { &snap.info.cluster };
+            by_cluster.entry(cluster.to_string()).or_insert(0);
+        }
         for snap in map.values().filter(|s| s.offline_since.is_none()) {
             let cluster = if snap.info.cluster.is_empty() {
                 "unknown".to_string()

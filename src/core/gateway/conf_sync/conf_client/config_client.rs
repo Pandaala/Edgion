@@ -607,7 +607,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
             tracing::error!(
                 component = "config_client",
                 change = ?change,
-                data_preview = &data[..data.len().min(200)],
+                data_preview = &data[..data.floor_char_boundary(200)],
                 "Failed to determine resource type"
             );
             return;
@@ -619,7 +619,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 change = ?change,
                 kind = kind,
                 error = %err,
-                data_preview = &data[..data.len().min(200)],
+                data_preview = &data[..data.floor_char_boundary(200)],
                 "Failed to parse resource"
             );
         };
@@ -639,7 +639,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 tracing::warn!(
                     component = "config_client",
                     change = ?change,
-                    data_preview = &data[..data.len().min(200)],
+                    data_preview = &data[..data.floor_char_boundary(200)],
                     "Unspecified resource kind, skipping"
                 );
             }
