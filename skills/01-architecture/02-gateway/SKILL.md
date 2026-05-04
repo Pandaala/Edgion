@@ -43,8 +43,8 @@ description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TL
 │  ├── ConnectionFilter (TCP 层, StreamPlugins)                │
 │  │                                                           │
 │  ├── ProxyHttp (HTTP/gRPC 生命周期)                          │
-│  │   ├── early_request_filter → ACME, timeouts               │
-│  │   ├── request_filter       → route match + plugins        │
+│  │   ├── early_request_filter → timeouts + keepalive         │
+│  │   ├── request_filter       → metadata + ACME + route       │
 │  │   ├── upstream_peer        → backend selection + LB       │
 │  │   ├── upstream_response    → response plugins             │
 │  │   └── logging              → AccessLog + Metrics          │

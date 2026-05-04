@@ -138,8 +138,8 @@ Controller 推送资源变更
   → ConnectionFilter: StreamPlugins 过滤 (IP 限制等)
     → TLS 握手: SNI 匹配证书 (GatewayTlsMatcher via ArcSwap)
       → HTTP 解析
-        → early_request_filter: ACME challenge、超时设置
-          → request_filter: 元数据提取、路由匹配、插件执行
+        → early_request_filter: 超时设置、keepalive 管理
+          → request_filter: 元数据提取、ACME challenge、路由匹配、插件执行
             → upstream_peer: 后端选择、LB 策略
               → 代理请求到上游
                 → upstream_response_filter/body_filter: 响应处理

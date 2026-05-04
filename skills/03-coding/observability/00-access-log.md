@@ -43,6 +43,8 @@
 | `sni` | TLS SNI（HTTPS 连接） |
 | `tls_id` | TLS 连接 ID（用于关联 tls_access.log） |
 | `discover_protocol` | 自动探测协议（grpc / websocket 等） |
+| `info` | 网关内部正常处理事件（如 ACME 本地命中），不代表异常 |
+| `errors` | 网关内部异常/拒绝/失败原因 |
 | `match_info.sv` | sync_version — gRPC 同步版本号，用于关联控制面日志（0 时省略）。详见 [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
 | stage_logs | 各阶段插件日志（见下方 PluginLog） |
 | upstreams | 上游连接详情（ip、port、ct/ht/bt/et、retry） |

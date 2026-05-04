@@ -34,14 +34,17 @@ flowchart TD
 
 在 HTTP 头解析完成后、路由匹配之前执行：
 
-1. **ACME HTTP-01 challenge**：检查全局 `ChallengeStore`（快速路径：`is_empty()` 检查在 99.99% 请求中零开销）。命中时直接发送 200 响应并短路返回 `HTTPStatus(200)` 错误终止代理流水线。
-2. **客户端超时设置**：从预解析的 `ParsedTimeouts.client` 设置 `read_timeout` 和 `write_timeout`。
-3. **Keepalive 管理**：正常时设置 keepalive_timeout；关闭中（`is_process_shutting_down()`）设为 None 禁用 keepalive 以辅助流量排空。
+1. **客户端超时设置**：从预解析的 `ParsedTimeouts.client` 设置 `read_timeout` 和 `write_timeout`。
+2. **Keepalive 管理**：正常时设置 keepalive_timeout；关闭中（`is_process_shutting_down()`）设为 None 禁用 keepalive 以辅助流量排空。
 
 ### 阶段 2：request_filter
 
 **文件**：`pg_request_filter.rs`
 **签名**：`async fn request_filter(session, ctx) -> Result<bool>`（返回 true 表示响应已发送）
+
+在路由匹配和插件执行之前，先构建请求级 metadata（client/remote/host/trace/raw URI/normalized path），再处理本地短路：
+
+1. **ACME HTTP-01 challenge**：检查全局 `ChallengeStore`（快速路径：`is_empty()` 检查在 99.99% 请求中零开销）。命中时直接发送 200 响应并返回 `Ok(true)` 终止代理流水线，同时 access log 保留 metadata 和 raw URI。
 
 最复杂的阶段，负责请求解析和路由匹配：
 
