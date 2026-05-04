@@ -245,72 +245,23 @@ pub async fn select_http_backend(
         }
     };
 
-    // Session Persistence: extract token before mutating ctx
-    // Pre-compute outside the borrow of route_unit to satisfy the borrow checker
-    let sp_active = route_unit.rule.session_persistence.is_some();
+    // Session Persistence step 1 of 2: extract token + set initial state. Step 2
+    // (affinity lookup) runs below after backend_ref is selected, since the affinity
+    // map is keyed by `{namespace}/{backend_ref.name}`.
+    let sp_token = sp_extract_token(session, &mut ctx.sp_state, &route_unit.rule);
 
-    let sp_token = route_unit
-        .rule
-        .session_persistence
-        .as_ref()
-        .and_then(|sp| session_persistence::extract_session_token(session, sp));
-
-    // Determine initial session persistence state and extract token value for affinity lookup
-    let sp_token_value: Option<String>;
-    if sp_active {
-        match sp_token {
-            Some(token) => {
-                // Token found in request — stays Inactive unless fallback happens later
-                ctx.sp_state = SessionPersistenceState::Inactive;
-                sp_token_value = Some(token);
-            }
-            None => {
-                // No token — first request, will inject new token
-                ctx.sp_state = SessionPersistenceState::InjectNew;
-                sp_token_value = None;
-            }
-        }
-    } else {
-        sp_token_value = None;
-    }
-
-    // ===== DynamicInternalUpstream: select specific backend_ref by name =====
-    let mut backend_ref = if let Some(ref jump) = ctx.internal_jump {
-        match RouteRules::find_backend_by_name(
-            &route_unit.rule,
-            &jump.backend_ref_name,
-            jump.backend_ref_namespace.as_deref(),
-            &route_unit.matched_info.rsc.ns,
-        ) {
-            Ok(backend) => backend,
-            Err(_) => match RouteRules::select_backend(&route_unit.rule) {
-                Ok(backend) => backend,
-                Err(e) => {
-                    ctx.add_error(match &e {
-                        EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-                        EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                        EdError::RefDenied { .. } => EdgionStatus::RefDenied,
-                        _ => EdgionStatus::Unknown,
-                    });
-                    end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-                    return Err(PingoraError::new(ErrorType::InternalError));
-                }
-            },
-        }
-    } else {
-        // ===== Normal: weighted round-robin selection =====
-        match RouteRules::select_backend(&route_unit.rule) {
-            Ok(backend) => backend,
-            Err(e) => {
-                ctx.add_error(match &e {
-                    EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-                    EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-                    EdError::RefDenied { .. } => EdgionStatus::RefDenied,
-                    _ => EdgionStatus::Unknown,
-                });
-                end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-                return Err(PingoraError::new(ErrorType::InternalError));
-            }
+    // Pick backend_ref: InternalJump (plugin-injected) tries by name first and falls back to
+    // weighted round-robin on miss; without InternalJump, plain weighted round-robin.
+    let mut backend_ref = match pick_backend_ref(
+        &route_unit.rule,
+        &route_unit.matched_info.rsc.ns,
+        ctx.internal_jump.as_ref(),
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            ctx.add_error(backend_select_status(&e));
+            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+            return Err(PingoraError::new(ErrorType::InternalError));
         }
     };
 
@@ -348,32 +299,107 @@ pub async fn select_http_backend(
         return Err(PingoraError::new(err_type));
     }
 
-    // Session Persistence: resolve token → target addr via affinity map
-    // Must happen after backend_ref selection (we need service_key for the map lookup)
-    if sp_active {
-        if let Some(ref token) = sp_token_value {
-            // Token present — look up in affinity map
-            let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_ns);
-            let service_key = format!("{}/{}", namespace, &backend_ref.name);
-
-            // Ensure affinity map is built for this service
-            let backends = crate::core::gateway::backends::get_backends_for_service(&service_key);
-            let affinity_map =
-                crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build(&service_key, &backends);
-
-            if let Some(&addr) = affinity_map.get(token.as_str()) {
-                // Token resolved — set target for try_get_peer to use
-                ctx.sp_target_addr = Some(addr);
-            } else {
-                // Token not in map (stale/unknown) → normal LB + inject new token
-                ctx.sp_state = SessionPersistenceState::InjectNew;
-            }
-        }
-        // sp_token_value is None → first request (InjectNew already set), no lookup needed
-    }
+    // Session Persistence step 2 of 2: resolve token to a sticky target via the
+    // affinity map. Step 1 ran above before backend_ref selection.
+    sp_resolve_target(ctx, &backend_ref, &route_ns, sp_token.as_deref());
 
     ctx.selected_backend = Some(backend_ref);
     Ok(())
+}
+
+/// Session Persistence step 1: extract the session token (if SP is configured on the route)
+/// and pin the initial `sp_state`. Returns the token for the later affinity lookup.
+///
+/// Takes `&mut SessionPersistenceState` rather than `&mut EdgionHttpContext` to keep the
+/// borrow disjoint from `&route_unit.rule` (which the caller still needs for backend selection).
+///
+/// - SP not configured → returns `None`, state untouched.
+/// - SP configured, token present → state = `Inactive` (a fallback later may flip it).
+/// - SP configured, no token → state = `InjectNew` (first request; response will inject one).
+#[inline]
+fn sp_extract_token(
+    session: &Session,
+    sp_state: &mut SessionPersistenceState,
+    rule: &crate::types::HTTPRouteRule,
+) -> Option<String> {
+    let sp = rule.session_persistence.as_ref()?;
+    let token = session_persistence::extract_session_token(session, sp);
+    *sp_state = if token.is_some() {
+        SessionPersistenceState::Inactive
+    } else {
+        SessionPersistenceState::InjectNew
+    };
+    token
+}
+
+/// Session Persistence step 2: resolve a token to a sticky upstream address via the
+/// per-service affinity map.
+///
+/// - Token absent → no-op (first request: state was already set to `InjectNew` in step 1).
+/// - Token hits in map → set `sp_target_addr` so `try_get_peer` routes directly to it.
+/// - Token misses (stale/unknown) → flip state to `InjectNew` so the response refreshes it.
+#[inline]
+fn sp_resolve_target(
+    ctx: &mut EdgionHttpContext,
+    backend_ref: &crate::types::HTTPBackendRef,
+    route_ns: &str,
+    token: Option<&str>,
+) {
+    let Some(token) = token else { return };
+
+    let namespace = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+    let service_key = format!("{}/{}", namespace, &backend_ref.name);
+
+    let backends = crate::core::gateway::backends::get_backends_for_service(&service_key);
+    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build(&service_key, &backends);
+
+    if let Some(&addr) = affinity_map.get(token) {
+        ctx.sp_target_addr = Some(addr);
+    } else {
+        ctx.sp_state = SessionPersistenceState::InjectNew;
+    }
+}
+
+/// Pick the HTTP backend_ref for this request.
+///
+/// With `InternalJump` (set by the dynamic_internal_upstream plugin), try the named
+/// backend_ref first; on miss, fall through to weighted round-robin so the request
+/// still gets served (graceful degradation rather than failing the request).
+///
+/// Without `InternalJump`, plain weighted round-robin selection.
+///
+/// Pure: no `&mut ctx` borrow, so the caller can keep its `&route_unit.rule` borrow
+/// alive across the call. Takes `&Arc<HTTPRouteRule>` (rather than `&HTTPRouteRule`)
+/// because that's what `RouteRules::find_backend_by_name` and `select_backend` require.
+#[inline]
+fn pick_backend_ref(
+    rule: &std::sync::Arc<crate::types::HTTPRouteRule>,
+    route_ns: &str,
+    internal_jump: Option<&crate::types::InternalJumpPreset>,
+) -> Result<crate::types::HTTPBackendRef, EdError> {
+    if let Some(jump) = internal_jump {
+        if let Ok(b) = RouteRules::find_backend_by_name(
+            rule,
+            &jump.backend_ref_name,
+            jump.backend_ref_namespace.as_deref(),
+            route_ns,
+        ) {
+            return Ok(b);
+        }
+        // Named lookup missed → fall through to weighted RR.
+    }
+    RouteRules::select_backend(rule)
+}
+
+/// Map a backend-selection `EdError` to its public `EdgionStatus` for access logs.
+#[inline]
+fn backend_select_status(e: &EdError) -> EdgionStatus {
+    match e {
+        EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
+        EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
+        EdError::RefDenied { .. } => EdgionStatus::RefDenied,
+        _ => EdgionStatus::Unknown,
+    }
 }
 
 /// Configure peer timeouts from global and route-level configs (inline for performance)
