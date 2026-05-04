@@ -12,6 +12,12 @@
 - `test_server` 能力清单： [references/test-server-capabilities.md](references/test-server-capabilities.md)
 - 保留现场后的排障步骤： [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)
 
+## macOS 前置：lo0 别名
+
+`HTTPRoute/Backend/LB*` 测试用 `127.0.0.2` / `127.0.0.3` / `127.0.0.4` 作为 LeastConn / RoundRobin / ConsistentHash 的多个独立 endpoint。Linux 默认把 `127/8` 整段路由到 `lo`，CI（ubuntu-latest）开箱即用；**macOS 默认 `lo0` 只 bind `127.0.0.1`**，必须手动给 `lo0` 加 alias，否则 connect 静默 timeout（test_server bind `0.0.0.0` 也救不了）。
+
+`run_integration.sh` 在启动时会做 preflight 检测，缺别名时直接退出并打印 `sudo ifconfig lo0 alias …` 命令；按提示手跑一次即可。重启后 alias 会失效，需要重新加；要永久生效用 launchd plist（脚本提示里有）。
+
 ## 快速开始
 
 ```bash

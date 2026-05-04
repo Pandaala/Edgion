@@ -638,11 +638,23 @@ pub struct EdgionHttpContext {
     /// Link-local / metadata ranges are never allowed by this switch.
     pub allow_loopback_upstream: bool,
 
-    /// P0-07: 上一次成功 increment 的 LeastConn backend (service_key, lb_addr)。
-    /// 由 connected_to_upstream 在 increment 后写入。
-    /// 由 begin_upstream_attempt 在 push 占位 upstream 之前 take() + decrement()，
-    /// 确保 retry 中间 backend 计数不泄漏。
-    pub leastconn_incremented_backend: Option<(String, pingora_core::protocols::l4::socket::SocketAddr)>,
+    /// P0-07: the last LeastConn backend that was successfully incremented
+    /// (service_key, lb_addr).
+    /// Written by `connected_to_upstream` after `runtime_state::increment`.
+    /// Taken by `begin_upstream_attempt` (decrement on retry) and by
+    /// `pg_logging` (decrement at request end), keeping the LeastConn ledger
+    /// balanced across retries and avoiding decrement on attempts that never
+    /// reached `connected_to_upstream`.
+    pub leastconn_incremented_backend: Option<(String, SocketAddr)>,
+
+    /// g1-007: the last EWMA backend that actually finished connect
+    /// (service_key, lb_addr, attempt_start_time).
+    /// Written by `connected_to_upstream` when the LB policy is EWMA.
+    /// Cleared by `begin_upstream_attempt` on retry (so a failed retry's
+    /// elapsed time cannot pollute the previous backend's EWMA sample).
+    /// Consumed by `pg_logging` at request end, which computes latency from
+    /// `attempt_start` rather than the request start.
+    pub last_ewma_backend: Option<(String, SocketAddr, Instant)>,
 }
 
 impl Default for EdgionHttpContext {
@@ -684,6 +696,7 @@ impl EdgionHttpContext {
             sp_target_addr: None,
             allow_loopback_upstream: false,
             leastconn_incremented_backend: None,
+            last_ewma_backend: None,
         }
     }
 

@@ -471,10 +471,14 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 /// cleanup is safe to run before pushing the new placeholder.
 #[inline]
 pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
-    // P0-07: retry 时清算上一次成功建连但中途放弃的 LeastConn backend。
+    // P0-07: on retry, decrement the LeastConn count for the previous attempt's backend
+    // (which had connected successfully but is now being abandoned).
     if let Some((sk, addr)) = ctx.leastconn_incremented_backend.take() {
         crate::core::gateway::lb::runtime_state::decrement(&sk, &addr);
     }
+    // g1-007: on retry, drop the previous attempt's EWMA record so the upcoming retry's
+    // elapsed time does not pollute the previous backend's EWMA sample.
+    ctx.last_ewma_backend = None;
 
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);

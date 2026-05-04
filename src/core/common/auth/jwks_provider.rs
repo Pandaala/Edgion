@@ -1,203 +1,261 @@
-//! JWKS (JSON Web Key Set) provider with background refresh.
+//! Generic JWKS + OIDC discovery cache provider.
 //!
-//! Fetches the OIDC discovery document to locate the `jwks_uri`, then periodically
-//! refreshes the JWKS. Provides `DecodingKey` construction for JWT verification.
+//! 单实例同时维护 discovery 文档与 JWKS 缓存，**统一 stale-while-revalidate 语义**：
+//! 当 JWKS 端点不可达且本地有缓存 set 时，返回缓存（带 warn 日志）而非传播 fetch 错误。
+//! 由 `JwksProviderConfig` 参数化 TTL / min refresh interval / 响应字节上限 / timeout /
+//! 组件 label。Discovery 文档形态由泛型 `D: DiscoveryDoc` 决定 —— admin 用精简版仅含
+//! `issuer + jwks_uri`，OIDC 网关插件用扩展版（包含 5 个 optional endpoints）。
 
 use jsonwebtoken::jwk::JwkSet;
 use reqwest::Client;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
-use super::config::AdminAuthConfig;
 use crate::core::common::http_util::fetch_json_limited;
 
-/// Lightweight discovery document — we only need issuer + jwks_uri.
-#[derive(Debug, Clone, Deserialize)]
-struct DiscoveryDocument {
-    issuer: String,
-    jwks_uri: String,
+/// Trait every discovery-doc shape must implement so the provider can read
+/// the two universally-required fields. Extended fields (e.g. `token_endpoint`)
+/// stay private to the calling crate.
+pub trait DiscoveryDoc: DeserializeOwned + Send + Sync + Clone + 'static {
+    fn issuer(&self) -> &str;
+    fn jwks_uri(&self) -> &str;
 }
 
-/// Cached JWKS state.
-#[derive(Debug)]
+/// Caller-supplied post-fetch validator. Used by g3-009 to enforce
+/// config-conditional required endpoints (e.g. `token_endpoint` when
+/// `verification_mode != JwksOnly`). Default is no-op.
+pub type DiscoveryValidator<D> = Arc<dyn Fn(&D) -> Result<(), String> + Send + Sync>;
+
+pub fn no_op_validator<D: DiscoveryDoc>() -> DiscoveryValidator<D> {
+    Arc::new(|_| Ok(()))
+}
+
+#[derive(Debug, Clone)]
+pub struct JwksProviderConfig {
+    pub discovery_url: String,
+    pub jwks_cache_ttl: Duration,
+    pub jwks_min_refresh_interval: Duration,
+    pub discovery_max_response_bytes: usize,
+    pub jwks_max_response_bytes: usize,
+    pub request_timeout: Duration,
+    /// Stable, low-cardinality component label for tracing (`"admin_auth"`,
+    /// `"openid_connect"`). Avoid per-instance dynamic strings.
+    pub component_label: &'static str,
+}
+
+/// Lean discovery doc for admin path — only the two universal fields.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LeanDiscoveryDocument {
+    pub issuer: String,
+    pub jwks_uri: String,
+}
+
+impl DiscoveryDoc for LeanDiscoveryDocument {
+    fn issuer(&self) -> &str {
+        &self.issuer
+    }
+    fn jwks_uri(&self) -> &str {
+        &self.jwks_uri
+    }
+}
+
+#[derive(Debug, Default)]
 struct JwksState {
     set: Option<JwkSet>,
     expires_at: Option<Instant>,
     last_refresh_at: Option<Instant>,
 }
 
-/// JWKS provider that fetches and caches JWKS from an OIDC discovery endpoint.
-pub struct JwksProvider {
-    config: AdminAuthConfig,
-    client: Client,
-    discovery_doc: RwLock<Option<DiscoveryDocument>>,
+pub struct JwksProvider<D: DiscoveryDoc> {
+    config: JwksProviderConfig,
+    client: Arc<Client>,
+    validator: DiscoveryValidator<D>,
+    discovery_doc: RwLock<Option<D>>,
     discovery_refresh: Mutex<()>,
     jwks_state: RwLock<JwksState>,
     jwks_refresh: Mutex<()>,
 }
 
-impl JwksProvider {
-    /// Create a new JWKS provider from admin auth config.
-    pub fn new(config: &AdminAuthConfig) -> Arc<Self> {
-        let client = Client::builder()
-            .pool_max_idle_per_host(4)
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .danger_accept_invalid_certs(!config.ssl_verify)
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::error!(component = "admin_auth", error = %e, "Failed to build HTTP client for JWKS");
-                std::process::exit(1);
-            });
-
+impl<D: DiscoveryDoc> JwksProvider<D> {
+    /// Construct. The HTTP client is injected so callers can choose between
+    /// a per-instance `Client` (admin) or a process-wide pool (gateway plugin).
+    pub fn new(config: JwksProviderConfig, client: Arc<Client>, validator: DiscoveryValidator<D>) -> Arc<Self> {
         Arc::new(Self {
-            config: config.clone(),
+            config,
             client,
+            validator,
             discovery_doc: RwLock::new(None),
             discovery_refresh: Mutex::new(()),
-            jwks_state: RwLock::new(JwksState {
-                set: None,
-                expires_at: None,
-                last_refresh_at: None,
-            }),
+            jwks_state: RwLock::new(JwksState::default()),
             jwks_refresh: Mutex::new(()),
         })
     }
 
-    /// Get the cached issuer from the discovery document.
+    /// Cached issuer (None until discovery has been fetched).
     pub async fn issuer(&self) -> Option<String> {
-        self.discovery_doc.read().await.as_ref().map(|d| d.issuer.clone())
+        self.discovery_doc.read().await.as_ref().map(|d| d.issuer().to_string())
     }
 
-    /// Get the cached JWKS. If expired or missing, refreshes first.
-    pub async fn get_jwks(&self) -> Result<JwkSet, String> {
-        // Fast path: check if cached JWKS is still valid.
-        {
-            let state = self.jwks_state.read().await;
-            if let Some(ref set) = state.set {
-                if state.expires_at.map_or(false, |exp| Instant::now() < exp) {
-                    return Ok(set.clone());
-                }
-            }
-        }
-
-        // Slow path: refresh with singleflight lock.
-        let _guard = self.jwks_refresh.lock().await;
-
-        // Double-check after acquiring lock.
-        {
-            let state = self.jwks_state.read().await;
-            if let Some(ref set) = state.set {
-                if state.expires_at.map_or(false, |exp| Instant::now() < exp) {
-                    return Ok(set.clone());
-                }
-            }
-        }
-
-        // Rate-limit refreshes.
-        {
-            let state = self.jwks_state.read().await;
-            if let Some(last) = state.last_refresh_at {
-                let min_interval = Duration::from_secs(self.config.jwks_min_refresh_interval);
-                if last.elapsed() < min_interval {
-                    if let Some(ref set) = state.set {
-                        return Ok(set.clone());
-                    }
-                }
-            }
-        }
-
-        // Ensure discovery document is available.
-        self.ensure_discovery().await?;
-
-        let jwks_uri = {
-            let doc = self.discovery_doc.read().await;
-            doc.as_ref().ok_or("Discovery document not available")?.jwks_uri.clone()
-        };
-
-        // Fetch JWKS.
-        let resp = self
-            .client
-            .get(&jwks_uri)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to fetch JWKS from {}: {}", jwks_uri, e))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("JWKS endpoint returned status {}", resp.status()));
-        }
-
-        let jwks: JwkSet = fetch_json_limited(resp, self.config.jwks_max_response_bytes, "JWKS").await?;
-
-        tracing::info!(
-            component = "admin_auth",
-            num_keys = jwks.keys.len(),
-            "JWKS refreshed successfully"
-        );
-
-        // Update cache.
-        {
-            let mut state = self.jwks_state.write().await;
-            state.set = Some(jwks.clone());
-            state.expires_at = Some(Instant::now() + Duration::from_secs(self.config.jwks_cache_ttl));
-            state.last_refresh_at = Some(Instant::now());
-        }
-
-        Ok(jwks)
+    /// Read-only cached discovery (no fetch). Used by gateway logout path which
+    /// must not pay an HTTP round-trip on the request.
+    pub async fn cached_discovery(&self) -> Option<D> {
+        self.discovery_doc.read().await.clone()
     }
 
-    /// Ensure the discovery document is fetched.
-    async fn ensure_discovery(&self) -> Result<(), String> {
-        {
-            let doc = self.discovery_doc.read().await;
-            if doc.is_some() {
-                return Ok(());
-            }
+    /// Get cached discovery, fetch if absent. Validator runs **before** caching;
+    /// a failed validator does NOT poison the cache (next call retries).
+    pub async fn get_or_fetch_discovery(&self) -> Result<D, String> {
+        if let Some(doc) = self.discovery_doc.read().await.as_ref() {
+            return Ok(doc.clone());
         }
-
         let _guard = self.discovery_refresh.lock().await;
-
-        // Double-check.
-        {
-            let doc = self.discovery_doc.read().await;
-            if doc.is_some() {
-                return Ok(());
-            }
+        if let Some(doc) = self.discovery_doc.read().await.as_ref() {
+            return Ok(doc.clone());
         }
 
         let resp = self
             .client
-            .get(&self.config.discovery)
+            .get(&self.config.discovery_url)
+            .timeout(self.config.request_timeout)
             .send()
             .await
             .map_err(|e| format!("Failed to fetch discovery document: {}", e))?;
-
         if !resp.status().is_success() {
             return Err(format!("Discovery endpoint returned status {}", resp.status()));
         }
+        let doc: D = fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery").await?;
 
-        let doc: DiscoveryDocument =
-            fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery").await?;
-
-        if doc.issuer.is_empty() {
+        if doc.issuer().is_empty() {
             return Err("Discovery document missing issuer".to_string());
         }
-        if doc.jwks_uri.is_empty() {
+        if doc.jwks_uri().is_empty() {
             return Err("Discovery document missing jwks_uri".to_string());
         }
+        // g3-009: caller-supplied config-aware validation runs before caching.
+        (self.validator)(&doc)?;
 
         tracing::info!(
-            component = "admin_auth",
-            issuer = %doc.issuer,
-            jwks_uri = %doc.jwks_uri,
+            component = self.config.component_label,
+            issuer = doc.issuer(),
+            jwks_uri = doc.jwks_uri(),
             "OIDC discovery document loaded"
         );
 
+        *self.discovery_doc.write().await = Some(doc.clone());
+        Ok(doc)
+    }
+
+    /// Get JWKS. Stale-while-revalidate: if the upstream fetch fails and we
+    /// have a cached set, return the cached set with a warn log. Only when
+    /// **no** cached set exists does the error propagate.
+    ///
+    /// `force_refresh=true` skips the TTL fast-path (used on JWT `kid` miss);
+    /// `jwks_min_refresh_interval` still gates back-to-back refreshes.
+    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwkSet, String> {
+        let now = Instant::now();
+        let min_refresh = self.config.jwks_min_refresh_interval;
+        let ttl = self.config.jwks_cache_ttl;
+
+        // Fast path.
+        {
+            let state = self.jwks_state.read().await;
+            if let Some(ref set) = state.set {
+                if !force_refresh && state.expires_at.is_some_and(|exp| now < exp) {
+                    return Ok(set.clone());
+                }
+                if force_refresh && !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
+                    return Ok(set.clone());
+                }
+            }
+        }
+
+        let _guard = self.jwks_refresh.lock().await;
+        let now = Instant::now();
+
+        // Double-check after lock.
+        {
+            let state = self.jwks_state.read().await;
+            if let Some(ref set) = state.set {
+                if !force_refresh && state.expires_at.is_some_and(|exp| now < exp) {
+                    return Ok(set.clone());
+                }
+                if force_refresh && !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
+                    return Ok(set.clone());
+                }
+            } else if !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
+                // No cached set AND blocked by min_refresh: caller should retry later.
+                return Err("JWKS refresh blocked by minimum refresh interval".to_string());
+            }
+        }
+
+        let discovery = self.get_or_fetch_discovery().await?;
+        let fetch_result: Result<JwkSet, String> = async {
+            let resp = self
+                .client
+                .get(discovery.jwks_uri())
+                .timeout(self.config.request_timeout)
+                .send()
+                .await
+                .map_err(|e| format!("JWKS request failed: {}", e))?;
+            if !resp.status().is_success() {
+                return Err(format!("JWKS request failed with status {}", resp.status()));
+            }
+            let jwks: JwkSet = fetch_json_limited(resp, self.config.jwks_max_response_bytes, "JWKS").await?;
+            if jwks.keys.is_empty() {
+                return Err("JWKS endpoint returned empty keys".to_string());
+            }
+            Ok(jwks)
+        }
+        .await;
+
+        let mut state = self.jwks_state.write().await;
+        state.last_refresh_at = Some(now);
+
+        match fetch_result {
+            Ok(jwks) => {
+                tracing::info!(
+                    component = self.config.component_label,
+                    num_keys = jwks.keys.len(),
+                    "JWKS refreshed successfully"
+                );
+                state.set = Some(jwks.clone());
+                state.expires_at = Some(now + ttl);
+                Ok(jwks)
+            }
+            Err(err) => match state.set.clone() {
+                Some(cached) => {
+                    // Stale-while-revalidate: log and serve stale.
+                    // Bump expires_at by min_refresh_interval so subsequent calls within the
+                    // backoff window hit the fast path instead of re-fetching every request
+                    // during a prolonged IdP outage (g3-002 review M2).
+                    state.expires_at = Some(now + min_refresh);
+                    tracing::warn!(
+                        component = self.config.component_label,
+                        error = %err,
+                        "JWKS fetch failed, serving stale cache"
+                    );
+                    Ok(cached)
+                }
+                None => Err(err),
+            },
+        }
+    }
+
+    fn can_refresh(last: Option<Instant>, now: Instant, min: Duration) -> bool {
+        match last {
+            Some(t) => now.saturating_duration_since(t) >= min,
+            None => true,
+        }
+    }
+
+    /// Test-only helper to inject a discovery doc directly, bypassing fetch.
+    /// Used by OIDC plugin tests that exercise post-discovery code paths.
+    #[cfg(test)]
+    pub async fn seed_discovery(&self, doc: D) {
         *self.discovery_doc.write().await = Some(doc);
-        Ok(())
     }
 }
 
@@ -206,14 +264,206 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_discovery_document_deserialize() {
+    fn test_lean_discovery_document_deserialize() {
         let json = r#"{
             "issuer": "https://idp.example.com",
             "jwks_uri": "https://idp.example.com/certs",
             "authorization_endpoint": "https://idp.example.com/auth"
         }"#;
-        let doc: DiscoveryDocument = serde_json::from_str(json).unwrap();
-        assert_eq!(doc.issuer, "https://idp.example.com");
-        assert_eq!(doc.jwks_uri, "https://idp.example.com/certs");
+        let doc: LeanDiscoveryDocument = serde_json::from_str(json).unwrap();
+        assert_eq!(doc.issuer(), "https://idp.example.com");
+        assert_eq!(doc.jwks_uri(), "https://idp.example.com/certs");
+    }
+
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    struct MockIdp {
+        addr: String,
+        jwks_should_fail: Arc<AtomicBool>,
+        jwks_keys_count: Arc<AtomicUsize>,
+        jwks_request_count: Arc<AtomicUsize>,
+    }
+
+    async fn spawn_mock_idp() -> MockIdp {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = listener.local_addr().unwrap();
+        let addr = format!("http://{}", local_addr);
+        let jwks_should_fail = Arc::new(AtomicBool::new(false));
+        let jwks_keys_count = Arc::new(AtomicUsize::new(1));
+        let jwks_request_count = Arc::new(AtomicUsize::new(0));
+        let fail_clone = jwks_should_fail.clone();
+        let count_clone = jwks_keys_count.clone();
+        let request_count_clone = jwks_request_count.clone();
+        let addr_for_loop = addr.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let fail = fail_clone.clone();
+                let count = count_clone.clone();
+                let request_count = request_count_clone.clone();
+                let addr_owned = addr_for_loop.clone();
+                tokio::spawn(async move {
+                    let mut req = [0u8; 1024];
+                    let n = sock.read(&mut req).await.unwrap_or(0);
+                    let req_str = String::from_utf8_lossy(&req[..n]).to_string();
+                    if req_str.contains("/.well-known/openid-configuration") {
+                        let body = format!(r#"{{"issuer":"{0}","jwks_uri":"{0}/jwks"}}"#, addr_owned);
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = sock.write_all(resp.as_bytes()).await;
+                    } else if req_str.contains("/jwks") {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        if fail.load(Ordering::SeqCst) {
+                            let _ = sock
+                                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+                                .await;
+                        } else {
+                            let n = count.load(Ordering::SeqCst);
+                            let keys = (0..n)
+                                .map(|i| format!(r#"{{"kty":"oct","kid":"k{}","k":"AAAAAA","alg":"HS256"}}"#, i))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            let body = format!(r#"{{"keys":[{}]}}"#, keys);
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                            let _ = sock.write_all(resp.as_bytes()).await;
+                        }
+                    }
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        MockIdp {
+            addr,
+            jwks_should_fail,
+            jwks_keys_count,
+            jwks_request_count,
+        }
+    }
+
+    fn test_config(addr: &str, ttl_ms: u64, min_refresh_ms: u64) -> JwksProviderConfig {
+        JwksProviderConfig {
+            discovery_url: format!("{}/.well-known/openid-configuration", addr),
+            jwks_cache_ttl: Duration::from_millis(ttl_ms),
+            jwks_min_refresh_interval: Duration::from_millis(min_refresh_ms),
+            discovery_max_response_bytes: 65_536,
+            jwks_max_response_bytes: 1_048_576,
+            request_timeout: Duration::from_secs(2),
+            component_label: "test",
+        }
+    }
+
+    fn test_provider(cfg: JwksProviderConfig) -> Arc<JwksProvider<LeanDiscoveryDocument>> {
+        let client = Arc::new(Client::builder().build().unwrap());
+        JwksProvider::new(cfg, client, no_op_validator())
+    }
+
+    #[tokio::test]
+    async fn fast_path_returns_cached_within_ttl() {
+        let idp = spawn_mock_idp().await;
+        let p = test_provider(test_config(&idp.addr, 60_000, 100));
+        let a = p.get_jwks(false).await.unwrap();
+        let b = p.get_jwks(false).await.unwrap();
+        assert_eq!(a.keys.len(), b.keys.len());
+    }
+
+    #[tokio::test]
+    async fn stale_fallback_returns_cached_on_fetch_error() {
+        let idp = spawn_mock_idp().await;
+        let p = test_provider(test_config(&idp.addr, 50, 0));
+        let _ = p.get_jwks(false).await.unwrap();
+        idp.jwks_should_fail.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let stale = p.get_jwks(false).await.expect("stale fallback should succeed");
+        assert_eq!(stale.keys.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn no_cache_no_fallback_returns_error() {
+        let idp = spawn_mock_idp().await;
+        idp.jwks_should_fail.store(true, Ordering::SeqCst);
+        let p = test_provider(test_config(&idp.addr, 60_000, 0));
+        let err = p.get_jwks(false).await.expect_err("must error with empty cache");
+        assert!(err.contains("503") || err.contains("status"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn force_refresh_blocked_by_min_interval_returns_cached() {
+        let idp = spawn_mock_idp().await;
+        let p = test_provider(test_config(&idp.addr, 60_000, 60_000));
+        let _ = p.get_jwks(false).await.unwrap();
+        idp.jwks_keys_count.store(5, Ordering::SeqCst);
+        let still_old = p.get_jwks(true).await.unwrap();
+        assert_eq!(still_old.keys.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn singleflight_concurrent_callers_share_one_fetch() {
+        let idp = spawn_mock_idp().await;
+        let p = test_provider(test_config(&idp.addr, 60_000, 0));
+        let mut handles = vec![];
+        for _ in 0..20 {
+            let pc = p.clone();
+            handles.push(tokio::spawn(async move { pc.get_jwks(false).await }));
+        }
+        for h in handles {
+            let _ = h.await.unwrap().unwrap();
+        }
+        assert_eq!(
+            idp.jwks_request_count.load(Ordering::SeqCst),
+            1,
+            "20 concurrent get_jwks should result in exactly 1 upstream JWKS fetch (singleflight)"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_fallback_rate_limited_by_min_refresh() {
+        // Regression test for g3-002 review M2: during a prolonged outage with cached set,
+        // we must not hammer the JWKS endpoint on every request. Subsequent calls within
+        // min_refresh_interval after a failed refresh should hit the fast path.
+        let idp = spawn_mock_idp().await;
+        let p = test_provider(test_config(&idp.addr, 30, 5_000)); // 30ms TTL, 5s min_refresh
+        let _ = p.get_jwks(false).await.unwrap(); // populate cache (1 request)
+        idp.jwks_should_fail.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await; // expire TTL
+        let _ = p.get_jwks(false).await.unwrap(); // stale-fallback (1 more request, fails)
+        let after_first_stale = idp.jwks_request_count.load(Ordering::SeqCst);
+        for _ in 0..10 {
+            let _ = p.get_jwks(false).await.unwrap();
+        }
+        let after_burst = idp.jwks_request_count.load(Ordering::SeqCst);
+        assert_eq!(
+            after_burst,
+            after_first_stale,
+            "stale-fallback should bump expires_at to absorb subsequent calls within min_refresh window; \
+             saw {} extra requests during burst (expected 0)",
+            after_burst - after_first_stale
+        );
+    }
+
+    #[tokio::test]
+    async fn validator_rejection_does_not_cache() {
+        let idp = spawn_mock_idp().await;
+        let cfg = test_config(&idp.addr, 60_000, 0);
+        let client = Arc::new(Client::builder().build().unwrap());
+        let validator: DiscoveryValidator<LeanDiscoveryDocument> =
+            Arc::new(|_| Err("synthetic validation failure".into()));
+        let p = JwksProvider::new(cfg, client, validator);
+        let err = p.get_or_fetch_discovery().await.expect_err("validator should reject");
+        assert!(err.contains("synthetic"), "got: {}", err);
+        assert!(
+            p.cached_discovery().await.is_none(),
+            "cache must remain empty after validator failure"
+        );
     }
 }

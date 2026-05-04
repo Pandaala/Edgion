@@ -36,26 +36,48 @@ pub async fn connected_to_upstream(
 
     // Record connection time (time from start_time to connection established)
     // P0-07: upstream borrow ends at block exit so we can write ctx.leastconn_incremented_backend after
-    let leastconn_backend = if let Some(upstream) = ctx.get_current_upstream_mut() {
+    // g1-007: also record the EWMA backend + attempt start so logging only updates EWMA for
+    // attempts that actually completed `connected_to_upstream`.
+    enum LbCleanup {
+        LeastConn(String, pingora_core::protocols::l4::socket::SocketAddr),
+        Ewma(
+            String,
+            pingora_core::protocols::l4::socket::SocketAddr,
+            std::time::Instant,
+        ),
+    }
+    let lb_cleanup = if let Some(upstream) = ctx.get_current_upstream_mut() {
         let ct = upstream.start_time.elapsed().as_millis() as u64;
         upstream.ct = Some(ct);
 
-        if let (Some(service_key), Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) = (
+        match (
             upstream.service_key.as_deref(),
             upstream.lb_backend_addr.as_ref(),
             &upstream.lb_policy,
         ) {
-            crate::core::gateway::lb::runtime_state::increment(service_key, addr);
-            Some((service_key.to_string(), addr.clone()))
-        } else {
-            None
+            (Some(service_key), Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) => {
+                crate::core::gateway::lb::runtime_state::increment(service_key, addr);
+                Some(LbCleanup::LeastConn(service_key.to_string(), addr.clone()))
+            }
+            (Some(service_key), Some(addr), Some(crate::types::ParsedLBPolicy::Ewma)) => Some(LbCleanup::Ewma(
+                service_key.to_string(),
+                addr.clone(),
+                upstream.start_time,
+            )),
+            _ => None,
         }
     } else {
         None
     };
     // upstream borrow dropped here — safe to write ctx
-    if let Some(backend) = leastconn_backend {
-        ctx.leastconn_incremented_backend = Some(backend);
+    match lb_cleanup {
+        Some(LbCleanup::LeastConn(sk, addr)) => {
+            ctx.leastconn_incremented_backend = Some((sk, addr));
+        }
+        Some(LbCleanup::Ewma(sk, addr, start)) => {
+            ctx.last_ewma_backend = Some((sk, addr, start));
+        }
+        None => {}
     }
 
     // For gRPC-Web or WebSocket, log connection establishment immediately

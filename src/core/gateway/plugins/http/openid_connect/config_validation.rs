@@ -57,10 +57,16 @@ impl OpenidConnect {
             return Ok(configured.to_string());
         }
         if !configured.starts_with('/') {
-            return Err((401, "Invalid redirectUri".to_string()));
+            return Err(OidcVerifyError::Other {
+                status: 401,
+                message: "Invalid redirectUri".to_string(),
+            });
         }
 
-        let host = Self::request_host(session).ok_or((401, "Missing host header for redirect".to_string()))?;
+        let host = Self::request_host(session).ok_or(OidcVerifyError::Other {
+            status: 401,
+            message: "Missing host header for redirect".to_string(),
+        })?;
         let scheme = Self::request_scheme(session);
         Ok(format!("{}://{}{}", scheme, host, configured))
     }
@@ -116,7 +122,10 @@ impl OpenidConnect {
 
         for required in required_scopes {
             if !available.contains(required) {
-                return Err((403, "Insufficient scope".to_string()));
+                return Err(OidcVerifyError::Other {
+                    status: 403,
+                    message: "Insufficient scope".to_string(),
+                });
             }
         }
 
@@ -158,13 +167,16 @@ impl OpenidConnect {
 
         if let Some(exp) = claims.get("exp").and_then(|v| v.as_u64()) {
             if now > exp.saturating_add(leeway) {
-                return Err((401, "Token expired".to_string()));
+                return Err(OidcVerifyError::Expired);
             }
         }
 
         if let Some(nbf) = claims.get("nbf").and_then(|v| v.as_u64()) {
             if now.saturating_add(leeway) < nbf {
-                return Err((401, "Token not yet valid".to_string()));
+                return Err(OidcVerifyError::Other {
+                    status: 401,
+                    message: "Token not yet valid".to_string(),
+                });
             }
         }
 
@@ -181,13 +193,19 @@ impl OpenidConnect {
         if let Some(issuers) = expected_issuers {
             let iss = claims.get("iss").and_then(|v| v.as_str());
             if !iss.is_some_and(|v| issuers.contains(&v)) {
-                return Err((401, "Invalid token issuer".to_string()));
+                return Err(OidcVerifyError::Other {
+                    status: 401,
+                    message: "Invalid token issuer".to_string(),
+                });
             }
         }
 
         if let Some(ref audiences) = self.config.audiences {
             if !audiences.is_empty() && !Self::claims_audience_matches(claims.get("aud"), audiences) {
-                return Err((401, "Invalid token audience".to_string()));
+                return Err(OidcVerifyError::Other {
+                    status: 401,
+                    message: "Invalid token audience".to_string(),
+                });
             }
         }
 

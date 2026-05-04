@@ -17,11 +17,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
-use crate::core::common::jwt_common::{
-    map_jwt_decode_error, resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError,
-};
+use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
+use crate::core::common::auth::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig};
+use crate::core::common::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::path_normalization::normalize_config_path;
@@ -37,31 +37,66 @@ use crate::types::resources::edgion_plugins::{
 
 type OidcError = Box<dyn std::error::Error + Send + Sync>;
 type OidcResult<T> = Result<T, OidcError>;
-type VerifyResult<T> = Result<T, (u16, String)>;
+type VerifyResult<T> = Result<T, OidcVerifyError>;
 
 #[derive(Debug, Clone, Deserialize)]
-struct DiscoveryDocument {
-    issuer: String,
-    jwks_uri: String,
+pub(super) struct DiscoveryDocument {
+    pub(super) issuer: String,
+    pub(super) jwks_uri: String,
     #[serde(default)]
-    authorization_endpoint: Option<String>,
+    pub(super) authorization_endpoint: Option<String>,
     #[serde(default)]
-    token_endpoint: Option<String>,
+    pub(super) token_endpoint: Option<String>,
     #[serde(default)]
-    introspection_endpoint: Option<String>,
+    pub(super) introspection_endpoint: Option<String>,
     #[serde(default)]
-    userinfo_endpoint: Option<String>,
+    pub(super) userinfo_endpoint: Option<String>,
     #[serde(default)]
-    end_session_endpoint: Option<String>,
+    pub(super) end_session_endpoint: Option<String>,
     #[serde(default)]
-    revocation_endpoint: Option<String>,
+    pub(super) revocation_endpoint: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
-struct JwksState {
-    set: Option<JwkSet>,
-    expires_at: Option<Instant>,
-    last_refresh_at: Option<Instant>,
+impl DiscoveryDoc for DiscoveryDocument {
+    fn issuer(&self) -> &str {
+        &self.issuer
+    }
+    fn jwks_uri(&self) -> &str {
+        &self.jwks_uri
+    }
+}
+
+/// Build a config-aware discovery validator that fails fetch when a required
+/// endpoint is missing for the configured plugin behavior. Closes g3-009 by
+/// shifting "missing endpoint" failures from request-time 502 to fetch-time.
+fn build_discovery_validator(config: &OpenidConnectConfig) -> DiscoveryValidator<DiscoveryDocument> {
+    // Snapshot config flags into the closure so it stays Send + Sync + 'static.
+    let unauth_action = config.unauth_action;
+    let needs_token_endpoint = config.unauth_action == UnauthAction::Auth
+        || config.verification_mode != VerificationMode::JwksOnly
+        || config.renew_access_token_on_expiry;
+    let needs_userinfo = config.set_userinfo_header;
+
+    Arc::new(move |doc: &DiscoveryDocument| {
+        if unauth_action == UnauthAction::Auth
+            && doc
+                .authorization_endpoint
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .is_none()
+        {
+            return Err("authorization_endpoint required when unauthAction=Auth".into());
+        }
+        if needs_token_endpoint && doc.token_endpoint.as_deref().filter(|v| !v.is_empty()).is_none() {
+            return Err("token_endpoint required for the configured verification/refresh mode".into());
+        }
+        if needs_userinfo && doc.userinfo_endpoint.as_deref().filter(|v| !v.is_empty()).is_none() {
+            return Err("userinfo_endpoint required when set_userinfo_header=true".into());
+        }
+        // introspection_endpoint can be overridden at the plugin config layer
+        // (`config.introspection_endpoint`), so we do not enforce it at fetch time.
+        Ok(())
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,10 +165,7 @@ pub struct OpenidConnect {
     config: OpenidConnectConfig,
     #[allow(dead_code)]
     plugin_namespace: String,
-    discovery_doc: Arc<RwLock<Option<DiscoveryDocument>>>,
-    discovery_refresh: Arc<Mutex<()>>,
-    jwks_state: Arc<RwLock<JwksState>>,
-    jwks_refresh: Arc<Mutex<()>>,
+    pub(super) jwks_provider: Arc<JwksProvider<DiscoveryDocument>>,
     introspection_cache: Arc<ShardedLruCache<String, IntrospectionCacheEntry>>,
     access_token_cache: Arc<ShardedLruCache<String, AccessTokenCacheEntry>>,
     refresh_singleflight_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -179,14 +211,25 @@ impl OpenidConnect {
             get_default_lru_cache_shards()
         };
 
+        let jwks_provider = {
+            let client = Arc::new(get_http_client_with_ssl_verify(config.ssl_verify).clone());
+            let provider_config = JwksProviderConfig {
+                discovery_url: config.discovery.clone(),
+                jwks_cache_ttl: Duration::from_secs(config.jwks_cache_ttl),
+                jwks_min_refresh_interval: Duration::from_secs(config.jwks_min_refresh_interval),
+                discovery_max_response_bytes: config.discovery_max_response_bytes,
+                jwks_max_response_bytes: config.jwks_max_response_bytes,
+                request_timeout: Duration::from_secs(config.timeout),
+                component_label: "openid_connect",
+            };
+            JwksProvider::new(provider_config, client, build_discovery_validator(&config))
+        };
+
         Self {
             name: "OpenidConnect".to_string(),
             config,
             plugin_namespace,
-            discovery_doc: Arc::new(RwLock::new(None)),
-            discovery_refresh: Arc::new(Mutex::new(())),
-            jwks_state: Arc::new(RwLock::new(JwksState::default())),
-            jwks_refresh: Arc::new(Mutex::new(())),
+            jwks_provider,
             introspection_cache: Arc::new(ShardedLruCache::new(introspection_capacity, introspection_shards)),
             access_token_cache: Arc::new(ShardedLruCache::new(access_token_capacity, access_token_shards)),
             refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),

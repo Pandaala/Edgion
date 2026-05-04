@@ -41,13 +41,12 @@ impl OpenidConnect {
         post_logout_redirect_uri: Option<String>,
         id_token_hint: Option<String>,
     ) -> String {
-        let end_session_endpoint = {
-            let cached = self.discovery_doc.read().await;
-            cached
-                .as_ref()
-                .and_then(|d| d.end_session_endpoint.clone())
-                .filter(|v| !v.is_empty())
-        };
+        let end_session_endpoint = self
+            .jwks_provider
+            .cached_discovery()
+            .await
+            .and_then(|d| d.end_session_endpoint.clone())
+            .filter(|v| !v.is_empty());
         let Some(end_session_endpoint) = end_session_endpoint else {
             return fallback_target;
         };

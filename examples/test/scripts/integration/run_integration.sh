@@ -126,6 +126,61 @@ check_docker_environment_ready() {
     return 0
 }
 
+# Loopback aliases required by HTTPRoute/Backend/LB* tests on macOS.
+# Linux routes 127.0.0.0/8 to lo by default; macOS needs explicit lo0 aliases or
+# packets to 127.0.0.2 / 127.0.0.3 are silently dropped (test_server bound to
+# 0.0.0.0 still won't see them). Aliases also do not survive reboots, so we
+# detect missing ones every run.
+REQUIRED_LO_ALIASES=("127.0.0.2" "127.0.0.3" "127.0.0.4")
+
+ensure_loopback_aliases() {
+    if [ "$(uname -s)" != "Darwin" ]; then
+        return 0
+    fi
+
+    local missing=()
+    local lo_inet
+    lo_inet=$(ifconfig lo0 2>/dev/null | awk '/inet /{print $2}')
+    for ip in "${REQUIRED_LO_ALIASES[@]}"; do
+        if ! grep -qx "$ip" <<< "$lo_inet"; then
+            missing+=("$ip")
+        fi
+    done
+
+    if [ "${#missing[@]}" -eq 0 ]; then
+        log_success "lo0 aliases present (${REQUIRED_LO_ALIASES[*]})"
+        return 0
+    fi
+
+    log_error "lo0 is missing required aliases on macOS: ${missing[*]}"
+    echo ""
+    echo "  HTTPRoute/Backend/LB* tests use 127.0.0.2 / 127.0.0.3 / 127.0.0.4 as"
+    echo "  distinct LB endpoints. macOS does not auto-route 127/8 to lo0 like"
+    echo "  Linux, so without these aliases connections silently time out."
+    echo ""
+    echo "  Run once now (aliases reset on reboot):"
+    for ip in "${missing[@]}"; do
+        echo "    sudo ifconfig lo0 alias ${ip} up"
+    done
+    echo ""
+    echo "  Or make them persistent with launchd:"
+    echo "    sudo tee /Library/LaunchDaemons/com.edgion.lo-alias.plist >/dev/null <<'EOF'"
+    echo "    <?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    echo "    <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyLists-1.0.dtd\">"
+    echo "    <plist version=\"1.0\"><dict>"
+    echo "      <key>Label</key><string>com.edgion.lo-alias</string>"
+    echo "      <key>ProgramArguments</key><array>"
+    echo "        <string>/bin/sh</string><string>-c</string>"
+    echo "        <string>$(printf '/sbin/ifconfig lo0 alias %s up; ' "${REQUIRED_LO_ALIASES[@]}")</string>"
+    echo "      </array>"
+    echo "      <key>RunAtLoad</key><true/>"
+    echo "    </dict></plist>"
+    echo "    EOF"
+    echo "    sudo launchctl load /Library/LaunchDaemons/com.edgion.lo-alias.plist"
+    echo ""
+    return 1
+}
+
 ensure_nofile_limit() {
     local required="${1:-65535}"
     local soft hard
@@ -726,6 +781,8 @@ run_all_tests() {
         run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
         run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-rr" || test_failed=true
         run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-ch" || test_failed=true
+        run_test "HTTPRoute_Backend_LBLeastConn" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-lc" || test_failed=true
+        run_test "HTTPRoute_Backend_LBLeastConnRetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-lc-rs" || test_failed=true
         run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
         run_test "HTTPRoute_Backend_HealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check" || test_failed=true
         if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
@@ -1014,6 +1071,11 @@ main() {
 
     if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
         log_error "File descriptor limit check failed"
+        exit 1
+    fi
+
+    if ! ensure_loopback_aliases; then
+        log_error "Loopback alias check failed"
         exit 1
     fi
 

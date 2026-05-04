@@ -5,14 +5,20 @@ impl OpenidConnect {
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| (502, format!("Failed to fetch OIDC discovery document: {}", e)))?;
+            .map_err(|e| OidcVerifyError::Other {
+                status: 502,
+                message: format!("Failed to fetch OIDC discovery document: {}", e),
+            })?;
         let endpoint = self
             .config
             .introspection_endpoint
             .clone()
             .filter(|v| !v.is_empty())
             .or_else(|| discovery.introspection_endpoint.clone().filter(|v| !v.is_empty()))
-            .ok_or((502, "OIDC introspection endpoint is not configured".to_string()))?;
+            .ok_or(OidcVerifyError::Other {
+                status: 502,
+                message: "OIDC introspection endpoint is not configured".to_string(),
+            })?;
 
         if let Some(cached_claims) = self.get_cached_introspection_claims(token).await {
             self.validate_claims_from_value(&cached_claims, Some(discovery.issuer.as_str()))?;
@@ -20,9 +26,10 @@ impl OpenidConnect {
             return Ok(cached_claims);
         }
 
-        let client_secret = self
-            .resolve_client_secret()
-            .map_err(|e| (401, format!("Missing client secret for introspection: {}", e)))?;
+        let client_secret = self.resolve_client_secret().map_err(|e| OidcVerifyError::Other {
+            status: 401,
+            message: format!("Missing client secret for introspection: {}", e),
+        })?;
 
         let client = self.http_client();
         let base_request = client
@@ -41,23 +48,26 @@ impl OpenidConnect {
             ]),
         };
 
-        let resp = request
-            .send()
-            .await
-            .map_err(|e| (502, format!("Introspection request failed: {}", e)))?;
+        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
+            status: 502,
+            message: format!("Introspection request failed: {}", e),
+        })?;
         if !resp.status().is_success() {
-            return Err((
-                502,
-                format!("Introspection request failed with status {}", resp.status()),
-            ));
+            return Err(OidcVerifyError::Other {
+                status: 502,
+                message: format!("Introspection request failed with status {}", resp.status()),
+            });
         }
 
-        let claims: Value = resp
-            .json()
-            .await
-            .map_err(|e| (502, format!("Invalid introspection response: {}", e)))?;
+        let claims: Value = resp.json().await.map_err(|e| OidcVerifyError::Other {
+            status: 502,
+            message: format!("Invalid introspection response: {}", e),
+        })?;
         if !claims.get("active").and_then(|v| v.as_bool()).unwrap_or(false) {
-            return Err((401, "Inactive token".to_string()));
+            return Err(OidcVerifyError::Other {
+                status: 401,
+                message: "Inactive token".to_string(),
+            });
         }
 
         self.validate_claims_from_value(&claims, Some(discovery.issuer.as_str()))?;
@@ -73,19 +83,21 @@ impl OpenidConnect {
         audience_override: Option<&[String]>,
         validate_exp: bool,
     ) -> VerifyResult<Value> {
-        let header = decode_header(token).map_err(|_| (401, "Invalid token format".to_string()))?;
+        let header = decode_header(token).map_err(|_| OidcVerifyError::InvalidFormat)?;
         let token_alg = header.alg;
 
         let (expected_alg, allowed_algs) = resolve_algorithm_policy(
             self.config.token_signing_alg.as_deref(),
             self.config.allowed_signing_algs.as_deref(),
-        )?;
-        validate_token_alg(token_alg, expected_alg, &allowed_algs)?;
+        )
+        .map_err(|(status, message)| OidcVerifyError::Other { status, message })?;
+        validate_token_alg(token_alg, expected_alg, &allowed_algs)
+            .map_err(|(status, message)| OidcVerifyError::Other { status, message })?;
 
         let mut jwks = self
             .get_or_fetch_jwks(false)
             .await
-            .map_err(|e| (502, format!("Failed to fetch JWKS: {}", e)))?;
+            .map_err(|e| OidcVerifyError::JwksFetch(e.to_string()))?;
 
         let jwk = match select_jwk(&header, &jwks, token_alg) {
             Ok(jwk) => jwk,
@@ -94,21 +106,31 @@ impl OpenidConnect {
                 jwks = self
                     .get_or_fetch_jwks(true)
                     .await
-                    .map_err(|e| (502, format!("Failed to refresh JWKS on kid miss: {}", e)))?;
-                select_jwk(&header, &jwks, token_alg)
-                    .map_err(|_| (401, "No matching JWK found for token kid".to_string()))?
+                    .map_err(|e| OidcVerifyError::JwksFetch(format!("refresh on kid miss: {}", e)))?;
+                select_jwk(&header, &jwks, token_alg).map_err(|_| OidcVerifyError::Other {
+                    status: 401,
+                    message: "No matching JWK found for token kid".to_string(),
+                })?
             }
             Err(JwkSelectError::NoSuitableKey) => {
-                return Err((401, "No suitable JWK for token algorithm".to_string()));
+                return Err(OidcVerifyError::Other {
+                    status: 401,
+                    message: "No suitable JWK for token algorithm".to_string(),
+                });
             }
         };
 
-        let decoding_key =
-            DecodingKey::from_jwk(&jwk).map_err(|e| (401, format!("Failed to build decoding key: {}", e)))?;
+        let decoding_key = DecodingKey::from_jwk(&jwk).map_err(|e| OidcVerifyError::Other {
+            status: 401,
+            message: format!("Failed to build decoding key: {}", e),
+        })?;
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| (502, format!("Failed to fetch OIDC discovery document: {}", e)))?;
+            .map_err(|e| OidcVerifyError::Other {
+                status: 502,
+                message: format!("Failed to fetch OIDC discovery document: {}", e),
+            })?;
 
         let mut validation = Validation::new(token_alg);
         validation.leeway = self.config.clock_skew_seconds;
@@ -140,7 +162,7 @@ impl OpenidConnect {
             validation.validate_aud = false;
         }
 
-        let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(map_jwt_decode_error)?;
+        let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(map_jwt_decode_error_typed)?;
         let claims = token_data.claims.to_value();
 
         if validate_scopes {
@@ -157,8 +179,8 @@ impl OpenidConnect {
         self.verify_jwt_token_internal(token, true, None, false).await
     }
 
-    pub(super) fn is_refresh_wait_timeout(err: &(u16, String)) -> bool {
-        err.0 == 502 && err.1 == "Token refresh singleflight wait timeout"
+    pub(super) fn is_refresh_wait_timeout(err: &OidcVerifyError) -> bool {
+        matches!(err, OidcVerifyError::RefreshSingleflightTimeout)
     }
 
     pub(super) fn is_expired_within_leeway(&self, claims: &Value) -> bool {
@@ -172,9 +194,8 @@ impl OpenidConnect {
         now > exp && now <= exp.saturating_add(self.config.access_token_expires_leeway)
     }
 
-    pub(super) fn should_auto_fallback_to_introspection(jwt_error: &(u16, String)) -> bool {
-        let (status, message) = jwt_error;
-        *status == 401 && message == "Invalid token format"
+    pub(super) fn should_auto_fallback_to_introspection(jwt_error: &OidcVerifyError) -> bool {
+        matches!(jwt_error, OidcVerifyError::InvalidFormat)
     }
 
     pub(super) async fn verify_token(&self, token: &str) -> VerifyResult<Value> {
@@ -240,7 +261,10 @@ impl OpenidConnect {
             .await?;
         let actual_nonce = claims.get("nonce").and_then(|v| v.as_str());
         if actual_nonce != Some(expected_nonce) {
-            return Err((401, "Invalid ID token nonce".to_string()));
+            return Err(OidcVerifyError::Other {
+                status: 401,
+                message: "Invalid ID token nonce".to_string(),
+            });
         }
         Ok(())
     }

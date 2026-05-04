@@ -21,7 +21,7 @@ impl RequestFilter for OpenidConnect {
             let session_cookie = match self.extract_session_cookie_from_request(session) {
                 Ok(Some((payload, _))) => Some(payload),
                 Ok(None) => None,
-                Err((_, _)) => {
+                Err(_) => {
                     plugin_log.push_err("session decode fail");
                     None
                 }
@@ -93,7 +93,7 @@ impl RequestFilter for OpenidConnect {
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("token refresh miss");
                             }
-                            Err((_, _)) => {
+                            Err(_) => {
                                 plugin_log.push_err("token refresh fail");
                             }
                         }
@@ -109,7 +109,7 @@ impl RequestFilter for OpenidConnect {
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("token refresh preemptive");
                             }
-                            Err((_, _)) => {
+                            Err(_) => {
                                 plugin_log.push_err("token refresh fail");
                             }
                         }
@@ -131,10 +131,9 @@ impl RequestFilter for OpenidConnect {
                                 plugin_log.push("session token verified");
                                 return PluginRunningResult::GoodNext;
                             }
-                            Err((status, message)) => {
+                            Err(err) => {
                                 let can_refresh_on_expired = self.config.renew_access_token_on_expiry
-                                    && status == 401
-                                    && message == "Token expired"
+                                    && matches!(err, OidcVerifyError::Expired)
                                     && session_cookie.refresh_token.as_deref().is_some();
 
                                 if can_refresh_on_expired {
@@ -156,12 +155,11 @@ impl RequestFilter for OpenidConnect {
                                                 plugin_log.push("token refresh on expiry");
                                                 return PluginRunningResult::GoodNext;
                                             }
-                                            Err((_, _)) => {
+                                            Err(_) => {
                                                 plugin_log.push_err("token verify fail");
                                             }
                                         },
-                                        Err((s2, m2)) => {
-                                            let refresh_err = (s2, m2.clone());
+                                        Err(refresh_err) => {
                                             if Self::is_refresh_wait_timeout(&refresh_err) {
                                                 match self.verify_jwt_token_allow_expired(&token).await {
                                                     Ok(claims) if self.is_expired_within_leeway(&claims) => {
@@ -193,9 +191,9 @@ impl RequestFilter for OpenidConnect {
                     }
                 }
                 Ok(None) => {}
-                Err((status, message)) => {
-                    if status == 502 {
-                        let _ = self.send_plain_error(session, 502, &message).await;
+                Err(err) => {
+                    if err.http_status() == 502 {
+                        let _ = self.send_plain_error(session, 502, &err.user_message()).await;
                         return PluginRunningResult::ErrTerminateRequest;
                     }
                 }
@@ -235,11 +233,11 @@ impl RequestFilter for OpenidConnect {
                             let cookies = vec![cookie];
                             let _ = self.send_redirect_with_cookies(session, &location, &cookies).await;
                         }
-                        Err((status, message)) => {
-                            if status == 502 {
-                                let _ = self.send_plain_error(session, 502, &message).await;
+                        Err(err) => {
+                            if err.http_status() == 502 {
+                                let _ = self.send_plain_error(session, 502, &err.user_message()).await;
                             } else {
-                                let _ = self.send_unauthorized(session, &message).await;
+                                let _ = self.send_unauthorized(session, &err.user_message()).await;
                             }
                         }
                     }
@@ -272,18 +270,10 @@ impl RequestFilter for OpenidConnect {
                 plugin_log.push("token verified");
                 PluginRunningResult::GoodNext
             }
-            Err((status, message)) => {
-                if status == 502 {
-                    if message.contains("JWKS") || message.contains("jwks") {
-                        plugin_log.push_err("jwks fetch fail");
-                    } else {
-                        plugin_log.push_err("introspect fail");
-                    }
-                } else if message == "Invalid token format" {
-                    plugin_log.push_err("token decode fail");
-                } else {
-                    plugin_log.push_err("token verify fail");
-                }
+            Err(err) => {
+                plugin_log.push_err(err.log_tag());
+                let status = err.http_status();
+                let message = err.user_message();
                 // Apply failure delay only for actual auth failures (401/403),
                 // not for upstream/infra errors (502).
                 if status != 502 {

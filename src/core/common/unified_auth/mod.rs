@@ -155,7 +155,10 @@ impl UnifiedAuthState {
                     discovery = %cfg.discovery,
                     "OIDC authentication enabled"
                 );
-                Some(AuthMiddlewareState::from_config(cfg))
+                Some(
+                    AuthMiddlewareState::from_config(cfg)
+                        .map_err(|e| anyhow::anyhow!("invalid [auth] config (component={}): {}", component, e))?,
+                )
             }
             Some(_) => {
                 tracing::info!(component = component, "OIDC authentication disabled by config");
@@ -433,7 +436,7 @@ async fn try_oidc_validation(state: &AuthMiddlewareState, token: &str) -> Result
     // Fetch JWKS from the provider (with caching).
     let jwks = state
         .jwks_provider
-        .get_jwks()
+        .get_jwks(false)
         .await
         .map_err(|e| format!("JWKS fetch failed: {}", e))?;
 

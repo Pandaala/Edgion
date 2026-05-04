@@ -16,10 +16,10 @@ pub mod udp_route;
 pub use http_route::{
     CircuitBreakerTestSuite, DnsResolutionFailureTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite,
     H2cTestSuite, HeaderModifierTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite,
-    HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite, LBLeastConnTestSuite,
-    LBRoundRobinTestSuite, MultiPortTestSuite, PartiallyInvalidTestSuite, PercentMirrorTestSuite,
-    RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite,
-    TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite,
+    LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
+    PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
+    SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite};

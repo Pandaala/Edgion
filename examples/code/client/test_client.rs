@@ -108,6 +108,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "lb-rr" | "lbrr" | "lb-roundrobin" => "HTTPRoute/Backend/LBRoundRobin".to_string(),
             "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "lb-lc" | "lblc" | "lb-leastconn" => "HTTPRoute/Backend/LBLeastConn".to_string(),
+            "lb-lc-rs" | "lblcrs" | "lb-leastconn-retry-on-status" => {
+                "HTTPRoute/Backend/LBLeastConnRetryOnStatus".to_string()
+            }
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
             "retry-on-status" | "retryonstatus" => "HTTPRoute/Backend/RetryOnStatus".to_string(),
@@ -193,6 +196,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend" | "HTTPRoute/Backend/LBRoundRobin" => "HTTPRoute/Backend/LBRoundRobin",
         "HTTPRoute/Backend/LBConsistentHash" => "HTTPRoute/Backend/LBConsistentHash",
         "HTTPRoute/Backend/LBLeastConn" => "HTTPRoute/Backend/LBLeastConn",
+        "HTTPRoute/Backend/LBLeastConnRetryOnStatus" => "HTTPRoute/Backend/LBLeastConnRetryOnStatus",
         "HTTPRoute/Backend/WeightedBackend" => "HTTPRoute/Backend/WeightedBackend",
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
         "HTTPRoute/Backend/RetryOnStatus" => "HTTPRoute/Backend/RetryOnStatus",
@@ -323,6 +327,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
             runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
             runner.add_suite(Box::new(suites::LBLeastConnTestSuite));
+            runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
             runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
             runner.add_suite(Box::new(suites::HealthCheckTestSuite));
@@ -351,6 +356,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::LBLeastConnTestSuite));
+        }
+        "HTTPRoute/Backend/LBLeastConnRetryOnStatus" => {
+            if !gateway {
+                eprintln!("Error: LB LeastConn RetryOnStatus tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
         }
         "HTTPRoute/Backend/WeightedBackend" => {
             if !gateway {
@@ -1327,6 +1339,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
                 runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
                 runner.add_suite(Box::new(suites::LBLeastConnTestSuite));
+                runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
                 runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
                 runner.add_suite(Box::new(suites::TimeoutTestSuite));
                 runner.add_suite(Box::new(suites::HealthCheckTestSuite));

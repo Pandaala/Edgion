@@ -115,14 +115,19 @@ impl OpenidConnect {
         redirect_uri: &str,
         code_verifier: Option<&str>,
     ) -> VerifyResult<TokenEndpointResponse> {
-        let token_endpoint = discovery
-            .token_endpoint
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or((502, "OIDC discovery document missing token_endpoint".to_string()))?;
-        let client_secret = self
-            .resolve_client_secret()
-            .map_err(|e| (401, format!("Missing client secret for token exchange: {}", e)))?;
+        let token_endpoint =
+            discovery
+                .token_endpoint
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .ok_or(OidcVerifyError::Other {
+                    status: 502,
+                    message: "OIDC discovery document missing token_endpoint".to_string(),
+                })?;
+        let client_secret = self.resolve_client_secret().map_err(|e| OidcVerifyError::Other {
+            status: 401,
+            message: format!("Missing client secret for token exchange: {}", e),
+        })?;
 
         let mut params: Vec<(&str, String)> = vec![
             ("grant_type", "authorization_code".to_string()),
@@ -150,19 +155,22 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request
-            .send()
-            .await
-            .map_err(|e| (502, format!("Token exchange request failed: {}", e)))?;
+        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
+            status: 502,
+            message: format!("Token exchange request failed: {}", e),
+        })?;
         if !resp.status().is_success() {
-            return Err((
-                502,
-                format!("Token exchange request failed with status {}", resp.status()),
-            ));
+            return Err(OidcVerifyError::Other {
+                status: 502,
+                message: format!("Token exchange request failed with status {}", resp.status()),
+            });
         }
         resp.json::<TokenEndpointResponse>()
             .await
-            .map_err(|e| (502, format!("Invalid token endpoint response: {}", e)))
+            .map_err(|e| OidcVerifyError::Other {
+                status: 502,
+                message: format!("Invalid token endpoint response: {}", e),
+            })
     }
 
     pub(super) async fn revoke_token(
@@ -264,14 +272,19 @@ impl OpenidConnect {
         discovery: &DiscoveryDocument,
         refresh_token: &str,
     ) -> VerifyResult<TokenEndpointResponse> {
-        let token_endpoint = discovery
-            .token_endpoint
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or((502, "OIDC discovery document missing token_endpoint".to_string()))?;
-        let client_secret = self
-            .resolve_client_secret()
-            .map_err(|e| (401, format!("Missing client secret for token refresh: {}", e)))?;
+        let token_endpoint =
+            discovery
+                .token_endpoint
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .ok_or(OidcVerifyError::Other {
+                    status: 502,
+                    message: "OIDC discovery document missing token_endpoint".to_string(),
+                })?;
+        let client_secret = self.resolve_client_secret().map_err(|e| OidcVerifyError::Other {
+            status: 401,
+            message: format!("Missing client secret for token refresh: {}", e),
+        })?;
 
         let mut params: Vec<(&str, String)> = vec![
             ("grant_type", "refresh_token".to_string()),
@@ -295,19 +308,22 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request
-            .send()
-            .await
-            .map_err(|e| (502, format!("Token refresh request failed: {}", e)))?;
+        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
+            status: 502,
+            message: format!("Token refresh request failed: {}", e),
+        })?;
         if !resp.status().is_success() {
-            return Err((
-                502,
-                format!("Token refresh request failed with status {}", resp.status()),
-            ));
+            return Err(OidcVerifyError::Other {
+                status: 502,
+                message: format!("Token refresh request failed with status {}", resp.status()),
+            });
         }
         resp.json::<TokenEndpointResponse>()
             .await
-            .map_err(|e| (502, format!("Invalid token refresh response: {}", e)))
+            .map_err(|e| OidcVerifyError::Other {
+                status: 502,
+                message: format!("Invalid token refresh response: {}", e),
+            })
     }
 
     pub(super) fn should_persist_id_token(&self, discovery: &DiscoveryDocument) -> bool {
@@ -321,14 +337,17 @@ impl OpenidConnect {
         if session_cookie.session_ref.is_empty() {
             session_cookie.session_ref = Self::generate_session_ref();
         }
-        let refresh_token = session_cookie
-            .refresh_token
-            .as_deref()
-            .ok_or((401, "Missing refresh token".to_string()))?;
+        let refresh_token = session_cookie.refresh_token.as_deref().ok_or(OidcVerifyError::Other {
+            status: 401,
+            message: "Missing refresh token".to_string(),
+        })?;
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| (502, format!("Failed to fetch OIDC discovery document: {}", e)))?;
+            .map_err(|e| OidcVerifyError::Other {
+                status: 502,
+                message: format!("Failed to fetch OIDC discovery document: {}", e),
+            })?;
         let token_response = self.refresh_access_token(&discovery, refresh_token).await?;
 
         let now = Self::now_unix_secs();
@@ -396,7 +415,7 @@ impl OpenidConnect {
                     *session_cookie = cached_payload;
                     return Ok(session_cookie.access_token.clone());
                 }
-                return Err((502, "Token refresh singleflight wait timeout".to_string()));
+                return Err(OidcVerifyError::RefreshSingleflightTimeout);
             }
         };
 

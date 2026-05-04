@@ -89,13 +89,15 @@ impl OpenidConnect {
             .authorization_endpoint
             .as_deref()
             .filter(|v| !v.is_empty())
-            .ok_or((
-                502,
-                "OIDC discovery document missing authorization_endpoint".to_string(),
-            ))?;
+            .ok_or(OidcVerifyError::Other {
+                status: 502,
+                message: "OIDC discovery document missing authorization_endpoint".to_string(),
+            })?;
 
-        let mut auth_url = Url::parse(authorization_endpoint)
-            .map_err(|e| (502, format!("Invalid authorization endpoint URL: {}", e)))?;
+        let mut auth_url = Url::parse(authorization_endpoint).map_err(|e| OidcVerifyError::Other {
+            status: 502,
+            message: format!("Invalid authorization endpoint URL: {}", e),
+        })?;
 
         let redirect_uri = self.resolve_redirect_uri(session)?;
         let state = Self::random_urlsafe(24);
@@ -149,12 +151,16 @@ impl OpenidConnect {
             nonce,
             created_at: Self::now_unix_secs(),
         };
-        let session_secret = self
-            .resolve_session_secret()
-            .map_err(|e| (401, format!("Missing session secret for auth flow: {}", e)))?;
+        let session_secret = self.resolve_session_secret().map_err(|e| OidcVerifyError::Other {
+            status: 401,
+            message: format!("Missing session secret for auth flow: {}", e),
+        })?;
         let cookie_value = self
             .encode_signed_cookie_payload(&cookie_payload, &session_secret)
-            .map_err(|e| (502, format!("Failed to encode OIDC state cookie: {}", e)))?;
+            .map_err(|e| OidcVerifyError::Other {
+                status: 502,
+                message: format!("Failed to encode OIDC state cookie: {}", e),
+            })?;
         let cookie_suffix = self.build_cookie_attr_suffix(session, 300, &self.callback_path());
         let cookie = format!("{}={}{}", Self::state_cookie_name(), cookie_value, cookie_suffix);
 
@@ -187,11 +193,11 @@ impl OpenidConnect {
         let state_cookie: AuthorizationStateCookie =
             match self.decode_signed_cookie_payload(&raw_state_cookie, &session_secret) {
                 Ok(v) => v,
-                Err((status, message)) => {
-                    if status == 502 {
-                        let _ = self.send_plain_error(session, 502, &message).await;
+                Err(err) => {
+                    if err.http_status() == 502 {
+                        let _ = self.send_plain_error(session, 502, &err.user_message()).await;
                     } else {
-                        let _ = self.send_unauthorized(session, &message).await;
+                        let _ = self.send_unauthorized(session, &err.user_message()).await;
                     }
                     return PluginRunningResult::ErrTerminateRequest;
                 }
@@ -221,11 +227,11 @@ impl OpenidConnect {
 
         let redirect_uri = match self.resolve_redirect_uri(session) {
             Ok(v) => v,
-            Err((status, message)) => {
-                if status == 502 {
-                    let _ = self.send_plain_error(session, 502, &message).await;
+            Err(err) => {
+                if err.http_status() == 502 {
+                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
                 } else {
-                    let _ = self.send_unauthorized(session, &message).await;
+                    let _ = self.send_unauthorized(session, &err.user_message()).await;
                 }
                 return PluginRunningResult::ErrTerminateRequest;
             }
@@ -236,12 +242,12 @@ impl OpenidConnect {
             .await
         {
             Ok(v) => v,
-            Err((status, message)) => {
+            Err(err) => {
                 plugin_log.push_err("token exchange fail");
-                if status == 502 {
-                    let _ = self.send_plain_error(session, 502, &message).await;
+                if err.http_status() == 502 {
+                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
                 } else {
-                    let _ = self.send_unauthorized(session, &message).await;
+                    let _ = self.send_unauthorized(session, &err.user_message()).await;
                 }
                 return PluginRunningResult::ErrTerminateRequest;
             }
@@ -262,12 +268,12 @@ impl OpenidConnect {
                     return PluginRunningResult::ErrTerminateRequest;
                 }
             };
-            if let Err((status, message)) = self.validate_id_token_nonce(id_token, expected_nonce).await {
-                plugin_log.push_err("token verify fail");
-                if status == 502 {
-                    let _ = self.send_plain_error(session, 502, &message).await;
+            if let Err(err) = self.validate_id_token_nonce(id_token, expected_nonce).await {
+                plugin_log.push_err(err.log_tag());
+                if err.http_status() == 502 {
+                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
                 } else {
-                    let _ = self.send_unauthorized(session, &message).await;
+                    let _ = self.send_unauthorized(session, &err.user_message()).await;
                 }
                 return PluginRunningResult::ErrTerminateRequest;
             }
@@ -275,20 +281,12 @@ impl OpenidConnect {
 
         let _claims = match self.verify_token(&token_response.access_token).await {
             Ok(v) => v,
-            Err((status, message)) => {
-                if status == 502 {
-                    if message.contains("JWKS") || message.contains("jwks") {
-                        plugin_log.push_err("jwks fetch fail");
-                    } else {
-                        plugin_log.push_err("introspect fail");
-                    }
-                    let _ = self.send_plain_error(session, 502, &message).await;
-                } else if message == "Invalid token format" {
-                    plugin_log.push_err("token decode fail");
-                    let _ = self.send_unauthorized(session, &message).await;
+            Err(err) => {
+                plugin_log.push_err(err.log_tag());
+                if err.http_status() == 502 {
+                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
                 } else {
-                    plugin_log.push_err("token verify fail");
-                    let _ = self.send_unauthorized(session, &message).await;
+                    let _ = self.send_unauthorized(session, &err.user_message()).await;
                 }
                 return PluginRunningResult::ErrTerminateRequest;
             }

@@ -1278,6 +1278,9 @@ async fn oidc_discovery_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         "issuer": issuer,
         "jwks_uri": format!("{}/jwks", endpoint_base),
         "introspection_endpoint": format!("{}/introspect", endpoint_base),
+        "token_endpoint": format!("{}/token", endpoint_base),
+        "userinfo_endpoint": format!("{}/userinfo", endpoint_base),
+        "authorization_endpoint": format!("{}/authorize", endpoint_base),
     });
 
     (StatusCode::OK, Json(body))
