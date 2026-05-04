@@ -432,7 +432,7 @@ pub fn register_service_backend_refs(
             continue;
         }
         let backend_ns = namespace.unwrap_or(route_ns);
-        let service_key = format!("{}/{}", backend_ns, name);
+        let service_key = crate::types::ServiceIdentity::new(name, backend_ns).key().to_string();
         manager.add_ref(service_key, resource_ref.clone());
     }
 }

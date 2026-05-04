@@ -23,7 +23,18 @@ pub(crate) enum BackendAppProtocol {
     WebSocket,
 }
 
-pub(crate) fn detect_backend_app_protocol(service_key: &str, backend_port: Option<i32>) -> Option<BackendAppProtocol> {
+pub(crate) fn detect_backend_app_protocol(
+    id: &crate::types::ServiceIdentity,
+    backend_port: Option<i32>,
+) -> Option<BackendAppProtocol> {
+    detect_backend_app_protocol_key(id.key(), backend_port)
+}
+
+/// Internal `&str` variant of [`detect_backend_app_protocol`].
+pub(crate) fn detect_backend_app_protocol_key(
+    service_key: &str,
+    backend_port: Option<i32>,
+) -> Option<BackendAppProtocol> {
     let service = get_global_service_store().get(service_key)?;
     let ports = service.spec.as_ref()?.ports.as_ref()?;
 

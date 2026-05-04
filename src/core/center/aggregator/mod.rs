@@ -64,7 +64,11 @@ impl ResourceAggregator {
         let mut map = self.inner.write();
         // Capture the cluster before removal so we can zero the gauge if it disappears.
         let removed_cluster = map.get(controller_id).map(|s| {
-            if s.info.cluster.is_empty() { "unknown".to_string() } else { s.info.cluster.clone() }
+            if s.info.cluster.is_empty() {
+                "unknown".to_string()
+            } else {
+                s.info.cluster.clone()
+            }
         });
         let removed = map.remove(controller_id).is_some();
         if removed {
@@ -74,7 +78,11 @@ impl ResourceAggregator {
             // last controller for this cluster is gone.
             if let Some(cluster) = removed_cluster {
                 let still_present = map.values().any(|s| {
-                    let c = if s.info.cluster.is_empty() { "unknown" } else { s.info.cluster.as_str() };
+                    let c = if s.info.cluster.is_empty() {
+                        "unknown"
+                    } else {
+                        s.info.cluster.as_str()
+                    };
                     c == cluster
                 });
                 if !still_present {
@@ -91,7 +99,11 @@ impl ResourceAggregator {
         let mut by_cluster: HashMap<String, u64> = HashMap::new();
         // Pre-seed all known clusters with 0 so disappeared clusters are zeroed out.
         for snap in map.values() {
-            let cluster = if snap.info.cluster.is_empty() { "unknown" } else { &snap.info.cluster };
+            let cluster = if snap.info.cluster.is_empty() {
+                "unknown"
+            } else {
+                &snap.info.cluster
+            };
             by_cluster.entry(cluster.to_string()).or_insert(0);
         }
         for snap in map.values().filter(|s| s.offline_since.is_none()) {

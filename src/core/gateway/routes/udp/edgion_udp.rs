@@ -8,7 +8,9 @@ use tokio::net::UdpSocket;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::core::gateway::backends::{select_roundrobin_backend, validate_endpoint_backend_addr};
+use crate::core::gateway::backends::{
+    resolve_target_port, select_roundrobin_backend, validate_endpoint_backend_addr, PortLookupSource,
+};
 use crate::core::gateway::observe::{log_udp, UdpLogEntry};
 use crate::core::gateway::routes::udp::UdpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -168,14 +170,10 @@ impl EdgionUdpProxy {
             }
         };
 
-        let backend_namespace = backend_ref
-            .namespace
-            .as_deref()
-            .or_else(|| udp_route.metadata.namespace.as_deref())
-            .unwrap_or("default");
-        let service_key = format!("{}/{}", backend_namespace, backend_ref.name);
+        let route_ns = udp_route.metadata.namespace.as_deref().unwrap_or("default");
+        let id = crate::types::ServiceIdentity::from_udp_backend_ref(&backend_ref, route_ns);
 
-        let backend = match select_roundrobin_backend(&service_key) {
+        let backend = match select_roundrobin_backend(&id) {
             Some(backend) => backend,
             None => {
                 log_udp(&UdpLogEntry::failure(
@@ -189,14 +187,17 @@ impl EdgionUdpProxy {
             }
         };
 
-        let mut upstream_addr = match backend.addr {
+        let mut upstream_pingora_addr = backend.addr;
+        resolve_target_port(
+            &mut upstream_pingora_addr,
+            backend_ref.port,
+            &id,
+            PortLookupSource::Auto,
+        );
+        let upstream_addr = match upstream_pingora_addr {
             PingoraSocketAddr::Inet(sockaddr) => sockaddr,
             PingoraSocketAddr::Unix(_) => return,
         };
-
-        if let Some(port) = backend_ref.port {
-            upstream_addr.set_port(port as u16);
-        }
         if validate_endpoint_backend_addr(&PingoraSocketAddr::Inet(upstream_addr), self.allow_loopback_upstream())
             .is_err()
         {

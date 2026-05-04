@@ -25,7 +25,22 @@ pub enum PortLookupSource {
 /// For single-port Services where port != targetPort (e.g. port:443 -> targetPort:8443),
 /// the addr may still carry the Service port if the LB was built before EndpointSlice sync.
 /// This function corrects it by looking up the targetPort directly from the Service spec.
-pub fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_key: &str, source: PortLookupSource) {
+pub fn resolve_target_port(
+    addr: &mut SocketAddr,
+    br_port: Option<i32>,
+    id: &crate::types::ServiceIdentity,
+    source: PortLookupSource,
+) {
+    resolve_target_port_key(addr, br_port, id.key(), source);
+}
+
+/// Internal `&str` variant of [`resolve_target_port`].
+pub(crate) fn resolve_target_port_key(
+    addr: &mut SocketAddr,
+    br_port: Option<i32>,
+    service_key: &str,
+    source: PortLookupSource,
+) {
     let Some(br_port_val) = br_port else {
         return;
     };
@@ -108,8 +123,9 @@ pub fn resolve_target_port(addr: &mut SocketAddr, br_port: Option<i32>, service_
 
 /// Resolve a Service port number to its port name.
 pub(crate) fn resolve_port_name(service_name: &str, namespace: Option<&str>, port: i32) -> Option<String> {
-    let ns = namespace.unwrap_or("");
-    let key = format!("{}/{}", ns, service_name);
+    let key = crate::types::ServiceIdentity::new(service_name, namespace.unwrap_or("default"))
+        .key()
+        .to_string();
     let svc_store = get_global_service_store();
     svc_store.with_service(&key, |svc| {
         svc.spec

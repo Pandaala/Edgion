@@ -19,8 +19,9 @@ pub fn validate_endpoint_in_route(
     route_namespace: &str,
 ) -> Result<(usize, u16), String> {
     for (idx, br) in route_backend_refs.iter().enumerate() {
-        let br_namespace = br.namespace.as_deref().unwrap_or(route_namespace);
-        let service_key = format!("{}/{}", br_namespace, br.name);
+        let service_key = crate::types::ServiceIdentity::from_http_backend_ref(br, route_namespace)
+            .key()
+            .to_string();
         let br_port = br.port.map(|p| p as u16);
 
         // Determine effective port

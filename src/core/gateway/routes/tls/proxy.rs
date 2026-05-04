@@ -254,28 +254,19 @@ impl EdgionTlsTcpProxy {
             }
 
             // 4b. Resolve backend address via EndpointSlice
-            let namespace = backend_ref
-                .namespace
-                .as_deref()
-                .or_else(|| tls_route.metadata.namespace.as_deref())
-                .unwrap_or("default");
-            let service_key = format!("{}/{}", namespace, &backend_ref.name);
+            let route_ns = tls_route.metadata.namespace.as_deref().unwrap_or("default");
+            let id = crate::types::ServiceIdentity::from_tls_backend_ref(&backend_ref, route_ns);
 
-            let backend = match select_roundrobin_backend(&service_key) {
+            let backend = match select_roundrobin_backend(&id) {
                 Some(b) => b,
                 None => {
-                    last_err = format!("no endpoint: {service_key}");
+                    last_err = format!("no endpoint: {}", id.key());
                     continue;
                 }
             };
 
             let mut upstream_addr = backend.addr;
-            resolve_target_port(
-                &mut upstream_addr,
-                backend_ref.port,
-                &service_key,
-                PortLookupSource::Auto,
-            );
+            resolve_target_port(&mut upstream_addr, backend_ref.port, &id, PortLookupSource::Auto);
             let upstream_addr_str = upstream_addr.to_string();
             let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
 
@@ -285,7 +276,7 @@ impl EdgionTlsTcpProxy {
                 backend: Some(MatchedInfo {
                     rsc: Rsc {
                         kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
-                        ns: namespace.to_string(),
+                        ns: id.namespace().to_string(),
                         name: backend_ref.name.clone(),
                     },
                     section: None,

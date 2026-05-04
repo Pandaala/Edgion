@@ -21,7 +21,7 @@ impl ServiceHandler {
     async fn requeue_dependent_routes(&self, svc: &Service, event: &str, ctx: &HandlerContext) {
         let svc_ns = svc.metadata.namespace.as_deref().unwrap_or("default");
         let svc_name = svc.metadata.name.as_deref().unwrap_or("");
-        let service_key = format!("{}/{}", svc_ns, svc_name);
+        let service_key = crate::types::ServiceIdentity::new(svc_name, svc_ns).key().to_string();
 
         let refs = ctx.runtime().service_ref_mgr.get_refs(&service_key);
         if refs.is_empty() {

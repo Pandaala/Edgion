@@ -483,7 +483,9 @@ impl BackendTlsPolicyHandler {
 
         for target_ref in &btp.spec.target_refs {
             // Per Gateway API spec, targetRef can only reference resources in the same namespace.
-            let service_key = format!("{}/{}", policy_ns, target_ref.name);
+            let service_key = crate::types::ServiceIdentity::new(&target_ref.name, policy_ns)
+                .key()
+                .to_string();
 
             // Step 1: Service -> Routes
             let routes = service_ref_manager.get_refs(&service_key);

@@ -39,7 +39,7 @@ use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::{EdgionHttpContext, ParsedLBPolicy};
 use peer_builder::{
-    apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol, extract_tls_config,
+    apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol_key, extract_tls_config,
     record_tls_to_upstream, validate_backend_addr, BackendAppProtocol,
 };
 use pingora_core::prelude::HttpPeer;
@@ -62,14 +62,13 @@ pub(crate) fn try_get_peer(
     let gateway_key_ref = Some(gateway_key.as_str());
 
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
-    let (br_name, br_port, br_kind, lb_policy, backend_tls_policy) = if is_grpc {
+    let (br_port, br_kind, lb_policy, backend_tls_policy) = if is_grpc {
         // gRPC backend
         let grpc_br = ctx
             .selected_grpc_backend
             .as_ref()
             .ok_or(EdgionStatus::GrpcUpstreamNotBackendRefs)?;
         (
-            &grpc_br.name,
             grpc_br.port,
             grpc_br.kind.as_ref(),
             &grpc_br.extension_info.lb_policy,
@@ -82,7 +81,6 @@ pub(crate) fn try_get_peer(
             .as_ref()
             .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
         (
-            &http_br.name,
             http_br.port,
             http_br.kind.as_ref(),
             &http_br.extension_info.lb_policy,
@@ -92,21 +90,19 @@ pub(crate) fn try_get_peer(
 
     let service_type = EdgionService::from_kind(br_kind);
 
-    // Form service_key while the immutable borrows of ctx are still alive — avoids
-    // cloning br_name / namespace on the hot path.
-    let namespace = ctx
+    // Read service_key from cached identity while immutable borrows of ctx are still alive.
+    let service_key = ctx
         .backend_context
         .as_ref()
-        .map(|bc| bc.rsc.ns.as_str())
-        .ok_or(EdgionStatus::Unknown)?;
-    let service_key = format!("{}/{}", namespace, br_name);
+        .map(|bc| bc.identity.key().to_string())
+        .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
 
     // Clone only the fields we hand to build_peer_from_lb_selection as owned values
     // (the helper takes &mut ctx, which would invalidate the ctx-borrowed references).
     let lb_policy = lb_policy.clone();
     let backend_tls_policy = backend_tls_policy.clone();
 
-    let backend_app_protocol = detect_backend_app_protocol(&service_key, br_port);
+    let backend_app_protocol = detect_backend_app_protocol_key(&service_key, br_port);
 
     match service_type {
         EdgionService::Service => {
@@ -290,7 +286,7 @@ fn build_peer_from_lb_selection(
 ) -> Result<Box<HttpPeer>, EdgionStatus> {
     let lb_addr = backend.addr.clone();
     let mut peer_addr = lb_addr.clone();
-    resolve_target_port(&mut peer_addr, br_port, service_key, port_source);
+    port_resolver::resolve_target_port_key(&mut peer_addr, br_port, service_key, port_source);
     if let Err(status) = validate_endpoint_backend_addr(&peer_addr, ctx.allow_loopback_upstream) {
         record_unsafe_upstream_attempt(ctx, &peer_addr, status);
         return Err(status);

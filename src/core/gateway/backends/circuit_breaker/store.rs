@@ -211,7 +211,7 @@ impl CircuitBreakerStore {
             ext: Default::default(),
         };
         let hash = crate::core::gateway::backends::health::check::backend_hash(&backend);
-        let total = crate::core::gateway::backends::get_backends_for_service(service_key).len();
+        let total = crate::core::gateway::backends::selector::get_backends_for_service_key(service_key).len();
         self.record_failure(service_key, hash, total);
     }
 

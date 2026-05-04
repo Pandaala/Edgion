@@ -121,7 +121,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     let (backend_ns, backend_name) = ctx
         .backend_context
         .as_ref()
-        .map(|bc| (bc.rsc.ns.as_str(), bc.rsc.name.as_str()))
+        .map(|bc| (bc.identity.namespace(), bc.identity.name()))
         .unwrap_or(("unknown", "unknown"));
 
     // Get protocol from discover_protocol (default "http", could be "grpc", "websocket", etc.)

@@ -113,6 +113,14 @@ pub fn sp_affinity_build(service_key: &str, backends: &[Backend]) {
 /// Get or build the session affinity map for a service.
 /// Lazy: builds from backends on first access.
 pub fn sp_affinity_get_or_build(
+    id: &crate::types::ServiceIdentity,
+    backends: &[Backend],
+) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
+    sp_affinity_get_or_build_key(id.key(), backends)
+}
+
+/// Internal `&str` variant of [`sp_affinity_get_or_build`].
+pub(crate) fn sp_affinity_get_or_build_key(
     service_key: &str,
     backends: &[Backend],
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {

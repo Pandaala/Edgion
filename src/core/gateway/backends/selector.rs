@@ -46,13 +46,23 @@ fn select_rr(
 }
 
 /// Select backend using round-robin based on endpoint mode.
-pub fn select_roundrobin_backend(service_key: &str) -> Option<pingora_load_balancing::Backend> {
-    let backends = get_backends_for_service(service_key);
+pub fn select_roundrobin_backend(id: &crate::types::ServiceIdentity) -> Option<pingora_load_balancing::Backend> {
+    select_roundrobin_backend_key(id.key())
+}
+
+/// Internal `&str` variant of [`select_roundrobin_backend`].
+pub(crate) fn select_roundrobin_backend_key(service_key: &str) -> Option<pingora_load_balancing::Backend> {
+    let backends = get_backends_for_service_key(service_key);
     select_rr(service_key, &backends)
 }
 
 /// Get backend list for a service from the appropriate store based on endpoint mode.
-pub fn get_backends_for_service(service_key: &str) -> Vec<pingora_load_balancing::Backend> {
+pub fn get_backends_for_service(id: &crate::types::ServiceIdentity) -> Vec<pingora_load_balancing::Backend> {
+    get_backends_for_service_key(id.key())
+}
+
+/// Internal `&str` variant of [`get_backends_for_service`].
+pub(crate) fn get_backends_for_service_key(service_key: &str) -> Vec<pingora_load_balancing::Backend> {
     match get_global_endpoint_mode() {
         EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
             get_roundrobin_store().get_backends_for_service(service_key)

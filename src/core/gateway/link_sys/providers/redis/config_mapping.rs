@@ -52,10 +52,7 @@ pub fn build_fred_config(crd: &RedisClientConfig, auth: &CredentialState<BasicAu
     };
 
     if let Some(db) = crd.db {
-        config.database = Some(
-            u8::try_from(db)
-                .map_err(|_| anyhow::anyhow!("Redis db {} out of range 0-255", db))?,
-        );
+        config.database = Some(u8::try_from(db).map_err(|_| anyhow::anyhow!("Redis db {} out of range 0-255", db))?);
     }
 
     if crd.auth.is_some() {

@@ -126,22 +126,18 @@ impl RequestMirrorPlugin {
         if self.config.backend_ref.name.is_empty() {
             return Err("backend_ref.name is required for RequestMirror".to_string());
         }
-        let ns = self
-            .config
-            .backend_ref
-            .namespace
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
         // TODO(Phase 2): Use BackendTLSPolicy to determine TLS instead of port heuristic.
         let scheme = if port == 443 { "https" } else { "http" };
 
-        let service_key = format!("{}/{}", ns, self.config.backend_ref.name);
+        // namespace is always Some here: filled in from default_namespace at construction time.
+        let ns = self.config.backend_ref.namespace.clone().unwrap_or_default();
+        let id = crate::types::ServiceIdentity::new(self.config.backend_ref.name.clone(), ns);
 
         // Use the gateway's standard backend resolution which respects EndpointMode,
         // performs round-robin LB across endpoints, and honours health checks.
-        if let Some(backend) = select_roundrobin_backend(&service_key) {
+        if let Some(backend) = select_roundrobin_backend(&id) {
             let mut addr = backend.addr;
-            resolve_target_port(&mut addr, Some(port), &service_key, PortLookupSource::Auto);
+            resolve_target_port(&mut addr, Some(port), &id, PortLookupSource::Auto);
             if validate_endpoint_backend_addr(&addr, allow_loopback_upstream).is_err() {
                 return Err("mirror backend resolved to loopback/link-local/metadata address (rejected)".to_string());
             }

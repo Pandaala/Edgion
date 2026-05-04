@@ -296,13 +296,25 @@ impl Vm {
                 let end = match &end_val {
                     Value::Int(n) => (*n).max(0) as usize,
                     Value::Nil => 0,
-                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: end_val.type_name(), operation: "substr()" }),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Int",
+                            got: end_val.type_name(),
+                            operation: "substr()",
+                        })
+                    }
                 };
                 let start_val = state.pop()?;
                 let start = match &start_val {
                     Value::Int(n) => (*n).max(0) as usize,
                     Value::Nil => 0,
-                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: start_val.type_name(), operation: "substr()" }),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Int",
+                            got: start_val.type_name(),
+                            operation: "substr()",
+                        })
+                    }
                 };
                 let s = state.pop()?;
                 match &s {
@@ -492,13 +504,25 @@ impl Vm {
                 let end = match &end_val {
                     Value::Int(n) => *n,
                     Value::Nil => 0,
-                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: end_val.type_name(), operation: "range()" }),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Int",
+                            got: end_val.type_name(),
+                            operation: "range()",
+                        })
+                    }
                 };
                 let start_val = state.pop()?;
                 let start = match &start_val {
                     Value::Int(n) => *n,
                     Value::Nil => 0,
-                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: start_val.type_name(), operation: "range()" }),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Int",
+                            got: start_val.type_name(),
+                            operation: "range()",
+                        })
+                    }
                 };
                 let count = (end - start).max(0).min(1000) as usize;
                 let list: Vec<String> = (start..start + count as i64).map(|i| i.to_string()).collect();
@@ -616,7 +640,13 @@ impl Vm {
                 let timestamp = match &ts_val {
                     Value::Int(n) => *n,
                     Value::Nil => return Ok(Value::Nil),
-                    _ => return Err(RuntimeError::TypeError { expected: "Int", got: ts_val.type_name(), operation: "time_format()" }),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Int",
+                            got: ts_val.type_name(),
+                            operation: "time_format()",
+                        })
+                    }
                 };
                 let dt = chrono::DateTime::from_timestamp(timestamp, 0);
                 match dt {

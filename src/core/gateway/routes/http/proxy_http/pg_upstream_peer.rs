@@ -8,7 +8,7 @@ use crate::core::gateway::routes::http::session_persistence;
 use crate::core::gateway::{end_response_500, end_response_503, end_response_grpc_unavailable};
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
-use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState};
+use crate::types::{EdgionHttpContext, EdgionStatus, ServiceIdentity, SessionPersistenceState};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
@@ -347,11 +347,9 @@ fn sp_resolve_target(
 ) {
     let Some(token) = token else { return };
 
-    let namespace = backend_ref.namespace.as_deref().unwrap_or(route_ns);
-    let service_key = format!("{}/{}", namespace, &backend_ref.name);
-
-    let backends = crate::core::gateway::backends::get_backends_for_service(&service_key);
-    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build(&service_key, &backends);
+    let id = ServiceIdentity::from_http_backend_ref(backend_ref, route_ns);
+    let backends = crate::core::gateway::backends::get_backends_for_service(&id);
+    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build(&id, &backends);
 
     if let Some(&addr) = affinity_map.get(token) {
         ctx.sp_target_addr = Some(addr);
@@ -558,7 +556,7 @@ async fn try_external_jump_peer(
 
     if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
         if ctx.backend_context.is_none() {
-            ctx.init_backend_context(domain, "_external_".to_string());
+            ctx.init_backend_context(ServiceIdentity::new(domain, "_external_"));
         }
         record_unsafe_resolved_upstream_attempt(ctx, addr, status);
         ctx.add_error(status);
@@ -572,7 +570,7 @@ async fn try_external_jump_peer(
     // finish_static_peer so init_backend_context_if_needed becomes a no-op.
     // Use domain as "name" and "_external_" as namespace marker.
     if ctx.backend_context.is_none() {
-        ctx.init_backend_context(domain, "_external_".to_string());
+        ctx.init_backend_context(ServiceIdentity::new(domain, "_external_"));
     }
 
     let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
@@ -600,31 +598,28 @@ pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx:
 #[inline]
 fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
     if ctx.backend_context.is_some() {
-        return Ok(()); // Already initialized
+        return Ok(());
     }
 
-    // Get namespace from selected backend (gRPC or HTTP)
-    let (name, namespace) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
-        let ns = grpc_br.namespace.clone().unwrap_or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .map(|unit| unit.matched_info.rsc.ns.clone())
-                .unwrap_or_default()
-        });
-        (grpc_br.name.clone(), ns)
+    let identity = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
+        let route_ns = ctx
+            .grpc_route_unit
+            .as_ref()
+            .map(|unit| unit.matched_info.rsc.ns.as_str())
+            .unwrap_or_default();
+        ServiceIdentity::from_grpc_backend_ref(grpc_br, route_ns)
     } else if let Some(http_br) = ctx.selected_backend.as_ref() {
-        let ns = http_br.namespace.clone().unwrap_or_else(|| {
-            ctx.route_unit
-                .as_ref()
-                .map(|unit| unit.matched_info.rsc.ns.clone())
-                .unwrap_or_default()
-        });
-        (http_br.name.clone(), ns)
+        let route_ns = ctx
+            .route_unit
+            .as_ref()
+            .map(|unit| unit.matched_info.rsc.ns.as_str())
+            .unwrap_or_default();
+        ServiceIdentity::from_http_backend_ref(http_br, route_ns)
     } else {
         return Err(PingoraError::new(ErrorType::InternalError));
     };
 
-    ctx.init_backend_context(name, namespace);
+    ctx.init_backend_context(identity);
     Ok(())
 }
 
