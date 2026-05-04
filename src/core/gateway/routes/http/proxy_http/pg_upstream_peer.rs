@@ -24,22 +24,12 @@ pub async fn upstream_peer(
 ) -> pingora_core::Result<Box<HttpPeer>> {
     // Check request timeout dynamically before attempting peer selection
     // This prevents starting a new retry attempt when deadline is already exceeded
-    let request_timeout = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .and_then(|timeouts| timeouts.request_timeout.as_duration())
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-                .and_then(|timeouts| timeouts.request_timeout.as_duration())
-        });
+    let request_timeout = ctx.request_timeout();
 
     if let Some(timeout) = request_timeout {
         let elapsed = ctx.start_time.elapsed();
         if elapsed >= timeout {
-            ctx.add_error(EdgionStatus::Unknown);
+            ctx.add_error(EdgionStatus::RequestTimeoutExceeded);
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);
             }
@@ -49,16 +39,7 @@ pub async fn upstream_peer(
 
     // Apply backoff delay on retry attempts
     if ctx.try_cnt >= 1 {
-        let base_backoff = ctx
-            .route_unit
-            .as_ref()
-            .and_then(|unit| unit.rule.parsed_retry.as_ref())
-            .or_else(|| {
-                ctx.grpc_route_unit
-                    .as_ref()
-                    .and_then(|unit| unit.rule.parsed_retry.as_ref())
-            })
-            .and_then(|r| r.backoff);
+        let base_backoff = ctx.retry_backoff();
 
         if let Some(base) = base_backoff {
             // Exponential: base * 2^(try_cnt - 1), capped at 30s
@@ -66,7 +47,7 @@ pub async fn upstream_peer(
             let delay = base.saturating_mul(1u32.checked_shl(exponent).unwrap_or(u32::MAX));
             let delay = delay.min(std::time::Duration::from_secs(30));
 
-            // Only sleep if remaining time allows
+            // TODO: abort this sleep early when the client disconnects
             if let Some(timeout) = request_timeout {
                 let remaining = timeout.saturating_sub(ctx.start_time.elapsed());
                 if delay < remaining {
@@ -182,70 +163,14 @@ pub async fn upstream_peer_http(
         ctx.uri_finalized = true;
     }
 
-    // 0. Check for DirectEndpoint (highest priority, bypass LB)
-    if let Some(direct) = &ctx.direct_endpoint {
-        let backend_ref_idx = direct.backend_ref_idx;
-        let addr = direct.addr;
-        let use_tls = direct.use_tls;
-        let sni = direct.sni.clone();
-
-        // If backend context not initialized, we need to set selected_backend for metadata
-        if ctx.selected_backend.is_none() {
-            if let Some(route_unit) = ctx.route_unit.as_ref() {
-                if let Some(refs) = &route_unit.rule.backend_refs {
-                    if let Some(br) = refs.get(backend_ref_idx) {
-                        ctx.selected_backend = Some(br.clone());
-                    }
-                }
-            }
-        }
-
-        // Initialize backend context (for logs/metrics)
-        init_backend_context_if_needed(ctx)?;
-
-        // Push placeholder upstream so subsequent ctx writes have a valid entry to land on.
-        begin_upstream_attempt(ctx);
-
-        // Create peer directly
-        let mut peer = Box::new(HttpPeer::new(addr, use_tls, sni));
-
-        // Configure peer
-        configure_peer_timeouts(edgion_http, &mut peer, ctx);
-        update_peer_metrics(edgion_http, &peer, ctx);
-
-        return Ok(peer);
+    // 0. DirectEndpoint (highest priority, bypass LB)
+    if let Some(result) = try_direct_endpoint_peer(edgion_http, ctx) {
+        return result;
     }
 
-    // 1. Check for ExternalJump (external domain, second priority)
-    if let Some(ref external) = ctx.external_jump {
-        let addr = resolve_domain(&external.domain, external.port).await?;
-        if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
-            if ctx.backend_context.is_none() {
-                ctx.init_backend_context(external.domain.clone(), "_external_".to_string());
-            }
-            record_unsafe_resolved_upstream_attempt(ctx, addr, status);
-            ctx.add_error(status);
-            return Err(PingoraError::explain(
-                ErrorType::ConnectError,
-                "external upstream resolved to unsafe address",
-            ));
-        }
-
-        // Build HttpPeer from resolved address
-        let mut peer = Box::new(HttpPeer::new(addr, external.use_tls, external.sni.clone()));
-
-        // Initialize backend context for logging/metrics
-        // Use domain as "name" and "_external_" as namespace marker
-        if ctx.backend_context.is_none() {
-            ctx.init_backend_context(external.domain.clone(), "_external_".to_string());
-        }
-
-        // Push placeholder upstream so update_peer_metrics has an entry to backfill.
-        begin_upstream_attempt(ctx);
-
-        configure_peer_timeouts(edgion_http, &mut peer, ctx);
-        update_peer_metrics(edgion_http, &peer, ctx);
-        return Ok(peer);
+    // 1. ExternalJump (external domain, second priority)
+    if let Some(result) = try_external_jump_peer(edgion_http, ctx).await {
+        return result;
     }
 
     // 2. Select HTTP backend if not already selected (may include InternalJump inside)
@@ -531,6 +456,97 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     if ctx.upstream_start_time.is_none() {
         ctx.upstream_start_time = Some(std::time::Instant::now());
     }
+}
+
+/// Finish a peer that was constructed directly (i.e. without going through LB / try_get_peer):
+/// init backend context, push the upstream attempt placeholder, then apply timeouts and metrics.
+///
+/// Used by paths that bypass load-balancing (DirectEndpoint, ExternalJump) where the address is
+/// already known. Callers must ensure `ctx.selected_backend` (or `ctx.backend_context`) is
+/// populated beforehand so [`init_backend_context_if_needed`] can complete.
+#[inline]
+fn finish_static_peer(
+    edgion_http: &EdgionHttpProxy,
+    ctx: &mut EdgionHttpContext,
+    mut peer: Box<HttpPeer>,
+) -> pingora_core::Result<Box<HttpPeer>> {
+    init_backend_context_if_needed(ctx)?;
+    begin_upstream_attempt(ctx);
+    configure_peer_timeouts(edgion_http, &mut peer, ctx);
+    update_peer_metrics(edgion_http, &peer, ctx);
+    Ok(peer)
+}
+
+/// Try the DirectEndpoint bypass path (exact IP set by a plugin, e.g. dynamic_endpoint).
+///
+/// Returns `None` when no DirectEndpoint is staged on `ctx`, letting the caller fall through
+/// to the next strategy. Otherwise returns the peer-construction result.
+#[inline]
+fn try_direct_endpoint_peer(
+    edgion_http: &EdgionHttpProxy,
+    ctx: &mut EdgionHttpContext,
+) -> Option<pingora_core::Result<Box<HttpPeer>>> {
+    let direct = ctx.direct_endpoint.as_ref()?;
+    let (addr, use_tls, sni, backend_ref_idx) =
+        (direct.addr, direct.use_tls, direct.sni.clone(), direct.backend_ref_idx);
+
+    // Backfill selected_backend from backend_refs[idx] so init_backend_context_if_needed
+    // (called inside finish_static_peer) can derive name/namespace from it.
+    if ctx.selected_backend.is_none() {
+        ctx.selected_backend = ctx
+            .route_unit
+            .as_ref()
+            .and_then(|ru| ru.rule.backend_refs.as_ref())
+            .and_then(|refs| refs.get(backend_ref_idx))
+            .cloned();
+    }
+
+    let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
+    Some(finish_static_peer(edgion_http, ctx, peer))
+}
+
+/// Try the ExternalJump bypass path (external domain set by a plugin, e.g. region_route).
+///
+/// Returns `None` when no ExternalJump is staged on `ctx`. Otherwise resolves the domain via
+/// async DNS, validates the address against SSRF defenses, then returns the peer-construction
+/// result (or the rejection error).
+#[inline]
+async fn try_external_jump_peer(
+    edgion_http: &EdgionHttpProxy,
+    ctx: &mut EdgionHttpContext,
+) -> Option<pingora_core::Result<Box<HttpPeer>>> {
+    let external = ctx.external_jump.as_ref()?;
+    let domain = external.domain.clone();
+    let port = external.port;
+    let use_tls = external.use_tls;
+    let sni = external.sni.clone();
+
+    let addr = match resolve_domain(&domain, port).await {
+        Ok(addr) => addr,
+        Err(e) => return Some(Err(e)),
+    };
+
+    if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
+        if ctx.backend_context.is_none() {
+            ctx.init_backend_context(domain, "_external_".to_string());
+        }
+        record_unsafe_resolved_upstream_attempt(ctx, addr, status);
+        ctx.add_error(status);
+        return Some(Err(PingoraError::explain(
+            ErrorType::ConnectError,
+            "external upstream resolved to unsafe address",
+        )));
+    }
+
+    // External jump has no selected_backend; seed backend_context manually before
+    // finish_static_peer so init_backend_context_if_needed becomes a no-op.
+    // Use domain as "name" and "_external_" as namespace marker.
+    if ctx.backend_context.is_none() {
+        ctx.init_backend_context(domain, "_external_".to_string());
+    }
+
+    let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
+    Some(finish_static_peer(edgion_http, ctx, peer))
 }
 
 /// Backfill the resolved peer ip/port onto the current placeholder upstream entry.

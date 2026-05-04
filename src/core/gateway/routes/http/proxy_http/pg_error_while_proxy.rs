@@ -40,28 +40,10 @@ pub fn error_while_proxy(
     // Case 2: connection reuse retry (Pingora built-in: stale keepalive connection)
     // Add max_retries and timeout guard
     let max_retries = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
-        })
+        .retry_attempts()
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
-    let timeout_exceeded = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        })
-        .and_then(|t| t.request_timeout.as_duration())
-        .map(|timeout| ctx.start_time.elapsed() >= timeout)
-        .unwrap_or(false);
+    let timeout_exceeded = ctx.request_timeout_exceeded();
 
     let can_retry = client_reused && buffer_ok && ctx.try_cnt <= max_retries && !timeout_exceeded;
 

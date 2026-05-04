@@ -39,40 +39,18 @@ pub fn fail_to_connect(
 
     // Check request timeout dynamically before allowing retry
     // If timeout is exceeded, block all retries and return 504
-    let request_timeout = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .and_then(|timeouts| timeouts.request_timeout.as_duration())
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-                .and_then(|timeouts| timeouts.request_timeout.as_duration())
-        });
-
-    if let Some(timeout) = request_timeout {
-        let elapsed = ctx.start_time.elapsed();
-        if elapsed >= timeout {
-            // Set 504 status for timeout
-            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.status = Some(504);
-            }
-            // Do not set retry flag - this blocks any further retries
-            return e;
+    if ctx.request_timeout_exceeded() {
+        // Set 504 status for timeout
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.status = Some(504);
         }
+        // Do not set retry flag - this blocks any further retries
+        return e;
     }
 
     // Determine max_retries: rule.retry.attempts > global (HTTP or gRPC route)
     let max_retries = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
-        })
+        .retry_attempts()
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
     if ctx.try_cnt <= max_retries {

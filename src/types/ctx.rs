@@ -692,6 +692,69 @@ impl EdgionHttpContext {
         self.edgion_status.push(err_code);
     }
 
+    /// Resolve the route-level `request_timeout`, preferring HTTP `route_unit`
+    /// over `grpc_route_unit`. Returns `None` when neither side resolves to a
+    /// concrete duration (either side may have `parsed_timeouts = None`, or have
+    /// `request_timeout` set to `Unset`/`Disabled`, both of which yield `None`
+    /// from `as_duration()`).
+    ///
+    /// The fallback is applied at the resolved `Duration` level — not at the
+    /// `parsed_timeouts` level — so that an HTTP route with `parsed_timeouts`
+    /// present but `request_timeout` not configured correctly falls through to
+    /// the gRPC side.
+    #[inline]
+    pub fn request_timeout(&self) -> Option<Duration> {
+        self.route_unit
+            .as_ref()
+            .and_then(|u| u.rule.parsed_timeouts.as_ref())
+            .and_then(|t| t.request_timeout.as_duration())
+            .or_else(|| {
+                self.grpc_route_unit
+                    .as_ref()
+                    .and_then(|u| u.rule.parsed_timeouts.as_ref())
+                    .and_then(|t| t.request_timeout.as_duration())
+            })
+    }
+
+    /// True when a route-level `request_timeout` is set and `start_time`
+    /// has already exceeded it. Returns `false` when no timeout is configured.
+    #[inline]
+    pub fn request_timeout_exceeded(&self) -> bool {
+        self.request_timeout().is_some_and(|t| self.start_time.elapsed() >= t)
+    }
+
+    /// Resolve the retry `attempts` cap with field-level fallback between
+    /// HTTP and gRPC route units.
+    #[inline]
+    pub fn retry_attempts(&self) -> Option<u32> {
+        self.route_unit
+            .as_ref()
+            .and_then(|u| u.rule.parsed_retry.as_ref())
+            .and_then(|r| r.attempts)
+            .or_else(|| {
+                self.grpc_route_unit
+                    .as_ref()
+                    .and_then(|u| u.rule.parsed_retry.as_ref())
+                    .and_then(|r| r.attempts)
+            })
+    }
+
+    /// Resolve the retry `backoff` base duration with field-level fallback
+    /// between HTTP and gRPC route units.
+    #[inline]
+    pub fn retry_backoff(&self) -> Option<Duration> {
+        self.route_unit
+            .as_ref()
+            .and_then(|u| u.rule.parsed_retry.as_ref())
+            .and_then(|r| r.backoff)
+            .or_else(|| {
+                self.grpc_route_unit
+                    .as_ref()
+                    .and_then(|u| u.rule.parsed_retry.as_ref())
+                    .and_then(|r| r.backoff)
+            })
+    }
+
     /// Initialize backend context with name and namespace (call once)
     pub fn init_backend_context(&mut self, name: String, namespace: String) {
         self.backend_context = Some(BackendContext {
@@ -853,16 +916,20 @@ mod sensitive_tests {
 
     static MODE_LOCK: Mutex<()> = Mutex::new(());
 
-    struct ModeGuard<'a>(u8, std::sync::MutexGuard<'a, ()>);
+    struct ModeGuard<'a> {
+        prev: u8,
+        // Held purely for RAII: serializes tests that mutate SENSITIVE_MODE.
+        _lock: std::sync::MutexGuard<'a, ()>,
+    }
     impl Drop for ModeGuard<'_> {
         fn drop(&mut self) {
-            SENSITIVE_MODE.store(self.0, Ordering::SeqCst);
+            SENSITIVE_MODE.store(self.prev, Ordering::SeqCst);
         }
     }
     fn set_mode(mode: u8) -> ModeGuard<'static> {
         let guard = MODE_LOCK.lock().unwrap();
         let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
-        ModeGuard(prev, guard)
+        ModeGuard { prev, _lock: guard }
     }
 
     #[test]

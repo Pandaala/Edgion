@@ -182,16 +182,20 @@ mod tests {
     // Serialize all tests that mutate SENSITIVE_MODE to prevent races.
     static MODE_LOCK: Mutex<()> = Mutex::new(());
 
-    struct ModeGuard<'a>(u8, std::sync::MutexGuard<'a, ()>);
+    struct ModeGuard<'a> {
+        prev: u8,
+        // Held purely for RAII: serializes tests that mutate SENSITIVE_MODE.
+        _lock: std::sync::MutexGuard<'a, ()>,
+    }
     impl Drop for ModeGuard<'_> {
         fn drop(&mut self) {
-            SENSITIVE_MODE.store(self.0, Ordering::SeqCst);
+            SENSITIVE_MODE.store(self.prev, Ordering::SeqCst);
         }
     }
     fn set_mode(mode: u8) -> ModeGuard<'static> {
         let guard = MODE_LOCK.lock().unwrap();
         let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
-        ModeGuard(prev, guard)
+        ModeGuard { prev, _lock: guard }
     }
 
     #[test]

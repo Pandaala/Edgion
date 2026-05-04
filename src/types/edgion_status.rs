@@ -117,4 +117,9 @@ pub enum EdgionStatus {
     /// (connection refused, DNS failure, or timeout). Emitted both when the
     /// plugin rejects the request and when `allow_degradation` lets it pass.
     ForwardAuthServiceUnreachable = 503_14,
+
+    /// End-to-end request timeout already exceeded before peer selection — the
+    /// gateway aborts instead of starting a new upstream attempt that would
+    /// also fail. Surfaced to the client as 504.
+    RequestTimeoutExceeded = 504_01,
 }
