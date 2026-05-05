@@ -102,6 +102,8 @@ pub mod condition_reasons {
     /// Gateway API upstream reason — see the "Edgion extension" note above
     /// the Secret-focused reasons for the general caveat.
     pub const INVALID_PLUGIN_METADATA_REF: &str = "InvalidPluginMetaDataRef";
+    /// Gateway-level: edgion.io/edgion-stream-plugins annotation references a missing resource.
+    pub const INVALID_STREAM_PLUGINS_REF: &str = "InvalidStreamPluginsRef";
 
     // Listener ResolvedRefs reasons (Gateway API v1.5)
     /// Listener certificate Secret ref invalid or unresolvable.
