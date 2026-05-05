@@ -488,6 +488,16 @@ fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContex
     let store = get_global_stream_plugin_store();
     let port = context.listener.port as u16;
 
+    if !store.contains(&store_key) {
+        tracing::warn!(
+            gateway=%context.gateway_key,
+            listener=%context.listener.name,
+            store_key=%store_key,
+            "edgion-stream-plugins reference not found in gateway store; \
+             connections will be admitted until resource is synced"
+        );
+    }
+
     let filter = Arc::new(StreamPluginConnectionFilter::new(store, store_key.clone(), port));
     service.set_connection_filter(filter);
 

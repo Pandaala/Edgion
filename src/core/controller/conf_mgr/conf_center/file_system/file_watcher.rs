@@ -105,11 +105,19 @@ impl FileSystemWatcher {
         let mut files_by_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = HashMap::new();
 
         // Scan directory
-        let entries = std::fs::read_dir(&self.conf_dir)
+        let mut entries = tokio::fs::read_dir(&self.conf_dir)
+            .await
             .with_context(|| format!("Failed to read directory: {}", self.conf_dir.display()))?;
 
-        for entry in entries {
-            let entry = entry?;
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("Failed to read directory entry: {}", self.conf_dir.display()));
+                }
+            };
             let path = entry.path();
 
             // Skip non-YAML files
@@ -118,7 +126,7 @@ impl FileSystemWatcher {
             }
 
             // Read file content
-            let content = match std::fs::read_to_string(&path) {
+            let content = match tokio::fs::read_to_string(&path).await {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(
@@ -300,7 +308,7 @@ impl FileSystemWatcher {
 
         if path.exists() {
             // File exists -> Apply event
-            match std::fs::read_to_string(path) {
+            match tokio::fs::read_to_string(path).await {
                 Ok(content) => {
                     let _ = sender.send(FileSystemEvent::Apply {
                         path: path.to_path_buf(),

@@ -86,11 +86,11 @@ impl FileSystemStatusHandler {
     /// * `kind` - Resource kind (e.g., "HTTPRoute")
     /// * `key` - Resource key (e.g., "default/my-route")
     /// * `status` - The native status object (must implement Serialize)
-    pub fn write_native_status<S: Serialize>(&self, kind: &str, key: &str, status: &S) -> std::io::Result<()> {
+    pub async fn write_native_status<S: Serialize>(&self, kind: &str, key: &str, status: &S) -> std::io::Result<()> {
         let status_path = self.build_status_path(kind, key);
         let yaml =
             serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&status_path, yaml)?;
+        tokio::fs::write(&status_path, yaml).await?;
 
         tracing::trace!(
             component = "fs_status",
@@ -107,11 +107,11 @@ impl FileSystemStatusHandler {
     ///
     /// This is useful when the status is extracted from a generic object
     /// using `extract_status_value()`.
-    pub fn write_status_value(&self, kind: &str, key: &str, status: &serde_json::Value) -> std::io::Result<()> {
+    pub async fn write_status_value(&self, kind: &str, key: &str, status: &serde_json::Value) -> std::io::Result<()> {
         let status_path = self.build_status_path(kind, key);
         let yaml =
             serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&status_path, yaml)?;
+        tokio::fs::write(&status_path, yaml).await?;
 
         tracing::trace!(
             component = "fs_status",
@@ -127,9 +127,9 @@ impl FileSystemStatusHandler {
     /// Write error status (for parse errors, etc.)
     ///
     /// This writes a simplified error status when the resource can't be fully parsed.
-    pub fn write_error_status(&self, kind: &str, key: &str, reason: &str, message: &str) -> std::io::Result<()> {
+    pub async fn write_error_status(&self, kind: &str, key: &str, reason: &str, message: &str) -> std::io::Result<()> {
         let status = ErrorStatus::error(reason, message);
-        self.write_native_status(kind, key, &status)
+        self.write_native_status(kind, key, &status).await
     }
 
     /// Read status from file as JSON string (for comparison)
@@ -138,13 +138,10 @@ impl FileSystemStatusHandler {
     /// - File doesn't exist
     /// - File read fails
     /// - Parsing/conversion fails
-    pub fn read_status_json(&self, kind: &str, key: &str) -> Option<String> {
+    pub async fn read_status_json(&self, kind: &str, key: &str) -> Option<String> {
         let status_path = self.build_status_path(kind, key);
-        if !status_path.exists() {
-            return None;
-        }
 
-        match std::fs::read_to_string(&status_path) {
+        match tokio::fs::read_to_string(&status_path).await {
             Ok(yaml_content) => {
                 // Parse YAML and convert to JSON for consistent comparison
                 match serde_yaml::from_str::<serde_json::Value>(&yaml_content) {
@@ -161,6 +158,7 @@ impl FileSystemStatusHandler {
                     }
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
                 tracing::warn!(
                     component = "fs_status",
@@ -175,26 +173,29 @@ impl FileSystemStatusHandler {
     }
 
     /// Delete status file
-    pub fn delete_status(&self, kind: &str, key: &str) -> std::io::Result<()> {
+    pub async fn delete_status(&self, kind: &str, key: &str) -> std::io::Result<()> {
         let status_path = self.build_status_path(kind, key);
-        if status_path.exists() {
-            std::fs::remove_file(&status_path)?;
-            tracing::trace!(
-                component = "fs_status",
-                kind = kind,
-                key = key,
-                status_file = %status_path.display(),
-                "Deleted status file"
-            );
+        match tokio::fs::remove_file(&status_path).await {
+            Ok(()) => {
+                tracing::trace!(
+                    component = "fs_status",
+                    kind = kind,
+                    key = key,
+                    status_file = %status_path.display(),
+                    "Deleted status file"
+                );
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
         }
-        Ok(())
     }
 
     /// Cleanup orphan status files (status files without corresponding config files)
-    pub fn cleanup_orphans(&self) -> std::io::Result<usize> {
+    pub async fn cleanup_orphans(&self) -> std::io::Result<usize> {
         let mut cleaned = 0;
 
-        let entries = match std::fs::read_dir(&self.conf_dir) {
+        let mut entries = match tokio::fs::read_dir(&self.conf_dir).await {
             Ok(entries) => entries,
             Err(e) => {
                 tracing::warn!(
@@ -207,7 +208,21 @@ impl FileSystemStatusHandler {
             }
         };
 
-        for entry in entries.flatten() {
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(
+                        component = "fs_status",
+                        conf_dir = %self.conf_dir.display(),
+                        error = %e,
+                        "Failed to read directory entry during orphan cleanup"
+                    );
+                    continue;
+                }
+            };
+
             let path = entry.path();
 
             // Only process .status files
@@ -217,9 +232,10 @@ impl FileSystemStatusHandler {
 
             // Check if corresponding config file exists
             if let Some(config_path) = Self::config_path_from_status(&path) {
-                if !config_path.exists() {
+                let exists = tokio::fs::try_exists(&config_path).await.unwrap_or(true);
+                if !exists {
                     // Orphan status file - delete it
-                    if let Err(e) = std::fs::remove_file(&path) {
+                    if let Err(e) = tokio::fs::remove_file(&path).await {
                         tracing::warn!(
                             component = "fs_status",
                             status_file = %path.display(),
@@ -288,8 +304,8 @@ mod tests {
         assert!(yaml.contains("TestError"));
     }
 
-    #[test]
-    fn test_write_native_status() {
+    #[tokio::test]
+    async fn test_write_native_status() {
         let temp_dir = TempDir::new().unwrap();
         let conf_dir = temp_dir.path().to_path_buf();
         let handler = FileSystemStatusHandler::new(conf_dir.clone());
@@ -317,6 +333,7 @@ mod tests {
 
         handler
             .write_native_status("HTTPRoute", "default/test", &status)
+            .await
             .unwrap();
 
         let status_path = handler.build_status_path("HTTPRoute", "default/test");
@@ -328,12 +345,12 @@ mod tests {
         assert!(content.contains("edgion.io/gateway-controller"));
 
         // Delete status
-        handler.delete_status("HTTPRoute", "default/test").unwrap();
+        handler.delete_status("HTTPRoute", "default/test").await.unwrap();
         assert!(!status_path.exists());
     }
 
-    #[test]
-    fn test_write_error_status() {
+    #[tokio::test]
+    async fn test_write_error_status() {
         let temp_dir = TempDir::new().unwrap();
         let conf_dir = temp_dir.path().to_path_buf();
         let handler = FileSystemStatusHandler::new(conf_dir.clone());
@@ -345,6 +362,7 @@ mod tests {
         // Write error status
         handler
             .write_error_status("HTTPRoute", "default/test", "ParseError", "Invalid YAML")
+            .await
             .unwrap();
 
         let status_path = handler.build_status_path("HTTPRoute", "default/test");
@@ -356,8 +374,8 @@ mod tests {
         assert!(content.contains("Invalid YAML"));
     }
 
-    #[test]
-    fn test_cleanup_orphans() {
+    #[tokio::test]
+    async fn test_cleanup_orphans() {
         let temp_dir = TempDir::new().unwrap();
         let conf_dir = temp_dir.path().to_path_buf();
         let handler = FileSystemStatusHandler::new(conf_dir.clone());
@@ -367,6 +385,7 @@ mod tests {
         std::fs::write(&config1, "test: content").unwrap();
         handler
             .write_error_status("HTTPRoute", "default/route1", "OK", "Success")
+            .await
             .unwrap();
 
         // Create an orphan status file (no corresponding config)
@@ -378,7 +397,7 @@ mod tests {
         assert!(orphan_status.exists());
 
         // Cleanup orphans
-        let cleaned = handler.cleanup_orphans().unwrap();
+        let cleaned = handler.cleanup_orphans().await.unwrap();
         assert_eq!(cleaned, 1);
 
         // Verify: orphan deleted, valid status remains

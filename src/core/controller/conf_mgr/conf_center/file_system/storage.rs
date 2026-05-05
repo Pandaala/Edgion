@@ -82,9 +82,18 @@ impl CenterApi for FileSystemStorage {
         // Format YAML to pretty format for readability
         let formatted_content = format_yaml_pretty(&content);
 
-        fs::write(&path, formatted_content)
+        // Atomic write: write to a temp file then rename, so readers (file watcher,
+        // external tools) never observe a half-written file, and a crash mid-write
+        // leaves the previous good content in place.
+        let tmp_path = path.with_extension("yaml.tmp");
+        fs::write(&tmp_path, formatted_content)
             .await
-            .map_err(|e| ConfWriterError::io("Failed to write file", e))?;
+            .map_err(|e| ConfWriterError::io("Failed to write tmp file", e))?;
+
+        if let Err(e) = fs::rename(&tmp_path, &path).await {
+            let _ = fs::remove_file(&tmp_path).await;
+            return Err(ConfWriterError::io("Failed to rename tmp file", e));
+        }
 
         tracing::info!(
             component = "file_system_writer",

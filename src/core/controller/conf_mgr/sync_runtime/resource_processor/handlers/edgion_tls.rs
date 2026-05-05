@@ -178,16 +178,23 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             }
         }
 
-        // 3. Resolve listener keys from parentRefs for per-listener route isolation
+        // 3. Resolve listener keys from parentRefs for per-listener route isolation.
+        // Defensive filter: EdgionTls only makes sense on HTTPS/TLS listeners.
+        // A Gateway is not expected to mix TLS-capable and non-TLS listeners, but
+        // we keep this local check so the resolved spec stays clean even if upstream
+        // Gateway validation ever lets a mixed configuration through.
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         tls.spec.resolved_listeners = None;
         if let Some(parent_refs) = &tls.spec.parent_refs {
-            let listener_keys = super::route_utils::resolve_listener_keys(
+            let listener_keys: Vec<_> = super::route_utils::resolve_listener_keys(
                 parent_refs,
                 resource_ns,
                 tls.metadata.namespace.as_deref(),
                 ctx.runtime(),
-            );
+            )
+            .into_iter()
+            .filter(|k| matches!(k.protocol(), "HTTPS" | "TLS"))
+            .collect();
             if !listener_keys.is_empty() {
                 tracing::debug!(
                     edgion_tls = %resource_ref.key(),

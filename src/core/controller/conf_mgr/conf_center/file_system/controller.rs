@@ -96,7 +96,7 @@ impl FileSystemController {
 
         // Cleanup orphan .status files at startup
         let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone());
-        match status_handler.cleanup_orphans() {
+        match status_handler.cleanup_orphans().await {
             Ok(count) if count > 0 => {
                 tracing::warn!(
                     component = "fs_controller",

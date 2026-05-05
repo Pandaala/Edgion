@@ -145,7 +145,7 @@ where
                                     self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
 
                                     // Read existing status from .status file for comparison
-                                    let existing_status_json = status_handler.read_status_json(kind, &key);
+                                    let existing_status_json = status_handler.read_status_json(kind, &key).await;
 
                                     let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
@@ -156,11 +156,10 @@ where
                                             if status_changed {
                                                 match extract_status_value(&obj) {
                                                     Some(status_value) => {
-                                                        match status_handler.write_status_value(
-                                                            kind,
-                                                            &key,
-                                                            &status_value,
-                                                        ) {
+                                                        match status_handler
+                                                            .write_status_value(kind, &key, &status_value)
+                                                            .await
+                                                        {
                                                             Ok(()) => {
                                                                 crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
                                                                 tracing::info!(
@@ -201,8 +200,9 @@ where
                                     let error_msg = e.to_string();
                                     // Extract key from path
                                     if let Some(key) = extract_key_from_path(&path, kind) {
-                                        if let Err(write_err) =
-                                            status_handler.write_error_status(kind, &key, "ParseError", &error_msg)
+                                        if let Err(write_err) = status_handler
+                                            .write_error_status(kind, &key, "ParseError", &error_msg)
+                                            .await
                                         {
                                             tracing::warn!(
                                                 component = "fs_resource_controller",
@@ -259,14 +259,17 @@ where
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
-                                        let existing_status_json = status_handler.read_status_json(kind, &key);
+                                        let existing_status_json = status_handler.read_status_json(kind, &key).await;
                                         let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                         if let WorkItemResult::Processed { obj, status_changed } = result {
                                             init_count += 1;
                                             if status_changed {
                                                 if let Some(status_value) = extract_status_value(&obj) {
-                                                    match status_handler.write_status_value(kind, &key, &status_value) {
+                                                    match status_handler
+                                                        .write_status_value(kind, &key, &status_value)
+                                                        .await
+                                                    {
                                                         Ok(()) => {
                                                             crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
                                                             tracing::info!(
@@ -470,7 +473,7 @@ where
                     let path = build_path_from_key(&conf_dir, kind, &work_item.key);
 
                     let (store_obj, parse_error) = if path.exists() {
-                        match std::fs::read_to_string(&path) {
+                        match tokio::fs::read_to_string(&path).await {
                             Ok(content) => match parse_resource_content::<K>(&content) {
                                 Ok(obj) => {
                                     // Keep raw store in sync with the latest file version.
@@ -514,8 +517,9 @@ where
 
                     // Handle parse errors by writing error status
                     if let Some(error_msg) = parse_error {
-                        if let Err(e) =
-                            status_handler.write_error_status(kind, &work_item.key, "ParseError", &error_msg)
+                        if let Err(e) = status_handler
+                            .write_error_status(kind, &work_item.key, "ParseError", &error_msg)
+                            .await
                         {
                             tracing::warn!(
                                 component = "fs_resource_controller",
@@ -530,7 +534,7 @@ where
                     }
 
                     // Read existing status from .status file for comparison
-                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key);
+                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key).await;
 
                     // Use processor's process_work_item which handles the reconciliation logic
                     let result = processor
@@ -548,7 +552,10 @@ where
                             if status_changed {
                                 match extract_status_value(&obj) {
                                     Some(status_value) => {
-                                        match status_handler.write_status_value(kind, &work_item.key, &status_value) {
+                                        match status_handler
+                                            .write_status_value(kind, &work_item.key, &status_value)
+                                            .await
+                                        {
                                             Ok(()) => {
                                                 crate::core::controller::conf_mgr::sync_runtime::record_status_write(
                                                     kind,
@@ -586,7 +593,7 @@ where
                         }
                         WorkItemResult::Deleted { key } => {
                             // Delete status file when resource is deleted
-                            if let Err(e) = status_handler.delete_status(kind, &key) {
+                            if let Err(e) = status_handler.delete_status(kind, &key).await {
                                 tracing::warn!(
                                     component = "fs_resource_controller",
                                     kind = kind,

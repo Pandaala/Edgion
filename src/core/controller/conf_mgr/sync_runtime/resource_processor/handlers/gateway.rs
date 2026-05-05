@@ -13,6 +13,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::ControllerRuntime;
+use crate::types::constants::annotations;
 use crate::types::constants::app::GATEWAY_NAME;
 use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
@@ -233,6 +234,23 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+
+        // Clear and re-register stream plugin annotation ref (for update/remove annotation scenario)
+        ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        if let Some(v) = g
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(annotations::edgion::EDGION_STREAM_PLUGINS))
+        {
+            let raw = v.trim();
+            if !raw.is_empty() {
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
+                let (ns, name) = parse_stream_plugin_ref(raw, gateway_ns);
+                let key = format!("{}/{}", ns, name);
+                ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
+            }
+        }
 
         // Track cross-namespace Secret references so ReferenceGrant changes requeue this Gateway
         let cross_ns_ref = ResourceRef::new(
@@ -478,6 +496,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
 
         // Clear cross-namespace reference tracking
         let cross_ns_ref = ResourceRef::new(
@@ -562,6 +581,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref(), _ctx.runtime());
 
+        // Pre-compute stream plugin ref validation before taking a mutable borrow of gateway.
+        let stream_plugin_ref_error = validate_gateway_stream_plugin_ref(gateway, _ctx.runtime());
+
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
 
@@ -598,17 +620,29 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
-        // Gateway-level ResolvedRefs (Gateway API v1.5): indicates whether non-Listener
-        // object references (e.g. infrastructure, backendTLS) on the Gateway are resolved.
-        // Currently no such references exist in the spec, so this is always True.
+        // Gateway-level ResolvedRefs: True unless edgion.io/edgion-stream-plugins
+        // annotation references a missing EdgionStreamPlugins resource.
         {
-            let cond = condition_true(
-                condition_types::RESOLVED_REFS,
-                condition_reasons::RESOLVED_REFS,
-                "All gateway-level references resolved",
-                generation,
-            );
-            update_gateway_condition(conditions, cond);
+            match stream_plugin_ref_error {
+                None => {
+                    let cond = condition_true(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::RESOLVED_REFS,
+                        "All gateway-level references resolved",
+                        generation,
+                    );
+                    update_gateway_condition(conditions, cond);
+                }
+                Some(message) => {
+                    let cond = condition_false(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::INVALID_STREAM_PLUGINS_REF,
+                        message,
+                        generation,
+                    );
+                    update_gateway_condition(conditions, cond);
+                }
+            }
         }
 
         // Gateway-level Programmed condition:
@@ -1508,12 +1542,141 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
     }
 }
 
+/// Parse `"namespace/name"` annotation value.
+/// Falls back to `gateway_ns` when the value contains no slash.
+/// Multi-slash values (e.g. `"a/b/c"`) yield `name = "b/c"`, which will never
+/// match a real resource key — callers treat this as not found.
+fn parse_stream_plugin_ref(value: &str, gateway_ns: &str) -> (String, String) {
+    if let Some((ns, name)) = value.split_once('/') {
+        (ns.to_string(), name.to_string())
+    } else {
+        (gateway_ns.to_string(), value.to_string())
+    }
+}
+
+/// Returns `Some(error_message)` when the Gateway has the
+/// `edgion.io/edgion-stream-plugins` annotation but the referenced
+/// `EdgionStreamPlugins` resource does not exist in the processor registry.
+/// Returns `None` when: annotation absent, annotation empty, or resource found.
+fn validate_gateway_stream_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
+    let annotation_value = gateway
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(annotations::edgion::EDGION_STREAM_PLUGINS))?;
+    let annotation_value = annotation_value.trim();
+    if annotation_value.is_empty() {
+        return None;
+    }
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let (ns, name) = parse_stream_plugin_ref(annotation_value, gateway_ns);
+    let key = format!("{}/{}", ns, name);
+    let exists = runtime
+        .processor_registry
+        .get("EdgionStreamPlugins")
+        .and_then(|p| p.get_raw_any(&key))
+        .is_some();
+    if exists {
+        None
+    } else {
+        Some(format!("EdgionStreamPlugins '{}' not found", key))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{gateway_service_lookup_candidates, has_all_ca_refs_invalid, GatewayResolvedRefsError};
+    use super::{
+        gateway_service_lookup_candidates, has_all_ca_refs_invalid, parse_stream_plugin_ref,
+        validate_gateway_stream_plugin_ref, GatewayResolvedRefsError,
+    };
+    use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::constants::app::GATEWAY_NAME;
+    use crate::types::prelude_resources::Gateway;
     use crate::types::resources::common::SecretObjectReference;
-    use crate::types::resources::gateway::{FrontendTLSValidation, GatewayTLSConfig, Listener as GatewayListener};
+    use crate::types::resources::gateway::{
+        FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, Listener as GatewayListener,
+    };
+    use std::collections::BTreeMap;
+
+    fn make_test_gateway(ns: &str) -> Gateway {
+        Gateway {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            spec: GatewaySpec {
+                gateway_class_name: "test".to_string(),
+                listeners: None,
+                addresses: None,
+                tls: None,
+            },
+            status: None,
+        }
+    }
+
+    fn make_gateway_with_annotation(ns: &str, annotation_value: &str) -> Gateway {
+        let mut gw = make_test_gateway(ns);
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "edgion.io/edgion-stream-plugins".to_string(),
+            annotation_value.to_string(),
+        );
+        gw.metadata.annotations = Some(annotations);
+        gw
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_no_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_test_gateway("default");
+        assert!(validate_gateway_stream_plugin_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_empty_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("default", "  ");
+        assert!(validate_gateway_stream_plugin_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_missing_resource_returns_error() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("default", "default/my-stream");
+        let result = validate_gateway_stream_plugin_ref(&gw, &runtime);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("default/my-stream"));
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_fallback_to_gateway_ns() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("my-ns", "my-stream");
+        let result = validate_gateway_stream_plugin_ref(&gw, &runtime);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("my-ns/my-stream"));
+    }
+
+    #[test]
+    fn parse_stream_plugin_ref_with_slash() {
+        let (ns, name) = parse_stream_plugin_ref("other-ns/my-plugin", "default");
+        assert_eq!(ns, "other-ns");
+        assert_eq!(name, "my-plugin");
+    }
+
+    #[test]
+    fn parse_stream_plugin_ref_without_slash_uses_gateway_ns() {
+        let (ns, name) = parse_stream_plugin_ref("my-plugin", "default");
+        assert_eq!(ns, "default");
+        assert_eq!(name, "my-plugin");
+    }
+
+    #[test]
+    fn parse_stream_plugin_ref_multi_slash_name_becomes_remainder() {
+        let (ns, name) = parse_stream_plugin_ref("a/b/c", "default");
+        assert_eq!(ns, "a");
+        assert_eq!(name, "b/c");
+    }
 
     fn listener_with_ca_refs(refs: Vec<(&str, &str)>) -> GatewayListener {
         let ca_refs = refs

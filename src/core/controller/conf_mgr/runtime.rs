@@ -28,6 +28,7 @@ use super::sync_runtime::resource_processor::{
     region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable},
     secret_utils::SecretStore,
     service_ref::{new_service_ref_manager, ServiceRefManager},
+    BidirectionalRefManager, ResourceRef,
 };
 
 /// Aggregated runtime state for the Controller.
@@ -57,6 +58,11 @@ pub struct ControllerRuntime {
     /// Service RegionRoute table: pm_key → ServiceRegionRouteEntry.
     /// Maintained by PluginMetaData handler (PluginMetaData fields) and EdgionPlugins handler (ref_plugins).
     pub(crate) service_region_route_table: RegionRouteServiceTable,
+    /// Tracks which Gateways reference each EdgionStreamPlugins via
+    /// `edgion.io/edgion-stream-plugins` annotation.
+    /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
+    /// Reverse: `Gateway ResourceRef → Set<"esp_ns/esp_name">`
+    pub(crate) stream_plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Optional conf_writer injected by the ConfCenter implementation.
     /// Used by handlers to auto-create resources (e.g., PluginMetaData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
@@ -82,6 +88,7 @@ impl ControllerRuntime {
             plugin_metadata_refs: PluginMetaDataRefManager::new(),
             cluster_region_route_table: RegionRouteClusterTable::new(),
             service_region_route_table: RegionRouteServiceTable::new(),
+            stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
             conf_writer: RwLock::new(None),
         }
     }
@@ -151,6 +158,9 @@ impl ControllerRuntime {
 
         self.service_region_route_table.clear();
         tracing::info!(component = "controller_runtime", "Cleared RegionRouteServiceTable");
+
+        self.stream_plugin_ref_mgr.clear();
+        tracing::info!(component = "controller_runtime", "Cleared StreamPluginRefManager");
     }
 }
 

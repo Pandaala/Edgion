@@ -104,10 +104,15 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         ProcessResult::Continue(esp)
     }
 
+    async fn on_change(&self, esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
+        requeue_referencing_gateways(esp, ctx).await;
+    }
+
     async fn on_delete(&self, esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
         ctx.runtime()
             .plugin_metadata_refs
             .clear_refs_from(&Self::self_ref_key(esp));
+        requeue_referencing_gateways(esp, ctx).await;
     }
 
     fn update_status(&self, esp: &mut EdgionStreamPlugins, ctx: &HandlerContext, validation_errors: &[String]) {
@@ -161,6 +166,30 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
+    }
+}
+
+/// Requeue all Gateways that reference this EdgionStreamPlugins via
+/// `edgion.io/edgion-stream-plugins` annotation.
+async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
+    let Some(esp_name) = esp.metadata.name.as_deref().filter(|n| !n.is_empty()) else {
+        return;
+    };
+    let esp_key = format!(
+        "{}/{}",
+        esp.metadata.namespace.as_deref().unwrap_or("default"),
+        esp_name
+    );
+    let refs = ctx.runtime().stream_plugin_ref_mgr.get_refs(&esp_key);
+    if !refs.is_empty() {
+        tracing::info!(
+            esp_key = %esp_key,
+            ref_count = refs.len(),
+            "EdgionStreamPlugins changed, requeuing referencing Gateways"
+        );
+    }
+    for gw_ref in refs {
+        ctx.requeue("Gateway", gw_ref.resource_key()).await;
     }
 }
 
