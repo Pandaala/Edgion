@@ -4,7 +4,8 @@
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
 use super::version_detection::{
-    probe_backend_tls_policy_version, probe_tls_route_version, BackendTLSPolicyVersion, TLSRouteVersion,
+    detect_reference_grant_version, probe_backend_tls_policy_version, probe_tls_route_version, BackendTLSPolicyVersion,
+    ReferenceGrantVersion, TLSRouteVersion,
 };
 use crate::core::controller::conf_mgr::conf_center::traits::{
     CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
@@ -106,14 +107,24 @@ impl KubernetesStorage {
                     ))
                 }
             },
-            "ReferenceGrant" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk(
-                    "gateway.networking.k8s.io",
-                    "v1beta1",
-                    "ReferenceGrant",
-                )),
-                Scope::Namespaced,
-            ),
+            "ReferenceGrant" => match detect_reference_grant_version(&self.client).await {
+                Some(ReferenceGrantVersion::V1Beta1) => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        "v1beta1",
+                        "ReferenceGrant",
+                    )),
+                    Scope::Namespaced,
+                ),
+                _ => (
+                    ApiResource::from_gvk(&GroupVersionKind::gvk(
+                        "gateway.networking.k8s.io",
+                        "v1",
+                        "ReferenceGrant",
+                    )),
+                    Scope::Namespaced,
+                ),
+            },
             "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client).await.map_err(|e| {
                 ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e))
             })? {

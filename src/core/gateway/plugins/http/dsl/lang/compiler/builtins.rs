@@ -67,7 +67,9 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
 }
 
 /// Expected argument count for each builtin — used for compile-time validation.
-pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
+/// Returns `Some(n)` for fixed-arity builtins, `None` for variadic builtins
+/// (where the runtime reads argc from the `CallBuiltin(_, argc)` opcode).
+pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
     match id {
         // req.* read — 0-arg (field access)
         BuiltinId::ReqMethod
@@ -87,7 +89,7 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         | BuiltinId::ReqGrpcMethod
         | BuiltinId::ReqContentLength
         | BuiltinId::ReqClientCertCn
-        | BuiltinId::ReqClientCertFingerprint => 0,
+        | BuiltinId::ReqClientCertFingerprint => Some(0),
 
         // req.* read — 1-arg
         BuiltinId::ReqHeader
@@ -98,22 +100,22 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         | BuiltinId::ReqRemoveHeader
         | BuiltinId::ReqSetUri
         | BuiltinId::ReqSetHost
-        | BuiltinId::ReqSetMethod => 1,
+        | BuiltinId::ReqSetMethod => Some(1),
 
         // req.* mutation — 2-arg
-        BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => 2,
+        BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => Some(2),
 
         // resp.* read
-        BuiltinId::RespStatus | BuiltinId::RespHeaderNames | BuiltinId::RespContentType => 0,
-        BuiltinId::RespHeader | BuiltinId::RespHasHeader => 1,
+        BuiltinId::RespStatus | BuiltinId::RespHeaderNames | BuiltinId::RespContentType => Some(0),
+        BuiltinId::RespHeader | BuiltinId::RespHasHeader => Some(1),
         // resp.* mutation — 1-arg
-        BuiltinId::RespRemoveHeader | BuiltinId::RespSetStatus => 1,
+        BuiltinId::RespRemoveHeader | BuiltinId::RespSetStatus => Some(1),
         // resp.* mutation — 2-arg
-        BuiltinId::RespSetHeader | BuiltinId::RespAppendHeader => 2,
+        BuiltinId::RespSetHeader | BuiltinId::RespAppendHeader => Some(2),
 
         // ctx.*
-        BuiltinId::CtxGet | BuiltinId::CtxRemove => 1,
-        BuiltinId::CtxSet => 2,
+        BuiltinId::CtxGet | BuiltinId::CtxRemove => Some(1),
+        BuiltinId::CtxSet => Some(2),
 
         // Utilities
         BuiltinId::Log
@@ -132,16 +134,19 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> usize {
         | BuiltinId::HexEncode
         | BuiltinId::HexDecode
         | BuiltinId::LogWarn
-        | BuiltinId::LogError => 1,
-        BuiltinId::Substr | BuiltinId::RegexReplace => 3,
-        BuiltinId::TimeNow | BuiltinId::Uuid => 0,
+        | BuiltinId::LogError => Some(1),
+        BuiltinId::Substr | BuiltinId::RegexReplace => Some(3),
+        BuiltinId::TimeNow | BuiltinId::Uuid => Some(0),
         BuiltinId::RegexFind
         | BuiltinId::Split
         | BuiltinId::HmacSha256
         | BuiltinId::JsonGet
         | BuiltinId::TimeFormat
         | BuiltinId::IpInCidr
-        | BuiltinId::Join => 2,
-        BuiltinId::Range => 2,
+        | BuiltinId::Join => Some(2),
+        BuiltinId::Range => Some(2),
+
+        // Variadic: argc carried by the opcode itself.
+        BuiltinId::LogFmt => None,
     }
 }

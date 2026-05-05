@@ -42,7 +42,7 @@ impl Vm {
     pub(crate) fn call_builtin(
         &self,
         id: BuiltinId,
-        _argc: u8,
+        argc: u8,
         state: &mut VmState,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
@@ -275,7 +275,7 @@ impl Vm {
             // ===== Utilities =====
             BuiltinId::Log => {
                 let msg = state.pop()?.into_string();
-                log.push(&msg);
+                log.push_sensitive(&msg);
                 Ok(Value::Nil)
             }
             BuiltinId::Len => {
@@ -726,7 +726,31 @@ impl Vm {
             }
             BuiltinId::LogError => {
                 let value = state.pop()?.into_string();
-                log.push_sensitive(&value);
+                log.push_err_sensitive(&value);
+                Ok(Value::Nil)
+            }
+            BuiltinId::LogFmt => {
+                // Stack (top → bottom): valueN, valueN-1, ..., value1, template
+                // argc = 1 (template) + N (values).
+                let total = argc as usize;
+                if total == 0 {
+                    return Err(RuntimeError::ApiError {
+                        function: "log_fmt".into(),
+                        message: "log_fmt requires at least the template argument".into(),
+                    });
+                }
+                let value_count = total - 1;
+                let mut values: Vec<String> = Vec::with_capacity(value_count);
+                for _ in 0..value_count {
+                    values.push(state.pop()?.into_string());
+                }
+                values.reverse();
+                let template = state.pop()?.into_string();
+                let log_args: Vec<crate::core::gateway::plugins::runtime::log::LogArg<'_>> = values
+                    .iter()
+                    .map(|s| crate::core::gateway::plugins::runtime::log::LogArg::Sensitive(s.as_str()))
+                    .collect();
+                log.push_fmt(&template, &log_args);
                 Ok(Value::Nil)
             }
         }

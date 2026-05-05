@@ -157,12 +157,13 @@ impl Validator {
             use super::compiler::builtin_expected_argc;
             for (i, op) in script.code.iter().enumerate() {
                 if let OpCode::CallBuiltin(builtin_id, argc) = op {
-                    let expected = builtin_expected_argc(builtin_id);
-                    if *argc as usize != expected {
-                        errors.push(ValidationError::new(format!(
-                            "CallBuiltin {:?} at instruction {} expects {} arg(s), bytecode says {}",
-                            builtin_id, i, expected, argc
-                        )));
+                    if let Some(expected) = builtin_expected_argc(builtin_id) {
+                        if *argc as usize != expected {
+                            errors.push(ValidationError::new(format!(
+                                "CallBuiltin {:?} at instruction {} expects {} arg(s), bytecode says {}",
+                                builtin_id, i, expected, argc
+                            )));
+                        }
                     }
                 }
             }

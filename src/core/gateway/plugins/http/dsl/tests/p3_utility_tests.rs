@@ -329,8 +329,8 @@ fn test_log_error() {
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
-        log.contains("critical failure"),
-        "log_error value not recorded: {:?}",
+        log.contains("err: critical failure; "),
+        "log_error must emit unified `err: <value>; ` entry: {:?}",
         log.log
     );
 }
@@ -388,7 +388,11 @@ fn test_log_error_replace_mode() {
     let mut s = session;
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.contains("***"), "expected masked output: {:?}", log.log);
+    assert!(
+        log.contains("err: ***; "),
+        "expected `err:` prefix wrapping masked value: {:?}",
+        log.log
+    );
     assert!(
         !log.contains("super-secret-value"),
         "plaintext must not appear in replace mode"
@@ -409,9 +413,164 @@ fn test_log_error_wrap_mode() {
     let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
-        log.contains("<E>super-secret-value</E>"),
-        "expected wrapped output: {:?}",
+        log.contains("err: <E>super-secret-value</E>; "),
+        "expected `err:` prefix wrapping wrapped value: {:?}",
         log.log
+    );
+}
+
+#[test]
+fn test_log_fmt_off_mode() {
+    let _g = set_mode(0);
+    let source = r#"
+        log_fmt("secret: {}", "abc-token")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(
+        log.contains("secret: abc-token"),
+        "expected plain interpolation in off mode: {:?}",
+        log.log
+    );
+}
+
+#[test]
+fn test_log_fmt_replace_mode_keeps_template() {
+    let _g = set_mode(1);
+    let source = r#"
+        log_fmt("secret: {}", "abc-token")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(
+        log.contains("secret: ***"),
+        "expected template preserved with masked value: {:?}",
+        log.log
+    );
+    assert!(
+        !log.contains("abc-token"),
+        "plaintext value must not appear in replace mode"
+    );
+}
+
+#[test]
+fn test_log_fmt_wrap_mode() {
+    let _g = set_mode(2);
+    let source = r#"
+        log_fmt("secret: {}", "abc-token")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(
+        log.contains("secret: <E>abc-token</E>"),
+        "expected template plus wrapped value: {:?}",
+        log.log
+    );
+}
+
+#[test]
+fn test_log_fmt_multiple_args_replace_mode() {
+    let _g = set_mode(1);
+    let source = r#"
+        log_fmt("user {} ip {}", "alice", "1.2.3.4")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(
+        log.contains("user *** ip ***"),
+        "expected each arg masked in order: {:?}",
+        log.log
+    );
+}
+
+#[test]
+fn test_log_fmt_multiple_args_off_mode_order() {
+    let _g = set_mode(0);
+    // Verifies positional ordering — args render left-to-right matching `{}` order.
+    let source = r#"
+        log_fmt("first={} second={}", "A", "B")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(
+        log.contains("first=A second=B"),
+        "args must render in source order: {:?}",
+        log.log
+    );
+}
+
+#[test]
+fn test_log_fmt_zero_args() {
+    // `log_fmt("no placeholders")` with zero values is permitted and degenerates
+    // to a plain log entry — useful for static strings without crafting a separate
+    // builtin.
+    let _g = set_mode(0);
+    let source = r#"
+        log_fmt("a static event")
+        return next()
+    "#;
+    let session = MockPluginSession::new();
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(log.contains("a static event"), "expected static output: {:?}", log.log);
+}
+
+#[test]
+fn test_log_fmt_dynamic_template_rejected() {
+    // Dynamic template would let request data flow into the unmasked plain part —
+    // compile-time guard rejects non-literal templates.
+    let source = r#"
+        let t = "secret: {}"
+        log_fmt(t, "abc")
+        return next()
+    "#;
+    let result = compile_dsl_source(source, &ValidationLimits::default());
+    assert!(result.is_err(), "dynamic template must be rejected at compile time");
+    let err = format!("{:?}", result.unwrap_err());
+    assert!(
+        err.contains("template must be a string literal"),
+        "expected literal-template diagnostic, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_log_fmt_placeholder_arity_mismatch_rejected() {
+    let result = compile_dsl_source(r#"log_fmt("a {} b {}", "only-one")"#, &ValidationLimits::default());
+    assert!(result.is_err());
+    let err = format!("{:?}", result.unwrap_err());
+    assert!(
+        err.contains("placeholder") && err.contains("value argument"),
+        "expected placeholder/argc diagnostic, got: {}",
+        err
     );
 }
 

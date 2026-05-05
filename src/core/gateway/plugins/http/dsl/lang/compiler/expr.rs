@@ -124,15 +124,16 @@ impl Compiler {
         if let ExprKind::Ident(namespace) = &object.kind {
             if let Some(builtin_id) = resolve_namespace_method(namespace, method) {
                 // Validate argument count at compile time
-                let expected = builtin_expected_argc(&builtin_id);
-                if args.len() != expected {
-                    return Err(CompileError::new(format!(
-                        "{}.{}() expects {} argument(s), got {}",
-                        namespace,
-                        method,
-                        expected,
-                        args.len()
-                    )));
+                if let Some(expected) = builtin_expected_argc(&builtin_id) {
+                    if args.len() != expected {
+                        return Err(CompileError::new(format!(
+                            "{}.{}() expects {} argument(s), got {}",
+                            namespace,
+                            method,
+                            expected,
+                            args.len()
+                        )));
+                    }
                 }
                 // Compile arguments onto stack
                 for arg in args {
@@ -208,6 +209,38 @@ impl Compiler {
                 self.emit(OpCode::RegexReplace(idx));
                 return Ok(());
             }
+        } else if name == "log_fmt" {
+            // log_fmt(template_literal, sensitive_arg1, sensitive_arg2, ...)
+            //
+            // Template MUST be a string literal — this preserves the safety contract
+            // that plain content in the rendered entry only originates from script
+            // source, never from request data. Trailing args are all treated as
+            // sensitive (passed through `apply_sensitive` at runtime).
+            if args.is_empty() {
+                return Err(CompileError::new(
+                    "log_fmt() requires at least 1 argument (the template string literal)",
+                ));
+            }
+            let template = match &args[0].kind {
+                ExprKind::StringLit(s) => s.clone(),
+                _ => {
+                    return Err(CompileError::new("log_fmt() template must be a string literal"));
+                }
+            };
+            let placeholder_count = template.matches("{}").count();
+            let value_count = args.len() - 1;
+            if placeholder_count != value_count {
+                return Err(CompileError::new(format!(
+                    "log_fmt() template has {} `{{}}` placeholder(s) but {} value argument(s) supplied",
+                    placeholder_count, value_count
+                )));
+            }
+            // Push template + each value onto the stack in source order.
+            for arg in args {
+                self.compile_expr(arg)?;
+            }
+            self.emit(OpCode::CallBuiltin(BuiltinId::LogFmt, args.len() as u8));
+            return Ok(());
         }
 
         // (builtin_id, expected_argc) — None means variadic / no check

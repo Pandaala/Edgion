@@ -233,6 +233,8 @@ impl EtcdWatcher {
     /// Reconnects on error; resyncs on compaction.
     async fn runtime_phase(&self, start_revision: i64, shutdown_signal: &mut ShutdownSignal) -> Result<()> {
         let mut revision = start_revision;
+        let mut reconnect_backoff = Duration::from_secs(1);
+        const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
         // Snapshot senders once — they are registered before run() and never change.
         let senders = self.senders.read().await.clone();
@@ -250,6 +252,8 @@ impl EtcdWatcher {
                 .await
             {
                 Ok(mut stream) => {
+                    // Stream established — reset reconnect backoff.
+                    reconnect_backoff = Duration::from_secs(1);
                     loop {
                         tokio::select! {
                             _ = shutdown_signal.wait() => {
@@ -266,7 +270,30 @@ impl EtcdWatcher {
                                                 compact_revision = resp.compact_revision(),
                                                 "Revision compacted, performing resync"
                                             );
-                                            revision = self.resync_phase().await?;
+                                            // Resync must be resilient: a transient list failure
+                                            // here used to terminate the entire controller. Retry
+                                            // with exponential backoff until success or shutdown.
+                                            let mut resync_backoff = Duration::from_secs(1);
+                                            let new_revision = loop {
+                                                match self.resync_phase().await {
+                                                    Ok(rev) => break rev,
+                                                    Err(e) => {
+                                                        tracing::error!(
+                                                            component = "etcd_watcher",
+                                                            error = %e,
+                                                            backoff_secs = resync_backoff.as_secs(),
+                                                            "Resync failed, retrying after backoff"
+                                                        );
+                                                        tokio::select! {
+                                                            _ = shutdown_signal.wait() => return Ok(()),
+                                                            _ = tokio::time::sleep(resync_backoff) => {}
+                                                        }
+                                                        resync_backoff =
+                                                            std::cmp::min(resync_backoff * 2, MAX_BACKOFF);
+                                                    }
+                                                }
+                                            };
+                                            revision = new_revision;
                                             break; // Restart watch from new revision
                                         }
 
@@ -341,11 +368,12 @@ impl EtcdWatcher {
                 }
             }
 
-            // Backoff before reconnect
+            // Exponential backoff before reconnect; reset to 1s once a stream connects.
             tokio::select! {
                 _ = shutdown_signal.wait() => return Ok(()),
-                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                _ = tokio::time::sleep(reconnect_backoff) => {}
             }
+            reconnect_backoff = std::cmp::min(reconnect_backoff * 2, MAX_BACKOFF);
         }
     }
 

@@ -148,11 +148,7 @@ pub fn redis_client_count() -> usize {
 /// Health check all registered Redis clients.
 pub async fn health_check_all_redis() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<RedisLinkClient>> = REDIS_RUNTIME.load().values().cloned().collect();
-    let mut results = Vec::with_capacity(clients.len());
-    for client in clients {
-        results.push(client.health_status().await);
-    }
-    results
+    futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
 }
 
 /// Insert a Redis client into the runtime store.
@@ -212,11 +208,7 @@ pub fn etcd_client_count() -> usize {
 /// Health check all registered Etcd clients.
 pub async fn health_check_all_etcd() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<EtcdLinkClient>> = ETCD_RUNTIME.load().values().cloned().collect();
-    let mut results = Vec::with_capacity(clients.len());
-    for client in clients {
-        results.push(client.health_status().await);
-    }
-    results
+    futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
 }
 
 /// Insert an Etcd client into the runtime store.
@@ -276,11 +268,7 @@ pub fn es_client_count() -> usize {
 /// Health check all registered Elasticsearch clients.
 pub async fn health_check_all_es() -> Vec<LinkSysHealth> {
     let clients: Vec<Arc<EsLinkClient>> = ES_RUNTIME.load().values().cloned().collect();
-    let mut results = Vec::with_capacity(clients.len());
-    for client in clients {
-        results.push(client.health_status().await);
-    }
-    results
+    futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
 }
 
 /// Insert an ES client into the runtime store.

@@ -514,28 +514,38 @@ impl RequestFilter for AllEndpointStatus {
         let global_config = get_all_endpoint_status_global_config();
 
         // === Global rate limit check ===
+        // Loop until we either claim the execution slot via CAS or get rate-limited.
+        // A bare load+check followed by a discarded CAS would let concurrent requests
+        // that all read the same `last` value bypass the min-interval gate together.
         let min_interval = global_config.min_interval_ms;
         if min_interval > 0 {
-            let now = elapsed_ms();
-            let last = LAST_EXECUTION_MS.load(Ordering::Relaxed);
-            let since_last = now.saturating_sub(last);
+            loop {
+                let last = LAST_EXECUTION_MS.load(Ordering::Relaxed);
+                let now = elapsed_ms();
+                let since_last = now.saturating_sub(last);
 
-            if since_last < min_interval {
-                let retry_after_s = (min_interval - since_last).div_ceil(1000);
-                log.push_err("rate limited");
-                let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
-                return self
-                    .send_json_response_with_headers(
-                        session,
-                        429,
-                        &body,
-                        &[("Retry-After", &retry_after_s.to_string())],
-                    )
-                    .await;
+                if since_last < min_interval {
+                    let retry_after_s = (min_interval - since_last).div_ceil(1000);
+                    log.push_err("rate limited");
+                    let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
+                    return self
+                        .send_json_response_with_headers(
+                            session,
+                            429,
+                            &body,
+                            &[("Retry-After", &retry_after_s.to_string())],
+                        )
+                        .await;
+                }
+
+                if LAST_EXECUTION_MS
+                    .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    break;
+                }
+                // Another request claimed the slot; re-load and re-check.
             }
-
-            // CAS to claim this execution slot
-            let _ = LAST_EXECUTION_MS.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed);
         }
 
         // === Global concurrency gate ===

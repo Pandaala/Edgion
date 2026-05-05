@@ -190,6 +190,36 @@ impl PluginLog {
         crate::types::sensitive::apply_sensitive(value, |w| self.ulog.get_or_insert_with(ULogBuffer::new).push(w))
     }
 
+    /// Push an error entry whose value is dynamic — atomically writes
+    /// `"err: <masked-value>; "` as a single buffer entry.
+    ///
+    /// The dynamic counterpart of [`push_err`] for callers that cannot supply a
+    /// `&'static str` (notably the DSL `log_error()` builtin). Output format
+    /// matches [`push_err`] so downstream parsers grepping for `err:` see both.
+    /// The value is masked through the active sensitive mode and truncated to
+    /// fit inside the 100-byte LogBuffer entry after accounting for prefix,
+    /// suffix, and any wrap overhead.
+    pub fn push_err_sensitive(&mut self, value: &str) -> bool {
+        const PREFIX: &str = "err: ";
+        const SUFFIX: &str = "; ";
+        let overhead = crate::types::sensitive::wrap_overhead();
+        let max_value_bytes = (100usize.saturating_sub(PREFIX.len() + SUFFIX.len() + overhead)).min(64);
+        let end = (0..=value.len().min(max_value_bytes))
+            .rev()
+            .find(|&i| value.is_char_boundary(i))
+            .unwrap_or(0);
+        let truncated = &value[..end];
+        let mut entry = String::with_capacity(PREFIX.len() + SUFFIX.len() + max_value_bytes + overhead);
+        entry.push_str(PREFIX);
+        crate::types::sensitive::apply_sensitive(truncated, |w| entry.push_str(w));
+        entry.push_str(SUFFIX);
+        let result = self.log.get_or_insert_with(LogBuffer::new).push(&entry);
+        if !result {
+            self.log_full = Some(true);
+        }
+        result
+    }
+
     /// Push a format-string log entry where only explicitly marked args are masked.
     ///
     /// The template string is never masked. Each `{}` placeholder is replaced by the

@@ -199,6 +199,9 @@ pub enum BuiltinId {
     Join,
     LogWarn,
     LogError,
+    /// `log_fmt(template_literal, sensitive_arg1, sensitive_arg2, ...)` — variadic.
+    /// Argument count is carried by the `CallBuiltin(_, argc)` opcode itself.
+    LogFmt,
 }
 
 /// Constant pool entry
