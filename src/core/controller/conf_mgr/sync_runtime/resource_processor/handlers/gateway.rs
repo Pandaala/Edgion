@@ -1364,21 +1364,27 @@ fn has_all_ca_refs_invalid(listener: &GatewayListener, errors: &[GatewayResolved
         return false;
     }
 
-    // Count how many CA-ref-related errors there are
-    let ca_error_count = errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                GatewayResolvedRefsError::InvalidCACertificateKind { .. }
-                    | GatewayResolvedRefsError::InvalidCACertificateRef { .. }
-                    | GatewayResolvedRefsError::CACertRefNotPermitted { .. }
-            )
-        })
-        .count();
+    // A single CA ref can produce multiple errors (e.g. both `InvalidCACertificateRef`
+    // for missing key AND `CACertRefNotPermitted` for cross-ns without ReferenceGrant).
+    // Count distinct invalid refs by (namespace, name) so a multi-error ref is not
+    // double-counted as if it were multiple invalid refs.
+    let mut invalid_refs: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
+    let mut kind_error_count = 0usize;
+    for e in errors {
+        match e {
+            GatewayResolvedRefsError::InvalidCACertificateRef { namespace, name, .. }
+            | GatewayResolvedRefsError::CACertRefNotPermitted { namespace, name, .. } => {
+                invalid_refs.insert((namespace.as_str(), name.as_str()));
+            }
+            // `InvalidCACertificateKind` carries no ref identity, but the producing
+            // sites short-circuit further checks for that ref, so each occurrence
+            // corresponds to exactly one distinct invalid ref.
+            GatewayResolvedRefsError::InvalidCACertificateKind { .. } => kind_error_count += 1,
+            _ => {}
+        }
+    }
 
-    // All CA refs are invalid if the number of CA errors >= number of CA refs
-    ca_error_count >= ca_ref_count
+    invalid_refs.len() + kind_error_count >= ca_ref_count
 }
 
 /// Returns the set of listener names that participate in a mixed TLS termination
@@ -1504,8 +1510,40 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
 
 #[cfg(test)]
 mod tests {
-    use super::gateway_service_lookup_candidates;
+    use super::{gateway_service_lookup_candidates, has_all_ca_refs_invalid, GatewayResolvedRefsError};
     use crate::types::constants::app::GATEWAY_NAME;
+    use crate::types::resources::common::SecretObjectReference;
+    use crate::types::resources::gateway::{FrontendTLSValidation, GatewayTLSConfig, Listener as GatewayListener};
+
+    fn listener_with_ca_refs(refs: Vec<(&str, &str)>) -> GatewayListener {
+        let ca_refs = refs
+            .into_iter()
+            .map(|(ns, name)| SecretObjectReference {
+                group: None,
+                kind: Some("Secret".to_string()),
+                name: name.to_string(),
+                namespace: Some(ns.to_string()),
+            })
+            .collect();
+        GatewayListener {
+            name: "https".to_string(),
+            hostname: None,
+            port: 443,
+            protocol: "HTTPS".to_string(),
+            tls: Some(GatewayTLSConfig {
+                mode: Some("Terminate".to_string()),
+                certificate_refs: None,
+                options: None,
+                secrets: None,
+                frontend_validation: Some(FrontendTLSValidation {
+                    ca_certificate_refs: Some(ca_refs),
+                    mode: None,
+                }),
+                resolved_frontend_ca_secrets: None,
+            }),
+            allowed_routes: None,
+        }
+    }
 
     #[test]
     fn gateway_service_lookup_prefers_fixed_edgion_gateway_service() {
@@ -1528,5 +1566,66 @@ mod tests {
             candidates,
             vec![("edgion-system".to_string(), GATEWAY_NAME.to_string())]
         );
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_returns_false_when_no_refs_configured() {
+        let listener = listener_with_ca_refs(vec![]);
+        assert!(!has_all_ca_refs_invalid(&listener, &[]));
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_does_not_double_count_multi_error_ref() {
+        // refA produces both InvalidCACertificateRef AND CACertRefNotPermitted;
+        // refB is fully valid (no errors). Old logic would count 2 errors >= 2 refs
+        // and incorrectly return true.
+        let listener = listener_with_ca_refs(vec![("ns-a", "ref-a"), ("ns-b", "ref-b")]);
+        let errors = vec![
+            GatewayResolvedRefsError::InvalidCACertificateRef {
+                namespace: "ns-a".to_string(),
+                name: "ref-a".to_string(),
+                reason: "missing required key 'ca.crt'".to_string(),
+            },
+            GatewayResolvedRefsError::CACertRefNotPermitted {
+                from_namespace: "gw-ns".to_string(),
+                namespace: "ns-a".to_string(),
+                name: "ref-a".to_string(),
+            },
+        ];
+        assert!(!has_all_ca_refs_invalid(&listener, &errors));
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_returns_true_when_every_ref_invalid() {
+        let listener = listener_with_ca_refs(vec![("ns-a", "ref-a"), ("ns-b", "ref-b")]);
+        let errors = vec![
+            GatewayResolvedRefsError::InvalidCACertificateRef {
+                namespace: "ns-a".to_string(),
+                name: "ref-a".to_string(),
+                reason: "Secret not found".to_string(),
+            },
+            GatewayResolvedRefsError::CACertRefNotPermitted {
+                from_namespace: "gw-ns".to_string(),
+                namespace: "ns-b".to_string(),
+                name: "ref-b".to_string(),
+            },
+        ];
+        assert!(has_all_ca_refs_invalid(&listener, &errors));
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_counts_invalid_kind_as_one_distinct_ref() {
+        let listener = listener_with_ca_refs(vec![("ns-a", "ref-a"), ("ns-b", "ref-b")]);
+        let errors = vec![
+            GatewayResolvedRefsError::InvalidCACertificateKind {
+                kind: "BogusKind".to_string(),
+            },
+            GatewayResolvedRefsError::InvalidCACertificateRef {
+                namespace: "ns-b".to_string(),
+                name: "ref-b".to_string(),
+                reason: "ConfigMap has no data".to_string(),
+            },
+        ];
+        assert!(has_all_ca_refs_invalid(&listener, &errors));
     }
 }
