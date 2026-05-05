@@ -369,10 +369,6 @@ pub struct UpstreamInfo {
     /// Error messages collected during upstream attempts
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub err: Vec<String>,
-    /// Backend socket address used for the actual peer connection (may be
-    /// rewritten by resolve_target_port for multi-port Services).
-    #[serde(skip)]
-    pub backend_addr: Option<SocketAddr>,
     /// Canonical backend address used by the LB selection algorithm, before
     /// any target-port rewrite. Runtime-state accounting must use this key
     /// so that selection reads and request-completion writes are consistent.
@@ -400,17 +396,40 @@ impl UpstreamInfo {
     }
 }
 
-/// Backend context containing service info and upstream attempt history
+/// Bypass-path tag set when a plugin staged a non-default backend selection.
+/// `None` on `BackendContext.source` means the default K8s resource-selected path
+/// (the common case — emitting nothing in access log keeps the JSON quiet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendSource {
+    /// DirectEndpoint bypass (plugin-staged exact IP).
+    DirectEndpoint,
+    /// ExternalJump bypass (plugin-staged external domain, DNS-resolved at runtime).
+    ExternalJump,
+}
+
+/// Backend context containing service info and upstream attempt history.
+///
+/// `rsc` and `service_key` are `None` for the bypass paths (DirectEndpoint / ExternalJump),
+/// which don't correspond to a K8s-selected backend resource. `source` is `Some` only on
+/// those bypass paths; `None` on the default K8s resource path. `upstreams` is always
+/// populated as attempts happen.
 #[derive(Debug, Clone, Serialize)]
 pub struct BackendContext {
-    /// Resource identifier (kind="Service")
-    pub rsc: Rsc,
-    /// LB store index key: `"namespace/name"`.
+    /// Bypass-path tag — `None` on the default K8s resource path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<BackendSource>,
+    /// Resource identifier (kind="Service") — `None` on bypass paths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rsc: Option<Rsc>,
+    /// LB store index key `"namespace/name"` — `None` on bypass paths (no LB).
     #[serde(skip)]
-    pub service_key: String,
+    pub service_key: Option<String>,
     /// Routing path (ClusterIP / Endpoint / EPS / ExternalName).
+    /// `None` for ExternalJump (DNS-resolved external domain — none of the K8s
+    /// service-routing modes apply). `Some` for the default path and DirectEndpoint.
     #[serde(skip)]
-    pub service_kind: EdgionService,
+    pub service_kind: Option<EdgionService>,
     /// List of upstream connection attempts (for retry tracking and access log)
     pub upstreams: Vec<UpstreamInfo>,
     /// Current upstream index (for status updates)
@@ -784,12 +803,17 @@ impl EdgionHttpContext {
             })
     }
 
-    /// Initialize backend context with flat service fields (call once).
+    /// Initialize backend context for the resource-selected path (HTTP/gRPC backend ref).
+    /// `source` stays `None` — this is the default path, no bypass tag needed.
+    /// Bypass paths (DirectEndpoint / ExternalJump) construct `BackendContext` directly
+    /// at the call site (in `try_direct_endpoint_peer` / `try_external_jump_peer`)
+    /// and set their own `Some(source)` tag.
     pub fn init_backend_context(&mut self, rsc: Rsc, service_key: String, service_kind: EdgionService) {
         self.backend_context = Some(BackendContext {
-            rsc,
-            service_key,
-            service_kind,
+            source: None,
+            rsc: Some(rsc),
+            service_key: Some(service_key),
+            service_kind: Some(service_kind),
             upstreams: Vec::new(),
             current_upstream_id: None,
         });
@@ -810,7 +834,6 @@ impl EdgionHttpContext {
                 response_body_size: None,
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),
-                backend_addr: None,
                 lb_backend_addr: None,
                 service_key: None,
                 lb_policy: None,

@@ -31,9 +31,15 @@ pub enum PluginRunningResult {
     /// Filter judged that the request should be stopped here, no other plugins should run.
     ///
     /// **Convention** (enforced by code review, not by the type system): any plugin
-    /// that returns `ErrTerminateRequest` MUST have already written the response
-    /// (header + body) to the session. Otherwise the client observes a naked 502
-    /// from Pingora with no diagnostic context.
+    /// that returns `ErrTerminateRequest` SHOULD have already written the response
+    /// (header + body) to the session before returning.
+    ///
+    /// **Runtime fail-safe**: if the plugin returns `ErrTerminateRequest` without
+    /// having written a response (`response_committed == false`), the runtime will
+    /// automatically write a 502 Bad Gateway (HTTP) or gRPC INTERNAL (gRPC) and
+    /// record [`EdgionStatus::PluginTerminateWithoutResponse`] in the access log.
+    /// This is a fail-safe — operators should treat the access-log marker as a signal
+    /// to fix the offending plugin.
     ///
     /// If a plugin cannot write a response at its current stage (e.g. the sync
     /// `UpstreamResponseFilter` hook where `await` is unavailable), prefer

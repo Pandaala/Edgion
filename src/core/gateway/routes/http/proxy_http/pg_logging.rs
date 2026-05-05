@@ -117,11 +117,13 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         ("unknown", "unknown")
     };
 
-    // Get backend information
+    // Get backend information. Bypass paths (DirectEndpoint / ExternalJump) have no rsc and
+    // fall back to "unknown" — same fallback as when backend_context itself is missing.
     let (backend_ns, backend_name) = ctx
         .backend_context
         .as_ref()
-        .map(|bc| (bc.rsc.ns.as_str(), bc.rsc.name.as_str()))
+        .and_then(|bc| bc.rsc.as_ref())
+        .map(|rsc| (rsc.ns.as_str(), rsc.name.as_str()))
         .unwrap_or(("unknown", "unknown"));
 
     // Get protocol from discover_protocol (default "http", could be "grpc", "websocket", etc.)

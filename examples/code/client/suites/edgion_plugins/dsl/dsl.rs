@@ -1361,11 +1361,11 @@ impl DslTestSuite {
     }
     // ==================== Test 19: Terminate ====================
 
-    /// Test: X-Terminate: true → connection reset (no valid HTTP response)
+    /// Test: X-Terminate: true → 502 Bad Gateway via terminate_with_fallback runtime fallback
     fn test_terminate_connection_reset() -> TestCase {
         TestCase::new(
             "dsl_terminate_connection_reset",
-            "DSL: X-Terminate: true → connection reset / error",
+            "DSL: terminate() → 502 Bad Gateway (terminate_with_fallback runtime fallback)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -1379,29 +1379,28 @@ impl DslTestSuite {
                         .await;
                     match response {
                         Ok(resp) => {
-                            // terminate() should cause a connection reset, not a normal response.
-                            // If we get a response, it means terminate() didn't work as expected.
                             let status = resp.status().as_u16();
-                            // Some implementations may return 502/503 instead of a connection reset
-                            if status == 502 || status == 503 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Gateway returned {} (terminate intercepted upstream)", status),
-                                )
+                            let elapsed = start.elapsed();
+                            if status == 502 {
+                                if elapsed.as_millis() >= 1000 {
+                                    TestResult::failed(
+                                        elapsed,
+                                        format!("Got 502 but took {}ms (expected <1000ms)", elapsed.as_millis()),
+                                    )
+                                } else {
+                                    TestResult::passed_with_message(
+                                        elapsed,
+                                        format!("502 in {}ms (terminate_with_fallback fired)", elapsed.as_millis()),
+                                    )
+                                }
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected connection error or 502/503, got HTTP {}", status),
-                                )
+                                TestResult::failed(elapsed, format!("Expected 502, got HTTP {}", status))
                             }
                         }
-                        Err(_e) => {
-                            // Connection error is the expected behavior for terminate()
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "Connection reset as expected (terminate)".to_string(),
-                            )
-                        }
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 502 response, got connection error: {}", e),
+                        ),
                     }
                 })
             },

@@ -345,6 +345,30 @@ session.set_upstream_uri(&new_uri)?;
 - verbose 调试用 `tracing::debug!()`，不要把 access log 当调试 dump
 - 条件跳过 `cond_skip` 由 conditional wrapper 自动写，不要重复造自己的格式
 
+## `ErrTerminateRequest` — write the response first
+
+When a plugin returns `ErrTerminateRequest`, it **SHOULD** write a complete
+response (status + headers + body) to the session before returning:
+
+```rust
+// Correct: write response, then return ErrTerminateRequest
+session.write_response_header(...).await?;
+session.write_response_body(Some(Bytes::from("Forbidden")), true).await?;
+return Ok(PluginRunningResult::ErrTerminateRequest);
+
+// Wrong: return ErrTerminateRequest without writing — triggers runtime fallback
+return Ok(PluginRunningResult::ErrTerminateRequest);
+```
+
+If the plugin cannot write a response at its current stage (e.g. a sync hook
+where `await` is unavailable), use `ErrResponse { status, body }` instead —
+the runtime writes the response on the plugin's behalf.
+
+**Runtime fail-safe**: a plugin that violates this convention receives a 502
+Bad Gateway fallback from the runtime, and `PluginTerminateWithoutResponse`
+appears in the access log `errors[]` field. Fix the plugin so it writes its
+own response and the marker disappears.
+
 ## 项目特有规则
 
 ### 没有 Consumer 模型

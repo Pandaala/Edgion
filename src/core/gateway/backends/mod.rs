@@ -87,10 +87,15 @@ pub(crate) fn try_get_peer(
     };
 
     // Read service_key and service_kind from BackendContext (set by init_backend_context_if_needed).
+    // Bypass paths (DirectEndpoint / ExternalJump) leave service_key / service_kind as None and
+    // never reach this function — they construct peers via finish_static_peer instead.
     let (service_key, service_type) = ctx
         .backend_context
         .as_ref()
-        .map(|bc| (bc.service_key.clone(), bc.service_kind.clone()))
+        .and_then(|bc| match (bc.service_key.clone(), bc.service_kind.clone()) {
+            (Some(sk), Some(skd)) => Some((sk, skd)),
+            _ => None,
+        })
         .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
 
     // Clone only the fields we hand to build_peer_from_lb_selection as owned values
@@ -106,22 +111,9 @@ pub(crate) fn try_get_peer(
                 return Err(EdgionStatus::BackendServiceNotFound);
             }
 
-            // Session persistence: if sp_target_addr is set, use it directly (skip LB)
-            let backend = if let Some(target_addr) = ctx.sp_target_addr.take() {
-                let health_store = get_health_status_store();
-                let b = pingora_load_balancing::Backend {
-                    addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(target_addr),
-                    weight: 1,
-                    ext: Default::default(),
-                };
-                if is_backend_healthy(&service_key, &b, &health_store) {
-                    b
-                } else {
-                    return Err(EdgionStatus::BackendEndpointSliceNotFoundByConsistent);
-                }
-            } else {
-                select_backend_by_policy(&service_key, &lb_policy, session)?
-            };
+            let backend = take_sp_target_or_select(ctx, &service_key, || {
+                select_backend_by_policy(&service_key, &lb_policy, session)
+            })?;
 
             build_peer_from_lb_selection(
                 ctx,
@@ -230,7 +222,9 @@ pub(crate) fn try_get_peer(
         EdgionService::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
 
         EdgionService::ServiceEndpoint => {
-            let backend = select_from_endpoints(&service_key, &lb_policy, session)?;
+            let backend = take_sp_target_or_select(ctx, &service_key, || {
+                select_from_endpoints(&service_key, &lb_policy, session)
+            })?;
             build_peer_from_lb_selection(
                 ctx,
                 session,
@@ -246,7 +240,9 @@ pub(crate) fn try_get_peer(
         }
 
         EdgionService::ServiceEndpointSlice => {
-            let backend = select_from_endpoint_slice(&service_key, &lb_policy, session)?;
+            let backend = take_sp_target_or_select(ctx, &service_key, || {
+                select_from_endpoint_slice(&service_key, &lb_policy, session)
+            })?;
             build_peer_from_lb_selection(
                 ctx,
                 session,
@@ -261,6 +257,42 @@ pub(crate) fn try_get_peer(
             )
         }
     }
+}
+
+/// Session-persistence-aware backend pick for the LB-based service kinds.
+///
+/// If `ctx.sp_target_addr` is set (the request carried a sticky-session token resolved
+/// to a known backend), use that target directly — skipping LB — provided the target
+/// is still healthy. The address is `take()`-d unconditionally so a follow-up retry on
+/// this request does not double-consume it.
+///
+/// If `sp_target_addr` is unset, or the sticky target is unhealthy, fall back to the
+/// caller-supplied `select_fn` (the kind's normal LB path).
+///
+/// Note: an unhealthy sticky target returns `StickyBackendUnhealthy` rather than calling
+/// `select_fn`. Caller (`get_peer_with_sp_fallback` in upstream_peer) is responsible for
+/// deciding whether to re-run with normal LB based on `strict` mode.
+fn take_sp_target_or_select<F>(
+    ctx: &mut EdgionHttpContext,
+    service_key: &str,
+    select_fn: F,
+) -> Result<pingora_load_balancing::Backend, EdgionStatus>
+where
+    F: FnOnce() -> Result<pingora_load_balancing::Backend, EdgionStatus>,
+{
+    if let Some(target_addr) = ctx.sp_target_addr.take() {
+        let b = pingora_load_balancing::Backend {
+            addr: SocketAddr::Inet(target_addr),
+            weight: 1,
+            ext: Default::default(),
+        };
+        let health_store = get_health_status_store();
+        if is_backend_healthy(service_key, &b, &health_store) {
+            return Ok(b);
+        }
+        return Err(EdgionStatus::StickyBackendUnhealthy);
+    }
+    select_fn()
 }
 
 /// 三个 LB-based kind 分支的公共逻辑。
@@ -297,7 +329,6 @@ fn build_peer_from_lb_selection(
     }
 
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        upstream.backend_addr = Some(peer_addr.clone());
         upstream.lb_backend_addr = Some(lb_addr);
         upstream.service_key = Some(service_key.to_string());
         upstream.lb_policy = lb_policy_clone;

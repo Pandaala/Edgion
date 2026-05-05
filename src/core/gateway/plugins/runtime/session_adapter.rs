@@ -10,7 +10,9 @@ use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
-use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
+use crate::types::{
+    DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, HTTPBackendRef, InternalJumpPreset, MirrorState,
+};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -342,10 +344,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             self.grpc_response_terminated = true;
             return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
         }
-        self.inner
+        let result = self
+            .inner
             .write_response_header(resp, end_of_stream)
             .await
-            .map_err(|e| Box::new(e) as PluginSessionError)
+            .map_err(|e| Box::new(e) as PluginSessionError);
+        if result.is_ok() {
+            self.ctx.request_info.response_committed = true;
+        }
+        result
     }
 
     fn write_response_header_boxed<'b>(
@@ -359,10 +366,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 self.grpc_response_terminated = true;
                 return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
             }
-            self.inner
+            let result = self
+                .inner
                 .write_response_header(resp, end_of_stream)
                 .await
-                .map_err(|e| Box::new(e) as PluginSessionError)
+                .map_err(|e| Box::new(e) as PluginSessionError);
+            if result.is_ok() {
+                self.ctx.request_info.response_committed = true;
+            }
+            result
         })
     }
 
@@ -672,8 +684,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
     }
 
-    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset) {
+    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset, backend_ref: HTTPBackendRef) {
         self.ctx.direct_endpoint = Some(info);
+        self.ctx.selected_backend = Some(backend_ref);
     }
 
     fn set_internal_jump(&mut self, info: InternalJumpPreset) {

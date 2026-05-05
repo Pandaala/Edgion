@@ -12,6 +12,7 @@ use crate::core::gateway::runtime::store::listener_gateway_info::format_gateway_
 use crate::core::gateway::services::acme::challenge_store::get_global_challenge_store;
 use crate::core::gateway::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
+    terminate_with_fallback,
 };
 use crate::types::ctx::NormalizedHostname;
 use crate::types::filters::PluginRunningResult;
@@ -182,9 +183,7 @@ pub async fn request_filter(
             if let Some(runtime) = get_global_plugin_store().get_plugin_runtime(&plugin_key) {
                 runtime.run_request_plugins(session, ctx).await;
                 if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                    if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
-                        let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
-                    }
+                    let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
                     return Ok(true);
                 }
             }
@@ -199,17 +198,13 @@ pub async fn request_filter(
             .run_request_plugins(session, ctx)
             .await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-            if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
-                let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
-            }
+            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }
     } else if let Some(route_unit) = ctx.route_unit.clone() {
         route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-            if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
-                let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
-            }
+            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }
     }

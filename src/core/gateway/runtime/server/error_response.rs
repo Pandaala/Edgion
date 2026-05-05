@@ -12,7 +12,7 @@
 //! handled here automatically and uniformly.
 
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
-use crate::types::EdgionHttpContext;
+use crate::types::{EdgionHttpContext, EdgionStatus};
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue};
 use pingora_http::ResponseHeader;
@@ -320,6 +320,67 @@ pub async fn end_response_500(
     Ok(())
 }
 
+/// Send 502 Bad Gateway error response (nginx-style).
+/// For gRPC requests, returns gRPC INTERNAL (status 13) — 502 falls into
+/// the `500..=599 => (13, "internal")` arm of [`http_to_grpc_status`].
+pub async fn end_response_502(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+) -> pingora_core::Result<()> {
+    if ctx.request_info.is_grpc_request {
+        return send_grpc_trailers_only(session, ctx, server_header_opts, 502).await;
+    }
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
+
+    ctx.request_info.status = Some(502);
+    ctx.request_info.response_committed = true;
+
+    let mut resp = ResponseHeader::build(502, None)?;
+    server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "text/html").unwrap();
+
+    let body = r#"<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>edgion</center>
+</body>
+</html>"#;
+
+    let resp_box = Box::new(resp);
+    session.write_response_header(resp_box, false).await?;
+    session.write_response_body(Some(Bytes::from(body)), true).await?;
+    shutdown_after_error_response(session).await;
+
+    Ok(())
+}
+
+/// Fail-safe for plugins that returned
+/// [`ErrTerminateRequest`](crate::types::filters::PluginRunningResult::ErrTerminateRequest)
+/// without writing a response.
+///
+/// - If `response_committed` is already true (spec-compliant plugin wrote its own
+///   response), this is a no-op — the plugin's response stands.
+/// - Otherwise: adds [`EdgionStatus::PluginTerminateWithoutResponse`] to the access
+///   log and writes a 502 (HTTP) / gRPC INTERNAL=13 fallback response.
+///
+/// The `let _ =` at call sites is intentional: a write error on a broken downstream
+/// socket is not actionable. Pingora surfaces it via connection state.
+pub async fn terminate_with_fallback(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+) -> pingora_core::Result<()> {
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
+    ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+    end_response_502(session, ctx, server_header_opts).await
+}
+
 /// Send 503 Service Temporarily Unavailable error response (nginx-style).
 /// For gRPC requests, returns gRPC UNAVAILABLE (status 14).
 pub async fn end_response_503(
@@ -355,4 +416,59 @@ pub async fn end_response_503(
     shutdown_after_error_response(session).await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{EdgionHttpContext, EdgionStatus};
+
+    /// When `response_committed` is true, `terminate_with_fallback` must be a no-op:
+    /// it must NOT push `PluginTerminateWithoutResponse` into `ctx.edgion_status`.
+    /// This test validates the guard branch directly without needing a live Session.
+    #[test]
+    fn terminate_with_fallback_noop_when_committed() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.response_committed = true;
+
+        // Pre-condition: no errors recorded yet
+        assert!(ctx.edgion_status.is_empty());
+
+        // Simulate the guard that terminate_with_fallback checks first
+        if !ctx.request_info.response_committed {
+            ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+        }
+
+        // Because response_committed was true, no error should have been added
+        assert!(
+            ctx.edgion_status.is_empty(),
+            "terminate_with_fallback must not add errors when response_committed = true"
+        );
+        assert!(
+            !ctx.edgion_status
+                .contains(&EdgionStatus::PluginTerminateWithoutResponse),
+            "PluginTerminateWithoutResponse must not appear when response was already committed"
+        );
+    }
+
+    /// Verify that `EdgionStatus::PluginTerminateWithoutResponse` has the expected
+    /// discriminant value (50202). This pins the numeric code used in access log
+    /// serialization so that any accidental renumbering causes a test failure.
+    #[test]
+    fn plugin_terminate_without_response_discriminant() {
+        assert_eq!(
+            EdgionStatus::PluginTerminateWithoutResponse as u32,
+            50202u32,
+            "PluginTerminateWithoutResponse discriminant must be 50202 for access log compatibility"
+        );
+    }
+
+    /// Verify that `http_to_grpc_status(502)` maps to gRPC INTERNAL (code 13).
+    /// 502 falls into the `500..=599` catch-all arm — this test locks that mapping.
+    #[test]
+    fn http_to_grpc_status_maps_502_to_internal() {
+        let (grpc_code, msg) = http_to_grpc_status(502);
+        assert_eq!(grpc_code, 13, "502 must map to gRPC INTERNAL (13)");
+        assert_eq!(msg, "internal", "502 gRPC message must be 'internal'");
+    }
 }

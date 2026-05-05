@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
+use pingora_core::{Error as PingoraError, ErrorType};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
@@ -83,6 +84,25 @@ pub fn classify_backend_addr(addr: &PingoraSocketAddr) -> Option<BlockedBackendR
 #[inline]
 pub fn is_localhost(addr: &PingoraSocketAddr) -> bool {
     matches!(classify_backend_addr(addr), Some(BlockedBackendReason::Localhost))
+}
+
+/// Resolve domain to SocketAddr using async DNS resolution.
+///
+/// Uses tokio's async DNS resolver to avoid blocking the event loop.
+/// Returns the first resolved address.
+pub async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<SocketAddr> {
+    let addr_str = format!("{}:{}", domain, port);
+
+    let mut addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
+        PingoraError::explain(
+            ErrorType::ConnectError,
+            format!("DNS resolution failed for {}: {}", domain, e),
+        )
+    })?;
+
+    addrs
+        .next()
+        .ok_or_else(|| PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain)))
 }
 
 #[cfg(test)]
@@ -209,5 +229,39 @@ mod tests {
         assert_eq!(classify_backend_addr(&addr), None);
         let addr = "[2001:db8::1]:80".parse::<PingoraSocketAddr>().unwrap();
         assert_eq!(classify_backend_addr(&addr), None);
+    }
+
+    // resolve_domain tests — kept hermetic by using IP literals and localhost only,
+    // so they don't depend on a working external resolver.
+
+    #[tokio::test]
+    async fn resolve_domain_ipv4_literal() {
+        let addr = resolve_domain("127.0.0.1", 8080).await.expect("ipv4 literal resolves");
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
+        assert_eq!(addr.port(), 8080);
+    }
+
+    #[tokio::test]
+    async fn resolve_domain_ipv6_literal() {
+        let addr = resolve_domain("::1", 9090).await.expect("ipv6 literal resolves");
+        assert_eq!(addr.ip().to_string(), "::1");
+        assert_eq!(addr.port(), 9090);
+    }
+
+    #[tokio::test]
+    async fn resolve_domain_localhost() {
+        let addr = resolve_domain("localhost", 80).await.expect("localhost resolves");
+        assert!(addr.ip().is_loopback(), "localhost must resolve to a loopback address");
+        assert_eq!(addr.port(), 80);
+    }
+
+    #[tokio::test]
+    async fn resolve_domain_invalid_returns_connect_error() {
+        // Empty host string is rejected at the parse stage by lookup_host before any
+        // resolver is consulted, so this stays hermetic even on networks where the
+        // ISP/DNS hijacks NXDOMAIN responses (RFC 2606 .invalid is unreliable in
+        // practice for that reason).
+        let err = resolve_domain("", 80).await.expect_err("must fail for invalid host");
+        assert_eq!(err.etype(), &ErrorType::ConnectError);
     }
 }

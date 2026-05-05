@@ -4,7 +4,9 @@ use crate::core::gateway::plugins::runtime::log::{EdgionPluginsLog, EdgionPlugin
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::ctx::ClientCertInfo;
 use crate::types::EdgionStatus;
-use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
+use crate::types::{
+    DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, HTTPBackendRef, InternalJumpPreset, MirrorState,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -243,7 +245,13 @@ pub trait PluginSession: Send + Sync {
     /// Set direct endpoint info for upstream routing.
     /// Called by DirectEndpoint plugin to bypass normal LB.
     /// The info persists across retries (Clone, not consumed).
-    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset);
+    ///
+    /// Also stores the matched `backend_ref` on `ctx.selected_backend` so the resource-
+    /// selection path in `init_backend_context_if_needed` can derive name/namespace/kind
+    /// without re-deriving them from `backend_ref_idx`. The plugin already has the
+    /// backend_ref in hand when it calls this — passing it through avoids a second
+    /// lookup at peer-construction time.
+    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset, backend_ref: HTTPBackendRef);
 
     /// Set internal jump target for backend selection.
     /// Called by DynamicInternalUpstream plugin to target a specific BackendRef.

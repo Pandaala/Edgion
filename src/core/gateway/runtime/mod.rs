@@ -12,8 +12,9 @@ pub use matching::{
 };
 pub(crate) use server::send_grpc_trailers_only;
 pub use server::{
-    end_response_400, end_response_404, end_response_421, end_response_500, end_response_503,
-    end_response_grpc_unavailable, end_response_grpc_unimplemented, GatewayBase, ServerHeaderOpts,
+    end_response_400, end_response_404, end_response_421, end_response_500, end_response_502, end_response_503,
+    end_response_grpc_unavailable, end_response_grpc_unimplemented, terminate_with_fallback, GatewayBase,
+    ServerHeaderOpts,
 };
 pub use store::{
     get_global_gateway_config_store, get_global_gateway_store, get_listener_gateway_info_store,

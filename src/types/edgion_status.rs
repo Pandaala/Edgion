@@ -119,8 +119,19 @@ pub enum EdgionStatus {
     /// Backend kind not supported (Gateway API conformance: return 500)
     BackendUnsupportedKind = 500_15,
 
+    /// Session-persistence sticky target was unhealthy at peer-selection time.
+    /// Runtime fell back to normal LB (non-strict) or returned an error (strict mode).
+    StickyBackendUnhealthy = 50016,
+
     /// Backend TLS certificate SAN validation failed
     BackendTlsSanValidationFailed = 502_01,
+
+    /// Plugin returned `ErrTerminateRequest` without committing a response.
+    /// Runtime applied a 502 fallback to ensure the client receives a response.
+    /// Operators: grep the `errors` field in access logs to find plugins violating
+    /// the `ErrTerminateRequest` convention; the offending plugin name is the last
+    /// entry in the request-stage `stage_logs[].filters[]` array.
+    PluginTerminateWithoutResponse = 502_02,
 
     /// ForwardAuth plugin could not reach the configured auth service
     /// (connection refused, DNS failure, or timeout). Emitted both when the

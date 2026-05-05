@@ -1,12 +1,15 @@
 use super::EdgionHttpProxy;
-use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReason};
+use crate::core::common::utils::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
 use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
 use crate::core::gateway::cli::config::get_path_normalization_config;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
 use crate::core::gateway::routes::http::routes_mgr::RouteRules;
 use crate::core::gateway::routes::http::session_persistence;
-use crate::core::gateway::{end_response_500, end_response_503, end_response_grpc_unavailable};
+use crate::core::gateway::{
+    end_response_500, end_response_503, end_response_grpc_unavailable, terminate_with_fallback,
+};
+use crate::types::ctx::BackendSource;
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
 use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState};
@@ -117,7 +120,7 @@ pub async fn upstream_peer_grpc(
 
     // 7. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    update_peer_metrics(edgion_http, &peer, ctx);
+    backfill_upstream_addr(&peer, ctx);
 
     Ok(peer)
 }
@@ -129,49 +132,22 @@ pub async fn upstream_peer_http(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    // ── Path Forwarding Decision (single point, spec §14) ──
-    // Priority:
-    //   0. ctx.uri_finalized already true   → skip (rewrite final form / already decided)
-    //   1. annotation forward-raw-path      → Some(true)/Some(false) forces
-    //   2. external_jump.preserve_raw_path  → gateway-to-gateway default raw
-    //   3. global forward_normalized_path   → false means raw (v3.1 compat / rollback)
-    //   Default                              → write normalized
-    if !ctx.uri_finalized {
-        let cfg = get_path_normalization_config();
-        let annotation = ctx.route_unit.as_ref().and_then(|ru| ru.rule.parsed_forward_raw_path);
-        let external_jump_preserve_raw = ctx
-            .external_jump
-            .as_ref()
-            .map(|ej| ej.preserve_raw_path)
-            .unwrap_or(false);
-        let want_raw = decide_want_raw(annotation, external_jump_preserve_raw, cfg.forward_normalized_path);
-        if !want_raw {
-            // Compare on path alone — query is passthrough, never changes via
-            // normalization. Using `path()` instead of `to_string()` correctly
-            // handles HTTP/2 absolute-form requests (where `to_string()` would
-            // include scheme + authority).
-            let normalized_path = ctx.path();
-            if normalized_path != session.req_header().uri.path() {
-                let new_uri = ctx.uri(session.req_header());
-                let parsed = new_uri
-                    .parse::<http::Uri>()
-                    .map_err(|e| PingoraError::because(ErrorType::InternalError, "compose normalized uri", e))?;
-                session.req_header_mut().set_uri(parsed);
-                // Wrote normalized form; cache (normalized_current_path) is already
-                // consistent with this URI, so no refresh needed.
-            }
-        }
-        ctx.uri_finalized = true;
-    }
+    finalize_request_uri(session, ctx)?;
 
     // 0. DirectEndpoint (highest priority, bypass LB)
-    if let Some(result) = try_direct_endpoint_peer(edgion_http, ctx) {
-        return result;
+    // INVARIANT: this check MUST come before the `selected_backend.is_none()` check below.
+    // `set_direct_endpoint` (plugin API) writes BOTH `ctx.direct_endpoint` AND
+    // `ctx.selected_backend` simultaneously so that `init_backend_context_if_needed` inside
+    // the bypass path has a backend_ref to derive service metadata from. If the order were
+    // swapped, a non-None `selected_backend` would suppress `select_http_backend` and the
+    // request would reach `try_get_peer` with the direct-endpoint backend_ref — incorrect.
+    if ctx.direct_endpoint.is_some() {
+        return try_direct_endpoint_peer(edgion_http, ctx);
     }
 
     // 1. ExternalJump (external domain, second priority)
-    if let Some(result) = try_external_jump_peer(edgion_http, ctx).await {
-        return result;
+    if ctx.external_jump.is_some() {
+        return try_external_jump_peer(edgion_http, ctx).await;
     }
 
     // 2. Select HTTP backend if not already selected (may include InternalJump inside)
@@ -187,45 +163,16 @@ pub async fn upstream_peer_http(
     //    as None, which would otherwise silently drop those writes (P0 g1-001).
     begin_upstream_attempt(ctx);
 
-    // 5. Get peer — with session persistence fallback support
-    //
-    // When session persistence resolved a target (sp_target_addr was set), try_get_peer
-    // routes directly to it. If that fails (unhealthy), fallback to normal LB unless strict.
-    let sp_had_target = ctx.sp_target_addr.is_some();
-    let sp_strict = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|ru| ru.rule.session_persistence.as_ref())
-        .and_then(|sp| sp.strict)
-        .unwrap_or(false);
-
-    let mut peer = if sp_had_target {
-        match try_get_peer(ctx, session, false) {
-            Ok(peer) => peer,
-            Err(status @ (EdgionStatus::BackendLocalhostNotAllowed | EdgionStatus::BackendAddrLinkLocalNotAllowed)) => {
-                ctx.add_error(status);
-                end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-                return Err(PingoraError::new(ErrorType::InternalError));
-            }
-            Err(_) if !sp_strict => {
-                // Session persistence fallback: target was unhealthy, retry with normal LB
-                ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
-                ctx.sp_state = SessionPersistenceState::InjectUpdate; // update token in response
-                                                                      // Retry with normal LB
-                get_peer(session, ctx, false).await?
-            }
-            Err(_) => {
-                // No fallback (strict mode, no session persistence, or no target) — error response
-                get_peer(session, ctx, false).await?
-            }
-        }
+    // 5. Get peer — common path defers to LB; the SP-affinity branch lives in its own helper.
+    let mut peer = if ctx.sp_target_addr.is_some() {
+        get_peer_with_sp_fallback(edgion_http, session, ctx).await?
     } else {
         get_peer(session, ctx, false).await?
     };
 
     // 6. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    update_peer_metrics(edgion_http, &peer, ctx);
+    backfill_upstream_addr(&peer, ctx);
 
     Ok(peer)
 }
@@ -288,16 +235,8 @@ pub async fn select_http_backend(
     // Run backend-level request edgion_plugins
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-        ctx.add_error(EdgionStatus::Unknown);
-        if !ctx.request_info.response_committed {
-            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-        }
-        let err_type = if ctx.request_info.is_grpc_request {
-            ErrorType::HTTPStatus(200)
-        } else {
-            ErrorType::InternalError
-        };
-        return Err(PingoraError::new(err_type));
+        let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
+        return Err(PingoraError::new(ErrorType::InternalError));
     }
 
     // Session Persistence step 2 of 2: resolve token to a sticky target via the
@@ -357,6 +296,53 @@ fn sp_resolve_target(
         ctx.sp_target_addr = Some(addr);
     } else {
         ctx.sp_state = SessionPersistenceState::InjectNew;
+    }
+}
+
+/// Get peer when session persistence resolved a sticky target (`sp_target_addr` is set).
+///
+/// Caller must have checked `ctx.sp_target_addr.is_some()` — this function assumes the
+/// SP-affinity branch and only routes its three outcomes:
+///
+/// - `try_get_peer` succeeds → use the sticky target.
+/// - `try_get_peer` rejects with SSRF (loopback / link-local) → write 503 and abort;
+///   never fall back, since the rejection is a security signal, not unhealthiness.
+/// - `try_get_peer` fails for any other reason → fall back to normal LB unless the route
+///   declared `session_persistence.strict = true`. On fallback, mark `sp_state` as
+///   `InjectUpdate` so the response refreshes the cookie/header pointing at the new pick.
+///
+/// Strict mode keeps the original `try_get_peer` error from `get_peer`'s second call,
+/// rather than synthesising one — `get_peer` will return whichever backend it can find,
+/// or surface its own error to the proxy layer.
+async fn get_peer_with_sp_fallback(
+    edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<Box<HttpPeer>> {
+    let sp_strict = ctx
+        .route_unit
+        .as_ref()
+        .and_then(|ru| ru.rule.session_persistence.as_ref())
+        .and_then(|sp| sp.strict)
+        .unwrap_or(false);
+
+    match try_get_peer(ctx, session, false) {
+        Ok(peer) => Ok(peer),
+        Err(status @ (EdgionStatus::BackendLocalhostNotAllowed | EdgionStatus::BackendAddrLinkLocalNotAllowed)) => {
+            ctx.add_error(status);
+            end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+            Err(PingoraError::new(ErrorType::InternalError))
+        }
+        Err(_) if !sp_strict => {
+            // Sticky target unhealthy → drop the SP target and refresh the token in the response.
+            ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
+            ctx.sp_state = SessionPersistenceState::InjectUpdate;
+            get_peer(session, ctx, false).await
+        }
+        Err(_) => {
+            // Strict mode: no fallback to normal LB. Defer to get_peer to surface a typed error.
+            get_peer(session, ctx, false).await
+        }
     }
 }
 
@@ -463,7 +449,7 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 /// Begin a new upstream attempt: push a placeholder upstream entry so subsequent
 /// calls to `ctx.get_current_upstream_mut()` (inside try_get_peer / build_peer_from_lb_selection
 /// / record_tls_to_upstream / record_unsafe_*_attempt) actually land on a valid entry.
-/// ip/port are filled in later by [`update_peer_metrics`] once the peer is known.
+/// ip/port are filled in later by [`backfill_upstream_addr`] once the peer is known.
 ///
 /// Must be called after `init_backend_context_if_needed` and before any peer construction.
 /// On retries this also decrements LeastConn for the previous (now-completed) attempt;
@@ -489,11 +475,12 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 }
 
 /// Finish a peer that was constructed directly (i.e. without going through LB / try_get_peer):
-/// init backend context, push the upstream attempt placeholder, then apply timeouts and metrics.
+/// push the upstream attempt placeholder, then apply timeouts and metrics.
 ///
 /// Used by paths that bypass load-balancing (DirectEndpoint, ExternalJump) where the address is
-/// already known. Callers must ensure `ctx.selected_backend` (or `ctx.backend_context`) is
-/// populated beforehand so [`init_backend_context_if_needed`] can complete.
+/// already known. Callers must seed `ctx.backend_context` beforehand (typically via
+/// [`EdgionHttpContext::init_bypass_backend_context`]); the [`init_backend_context_if_needed`]
+/// call inside is a defensive no-op for that case.
 #[inline]
 fn finish_static_peer(
     edgion_http: &EdgionHttpProxy,
@@ -503,99 +490,93 @@ fn finish_static_peer(
     init_backend_context_if_needed(ctx)?;
     begin_upstream_attempt(ctx);
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    update_peer_metrics(edgion_http, &peer, ctx);
+    backfill_upstream_addr(&peer, ctx);
     Ok(peer)
 }
 
-/// Try the DirectEndpoint bypass path (exact IP set by a plugin, e.g. dynamic_endpoint).
+/// DirectEndpoint bypass path (exact IP set by a plugin, e.g. dynamic_endpoint).
 ///
-/// Returns `None` when no DirectEndpoint is staged on `ctx`, letting the caller fall through
-/// to the next strategy. Otherwise returns the peer-construction result.
-#[inline]
+/// Caller must have already checked `ctx.direct_endpoint.is_some()` — this is the
+/// cold path, so it's not `#[inline]` and the existence check stays at the call
+/// site to keep the hot path branch-only.
+///
+/// `selected_backend` was already populated by `set_direct_endpoint` on the plugin
+/// side (paired with the matched backend_ref), so `finish_static_peer`'s call to
+/// `init_backend_context_if_needed` derives rsc / service_key / service_kind for
+/// free. We only need to retag `source` afterward to record the staging path.
 fn try_direct_endpoint_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
-) -> Option<pingora_core::Result<Box<HttpPeer>>> {
-    let direct = ctx.direct_endpoint.as_ref()?;
-    let (addr, use_tls, sni, backend_ref_idx) =
-        (direct.addr, direct.use_tls, direct.sni.clone(), direct.backend_ref_idx);
-
-    // Backfill selected_backend from backend_refs[idx] so init_backend_context_if_needed
-    // (called inside finish_static_peer) can derive name/namespace from it.
-    if ctx.selected_backend.is_none() {
-        ctx.selected_backend = ctx
-            .route_unit
-            .as_ref()
-            .and_then(|ru| ru.rule.backend_refs.as_ref())
-            .and_then(|refs| refs.get(backend_ref_idx))
-            .cloned();
-    }
+) -> pingora_core::Result<Box<HttpPeer>> {
+    let direct = ctx
+        .direct_endpoint
+        .as_ref()
+        .expect("caller must check direct_endpoint.is_some()");
+    let (addr, use_tls, sni) = (direct.addr, direct.use_tls, direct.sni.clone());
 
     let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
-    Some(finish_static_peer(edgion_http, ctx, peer))
+    let result = finish_static_peer(edgion_http, ctx, peer);
+
+    // init_backend_context_if_needed left source as None (default path) — tag this
+    // request as a DirectEndpoint bypass so access logs/metrics can distinguish it.
+    if let Some(bc) = ctx.backend_context.as_mut() {
+        bc.source = Some(BackendSource::DirectEndpoint);
+    }
+
+    result
 }
 
-/// Try the ExternalJump bypass path (external domain set by a plugin, e.g. region_route).
+/// ExternalJump bypass path (external domain set by a plugin, e.g. region_route).
 ///
-/// Returns `None` when no ExternalJump is staged on `ctx`. Otherwise resolves the domain via
-/// async DNS, validates the address against SSRF defenses, then returns the peer-construction
-/// result (or the rejection error).
-#[inline]
+/// Caller must have already checked `ctx.external_jump.is_some()` — cold path,
+/// not `#[inline]`. Resolves the domain via async DNS, validates against SSRF
+/// defenses, then constructs the peer (or returns the rejection error).
 async fn try_external_jump_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
-) -> Option<pingora_core::Result<Box<HttpPeer>>> {
-    let external = ctx.external_jump.as_ref()?;
+) -> pingora_core::Result<Box<HttpPeer>> {
+    let external = ctx
+        .external_jump
+        .as_ref()
+        .expect("caller must check external_jump.is_some()");
     let domain = external.domain.clone();
     let port = external.port;
     let use_tls = external.use_tls;
     let sni = external.sni.clone();
 
-    let addr = match resolve_domain(&domain, port).await {
-        Ok(addr) => addr,
-        Err(e) => return Some(Err(e)),
-    };
+    let addr = resolve_domain(&domain, port).await?;
 
-    if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
-        if ctx.backend_context.is_none() {
-            let service_key = format!("{}/{}", "_external_", domain);
-            let rsc = crate::types::Rsc {
-                kind: "Service".to_string(),
-                ns: "_external_".to_string(),
-                name: domain.clone(),
-            };
-            ctx.init_backend_context(rsc, service_key, EdgionService::Service);
-        }
-        record_unsafe_resolved_upstream_attempt(ctx, addr, status);
-        ctx.add_error(status);
-        return Some(Err(PingoraError::explain(
-            ErrorType::ConnectError,
-            "external upstream resolved to unsafe address",
-        )));
+    // Seed before validation so failure-path record_unsafe_resolved_upstream_attempt
+    // has a backend_context to push onto. No K8s resource → rsc/service_key stay None.
+    if ctx.backend_context.is_none() {
+        ctx.backend_context = Some(crate::types::ctx::BackendContext {
+            source: Some(BackendSource::ExternalJump),
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+        });
     }
 
-    // External jump has no selected_backend; seed backend_context manually before
-    // finish_static_peer so init_backend_context_if_needed becomes a no-op.
-    // Use domain as "name" and "_external_" as namespace marker.
-    if ctx.backend_context.is_none() {
-        let service_key = format!("{}/{}", "_external_", domain);
-        let rsc = crate::types::Rsc {
-            kind: "Service".to_string(),
-            ns: "_external_".to_string(),
-            name: domain.clone(),
-        };
-        ctx.init_backend_context(rsc, service_key, EdgionService::Service);
+    if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
+        record_unsafe_resolved_upstream_attempt(ctx, addr, status);
+        ctx.add_error(status);
+        return Err(PingoraError::explain(
+            ErrorType::ConnectError,
+            "external upstream resolved to unsafe address",
+        ));
     }
 
     let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
-    Some(finish_static_peer(edgion_http, ctx, peer))
+    finish_static_peer(edgion_http, ctx, peer)
 }
 
 /// Backfill the resolved peer ip/port onto the current placeholder upstream entry.
 /// The entry itself was created by [`begin_upstream_attempt`]; this stage only finalises
 /// address fields once `try_get_peer` has produced a peer.
 #[inline]
-pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
+pub fn backfill_upstream_addr(peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
     let (ip, port) = peer
         .address()
         .as_inet()
@@ -607,8 +588,11 @@ pub fn update_peer_metrics(_edgion_http: &EdgionHttpProxy, peer: &HttpPeer, ctx:
     }
 }
 
-/// Initialize backend context if not yet initialized (inline for performance).
-/// This function handles both gRPC and HTTP backends.
+/// Initialize backend context for the resource-selected path (HTTP / gRPC backend ref).
+/// No-op when already initialized — bypass paths (DirectEndpoint / ExternalJump) seed
+/// it themselves via [`EdgionHttpContext::init_bypass_backend_context`] before reaching here.
+/// Errors only when neither selected_backend nor selected_grpc_backend is set, which
+/// indicates a routing bug, not a bypass path.
 #[inline]
 fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
     if ctx.backend_context.is_some() {
@@ -646,28 +630,6 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
     let service_kind = EdgionService::from_kind(kind_str.as_ref());
     ctx.init_backend_context(rsc, service_key, service_kind);
     Ok(())
-}
-
-/// Resolve domain to SocketAddr using async DNS resolution.
-///
-/// Uses tokio's async DNS resolver to avoid blocking the event loop.
-/// Returns the first resolved address.
-async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<std::net::SocketAddr> {
-    let addr_str = format!("{}:{}", domain, port);
-
-    // Use tokio async DNS resolution
-    let mut addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
-        PingoraError::explain(
-            ErrorType::ConnectError,
-            format!("DNS resolution failed for {}: {}", domain, e),
-        )
-    })?;
-
-    let addr = addrs
-        .next()
-        .ok_or_else(|| PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain)))?;
-
-    Ok(addr)
 }
 
 fn validate_resolved_domain_addr(
@@ -719,6 +681,50 @@ fn record_unsafe_resolved_upstream_attempt(
         };
         upstream.err.push(reason.to_string());
     }
+}
+
+/// Path Forwarding Decision (single point, spec §14).
+///
+/// Priority:
+///   0. ctx.uri_finalized already true   → skip (rewrite final form / already decided)
+///   1. annotation forward-raw-path      → Some(true)/Some(false) forces
+///   2. external_jump.preserve_raw_path  → gateway-to-gateway default raw
+///   3. global forward_normalized_path   → false means raw (v3.1 compat / rollback)
+///   Default                              → write normalized
+#[inline]
+fn finalize_request_uri(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    if ctx.uri_finalized {
+        return Ok(());
+    }
+
+    let cfg = get_path_normalization_config();
+    let annotation = ctx.route_unit.as_ref().and_then(|ru| ru.rule.parsed_forward_raw_path);
+    let external_jump_preserve_raw = ctx
+        .external_jump
+        .as_ref()
+        .map(|ej| ej.preserve_raw_path)
+        .unwrap_or(false);
+    let want_raw = decide_want_raw(annotation, external_jump_preserve_raw, cfg.forward_normalized_path);
+
+    if !want_raw {
+        // Compare on path alone — query is passthrough, never changes via
+        // normalization. Using `path()` instead of `to_string()` correctly
+        // handles HTTP/2 absolute-form requests (where `to_string()` would
+        // include scheme + authority).
+        let normalized_path = ctx.path();
+        if normalized_path != session.req_header().uri.path() {
+            let new_uri = ctx.uri(session.req_header());
+            let parsed = new_uri
+                .parse::<http::Uri>()
+                .map_err(|e| PingoraError::because(ErrorType::InternalError, "compose normalized uri", e))?;
+            session.req_header_mut().set_uri(parsed);
+            // Wrote normalized form; cache (normalized_current_path) is already
+            // consistent with this URI, so no refresh needed.
+        }
+    }
+
+    ctx.uri_finalized = true;
+    Ok(())
 }
 
 /// Path forwarding decision for the upstream-peer single-point block (spec §14).
