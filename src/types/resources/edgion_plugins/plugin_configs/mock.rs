@@ -110,6 +110,14 @@ impl MockConfig {
     }
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for MockConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.validate().err()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

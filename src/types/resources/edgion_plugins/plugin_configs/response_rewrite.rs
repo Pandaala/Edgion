@@ -99,15 +99,15 @@ pub struct HeaderRename {
 }
 
 impl ResponseRewriteConfig {
-    /// Validate configuration.
+    /// Stateless field validation.
     ///
-    /// Returns true if configuration is valid, false otherwise.
-    pub fn validate(&mut self) -> bool {
+    /// Returns `Some(error)` if any field is invalid, `None` if all checks pass.
+    /// Does not mutate `self`.
+    pub fn check_fields(&self) -> Option<String> {
         // Validate status code range
         if let Some(status) = self.status_code {
             if !(100..=599).contains(&status) {
-                self.validation_error = Some(format!("Invalid status code: {}. Must be between 100 and 599.", status));
-                return false;
+                return Some(format!("Invalid status code: {}. Must be between 100 and 599.", status));
             }
         }
 
@@ -117,8 +117,7 @@ impl ResponseRewriteConfig {
             if let Some(ref set_headers) = headers.set {
                 for entry in set_headers {
                     if entry.name.is_empty() {
-                        self.validation_error = Some("Header name in 'set' cannot be empty.".to_string());
-                        return false;
+                        return Some("Header name in 'set' cannot be empty.".to_string());
                     }
                 }
             }
@@ -127,8 +126,7 @@ impl ResponseRewriteConfig {
             if let Some(ref add_headers) = headers.add {
                 for entry in add_headers {
                     if entry.name.is_empty() {
-                        self.validation_error = Some("Header name in 'add' cannot be empty.".to_string());
-                        return false;
+                        return Some("Header name in 'add' cannot be empty.".to_string());
                     }
                 }
             }
@@ -137,8 +135,7 @@ impl ResponseRewriteConfig {
             if let Some(ref remove_headers) = headers.remove {
                 for name in remove_headers {
                     if name.is_empty() {
-                        self.validation_error = Some("Header name in 'remove' cannot be empty.".to_string());
-                        return false;
+                        return Some("Header name in 'remove' cannot be empty.".to_string());
                     }
                 }
             }
@@ -147,18 +144,29 @@ impl ResponseRewriteConfig {
             if let Some(ref rename_headers) = headers.rename {
                 for entry in rename_headers {
                     if entry.from.is_empty() {
-                        self.validation_error = Some("Header 'from' name in 'rename' cannot be empty.".to_string());
-                        return false;
+                        return Some("Header 'from' name in 'rename' cannot be empty.".to_string());
                     }
                     if entry.to.is_empty() {
-                        self.validation_error = Some("Header 'to' name in 'rename' cannot be empty.".to_string());
-                        return false;
+                        return Some("Header 'to' name in 'rename' cannot be empty.".to_string());
                     }
                 }
             }
         }
 
+        None
+    }
+
+    /// Validate configuration.
+    ///
+    /// Returns true if configuration is valid, false otherwise.
+    pub fn validate(&mut self) -> bool {
         self.validation_error = None;
+
+        if let Some(err) = self.check_fields() {
+            self.validation_error = Some(err);
+            return false;
+        }
+
         true
     }
 
@@ -175,6 +183,14 @@ impl ResponseRewriteConfig {
     /// Check if any rewrite is configured (for logging purposes)
     pub fn has_any_config(&self) -> bool {
         self.status_code.is_some() || self.headers.is_some()
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for ResponseRewriteConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
     }
 }
 
@@ -374,5 +390,75 @@ mod tests {
         assert_eq!(set_headers[0].name, "X-First");
         assert_eq!(set_headers[1].name, "X-Second");
         assert_eq!(set_headers[2].name, "X-Third");
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        // Construct an invalid config (status code out of range) without calling validate(),
+        // verify the trait implementation is stateless and does not touch validation_error.
+        let config = ResponseRewriteConfig {
+            status_code: Some(600), // out of range, triggers a field-level error
+            headers: None,
+            validation_error: None,
+        };
+
+        let result = config.validation_error();
+        // The trait must NOT mutate self — cached field must remain None.
+        assert!(config.validation_error.is_none(), "trait must not touch cached field");
+        // The returned value must contain the expected error message.
+        assert!(
+            result.as_deref().unwrap_or("").contains("Invalid status code: 600"),
+            "expected invalid status code error, got: {:?}",
+            result,
+        );
+    }
+
+    #[test]
+    fn validation_error_returns_none_for_valid_config() {
+        let config = ResponseRewriteConfig {
+            status_code: Some(200),
+            headers: None,
+            validation_error: None,
+        };
+        assert!(config.validation_error().is_none());
+        // Cached field still untouched.
+        assert!(config.validation_error.is_none());
+    }
+
+    #[test]
+    fn validation_error_returns_none_for_default_config() {
+        let config = ResponseRewriteConfig::default();
+        assert!(config.validation_error().is_none());
+        assert!(config.validation_error.is_none());
+    }
+
+    #[test]
+    fn validation_error_detects_empty_set_header_name() {
+        let config = ResponseRewriteConfig {
+            status_code: None,
+            headers: Some(ResponseHeaderActions {
+                set: Some(vec![ResponseHeaderEntry {
+                    name: "".to_string(),
+                    value: "v".to_string(),
+                }]),
+                add: None,
+                remove: None,
+                rename: None,
+            }),
+            validation_error: None,
+        };
+        let result = config.validation_error();
+        assert!(config.validation_error.is_none(), "trait must not touch cached field");
+        assert!(
+            result.as_deref().unwrap_or("").contains("cannot be empty"),
+            "expected empty-header error, got: {:?}",
+            result,
+        );
     }
 }

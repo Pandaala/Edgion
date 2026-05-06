@@ -215,6 +215,14 @@ impl IpRestrictionConfig {
     }
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for IpRestrictionConfig {
+    fn validation_error(&self) -> Option<String> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

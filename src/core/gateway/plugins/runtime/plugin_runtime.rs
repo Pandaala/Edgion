@@ -74,11 +74,11 @@ pub struct PluginRuntime {
 ///
 /// Distinguishes "plugin variant does not belong to this stage" (a configuration
 /// error surfaced to status.conditions) from "plugin is applicable but construction
-/// declined" (already captured by `get_plugin_validation_error`).
+/// declined" (already captured by `EdgionPlugin::validation_error`).
 enum CreateResult<T> {
     /// Plugin variant is applicable to this stage. `Some` on success, `None` if
     /// the inner constructor returned None (e.g. DSL compile failure — already
-    /// reported through `get_plugin_validation_error`).
+    /// reported through `EdgionPlugin::validation_error`).
     Ok(Option<T>),
     /// Plugin variant does not belong to this stage (config error).
     WrongStage,
@@ -243,7 +243,7 @@ impl PluginRuntime {
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
                 // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                 }
@@ -255,7 +255,7 @@ impl PluginRuntime {
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -287,7 +287,7 @@ impl PluginRuntime {
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
                 // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseFilterPlugins[{}] ({}): {}",
@@ -303,7 +303,7 @@ impl PluginRuntime {
                         self.add_upstream_response_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -331,7 +331,7 @@ impl PluginRuntime {
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
                 // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponsePlugins[{}] ({}): {}",
@@ -346,7 +346,7 @@ impl PluginRuntime {
                         self.add_upstream_response(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -378,7 +378,7 @@ impl PluginRuntime {
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
                 // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
@@ -394,7 +394,7 @@ impl PluginRuntime {
                         self.add_upstream_response_body_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -589,59 +589,6 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
-        }
-    }
-
-    /// Get validation error from a plugin config (if any)
-    fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
-        match plugin {
-            EdgionPlugin::BasicAuth(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::RateLimitRedis(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::DirectEndpoint(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::LdapAuth(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::OpenidConnect(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::JweDecrypt(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::HmacAuth(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::HeaderCertAuth(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::Dsl(config) => config.get_validation_error_owned(),
-            EdgionPlugin::RegionRoute(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::Mock(config) => config.validate().err(),
-            // These plugins have no preparse validation
-            EdgionPlugin::RequestHeaderModifier(_)
-            | EdgionPlugin::ResponseHeaderModifier(_)
-            | EdgionPlugin::RequestRedirect(_)
-            | EdgionPlugin::UrlRewrite(_)
-            | EdgionPlugin::RequestMirror(_)
-            | EdgionPlugin::ExtensionRef(_)
-            | EdgionPlugin::Cors(_)
-            | EdgionPlugin::Csrf(_)
-            | EdgionPlugin::IpRestriction(_)
-            | EdgionPlugin::JwtAuth(_)
-            | EdgionPlugin::DebugAccessLogToHeader(_)
-            | EdgionPlugin::RealIp(_) => None,
         }
     }
 

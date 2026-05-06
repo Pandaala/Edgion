@@ -259,27 +259,28 @@ impl RequestRestrictionConfig {
         self.validation_error.as_deref()
     }
 
-    /// Validate and compile all rules
-    fn validate_and_compile(&mut self) -> Result<(), String> {
+    /// Stateless field validation — mirrors every error branch of validate_and_compile
+    /// without mutating self or compiling any matchers.
+    pub fn check_fields(&self) -> Option<String> {
         // Must have at least one rule
         if self.rules.is_empty() {
-            return Err("At least one rule must be specified".to_string());
+            return Some("At least one rule must be specified".to_string());
         }
 
         // Validate status code
         if self.status < 100 || self.status >= 600 {
-            return Err(format!("Invalid status code: {}", self.status));
+            return Some(format!("Invalid status code: {}", self.status));
         }
 
-        // Validate and compile each rule
-        for (i, rule) in self.rules.iter_mut().enumerate() {
+        // Validate each rule (field checks only — no compilation)
+        for (i, rule) in self.rules.iter().enumerate() {
             let rule_name = rule.name.clone().unwrap_or_else(|| format!("rule[{}]", i));
 
             // Validate key requirement based on source
             match rule.source {
                 RestrictionSource::Header | RestrictionSource::Cookie | RestrictionSource::Query => {
                     if rule.key.is_none() || rule.key.as_ref().is_some_and(|k| k.is_empty()) {
-                        return Err(format!(
+                        return Some(format!(
                             "Rule '{}': 'key' is required for source {:?}",
                             rule_name, rule.source
                         ));
@@ -297,17 +298,78 @@ impl RequestRestrictionConfig {
             let has_allow = rule.allow.is_some() || rule.allow_regex.is_some();
             let has_deny = rule.deny.is_some() || rule.deny_regex.is_some();
             if !has_allow && !has_deny {
-                return Err(format!(
+                return Some(format!(
                     "Rule '{}': at least one of 'allow', 'allowRegex', 'deny', or 'denyRegex' must be specified",
                     rule_name
                 ));
             }
 
-            // Compile rule
+            // Validate allow/deny list emptiness
+            if let Some(values) = &rule.allow {
+                if values.is_empty() {
+                    return Some(format!("Rule '{}': 'allow' list cannot be empty", rule_name));
+                }
+            }
+            if let Some(patterns) = &rule.allow_regex {
+                if patterns.is_empty() {
+                    return Some(format!("Rule '{}': 'allowRegex' list cannot be empty", rule_name));
+                }
+                // Validate regex patterns are valid
+                let combined = patterns
+                    .iter()
+                    .map(|p| format!("({})", p))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                if let Err(e) = Regex::new(&combined) {
+                    return Some(format!("Rule '{}': Invalid allowRegex: {}", rule_name, e));
+                }
+            }
+            if let Some(values) = &rule.deny {
+                if values.is_empty() {
+                    return Some(format!("Rule '{}': 'deny' list cannot be empty", rule_name));
+                }
+            }
+            if let Some(patterns) = &rule.deny_regex {
+                if patterns.is_empty() {
+                    return Some(format!("Rule '{}': 'denyRegex' list cannot be empty", rule_name));
+                }
+                // Validate regex patterns are valid
+                let combined = patterns
+                    .iter()
+                    .map(|p| format!("({})", p))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                if let Err(e) = Regex::new(&combined) {
+                    return Some(format!("Rule '{}': Invalid denyRegex: {}", rule_name, e));
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Validate and compile all rules
+    fn validate_and_compile(&mut self) -> Result<(), String> {
+        // Run stateless field checks first
+        if let Some(err) = self.check_fields() {
+            return Err(err);
+        }
+
+        // Compile each rule (field checks already passed)
+        for (i, rule) in self.rules.iter_mut().enumerate() {
+            let rule_name = rule.name.clone().unwrap_or_else(|| format!("rule[{}]", i));
             rule.compile().map_err(|e| format!("Rule '{}': {}", rule_name, e))?;
         }
 
         Ok(())
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for RequestRestrictionConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
     }
 }
 
@@ -950,5 +1012,81 @@ mod tests {
         assert_eq!(rule.check_value(Some("/%61dmin")), Some(true));
         // Normalized form does NOT match (kept raw)
         assert_eq!(rule.check_value(Some("/admin")), Some(false));
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        // Default config has no rules — first error from check_fields is "At least one rule".
+        let config = RequestRestrictionConfig::default();
+        let result = config.validation_error();
+        // Must not touch the cached field (check_fields is stateless)
+        assert!(config.validation_error.is_none(), "must not touch cached field");
+        assert!(
+            result.as_deref().unwrap_or("").contains("At least one rule"),
+            "expected 'At least one rule' error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn validation_error_returns_none_for_valid_config() {
+        let config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                source: RestrictionSource::Header,
+                key: Some("X-Test".to_string()),
+                deny: Some(vec!["bad".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(config.validation_error(), None);
+        // Cached field must still be None (stateless)
+        assert!(config.validation_error.is_none(), "must not touch cached field");
+    }
+
+    #[test]
+    fn validation_error_catches_missing_key_for_header() {
+        let config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                source: RestrictionSource::Header,
+                key: None,
+                deny: Some(vec!["bad".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let result = config.validation_error();
+        assert!(config.validation_error.is_none(), "must not touch cached field");
+        assert!(
+            result.as_deref().unwrap_or("").contains("key"),
+            "expected 'key' error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn validation_error_catches_invalid_regex() {
+        let config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                source: RestrictionSource::Header,
+                key: Some("X-Test".to_string()),
+                deny_regex: Some(vec!["[invalid".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let result = config.validation_error();
+        assert!(config.validation_error.is_none(), "must not touch cached field");
+        assert!(
+            result.as_deref().unwrap_or("").contains("Invalid"),
+            "expected 'Invalid' regex error, got: {:?}",
+            result
+        );
     }
 }

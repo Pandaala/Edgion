@@ -190,6 +190,14 @@ impl ForwardAuthConfig {
     }
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for ForwardAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.get_validation_error().map(str::to_owned)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

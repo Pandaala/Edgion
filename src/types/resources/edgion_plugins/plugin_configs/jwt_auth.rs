@@ -191,3 +191,11 @@ impl Default for JwtAuthConfig {
         }
     }
 }
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for JwtAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        None
+    }
+}

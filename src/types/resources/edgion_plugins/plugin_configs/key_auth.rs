@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::types::common::KeyGet;
+use crate::types::resources::edgion_plugins::plugin_validation::PluginValidation;
 use crate::types::resources::gateway::SecretObjectReference;
 
 /// Key Auth plugin configuration
@@ -207,6 +208,12 @@ impl KeyAuthConfig {
     }
 }
 
+impl PluginValidation for KeyAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.validate_and_check().err()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +404,23 @@ realm: "Production API"
         };
         assert!(config.validate());
         assert!(config.is_valid());
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        let config = KeyAuthConfig {
+            key_sources: vec![],
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("key_sources cannot be empty - at least one key source must be specified".to_string())
+        );
+        assert!(config.validation_error.is_none());
     }
 }

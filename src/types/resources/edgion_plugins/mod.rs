@@ -16,6 +16,7 @@ pub mod edgion_plugin;
 pub mod entry;
 
 pub mod plugin_configs;
+pub mod plugin_validation;
 
 #[cfg(test)]
 mod tests;
@@ -42,6 +43,7 @@ pub use plugin_configs::{
     ResponseRewriteConfig, RestrictionRule, RestrictionSource, RouteRule, RuleMatchMode, TemplateSegment,
     TemplateVarType, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
 };
+pub use plugin_validation::PluginValidation;
 
 /// API group for EdgionPlugins
 pub const EDGION_PLUGINS_GROUP: &str = "edgion.io";

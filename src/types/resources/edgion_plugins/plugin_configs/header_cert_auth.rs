@@ -234,6 +234,14 @@ impl HeaderCertAuthConfig {
     }
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for HeaderCertAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.detect_validation_error()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

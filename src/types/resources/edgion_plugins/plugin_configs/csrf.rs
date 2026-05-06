@@ -78,6 +78,14 @@ impl CsrfConfig {
     }
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for CsrfConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.validate().err()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

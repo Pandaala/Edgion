@@ -422,21 +422,54 @@ impl RateLimitConfig {
         }
     }
 
-    fn validate_and_compile(&mut self, default_slots: usize, max_slots: usize) -> Result<(), String> {
+    /// Check fields for validation errors without mutating any state.
+    ///
+    /// Only returns errors for structurally invalid configurations.
+    /// Clamp/assignment side effects (skew_tolerance, interval_duration, effective_slots)
+    /// are intentionally NOT performed here — they remain in `validate_and_compile`.
+    fn check_fields(&self) -> Option<String> {
         // Validate rate
         if self.rate <= 0 {
-            return Err("rate must be greater than 0".to_string());
+            return Some("rate must be greater than 0".to_string());
         }
 
         // Validate Cluster scope constraints
-        if self.scope == RateLimitScope::Cluster {
-            // Cluster scope with very low rate may result in 0 effective rate per instance
-            if self.rate < 2 {
-                return Err("rate must be >= 2 for Cluster scope (to ensure non-zero effective rate)".to_string());
+        if self.scope == RateLimitScope::Cluster && self.rate < 2 {
+            return Some("rate must be >= 2 for Cluster scope (to ensure non-zero effective rate)".to_string());
+        }
+
+        // Validate reject_status
+        if self.reject_status < 100 || self.reject_status >= 600 {
+            return Some(format!("Invalid reject_status: {}", self.reject_status));
+        }
+
+        // Validate keys: check if name is required but empty for each key
+        for (i, key) in self.key.iter().enumerate() {
+            if let Some(name) = key.name() {
+                if name.is_empty() {
+                    return Some(format!(
+                        "'key[{}].name' cannot be empty for type {:?}",
+                        i,
+                        key.source_type()
+                    ));
+                }
             }
         }
 
-        // Validate and clamp skewTolerance (only meaningful for Cluster, but always validate)
+        // Validate interval can be parsed (do not store the result)
+        if let Err(e) = parse_duration(&self.interval) {
+            return Some(e);
+        }
+
+        None
+    }
+
+    fn validate_and_compile(&mut self, default_slots: usize, max_slots: usize) -> Result<(), String> {
+        if let Some(err) = self.check_fields() {
+            return Err(err);
+        }
+
+        // Clamp skewTolerance (only meaningful for Cluster, but always apply)
         if self.skew_tolerance < 1.0 {
             tracing::warn!(
                 configured = self.skew_tolerance,
@@ -453,30 +486,7 @@ impl RateLimitConfig {
             self.skew_tolerance = 2.0;
         }
 
-        // Validate reject_status
-        if self.reject_status < 100 || self.reject_status >= 600 {
-            return Err(format!("Invalid reject_status: {}", self.reject_status));
-        }
-
-        // Validate keys: check if name is required but empty for each key
-        for (i, key) in self.key.iter().enumerate() {
-            if let Some(name) = key.name() {
-                if name.is_empty() {
-                    return Err(format!(
-                        "'key[{}].name' cannot be empty for type {:?}",
-                        i,
-                        key.source_type()
-                    ));
-                }
-            }
-
-            // Log warning for unsupported KeyGet types in rate limiting
-            if matches!(key, KeyGet::Method) {
-                tracing::warn!("KeyGet::Method is not recommended for rate limiting (key[{}])", i);
-            }
-        }
-
-        // Parse interval
+        // Parse interval and store
         self.interval_duration = Some(parse_duration(&self.interval)?);
 
         // Compute effective estimator slots
@@ -499,7 +509,22 @@ impl RateLimitConfig {
 
         self.effective_slots = Some(effective);
 
+        // Log warning for unsupported KeyGet types in rate limiting
+        for (i, key) in self.key.iter().enumerate() {
+            if matches!(key, KeyGet::Method) {
+                tracing::warn!("KeyGet::Method is not recommended for rate limiting (key[{}])", i);
+            }
+        }
+
         Ok(())
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for RateLimitConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
     }
 }
 
@@ -974,5 +999,30 @@ rate: 100
             // effective_rate = ceil(10 * 1.2 / 4) = ceil(3.0) = 3
             assert_eq!(config.get_effective_rate(), 3);
         });
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        let mut config = RateLimitConfig::default();
+        config.rate = 0;
+        // Should report an error about rate, without any validate() call.
+        assert!(config.validation_error().is_some(), "rate=0 must be invalid");
+        assert!(config.validation_error.is_none(), "must not touch cached field");
+    }
+
+    #[test]
+    fn validation_error_does_not_treat_clamp_as_error() {
+        let mut config = RateLimitConfig::default();
+        config.skew_tolerance = 5.0; // Will be clamped at runtime, NOT an error.
+        assert!(
+            config.validation_error().is_none(),
+            "skew_tolerance clamp must not surface as preparse error"
+        );
     }
 }

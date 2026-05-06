@@ -183,6 +183,13 @@ impl RegionRouteConfig {
         // No local validation needed — PluginMetaData chain resolution handles all checks.
     }
 
+    /// Stateless field-level validation.
+    /// Returns None — region_route validation is handled by
+    /// PluginMetaData chain resolution at preparse time.
+    fn check_fields(&self) -> Option<String> {
+        None
+    }
+
     /// Return a cached validation error set by the Controller, if any.
     ///
     /// `validation_error` is `#[serde(skip)]` so it is never serialized/deserialized.
@@ -191,7 +198,30 @@ impl RegionRouteConfig {
     /// at plugin-build time; it will always return `None` because the field is never set
     /// after deserialization. Kept for API compatibility with the plugin_runtime dispatch
     /// table in `plugin_runtime.rs`.
+    #[deprecated(note = "use PluginValidation::validation_error() instead; this always returns None")]
     pub fn get_validation_error(&self) -> Option<&str> {
         self.validation_error.as_deref()
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for RegionRouteConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_none_for_default_config() {
+        // region_route relies on PluginMetaData chain resolution for all checks;
+        // the trait method must return None and must not panic.
+        let config = RegionRouteConfig::default();
+        assert_eq!(config.validation_error(), None);
     }
 }

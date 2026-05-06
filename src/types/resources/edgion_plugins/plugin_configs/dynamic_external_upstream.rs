@@ -4,6 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::types::common::KeyGet;
+use crate::types::resources::edgion_plugins::PluginValidation;
 
 /// DynamicExternalUpstream plugin configuration
 ///
@@ -197,34 +198,27 @@ impl Default for DynamicExternalUpstreamConfig {
 }
 
 impl DynamicExternalUpstreamConfig {
-    /// Validate configuration and pre-compile regex at parse time
-    pub fn validate(&mut self) {
+    /// Stateless field validation: mirrors every error branch in validate() without mutating self.
+    fn check_fields(&self) -> Option<String> {
         // Validate regex
         if let Some(ref extract) = self.extract {
-            match regex::Regex::new(&extract.regex) {
-                Ok(re) => self.compiled_regex = Some(re),
-                Err(e) => {
-                    self.validation_error = Some(format!("Invalid extract regex: {}", e));
-                    return;
-                }
+            if let Err(e) = regex::Regex::new(&extract.regex) {
+                return Some(format!("Invalid extract regex: {}", e));
             }
         }
 
         // Validate domainMap
         if self.domain_map.is_empty() {
-            self.validation_error = Some("domainMap cannot be empty".to_string());
-            return;
+            return Some("domainMap cannot be empty".to_string());
         }
 
         for (key, target) in &self.domain_map {
             if target.domain.is_empty() {
-                self.validation_error = Some(format!("domainMap['{}']: domain cannot be empty", key));
-                return;
+                return Some(format!("domainMap['{}']: domain cannot be empty", key));
             }
             if let Some(port) = target.port {
                 if port == 0 {
-                    self.validation_error = Some(format!("domainMap['{}']: port cannot be 0", key));
-                    return;
+                    return Some(format!("domainMap['{}']: port cannot be 0", key));
                 }
             }
             // Validate domain: reject control chars, null bytes, and chars invalid in DNS/SNI/Host
@@ -233,11 +227,26 @@ impl DynamicExternalUpstreamConfig {
                 .chars()
                 .find(|c| c.is_control() || matches!(c, ' ' | '/' | '\\' | '@' | '#' | '?' | '[' | ']'))
             {
-                self.validation_error = Some(format!(
+                return Some(format!(
                     "domainMap['{}']: domain contains invalid character {:?}",
                     key, c
                 ));
-                return;
+            }
+        }
+
+        None
+    }
+
+    /// Validate configuration and pre-compile regex at parse time
+    pub fn validate(&mut self) {
+        self.validation_error = self.check_fields();
+
+        // Pre-compile regex if validation passed and extract is set
+        if self.validation_error.is_none() {
+            if let Some(ref extract) = self.extract {
+                if let Ok(re) = regex::Regex::new(&extract.regex) {
+                    self.compiled_regex = Some(re);
+                }
             }
         }
     }
@@ -251,5 +260,114 @@ impl DynamicExternalUpstreamConfig {
     /// Look up target domain by routing key
     pub fn lookup_domain(&self, routing_key: &str) -> Option<&DomainTarget> {
         self.domain_map.get(routing_key)
+    }
+}
+
+impl PluginValidation for DynamicExternalUpstreamConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        // Default config has an empty domain_map, which is the first field error
+        // (after regex check passes since extract is None).
+        let config = DynamicExternalUpstreamConfig::default();
+        assert!(config.validation_error.is_none(), "trait must not touch cached field");
+        let result = config.validation_error();
+        assert_eq!(result, Some("domainMap cannot be empty".to_string()));
+    }
+
+    #[test]
+    fn validation_error_detects_invalid_regex() {
+        let mut config = DynamicExternalUpstreamConfig::default();
+        config.extract = Some(ExtUpstreamExtract {
+            regex: "[invalid".to_string(),
+            group: 1,
+        });
+        // validation_error field is still None — no validate() called
+        assert!(config.validation_error.is_none());
+        let result = config.validation_error();
+        assert!(
+            result.as_deref().unwrap_or("").starts_with("Invalid extract regex:"),
+            "expected regex error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn validation_error_none_for_valid_config() {
+        let mut config = DynamicExternalUpstreamConfig::default();
+        config.domain_map.insert(
+            "us".to_string(),
+            DomainTarget {
+                domain: "api-us.example.com".to_string(),
+                port: Some(443),
+                tls: true,
+                override_host: None,
+                sni: None,
+            },
+        );
+        assert_eq!(config.validation_error(), None);
+    }
+
+    #[test]
+    fn validation_error_detects_empty_domain() {
+        let mut config = DynamicExternalUpstreamConfig::default();
+        config.domain_map.insert(
+            "us".to_string(),
+            DomainTarget {
+                domain: "".to_string(),
+                port: None,
+                tls: true,
+                override_host: None,
+                sni: None,
+            },
+        );
+        let result = config.validation_error();
+        assert_eq!(result, Some("domainMap['us']: domain cannot be empty".to_string()));
+    }
+
+    #[test]
+    fn validation_error_detects_zero_port() {
+        let mut config = DynamicExternalUpstreamConfig::default();
+        config.domain_map.insert(
+            "eu".to_string(),
+            DomainTarget {
+                domain: "api.example.com".to_string(),
+                port: Some(0),
+                tls: true,
+                override_host: None,
+                sni: None,
+            },
+        );
+        let result = config.validation_error();
+        assert_eq!(result, Some("domainMap['eu']: port cannot be 0".to_string()));
+    }
+
+    #[test]
+    fn validation_error_detects_invalid_domain_char() {
+        let mut config = DynamicExternalUpstreamConfig::default();
+        config.domain_map.insert(
+            "bad".to_string(),
+            DomainTarget {
+                domain: "api example.com".to_string(), // space is invalid
+                port: None,
+                tls: true,
+                override_host: None,
+                sni: None,
+            },
+        );
+        let result = config.validation_error();
+        assert_eq!(
+            result,
+            Some("domainMap['bad']: domain contains invalid character ' '".to_string())
+        );
     }
 }

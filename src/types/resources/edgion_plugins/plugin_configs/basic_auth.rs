@@ -111,6 +111,14 @@ impl BasicAuthConfig {
     }
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for BasicAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.detect_validation_error()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::BasicAuthConfig;

@@ -385,6 +385,41 @@ own response and the marker disappears.
 
 这是当前仓库的通用约束，保持和现有插件一致。
 
+## Validation
+
+All plugin configs must `impl PluginValidation` (trait defined in `src/types/resources/edgion_plugins/plugin_validation.rs`):
+
+```rust
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for MyPluginConfig {
+    fn validation_error(&self) -> Option<String> {
+        // stateless field-level checks — no mutation, no I/O
+        if self.required_field.is_empty() {
+            return Some("requiredField is required".to_string());
+        }
+        None
+    }
+}
+```
+
+**Requirements:**
+- Implementation must be stateless (`&self`, no side effects) — safe to call during controller preparse
+- **Do not** introduce `validation_error: Option<String>` cached fields — this legacy pattern causes preparse path to miss errors (see t1-002 root cause)
+- If config needs runtime compilation (regex / template / DashMap), keep that logic in `compile()` / constructors returning `Result<(), String>` — **separate field validation from compilation**
+- Add the new arm to `EdgionPlugin::validation_error()` match in `src/types/resources/edgion_plugins/edgion_plugin.rs` — the exhaustive match enforces this at compile time (missing arm = compile error)
+
+**Required regression test (add to every new plugin):**
+```rust
+#[test]
+fn validation_error_returns_field_error_without_validate_call() {
+    let config = MyPluginConfig { /* invalid field */ ..Default::default() };
+    assert!(config.validation_error().is_some());
+    // If your config has a cached field, assert it's not touched:
+    // assert!(config.validation_error_cached.is_none());
+}
+```
+
 ## 测试建议
 
 优先补这四层：
