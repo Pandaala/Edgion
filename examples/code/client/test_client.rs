@@ -275,6 +275,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
         "EdgionPlugins/PluginMetaDataStatus" => "EdgionPlugins",
         "EdgionPlugins/PluginMetaDataStatus/RefFlap" => "EdgionPlugins",
+        "EdgionPlugins/PluginValidationStatus" => "EdgionPlugins",
         "EdgionPlugins/ResolvedRefs" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
         "LinkSys/Status" => "EdgionPlugins",
@@ -923,6 +924,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PluginMetaDataStatusTestSuite));
+        }
+        "EdgionPlugins/PluginValidationStatus" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/PluginValidationStatus tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PluginValidationStatusTestSuite));
         }
         "EdgionPlugins/PluginMetaDataStatus/RefFlap" => {
             if !gateway {

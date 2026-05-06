@@ -171,6 +171,7 @@ pub struct RateLimitConfig {
     /// Maximum requests per interval
     ///
     /// For example, rate=100 with interval="1s" means 100 requests per second.
+    #[schemars(range(min = 1))]
     pub rate: isize,
 
     /// Time interval for rate calculation (default: "1s")
@@ -221,6 +222,7 @@ pub struct RateLimitConfig {
 
     /// HTTP status code for rejected requests (default: 429)
     #[serde(default = "default_reject_status")]
+    #[schemars(range(min = 100, max = 599))]
     pub reject_status: u16,
 
     /// Custom rejection message
@@ -1009,8 +1011,7 @@ mod validation_trait_tests {
 
     #[test]
     fn validation_error_returns_field_error_without_validate_call() {
-        let mut config = RateLimitConfig::default();
-        config.rate = 0;
+        let config = RateLimitConfig { rate: 0, ..Default::default() };
         // Should report an error about rate, without any validate() call.
         assert!(config.validation_error().is_some(), "rate=0 must be invalid");
         assert!(config.validation_error.is_none(), "must not touch cached field");
@@ -1018,11 +1019,38 @@ mod validation_trait_tests {
 
     #[test]
     fn validation_error_does_not_treat_clamp_as_error() {
-        let mut config = RateLimitConfig::default();
-        config.skew_tolerance = 5.0; // Will be clamped at runtime, NOT an error.
+        let config = RateLimitConfig {
+            skew_tolerance: 5.0, // Will be clamped at runtime, NOT an error.
+            ..Default::default()
+        };
         assert!(
             config.validation_error().is_none(),
             "skew_tolerance clamp must not surface as preparse error"
+        );
+    }
+
+    #[test]
+    fn rate_field_has_minimum_1_in_json_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(RateLimitConfig)).unwrap();
+        let minimum = schema["properties"]["rate"]["minimum"]
+            .as_f64()
+            .expect("rate field must have a numeric minimum in JSON Schema");
+        assert_eq!(minimum, 1.0, "rate minimum should be 1");
+    }
+
+    #[test]
+    fn reject_status_field_has_range_in_json_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(RateLimitConfig)).unwrap();
+        let props = &schema["properties"]["rejectStatus"];
+        assert_eq!(
+            props["minimum"].as_f64(),
+            Some(100.0),
+            "rejectStatus minimum should be 100"
+        );
+        assert_eq!(
+            props["maximum"].as_f64(),
+            Some(599.0),
+            "rejectStatus maximum should be 599"
         );
     }
 }

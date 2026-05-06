@@ -108,6 +108,7 @@ pub struct JweDecryptConfig {
 
     /// Max accepted token size.
     #[serde(default = "default_max_token_size")]
+    #[schemars(range(min = 1))]
     pub max_token_size: usize,
 
     /// Allowed content encryption algorithms in JWE protected header.
@@ -128,10 +129,12 @@ pub struct JweDecryptConfig {
 
     /// Max bytes for a single mapped header value.
     #[serde(default = "default_max_header_value_bytes")]
+    #[schemars(range(min = 1))]
     pub max_header_value_bytes: usize,
 
     /// Max bytes for all mapped headers.
     #[serde(default = "default_max_total_header_bytes")]
+    #[schemars(range(min = 1))]
     pub max_total_header_bytes: usize,
 
     // === Runtime fields (controller populated) ===
@@ -229,6 +232,9 @@ impl JweDecryptConfig {
             }
         }
         if let Some(resolved) = &self.resolved_credential {
+            if resolved.secret.is_none() {
+                return Some("resolvedCredential.secret is required".to_string());
+            }
             if let Some(secret_b64) = &resolved.secret {
                 let decoded = match base64::engine::general_purpose::STANDARD.decode(secret_b64) {
                     Ok(v) => v,
@@ -333,5 +339,18 @@ mod tests {
         };
         let err = cfg.detect_validation_error();
         assert!(err.is_none());
+    }
+
+    #[test]
+    fn validation_error_resolved_credential_without_secret() {
+        use crate::types::resources::edgion_plugins::PluginValidation;
+        let config = JweDecryptConfig {
+            resolved_credential: Some(ResolvedJweCredential { secret: None }),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("resolvedCredential.secret is required".to_string())
+        );
     }
 }

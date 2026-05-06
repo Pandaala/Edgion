@@ -77,6 +77,7 @@ pub struct RequestRestrictionConfig {
 
     /// HTTP status code for rejection (default: 403)
     #[serde(default = "default_status")]
+    #[schemars(range(min = 100, max = 599))]
     pub status: u16,
 
     /// Custom rejection message

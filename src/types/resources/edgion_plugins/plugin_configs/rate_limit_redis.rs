@@ -102,6 +102,7 @@ pub enum OnRedisFailure {
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitPolicy {
     /// Maximum requests (or cost units) allowed per interval.
+    #[schemars(range(min = 1))]
     pub rate: u64,
 
     /// Time interval (e.g., "1s", "1m", "1h", "1d").
@@ -178,6 +179,7 @@ pub struct RateLimitRedisConfig {
 
     /// HTTP status code for rejected requests (default: 429)
     #[serde(default = "default_reject_status")]
+    #[schemars(range(min = 100, max = 599))]
     pub reject_status: u16,
 
     /// Custom rejection message (JSON body)
@@ -206,6 +208,7 @@ pub struct RateLimitRedisConfig {
     /// Useful for APIs where different endpoints have different costs.
     /// For example, a search endpoint might cost 5, while a simple GET costs 1.
     #[serde(default = "default_cost")]
+    #[schemars(range(min = 1))]
     pub cost: u32,
 
     /// Maximum length of the limit key portion in Redis keys (default: 4096 bytes).
@@ -214,6 +217,7 @@ pub struct RateLimitRedisConfig {
     /// to this length before being embedded into the Redis key string.
     /// This prevents Redis OOM from maliciously long header values.
     #[serde(default = "default_max_key_len")]
+    #[schemars(range(min = 64, max = 65536))]
     pub max_key_len: usize,
 
     // --- Runtime fields (skip serialization) ---

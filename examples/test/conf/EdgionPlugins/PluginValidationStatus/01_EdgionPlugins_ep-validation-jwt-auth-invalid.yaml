@@ -1,0 +1,14 @@
+# Scenario: JwtAuth plugin with no credential source and no anonymous
+# Expect: Accepted=False/Invalid, message contains "secretRef"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-jwt-auth-invalid
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JwtAuth
+      config:
+        algorithm: HS256
+        # No secretRef, no secretRefs, no anonymous — validation must reject this

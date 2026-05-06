@@ -71,6 +71,7 @@ pub struct HmacAuthConfig {
 
     /// Maximum allowed clock skew in seconds.
     #[serde(default = "default_clock_skew")]
+    #[schemars(range(min = 1))]
     pub clock_skew: u64,
 
     /// Headers that must be included in signed headers list.

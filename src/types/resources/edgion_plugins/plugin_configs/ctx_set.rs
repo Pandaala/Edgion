@@ -452,6 +452,61 @@ impl CompiledTemplate {
 // ============================================================================
 
 impl CtxSetConfig {
+    /// Check all fields for validity without mutating self or compiling patterns.
+    ///
+    /// This mirrors every error branch in `validate()` but skips all side effects
+    /// (compiled_patterns inserts, etc.).  Used by `PluginValidation::validation_error`
+    /// so that controller pre-parse can detect malformed configs without calling
+    /// `validate()` first.
+    fn check_fields(&self) -> Option<String> {
+        if self.vars.is_empty() {
+            return Some("vars list is empty".to_string());
+        }
+        for (idx, rule) in self.vars.iter().enumerate() {
+            if rule.name.is_empty() {
+                return Some(format!("vars[{}]: name is empty", idx));
+            }
+            if rule.value.is_none() && rule.from.is_none() && rule.template.is_none() {
+                return Some(format!(
+                    "vars[{}] '{}': must specify 'value', 'from', or 'template'",
+                    idx, rule.name
+                ));
+            }
+            if let Some(ref extract) = rule.extract {
+                if let Err(e) = Regex::new(&extract.regex) {
+                    return Some(format!(
+                        "vars[{}] '{}': invalid extract regex '{}': {}",
+                        idx, rule.name, extract.regex, e
+                    ));
+                }
+            }
+            if let Some(ref transform) = rule.transform {
+                if let Some(TransformType::Replace { ref pattern, .. }) = transform.get_transform_type() {
+                    if let Err(e) = Regex::new(pattern) {
+                        return Some(format!(
+                            "vars[{}] '{}': invalid transform.replace pattern '{}': {}",
+                            idx, rule.name, pattern, e
+                        ));
+                    }
+                }
+                if let Some(TransformType::Substring(start, end)) = transform.get_transform_type() {
+                    if start > end {
+                        return Some(format!(
+                            "vars[{}] '{}': substring start ({}) > end ({})",
+                            idx, rule.name, start, end
+                        ));
+                    }
+                }
+            }
+            if let Some(ref template) = rule.template {
+                if let Err(e) = CompiledTemplate::compile(template) {
+                    return Some(format!("vars[{}] '{}': invalid template: {}", idx, rule.name, e));
+                }
+            }
+        }
+        None
+    }
+
     /// Validate configuration and compile regex patterns
     pub fn validate(&mut self) {
         self.validation_error = None;
@@ -574,7 +629,7 @@ use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for CtxSetConfig {
     fn validation_error(&self) -> Option<String> {
-        self.get_validation_error().map(str::to_owned)
+        self.check_fields()
     }
 }
 
@@ -896,6 +951,15 @@ vars:
         let compiled = CompiledTemplate::compile("just a literal string").unwrap();
         assert_eq!(compiled.segments().len(), 1);
         assert!(matches!(&compiled.segments()[0], TemplateSegment::Literal(s) if s == "just a literal string"));
+    }
+
+    /// Regression test: `validation_error()` via `PluginValidation` must work
+    /// without calling `validate()` first, and must NOT touch the cached field.
+    #[test]
+    fn validation_error_without_validate_call() {
+        let config = CtxSetConfig::default(); // vars is empty
+        assert_eq!(config.validation_error(), Some("vars list is empty".to_string()));
+        assert!(config.validation_error.is_none()); // cache must NOT be touched
     }
 
     #[test]

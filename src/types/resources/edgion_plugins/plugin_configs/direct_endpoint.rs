@@ -162,11 +162,6 @@ use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for DirectEndpointConfig {
     fn validation_error(&self) -> Option<String> {
-        // Check cached field first (set by validate()).
-        if let Some(err) = self.validation_error.as_deref() {
-            return Some(err.to_owned());
-        }
-        // Stateless regex validation — runs even if validate() was never called.
         if let Some(ref extract) = self.extract {
             if let Err(e) = regex::Regex::new(&extract.regex) {
                 return Some(format!("Invalid extract regex: {}", e));

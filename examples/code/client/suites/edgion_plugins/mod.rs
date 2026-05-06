@@ -27,6 +27,7 @@ mod path_normalization;
 mod plugin_condition;
 mod plugin_metadata_managed;
 mod plugin_metadata_status;
+mod plugin_validation_status;
 mod proxy_rewrite;
 mod rate_limit;
 mod real_ip;
@@ -65,6 +66,7 @@ pub use plugin_metadata_managed::PluginMetaDataManagedTestSuite;
 pub use plugin_metadata_status::{
     PluginMetaDataStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
 };
+pub use plugin_validation_status::PluginValidationStatusTestSuite;
 pub use proxy_rewrite::ProxyRewriteTestSuite;
 pub use rate_limit::{RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite};
 pub use real_ip::RealIpPluginTestSuite;

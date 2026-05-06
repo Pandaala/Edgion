@@ -196,6 +196,92 @@ use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for JwtAuthConfig {
     fn validation_error(&self) -> Option<String> {
+        // When not anonymous, at least one credential source must be present.
+        // resolved_credential/resolved_credentials are set by the controller
+        // (after secret lookup); at preparse time they may be None even if
+        // secret_ref/secret_refs are set, so we only check the user-facing refs.
+        if self.anonymous.is_none()
+            && self.secret_ref.is_none()
+            && self.secret_refs.is_none()
+            && self.resolved_credential.is_none()
+            && self.resolved_credentials.is_none()
+        {
+            return Some(
+                "At least one of secretRef, secretRefs, or resolvedCredential must be provided \
+                 when anonymous is not set"
+                    .to_string(),
+            );
+        }
+
+        // Token source fields must not be empty
+        if self.header.trim().is_empty() {
+            return Some("header must not be empty".to_string());
+        }
+        if self.query.trim().is_empty() {
+            return Some("query must not be empty".to_string());
+        }
+        if self.cookie.trim().is_empty() {
+            return Some("cookie must not be empty".to_string());
+        }
+
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+    use crate::types::resources::gateway::SecretObjectReference;
+
+    fn make_secret_ref() -> SecretObjectReference {
+        SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "my-secret".to_string(),
+            namespace: Some("default".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_no_credential_no_anonymous_returns_error() {
+        let cfg = JwtAuthConfig::default();
+        let err = cfg.validation_error();
+        assert!(err.is_some(), "expected a validation error");
+        let msg = err.unwrap();
+        assert!(
+            msg.contains("secretRef"),
+            "error message should mention secretRef, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_anonymous_set_no_credential_is_valid() {
+        let cfg = JwtAuthConfig {
+            anonymous: Some("guest".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.validation_error(), None);
+    }
+
+    #[test]
+    fn test_empty_header_returns_error() {
+        let cfg = JwtAuthConfig {
+            secret_ref: Some(make_secret_ref()),
+            header: "   ".to_string(),
+            ..Default::default()
+        };
+        let err = cfg.validation_error();
+        assert!(err.is_some());
+        assert!(err.unwrap().contains("header"));
+    }
+
+    #[test]
+    fn test_valid_config_with_secret_ref_returns_none() {
+        let cfg = JwtAuthConfig {
+            secret_ref: Some(make_secret_ref()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.validation_error(), None);
     }
 }

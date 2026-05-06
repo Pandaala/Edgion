@@ -242,7 +242,78 @@ use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for RealIpConfig {
     fn validation_error(&self) -> Option<String> {
+        if self.trusted_ips.is_empty() {
+            return Some("'trusted_ips' must not be empty".to_string());
+        }
+
+        if self.real_ip_header.trim().is_empty() {
+            return Some("'real_ip_header' must not be empty".to_string());
+        }
+
+        let total = self.trusted_ips.len();
+        let invalid_count = self
+            .trusted_ips
+            .iter()
+            .filter(|ip| Self::validate_and_to_cidr(ip).is_err())
+            .count();
+
+        if invalid_count == total {
+            return Some(format!(
+                "No valid IPs in trusted_ips (total: {}, invalid: {})",
+                total, invalid_count
+            ));
+        }
+
         None
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn test_plugin_validation_empty_trusted_ips() {
+        let config = RealIpConfig::default();
+        let err = config.validation_error();
+        assert!(err.is_some());
+        assert_eq!(err.unwrap(), "'trusted_ips' must not be empty");
+    }
+
+    #[test]
+    fn test_plugin_validation_empty_real_ip_header() {
+        let config = RealIpConfig {
+            trusted_ips: vec!["10.0.0.0/8".to_string()],
+            real_ip_header: "   ".to_string(),
+            ..Default::default()
+        };
+        let err = config.validation_error();
+        assert!(err.is_some());
+        assert_eq!(err.unwrap(), "'real_ip_header' must not be empty");
+    }
+
+    #[test]
+    fn test_plugin_validation_all_invalid_ips() {
+        let config = RealIpConfig {
+            trusted_ips: vec!["not-an-ip".to_string(), "999.999.999.999".to_string()],
+            ..Default::default()
+        };
+        let err = config.validation_error();
+        assert!(err.is_some());
+        let msg = err.unwrap();
+        assert!(msg.contains("No valid IPs in trusted_ips"), "unexpected message: {msg}");
+        assert!(msg.contains("total: 2"), "unexpected message: {msg}");
+        assert!(msg.contains("invalid: 2"), "unexpected message: {msg}");
+    }
+
+    #[test]
+    fn test_plugin_validation_valid_config() {
+        let config = RealIpConfig {
+            trusted_ips: vec!["10.0.0.0/8".to_string(), "192.168.1.1".to_string()],
+            real_ip_header: "X-Forwarded-For".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validation_error().is_none());
     }
 }
 

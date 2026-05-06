@@ -330,6 +330,49 @@ use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for CorsConfig {
     fn validation_error(&self) -> Option<String> {
+        // Security check: wildcard + credentials conflict
+        if self.allow_credentials {
+            if self.allow_origins.contains('*') {
+                return Some("Cannot use '*' or '**' in allow_origins when allow_credentials is true".to_string());
+            }
+            if self.allow_methods.contains('*') {
+                return Some("Cannot use '*' or '**' in allow_methods when allow_credentials is true".to_string());
+            }
+            if self.allow_headers.contains('*') {
+                return Some("Cannot use '*' or '**' in allow_headers when allow_credentials is true".to_string());
+            }
+            if self.expose_headers.contains('*') {
+                return Some("Cannot use '*' or '**' in expose_headers when allow_credentials is true".to_string());
+            }
+            if let Some(ref timing) = self.timing_allow_origins {
+                if timing.contains('*') {
+                    return Some(
+                        "Cannot use '*' or '**' in timing_allow_origins when allow_credentials is true".to_string(),
+                    );
+                }
+            }
+        }
+
+        // Validate user-provided regex patterns (try-compile)
+        if let Some(ref patterns) = self.allow_origins_by_regex {
+            for pattern in patterns {
+                if let Err(e) = regex::Regex::new(pattern) {
+                    return Some(format!("Invalid regex in allow_origins_by_regex '{}': {}", pattern, e));
+                }
+            }
+        }
+
+        if let Some(ref patterns) = self.timing_allow_origins_by_regex {
+            for pattern in patterns {
+                if let Err(e) = regex::Regex::new(pattern) {
+                    return Some(format!(
+                        "Invalid regex in timing_allow_origins_by_regex '{}': {}",
+                        pattern, e
+                    ));
+                }
+            }
+        }
+
         None
     }
 }
@@ -577,5 +620,165 @@ mod tests {
 
         let cors2 = CorsConfig::default();
         assert!(!cors2.allow_private_network);
+    }
+
+    mod validation_trait_tests {
+        use super::*;
+        use crate::types::resources::edgion_plugins::PluginValidation;
+
+        #[test]
+        fn test_default_config_returns_none() {
+            let cors = CorsConfig::default();
+            assert_eq!(cors.validation_error(), None);
+        }
+
+        #[test]
+        fn test_wildcard_origins_with_credentials_is_error() {
+            let cors = CorsConfig {
+                allow_origins: "*".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(
+                err.unwrap().contains("allow_origins when allow_credentials is true"),
+                "error message should mention allow_origins and allow_credentials"
+            );
+        }
+
+        #[test]
+        fn test_double_wildcard_origins_with_credentials_is_error() {
+            let cors = CorsConfig {
+                allow_origins: "**".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            assert!(cors.validation_error().is_some());
+        }
+
+        #[test]
+        fn test_wildcard_methods_with_credentials_is_error() {
+            let cors = CorsConfig {
+                allow_origins: "https://example.com".to_string(),
+                allow_methods: "*".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(err.unwrap().contains("allow_methods when allow_credentials is true"));
+        }
+
+        #[test]
+        fn test_wildcard_headers_with_credentials_is_error() {
+            let cors = CorsConfig {
+                allow_origins: "https://example.com".to_string(),
+                allow_headers: "*".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(err.unwrap().contains("allow_headers when allow_credentials is true"));
+        }
+
+        #[test]
+        fn test_wildcard_expose_headers_with_credentials_is_error() {
+            let cors = CorsConfig {
+                allow_origins: "https://example.com".to_string(),
+                expose_headers: "*".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(err.unwrap().contains("expose_headers when allow_credentials is true"));
+        }
+
+        #[test]
+        fn test_wildcard_timing_origins_with_credentials_is_error() {
+            let cors = CorsConfig {
+                allow_origins: "https://example.com".to_string(),
+                timing_allow_origins: Some("*".to_string()),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(err
+                .unwrap()
+                .contains("timing_allow_origins when allow_credentials is true"));
+        }
+
+        #[test]
+        fn test_valid_config_with_credentials_returns_none() {
+            let cors = CorsConfig {
+                allow_origins: "https://example.com".to_string(),
+                allow_methods: "GET,POST".to_string(),
+                allow_headers: "Content-Type,Authorization".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            assert_eq!(cors.validation_error(), None);
+        }
+
+        #[test]
+        fn test_invalid_regex_in_allow_origins_by_regex() {
+            let cors = CorsConfig {
+                allow_origins_by_regex: Some(vec!["[invalid regex(".to_string()]),
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            let msg = err.unwrap();
+            assert!(msg.contains("Invalid regex in allow_origins_by_regex"));
+            assert!(msg.contains("[invalid regex("));
+        }
+
+        #[test]
+        fn test_invalid_regex_in_timing_allow_origins_by_regex() {
+            let cors = CorsConfig {
+                timing_allow_origins_by_regex: Some(vec!["(*bad".to_string()]),
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(err.unwrap().contains("Invalid regex in timing_allow_origins_by_regex"));
+        }
+
+        #[test]
+        fn test_valid_regex_patterns_return_none() {
+            let cors = CorsConfig {
+                allow_origins_by_regex: Some(vec![
+                    r"^https://.*\.example\.com$".to_string(),
+                    r"^http://localhost:[0-9]+$".to_string(),
+                ]),
+                timing_allow_origins_by_regex: Some(vec![r"^https://cdn\.example\.com$".to_string()]),
+                ..Default::default()
+            };
+            assert_eq!(cors.validation_error(), None);
+        }
+
+        #[test]
+        fn test_error_message_matches_validate_and_init() {
+            // Ensure validation_error() and validate_and_init() return the same message
+            // for the wildcard+credentials conflict so users get consistent errors.
+            let cors = CorsConfig {
+                allow_origins: "*".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let trait_msg = cors.validation_error().expect("should be Some");
+
+            let mut cors2 = CorsConfig {
+                allow_origins: "*".to_string(),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let init_msg = cors2.validate_and_init().expect_err("should be Err");
+
+            assert_eq!(trait_msg, init_msg);
+        }
     }
 }

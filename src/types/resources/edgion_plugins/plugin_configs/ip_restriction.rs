@@ -67,6 +67,7 @@ pub struct IpRestrictionConfig {
 
     /// HTTP status code for rejection (default: 403)
     #[serde(default = "default_status")]
+    #[schemars(range(min = 100, max = 599))]
     pub status: u16,
 
     /// Default action when no rules match (default: Allow)
@@ -217,8 +218,133 @@ impl IpRestrictionConfig {
 
 use crate::types::resources::edgion_plugins::PluginValidation;
 
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_both_none() {
+        let config = IpRestrictionConfig::default();
+        let result = PluginValidation::validation_error(&config);
+        assert_eq!(
+            result,
+            Some("At least one of 'allow' or 'deny' must be specified".to_string())
+        );
+    }
+
+    #[test]
+    fn validation_error_empty_allow_list() {
+        let config = IpRestrictionConfig {
+            allow: Some(vec![]),
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert_eq!(result, Some("'allow' list cannot be empty".to_string()));
+    }
+
+    #[test]
+    fn validation_error_empty_deny_list() {
+        let config = IpRestrictionConfig {
+            deny: Some(vec![]),
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert_eq!(result, Some("'deny' list cannot be empty".to_string()));
+    }
+
+    #[test]
+    fn validation_error_invalid_ip_string() {
+        let config = IpRestrictionConfig {
+            allow: Some(vec!["not-an-ip".to_string()]),
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("not-an-ip"));
+    }
+
+    #[test]
+    fn validation_error_valid_status_200() {
+        let config = IpRestrictionConfig {
+            allow: Some(vec!["192.168.1.1".to_string()]),
+            status: 200,
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn validation_error_status_600() {
+        let config = IpRestrictionConfig {
+            allow: Some(vec!["192.168.1.1".to_string()]),
+            status: 600,
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert_eq!(result, Some("Invalid status code: 600".to_string()));
+    }
+
+    #[test]
+    fn validation_error_valid_config() {
+        let config = IpRestrictionConfig {
+            allow: Some(vec!["192.168.1.0/24".to_string()]),
+            deny: Some(vec!["192.168.1.100".to_string()]),
+            status: 403,
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn status_field_has_range_in_json_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(IpRestrictionConfig)).unwrap();
+        let props = &schema["properties"]["status"];
+        assert_eq!(props["minimum"].as_f64(), Some(100.0), "status minimum should be 100");
+        assert_eq!(props["maximum"].as_f64(), Some(599.0), "status maximum should be 599");
+    }
+}
+
 impl PluginValidation for IpRestrictionConfig {
     fn validation_error(&self) -> Option<String> {
+        use crate::core::common::matcher::ip_cidr_helpers::validate_ip_or_cidr;
+
+        // Must have at least one of allow or deny
+        if self.allow.is_none() && self.deny.is_none() {
+            return Some("At least one of 'allow' or 'deny' must be specified".to_string());
+        }
+
+        // Validate status code range
+        if self.status < 100 || self.status >= 600 {
+            return Some(format!("Invalid status code: {}", self.status));
+        }
+
+        // Validate allow list
+        if let Some(ref allow_list) = self.allow {
+            if allow_list.is_empty() {
+                return Some("'allow' list cannot be empty".to_string());
+            }
+            for ip_str in allow_list {
+                if let Err(e) = validate_ip_or_cidr(ip_str) {
+                    return Some(e);
+                }
+            }
+        }
+
+        // Validate deny list
+        if let Some(ref deny_list) = self.deny {
+            if deny_list.is_empty() {
+                return Some("'deny' list cannot be empty".to_string());
+            }
+            for ip_str in deny_list {
+                if let Err(e) = validate_ip_or_cidr(ip_str) {
+                    return Some(e);
+                }
+            }
+        }
+
         None
     }
 }

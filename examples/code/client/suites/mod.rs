@@ -59,10 +59,10 @@ pub use edgion_plugins::{
     JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
     PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
     PluginConditionTestSuite, PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite,
-    PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite, ProxyRewriteTestSuite,
-    RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
-    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
-    ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    PluginValidationStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
+    ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite,
+    RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
+    ResolvedRefsTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests
