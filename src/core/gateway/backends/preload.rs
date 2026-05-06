@@ -1,58 +1,34 @@
-//! LB preload module for warming up load balancers at startup
+//! LB preload module — warm `ServiceSelectorCell` entries at startup.
 //!
-//! This module preloads LoadBalancers for all routes to reduce first-request latency.
-//! It is called after `wait_for_ready()` when all routes and EndpointSlices are loaded.
+//! Called after `wait_for_ready()` when all routes and EndpointSlices are
+//! loaded. Pays the first-request hydration cost up front so that early
+//! traffic does not see a cold-cell round trip.
 
 use crate::core::gateway::backends::{get_global_endpoint_mode, EndpointMode};
 use crate::core::gateway::conf_sync::conf_client::ConfigClient;
-use crate::types::resources::ParsedLBPolicy;
+use crate::core::gateway::lb::compiled_selector;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Key for deduplication: (service_key, lb_policy_type)
-/// Same service with different LB policies need separate LB instances
-type PreloadKey = (String, Option<LbPolicyType>);
-
-/// Simplified LB policy type for deduplication (ignores hash source details)
-#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
-enum LbPolicyType {
-    ConsistentHash,
-    LeastConn,
-    Ewma,
-}
-
-impl From<&ParsedLBPolicy> for LbPolicyType {
-    fn from(policy: &ParsedLBPolicy) -> Self {
-        match policy {
-            ParsedLBPolicy::ConsistentHash(_) => LbPolicyType::ConsistentHash,
-            ParsedLBPolicy::LeastConn => LbPolicyType::LeastConn,
-            ParsedLBPolicy::Ewma => LbPolicyType::Ewma,
-        }
-    }
-}
-
-/// Preload LBs for all routes to reduce first-request latency.
+/// Warm the `ServiceSelectorCell` for every service referenced by any route.
 ///
 /// Called after `wait_for_ready()` when all routes and EndpointSlices are loaded.
-/// This function is synchronous as all store operations are sync.
 pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
     let mode = get_global_endpoint_mode();
-    let mut keys: HashSet<PreloadKey> = HashSet::new();
+    let mut service_keys: HashSet<String> = HashSet::new();
 
-    // Collect from all route types
-    collect_http_routes(&config_client, &mut keys);
-    collect_grpc_routes(&config_client, &mut keys);
-    collect_tcp_routes(&config_client, &mut keys);
-    collect_udp_routes(&config_client, &mut keys);
-    collect_tls_routes(&config_client, &mut keys);
+    collect_http_routes(&config_client, &mut service_keys);
+    collect_grpc_routes(&config_client, &mut service_keys);
+    collect_tcp_routes(&config_client, &mut service_keys);
+    collect_udp_routes(&config_client, &mut service_keys);
+    collect_tls_routes(&config_client, &mut service_keys);
 
-    let total = keys.len();
+    let total = service_keys.len();
     let mut success = 0;
     let mut skipped = 0;
 
-    // Preload each unique (service_key, lb_policy)
-    for (service_key, lb_type) in &keys {
-        if preload_lb(service_key, lb_type, mode) {
+    for service_key in &service_keys {
+        if warm_cell(service_key, mode) {
             success += 1;
         } else {
             skipped += 1;
@@ -69,165 +45,122 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
     );
 }
 
-fn collect_http_routes(config_client: &ConfigClient, keys: &mut HashSet<PreloadKey>) {
+fn collect_http_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
     for route in &config_client.list_routes().data {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let Some(rules) = route.spec.rules.as_ref() else {
             continue;
         };
-
         for rule in rules {
             let Some(backend_refs) = rule.backend_refs.as_ref() else {
                 continue;
             };
             for br in backend_refs {
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                let key = format!("{}/{}", ns, br.name);
-                let lb_type = br.extension_info.lb_policy.as_ref().map(LbPolicyType::from);
-                keys.insert((key, lb_type));
+                keys.insert(format!("{}/{}", ns, br.name));
             }
         }
     }
 }
 
-fn collect_grpc_routes(config_client: &ConfigClient, keys: &mut HashSet<PreloadKey>) {
+fn collect_grpc_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
     for route in &config_client.list_grpc_routes().data {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let Some(rules) = route.spec.rules.as_ref() else {
             continue;
         };
-
         for rule in rules {
             let Some(backend_refs) = rule.backend_refs.as_ref() else {
                 continue;
             };
             for br in backend_refs {
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                let key = format!("{}/{}", ns, br.name);
-                let lb_type = br.extension_info.lb_policy.as_ref().map(LbPolicyType::from);
-                keys.insert((key, lb_type));
+                keys.insert(format!("{}/{}", ns, br.name));
             }
         }
     }
 }
 
-fn collect_tcp_routes(config_client: &ConfigClient, keys: &mut HashSet<PreloadKey>) {
-    // TCPRoute has no extension_info, always uses RoundRobin
+fn collect_tcp_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
     for route in &config_client.list_tcp_routes().data {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let Some(rules) = route.spec.rules.as_ref() else {
             continue;
         };
-
         for rule in rules {
             let Some(backend_refs) = rule.backend_refs.as_ref() else {
                 continue;
             };
             for br in backend_refs {
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                let key = format!("{}/{}", ns, br.name);
-                keys.insert((key, None)); // No LB policy
+                keys.insert(format!("{}/{}", ns, br.name));
             }
         }
     }
 }
 
-fn collect_udp_routes(config_client: &ConfigClient, keys: &mut HashSet<PreloadKey>) {
+fn collect_udp_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
     for route in &config_client.list_udp_routes().data {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let Some(rules) = route.spec.rules.as_ref() else {
             continue;
         };
-
         for rule in rules {
             let Some(backend_refs) = rule.backend_refs.as_ref() else {
                 continue;
             };
             for br in backend_refs {
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                let key = format!("{}/{}", ns, br.name);
-                let lb_type = br.extension_info.lb_policy.as_ref().map(LbPolicyType::from);
-                keys.insert((key, lb_type));
+                keys.insert(format!("{}/{}", ns, br.name));
             }
         }
     }
 }
 
-fn collect_tls_routes(config_client: &ConfigClient, keys: &mut HashSet<PreloadKey>) {
+fn collect_tls_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
     for route in &config_client.list_tls_routes().data {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let Some(rules) = route.spec.rules.as_ref() else {
             continue;
         };
-
         for rule in rules {
             let Some(backend_refs) = rule.backend_refs.as_ref() else {
                 continue;
             };
             for br in backend_refs {
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                let key = format!("{}/{}", ns, br.name);
-                let lb_type = br.extension_info.lb_policy.as_ref().map(LbPolicyType::from);
-                keys.insert((key, lb_type));
+                keys.insert(format!("{}/{}", ns, br.name));
             }
         }
     }
 }
 
-fn preload_lb(service_key: &str, lb_type: &Option<LbPolicyType>, mode: EndpointMode) -> bool {
-    match mode {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => preload_eps_lb(service_key, lb_type),
-        EndpointMode::Endpoint => preload_endpoint_lb(service_key, lb_type),
-    }
-}
+/// Hydrate the `ServiceSelectorCell` for `service_key` from the data layer.
+/// Returns true if data was available and the cell was warmed.
+fn warm_cell(service_key: &str, mode: EndpointMode) -> bool {
+    use crate::core::gateway::backends::discovery::{get_endpoint_roundrobin_store, get_roundrobin_store};
 
-fn preload_eps_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> bool {
-    use crate::core::gateway::backends::discovery::endpoint_slice::get_roundrobin_store;
+    let backends = match mode {
+        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
+            get_roundrobin_store().get_backends_for_service(service_key)
+        }
+        EndpointMode::Endpoint => get_endpoint_roundrobin_store().get_backends_for_service(service_key),
+    };
 
-    let rr_store = get_roundrobin_store();
-
-    // Preload the RoundRobin LB which owns the data layer.
-    // LeastConn/EWMA/ConsistentHash read from the RR backend list at
-    // selection time, so no separate LB instances needed.
-    let rr_lb = rr_store.get_or_create(service_key);
-    if rr_lb.is_none() {
+    if backends.is_empty() {
         tracing::debug!(
             component = "lb_preload",
             service_key,
-            "Skipping: no EndpointSlice data available"
+            "Skipping: no backend data available"
         );
         return false;
     }
 
-    tracing::trace!(
-        component = "lb_preload",
-        service_key,
-        lb_type = ?lb_type,
-        "Preloaded LB (EndpointSlice)"
-    );
-    true
-}
-
-fn preload_endpoint_lb(service_key: &str, lb_type: &Option<LbPolicyType>) -> bool {
-    use crate::core::gateway::backends::discovery::endpoint::get_endpoint_roundrobin_store;
-
-    let rr_store = get_endpoint_roundrobin_store();
-
-    let rr_lb = rr_store.get_or_create(service_key);
-    if rr_lb.is_none() {
-        tracing::debug!(
-            component = "lb_preload",
-            service_key,
-            "Skipping: no Endpoint data available"
-        );
-        return false;
+    let cell = compiled_selector::get_or_create_cell(service_key);
+    if cell.backends.load().is_empty() {
+        cell.replace_backends(backends);
     }
 
-    tracing::trace!(
-        component = "lb_preload",
-        service_key,
-        lb_type = ?lb_type,
-        "Preloaded LB (Endpoint)"
-    );
+    tracing::trace!(component = "lb_preload", service_key, "Warmed ServiceSelectorCell");
     true
 }

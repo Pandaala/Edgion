@@ -54,9 +54,8 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
                     ParsedLBPolicy::Ewma => LbPolicy::Ewma,
                 };
 
-                let service_key = crate::types::ServiceIdentity::from_http_backend_ref(backend_ref, route_namespace)
-                    .key()
-                    .to_string();
+                let ns = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
+                let service_key = format!("{}/{}", ns, backend_ref.name);
 
                 // Add to route_service_policies map
                 route_service_policies

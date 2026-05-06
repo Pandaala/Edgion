@@ -12,13 +12,11 @@ pub mod output;
 pub mod resources;
 pub mod schema;
 pub mod sensitive;
-pub mod service_identity;
 pub mod work_dir;
 
 // Re-export common types
 pub use self::common::{KeyGet, KeySet};
 pub use self::listener_key::ListenerKey;
-pub use self::service_identity::ServiceIdentity;
 
 // Backward compatibility: global_def re-exports from constants::app
 pub mod global_def {

@@ -1,4 +1,5 @@
 use crate::core::gateway::backends::EdgionService;
+use crate::core::gateway::lb::edgion_backend::EdgionBackend;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
@@ -374,6 +375,12 @@ pub struct UpstreamInfo {
     /// so that selection reads and request-completion writes are consistent.
     #[serde(skip)]
     pub lb_backend_addr: Option<SocketAddr>,
+    /// Live `EdgionBackend` shared with the `ServiceSelectorCell` snapshot.
+    /// Set by `build_peer_from_lb_selection`; read by `connected_to_upstream`
+    /// to call `inc_conn()` and by `lb_runtime_cleanup` to call `dec_conn()` /
+    /// `update_ewma()`. None for SP-target or bypass paths.
+    #[serde(skip)]
+    pub lb_edgion_backend: Option<Arc<EdgionBackend>>,
     /// Service key (`"namespace/name"`) that owns this backend, needed by
     /// service-scoped LB runtime state.
     #[serde(skip)]
@@ -667,23 +674,21 @@ pub struct EdgionHttpContext {
     /// Link-local / metadata ranges are never allowed by this switch.
     pub allow_loopback_upstream: bool,
 
-    /// P0-07: the last LeastConn backend that was successfully incremented
-    /// (service_key, lb_addr).
-    /// Written by `connected_to_upstream` after `runtime_state::increment`.
-    /// Taken by `begin_upstream_attempt` (decrement on retry) and by
-    /// `pg_logging` (decrement at request end), keeping the LeastConn ledger
-    /// balanced across retries and avoiding decrement on attempts that never
-    /// reached `connected_to_upstream`.
-    pub leastconn_incremented_backend: Option<(String, SocketAddr)>,
+    /// P0-07: the live `EdgionBackend` whose `conn_count` was incremented by
+    /// `connected_to_upstream`. Taken by `begin_upstream_attempt` (decrement
+    /// on retry) and by `pg_logging` (decrement at request end), keeping the
+    /// LeastConn ledger balanced across retries and avoiding decrement on
+    /// attempts that never reached `connected_to_upstream`.
+    pub leastconn_incremented_backend: Option<Arc<EdgionBackend>>,
 
-    /// g1-007: the last EWMA backend that actually finished connect
-    /// (service_key, lb_addr, attempt_start_time).
+    /// g1-007: the live `EdgionBackend` that actually finished connect, plus
+    /// the attempt start time for EWMA latency calculation.
     /// Written by `connected_to_upstream` when the LB policy is EWMA.
     /// Cleared by `begin_upstream_attempt` on retry (so a failed retry's
     /// elapsed time cannot pollute the previous backend's EWMA sample).
     /// Consumed by `pg_logging` at request end, which computes latency from
     /// `attempt_start` rather than the request start.
-    pub last_ewma_backend: Option<(String, SocketAddr, Instant)>,
+    pub last_ewma_backend: Option<(Arc<EdgionBackend>, Instant)>,
 }
 
 impl Default for EdgionHttpContext {
@@ -835,6 +840,7 @@ impl EdgionHttpContext {
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),
                 lb_backend_addr: None,
+                lb_edgion_backend: None,
                 service_key: None,
                 lb_policy: None,
                 tls: None,

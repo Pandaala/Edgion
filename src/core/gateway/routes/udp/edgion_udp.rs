@@ -9,7 +9,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::gateway::backends::{
-    resolve_target_port, select_roundrobin_backend, validate_endpoint_backend_addr, PortLookupSource,
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr, PortLookupSource,
 };
 use crate::core::gateway::observe::{log_udp, UdpLogEntry};
 use crate::core::gateway::routes::udp::UdpPortRouteManager;
@@ -171,9 +171,10 @@ impl EdgionUdpProxy {
         };
 
         let route_ns = udp_route.metadata.namespace.as_deref().unwrap_or("default");
-        let id = crate::types::ServiceIdentity::from_udp_backend_ref(&backend_ref, route_ns);
+        let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+        let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-        let backend = match select_roundrobin_backend(&id) {
+        let backend = match select_roundrobin_backend_key(&service_key) {
             Some(backend) => backend,
             None => {
                 log_udp(&UdpLogEntry::failure(
@@ -187,11 +188,11 @@ impl EdgionUdpProxy {
             }
         };
 
-        let mut upstream_pingora_addr = backend.addr;
-        resolve_target_port(
+        let mut upstream_pingora_addr = backend.inner().addr.clone();
+        resolve_target_port_key(
             &mut upstream_pingora_addr,
             backend_ref.port,
-            &id,
+            &service_key,
             PortLookupSource::Auto,
         );
         let upstream_addr = match upstream_pingora_addr {

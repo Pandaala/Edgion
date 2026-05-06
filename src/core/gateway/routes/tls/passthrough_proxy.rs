@@ -22,7 +22,7 @@ use super::sni_parser;
 use super::TlsRouteManager;
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::{
-    resolve_target_port, select_roundrobin_backend, validate_endpoint_backend_addr, PortLookupSource,
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr, PortLookupSource,
 };
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
@@ -186,18 +186,24 @@ impl EdgionTlsPassthroughProxy {
             }
 
             let route_ns = tls_route.metadata.namespace.as_deref().unwrap_or("default");
-            let id = crate::types::ServiceIdentity::from_tls_backend_ref(&backend_ref, route_ns);
+            let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+            let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-            let backend = match select_roundrobin_backend(&id) {
+            let backend = match select_roundrobin_backend_key(&service_key) {
                 Some(b) => b,
                 None => {
-                    last_err = format!("no endpoint: {}", id.key());
+                    last_err = format!("no endpoint: {}", service_key);
                     continue;
                 }
             };
 
-            let mut upstream_addr = backend.addr;
-            resolve_target_port(&mut upstream_addr, backend_ref.port, &id, PortLookupSource::Auto);
+            let mut upstream_addr = backend.inner().addr.clone();
+            resolve_target_port_key(
+                &mut upstream_addr,
+                backend_ref.port,
+                &service_key,
+                PortLookupSource::Auto,
+            );
             let upstream_addr_str = upstream_addr.to_string();
             let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
 
@@ -207,7 +213,7 @@ impl EdgionTlsPassthroughProxy {
                 backend: Some(MatchedInfo {
                     rsc: Rsc {
                         kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
-                        ns: id.namespace().to_string(),
+                        ns: backend_ns.to_string(),
                         name: backend_ref.name.clone(),
                     },
                     section: None,

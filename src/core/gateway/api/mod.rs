@@ -390,13 +390,11 @@ struct ClientCachesStats {
 
 #[derive(Serialize)]
 struct EndpointStoreStats {
-    lb_count: usize,
     ep_data_count: usize,
 }
 
 #[derive(Serialize)]
 struct EpSliceStoreStats {
-    lb_count: usize,
     slice_count: usize,
     service_index_count: usize,
 }
@@ -477,13 +475,11 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
 
     let ep_g = crate::core::gateway::backends::get_endpoint_roundrobin_store();
     let endpoint_store = EndpointStoreStats {
-        lb_count: ep_g.lb_count(),
         ep_data_count: ep_g.ep_data_count(),
     };
 
     let eps_g = crate::core::gateway::backends::get_roundrobin_store();
     let ep_slice_store = EpSliceStoreStats {
-        lb_count: eps_g.lb_count(),
         slice_count: eps_g.slice_count(),
         service_index_count: eps_g.service_index_count(),
     };
@@ -1641,12 +1637,8 @@ mod store_stats_tests {
                 by_kind: std::collections::BTreeMap::new(),
             },
             service_store: SimpleCountStats { count: 0 },
-            endpoint_store: EndpointStoreStats {
-                lb_count: 0,
-                ep_data_count: 0,
-            },
+            endpoint_store: EndpointStoreStats { ep_data_count: 0 },
             ep_slice_store: EpSliceStoreStats {
-                lb_count: 0,
                 slice_count: 0,
                 service_index_count: 0,
             },

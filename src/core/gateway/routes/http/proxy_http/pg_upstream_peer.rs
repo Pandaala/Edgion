@@ -289,8 +289,10 @@ fn sp_resolve_target(
 
     let ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
     let service_key = format!("{}/{}", ns, backend_ref.name);
-    let backends = crate::core::gateway::backends::selector::get_backends_for_service_key(&service_key);
-    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, &backends);
+    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build_key(
+        &service_key,
+        || crate::core::gateway::backends::selector::get_backends_for_service_key(&service_key),
+    );
 
     if let Some(&addr) = affinity_map.get(token) {
         ctx.sp_target_addr = Some(addr);
@@ -459,8 +461,8 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     // P0-07: on retry, decrement the LeastConn count for the previous attempt's backend
     // (which had connected successfully but is now being abandoned).
-    if let Some((sk, addr)) = ctx.leastconn_incremented_backend.take() {
-        crate::core::gateway::lb::runtime_state::decrement(&sk, &addr);
+    if let Some(backend) = ctx.leastconn_incremented_backend.take() {
+        backend.dec_conn();
     }
     // g1-007: on retry, drop the previous attempt's EWMA record so the upcoming retry's
     // elapsed time does not pollute the previous backend's EWMA sample.

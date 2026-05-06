@@ -11,7 +11,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::gateway::backends::{
-    resolve_target_port, select_roundrobin_backend, validate_endpoint_backend_addr, PortLookupSource,
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr, PortLookupSource,
 };
 use crate::core::gateway::observe::{log_tcp, TcpLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
@@ -143,9 +143,10 @@ impl EdgionTcpProxy {
 
         // 5. Resolve backend address via EndpointSlice
         let route_ns = tcp_route.metadata.namespace.as_deref().unwrap_or("default");
-        let id = crate::types::ServiceIdentity::from_tcp_backend_ref(&backend_ref, route_ns);
+        let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+        let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-        let backend = match select_roundrobin_backend(&id) {
+        let backend = match select_roundrobin_backend_key(&service_key) {
             Some(backend) => backend,
             None => {
                 ctx.status = TcpStatus::NoBackendResolved;
@@ -154,8 +155,13 @@ impl EdgionTcpProxy {
         };
 
         // 6. Build upstream address
-        let mut upstream_addr = backend.addr;
-        resolve_target_port(&mut upstream_addr, backend_ref.port, &id, PortLookupSource::Auto);
+        let mut upstream_addr = backend.inner().addr.clone();
+        resolve_target_port_key(
+            &mut upstream_addr,
+            backend_ref.port,
+            &service_key,
+            PortLookupSource::Auto,
+        );
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
         if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {

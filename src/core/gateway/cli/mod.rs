@@ -69,10 +69,19 @@ impl EdgionGatewayCli {
         config: &EdgionGatewayConfig,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
-        // Start backend cleaner
-        let cleaner = BackendCleaner::new();
+        // Start backend cleaner; stop it when the shutdown signal fires.
+        let mut cleaner = BackendCleaner::new();
         cleaner.start();
         tracing::info!("Backend cleaner task started for LeastConnection LB");
+        let mut cleaner_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            while !*cleaner_shutdown.borrow() {
+                if cleaner_shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+            cleaner.stop().await;
+        });
 
         // Initialize health check stores and manager (tasks start on resource updates).
         let _ = crate::core::gateway::backends::health::check::get_hc_config_store();

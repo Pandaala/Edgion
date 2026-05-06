@@ -259,14 +259,34 @@ fn get_service_backends(service_key: &str) -> Vec<Backend> {
 
     match mode {
         EndpointMode::EndpointSlice => {
-            backends.extend(get_roundrobin_store().get_backends_for_service(service_key));
+            backends.extend(
+                get_roundrobin_store()
+                    .get_backends_for_service(service_key)
+                    .into_iter()
+                    .map(|b| b.into_inner()),
+            );
         }
         EndpointMode::Endpoint => {
-            backends.extend(get_endpoint_roundrobin_store().get_backends_for_service(service_key));
+            backends.extend(
+                get_endpoint_roundrobin_store()
+                    .get_backends_for_service(service_key)
+                    .into_iter()
+                    .map(|b| b.into_inner()),
+            );
         }
         EndpointMode::Both | EndpointMode::Auto => {
-            backends.extend(get_roundrobin_store().get_backends_for_service(service_key));
-            backends.extend(get_endpoint_roundrobin_store().get_backends_for_service(service_key));
+            backends.extend(
+                get_roundrobin_store()
+                    .get_backends_for_service(service_key)
+                    .into_iter()
+                    .map(|b| b.into_inner()),
+            );
+            backends.extend(
+                get_endpoint_roundrobin_store()
+                    .get_backends_for_service(service_key)
+                    .into_iter()
+                    .map(|b| b.into_inner()),
+            );
         }
     }
 

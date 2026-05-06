@@ -3,10 +3,36 @@ use crate::core::gateway::backends::discovery::{get_endpoint_roundrobin_store, g
 use crate::core::gateway::backends::endpoint_mode::{get_global_endpoint_mode, EndpointMode};
 use crate::core::gateway::backends::health;
 use crate::core::gateway::backends::health::get_health_status_store;
-use crate::core::gateway::lb::{runtime_state, selection};
+use crate::core::gateway::lb::{compiled_selector, EdgionBackend, PolicyKind};
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::{ConsistentHashOn, ParsedLBPolicy};
 use pingora_proxy::Session;
+use std::sync::Arc;
+
+/// Lazily hydrate `cell` from the EP/EPS data layer when it is empty.
+///
+/// The control plane only pushes backends into a cell via
+/// `update_affected_lbs` / `update_all_existing_lbs`, both of which iterate
+/// `service_lbs` (legacy LB cache), not the data layer. Under the lazy-LB
+/// design that legacy cache is empty until a request triggers
+/// `get_or_create_with_provider`, so on a cold cell the very first
+/// pre-request push never happens — the cell would stay empty forever and
+/// every selection returns `not_found`.
+///
+/// We mirror the legacy `get_backends_for_service_key` path: read whatever
+/// the EP/EPS store currently has and seed the cell with it. Subsequent
+/// EP/EPS partial updates run through `replace_backends` and stay
+/// authoritative.
+///
+/// Returns `true` if the cell ended up non-empty after this call.
+fn hydrate_cell_if_empty(cell: &compiled_selector::ServiceSelectorCell, service_key: &str) -> bool {
+    cell.hydrate_if_empty(|| match get_global_endpoint_mode() {
+        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
+            get_roundrobin_store().get_backends_for_service(service_key)
+        }
+        EndpointMode::Endpoint => get_endpoint_roundrobin_store().get_backends_for_service(service_key),
+    })
+}
 
 /// Health predicate for all self-impl selection algorithms.
 ///
@@ -33,42 +59,42 @@ pub(crate) fn is_backend_healthy(
     true
 }
 
-fn select_rr(
-    service_key: &str,
-    backends: &[pingora_load_balancing::Backend],
-) -> Option<pingora_load_balancing::Backend> {
-    if backends.is_empty() {
+/// Map a parsed LB policy to the discriminator used by `ServiceSelectorCell`.
+#[inline]
+fn policy_to_kind(lb_policy: &Option<ParsedLBPolicy>) -> PolicyKind {
+    match lb_policy {
+        None => PolicyKind::RoundRobin,
+        Some(ParsedLBPolicy::ConsistentHash(_)) => PolicyKind::ConsistentHash,
+        Some(ParsedLBPolicy::LeastConn) => PolicyKind::LeastConn,
+        Some(ParsedLBPolicy::Ewma) => PolicyKind::Ewma,
+    }
+}
+
+/// Select a round-robin backend by canonical `"namespace/name"` service key.
+///
+/// Used by TCP / UDP / TLS routes and the request_mirror plugin, none of which
+/// thread an LB policy through. Routes through the per-service
+/// `ServiceSelectorCell` so the cached selector is shared with the HTTP path.
+pub fn select_roundrobin_backend_key(service_key: &str) -> Option<Arc<EdgionBackend>> {
+    let cell = compiled_selector::get_or_create_cell(service_key);
+    if !hydrate_cell_if_empty(&cell, service_key) {
         return None;
     }
-    let rr = runtime_state::get_rr_selector(service_key, backends);
+    let selector = cell.get_or_build(PolicyKind::RoundRobin);
     let health_store = get_health_status_store();
-    rr.select(256, |b| is_backend_healthy(service_key, b, &health_store))
+    selector.select(None, |b| is_backend_healthy(service_key, b.inner(), &health_store))
 }
 
-/// Select backend using round-robin based on endpoint mode.
-pub fn select_roundrobin_backend(id: &crate::types::ServiceIdentity) -> Option<pingora_load_balancing::Backend> {
-    select_roundrobin_backend_key(id.key())
-}
-
-/// Internal `&str` variant of [`select_roundrobin_backend`].
-pub(crate) fn select_roundrobin_backend_key(service_key: &str) -> Option<pingora_load_balancing::Backend> {
-    let backends = get_backends_for_service_key(service_key);
-    select_rr(service_key, &backends)
-}
-
-/// Get backend list for a service from the appropriate store based on endpoint mode.
-pub fn get_backends_for_service(id: &crate::types::ServiceIdentity) -> Vec<pingora_load_balancing::Backend> {
-    get_backends_for_service_key(id.key())
-}
-
-/// Internal `&str` variant of [`get_backends_for_service`].
-pub(crate) fn get_backends_for_service_key(service_key: &str) -> Vec<pingora_load_balancing::Backend> {
-    match get_global_endpoint_mode() {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            get_roundrobin_store().get_backends_for_service(service_key)
-        }
-        EndpointMode::Endpoint => get_endpoint_roundrobin_store().get_backends_for_service(service_key),
-    }
+/// Get the current backend list for `service_key`.
+///
+/// Reads from the per-service `ServiceSelectorCell`, which the control plane
+/// keeps in sync with the EP/EPS data layer. Used by health/CB convenience
+/// APIs and by `pg_upstream_peer::sp_resolve_target` for session-affinity map
+/// construction.
+pub fn get_backends_for_service_key(service_key: &str) -> Arc<Vec<Arc<EdgionBackend>>> {
+    let cell = compiled_selector::get_or_create_cell(service_key);
+    let _ = hydrate_cell_if_empty(&cell, service_key);
+    cell.backends_snapshot()
 }
 
 /// Extract hash key from request based on LB policy configuration.
@@ -123,7 +149,9 @@ pub(crate) fn select_backend_by_policy(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
+) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+    use crate::core::gateway::backends::endpoint_mode::{get_global_endpoint_mode, EndpointMode};
+
     match get_global_endpoint_mode() {
         EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
             select_from_endpoint_slice(service_key, lb_policy, session)
@@ -132,68 +160,84 @@ pub(crate) fn select_backend_by_policy(
     }
 }
 
-fn select_from_backends(
+/// Errors raised when the cell yields no backend, broken out per
+/// (endpoint-mode, policy) combination so the caller still maps to the
+/// historically-correct `EdgionStatus`.
+struct NotFoundMap {
+    /// Empty backend list (no policy applies).
+    empty: EdgionStatus,
+    /// Round-robin selection found nothing healthy.
+    rr: EdgionStatus,
+    /// Consistent hash selected nothing (non-empty key path).
+    ch: EdgionStatus,
+    /// LeastConn found nothing.
+    lc: EdgionStatus,
+    /// EWMA found nothing.
+    ewma: EdgionStatus,
+}
+
+impl NotFoundMap {
+    fn for_kind(&self, kind: PolicyKind, ch_used_hash_key: bool) -> EdgionStatus {
+        match kind {
+            PolicyKind::RoundRobin => self.rr,
+            PolicyKind::ConsistentHash if ch_used_hash_key => self.ch,
+            // Empty hash key falls back to RR-style selection internally, so
+            // surface the RR not-found code to match historical behaviour.
+            PolicyKind::ConsistentHash => self.rr,
+            PolicyKind::LeastConn => self.lc,
+            PolicyKind::Ewma => self.ewma,
+        }
+    }
+}
+
+fn pick(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-    backends: Vec<pingora_load_balancing::Backend>,
-    not_found_rr_default: EdgionStatus,
-    not_found_rr: EdgionStatus,
-    not_found_ch: EdgionStatus,
-    not_found_lc: EdgionStatus,
-    not_found_ewma: EdgionStatus,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
-    if backends.is_empty() {
-        return Err(not_found_rr_default);
+    not_found: NotFoundMap,
+) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+    let cell = compiled_selector::get_or_create_cell(service_key);
+    if !hydrate_cell_if_empty(&cell, service_key) {
+        return Err(not_found.empty);
     }
-    let health_store = get_health_status_store();
 
-    match lb_policy {
-        None => {
-            let rr = runtime_state::get_rr_selector(service_key, &backends);
-            rr.select(256, |b| is_backend_healthy(service_key, b, &health_store))
-                .ok_or(not_found_rr_default)
-        }
-        Some(ParsedLBPolicy::ConsistentHash(_)) => {
-            let hash_key = extract_hash_key(session, lb_policy);
-            if hash_key.is_empty() {
-                let rr = runtime_state::get_rr_selector(service_key, &backends);
-                rr.select(256, |b| is_backend_healthy(service_key, b, &health_store))
-                    .ok_or(not_found_rr)
-            } else {
-                let ring_lock = runtime_state::get_ch_ring(service_key, &backends);
-                let ring = ring_lock.read();
-                ring.select(&hash_key, 256, |b| is_backend_healthy(service_key, b, &health_store))
-                    .ok_or(not_found_ch)
-            }
-        }
-        Some(ParsedLBPolicy::LeastConn) => selection::least_conn::select(&backends, service_key, 256, |b| {
-            is_backend_healthy(service_key, b, &health_store)
+    let kind = policy_to_kind(lb_policy);
+    let selector = cell.get_or_build(kind);
+
+    // Build the hash key only for ConsistentHash; an empty key triggers the
+    // internal RR fallback inside `CompiledSelector::ConsistentHash::select`.
+    let (hash_key, hash_key_used) = if matches!(kind, PolicyKind::ConsistentHash) {
+        let key = extract_hash_key(session, lb_policy);
+        let used = !key.is_empty();
+        (Some(key), used)
+    } else {
+        (None, false)
+    };
+
+    let health_store = get_health_status_store();
+    selector
+        .select(hash_key.as_deref(), |b| {
+            is_backend_healthy(service_key, b.inner(), &health_store)
         })
-        .ok_or(not_found_lc),
-        Some(ParsedLBPolicy::Ewma) => selection::ewma::select(&backends, service_key, 256, |b| {
-            is_backend_healthy(service_key, b, &health_store)
-        })
-        .ok_or(not_found_ewma),
-    }
+        .ok_or(not_found.for_kind(kind, hash_key_used))
 }
 
 pub(crate) fn select_from_endpoint_slice(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
-    let backends = get_roundrobin_store().get_backends_for_service(service_key);
-    select_from_backends(
+) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+    pick(
         service_key,
         lb_policy,
         session,
-        backends,
-        EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
-        EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
-        EdgionStatus::BackendEndpointSliceNotFoundByConsistent,
-        EdgionStatus::BackendEndpointSliceNotFoundByLeastConn,
-        EdgionStatus::BackendEndpointSliceNotFoundByEwma,
+        NotFoundMap {
+            empty: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
+            rr: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
+            ch: EdgionStatus::BackendEndpointSliceNotFoundByConsistent,
+            lc: EdgionStatus::BackendEndpointSliceNotFoundByLeastConn,
+            ewma: EdgionStatus::BackendEndpointSliceNotFoundByEwma,
+        },
     )
 }
 
@@ -201,17 +245,17 @@ pub(crate) fn select_from_endpoints(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus> {
-    let backends = get_endpoint_roundrobin_store().get_backends_for_service(service_key);
-    select_from_backends(
+) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+    pick(
         service_key,
         lb_policy,
         session,
-        backends,
-        EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault,
-        EdgionStatus::BackendEndpointNotFoundByRoundRobin,
-        EdgionStatus::BackendEndpointNotFoundByConsistent,
-        EdgionStatus::BackendEndpointNotFoundByLeastConn,
-        EdgionStatus::BackendEndpointNotFoundByEwma,
+        NotFoundMap {
+            empty: EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault,
+            rr: EdgionStatus::BackendEndpointNotFoundByRoundRobin,
+            ch: EdgionStatus::BackendEndpointNotFoundByConsistent,
+            lc: EdgionStatus::BackendEndpointNotFoundByLeastConn,
+            ewma: EdgionStatus::BackendEndpointNotFoundByEwma,
+        },
     )
 }

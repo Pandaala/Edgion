@@ -1,3 +1,23 @@
+//! Global `EndpointMode` accessor.
+//!
+//! ## Mode semantics for the LB selection path (read this before changing
+//! `is_primary_for_cell` in EP/EPS handlers):
+//!
+//! | Mode            | Selector reads from | Cell ownership (handler)              |
+//! |-----------------|---------------------|----------------------------------------|
+//! | `Endpoint`      | EP store            | EP handler is primary                  |
+//! | `EndpointSlice` | EPS store           | EPS handler is primary                 |
+//! | `Both` / `Auto` | EPS store (only)    | EPS handler is primary; EP is silent   |
+//!
+//! In `Both` / `Auto`, EPS is the canonical source of truth for *selection*.
+//! Active health checks (see `health::check::manager::get_service_backends`)
+//! still merge EP+EPS in those modes — that is intentional, since HC tracks a
+//! superset, while the data plane only picks from the EPS view.
+//!
+//! Drift between the data-plane mode check (in `select_backend_by_policy`) and
+//! the handler-side `is_primary_for_cell` would let EP and EPS race over the
+//! same `ServiceSelectorCell`, so they MUST stay in sync.
+
 use std::sync::OnceLock;
 
 pub use crate::core::controller::conf_mgr::conf_center::EndpointMode;

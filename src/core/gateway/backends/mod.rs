@@ -29,9 +29,9 @@ pub use policy::{
     create_backend_tls_policy_handler, get_global_backend_tls_policy_store, query_backend_tls_policy_for_service,
     BackendTLSPolicyStore,
 };
-pub use port_resolver::{resolve_target_port, PortLookupSource};
+pub use port_resolver::{resolve_target_port_key, PortLookupSource};
 pub use preload::preload_load_balancers;
-pub use selector::{get_backends_for_service, select_roundrobin_backend};
+pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
 pub use service_kind::EdgionService;
 pub use validation::validate_endpoint_in_route;
 
@@ -276,29 +276,44 @@ fn take_sp_target_or_select<F>(
     ctx: &mut EdgionHttpContext,
     service_key: &str,
     select_fn: F,
-) -> Result<pingora_load_balancing::Backend, EdgionStatus>
+) -> Result<Arc<crate::core::gateway::lb::EdgionBackend>, EdgionStatus>
 where
-    F: FnOnce() -> Result<pingora_load_balancing::Backend, EdgionStatus>,
+    F: FnOnce() -> Result<Arc<crate::core::gateway::lb::EdgionBackend>, EdgionStatus>,
 {
     if let Some(target_addr) = ctx.sp_target_addr.take() {
-        let b = pingora_load_balancing::Backend {
-            addr: SocketAddr::Inet(target_addr),
-            weight: 1,
-            ext: Default::default(),
-        };
-        let health_store = get_health_status_store();
-        if is_backend_healthy(service_key, &b, &health_store) {
-            return Ok(b);
+        // Look up the live Arc from the cell so inc_conn/dec_conn/update_ewma
+        // operate on the same object that the selector tracks. Wrapping a fresh
+        // EdgionBackend here would create an orphan: metric calls would be on a
+        // throwaway object and the real cell backend would always show conn==0.
+        let snap = selector::get_backends_for_service_key(service_key);
+        let live = snap.iter().find(|b| {
+            matches!(b.addr, SocketAddr::Inet(a) if a == target_addr)
+        }).cloned();
+
+        match live {
+            Some(arc) => {
+                let health_store = get_health_status_store();
+                if is_backend_healthy(service_key, arc.inner(), &health_store) {
+                    return Ok(arc);
+                }
+                return Err(EdgionStatus::StickyBackendUnhealthy);
+            }
+            // SP target no longer in the cell (pod removed after sticky token was
+            // issued). Treat as unhealthy so the caller's strict-mode logic and
+            // InjectUpdate state machine apply identically to the gone-backend case.
+            None => return Err(EdgionStatus::StickyBackendUnhealthy),
         }
-        return Err(EdgionStatus::StickyBackendUnhealthy);
     }
     select_fn()
 }
 
-/// 三个 LB-based kind 分支的公共逻辑。
+/// Shared logic for all three LB-based service kinds.
 ///
-/// 入参：已经选出来的 backend + 对应的 `PortLookupSource`。
-/// 作用：解析 targetPort → 提取 TLS → 记录 hash_key/upstream → 构造 peer + app protocol。
+/// Takes the already-selected `Arc<EdgionBackend>`, resolves the target port,
+/// validates the address, writes upstream metadata, and constructs the peer.
+/// Stores the `Arc<EdgionBackend>` on `upstream.lb_edgion_backend` so that
+/// `connected_to_upstream` can call `inc_conn()` and `lb_runtime_cleanup` can
+/// call `dec_conn()` / `update_ewma()` on the same live object.
 #[allow(clippy::too_many_arguments)]
 fn build_peer_from_lb_selection(
     ctx: &mut EdgionHttpContext,
@@ -307,7 +322,7 @@ fn build_peer_from_lb_selection(
     br_port: Option<i32>,
     lb_policy: &Option<ParsedLBPolicy>,
     backend_tls_policy: &Option<Arc<BackendTLSPolicy>>,
-    backend: pingora_load_balancing::Backend,
+    backend: Arc<crate::core::gateway::lb::EdgionBackend>,
     port_source: PortLookupSource,
     backend_app_protocol: Option<BackendAppProtocol>,
     gateway_key_ref: Option<&str>,
@@ -330,6 +345,7 @@ fn build_peer_from_lb_selection(
 
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.lb_backend_addr = Some(lb_addr);
+        upstream.lb_edgion_backend = Some(backend);
         upstream.service_key = Some(service_key.to_string());
         upstream.lb_policy = lb_policy_clone;
         // Write unconditionally so a TLS-then-plaintext fallback (e.g. SP-target

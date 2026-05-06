@@ -34,36 +34,27 @@ pub async fn connected_to_upstream(
         }
     }
 
-    // Record connection time (time from start_time to connection established)
-    // P0-07: upstream borrow ends at block exit so we can write ctx.leastconn_incremented_backend after
-    // g1-007: also record the EWMA backend + attempt start so logging only updates EWMA for
-    // attempts that actually completed `connected_to_upstream`.
+    // Record connection time (time from start_time to connection established).
+    // P0-07: upstream borrow ends at block exit so we can write ctx fields after.
+    // g1-007: also record the EWMA backend + attempt start so logging only
+    // updates EWMA for attempts that actually completed `connected_to_upstream`.
+    use std::sync::Arc;
     enum LbCleanup {
-        LeastConn(String, pingora_core::protocols::l4::socket::SocketAddr),
-        Ewma(
-            String,
-            pingora_core::protocols::l4::socket::SocketAddr,
-            std::time::Instant,
-        ),
+        LeastConn(Arc<crate::core::gateway::lb::EdgionBackend>),
+        Ewma(Arc<crate::core::gateway::lb::EdgionBackend>, std::time::Instant),
     }
     let lb_cleanup = if let Some(upstream) = ctx.get_current_upstream_mut() {
         let ct = upstream.start_time.elapsed().as_millis() as u64;
         upstream.ct = Some(ct);
 
-        match (
-            upstream.service_key.as_deref(),
-            upstream.lb_backend_addr.as_ref(),
-            &upstream.lb_policy,
-        ) {
-            (Some(service_key), Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) => {
-                crate::core::gateway::lb::runtime_state::increment(service_key, addr);
-                Some(LbCleanup::LeastConn(service_key.to_string(), addr.clone()))
+        match (&upstream.lb_edgion_backend, &upstream.lb_policy) {
+            (Some(backend), Some(crate::types::ParsedLBPolicy::LeastConn)) => {
+                backend.inc_conn();
+                Some(LbCleanup::LeastConn(backend.clone()))
             }
-            (Some(service_key), Some(addr), Some(crate::types::ParsedLBPolicy::Ewma)) => Some(LbCleanup::Ewma(
-                service_key.to_string(),
-                addr.clone(),
-                upstream.start_time,
-            )),
+            (Some(backend), Some(crate::types::ParsedLBPolicy::Ewma)) => {
+                Some(LbCleanup::Ewma(backend.clone(), upstream.start_time))
+            }
             _ => None,
         }
     } else {
@@ -71,11 +62,11 @@ pub async fn connected_to_upstream(
     };
     // upstream borrow dropped here — safe to write ctx
     match lb_cleanup {
-        Some(LbCleanup::LeastConn(sk, addr)) => {
-            ctx.leastconn_incremented_backend = Some((sk, addr));
+        Some(LbCleanup::LeastConn(backend)) => {
+            ctx.leastconn_incremented_backend = Some(backend);
         }
-        Some(LbCleanup::Ewma(sk, addr, start)) => {
-            ctx.last_ewma_backend = Some((sk, addr, start));
+        Some(LbCleanup::Ewma(backend, start)) => {
+            ctx.last_ewma_backend = Some((backend, start));
         }
         None => {}
     }

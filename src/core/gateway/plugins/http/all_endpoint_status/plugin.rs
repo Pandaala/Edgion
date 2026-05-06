@@ -255,9 +255,7 @@ fn resolve_endpoints(
     use_tls: bool,
     allow_loopback_upstream: bool,
 ) -> (Vec<ResolvedEndpoint>, usize) {
-    let service_key = crate::types::ServiceIdentity::new(backend_name, backend_namespace)
-        .key()
-        .to_string();
+    let service_key = format!("{}/{}", backend_namespace, backend_name);
 
     // Try EndpointSlice first (preferred, newer K8s API)
     let eps_store = get_roundrobin_store();

@@ -6,6 +6,7 @@ use crate::core::gateway::backends::circuit_breaker::{
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
+use crate::core::gateway::lb::compiled_selector;
 use crate::core::gateway::lb::runtime_state;
 use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
@@ -32,6 +33,7 @@ impl ConfHandler<Service> for ServiceStore {
                 hc_manager.reconcile_service(&old_key);
                 runtime_state::remove_service(&old_key);
                 cb_store.remove_service(&old_key);
+                compiled_selector::drop_cell(&old_key);
             }
         }
 
@@ -75,6 +77,7 @@ impl ConfHandler<Service> for ServiceStore {
             hc_manager.reconcile_service(key);
             runtime_state::remove_service(key);
             cb_store.remove_service(key);
+            compiled_selector::drop_cell(key);
         }
 
         // Merge add and update for storage, extracting from Arc
