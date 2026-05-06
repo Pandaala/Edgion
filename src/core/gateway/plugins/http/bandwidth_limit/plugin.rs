@@ -112,5 +112,4 @@ mod tests {
         // Invalid rate -> fail-open, no throttling
         assert!(delay.is_none());
     }
-
 }

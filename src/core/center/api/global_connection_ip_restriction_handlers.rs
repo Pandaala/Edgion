@@ -283,6 +283,44 @@ pub async fn create_global_ip_restriction(
     }))
 }
 
+/// Extract [`GlobalConnectionIpRestrictionData`] from a Controller GET response body.
+///
+/// The Controller stores and returns PluginMetaData as:
+/// `{"spec": {"metadata": {"config": <GlobalConnectionIpRestrictionData>}}}`
+fn extract_pm_data(v: &serde_json::Value) -> Result<GlobalConnectionIpRestrictionData, String> {
+    let config = v
+        .pointer("/spec/metadata/config")
+        .ok_or_else(|| "missing /spec/metadata/config in Controller PM response".to_string())?;
+    serde_json::from_value(config.clone()).map_err(|e| format!("failed to deserialize PM config: {e}"))
+}
+
+/// Fetch live PM data from a specific Controller via GET.
+///
+/// Returns `Err((status_code, message))` on any failure so the caller can build a
+/// `ControllerOpResult` with the correct `controller_id` and forward the reason to the client.
+async fn fetch_live_pm_data(
+    proxy: &crate::core::center::proxy::ProxyForwarder,
+    cid: &str,
+    path: &str,
+) -> Result<GlobalConnectionIpRestrictionData, (u16, String)> {
+    match proxy
+        .forward(cid, "GET".to_string(), path.to_string(), HashMap::new(), vec![])
+        .await
+    {
+        Ok(r) if r.status_code == 200 => {
+            let v = serde_json::from_slice::<serde_json::Value>(&r.body)
+                .map_err(|e| (502u16, format!("Controller returned non-JSON body: {e}")))?;
+            extract_pm_data(&v).map_err(|e| (502u16, format!("GET PM from controller: {e}")))
+        }
+        Ok(r) if r.status_code == 404 => Err((404, "PM not found on this controller".to_string())),
+        Ok(r) => Err((
+            r.status_code as u16,
+            format!("GET PM from controller returned HTTP {}", r.status_code),
+        )),
+        Err((_, msg)) => Err((502, format!("GET PM from controller failed: {msg}"))),
+    }
+}
+
 fn build_pm_json(ns: &str, name: &str, data: &GlobalConnectionIpRestrictionData) -> String {
     let doc = serde_json::json!({
         "apiVersion": "edgion.io/v1",
@@ -387,28 +425,27 @@ pub async fn patch_enable(
     Json(req): Json<PatchEnableRequest>,
 ) -> Json<ApiResponse<FanOutResponse>> {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
-    let pm_key = format!("{}/{}", ns, name);
-    let per_ctrl = state
-        .metadata_store
-        .get_global_ip_restriction(&pm_key)
-        .unwrap_or_default();
 
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let futs = targets.into_iter().map(|cid| {
-        let base = per_ctrl.get(&cid).cloned();
         let proxy = state.proxy.clone();
         let ns = ns.clone();
         let name = name.clone();
         let path = path.clone();
         let enable = req.enable;
         async move {
-            let Some(base) = base else {
-                return ControllerOpResult {
-                    controller_id: cid,
-                    detail: None,
-                    error: Some("PM not found on this controller".to_string()),
-                    status_code: Some(404),
-                };
+            // GET live data from the Controller to avoid clobbering concurrent writes
+            // with a stale Center-cache snapshot.
+            let base = match fetch_live_pm_data(&proxy, &cid, &path).await {
+                Ok(d) => d,
+                Err((code, msg)) => {
+                    return ControllerOpResult {
+                        controller_id: cid,
+                        detail: None,
+                        error: Some(msg),
+                        status_code: Some(code),
+                    }
+                }
             };
             let data = GlobalConnectionIpRestrictionData {
                 enable,
@@ -419,6 +456,9 @@ pub async fn patch_enable(
             let body = build_pm_json(&ns, &name, &data).into_bytes();
             let mut headers = HashMap::new();
             headers.insert("content-type".to_string(), "application/json".to_string());
+            // NOTE: There is still a TOCTOU window between the GET above and this PUT.
+            // A concurrent write between the two calls means the last writer wins silently.
+            // Eliminating this would require Controller-side ETag/resourceVersion support.
             match proxy.forward(&cid, "PUT".to_string(), path, headers, body).await {
                 Ok(r) if r.status_code >= 200 && r.status_code < 300 => ControllerOpResult {
                     controller_id: cid,
@@ -472,28 +512,28 @@ pub async fn patch_active_profile(
     Json(req): Json<PatchActiveProfileRequest>,
 ) -> Json<ApiResponse<FanOutResponse>> {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
-    let pm_key = format!("{}/{}", ns, name);
-    let per_ctrl = state
-        .metadata_store
-        .get_global_ip_restriction(&pm_key)
-        .unwrap_or_default();
 
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let futs = targets.into_iter().map(|cid| {
-        let base = per_ctrl.get(&cid).cloned();
         let proxy = state.proxy.clone();
         let ns = ns.clone();
         let name = name.clone();
         let path = path.clone();
         let active_profile = req.active_profile.clone();
         async move {
-            let Some(base) = base else {
-                return ControllerOpResult {
-                    controller_id: cid,
-                    detail: None,
-                    error: Some("PM not found on this controller".to_string()),
-                    status_code: Some(404),
-                };
+            // GET live data from the Controller to avoid clobbering concurrent writes
+            // with a stale Center-cache snapshot. Profile existence is validated against
+            // the live state for the same reason.
+            let base = match fetch_live_pm_data(&proxy, &cid, &path).await {
+                Ok(d) => d,
+                Err((code, msg)) => {
+                    return ControllerOpResult {
+                        controller_id: cid,
+                        detail: None,
+                        error: Some(msg),
+                        status_code: Some(code),
+                    }
+                }
             };
             if !base.profiles.contains_key(&active_profile) {
                 return ControllerOpResult {
@@ -512,6 +552,9 @@ pub async fn patch_active_profile(
             let body = build_pm_json(&ns, &name, &data).into_bytes();
             let mut headers = HashMap::new();
             headers.insert("content-type".to_string(), "application/json".to_string());
+            // NOTE: There is still a TOCTOU window between the GET above and this PUT.
+            // A concurrent write between the two calls means the last writer wins silently.
+            // Eliminating this would require Controller-side ETag/resourceVersion support.
             match proxy.forward(&cid, "PUT".to_string(), path, headers, body).await {
                 Ok(r) if r.status_code >= 200 && r.status_code < 300 => ControllerOpResult {
                     controller_id: cid,
@@ -622,4 +665,70 @@ pub async fn sync_global_ip_restriction(
         failed,
         warnings,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::plugin_metadata::ProfileRules;
+
+    fn make_pm_json(data: &GlobalConnectionIpRestrictionData) -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "PluginMetaData",
+            "metadata": { "name": "test", "namespace": "default" },
+            "spec": {
+                "metadata": {
+                    "type": "GlobalConnectionIpRestriction",
+                    "config": serde_json::to_value(data).unwrap()
+                }
+            }
+        })
+    }
+
+    fn sample_data() -> GlobalConnectionIpRestrictionData {
+        GlobalConnectionIpRestrictionData {
+            enable: true,
+            active_profile: "prod".to_string(),
+            profiles: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    "prod".to_string(),
+                    ProfileRules {
+                        allow: None,
+                        deny: None,
+                        default_action: Default::default(),
+                        allow_matcher: None,
+                        deny_matcher: None,
+                    },
+                );
+                m
+            },
+            description: Some("test desc".to_string()),
+        }
+    }
+
+    #[test]
+    fn extract_pm_data_success() {
+        let v = make_pm_json(&sample_data());
+        let got = extract_pm_data(&v).expect("should parse valid PM JSON");
+        assert!(got.enable);
+        assert_eq!(got.active_profile, "prod");
+        assert!(got.profiles.contains_key("prod"));
+        assert_eq!(got.description.as_deref(), Some("test desc"));
+    }
+
+    #[test]
+    fn extract_pm_data_missing_spec() {
+        let v = serde_json::json!({ "apiVersion": "edgion.io/v1", "kind": "PluginMetaData" });
+        assert!(extract_pm_data(&v).is_err());
+    }
+
+    #[test]
+    fn extract_pm_data_invalid_config() {
+        let v = serde_json::json!({
+            "spec": { "metadata": { "config": "not-an-object" } }
+        });
+        assert!(extract_pm_data(&v).is_err());
+    }
 }

@@ -413,5 +413,4 @@ mod tests {
         assert_eq!(ProxyRewrite::url_encode("a+b"), "a%2Bb");
         assert_eq!(ProxyRewrite::url_encode("normal"), "normal");
     }
-
 }

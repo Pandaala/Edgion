@@ -63,6 +63,7 @@ const TIER_3: &[ResourceKind] = &[
 
 pub async fn wipe_all(State(state): State<Arc<AdminState>>) -> Json<ApiResponse<WipeAllResponse>> {
     let start = Instant::now();
+    tracing::info!(component = "wipe_all", "wipe_all started");
     let mut deleted: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut errors: Vec<WipeError> = Vec::new();
 
@@ -70,12 +71,20 @@ pub async fn wipe_all(State(state): State<Arc<AdminState>>) -> Json<ApiResponse<
         wipe_tier(&state, tier, &mut deleted, &mut errors).await;
     }
 
-    let total = deleted.values().map(|v| v.len()).sum();
+    let total: usize = deleted.values().map(|v| v.len()).sum();
+    let duration_ms = start.elapsed().as_millis();
+    tracing::info!(
+        component = "wipe_all",
+        total = total,
+        errors = errors.len(),
+        duration_ms = duration_ms as u64,
+        "wipe_all finished"
+    );
     Json(ApiResponse::success(WipeAllResponse {
         deleted,
         total,
         errors,
-        duration_ms: start.elapsed().as_millis(),
+        duration_ms,
     }))
 }
 

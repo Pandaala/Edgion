@@ -9,7 +9,10 @@ use crate::core::controller::conf_mgr::conf_center::traits::{
 };
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs;
+
+static CREATE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Format YAML content to pretty format
 ///
@@ -117,18 +120,43 @@ impl CenterApi for FileSystemStorage {
     ) -> Result<(), ConfWriterError> {
         let path = build_resource_path(&self.root, kind, namespace, name);
 
-        // Check if file already exists
-        if path.exists() {
-            return Err(ConfWriterError::AlreadyExists(format!(
-                "{}/{}/{}",
-                kind,
-                namespace.unwrap_or("_"),
-                name
-            )));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ConfWriterError::io("Failed to create directory", e))?;
         }
 
-        // Delegate to set_one for actual write
-        self.set_one(kind, namespace, name, content).await?;
+        let formatted_content = format_yaml_pretty(&content);
+        // Unique per-call tmp name (seq counter) avoids collisions between concurrent
+        // create_one calls for the same resource, and is distinct from set_one's "yaml.tmp".
+        // Path::extension() on "*.create.N.tmp" returns "tmp", correctly skipped by list scans.
+        let seq = CREATE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = path.with_extension(format!("create.{seq}.tmp"));
+
+        fs::write(&tmp_path, formatted_content)
+            .await
+            .map_err(|e| ConfWriterError::io("Failed to write tmp file", e))?;
+
+        // hard_link(tmp, dest) is atomic on POSIX and fails with AlreadyExists if dest
+        // exists, closing the TOCTOU window that a plain exists()-then-rename would leave.
+        match fs::hard_link(&tmp_path, &path).await {
+            Ok(()) => {
+                let _ = fs::remove_file(&tmp_path).await;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&tmp_path).await;
+                return Err(ConfWriterError::AlreadyExists(format!(
+                    "{}/{}/{}",
+                    kind,
+                    namespace.unwrap_or("_"),
+                    name
+                )));
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&tmp_path).await;
+                return Err(ConfWriterError::io("Failed to link tmp file", e));
+            }
+        }
 
         tracing::info!(
             component = "file_system_writer",

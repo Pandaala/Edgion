@@ -20,7 +20,7 @@ use crate::core::gateway::runtime::store::listener_gateway_info::is_listener_not
 use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{FrontendTLSValidation, SecretObjectReference};
-use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
 use std::collections::HashMap;
@@ -68,13 +68,13 @@ struct TlsMatcherData {
 /// 2. Wildcard hostname match (via HashHost)
 /// 3. Catch-all fallback (listeners without hostname)
 pub struct GatewayTlsMatcher {
-    data: ArcSwap<Option<TlsMatcherData>>,
+    data: ArcSwapOption<TlsMatcherData>,
 }
 
 impl GatewayTlsMatcher {
     pub fn new() -> Self {
         Self {
-            data: ArcSwap::from_pointee(None),
+            data: ArcSwapOption::empty(),
         }
     }
 
@@ -97,7 +97,7 @@ impl GatewayTlsMatcher {
     #[inline]
     pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<GatewayTlsEntry> {
         let data_guard = self.data.load();
-        let data = data_guard.as_ref().as_ref()?;
+        let data = data_guard.as_ref()?;
 
         // 1) Hostname-based lookup (exact > wildcard)
         if let Some(host_matcher) = data.listener_map.get(key) {
@@ -230,12 +230,12 @@ impl GatewayTlsMatcher {
         );
 
         if total_entries > 0 {
-            self.data.store(Arc::new(Some(TlsMatcherData {
+            self.data.store(Some(Arc::new(TlsMatcherData {
                 listener_map,
                 fallback_listener_map,
             })));
         } else {
-            self.data.store(Arc::new(None));
+            self.data.store(None);
         }
     }
 }
@@ -250,7 +250,7 @@ impl GatewayTlsMatcher {
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> GatewayTlsMatcherStats {
         let data = self.data.load();
-        match data.as_ref() {
+        match data.as_deref() {
             Some(d) => {
                 let mut all_keys: std::collections::HashSet<&ListenerKey> = d.listener_map.keys().collect();
                 all_keys.extend(d.fallback_listener_map.keys());

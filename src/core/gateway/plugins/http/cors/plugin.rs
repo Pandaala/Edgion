@@ -336,5 +336,4 @@ mod tests {
         assert_eq!(result, PluginRunningResult::GoodNext);
         // No origin header, should skip CORS processing (no logs)
     }
-
 }

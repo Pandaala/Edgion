@@ -353,5 +353,4 @@ mod tests {
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("Allow kl="));
     }
-
 }

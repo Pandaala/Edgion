@@ -453,5 +453,4 @@ mod tests {
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("cfg invalid"));
     }
-
 }

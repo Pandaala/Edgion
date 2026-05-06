@@ -1011,7 +1011,10 @@ mod validation_trait_tests {
 
     #[test]
     fn validation_error_returns_field_error_without_validate_call() {
-        let config = RateLimitConfig { rate: 0, ..Default::default() };
+        let config = RateLimitConfig {
+            rate: 0,
+            ..Default::default()
+        };
         // Should report an error about rate, without any validate() call.
         assert!(config.validation_error().is_some(), "rate=0 must be invalid");
         assert!(config.validation_error.is_none(), "must not touch cached field");

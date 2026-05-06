@@ -10,7 +10,7 @@ use crate::types::err::EdError;
 use crate::types::HTTPRoute;
 use crate::types::ListenerKey;
 use crate::types::{HTTPBackendRef, HTTPRouteRule};
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -189,20 +189,20 @@ pub struct DomainRouteRules {
     /// Wildcard domain matching (e.g., "*.example.com")
     /// Uses RadixHostMatchEngine for wildcard support
     /// None if no wildcard domains are configured
-    pub(crate) wildcard_engine: ArcSwap<Option<RadixHostMatchEngine<RouteRules>>>,
+    pub(crate) wildcard_engine: ArcSwapOption<RadixHostMatchEngine<RouteRules>>,
 
     /// Catch-all routes from HTTPRoutes with no spec.hostnames.
     /// Stored separately from exact_domain_map to avoid mixing fallback
     /// semantics with exact-match semantics.
-    pub(crate) catch_all_routes: ArcSwap<Option<Arc<RouteRules>>>,
+    pub(crate) catch_all_routes: ArcSwapOption<RouteRules>,
 }
 
 impl DomainRouteRules {
     pub fn new() -> Self {
         Self {
             exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
-            wildcard_engine: ArcSwap::from_pointee(None),
-            catch_all_routes: ArcSwap::from_pointee(None),
+            wildcard_engine: ArcSwapOption::empty(),
+            catch_all_routes: ArcSwapOption::empty(),
         }
     }
 
@@ -237,14 +237,14 @@ impl DomainRouteRules {
         }
 
         // Step 2: Try wildcard domain match (O(log n))
-        if let Some(ref engine) = wildcard_engine.as_ref() {
+        if let Some(engine) = wildcard_engine.as_ref() {
             if let Some(route_rules) = engine.match_host(hostname) {
                 return route_rules.match_route(session, ctx, index);
             }
         }
 
         // Step 3: Try catch-all routes (from HTTPRoutes with no spec.hostnames)
-        if let Some(ref catch_all) = **self.catch_all_routes.load() {
+        if let Some(catch_all) = self.catch_all_routes.load().as_ref() {
             return catch_all.match_route(session, ctx, index);
         }
 
@@ -487,7 +487,7 @@ impl GlobalHttpRouteManagers {
             let exact_map = table.exact_domain_map.load();
             total_exact_domains += exact_map.len();
             let wc = table.wildcard_engine.load();
-            total_wildcard_domains += wc.as_ref().as_ref().map_or(0, |e| e.host_count());
+            total_wildcard_domains += wc.as_ref().map_or(0, |e| e.host_count());
             if table.catch_all_routes.load().is_some() {
                 total_catch_all = true;
             }

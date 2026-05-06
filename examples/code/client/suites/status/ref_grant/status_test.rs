@@ -652,29 +652,53 @@ impl RefGrantStatusTestSuite {
                         return TestResult::failed(start.elapsed(), format!("Failed to delete ReferenceGrant: {}", e));
                     }
 
-                    // Step 3: Wait for revalidation and check ResolvedRefs=False + Accepted=True
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    // Step 3: Poll for ResolvedRefs=False (up to 5 seconds).
+                    //
+                    // On macOS, FSEvents delivers file-system events with ~2 s latency, and the
+                    // debounce adds another ~1 s.  A fixed 2 s sleep is therefore too short.
+                    // Polling lets the test succeed as soon as the controller reacts while
+                    // still failing deterministically if no reaction arrives within the budget.
+                    let delete_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                    let mut delete_observed = false;
+                    let mut last_route_status: Option<Value> = None;
+                    while tokio::time::Instant::now() < delete_deadline {
+                        match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await
+                        {
+                            Ok(route) => {
+                                if Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
+                                    delete_observed = true;
+                                    break;
+                                }
+                                last_route_status = Some(route);
+                            }
+                            Err(_) => {}
+                        }
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
 
+                    if !delete_observed {
+                        let _ = ctx.apply_yaml(REFERENCE_GRANT_YAML).await;
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "After deleting ReferenceGrant, expected ResolvedRefs=False(RefNotPermitted), got: {}",
+                                last_route_status
+                                    .as_ref()
+                                    .and_then(|r| serde_json::to_string_pretty(&r["status"]).ok())
+                                    .unwrap_or_else(|| "<no status>".to_string())
+                            ),
+                        );
+                    }
+
+                    // Verify Accepted=True while ResolvedRefs=False
                     match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await {
                         Ok(route) => {
                             if !helpers::has_condition(&route, "Accepted", "True") {
-                                // Restore before failing
                                 let _ = ctx.apply_yaml(REFERENCE_GRANT_YAML).await;
                                 return TestResult::failed(
                                     start.elapsed(),
                                     format!(
                                         "After deleting ReferenceGrant, Accepted should remain True, got: {}",
-                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
-                                    ),
-                                );
-                            }
-                            if !Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
-                                // Restore before failing
-                                let _ = ctx.apply_yaml(REFERENCE_GRANT_YAML).await;
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "After deleting ReferenceGrant, expected ResolvedRefs=False(RefNotPermitted), got: {}",
                                         serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
                                     ),
                                 );
@@ -691,27 +715,43 @@ impl RefGrantStatusTestSuite {
                         return TestResult::failed(start.elapsed(), format!("Failed to restore ReferenceGrant: {}", e));
                     }
 
-                    // Step 5: Wait and verify ResolvedRefs goes back to True
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-
-                    match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await {
-                        Ok(route) => {
-                            if helpers::has_condition(&route, "ResolvedRefs", "True") {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Delete→ResolvedRefs=False(RefNotPermitted)+Accepted=True, Restore→ResolvedRefs=True".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "After restoring ReferenceGrant, expected ResolvedRefs=True, got: {}",
-                                        serde_json::to_string_pretty(&route["status"]).unwrap_or_default()
-                                    ),
-                                )
+                    // Step 5: Poll for ResolvedRefs=True (up to 3 seconds).
+                    // FSEvents is already "warm" at this point so the restore is processed quickly.
+                    let restore_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+                    let mut restore_observed = false;
+                    let mut last_restore_status: Option<Value> = None;
+                    while tokio::time::Instant::now() < restore_deadline {
+                        match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await
+                        {
+                            Ok(route) => {
+                                if helpers::has_condition(&route, "ResolvedRefs", "True") {
+                                    restore_observed = true;
+                                    break;
+                                }
+                                last_restore_status = Some(route);
                             }
+                            Err(_) => {}
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Fetch after restore failed: {}", e)),
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+
+                    if restore_observed {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Delete→ResolvedRefs=False(RefNotPermitted)+Accepted=True, Restore→ResolvedRefs=True"
+                                .to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "After restoring ReferenceGrant, expected ResolvedRefs=True, got: {}",
+                                last_restore_status
+                                    .as_ref()
+                                    .and_then(|r| serde_json::to_string_pretty(&r["status"]).ok())
+                                    .unwrap_or_else(|| "<no status>".to_string())
+                            ),
+                        )
                     }
                 })
             },

@@ -250,15 +250,37 @@ impl FileSystemWatcher {
         // Debounce and dispatch events.
         // Stores the last-seen EventKind per path so dispatch can use event type
         // (not just path existence) to distinguish atomic-replace from true deletion.
+        //
+        // `had_genuine_remove` tracks paths that received an EventKind::Remove event within
+        // the current debounce window.  If a Create follows in the same window, the debounce
+        // normally collapses them into a single Apply (last-write-wins).  We detect this
+        // sequence and dispatch a synthetic Delete first so dependent resources (e.g. routes
+        // whose ReferenceGrant was deleted then immediately recreated) see the intermediate
+        // deleted state and revalidate their status correctly.
+        // Note: rename-from events (Modify(Name(From))) are intentionally excluded — those
+        // represent atomic file replacement (vim, kustomize) and should not trigger a Delete.
         let mut pending: HashMap<PathBuf, EventKind> = HashMap::new();
+        let mut had_genuine_remove: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         let debounce_duration = Duration::from_secs(1);
         let mut debounce_timer = tokio::time::interval(debounce_duration);
+
+        // Diagnostic counters for cache-residue investigation: track raw events
+        // received from the notify backend in the current debounce window so we
+        // can tell whether the OS layer is delivering everything (vs. losing or
+        // coalescing events) and how long the sequential dispatch takes.
+        let mut raw_event_count: usize = 0;
+        let mut raw_remove_count: usize = 0;
 
         loop {
             tokio::select! {
                 Some(event) = rx.recv() => {
                     for path in event.paths {
                         if is_yaml_file(&path) {
+                            raw_event_count += 1;
+                            if matches!(event.kind, EventKind::Remove(_)) {
+                                raw_remove_count += 1;
+                                had_genuine_remove.insert(path.clone());
+                            }
                             // Overwrite with the most recent event kind for this path.
                             pending.insert(path, event.kind);
                         }
@@ -266,9 +288,26 @@ impl FileSystemWatcher {
                 }
                 _ = debounce_timer.tick() => {
                     if !pending.is_empty() {
+                        let pending_count = pending.len();
+                        let dispatch_start = std::time::Instant::now();
                         for (path, kind) in pending.drain() {
-                            self.dispatch_file_event(&path, kind).await;
+                            let had_remove = had_genuine_remove.remove(&path);
+                            self.dispatch_file_event(&path, kind, had_remove).await;
                         }
+                        let dispatch_ms = dispatch_start.elapsed().as_millis();
+                        tracing::info!(
+                            component = "fs_watcher",
+                            raw_events = raw_event_count,
+                            raw_removes = raw_remove_count,
+                            unique_paths = pending_count,
+                            dispatch_ms = dispatch_ms as u64,
+                            "Debounce flush"
+                        );
+                        raw_event_count = 0;
+                        raw_remove_count = 0;
+                        // Clear any stale entries (paths in had_genuine_remove with no
+                        // corresponding pending entry — should not normally occur).
+                        had_genuine_remove.clear();
                     }
                 }
                 _ = shutdown_signal.wait() => {
@@ -293,7 +332,12 @@ impl FileSystemWatcher {
     /// window — to distinguish atomic-replace (e.g. vim, kustomize) from true deletion.
     /// Falls back to a 200 ms re-existence check for ambiguous event types so that a
     /// transient absence during rename does not produce a spurious Delete.
-    async fn dispatch_file_event(&self, path: &Path, last_kind: EventKind) {
+    ///
+    /// `had_genuine_remove` is true when a `Remove` event was seen for this path earlier in
+    /// the same debounce window.  If the resolved action is Apply (a Create followed the
+    /// Remove), a synthetic Delete is dispatched first so consumers can react to the
+    /// intermediate deleted state before the resource reappears.
+    async fn dispatch_file_event(&self, path: &Path, last_kind: EventKind, had_genuine_remove: bool) {
         let Some(info) = parse_resource_filename(path) else {
             tracing::trace!(
                 component = "fs_watcher",
@@ -328,6 +372,21 @@ impl FileSystemWatcher {
             } else {
                 DispatchAction::Delete
             };
+        }
+
+        // When a genuine Remove was followed by a Create in the same debounce window,
+        // dispatch a Delete first so consumers invalidate their state before the
+        // resource reappears.  This prevents the collapsed Delete+Create sequence
+        // from being silently treated as a no-op update.
+        if had_genuine_remove && action == DispatchAction::Apply {
+            let delete_info = format!("__DELETE__:{}:{}", info.kind, info.key);
+            let _ = sender.send(FileSystemEvent::Delete(delete_info));
+            tracing::debug!(
+                component = "fs_watcher",
+                kind = %info.kind,
+                key = %info.key,
+                "Dispatched intermediate Delete before Apply (delete+recreate in same debounce window)"
+            );
         }
 
         match action {
