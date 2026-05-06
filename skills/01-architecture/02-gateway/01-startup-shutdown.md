@@ -70,11 +70,10 @@ let server_info = runtime.block_on(sync_client.get_server_info())?;
 ```
 
 `GetServerInfo` gRPC 调用返回：
-- `endpoint_mode`：`EndpointSlice` / `Endpoint` / `Both`，决定后端发现模式
 - `supported_kinds`：Controller 支持的资源类型列表，用于选择性 Watch
 - `server_id`：Controller 实例标识，用于版本一致性校验
 
-解析 endpoint_mode 并通过 `init_global_endpoint_mode()` 设置全局模式。同时初始化集成测试模式和全局测试模式（由 `--integration-testing-mode` CLI 标志控制）。
+同时初始化集成测试模式和全局测试模式（由 `--integration-testing-mode` CLI 标志控制）。
 
 ### 第 7 步：开始 Watch 资源
 

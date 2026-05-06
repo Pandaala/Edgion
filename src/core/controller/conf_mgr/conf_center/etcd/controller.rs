@@ -18,7 +18,6 @@ use super::resource_controller::EtcdResourceController;
 use super::status::EtcdStatusHandler;
 use super::watcher::{EtcdWatcher, KindEventReceiver};
 use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ResourceProcessor, SecretRefManager};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
@@ -60,22 +59,16 @@ impl LocalControllerBackend for EtcdControllerBackend {
 pub struct EtcdController {
     client: Arc<EtcdLinkClient>,
     key_prefix: String,
-    endpoint_mode: EndpointMode,
 }
 
 impl EtcdController {
-    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String, endpoint_mode: EndpointMode) -> Self {
+    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String) -> Self {
         tracing::info!(
             component = "etcd_controller",
             key_prefix = %key_prefix,
-            endpoint_mode = ?endpoint_mode,
             "Creating EtcdController"
         );
-        Self {
-            client,
-            key_prefix,
-            endpoint_mode,
-        }
+        Self { client, key_prefix }
     }
 
     /// Run the controller.
@@ -99,7 +92,6 @@ impl EtcdController {
         // Spawn all resource controllers
         let handles = spawn_all_controllers(
             &backend,
-            self.endpoint_mode,
             &secret_ref_manager,
             shutdown_signal.clone(),
             runtime,

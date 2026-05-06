@@ -1,6 +1,5 @@
 use crate::core::gateway::backends::circuit_breaker::get_circuit_breaker_store;
-use crate::core::gateway::backends::discovery::{get_endpoint_roundrobin_store, get_roundrobin_store};
-use crate::core::gateway::backends::endpoint_mode::{get_global_endpoint_mode, EndpointMode};
+use crate::core::gateway::backends::discovery::get_roundrobin_store;
 use crate::core::gateway::backends::health;
 use crate::core::gateway::backends::health::get_health_status_store;
 use crate::core::gateway::lb::{compiled_selector, EdgionBackend, PolicyKind};
@@ -9,7 +8,7 @@ use crate::types::{ConsistentHashOn, ParsedLBPolicy};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
-/// Lazily hydrate `cell` from the EP/EPS data layer when it is empty.
+/// Lazily hydrate `cell` from the EndpointSlice data layer when it is empty.
 ///
 /// The control plane only pushes backends into a cell via
 /// `update_affected_lbs` / `update_all_existing_lbs`, both of which iterate
@@ -20,18 +19,13 @@ use std::sync::Arc;
 /// every selection returns `not_found`.
 ///
 /// We mirror the legacy `get_backends_for_service_key` path: read whatever
-/// the EP/EPS store currently has and seed the cell with it. Subsequent
-/// EP/EPS partial updates run through `replace_backends` and stay
+/// the EndpointSlice store currently has and seed the cell with it.
+/// Subsequent partial updates run through `replace_backends` and stay
 /// authoritative.
 ///
 /// Returns `true` if the cell ended up non-empty after this call.
 fn hydrate_cell_if_empty(cell: &compiled_selector::ServiceSelectorCell, service_key: &str) -> bool {
-    cell.hydrate_if_empty(|| match get_global_endpoint_mode() {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            get_roundrobin_store().get_backends_for_service(service_key)
-        }
-        EndpointMode::Endpoint => get_endpoint_roundrobin_store().get_backends_for_service(service_key),
-    })
+    cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key))
 }
 
 /// Health predicate for all self-impl selection algorithms.
@@ -144,25 +138,17 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
     }
 }
 
-/// Select backend based on endpoint mode and LB policy.
+/// Select backend based on LB policy (always reads from EndpointSlice store).
 pub(crate) fn select_backend_by_policy(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
 ) -> Result<Arc<EdgionBackend>, EdgionStatus> {
-    use crate::core::gateway::backends::endpoint_mode::{get_global_endpoint_mode, EndpointMode};
-
-    match get_global_endpoint_mode() {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            select_from_endpoint_slice(service_key, lb_policy, session)
-        }
-        EndpointMode::Endpoint => select_from_endpoints(service_key, lb_policy, session),
-    }
+    select_from_endpoint_slice(service_key, lb_policy, session)
 }
 
-/// Errors raised when the cell yields no backend, broken out per
-/// (endpoint-mode, policy) combination so the caller still maps to the
-/// historically-correct `EdgionStatus`.
+/// Errors raised when the cell yields no backend, broken out per LB policy
+/// so the caller maps to the historically-correct `EdgionStatus`.
 struct NotFoundMap {
     /// Empty backend list (no policy applies).
     empty: EdgionStatus,
@@ -237,25 +223,6 @@ pub(crate) fn select_from_endpoint_slice(
             ch: EdgionStatus::BackendEndpointSliceNotFoundByConsistent,
             lc: EdgionStatus::BackendEndpointSliceNotFoundByLeastConn,
             ewma: EdgionStatus::BackendEndpointSliceNotFoundByEwma,
-        },
-    )
-}
-
-pub(crate) fn select_from_endpoints(
-    service_key: &str,
-    lb_policy: &Option<ParsedLBPolicy>,
-    session: &Session,
-) -> Result<Arc<EdgionBackend>, EdgionStatus> {
-    pick(
-        service_key,
-        lb_policy,
-        session,
-        NotFoundMap {
-            empty: EdgionStatus::BackendEndpointNotFoundByRoundRobinDefault,
-            rr: EdgionStatus::BackendEndpointNotFoundByRoundRobin,
-            ch: EdgionStatus::BackendEndpointNotFoundByConsistent,
-            lc: EdgionStatus::BackendEndpointNotFoundByLeastConn,
-            ewma: EdgionStatus::BackendEndpointNotFoundByEwma,
         },
     )
 }

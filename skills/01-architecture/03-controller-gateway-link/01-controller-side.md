@@ -14,7 +14,6 @@ gRPC 配置同步服务器的核心状态管理器，持有所有资源的 Watch
 ```rust
 pub struct ConfigSyncServer {
     server_id: RwLock<String>,                              // 服务器实例 ID（毫秒时间戳）
-    endpoint_mode: RwLock<Option<EndpointMode>>,             // 端点发现模式
     watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>, // 按 kind 注册的 WatchObj
     client_registry: Arc<ClientRegistry>,                    // 已连接 Gateway 实例注册表
 }
@@ -63,7 +62,7 @@ ConfigSyncGrpcServer 不直接持有 ConfigSyncServer，而是通过 `ConfigSync
 
 | RPC | 实现逻辑 |
 |-----|---------|
-| `GetServerInfo` | 返回 server_id、endpoint_mode、supported_kinds（所有已注册的 WatchObj kind） |
+| `GetServerInfo` | 返回 server_id、supported_kinds（所有已注册的 WatchObj kind） |
 | `List` | 校验 expected_server_id → 查找对应 kind 的 WatchObj → 调用 `list_json()` → 返回 ListResponse |
 | `Watch` | 校验 expected_server_id → 查找 WatchObj → 调用 `watch_json()` → 返回 streaming WatchResponse |
 | `WatchServerMeta` | 注册 Gateway 实例到 ClientRegistry → 推送 gateway_instance_count 变更事件流 |

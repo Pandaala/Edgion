@@ -8,24 +8,12 @@ description: 后端发现与健康检查：三种发现源、BackendStore、健�
 > 后端模块负责从 Kubernetes 获取 Service 对应的实际 Pod 端点，
 > 并通过健康检查系统自动剔除不健康的后端、恢复健康的后端。
 
-## 三种发现源
+## 发现源
 
-| 发现源 | 模块 | K8s 资源 | 适用场景 |
-|--------|------|----------|----------|
-| Endpoint | `discovery/endpoint/` | `Endpoints` | 传统模式（K8s < 1.21） |
-| EndpointSlice | `discovery/endpoint_slice/` | `EndpointSlice` | 推荐模式（K8s >= 1.21），支持更大规模集群 |
+| 发现源 | 模块 | K8s 资源 | 说明 |
+|--------|------|----------|------|
+| EndpointSlice | `discovery/endpoint_slice/` | `EndpointSlice` | 后端端点发现 |
 | Service | `discovery/services/` | `Service` | Service 元数据存储（ClusterIP、端口映射） |
-
-### EndpointMode 配置
-
-通过 `GLOBAL_ENDPOINT_MODE`（OnceLock，启动时初始化）控制使用哪种发现源：
-
-| 模式 | 说明 |
-|------|------|
-| `EndpointSlice` | 仅使用 EndpointSlice |
-| `Endpoint` | 仅使用 Endpoint |
-| `Both` | 同时使用两者 |
-| `Auto` | 自动选择（等同 EndpointSlice） |
 
 ### 发现数据流
 
@@ -38,9 +26,6 @@ Controller (K8s Watch)
   │                                    └── RoundRobin Store (DashMap)
   │                                         └── Pingora LoadBalancer (per service_key)
   │
-  ├── ConfHandler<Endpoint>       →  EndpointStore
-  │                                    └── RoundRobin Store (DashMap)
-  │
   └── ConfHandler<Service>        →  ServiceStore (DashMap)
                                        └── Service 元数据（ports、annotations）
 ```
@@ -48,7 +33,7 @@ Controller (K8s Watch)
 每个发现源实现：
 - `conf_handler_impl.rs` — ConfHandler trait 实现，处理 full_set/partial_update
 - `discovery_impl.rs` — 发现逻辑，将 K8s 资源转换为 Pingora Backend 列表
-- `*_store.rs` — 数据存储（EpSliceStore/EndpointStore/ServiceStore）
+- `*_store.rs` — 数据存储（EpSliceStore/ServiceStore）
 
 ## 健康检查系统
 
@@ -170,9 +155,8 @@ policy/
 
 1. 遍历所有路由类型（HTTP/gRPC/TCP/UDP/TLS），收集 (service_key, lb_policy) 对
 2. HashSet 去重
-3. 根据 EndpointMode 选择 store（EndpointSlice 或 Endpoint）
-4. 调用 `get_or_create()` 预创建 RoundRobin LB 实例
-5. 日志记录预热结果（total, success, skipped）
+3. 从 EndpointSlice store 中调用 `get_or_create()` 预创建 RoundRobin LB 实例
+4. 日志记录预热结果（total, success, skipped）
 
 ## 端点验证
 
@@ -188,10 +172,9 @@ policy/
 
 ```
 src/core/gateway/backends/
-├── mod.rs                    # 模块导出 + EndpointMode 管理
+├── mod.rs                    # 模块导出
 ├── discovery/                # 后端发现
-│   ├── endpoint/             # Endpoint 发现
-│   ├── endpoint_slice/       # EndpointSlice 发现（推荐）
+│   ├── endpoint_slice/       # EndpointSlice 发现
 │   └── services/             # Service 元数据
 ├── health/                   # 健康检查
 │   └── check/                # 检查系统

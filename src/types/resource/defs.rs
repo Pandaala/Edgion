@@ -116,15 +116,6 @@ define_resources! {
         capacity_field: endpoint_slices_capacity,
         default_capacity: normal,
     },
-    Endpoint {
-        enum_value: 19,
-        kind_name: "endpoint",
-        kind_aliases: ["endpoints"],
-        cache_field: endpoints,
-        capacity_field: endpoints_capacity,
-        default_capacity: normal,
-    },
-
     // ==================== Security and Policy Resources ====================
     EdgionTls {
         enum_value: 7,
@@ -225,8 +216,8 @@ mod tests {
 
     #[test]
     fn test_all_resource_infos_count() {
-        // We have 21 resource types (excluding Unspecified)
-        assert_eq!(ALL_RESOURCE_INFOS.len(), 21);
+        // We have 20 resource types (excluding Unspecified)
+        assert_eq!(ALL_RESOURCE_INFOS.len(), 20);
     }
 
     #[test]
@@ -362,9 +353,7 @@ mod tests {
             "edgionstreamplugins",
             "referencegrant",
             "backendtlspolicy",
-            "endpoint",
-            "endpoints", // alias
-            "unknown",   // should return None
+            "unknown", // should return None
         ];
 
         for name in test_cases {

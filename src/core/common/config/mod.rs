@@ -12,7 +12,6 @@ static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
 
 /// Global test mode flag (Controller)
 /// When enabled:
-/// - endpoint_mode is forced to Both (sync both Endpoints and EndpointSlice)
 /// - metrics test_key/test_type annotations are processed
 static GLOBAL_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -29,7 +28,7 @@ pub fn init_global_test_mode(enabled: bool) {
     if enabled {
         tracing::info!(
             component = "test_mode",
-            "Test mode enabled: endpoint_mode=Both, metrics test features active"
+            "Test mode enabled: metrics test features active"
         );
     }
 }
@@ -134,9 +133,8 @@ pub struct EdgionControllerConfig {
 
     /// Enable test mode for integration testing
     /// When enabled:
-    /// - endpoint_mode is forced to Both (sync both Endpoints and EndpointSlice)
     /// - metrics test_key/test_type Gateway annotations are processed
-    #[arg(long, help = "Enable test mode (Both endpoint mode + metrics test features)")]
+    #[arg(long, help = "Enable test mode (metrics test features)")]
     #[serde(skip)]
     pub test_mode: bool,
 
@@ -626,10 +624,7 @@ impl EdgionControllerConfig {
 
         // Configuration directory: CLI --conf-dir overrides conf_center.conf_dir
         if let Some(conf_dir) = &cli.conf_dir {
-            // Preserve existing endpoint_mode if we're switching from FileSystem to FileSystem
-            let endpoint_mode = base.conf_center.endpoint_mode();
-            base.conf_center =
-                ConfCenterConfig::FileSystem(FileSystemConfig::new(conf_dir.clone()).with_endpoint_mode(endpoint_mode));
+            base.conf_center = ConfCenterConfig::FileSystem(FileSystemConfig::new(conf_dir.clone()));
         }
 
         // Server config

@@ -35,7 +35,7 @@
 
 use anyhow::Result;
 use futures::TryStreamExt;
-use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Namespace, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::runtime::watcher;
 use kube::runtime::WatchStreamExt;
@@ -53,7 +53,7 @@ use tokio::task::JoinHandle;
 use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{ApiScope, RelinkReason, RelinkSignalSender, ResourceController};
 use super::ShutdownSignal;
-use crate::core::controller::conf_mgr::conf_center::{EndpointMode, MetadataFilterConfig};
+use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ProcessorHandler, ResourceProcessor, SecretRefManager,
 };
@@ -65,9 +65,9 @@ use crate::types::ResourceMeta;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
     EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
-    EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
-    LinkSysHandler, PluginMetadataHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler,
-    ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
+    EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler,
+    PluginMetadataHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler,
+    TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -334,8 +334,6 @@ pub struct KubernetesController {
     label_selector: Option<String>,
     /// Optional metadata filter configuration for reducing resource memory usage
     metadata_filter: Option<MetadataFilterConfig>,
-    /// Resolved endpoint mode (Auto should be resolved before controller creation)
-    endpoint_mode: EndpointMode,
     /// Leader handle for gating status writes in all-serve HA mode
     leader_handle: Option<super::leader_election::LeaderHandle>,
     /// Resource kinds to skip (not watch, not register, not probe)
@@ -350,7 +348,6 @@ impl KubernetesController {
         gateway_address: Option<String>,
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
-        endpoint_mode: EndpointMode,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
         Self::with_metadata_filter(
@@ -361,7 +358,6 @@ impl KubernetesController {
             watch_namespaces,
             label_selector,
             MetadataFilterConfig::default(),
-            endpoint_mode,
             HashSet::new(),
         )
     }
@@ -378,7 +374,6 @@ impl KubernetesController {
         watch_namespaces: Vec<String>,
         label_selector: Option<String>,
         metadata_filter: MetadataFilterConfig,
-        endpoint_mode: EndpointMode,
         no_watch_kinds: HashSet<String>,
     ) -> Result<Self> {
         let watch_mode = NamespaceWatchMode::from_namespaces(watch_namespaces);
@@ -391,7 +386,6 @@ impl KubernetesController {
             controller_name = %controller_name,
             gateway_address = ?gateway_address,
             metadata_filter_enabled = true,
-            endpoint_mode = ?endpoint_mode,
             no_watch_kinds = ?no_watch_kinds,
             "Creating Kubernetes controller"
         );
@@ -404,7 +398,6 @@ impl KubernetesController {
             watch_mode,
             label_selector,
             metadata_filter: Some(metadata_filter),
-            endpoint_mode,
             leader_handle: None,
             no_watch_kinds,
         })
@@ -462,13 +455,8 @@ impl KubernetesController {
             "ConfigMap",
             "ReferenceGrant",
             "Service",
+            "EndpointSlice",
         ];
-        if self.endpoint_mode.uses_endpoint() {
-            kinds.push("Endpoints");
-        }
-        if self.endpoint_mode.uses_endpoint_slice() {
-            kinds.push("EndpointSlice");
-        }
         kinds.retain(|k| !self.no_watch_kinds.contains(*k));
         kinds
     }
@@ -511,7 +499,7 @@ impl KubernetesController {
     /// Internal method to run all controllers with phased initialization.
     ///
     /// Phase 1 (Foundation): GatewayClass, Gateway, Secret, ReferenceGrant,
-    ///   Service, Endpoints/EndpointSlice, Namespace watcher
+    ///   Service, EndpointSlice, Namespace watcher
     /// Phase 2 (Dependent): Routes, EdgionTls, BackendTLSPolicy, Plugins, etc.
     ///
     /// Phase 2 waits for Phase 1 to complete init before starting, so that
@@ -617,34 +605,16 @@ impl KubernetesController {
             h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
         }
 
-        // Endpoint resources (Route backend address resolution)
-        if self.endpoint_mode.uses_endpoint() {
-            tracing::info!(
-                component = "k8s_controller",
-                mode = ?self.endpoint_mode,
-                "Registering Endpoints controller (Phase 1)"
-            );
-            h.push(spawn::<Endpoints, _>(self, "Endpoints", EndpointsHandler::new(), &ctx));
-        }
-
-        if self.endpoint_mode.uses_endpoint_slice() {
-            tracing::info!(
-                component = "k8s_controller",
-                mode = ?self.endpoint_mode,
-                "Registering EndpointSlice controller (Phase 1)"
-            );
-            h.push(spawn::<EndpointSlice, _>(
-                self,
-                "EndpointSlice",
-                EndpointSliceHandler::new(),
-                &ctx,
-            ));
-        }
-
-        // Safety check: Auto mode should have been resolved
-        if self.endpoint_mode.is_auto() {
-            unreachable!("EndpointMode::Auto should be resolved before run_controllers");
-        }
+        tracing::info!(
+            component = "k8s_controller",
+            "Registering EndpointSlice controller (Phase 1)"
+        );
+        h.push(spawn::<EndpointSlice, _>(
+            self,
+            "EndpointSlice",
+            EndpointSliceHandler::new(),
+            &ctx,
+        ));
 
         // Namespace watcher (Gateway Selector namespace policy)
         h.push(spawn_namespace_watcher(

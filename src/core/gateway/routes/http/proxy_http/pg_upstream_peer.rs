@@ -289,10 +289,9 @@ fn sp_resolve_target(
 
     let ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
     let service_key = format!("{}/{}", ns, backend_ref.name);
-    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build_key(
-        &service_key,
-        || crate::core::gateway::backends::selector::get_backends_for_service_key(&service_key),
-    );
+    let affinity_map = crate::core::gateway::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, || {
+        crate::core::gateway::backends::selector::get_backends_for_service_key(&service_key)
+    });
 
     if let Some(&addr) = affinity_map.get(token) {
         ctx.sp_target_addr = Some(addr);

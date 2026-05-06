@@ -11,16 +11,6 @@ pub(in crate::core::gateway::backends::discovery) trait RoundRobinStoreOps {
     fn get_backends_for_service(&self, service_key: &str) -> Vec<EdgionBackend>;
 }
 
-impl<S> RoundRobinStoreOps for super::endpoint::EndpointStore<S>
-where
-    S: pingora_load_balancing::selection::BackendSelection + 'static,
-    S::Iter: pingora_load_balancing::selection::BackendIter,
-{
-    fn get_backends_for_service(&self, service_key: &str) -> Vec<EdgionBackend> {
-        self.get_backends_for_service(service_key)
-    }
-}
-
 impl<S> RoundRobinStoreOps for super::endpoint_slice::EpSliceStore<S>
 where
     S: pingora_load_balancing::selection::BackendSelection + 'static,
@@ -90,17 +80,10 @@ pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(
 ///
 /// Also runs `cleanup_removed_backends` to register draining for any backends
 /// with in-flight connections, matching the behaviour of `update_affected_lbs`.
-///
-/// `is_primary_for_cell` must mirror the data-plane mode selection so that EP
-/// and EPS handlers do not race on the same `ServiceSelectorCell`.
 pub(in crate::core::gateway::backends::discovery) fn update_all_existing_lbs<S: RoundRobinStoreOps>(
     store: &S,
     service_keys: &HashSet<String>,
-    is_primary_for_cell: bool,
 ) {
-    if !is_primary_for_cell {
-        return;
-    }
     for service_key in service_keys {
         let new_backends = store.get_backends_for_service(service_key);
         let new_addrs: HashSet<SocketAddr> = new_backends.iter().map(|b| b.inner().addr.clone()).collect();
@@ -119,12 +102,9 @@ pub(in crate::core::gateway::backends::discovery) fn update_all_existing_lbs<S: 
 /// Uses the cell's pre-replace snapshot as the "old" address set so that
 /// `cleanup_removed_backends` can read live conn counts from the
 /// `Arc<EdgionBackend>` objects still held by in-flight requests.
-///
-/// `is_primary_for_cell` must mirror the data-plane mode selection.
 pub(in crate::core::gateway::backends::discovery) fn update_affected_lbs<S: RoundRobinStoreOps>(
     store: &S,
     affected_services: &HashSet<String>,
-    is_primary_for_cell: bool,
 ) {
     for service_key in affected_services {
         let new_backends = store.get_backends_for_service(service_key);
@@ -139,8 +119,6 @@ pub(in crate::core::gateway::backends::discovery) fn update_affected_lbs<S: Roun
 
         cleanup_removed_backends(service_key, &old_addrs, &new_addrs, &old_cell_snapshot);
 
-        if is_primary_for_cell {
-            cell.replace_backends(new_backends);
-        }
+        cell.replace_backends(new_backends);
     }
 }

@@ -207,5 +207,5 @@ ctl 是同步 CLI 工具，命令完成即退出。
 |---------|------|------|
 | `CONTROLLER_CONFIG` | `src/core/common/config/mod.rs` | Controller 全局配置（`OnceLock`） |
 | `GATEWAY_INSTANCE_COUNT` | 同上 | Gateway 集群实例数（`AtomicU32`，用于集群级速率限制） |
-| `GLOBAL_TEST_MODE` | 同上 | 测试模式标志（强制 endpoint_mode=Both） |
+| `GLOBAL_TEST_MODE` | 同上 | 测试模式标志（启用 metrics 测试功能） |
 | `GLOBAL_INTEGRATION_TESTING_MODE` | 同上 | 集成测试模式（启用 AccessLog 存储 + 指标测试数据） |

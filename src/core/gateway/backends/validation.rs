@@ -1,17 +1,16 @@
 use std::net::IpAddr;
 
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
-use crate::core::gateway::backends::{get_endpoint_roundrobin_store, get_global_endpoint_mode, get_roundrobin_store};
+use crate::core::gateway::backends::get_roundrobin_store;
 use crate::types::HTTPBackendRef;
 
-/// Validate that a given IP is a valid endpoint for one of the route's backend_refs.
+/// Validate that a given IP is a valid EndpointSlice address for one of the route's backend_refs.
 ///
 /// Returns:
-/// - `Ok((backend_ref_index, port))` if the IP is found in any backend_ref's endpoints
+/// - `Ok((backend_ref_index, port))` if the IP is found in any backend_ref's EndpointSlices
 /// - `Err(reason)` if the IP is not found
 ///
 /// Security: This prevents SSRF by ensuring the caller can only route to
-/// endpoints that the route already has access to via its backend_refs.
+/// addresses that the route already has access to via its backend_refs.
 pub fn validate_endpoint_in_route(
     target_ip: &IpAddr,
     target_port: Option<u16>,
@@ -28,37 +27,26 @@ pub fn validate_endpoint_in_route(
             continue; // No port available for this backend_ref
         };
 
-        // Check Endpoints or EndpointSlice based on global mode
+        // Check EndpointSlice for this backend_ref
         if is_ip_in_service_endpoints(target_ip, port, &service_key) {
             return Ok((idx, port));
         }
     }
 
-    Err(format!("IP {} not found in any backend_ref endpoints", target_ip))
+    Err(format!("IP {} not found in any backend_ref EndpointSlices", target_ip))
 }
 
-/// Check if a given IP:port exists in a Service's endpoints
+/// Check if a given IP:port exists in a Service's EndpointSlices.
 fn is_ip_in_service_endpoints(target_ip: &IpAddr, port: u16, service_key: &str) -> bool {
-    let mode = get_global_endpoint_mode();
-
-    match mode {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            let store = get_roundrobin_store(); // EndpointSlice store
-            if let Some(slices) = store.get_slices_for_service(service_key) {
-                for slice in &slices {
-                    if check_endpoint_slice_with_port(slice, target_ip, port) {
-                        return true;
-                    }
-                }
+    let store = get_roundrobin_store();
+    if let Some(slices) = store.get_slices_for_service(service_key) {
+        for slice in &slices {
+            if check_endpoint_slice_with_port(slice, target_ip, port) {
+                return true;
             }
-            if matches!(mode, EndpointMode::Both) {
-                // Fallback to legacy Endpoints
-                return check_legacy_endpoints(target_ip, port, service_key);
-            }
-            false
         }
-        EndpointMode::Endpoint => check_legacy_endpoints(target_ip, port, service_key),
     }
+    false
 }
 
 fn check_endpoint_slice_with_port(
@@ -82,34 +70,6 @@ fn check_endpoint_slice_with_port(
         for addr in &ep.addresses {
             if addr == &target_ip_str {
                 return true;
-            }
-        }
-    }
-    false
-}
-
-fn check_legacy_endpoints(target_ip: &IpAddr, port: u16, service_key: &str) -> bool {
-    let store = get_endpoint_roundrobin_store();
-    if let Some(ep) = store.get_endpoint_for_service(service_key) {
-        let target_ip_str = target_ip.to_string();
-
-        if let Some(subsets) = &ep.subsets {
-            for subset in subsets {
-                // Check port
-                let has_port = subset
-                    .ports
-                    .as_ref()
-                    .is_some_and(|ports| ports.iter().any(|p| p.port == port as i32));
-                if !has_port {
-                    continue;
-                }
-
-                // Check IP
-                if let Some(addresses) = &subset.addresses {
-                    if addresses.iter().any(|addr| addr.ip == target_ip_str) {
-                        return true;
-                    }
-                }
             }
         }
     }

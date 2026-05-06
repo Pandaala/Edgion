@@ -30,7 +30,7 @@ flowchart TD
 
 关键组件说明：
 
-- **ConfigSyncClient** (`conf_sync/conf_client/grpc_client.rs`)：管理与 Controller 的 gRPC 连接，负责 List/Watch 调用、版本跟踪、断线重连。通过 `get_server_info()` 获取 endpoint_mode 和 supported_kinds。
+- **ConfigSyncClient** (`conf_sync/conf_client/grpc_client.rs`)：管理与 Controller 的 gRPC 连接，负责 List/Watch 调用、版本跟踪、断线重连。通过 `get_server_info()` 获取 server_id 和 supported_kinds。
 - **ClientCache\<T\>** (`conf_sync/cache_client/cache.rs`)：每种资源类型一个缓存实例，内部持有 `CacheData<T>`（RwLock 保护）和 gRPC 客户端引用。实现了 `DynClientCache` trait 以支持类型擦除的统一调度。
 - **event_dispatch** (`conf_sync/cache_client/event_dispatch.rs`)：实现 `CacheEventDispatch<T>` trait，将 gRPC 事件（InitAdd/EventAdd/EventUpdate/EventDelete）应用到 CacheData，并压缩事件批次。
 - **ConfHandler\<T\>** (`core/common/conf_sync/traits.rs`)：资源处理器 trait，每种资源类型一个实现。提供 `full_set()` 和 `partial_update(add, update, remove)` 两种回调，负责将资源写入运行时存储。

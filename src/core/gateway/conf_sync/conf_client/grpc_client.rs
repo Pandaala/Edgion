@@ -106,7 +106,6 @@ impl ConfigSyncClient {
 
         tracing::info!(
             server_id = %info.server_id,
-            endpoint_mode = %info.endpoint_mode,
             supported_kinds = ?info.supported_kinds,
             "Received server info"
         );

@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use super::config::EtcdConfig;
 use super::controller::EtcdController;
 use super::storage::EtcdStorage;
-use crate::core::controller::conf_mgr::conf_center::non_kube_common::{resolve_endpoint_mode, CenterBase};
+use crate::core::controller::conf_mgr::conf_center::non_kube_common::CenterBase;
 use crate::core::controller::conf_mgr::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -73,29 +73,23 @@ impl CenterLifeCycle for EtcdCenter {
             Arc::new(EtcdStorage::new(self.client.clone(), self.config.key_prefix.clone()));
         self.base.runtime().set_conf_writer(writer_arc);
 
-        let endpoint_mode = resolve_endpoint_mode(self.config.endpoint_mode());
         let client = self.client.clone();
         let key_prefix = self.config.key_prefix.clone();
 
         self.base
-            .run_lifecycle(
-                shutdown_handle,
-                endpoint_mode,
-                "etcd_center",
-                |shutdown, runtime, error_tx| {
-                    let ctrl = EtcdController::new(client.clone(), key_prefix.clone(), endpoint_mode);
-                    tokio::spawn(async move {
-                        if let Err(e) = ctrl.run(shutdown, runtime).await {
-                            tracing::error!(
-                                component = "etcd_center",
-                                error = %e,
-                                "EtcdController error"
-                            );
-                            let _ = error_tx.send(e.to_string());
-                        }
-                    })
-                },
-            )
+            .run_lifecycle(shutdown_handle, "etcd_center", |shutdown, runtime, error_tx| {
+                let ctrl = EtcdController::new(client.clone(), key_prefix.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = ctrl.run(shutdown, runtime).await {
+                        tracing::error!(
+                            component = "etcd_center",
+                            error = %e,
+                            "EtcdController error"
+                        );
+                        let _ = error_tx.send(e.to_string());
+                    }
+                })
+            })
             .await
     }
 

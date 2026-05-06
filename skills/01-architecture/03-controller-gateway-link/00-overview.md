@@ -24,7 +24,7 @@ service ConfigSync {
 
 | RPC | 方向 | 说明 |
 |-----|------|------|
-| **GetServerInfo** | 一元 | 返回 `server_id`、`endpoint_mode`（EndpointSlice/Endpoint/Auto）、`supported_kinds` 列表 |
+| **GetServerInfo** | 一元 | 返回 `server_id`、`supported_kinds` 列表 |
 | **List** | 一元 | 按 kind 获取全量资源快照，返回 JSON 数据 + `sync_version` + `server_id` |
 | **Watch** | 服务端流 | 按 kind 持续接收增量变更事件，携带 `from_version` 实现续接 |
 | **WatchServerMeta** | 服务端流 | 接收服务器元数据变更（`gateway_instance_count`），用于集群级感知 |
@@ -37,7 +37,7 @@ service ConfigSync {
 | `ListResponse` | `data`（JSON）、`sync_version`、`server_id` |
 | `WatchRequest` | `kind`、`client_id`、`client_name`、`from_version`、`expected_server_id` |
 | `WatchResponse` | `data`（JSON）、`sync_version`、`err`、`server_id` |
-| `ServerInfoResponse` | `server_id`、`endpoint_mode`、`supported_kinds` |
+| `ServerInfoResponse` | `server_id`、`supported_kinds` |
 | `ServerMetaEvent` | `server_id`、`gateway_instance_count`、`timestamp` |
 
 ## 同步流程
@@ -46,7 +46,7 @@ service ConfigSync {
 
 ```
 Gateway 启动:
-  1. GetServerInfo() → 获取 server_id, endpoint_mode, supported_kinds
+  1. GetServerInfo() → 获取 server_id, supported_kinds
   2. 对每种 kind: List(kind) → 全量快照（InitStart → InitAdd × N → InitDone）
   3. 对每种 kind: Watch(kind, from_version) → 持续接收增量变更
 ```

@@ -1,6 +1,5 @@
 pub mod circuit_breaker;
 pub mod discovery;
-pub mod endpoint_mode;
 pub mod gateway_backend_tls_store;
 pub mod health;
 pub(crate) mod peer_builder;
@@ -14,14 +13,10 @@ pub mod validation;
 use crate::types::resources::BackendTLSPolicy;
 pub use circuit_breaker::{get_circuit_breaker_store, parse_circuit_breaker_annotation};
 pub use discovery::{
-    create_endpoint_handler, create_ep_slice_handler, create_service_handler, get_endpoint_roundrobin_store,
-    get_global_service_store, get_roundrobin_store, EndpointDiscovery, EndpointExt, EndpointSliceExt, EndpointStore,
+    create_ep_slice_handler, create_service_handler, get_global_service_store, get_roundrobin_store, EndpointSliceExt,
     EpSliceStore, ServiceStore,
 };
-pub use endpoint_mode::{
-    get_global_endpoint_mode, init_global_endpoint_mode, is_endpoint_slice_mode, try_get_global_endpoint_mode,
-    EndpointMode,
-};
+
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
 pub(crate) use peer_builder::validate_endpoint_backend_addr;
@@ -29,7 +24,7 @@ pub use policy::{
     create_backend_tls_policy_handler, get_global_backend_tls_policy_store, query_backend_tls_policy_for_service,
     BackendTLSPolicyStore,
 };
-pub use port_resolver::{resolve_target_port_key, PortLookupSource};
+pub use port_resolver::resolve_target_port_key;
 pub use preload::preload_load_balancers;
 pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
 pub use service_kind::EdgionService;
@@ -48,9 +43,7 @@ use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
-use selector::{
-    extract_hash_key, is_backend_healthy, select_backend_by_policy, select_from_endpoint_slice, select_from_endpoints,
-};
+use selector::{extract_hash_key, is_backend_healthy, select_backend_by_policy, select_from_endpoint_slice};
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 pub(crate) fn try_get_peer(
@@ -123,7 +116,6 @@ pub(crate) fn try_get_peer(
                 &lb_policy,
                 &backend_tls_policy,
                 backend,
-                PortLookupSource::Auto,
                 backend_app_protocol,
                 gateway_key_ref,
             )
@@ -221,24 +213,6 @@ pub(crate) fn try_get_peer(
 
         EdgionService::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
 
-        EdgionService::ServiceEndpoint => {
-            let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoints(&service_key, &lb_policy, session)
-            })?;
-            build_peer_from_lb_selection(
-                ctx,
-                session,
-                &service_key,
-                br_port,
-                &lb_policy,
-                &backend_tls_policy,
-                backend,
-                PortLookupSource::Endpoint,
-                backend_app_protocol,
-                gateway_key_ref,
-            )
-        }
-
         EdgionService::ServiceEndpointSlice => {
             let backend = take_sp_target_or_select(ctx, &service_key, || {
                 select_from_endpoint_slice(&service_key, &lb_policy, session)
@@ -251,7 +225,6 @@ pub(crate) fn try_get_peer(
                 &lb_policy,
                 &backend_tls_policy,
                 backend,
-                PortLookupSource::EndpointSlice,
                 backend_app_protocol,
                 gateway_key_ref,
             )
@@ -286,9 +259,10 @@ where
         // EdgionBackend here would create an orphan: metric calls would be on a
         // throwaway object and the real cell backend would always show conn==0.
         let snap = selector::get_backends_for_service_key(service_key);
-        let live = snap.iter().find(|b| {
-            matches!(b.addr, SocketAddr::Inet(a) if a == target_addr)
-        }).cloned();
+        let live = snap
+            .iter()
+            .find(|b| matches!(b.addr, SocketAddr::Inet(a) if a == target_addr))
+            .cloned();
 
         match live {
             Some(arc) => {
@@ -323,13 +297,12 @@ fn build_peer_from_lb_selection(
     lb_policy: &Option<ParsedLBPolicy>,
     backend_tls_policy: &Option<Arc<BackendTLSPolicy>>,
     backend: Arc<crate::core::gateway::lb::EdgionBackend>,
-    port_source: PortLookupSource,
     backend_app_protocol: Option<BackendAppProtocol>,
     gateway_key_ref: Option<&str>,
 ) -> Result<Box<HttpPeer>, EdgionStatus> {
     let lb_addr = backend.addr.clone();
     let mut peer_addr = lb_addr.clone();
-    port_resolver::resolve_target_port_key(&mut peer_addr, br_port, service_key, port_source);
+    port_resolver::resolve_target_port_key(&mut peer_addr, br_port, service_key);
     if let Err(status) = validate_endpoint_backend_addr(&peer_addr, ctx.allow_loopback_upstream) {
         record_unsafe_upstream_attempt(ctx, &peer_addr, status);
         return Err(status);

@@ -72,7 +72,6 @@ async fn collect_conf_center_counts(state: &AdminState) -> BTreeMap<String, usiz
         ResourceKind::LinkSys,
         ResourceKind::ReferenceGrant,
         ResourceKind::Service,
-        ResourceKind::Endpoint,
         ResourceKind::EndpointSlice,
         ResourceKind::Secret,
         ResourceKind::ConfigMap,

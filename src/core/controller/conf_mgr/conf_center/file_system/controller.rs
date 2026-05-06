@@ -26,7 +26,6 @@ use super::file_watcher::{FileSystemWatcher, KindEventReceiver};
 use super::resource_controller::FileSystemResourceController;
 use super::status::FileSystemStatusHandler;
 use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ResourceProcessor, SecretRefManager};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
@@ -67,23 +66,18 @@ impl LocalControllerBackend for FileSystemControllerBackend {
 /// FileSystemController - Top-level controller for FileSystem mode
 pub struct FileSystemController {
     conf_dir: PathBuf,
-    endpoint_mode: EndpointMode,
 }
 
 impl FileSystemController {
     /// Create a new FileSystemController
-    pub fn new(conf_dir: PathBuf, endpoint_mode: EndpointMode) -> Self {
+    pub fn new(conf_dir: PathBuf) -> Self {
         tracing::info!(
             component = "fs_controller",
             conf_dir = %conf_dir.display(),
-            endpoint_mode = ?endpoint_mode,
             "Creating FileSystemController"
         );
 
-        Self {
-            conf_dir,
-            endpoint_mode,
-        }
+        Self { conf_dir }
     }
 
     /// Run the controller
@@ -125,7 +119,6 @@ impl FileSystemController {
         // Spawn all resource controllers
         let handles = spawn_all_controllers(
             &backend,
-            self.endpoint_mode,
             &secret_ref_manager,
             shutdown_signal.clone(),
             runtime,

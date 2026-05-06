@@ -11,7 +11,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use crate::core::gateway::backends::{
-    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr, PortLookupSource,
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
 };
 use crate::core::gateway::observe::{log_tcp, TcpLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
@@ -156,12 +156,7 @@ impl EdgionTcpProxy {
 
         // 6. Build upstream address
         let mut upstream_addr = backend.inner().addr.clone();
-        resolve_target_port_key(
-            &mut upstream_addr,
-            backend_ref.port,
-            &service_key,
-            PortLookupSource::Auto,
-        );
+        resolve_target_port_key(&mut upstream_addr, backend_ref.port, &service_key);
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
         if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {

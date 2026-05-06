@@ -56,7 +56,6 @@ const TIER_2: &[ResourceKind] = &[
 
 const TIER_3: &[ResourceKind] = &[
     ResourceKind::Service,
-    ResourceKind::Endpoint,
     ResourceKind::EndpointSlice,
     ResourceKind::Secret,
     ResourceKind::ConfigMap,
@@ -226,7 +225,7 @@ mod tests {
         all.extend(TIER_1);
         all.extend(TIER_2);
         all.extend(TIER_3);
-        assert_eq!(all.len(), 21, "tiers must cover all 21 ResourceKind variants");
+        assert_eq!(all.len(), 20, "tiers must cover all 20 ResourceKind variants");
         // Verify no duplicates
         let mut seen = std::collections::HashSet::new();
         for k in &all {

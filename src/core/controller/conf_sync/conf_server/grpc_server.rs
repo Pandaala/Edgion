@@ -187,23 +187,16 @@ impl ConfigSync for ConfigSyncGrpcServer {
     ) -> Result<Response<ServerInfoResponse>, Status> {
         let server = self.get_server()?;
 
-        let endpoint_mode = server
-            .endpoint_mode()
-            .map(|m| format!("{:?}", m))
-            .unwrap_or_else(|| "Auto".to_string());
-
         let supported_kinds = server.all_kinds();
 
         tracing::debug!(
             component = "grpc_server",
-            endpoint_mode = %endpoint_mode,
             supported_kinds = ?supported_kinds,
             "GetServerInfo request"
         );
 
         Ok(Response::new(ServerInfoResponse {
             server_id: server.server_id(),
-            endpoint_mode,
             supported_kinds,
         }))
     }

@@ -35,7 +35,6 @@ conf_center:
   type: etcd
   endpoints: [http://127.0.0.1:2379]
   key_prefix: /edgion
-  endpoint_mode: endpoint_slice
 
   # Connection timeout (milliseconds)
   # connect_timeout_ms: 5000

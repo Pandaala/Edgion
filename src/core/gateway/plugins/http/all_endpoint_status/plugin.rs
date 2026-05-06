@@ -18,7 +18,6 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
-use crate::core::gateway::backends::discovery::endpoint::{get_endpoint_roundrobin_store, EndpointExt};
 use crate::core::gateway::backends::discovery::endpoint_slice::{get_roundrobin_store, EndpointSliceExt};
 use crate::core::gateway::backends::validate_endpoint_backend_addr;
 use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
@@ -247,7 +246,7 @@ fn resolved_endpoint_from_backend(
 }
 
 /// Resolve all endpoint addresses for a backend reference.
-/// Tries EndpointSlice first (newer K8s API), falls back to Endpoints.
+/// Resolves backend endpoints from the EndpointSlice store.
 fn resolve_endpoints(
     backend_name: &str,
     backend_namespace: &str,
@@ -280,26 +279,6 @@ fn resolve_endpoints(
                 .collect();
             return (endpoints, unsafe_count);
         }
-    }
-
-    // Fallback to Endpoints
-    let ep_store = get_endpoint_roundrobin_store();
-    if let Some(endpoints) = ep_store.get_endpoint_for_service(&service_key) {
-        let mut unsafe_count = 0;
-        let resolved = endpoints
-            .build_backends(backend_port)
-            .into_iter()
-            .filter_map(
-                |b| match resolved_endpoint_from_backend(b, backend_name, use_tls, allow_loopback_upstream) {
-                    Ok(endpoint) => Some(endpoint),
-                    Err(()) => {
-                        unsafe_count += 1;
-                        None
-                    }
-                },
-            )
-            .collect();
-        return (resolved, unsafe_count);
     }
 
     (vec![], 0) // No endpoints found

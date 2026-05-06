@@ -7,13 +7,7 @@ description: 后端服务发现、健康检查配置、负载均衡策略完整�
 
 ## 服务发现
 
-Edgion 支持三种后端发现模式（通过 `conf_center.endpoint_mode` 配置）：
-
-| 模式 | 说明 | 推荐 |
-|------|------|------|
-| `EndpointSlice` | K8s EndpointSlice API（默认） | ✅ 推荐 |
-| `Endpoints` | 传统 Endpoints API | 兼容旧集群 |
-| `Both` | 同时使用两种 | 测试 |
+Edgion 通过 Kubernetes EndpointSlice API 发现后端端点。Controller 通过 K8s watch 机制持续同步 EndpointSlice 资源，并通过 gRPC ConfigSync 将端点信息推送到 Gateway。
 
 ### Service 资源
 
@@ -92,7 +86,7 @@ edgion.io/circuit-breaker: |
   maxEjectionPercent: u32   # 最大逐出比例百分比（默认 50，0=不限制）
 ```
 
-配置挂在 Service 上，逐出跟踪在 EP/EPS 内部独立工作，与健康检查互补。
+配置挂在 Service 上，逐出跟踪在 EndpointSlice 内部独立工作，与健康检查互补。
 
 ## 负载均衡策略
 

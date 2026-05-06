@@ -28,7 +28,6 @@ description: Edgion 常见部署模式：FileSystem 本地开发、K8s 生产部
 conf_center:
   type: filesystem
   conf_dir: config/resources     # YAML 资源目录
-  endpoint_mode: EndpointSlice   # EndpointSlice | Endpoints | Both
 ```
 
 ### 适用场景
@@ -67,7 +66,6 @@ edgion-gateway --server-addr http://127.0.0.1:50051
 conf_center:
   type: kubernetes
   gateway_class: edgion          # 必填：匹配的 GatewayClass 名称
-  endpoint_mode: EndpointSlice
 
   # 可选：命名空间过滤
   watch_namespaces: [default, production]
@@ -83,7 +81,6 @@ conf_center:
 |------|------|------|------|
 | `gateway_class` | `String` | **必填** | 只处理此 GatewayClass 的资源 |
 | `watch_namespaces` | `Vec<String>` | 全部 | 限制 watch 的命名空间列表 |
-| `endpoint_mode` | `String` | `EndpointSlice` | 后端发现模式 |
 | `gateway_address` | `String?` | — | Gateway status 中报告的地址 |
 
 ---

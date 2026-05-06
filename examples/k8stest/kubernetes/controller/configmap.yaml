@@ -29,7 +29,6 @@ data:
       gateway_class: public-gateway
       controller_name: edgion.io/gateway-controller
       watch_namespaces: [edgion-system, edgion-default, edgion-test, edgion-backend]
-      endpoint_mode: both
       # HA mode: "leader-only" (default) or "all-serve"
       ha_mode: leader-only
 

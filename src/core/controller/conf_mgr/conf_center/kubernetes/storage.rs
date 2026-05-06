@@ -159,10 +159,6 @@ impl KubernetesStorage {
                 ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Service")),
                 Scope::Namespaced,
             ),
-            "Endpoints" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Endpoints")),
-                Scope::Namespaced,
-            ),
             "EndpointSlice" => (
                 ApiResource::from_gvk(&GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice")),
                 Scope::Namespaced,
@@ -466,7 +462,6 @@ impl CenterApi for KubernetesStorage {
             "ReferenceGrant",
             "Secret",
             "Service",
-            "Endpoints",
             "EndpointSlice",
             "EdgionTls",
             "EdgionGatewayConfig",

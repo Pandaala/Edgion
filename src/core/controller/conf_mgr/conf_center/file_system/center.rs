@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use super::config::FileSystemConfig;
 use super::controller::FileSystemController;
 use super::storage::FileSystemStorage;
-use crate::core::controller::conf_mgr::conf_center::non_kube_common::{resolve_endpoint_mode, CenterBase};
+use crate::core::controller::conf_mgr::conf_center::non_kube_common::CenterBase;
 use crate::core::controller::conf_mgr::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -92,28 +92,22 @@ impl CenterLifeCycle for FileSystemCenter {
         let writer_arc: Arc<dyn CenterApi + Send + Sync> = Arc::new(FileSystemStorage::new(self.config.conf_dir()));
         self.base.runtime().set_conf_writer(writer_arc);
 
-        let endpoint_mode = resolve_endpoint_mode(self.config.endpoint_mode());
         let conf_dir = self.config.conf_dir().clone();
 
         self.base
-            .run_lifecycle(
-                shutdown_handle,
-                endpoint_mode,
-                "file_system_center",
-                |shutdown, runtime, error_tx| {
-                    let ctrl = FileSystemController::new(conf_dir.clone(), endpoint_mode);
-                    tokio::spawn(async move {
-                        if let Err(e) = ctrl.run(shutdown, runtime).await {
-                            tracing::error!(
-                                component = "file_system_center",
-                                error = %e,
-                                "FileSystemController error"
-                            );
-                            let _ = error_tx.send(e.to_string());
-                        }
-                    })
-                },
-            )
+            .run_lifecycle(shutdown_handle, "file_system_center", |shutdown, runtime, error_tx| {
+                let ctrl = FileSystemController::new(conf_dir.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = ctrl.run(shutdown, runtime).await {
+                        tracing::error!(
+                            component = "file_system_center",
+                            error = %e,
+                            "FileSystemController error"
+                        );
+                        let _ = error_tx.send(e.to_string());
+                    }
+                })
+            })
             .await
     }
 

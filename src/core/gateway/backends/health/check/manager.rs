@@ -3,15 +3,12 @@ use super::config_store::{get_hc_config_store, HealthCheckConfigStore};
 use super::probes::{build_http_probe_client, probe_grpc, probe_http, probe_http_with_client, probe_tcp};
 use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::core::common::utils::duration::parse_duration;
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
-use crate::core::gateway::backends::discovery::endpoint::get_endpoint_roundrobin_store;
 use crate::core::gateway::backends::discovery::endpoint_slice::get_roundrobin_store;
-use crate::core::gateway::backends::try_get_global_endpoint_mode;
 use crate::types::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
 use parking_lot::RwLock;
 use pingora_load_balancing::Backend;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -253,44 +250,15 @@ fn derive_startup_jitter(service_key: &str, max_jitter: Duration) -> Duration {
     Duration::from_millis(offset_ms)
 }
 
+/// Returns the set of backends for a service, sourced exclusively from the
+/// EndpointSlice discovery store. The store already deduplicates and orders
+/// its result, so no further dedup is needed here.
 fn get_service_backends(service_key: &str) -> Vec<Backend> {
-    let mode = try_get_global_endpoint_mode().unwrap_or(EndpointMode::EndpointSlice);
-    let mut backends: BTreeSet<Backend> = BTreeSet::new();
-
-    match mode {
-        EndpointMode::EndpointSlice => {
-            backends.extend(
-                get_roundrobin_store()
-                    .get_backends_for_service(service_key)
-                    .into_iter()
-                    .map(|b| b.into_inner()),
-            );
-        }
-        EndpointMode::Endpoint => {
-            backends.extend(
-                get_endpoint_roundrobin_store()
-                    .get_backends_for_service(service_key)
-                    .into_iter()
-                    .map(|b| b.into_inner()),
-            );
-        }
-        EndpointMode::Both | EndpointMode::Auto => {
-            backends.extend(
-                get_roundrobin_store()
-                    .get_backends_for_service(service_key)
-                    .into_iter()
-                    .map(|b| b.into_inner()),
-            );
-            backends.extend(
-                get_endpoint_roundrobin_store()
-                    .get_backends_for_service(service_key)
-                    .into_iter()
-                    .map(|b| b.into_inner()),
-            );
-        }
-    }
-
-    backends.into_iter().collect()
+    get_roundrobin_store()
+        .get_backends_for_service(service_key)
+        .into_iter()
+        .map(|b| b.into_inner())
+        .collect()
 }
 
 #[cfg(test)]

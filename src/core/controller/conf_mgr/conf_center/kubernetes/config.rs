@@ -7,8 +7,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
-
 /// HA mode for controller replicas
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -43,7 +41,6 @@ impl std::fmt::Display for HaMode {
 ///   - default
 ///   - prod
 /// label_selector: app=edgion
-/// endpoint_mode: auto
 /// leader_election:
 ///   lease_name: edgion-controller-leader
 ///   lease_namespace: edgion-system
@@ -77,10 +74,6 @@ pub struct KubernetesConfig {
     #[serde(default)]
     pub leader_election: LeaderElectionConfig,
 
-    /// Endpoint discovery mode for Kubernetes
-    #[serde(default)]
-    pub endpoint_mode: EndpointMode,
-
     /// Static address to set on all managed Gateways' status.addresses
     /// when spec.addresses is empty and no matching Service is found.
     /// Useful for conformance testing or single-gateway deployments.
@@ -113,7 +106,6 @@ impl KubernetesConfig {
             controller_name: default_controller_name(),
             metadata_filter: MetadataFilterConfig::default(),
             leader_election: LeaderElectionConfig::default(),
-            endpoint_mode: EndpointMode::default(),
             gateway_address: None,
             ha_mode: HaMode::default(),
             no_watch_kinds: Vec::new(),
@@ -138,12 +130,6 @@ impl KubernetesConfig {
         self
     }
 
-    /// Set endpoint mode
-    pub fn with_endpoint_mode(mut self, mode: EndpointMode) -> Self {
-        self.endpoint_mode = mode;
-        self
-    }
-
     /// Set metadata filter
     pub fn with_metadata_filter(mut self, filter: MetadataFilterConfig) -> Self {
         self.metadata_filter = filter;
@@ -154,11 +140,6 @@ impl KubernetesConfig {
     pub fn with_leader_election(mut self, config: LeaderElectionConfig) -> Self {
         self.leader_election = config;
         self
-    }
-
-    /// Get the endpoint mode
-    pub fn endpoint_mode(&self) -> EndpointMode {
-        self.endpoint_mode
     }
 
     /// Get watch namespaces
@@ -333,7 +314,6 @@ mod tests {
         assert_eq!(config.controller_name, "edgion.io/gateway-controller");
         assert!(config.watch_namespaces.is_empty());
         assert!(config.label_selector.is_none());
-        assert!(config.endpoint_mode.is_auto());
     }
 
     #[test]
@@ -341,14 +321,12 @@ mod tests {
         let config = KubernetesConfig::new("edgion")
             .with_watch_namespaces(vec!["default".to_string(), "prod".to_string()])
             .with_label_selector("app=edgion")
-            .with_controller_name("example.com/controller")
-            .with_endpoint_mode(EndpointMode::EndpointSlice);
+            .with_controller_name("example.com/controller");
 
         assert_eq!(config.gateway_class(), "edgion");
         assert_eq!(config.controller_name(), "example.com/controller");
         assert_eq!(config.watch_namespaces(), &["default", "prod"]);
         assert_eq!(config.label_selector(), Some("app=edgion"));
-        assert_eq!(config.endpoint_mode(), EndpointMode::EndpointSlice);
     }
 
     #[test]

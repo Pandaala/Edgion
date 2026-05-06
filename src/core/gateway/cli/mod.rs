@@ -1,6 +1,4 @@
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
 use crate::core::gateway::api;
-use crate::core::gateway::backends::init_global_endpoint_mode;
 use crate::core::gateway::cli::pingora::{create_and_configure_server, run_server};
 use crate::core::gateway::conf_sync::{ConfigClient, ConfigSyncClient};
 use crate::core::gateway::lb::leastconn::BackendCleaner;
@@ -217,26 +215,10 @@ impl EdgionGatewayCli {
         init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
 
-        // 4.1. Get server info from Controller (includes EndpointMode and supported kinds)
+        // 4.1. Get server info from Controller (includes supported kinds)
         let server_info = runtime
             .block_on(sync_client.get_server_info())
             .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
-
-        // 4.2. Parse and initialize global endpoint mode from Controller
-        let endpoint_mode = match server_info.endpoint_mode.as_str() {
-            "EndpointSlice" => EndpointMode::EndpointSlice,
-            "Endpoint" => EndpointMode::Endpoint,
-            "Both" => EndpointMode::Both,
-            _ => {
-                tracing::warn!(
-                    component = "startup",
-                    endpoint_mode = %server_info.endpoint_mode,
-                    "Unknown endpoint mode from Controller, defaulting to EndpointSlice"
-                );
-                EndpointMode::EndpointSlice
-            }
-        };
-        init_global_endpoint_mode(endpoint_mode);
 
         // 4.3. Initialize integration testing mode from CLI flag
         // This flag activates: Access Log Store + Metrics Test Data collection
@@ -248,11 +230,10 @@ impl EdgionGatewayCli {
 
         tracing::info!(
             component = "startup",
-            endpoint_mode = ?endpoint_mode,
             test_mode = integration_testing,
             integration_testing_mode = integration_testing,
             server_id = %server_info.server_id,
-            "Global endpoint mode initialized from Controller"
+            "Gateway startup configuration initialized"
         );
 
         // 5. Start watching resources based on Controller's supported kinds

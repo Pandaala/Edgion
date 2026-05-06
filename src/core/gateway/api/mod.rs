@@ -105,7 +105,6 @@ macro_rules! list_client_resources {
             ResourceKind::TLSRoute => to_json_vec($client.tls_routes().list().data),
             ResourceKind::Service => to_json_vec($client.services().list().data),
             ResourceKind::EndpointSlice => to_json_vec($client.endpoint_slices().list().data),
-            ResourceKind::Endpoint => to_json_vec($client.endpoints().list().data),
             ResourceKind::EdgionTls => to_json_vec($client.edgion_tls().list().data),
             ResourceKind::EdgionPlugins => to_json_vec($client.edgion_plugins().list().data),
             ResourceKind::EdgionStreamPlugins => to_json_vec($client.edgion_stream_plugins().list().data),
@@ -134,7 +133,6 @@ macro_rules! get_client_resource {
             ResourceKind::TLSRoute => find_resource($client.tls_routes().list().data, ns_opt, name_str),
             ResourceKind::Service => find_resource($client.services().list().data, ns_opt, name_str),
             ResourceKind::EndpointSlice => find_resource($client.endpoint_slices().list().data, ns_opt, name_str),
-            ResourceKind::Endpoint => find_resource($client.endpoints().list().data, ns_opt, name_str),
             ResourceKind::EdgionTls => find_resource($client.edgion_tls().list().data, ns_opt, name_str),
             ResourceKind::EdgionPlugins => find_resource_alt($client.edgion_plugins().list().data, ns_opt, name_str),
             ResourceKind::EdgionStreamPlugins => {
@@ -334,7 +332,6 @@ struct StoreStatsResponse {
     // New sections (Tasks 1-10)
     client_caches: ClientCachesStats,
     service_store: SimpleCountStats,
-    endpoint_store: EndpointStoreStats,
     ep_slice_store: EpSliceStoreStats,
     health_status_store: SimpleCountStats,
     circuit_breaker_store: SimpleCountStats,
@@ -386,11 +383,6 @@ struct SimpleCountStats {
 #[derive(Serialize)]
 struct ClientCachesStats {
     by_kind: std::collections::BTreeMap<String, usize>,
-}
-
-#[derive(Serialize)]
-struct EndpointStoreStats {
-    ep_data_count: usize,
 }
 
 #[derive(Serialize)]
@@ -473,11 +465,6 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         count: svc_store_g.count(),
     };
 
-    let ep_g = crate::core::gateway::backends::get_endpoint_roundrobin_store();
-    let endpoint_store = EndpointStoreStats {
-        ep_data_count: ep_g.ep_data_count(),
-    };
-
     let eps_g = crate::core::gateway::backends::get_roundrobin_store();
     let ep_slice_store = EpSliceStoreStats {
         slice_count: eps_g.slice_count(),
@@ -540,7 +527,6 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         edgion_gateway_config_store,
         client_caches,
         service_store,
-        endpoint_store,
         ep_slice_store,
         health_status_store,
         circuit_breaker_store,
@@ -1637,7 +1623,6 @@ mod store_stats_tests {
                 by_kind: std::collections::BTreeMap::new(),
             },
             service_store: SimpleCountStats { count: 0 },
-            endpoint_store: EndpointStoreStats { ep_data_count: 0 },
             ep_slice_store: EpSliceStoreStats {
                 slice_count: 0,
                 service_index_count: 0,

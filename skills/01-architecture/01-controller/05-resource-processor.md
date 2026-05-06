@@ -117,13 +117,12 @@ Handler 方法的上下文对象，提供以下共享资源：
 | `BackendTlsPolicyHandler` | BackendTLSPolicy | 后端 TLS 策略校验 |
 | `ReferenceGrantHandler` | ReferenceGrant | 跨命名空间授权变更通知、CrossNsRevalidationListener |
 
-### K8s 核心资源（5 种）
+### K8s 核心资源（4 种）
 
 | Handler | 资源 | 关键处理 |
 |---|---|---|
 | `ServiceHandler` | Service | 变更时 requeue 依赖的路由 |
-| `EndpointsHandler` | Endpoints | 直接存储，Gateway 按需消费 |
-| `EndpointSliceHandler` | EndpointSlice | 同 Endpoints |
+| `EndpointSliceHandler` | EndpointSlice | 直接存储，Gateway 按需消费 |
 | `SecretHandler` | Secret | 变更时级联 requeue 依赖资源 |
 | `ConfigmapHandler` | ConfigMap | 直接存储，无 requeue 依赖 |
 

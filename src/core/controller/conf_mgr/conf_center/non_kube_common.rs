@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
 use parking_lot::{Mutex, RwLock};
@@ -16,35 +16,19 @@ use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
     EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
-    EndpointSliceHandler, EndpointsHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
-    LinkSysHandler, PluginMetadataHandler, ProcessorHandler, ReferenceGrantHandler, ResourceProcessor, SecretHandler,
-    SecretRefManager, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler,
+    PluginMetadataHandler, ProcessorHandler, ReferenceGrantHandler, ResourceProcessor, SecretHandler, SecretRefManager,
+    ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 use crate::core::controller::conf_mgr::sync_runtime::{ShutdownHandle, ShutdownSignal};
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceMeta;
-
-/// Resolve the effective endpoint mode for non-Kubernetes backends.
-///
-/// - In test mode, always use `Both` (sync both Endpoints and EndpointSlice).
-/// - Otherwise, `Auto` defaults to `EndpointSlice`; other values pass through.
-pub fn resolve_endpoint_mode(configured: EndpointMode) -> EndpointMode {
-    if crate::core::common::config::is_test_mode() {
-        EndpointMode::Both
-    } else {
-        match configured {
-            EndpointMode::Auto => EndpointMode::EndpointSlice,
-            mode => mode,
-        }
-    }
-}
 
 /// Shared state for non-Kubernetes configuration center backends.
 ///
@@ -175,7 +159,6 @@ impl CenterBase {
     /// # Parameters
     ///
     /// - `shutdown_handle`: The top-level shutdown handle for this center instance.
-    /// - `endpoint_mode`: The resolved endpoint mode (already post-`resolve_endpoint_mode`).
     /// - `component`: A `'static` string used as the `component` field in every log line.
     /// - `make_handle`: A synchronous closure that spawns the backend-specific controller
     ///   and returns its `JoinHandle`. Receives the iteration-scoped shutdown signal,
@@ -183,19 +166,10 @@ impl CenterBase {
     pub async fn run_lifecycle(
         &self,
         shutdown_handle: ShutdownHandle,
-        endpoint_mode: EndpointMode,
         component: &'static str,
         make_handle: impl Fn(ShutdownSignal, Arc<ControllerRuntime>, oneshot::Sender<String>) -> JoinHandle<()>,
     ) -> Result<()> {
         self.set_shutdown_handle(shutdown_handle.clone());
-
-        crate::core::gateway::backends::init_global_endpoint_mode(endpoint_mode);
-
-        tracing::info!(
-            component = component,
-            endpoint_mode = ?endpoint_mode,
-            "Using endpoint mode"
-        );
 
         let mut reload_start_time: Option<Instant> = None;
 
@@ -229,7 +203,6 @@ impl CenterBase {
 
             // 6. Create ConfigSyncServer and register all WatchObjs.
             let config_sync_server = Arc::new(ConfigSyncServer::new());
-            config_sync_server.set_endpoint_mode(endpoint_mode);
             let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
             config_sync_server.register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
@@ -393,14 +366,13 @@ where
 /// # Phase ordering
 ///
 /// - **Phase 1** (Foundation): GatewayClass, Gateway, Secret, ConfigMap,
-///   ReferenceGrant, Service, and optionally Endpoints / EndpointSlice.
+///   ReferenceGrant, Service, and EndpointSlice.
 ///   The function waits up to 15 s for all Phase-1 processors to become ready
 ///   before proceeding.
 /// - **Phase 2** (Dependent): All route, TLS, plugin, ACME, and config
 ///   resource types that depend on Phase-1 data being available.
 pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     backend: &B,
-    endpoint_mode: EndpointMode,
     secret_ref_manager: &Arc<SecretRefManager>,
     shutdown_signal: ShutdownSignal,
     runtime: Arc<ControllerRuntime>,
@@ -435,22 +407,8 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
 
     for_each_phase1_core_resource!(do_spawn);
 
-    if endpoint_mode.uses_endpoint() {
-        tracing::info!(
-            component = component,
-            mode = ?endpoint_mode,
-            "Registering Endpoints controller (Phase 1)"
-        );
-        do_spawn!(Endpoints, EndpointsHandler::new());
-    }
-    if endpoint_mode.uses_endpoint_slice() {
-        tracing::info!(
-            component = component,
-            mode = ?endpoint_mode,
-            "Registering EndpointSlice controller (Phase 1)"
-        );
-        do_spawn!(EndpointSlice, EndpointSliceHandler::new());
-    }
+    tracing::info!(component = component, "Registering EndpointSlice controller (Phase 1)");
+    do_spawn!(EndpointSlice, EndpointSliceHandler::new());
 
     let phase1_count = handles.len();
     tracing::info!(
@@ -463,7 +421,7 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
     let phase1_ready = runtime
         .processor_registry
-        .wait_kinds_ready(&common::phase1_kinds(endpoint_mode), PHASE1_TIMEOUT)
+        .wait_kinds_ready(&common::phase1_kinds(), PHASE1_TIMEOUT)
         .await;
 
     if phase1_ready {

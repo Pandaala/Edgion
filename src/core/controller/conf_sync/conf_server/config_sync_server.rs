@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 
 use super::client_registry::ClientRegistry;
 use super::traits::WatchObj;
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
 
 /// Simplified event data for watch responses (includes server_id)
 #[derive(Debug, Clone)]
@@ -38,9 +37,6 @@ pub struct ConfigSyncServer {
     /// Server instance ID, generated at startup
     server_id: RwLock<String>,
 
-    /// Endpoint discovery mode
-    endpoint_mode: RwLock<Option<EndpointMode>>,
-
     /// Watch objects by kind (registered by processors)
     watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>,
 
@@ -63,7 +59,6 @@ impl ConfigSyncServer {
 
         Self {
             server_id: RwLock::new(server_id),
-            endpoint_mode: RwLock::new(None),
             watch_objects: RwLock::new(HashMap::new()),
             client_registry: Arc::new(ClientRegistry::new()),
         }
@@ -107,16 +102,6 @@ impl ConfigSyncServer {
             "Regenerating server_id for relink"
         );
         *self.server_id.write() = new_id;
-    }
-
-    /// Set endpoint discovery mode
-    pub fn set_endpoint_mode(&self, mode: EndpointMode) {
-        *self.endpoint_mode.write() = Some(mode);
-    }
-
-    /// Get endpoint discovery mode
-    pub fn endpoint_mode(&self) -> Option<EndpointMode> {
-        *self.endpoint_mode.read()
     }
 
     // ==================== WatchObj Registration ====================

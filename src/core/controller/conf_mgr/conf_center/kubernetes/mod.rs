@@ -58,9 +58,9 @@ pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceControll
 pub use status::{create_shared_handler, KubernetesStatusHandler, SharedStatusHandler};
 pub use storage::KubernetesStorage;
 pub use version_detection::{
-    detect_backend_tls_policy_version, detect_endpoint_mode, detect_reference_grant_version, detect_tls_route_version,
-    probe_backend_tls_policy_version, probe_tls_route_version, resolve_endpoint_mode, BackendTLSPolicyVersion,
-    ReferenceGrantVersion, TLSRouteVersion,
+    detect_backend_tls_policy_version, detect_reference_grant_version, detect_tls_route_version,
+    probe_backend_tls_policy_version, probe_tls_route_version, BackendTLSPolicyVersion, ReferenceGrantVersion,
+    TLSRouteVersion,
 };
 
 // Re-export types from sync_runtime

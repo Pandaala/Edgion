@@ -56,7 +56,7 @@ pub use manager::ConfMgr;
 
 // Configuration (from conf_center)
 pub use conf_center::{
-    ConfCenterConfig, EndpointMode, FileSystemConfig, KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig,
+    ConfCenterConfig, FileSystemConfig, KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig,
 };
 
 // ProcessorRegistry exports

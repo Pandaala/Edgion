@@ -8,7 +8,6 @@ use k8s_openapi::ByteString;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
 use crate::core::gateway::link_sys::credential::CredentialState;
 use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
@@ -28,7 +27,6 @@ use crate::types::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKe
 /// type = "etcd"
 /// endpoints = ["http://127.0.0.1:2379"]
 /// key_prefix = "/edgion"
-/// endpoint_mode = "endpoint_slice"
 ///
 /// [conf_center.auth]
 /// username = "root"
@@ -47,10 +45,6 @@ pub struct EtcdConfig {
     /// Key prefix for all configuration keys (default: "/edgion")
     #[serde(default = "default_key_prefix")]
     pub key_prefix: String,
-
-    /// Endpoint discovery mode (default: Auto → EndpointSlice)
-    #[serde(default)]
-    pub endpoint_mode: EndpointMode,
 
     /// Authentication (username/password)
     #[serde(default)]
@@ -116,11 +110,6 @@ pub struct EtcdTlsConfig {
 // ============================================================================
 
 impl EtcdConfig {
-    /// Get endpoint mode
-    pub fn endpoint_mode(&self) -> EndpointMode {
-        self.endpoint_mode
-    }
-
     /// Convert to `EtcdClientConfig` + `CredentialState` that
     /// `EtcdLinkClient::from_config()` accepts.
     ///
@@ -280,7 +269,6 @@ endpoints: ["http://127.0.0.1:2379"]
         let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints, vec!["http://127.0.0.1:2379"]);
         assert_eq!(config.key_prefix, "/edgion");
-        assert!(config.endpoint_mode.is_auto());
         assert!(config.auth.is_none());
         assert!(config.tls.is_none());
     }
@@ -290,7 +278,6 @@ endpoints: ["http://127.0.0.1:2379"]
         let yaml = r#"
 endpoints: ["http://etcd-1:2379", "http://etcd-2:2379"]
 key_prefix: /my-app
-endpoint_mode: endpoint_slice
 connect_timeout_ms: 3000
 request_timeout_ms: 8000
 keep_alive_time_secs: 30
@@ -302,7 +289,6 @@ auth:
         let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints.len(), 2);
         assert_eq!(config.key_prefix, "/my-app");
-        assert!(config.endpoint_mode.is_endpoint_slice());
         assert_eq!(config.connect_timeout_ms, Some(3000));
 
         let auth = config.auth.as_ref().unwrap();
@@ -315,7 +301,6 @@ auth:
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
-            endpoint_mode: EndpointMode::default(),
             auth: None,
             tls: None,
             connect_timeout_ms: None,
@@ -339,7 +324,6 @@ auth:
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
-            endpoint_mode: EndpointMode::default(),
             auth: Some(EtcdAuthConfig {
                 username: "root".to_string(),
                 password: "changeme".to_string(),
@@ -375,7 +359,6 @@ auth:
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
-            endpoint_mode: EndpointMode::default(),
             auth: None,
             tls: None,
             connect_timeout_ms: None,

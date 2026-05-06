@@ -3,8 +3,11 @@
 //! Called after `wait_for_ready()` when all routes and EndpointSlices are
 //! loaded. Pays the first-request hydration cost up front so that early
 //! traffic does not see a cold-cell round trip.
+//!
+//! Only the EndpointSlice path is supported; endpoint discovery uses
+//! `get_roundrobin_store` exclusively.
 
-use crate::core::gateway::backends::{get_global_endpoint_mode, EndpointMode};
+use crate::core::gateway::backends::discovery::get_roundrobin_store;
 use crate::core::gateway::conf_sync::conf_client::ConfigClient;
 use crate::core::gateway::lb::compiled_selector;
 use std::collections::HashSet;
@@ -14,7 +17,6 @@ use std::sync::Arc;
 ///
 /// Called after `wait_for_ready()` when all routes and EndpointSlices are loaded.
 pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
-    let mode = get_global_endpoint_mode();
     let mut service_keys: HashSet<String> = HashSet::new();
 
     collect_http_routes(&config_client, &mut service_keys);
@@ -28,7 +30,7 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
     let mut skipped = 0;
 
     for service_key in &service_keys {
-        if warm_cell(service_key, mode) {
+        if warm_cell(service_key) {
             success += 1;
         } else {
             skipped += 1;
@@ -40,7 +42,6 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
         total,
         success,
         skipped,
-        mode = ?mode,
         "LB preload completed"
     );
 }
@@ -135,17 +136,10 @@ fn collect_tls_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) 
     }
 }
 
-/// Hydrate the `ServiceSelectorCell` for `service_key` from the data layer.
+/// Hydrate the `ServiceSelectorCell` for `service_key` from the EndpointSlice store.
 /// Returns true if data was available and the cell was warmed.
-fn warm_cell(service_key: &str, mode: EndpointMode) -> bool {
-    use crate::core::gateway::backends::discovery::{get_endpoint_roundrobin_store, get_roundrobin_store};
-
-    let backends = match mode {
-        EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto => {
-            get_roundrobin_store().get_backends_for_service(service_key)
-        }
-        EndpointMode::Endpoint => get_endpoint_roundrobin_store().get_backends_for_service(service_key),
-    };
+fn warm_cell(service_key: &str) -> bool {
+    let backends = get_roundrobin_store().get_backends_for_service(service_key);
 
     if backends.is_empty() {
         tracing::debug!(

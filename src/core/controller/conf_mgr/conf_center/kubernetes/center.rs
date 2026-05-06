@@ -14,12 +14,11 @@
 //! └── client: kube::Client
 //! ```
 
-use super::super::common::EndpointMode;
 use super::config::{HaMode, KubernetesConfig};
 use super::controller::{ControllerExitReason, KubernetesController};
 use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLeaderElectionConfig, LeaderHandle};
 use super::storage::KubernetesStorage;
-use super::version_detection::{preflight_check_gateway_api_crds, resolve_endpoint_mode, validate_no_watch_kinds};
+use super::version_detection::{preflight_check_gateway_api_crds, validate_no_watch_kinds};
 use crate::core::controller::conf_mgr::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
 };
@@ -193,7 +192,7 @@ impl KubernetesCenter {
     }
 
     /// Create K8s controller (new architecture - no ConfigServer dependency)
-    fn create_k8s_controller(&self, client: &Client, endpoint_mode: EndpointMode) -> Result<KubernetesController> {
+    fn create_k8s_controller(&self, client: &Client) -> Result<KubernetesController> {
         let config = self.config();
 
         tracing::info!(
@@ -217,7 +216,6 @@ impl KubernetesCenter {
             config.watch_namespaces.clone(),
             config.label_selector.clone(),
             config.metadata_filter.clone(),
-            endpoint_mode,
             no_watch_kinds,
         )
     }
@@ -453,21 +451,17 @@ impl KubernetesCenter {
         leader_handle: &LeaderHandle,
         event_tx: mpsc::Sender<LifecycleEvent>,
     ) -> Result<(WatcherHandles, Arc<ConfigSyncServer>)> {
-        // 1. Resolve endpoint mode (test / auto / explicit) and initialize global
-        let resolved_mode = self.resolve_and_init_endpoint_mode(client).await?;
-
-        // 2. Validate and preflight check Gateway API CRDs
+        // 1. Validate and preflight check Gateway API CRDs
         validate_no_watch_kinds(&self.config.no_watch_kinds);
         let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
         preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
 
-        // 3. Create ConfigSyncServer (will be populated when caches are ready)
+        // 2. Create ConfigSyncServer (will be populated when caches are ready)
         let config_sync_server = Arc::new(ConfigSyncServer::new());
-        config_sync_server.set_endpoint_mode(resolved_mode);
 
-        // 4. Create Controller with resolved endpoint mode and leader handle
+        // 3. Create Controller and leader handle
         let controller = self
-            .create_k8s_controller(client, resolved_mode)?
+            .create_k8s_controller(client)?
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
 
@@ -591,29 +585,6 @@ impl KubernetesCenter {
     /// Calculate exponential backoff duration
     fn backoff(failures: u32) -> Duration {
         Duration::from_secs(1 << failures.min(6))
-    }
-
-    /// Resolve endpoint mode and initialize the global setting.
-    async fn resolve_and_init_endpoint_mode(&self, client: &Client) -> Result<EndpointMode> {
-        let resolved_mode = if crate::core::common::config::is_test_mode() {
-            tracing::info!(
-                component = "kubernetes_center",
-                "Test mode enabled, forcing endpoint_mode=Both"
-            );
-            EndpointMode::Both
-        } else {
-            resolve_endpoint_mode(client, self.config.endpoint_mode()).await?
-        };
-
-        tracing::info!(
-            component = "kubernetes_center",
-            resolved_mode = ?resolved_mode,
-            test_mode = crate::core::common::config::is_test_mode(),
-            "Endpoint mode resolved"
-        );
-
-        crate::core::gateway::backends::init_global_endpoint_mode(resolved_mode);
-        Ok(resolved_mode)
     }
 
     /// Spawn caches-ready watcher task.
@@ -842,21 +813,17 @@ impl KubernetesCenter {
         leader_handle: &LeaderHandle,
         event_tx: mpsc::Sender<LifecycleEvent>,
     ) -> Result<(WatcherHandles, Arc<ConfigSyncServer>)> {
-        // 1. Resolve endpoint mode and initialize global
-        let resolved_mode = self.resolve_and_init_endpoint_mode(client).await?;
-
-        // 2. Validate and preflight check Gateway API CRDs
+        // 1. Validate and preflight check Gateway API CRDs
         validate_no_watch_kinds(&self.config.no_watch_kinds);
         let no_watch_kinds: std::collections::HashSet<String> = self.config.no_watch_kinds.iter().cloned().collect();
         preflight_check_gateway_api_crds(client, &no_watch_kinds).await?;
 
-        // 3. Create ConfigSyncServer
+        // 2. Create ConfigSyncServer
         let config_sync_server = Arc::new(ConfigSyncServer::new());
-        config_sync_server.set_endpoint_mode(resolved_mode);
 
-        // 4. Create controller with leader_handle for status write gating
+        // 3. Create controller with leader_handle for status write gating
         let controller = self
-            .create_k8s_controller(client, resolved_mode)?
+            .create_k8s_controller(client)?
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
 

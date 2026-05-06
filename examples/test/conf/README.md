@@ -99,17 +99,14 @@ RoundRobin load-balancing tests verify that requests are evenly distributed acro
 - `Gateway.yaml`: RoundRobin test gateway on port `31120`.
 - `Service_default_lb-rr.yaml`: Load-balancing service definition.
 - `EndpointSlice_default_lb-rr.yaml`: Single-slice backend with 3 endpoints.
-- `Endpoints_default_lb-rr.yaml`: `Endpoints` resource for EP mode tests.
 - `HTTPRoute_default_lb-rr-eps.yaml`: EndpointSlice mode route.
-- `HTTPRoute_default_lb-rr-ep.yaml`: Endpoints mode route using `kind: ServiceEndpoint`.
 - `Service_default_lb-rr-multi.yaml`: Multi-slice service.
 - `EndpointSlice_default_lb-rr-multi-1/2.yaml`: Multi-slice backend with 4 endpoints across 2 slices.
 - `HTTPRoute_default_lb-rr-multi.yaml`: Multi-slice route.
 
 Test scenarios:
 1. EndpointSlice mode with a single slice.
-2. Endpoints mode using `ServiceEndpoint`.
-3. Round-robin behavior across multiple EndpointSlices.
+2. Round-robin behavior across multiple EndpointSlices.
 
 ### `lb-consistenthash/`
 
@@ -118,9 +115,7 @@ ConsistentHash tests verify that the same key is consistently routed to the same
 - `Gateway.yaml`: ConsistentHash test gateway on port `31121`.
 - `Service_default_lb-ch.yaml`: Service definition.
 - `EndpointSlice_default_lb-ch.yaml`: Single-slice backend.
-- `Endpoints_default_lb-ch.yaml`: `Endpoints` resource.
 - `HTTPRoute_default_lb-ch-header-eps.yaml`: Header hash with EndpointSlice mode.
-- `HTTPRoute_default_lb-ch-header-ep.yaml`: Header hash with Endpoints mode.
 - `HTTPRoute_default_lb-ch-cookie.yaml`: Cookie hash route.
 - `HTTPRoute_default_lb-ch-arg.yaml`: Query-parameter hash route.
 - `Service_default_lb-ch-multi.yaml`: Multi-slice test service.
@@ -131,8 +126,7 @@ Test scenarios:
 1. Header hash using `x-user-id`.
 2. Cookie hash using `session-id`.
 3. Query-parameter hash using `user_id`.
-4. EndpointSlice versus Endpoints mode.
-5. Consistency across multiple slices.
+4. Consistency across multiple slices.
 
 ### `weighted-backend/`
 

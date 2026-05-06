@@ -39,7 +39,9 @@ pub fn sp_affinity_lookup(service_key: &str, token: &str) -> Option<std::net::So
     SP_AFFINITY.get(service_key).and_then(|map| map.get(token).copied())
 }
 
-fn build_sp_affinity_map(backends: &[Arc<EdgionBackend>]) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
+fn build_sp_affinity_map(
+    backends: &[Arc<EdgionBackend>],
+) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     let mut map = std::collections::HashMap::with_capacity(backends.len().min(SP_AFFINITY_MAX_PER_SERVICE));
     for b in backends.iter().take(SP_AFFINITY_MAX_PER_SERVICE) {
         if let SocketAddr::Inet(addr) = b.addr {

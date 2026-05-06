@@ -13,7 +13,7 @@ FileSystemCenter 是面向开发和测试场景的配置中心后端，监听本
 ```
 FileSystemCenter
 ├── writer: FileSystemStorage       # CenterApi 委托（CRUD 操作）
-├── config: FileSystemConfig        # 配置（conf_dir, endpoint_mode 等）
+├── config: FileSystemConfig        # 配置（conf_dir 等）
 ├── config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>
 ├── reload_tx: Mutex<Option<mpsc::Sender<()>>>
 └── controller_handle: Mutex<Option<JoinHandle<()>>>
@@ -76,7 +76,7 @@ start(shutdown_handle)
     ├── 2. FileSystemController.run()
     │   ├── 清理孤儿 .status 文件
     │   ├── Phase 1: spawn 基础资源控制器
-    │   │   （GatewayClass, Gateway, Secret, ReferenceGrant, Service, Endpoints/EndpointSlice）
+    │   │   （GatewayClass, Gateway, Secret, ReferenceGrant, Service, EndpointSlice）
     │   ├── wait_kinds_ready(phase1_kinds, 15s)
     │   ├── Phase 2: spawn 依赖资源控制器
     │   │   （HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, EdgionTls,
@@ -150,7 +150,7 @@ Remove 事件明确来自内核，被保守地处理为 Delete，不论 `path.ex
 
 | 阶段 | 资源 | 说明 |
 |------|------|------|
-| Phase 1（基础） | GatewayClass, Gateway, Secret, ReferenceGrant, Service, Endpoints/EndpointSlice | 其他资源在 `parse()` 时需要查询这些基础资源 |
+| Phase 1（基础） | GatewayClass, Gateway, Secret, ReferenceGrant, Service, EndpointSlice | 其他资源在 `parse()` 时需要查询这些基础资源 |
 | Phase 2（依赖） | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls, BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, PluginMetaData, LinkSys, EdgionAcme, EdgionGatewayConfig | Phase 1 完成后启动 |
 
 Phase 2 等待 Phase 1 所有 Kind 在 `PROCESSOR_REGISTRY` 中标记 ready（超时 15 秒后降级为并行初始化）。

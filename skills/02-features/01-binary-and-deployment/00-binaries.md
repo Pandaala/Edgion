@@ -38,7 +38,7 @@ edgion-controller [OPTIONS]
 | `--work-dir` | `-w` | `PathBuf` | `"."` | 工作目录 |
 | `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML 配置文件路径 |
 | `--conf-dir` | — | `PathBuf` | — | FileSystem 模式的配置目录（覆盖 TOML 中 conf_center.conf_dir） |
-| `--test-mode` | — | `bool` | `false` | 启用测试模式（endpoint_mode=Both + metrics 测试功能） |
+| `--test-mode` | — | `bool` | `false` | 启用测试模式（metrics 测试功能） |
 | `--grpc-listen` | — | `String` | `0.0.0.0:50051` | gRPC 监听地址 |
 | `--admin-listen` | — | `String` | `0.0.0.0:5800` | Admin HTTP API 地址 |
 | `--log-dir` | — | `String` | `logs` | 日志目录 |

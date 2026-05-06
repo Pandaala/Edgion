@@ -24,7 +24,7 @@
 //!
 //! ## Configuration
 //!
-//! - `common`: Common types shared across backends (EndpointMode)
+//! - `common`: Common types shared across backends
 //! - `config`: Top-level ConfCenterConfig enum
 //! - `kubernetes::config`: Kubernetes-specific config (LeaderElectionConfig, MetadataFilterConfig)
 //!
@@ -140,5 +140,4 @@ pub use kubernetes::{
 pub use etcd::{EtcdCenter, EtcdConfig};
 
 // Re-export configuration types
-pub use common::EndpointMode;
 pub use config::ConfCenterConfig;

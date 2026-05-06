@@ -105,9 +105,9 @@
 
 ## try_get_peer 重复代码已修复
 
-**原问题**：`try_get_peer` 的 Service/ServiceEndpoint/ServiceEndpointSlice 三个 match 臂有 ~25 行重复的 upstream 填充 + peer 构建逻辑。
+**原问题**：`try_get_peer` 的 Service/ServiceEndpointSlice 等 match 臂有 ~25 行重复的 upstream 填充 + peer 构建逻辑。
 
-**修复**：提取 `build_lb_peer` 公共函数，三个 match 臂简化为"选 backend + 指定 PortLookupSource + 调用 build_lb_peer"。消除 ~60 行重复。注意：因 `lb_policy` 借用自 `ctx`，提取函数时需先 clone `lb_policy` 断开借用。
+**修复**：提取 `build_peer_from_lb_selection` 公共函数，各 match 臂简化为"选 backend + 调用 build_peer_from_lb_selection"。消除 ~60 行重复。注意：因 `lb_policy` 借用自 `ctx`，提取函数时需先 clone `lb_policy` 断开借用。
 
 ---
 
@@ -140,10 +140,10 @@
 
 ---
 
-## select_from_backends 9 个参数不需要重构
+## pick 多参数不需要重构
 
-**误判场景**：`select_from_backends` 有 9 个参数，其中 5 个是 EdgionStatus 错误码（source×algorithm 组合），建议传入 source 枚举并内部映射。
+**误判场景**：`pick`（在 `selector.rs`）封装了 EdgionStatus 错误码（per-policy 组合），可能建议进一步抽象为 source 枚举映射。
 
-**实际情况**：只有 2 个调用方（`select_from_endpoint_slice`、`select_from_endpoints`），都在同文件紧邻定义。10 个错误码变体全仓库仅在 `backends/mod.rs` 使用，无外部消费。新增 LB 算法频率极低。重构为 source 枚举 + 映射函数只是把显式参数变成隐式映射，调试反而多一层。
+**实际情况**：唯一调用方是 `select_from_endpoint_slice`（同文件紧邻定义）。错误码变体全仓库仅在 `backends/mod.rs` 使用，无外部消费。新增 LB 算法频率极低。重构为 source 枚举 + 映射函数只会把显式参数变成隐式映射，调试反而多一层。
 
-**判定**：2 个调用方、同文件可见、扩展频率极低，不需要重构。
+**判定**：单一调用方、同文件可见、扩展频率极低，不需要重构。

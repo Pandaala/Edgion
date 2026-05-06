@@ -22,7 +22,7 @@ use super::sni_parser;
 use super::TlsRouteManager;
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::{
-    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr, PortLookupSource,
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
 };
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
@@ -198,12 +198,7 @@ impl EdgionTlsPassthroughProxy {
             };
 
             let mut upstream_addr = backend.inner().addr.clone();
-            resolve_target_port_key(
-                &mut upstream_addr,
-                backend_ref.port,
-                &service_key,
-                PortLookupSource::Auto,
-            );
+            resolve_target_port_key(&mut upstream_addr, backend_ref.port, &service_key);
             let upstream_addr_str = upstream_addr.to_string();
             let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
 

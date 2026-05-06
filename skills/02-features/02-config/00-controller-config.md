@@ -62,7 +62,6 @@ conf_sync:
 conf_center:
   type: filesystem
   conf_dir: config/resources              # YAML 资源目录
-  endpoint_mode: EndpointSlice            # EndpointSlice | Endpoints | Both
 
 # ─── Kubernetes 模式 ───
 # conf_center:
@@ -71,7 +70,6 @@ conf_center:
 #   controller_name: edgion.io/gateway-controller  # Gateway API status 回报的 controllerName
 #   watch_namespaces: []                  # 空 = 所有命名空间
 #   label_selector: ""                    # 标签过滤
-#   endpoint_mode: EndpointSlice
 #   gateway_address: ""                   # Gateway status 报告地址
 #   ha_mode: leader-only                  # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]  # 跳过 CRD 预检和 watch 的资源 kind
@@ -146,7 +144,6 @@ conf_center:
 |------|------|------|------|
 | `type` | `String` | — | `"filesystem"` |
 | `conf_dir` | `PathBuf` | — | 资源配置目录 |
-| `endpoint_mode` | `String` | `EndpointSlice` | 后端发现：`EndpointSlice` / `Endpoints` / `Both` |
 
 重要现实约束：
 - `conf_dir` 当前由 `FileSystemStorage::new()` 直接按进程 cwd 解析
@@ -155,7 +152,7 @@ conf_center:
 
 CLI 特例：
 - `--conf-dir` 会直接覆盖这里的 `conf_dir`
-- 而且会把 `conf_center` 切到 FileSystem 变体，只保留原来的 `endpoint_mode`
+- 而且会把 `conf_center` 切到 FileSystem 变体
 
 ### [conf_center] — Kubernetes
 
@@ -166,7 +163,6 @@ CLI 特例：
 | `controller_name` | `String` | — | Gateway API status 里回报的 controllerName |
 | `watch_namespaces` | `Vec<String>` | `[]`（全部） | Watch 的命名空间列表 |
 | `label_selector` | `String` | `""` | 资源标签过滤 |
-| `endpoint_mode` | `String` | `EndpointSlice` | 后端发现模式 |
 | `gateway_address` | `String?` | — | Gateway status 中报告的地址 |
 | `ha_mode` | `String` | — | `"leader-only"` 或 `"all-serve"` |
 | `no_watch_kinds` | `Vec<String>` | `[]` | 不探测/不 watch 的资源 kind（PascalCase），如 `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`。启动时跳过 CRD 预检，不 spawn watcher，从 processor readiness 中排除 |

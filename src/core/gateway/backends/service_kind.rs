@@ -1,8 +1,7 @@
 /// EdgionService defines the types of backend services
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgionService {
-    /// Standard Kubernetes Service (default behavior based on endpoint_mode)
-    /// In Both mode: tries EndpointSlice first, falls back to Endpoint
+    /// Standard Kubernetes Service (default behavior, uses EndpointSlice)
     Service,
     /// Service with ClusterIP (direct connection, no LB)
     ServiceClusterIp,
@@ -10,11 +9,7 @@ pub enum EdgionService {
     ServiceImport,
     /// Service with ExternalName
     ServiceExternalName,
-    /// Force use Endpoints resource for backend discovery
-    /// Useful in Both mode to explicitly select Endpoint over EndpointSlice
-    ServiceEndpoint,
     /// Force use EndpointSlice resource for backend discovery
-    /// Useful in Both mode to explicitly select EndpointSlice
     ServiceEndpointSlice,
     /// Unsupported backend kind (Gateway API conformance: must return 500)
     Unsupported(String),
@@ -31,7 +26,6 @@ impl EdgionService {
                 "ServiceClusterIp" => EdgionService::ServiceClusterIp,
                 "ServiceImport" => EdgionService::ServiceImport,
                 "ServiceExternalName" => EdgionService::ServiceExternalName,
-                "ServiceEndpoint" | "Endpoint" => EdgionService::ServiceEndpoint,
                 "ServiceEndpointSlice" | "EndpointSlice" => EdgionService::ServiceEndpointSlice,
                 _ => EdgionService::Unsupported(k.clone()),
             },
@@ -70,18 +64,6 @@ mod tests {
     }
 
     #[test]
-    fn test_edgion_service_from_kind_explicit_endpoint() {
-        assert_eq!(
-            EdgionService::from_kind(Some(&"ServiceEndpoint".to_string())),
-            EdgionService::ServiceEndpoint
-        );
-        assert_eq!(
-            EdgionService::from_kind(Some(&"Endpoint".to_string())),
-            EdgionService::ServiceEndpoint
-        );
-    }
-
-    #[test]
     fn test_edgion_service_from_kind_explicit_endpoint_slice() {
         assert_eq!(
             EdgionService::from_kind(Some(&"ServiceEndpointSlice".to_string())),
@@ -102,6 +84,15 @@ mod tests {
         assert_eq!(
             EdgionService::from_kind(Some(&"RandomString".to_string())),
             EdgionService::Unsupported("RandomString".to_string())
+        );
+        // Legacy endpoint kinds are now unsupported
+        assert_eq!(
+            EdgionService::from_kind(Some(&"ServiceEndpoint".to_string())),
+            EdgionService::Unsupported("ServiceEndpoint".to_string())
+        );
+        assert_eq!(
+            EdgionService::from_kind(Some(&"Endpoint".to_string())),
+            EdgionService::Unsupported("Endpoint".to_string())
         );
     }
 }

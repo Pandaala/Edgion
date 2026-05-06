@@ -1,7 +1,6 @@
 use super::get_roundrobin_store;
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::gateway::backends::discovery::conf_handler_common::{update_affected_lbs, update_all_existing_lbs};
-use crate::core::gateway::backends::endpoint_mode::{try_get_global_endpoint_mode, EndpointMode};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
@@ -11,20 +10,6 @@ use crate::types::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-/// Whether the EndpointSlice store currently owns the `ServiceSelectorCell`
-/// snapshot for each service. Mirrors the read-side mode selection used by
-/// `select_backend_by_policy` so EP/EPS handlers do not race on the cell.
-///
-/// During very early startup the global endpoint mode may not be initialized
-/// yet; in that window we conservatively skip cell updates (the data layer
-/// itself is still updated for later replay via `update_all_existing_lbs`).
-fn is_primary_for_cell() -> bool {
-    matches!(
-        try_get_global_endpoint_mode(),
-        Some(EndpointMode::EndpointSlice | EndpointMode::Both | EndpointMode::Auto)
-    )
-}
 
 /// Handler for EndpointSlice configuration updates
 ///
@@ -109,7 +94,7 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         let all_services = roundrobin_store.replace_data_only(data_owned);
 
         // 2. Push fresh backends into cells for all known services
-        update_all_existing_lbs(&*roundrobin_store, &all_services, is_primary_for_cell());
+        update_all_existing_lbs(&*roundrobin_store, &all_services);
 
         // 3. Sync EndpointSlice-level health check config
         self.sync_health_check_configs_for_services(&all_services);
@@ -157,7 +142,7 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         let affected_services = roundrobin_store.update_data_only(add_owned, update_owned, &remove);
 
         // 2. Update affected LBs in ALL stores
-        update_affected_lbs(&*roundrobin_store, &affected_services, is_primary_for_cell());
+        update_affected_lbs(&*roundrobin_store, &affected_services);
 
         // 3. Sync EndpointSlice-level health check config
         self.sync_health_check_configs_for_services(&affected_services);

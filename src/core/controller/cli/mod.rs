@@ -366,7 +366,7 @@ impl EdgionControllerCli {
         crate::core::common::config::init_controller_config(config.clone());
 
         // Initialize test mode if enabled via CLI --test-mode
-        // This affects: endpoint_mode (forced to Both), metrics test features
+        // This affects: metrics test features
         crate::core::common::config::init_global_test_mode(self.config.test_mode);
 
         // 1. Initialize environment (work_dir, logging)

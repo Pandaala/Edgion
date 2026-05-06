@@ -125,7 +125,6 @@ gRPC 配置同步服务器，持有所有 WatchObj 并提供统一的 list/watch
 ```rust
 pub struct ConfigSyncServer {
     server_id: RwLock<String>,                              // 服务器实例 ID（毫秒时间戳）
-    endpoint_mode: RwLock<Option<EndpointMode>>,             // 端点发现模式
     watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>, // 按 kind 注册的 WatchObj
     client_registry: Arc<ClientRegistry>,                    // 已连接 Gateway 实例注册表
 }

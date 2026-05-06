@@ -23,7 +23,7 @@ pub struct ConfigSyncClient {
 ### 启动同步序列
 
 1. **连接建立**：通过 tonic 连接 Controller 的 gRPC 端口（默认 :50051）
-2. **GetServerInfo**：获取 `server_id`、`endpoint_mode`、`supported_kinds`
+2. **GetServerInfo**：获取 `server_id`、`supported_kinds`
 3. **逐 kind List**：对 `supported_kinds` 中的每种资源执行 List 调用，获取全量快照
 4. **逐 kind Watch**：使用 List 返回的 `sync_version` 作为 `from_version`，启动 Watch 流
 5. **WatchServerMeta**：注册到 Controller 的 ClientRegistry，接收 `gateway_instance_count` 变更
@@ -193,7 +193,7 @@ ConfigClient
   ├── ClientCache<EdgionGatewayConfig>
   ├── ClientCache<LinkSys>
   ├── ClientCache<EdgionAcme>
-  └── ClientCache<Service/EndpointSlice/Endpoint>
+  └── ClientCache<Service/EndpointSlice>
 ```
 
 ConfigClient 还提供 `is_ready()` 方法，检查所有必需资源是否已完成初始化同步。Gateway 只有在 ConfigClient 就绪后才开始接受流量。
