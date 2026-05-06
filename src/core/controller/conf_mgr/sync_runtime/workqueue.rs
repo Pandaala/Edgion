@@ -15,7 +15,8 @@
 //! reconnect triggers a full cache rebuild which re-processes and re-writes all statuses.
 //! Accurate identification of transient vs permanent failures is not practical at this layer.
 
-use dashmap::DashSet;
+use dashmap::mapref::entry::Entry;
+use dashmap::{DashMap, DashSet};
 use smallvec::SmallVec;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::BinaryHeap;
@@ -124,6 +125,19 @@ impl WorkItem {
             trigger_chain: chain,
         }
     }
+}
+
+// ==================== Pending entry ====================
+
+/// State stored alongside a pending key.
+///
+/// `chain` is the cascade history merged across all enqueue paths that converged
+/// on this key while it was pending. `enqueue_time` is the time of the first
+/// enqueue that caused the entry to be created.
+#[derive(Debug, Clone)]
+struct PendingEntry {
+    enqueue_time: Instant,
+    chain: TriggerChain,
 }
 
 // ==================== Delay Queue internals ====================
@@ -249,13 +263,17 @@ impl WorkqueueMetrics {
 pub struct Workqueue {
     /// Queue name (for logging and metrics)
     name: String,
-    /// Sender for enqueueing ready items
-    tx: mpsc::Sender<WorkItem>,
-    /// Receiver for dequeueing items (wrapped in Mutex for single consumer)
-    rx: Mutex<mpsc::Receiver<WorkItem>>,
-    /// Keys currently in the ready queue (for deduplication).
-    /// Wrapped in Arc so delay_loop shares the same set.
-    pending: Arc<DashSet<String>>,
+    /// Sender for ready key notifications. Only the key travels through the
+    /// channel; the associated `PendingEntry` (enqueue time + trigger chain)
+    /// lives in `pending` so that converging enqueue paths can merge their
+    /// chains rather than racing through the channel as separate items.
+    tx: mpsc::Sender<String>,
+    /// Receiver for dequeueing keys (wrapped in Mutex for single consumer)
+    rx: Mutex<mpsc::Receiver<String>>,
+    /// Keys currently in the ready queue with their merged trigger chain
+    /// (for deduplication and cascade-history preservation). Wrapped in Arc
+    /// so the delay loop shares the same map.
+    pending: Arc<DashMap<String, PendingEntry>>,
     /// Keys currently scheduled in the delay queue (dedup at schedule time).
     /// Wrapped in Arc so delay_loop shares the same set.
     scheduled: Arc<DashSet<String>>,
@@ -275,7 +293,7 @@ impl Workqueue {
     pub fn new(name: &str, config: WorkqueueConfig) -> Self {
         let (tx, rx) = mpsc::channel(config.capacity);
         let (delay_tx, delay_rx) = mpsc::channel(config.capacity);
-        let pending = Arc::new(DashSet::new());
+        let pending = Arc::new(DashMap::new());
         let scheduled = Arc::new(DashSet::new());
         let metrics = Arc::new(WorkqueueMetrics::new());
 
@@ -312,8 +330,8 @@ impl Workqueue {
     fn spawn_delay_loop(
         name: String,
         mut delay_rx: mpsc::Receiver<DelayedItem>,
-        ready_tx: mpsc::Sender<WorkItem>,
-        pending: Arc<DashSet<String>>,
+        ready_tx: mpsc::Sender<String>,
+        pending: Arc<DashMap<String, PendingEntry>>,
         scheduled: Arc<DashSet<String>>,
         metrics: Arc<WorkqueueMetrics>,
     ) {
@@ -338,27 +356,7 @@ impl Workqueue {
                                     let item = heap.pop().unwrap();
                                     scheduled.remove(&item.key);
 
-                                    if !pending.insert(item.key.clone()) {
-                                        tracing::trace!(
-                                            queue = %name,
-                                            key = %item.key,
-                                            "Delayed item ready but key already pending, skipping"
-                                        );
-                                        continue;
-                                    }
-                                    metrics.inc_depth();
-                                    metrics.inc_adds();
-
-                                    let work_item = WorkItem::with_chain(item.key.clone(), item.chain);
-                                    if ready_tx.send(work_item).await.is_err() {
-                                        pending.remove(&item.key);
-                                        metrics.dec_depth();
-                                        tracing::error!(
-                                            queue = %name,
-                                            key = %item.key,
-                                            "Failed to move delayed item to ready queue"
-                                        );
-                                    }
+                                    promote_delayed_item(&name, item, &pending, &ready_tx, &metrics).await;
                                 } else {
                                     break;
                                 }
@@ -371,16 +369,9 @@ impl Workqueue {
                                     // Channel closed. Drain remaining items.
                                     let now = Instant::now();
                                     while let Some(item) = heap.pop() {
+                                        scheduled.remove(&item.key);
                                         if item.ready_at <= now {
-                                            scheduled.remove(&item.key);
-                                            if pending.insert(item.key.clone()) {
-                                                metrics.inc_depth();
-                                                metrics.inc_adds();
-                                                let work_item = WorkItem::with_chain(item.key.clone(), item.chain);
-                                                let _ = ready_tx.send(work_item).await;
-                                            }
-                                        } else {
-                                            scheduled.remove(&item.key);
+                                            promote_delayed_item(&name, item, &pending, &ready_tx, &metrics).await;
                                         }
                                     }
                                     break;
@@ -399,7 +390,66 @@ impl Workqueue {
     pub fn name(&self) -> &str {
         &self.name
     }
+}
 
+/// Promote a delayed item to the ready queue.
+///
+/// On collision (key already pending from a concurrent immediate enqueue) the
+/// trigger chain is **merged** into the existing pending entry rather than
+/// dropped. The deeper of the two chains wins. This preserves cascade history
+/// for cycle detection — see `c3a-008`. No new mpsc message is sent on
+/// collision because the existing pending entry already has one in flight.
+async fn promote_delayed_item(
+    name: &str,
+    item: DelayedItem,
+    pending: &DashMap<String, PendingEntry>,
+    ready_tx: &mpsc::Sender<String>,
+    metrics: &WorkqueueMetrics,
+) {
+    let needs_send = match pending.entry(item.key.clone()) {
+        Entry::Vacant(v) => {
+            v.insert(PendingEntry {
+                enqueue_time: Instant::now(),
+                chain: item.chain,
+            });
+            metrics.inc_depth();
+            metrics.inc_adds();
+            true
+        }
+        Entry::Occupied(mut o) => {
+            if item.chain.depth() > o.get().chain.depth() {
+                let prev_depth = o.get().chain.depth();
+                o.get_mut().chain = item.chain;
+                tracing::trace!(
+                    queue = %name,
+                    key = %o.key(),
+                    prev_depth = prev_depth,
+                    new_depth = o.get().chain.depth(),
+                    "Delayed item collided with pending; merged deeper chain"
+                );
+            } else {
+                tracing::trace!(
+                    queue = %name,
+                    key = %o.key(),
+                    "Delayed item collided with pending; existing chain is at least as deep"
+                );
+            }
+            false
+        }
+    };
+
+    if needs_send && ready_tx.send(item.key.clone()).await.is_err() {
+        pending.remove(&item.key);
+        metrics.dec_depth();
+        tracing::error!(
+            queue = %name,
+            key = %item.key,
+            "Failed to move delayed item to ready queue"
+        );
+    }
+}
+
+impl Workqueue {
     /// Get metrics reference
     pub fn metrics(&self) -> Arc<WorkqueueMetrics> {
         self.metrics.clone()
@@ -413,7 +463,18 @@ impl Workqueue {
     /// which enables dirty requeue - if an update arrives while processing, it will be queued
     /// and processed again after the current processing completes.
     pub async fn enqueue(&self, key: String) -> bool {
-        if !self.pending.insert(key.clone()) {
+        let was_inserted = match self.pending.entry(key.clone()) {
+            Entry::Vacant(v) => {
+                v.insert(PendingEntry {
+                    enqueue_time: Instant::now(),
+                    chain: TriggerChain::default(),
+                });
+                true
+            }
+            Entry::Occupied(_) => false,
+        };
+
+        if !was_inserted {
             tracing::trace!(
                 queue = %self.name,
                 key = %key,
@@ -421,6 +482,7 @@ impl Workqueue {
             );
             return false;
         }
+
         self.metrics.inc_depth();
         let depth = self.metrics.get_depth();
         let capacity = self.config.capacity as u64;
@@ -433,9 +495,7 @@ impl Workqueue {
             );
         }
 
-        let item = WorkItem::new(key.clone());
-
-        match self.tx.send(item).await {
+        match self.tx.send(key.clone()).await {
             Ok(()) => {
                 self.metrics.inc_adds();
                 tracing::debug!(
@@ -527,15 +587,35 @@ impl Workqueue {
     /// requests for the same key during processing.
     pub async fn dequeue(&self) -> Option<WorkItem> {
         let mut rx = self.rx.lock().await;
-        let item = rx.recv().await?;
+        let key = rx.recv().await?;
 
-        if self.pending.remove(&item.key).is_some() {
-            self.metrics.dec_depth();
-        }
+        let (enqueue_time, trigger_chain) = match self.pending.remove(&key) {
+            Some((_, entry)) => {
+                self.metrics.dec_depth();
+                (entry.enqueue_time, entry.chain)
+            }
+            None => {
+                // Defensive: pending entry should exist for any key in the channel,
+                // but if it's missing (e.g. send-after-remove race on shutdown),
+                // fall back to an empty WorkItem rather than dropping the event.
+                tracing::warn!(
+                    queue = %self.name,
+                    key = %key,
+                    "Dequeued key without pending entry; using empty chain"
+                );
+                (Instant::now(), TriggerChain::default())
+            }
+        };
+
+        let item = WorkItem {
+            key: key.clone(),
+            enqueue_time,
+            trigger_chain,
+        };
 
         tracing::debug!(
             queue = %self.name,
-            key = %item.key,
+            key = %key,
             chain_depth = item.trigger_chain.depth(),
             "Dequeued item for processing"
         );
@@ -567,7 +647,7 @@ impl Workqueue {
 
     /// Check if a key is in the ready queue (pending)
     pub fn contains(&self, key: &str) -> bool {
-        self.pending.contains(key)
+        self.pending.contains_key(key)
     }
 
     /// Check if a key is in the delay queue (scheduled)
@@ -752,5 +832,44 @@ mod tests {
 
         // Now all should be processed
         assert_eq!(queue.len(), 0, "Pending queue should be empty after draining");
+    }
+
+    #[tokio::test]
+    async fn test_delay_fire_collision_preserves_chain() {
+        // Reproduces c3a-008: when enqueue_after's delay fires and the key is already
+        // pending from a concurrent immediate enqueue, the trigger chain must be
+        // merged into the pending entry, not silently dropped. Otherwise the cycle
+        // detector loses cascade history and `max_trigger_cycles` cannot fire.
+        let queue = Workqueue::with_defaults("test");
+        let chain = TriggerChain::new().extend("HTTPRoute", "default/route-x");
+        assert_eq!(chain.depth(), 1);
+
+        // Schedule with delay (50ms) carrying a chain of depth 1.
+        queue
+            .enqueue_after("ns/key".to_string(), Duration::from_millis(50), chain.clone())
+            .await;
+
+        // Immediate enqueue lands in pending with empty chain. The delayed item is
+        // still parked in the heap; when its 50ms timer fires it will hit the
+        // pending-collision branch.
+        queue.enqueue("ns/key".to_string()).await;
+
+        // Wait for the delay to fire while the immediate item is still pending
+        // (we deliberately do NOT dequeue between the two enqueues).
+        sleep(Duration::from_millis(120)).await;
+
+        // Dequeue: the surviving WorkItem must carry the merged chain (depth 1),
+        // not the empty chain that would result if the collision dropped the chain.
+        let item = queue.dequeue().await.expect("Should have an item");
+        assert_eq!(item.key, "ns/key");
+        assert_eq!(
+            item.trigger_chain.depth(),
+            1,
+            "Chain must be preserved when delay-fire collides with pending"
+        );
+        assert_eq!(item.trigger_chain.sources[0].kind, "HTTPRoute");
+        assert_eq!(item.trigger_chain.sources[0].key, "default/route-x");
+
+        assert_eq!(queue.len(), 0, "No more items after dequeue");
     }
 }

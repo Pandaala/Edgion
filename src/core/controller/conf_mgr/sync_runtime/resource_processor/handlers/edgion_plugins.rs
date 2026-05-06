@@ -16,6 +16,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 };
 use crate::types::prelude_resources::EdgionPlugins;
 use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
+use crate::types::resources::plugin_metadata::MetaDataEntry;
 use crate::types::ResourceKind;
 
 use super::plugins::resolve_credential as cred;
@@ -66,41 +67,9 @@ impl EdgionPluginsHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
-    fn preparse(&self, ep: &mut EdgionPlugins, ctx: &HandlerContext) -> Vec<String> {
-        // Build plugin runtime and collect validation errors
+    fn preparse(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext) -> Vec<String> {
         ep.preparse();
-        let mut errors = ep.get_preparse_errors().to_vec();
-
-        // Check serviceRegionRouteRef ServiceRegionRoute PluginMetaData availability so errors appear in status conditions
-        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-        if let Some(plugins) = &ep.spec.request_plugins {
-            for (idx, entry) in plugins.iter().enumerate() {
-                if let EdgionPlugin::RegionRoute(ref config) = entry.plugin {
-                    if let Some(ref svc_name) = config.service_region_route_ref {
-                        let plugin_metadata = ctx.runtime().plugin_metadata_store.get(Some(ns), svc_name);
-                        match plugin_metadata {
-                            None => {
-                                errors.push(format!(
-                                    "requestPlugins[{}] RegionRoute: serviceRegionRouteRef {}/{} not found",
-                                    idx, ns, svc_name
-                                ));
-                            }
-                            Some(plugin_metadata) => {
-                                use crate::types::resources::plugin_metadata::MetaDataEntry;
-                                if !matches!(plugin_metadata.spec.metadata, MetaDataEntry::ServiceRegionRoute(_)) {
-                                    errors.push(format!(
-                                        "requestPlugins[{}] RegionRoute: PluginMetaData {}/{} is not a ServiceRegionRoute",
-                                        idx, ns, svc_name
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        errors
+        ep.get_preparse_errors().to_vec()
     }
 
     async fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {
@@ -192,10 +161,8 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             )
         };
 
-        // ResolvedRefs aggregates the Secret references registered during parse().
-        // parse() always adds refs before resolution, so any unresolved Secret appears
-        // in the ref manager's dependency list but not in secret_store.
-        let resolved_errors = Self::resolve_secret_refs(ep, ctx);
+        let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
+        resolved_errors.extend(resolve_pm_refs(ep, ctx));
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
                 condition_types::RESOLVED_REFS,
@@ -253,6 +220,34 @@ impl EdgionPluginsHandler {
         }
         errors
     }
+}
+
+/// Check each RegionRoute plugin's `serviceRegionRouteRef` against the PluginMetaData store.
+/// Returns one `PluginMetaDataNotFound` error per missing or wrong-type reference.
+fn resolve_pm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+    let Some(plugins) = &ep.spec.request_plugins else {
+        return vec![];
+    };
+    let mut errors = Vec::new();
+    for entry in plugins {
+        if let EdgionPlugin::RegionRoute(ref config) = entry.plugin {
+            if let Some(ref svc_name) = config.service_region_route_ref {
+                let target = ctx.runtime().plugin_metadata_store.get(Some(ns), svc_name);
+                let resolved = target
+                    .as_ref()
+                    .is_some_and(|t| matches!(&t.spec.metadata, MetaDataEntry::ServiceRegionRoute(_)));
+                if !resolved {
+                    errors.push(ResolvedRefsError::PluginMetaDataNotFound {
+                        namespace: ns.to_string(),
+                        name: svc_name.clone(),
+                        expected_type: "ServiceRegionRoute".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    errors
 }
 
 #[cfg(test)]
@@ -656,8 +651,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_region_route_refs_missing() {
-        // Empty store → preparse() reports error via status conditions
-        // (validation_error on the config is no longer set; the check moved to preparse())
+        // Empty PluginMetaData store → resolve_pm_refs() reports the missing reference
+        // as a ResolvedRefsError::PluginMetaDataNotFound. Preparse no longer touches
+        // PluginMetaData refs (they aren't structural validation of the EP itself —
+        // they're a ref-resolution concern, surfaced via the ResolvedRefs condition).
         let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
 
         let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
@@ -671,19 +668,15 @@ mod tests {
 
         let handler = EdgionPluginsHandler::new();
 
-        // preparse() should report the missing PluginMetaData reference as an error
-        let errors = handler.preparse(&mut ep, &ctx);
+        // preparse() should NOT report missing PM as a structural error
+        let preparse_errors = handler.preparse(&mut ep, &ctx);
         assert!(
-            !errors.is_empty(),
-            "expected preparse to report an error for missing PM"
-        );
-        assert!(
-            errors.iter().any(|e| e.contains("not found")),
-            "expected 'not found' in errors, got: {:?}",
-            errors
+            preparse_errors.is_empty(),
+            "preparse should not flag missing PM (handled by ResolvedRefs), got: {:?}",
+            preparse_errors
         );
 
-        // parse() no longer sets validation_error — config.validation_error stays None
+        // parse() does not set validation_error on the config either
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
@@ -693,5 +686,18 @@ mod tests {
             _ => panic!("unexpected plugin type"),
         };
         assert!(config.validation_error.is_none());
+
+        // resolve_pm_refs() is the path that surfaces the missing PluginMetaData.
+        let ref_errors = super::resolve_pm_refs(&parsed, &ctx);
+        assert_eq!(ref_errors.len(), 1, "expected one PluginMetaDataNotFound error");
+        match &ref_errors[0] {
+            crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
+                PluginMetaDataNotFound { namespace, name, expected_type } => {
+                assert_eq!(namespace, "default");
+                assert_eq!(name, "missing-pm");
+                assert_eq!(expected_type, "ServiceRegionRoute");
+            }
+            other => panic!("expected PluginMetaDataNotFound, got: {:?}", other),
+        }
     }
 }

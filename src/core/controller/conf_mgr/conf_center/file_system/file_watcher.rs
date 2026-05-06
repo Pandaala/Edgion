@@ -8,8 +8,9 @@ use super::event::{FileSystemEvent, ParsedFileInfo};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::types::ResourceKind;
 use anyhow::{Context, Result};
+use notify::event::{ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -246,8 +247,10 @@ impl FileSystemWatcher {
         })
         .await??;
 
-        // Debounce and dispatch events
-        let mut pending_paths: HashSet<PathBuf> = HashSet::new();
+        // Debounce and dispatch events.
+        // Stores the last-seen EventKind per path so dispatch can use event type
+        // (not just path existence) to distinguish atomic-replace from true deletion.
+        let mut pending: HashMap<PathBuf, EventKind> = HashMap::new();
         let debounce_duration = Duration::from_secs(1);
         let mut debounce_timer = tokio::time::interval(debounce_duration);
 
@@ -256,14 +259,15 @@ impl FileSystemWatcher {
                 Some(event) = rx.recv() => {
                     for path in event.paths {
                         if is_yaml_file(&path) {
-                            pending_paths.insert(path);
+                            // Overwrite with the most recent event kind for this path.
+                            pending.insert(path, event.kind);
                         }
                     }
                 }
                 _ = debounce_timer.tick() => {
-                    if !pending_paths.is_empty() {
-                        for path in pending_paths.drain() {
-                            self.dispatch_file_event(&path).await;
+                    if !pending.is_empty() {
+                        for (path, kind) in pending.drain() {
+                            self.dispatch_file_event(&path, kind).await;
                         }
                     }
                 }
@@ -283,9 +287,13 @@ impl FileSystemWatcher {
         Ok(())
     }
 
-    /// Dispatch a file event (Apply or Delete) to the appropriate kind channel
-    async fn dispatch_file_event(&self, path: &Path) {
-        // Parse file info from filename
+    /// Dispatch a file event (Apply or Delete) to the appropriate kind channel.
+    ///
+    /// Uses `last_kind` — the most recent EventKind seen for this path in the debounce
+    /// window — to distinguish atomic-replace (e.g. vim, kustomize) from true deletion.
+    /// Falls back to a 200 ms re-existence check for ambiguous event types so that a
+    /// transient absence during rename does not produce a spurious Delete.
+    async fn dispatch_file_event(&self, path: &Path, last_kind: EventKind) {
         let Some(info) = parse_resource_filename(path) else {
             tracing::trace!(
                 component = "fs_watcher",
@@ -295,20 +303,35 @@ impl FileSystemWatcher {
             return;
         };
 
-        let senders = self.senders.read().await;
-        let Some(sender) = senders.get(info.kind.as_str()) else {
-            tracing::trace!(
-                component = "fs_watcher",
-                kind = %info.kind,
-                path = %path.display(),
-                "No subscriber for kind"
-            );
-            return;
+        // Clone the sender so we release the read-lock before any await points.
+        let sender = {
+            let senders = self.senders.read().await;
+            let Some(s) = senders.get(info.kind.as_str()) else {
+                tracing::trace!(
+                    component = "fs_watcher",
+                    kind = %info.kind,
+                    path = %path.display(),
+                    "No subscriber for kind"
+                );
+                return;
+            };
+            s.clone()
         };
 
-        if path.exists() {
-            // File exists -> Apply event
-            match tokio::fs::read_to_string(path).await {
+        let mut action = infer_dispatch_action(&last_kind, path.exists());
+
+        if action == DispatchAction::Recheck {
+            // Wait for an in-flight atomic-replace (rename) to complete before deciding.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            action = if path.exists() {
+                DispatchAction::Apply
+            } else {
+                DispatchAction::Delete
+            };
+        }
+
+        match action {
+            DispatchAction::Apply => match tokio::fs::read_to_string(path).await {
                 Ok(content) => {
                     let _ = sender.send(FileSystemEvent::Apply {
                         path: path.to_path_buf(),
@@ -329,18 +352,55 @@ impl FileSystemWatcher {
                         "Failed to read file for Apply event"
                     );
                 }
+            },
+            DispatchAction::Delete => {
+                let delete_info = format!("__DELETE__:{}:{}", info.kind, info.key);
+                let _ = sender.send(FileSystemEvent::Delete(delete_info));
+                tracing::debug!(
+                    component = "fs_watcher",
+                    kind = %info.kind,
+                    key = %info.key,
+                    "Dispatched Delete event"
+                );
             }
-        } else {
-            // File doesn't exist -> Delete event
-            // For delete, we send the key as content so the controller knows what to delete
-            let delete_info = format!("__DELETE__:{}:{}", info.kind, info.key);
-            let _ = sender.send(FileSystemEvent::Delete(delete_info));
-            tracing::debug!(
-                component = "fs_watcher",
-                kind = %info.kind,
-                key = %info.key,
-                "Dispatched Delete event"
-            );
+            DispatchAction::Recheck => unreachable!(),
+        }
+    }
+}
+
+// ============================================================================
+// Dispatch classification
+// ============================================================================
+
+/// Outcome of dispatch classification for a pending file path.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DispatchAction {
+    Apply,
+    Delete,
+    /// Event type is ambiguous; caller should recheck path existence after a short delay.
+    Recheck,
+}
+
+/// Classify whether a pending path should trigger Apply, Delete, or a re-existence check.
+///
+/// Uses the last-seen EventKind to distinguish atomic-replace (rename) from true deletion.
+/// Falls back to `path_exists` for ambiguous event types, emitting Recheck when the path
+/// is absent so the caller can wait out any in-flight create before committing to Delete.
+pub(crate) fn infer_dispatch_action(last_kind: &EventKind, path_exists: bool) -> DispatchAction {
+    match last_kind {
+        // Explicit removal or "renamed away" — treat as Delete regardless of path state.
+        EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(RenameMode::From)) => DispatchAction::Delete,
+        // Explicit creation or "renamed into" — treat as Apply.
+        EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(RenameMode::To)) => DispatchAction::Apply,
+        // All other kinds (data/metadata modify, Any, Other, Name(Both/Any)) are ambiguous.
+        // Resolve by path existence; if absent, ask caller to recheck after a short delay
+        // so an in-flight atomic-replace can complete before we commit to Delete.
+        _ => {
+            if path_exists {
+                DispatchAction::Apply
+            } else {
+                DispatchAction::Recheck
+            }
         }
     }
 }
@@ -387,6 +447,136 @@ fn parse_resource_filename(path: &Path) -> Option<ParsedFileInfo> {
         Some(ParsedFileInfo::new(kind, namespace, name))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
+
+    #[test]
+    fn remove_file_event_triggers_delete() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Remove(RemoveKind::File), false),
+            DispatchAction::Delete
+        );
+    }
+
+    #[test]
+    fn remove_any_event_triggers_delete() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Remove(RemoveKind::Any), false),
+            DispatchAction::Delete
+        );
+    }
+
+    #[test]
+    fn remove_event_triggers_delete_even_when_path_exists() {
+        // Conservative: trust the kernel Remove event, not the existence check.
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Remove(RemoveKind::File), true),
+            DispatchAction::Delete
+        );
+    }
+
+    #[test]
+    fn rename_from_event_triggers_delete() {
+        // Modify(Name(From)) = file was renamed/moved away = effectively deleted.
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Name(RenameMode::From)), false),
+            DispatchAction::Delete
+        );
+    }
+
+    #[test]
+    fn rename_from_event_triggers_delete_even_when_path_exists() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Name(RenameMode::From)), true),
+            DispatchAction::Delete
+        );
+    }
+
+    #[test]
+    fn create_event_with_existing_file_triggers_apply() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Create(CreateKind::File), true),
+            DispatchAction::Apply
+        );
+    }
+
+    #[test]
+    fn rename_to_event_triggers_apply() {
+        // Modify(Name(To)) = file was renamed/moved into watched dir.
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Name(RenameMode::To)), true),
+            DispatchAction::Apply
+        );
+    }
+
+    #[test]
+    fn modify_data_event_with_existing_file_triggers_apply() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Data(DataChange::Content)), true),
+            DispatchAction::Apply
+        );
+    }
+
+    #[test]
+    fn modify_data_event_with_missing_file_triggers_recheck() {
+        // Event-loss scenario: Remove was dropped, only Modify remains in pending.
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Data(DataChange::Content)), false),
+            DispatchAction::Recheck
+        );
+    }
+
+    #[test]
+    fn any_event_with_existing_file_triggers_apply() {
+        assert_eq!(infer_dispatch_action(&EventKind::Any, true), DispatchAction::Apply);
+    }
+
+    #[test]
+    fn any_event_with_missing_file_triggers_recheck() {
+        assert_eq!(infer_dispatch_action(&EventKind::Any, false), DispatchAction::Recheck);
+    }
+
+    // This is the core vim atomic-replace fix:
+    // vim does rename(tmp, target) → notify emits Modify(Name(Both)) or separate From/To.
+    // In the same debounce window, pending[target] ends up with the LAST event.
+    // If last event is Create or Modify(Name(To)), and file exists → Apply, not Delete.
+    #[test]
+    fn vim_atomic_replace_last_event_is_rename_to_triggers_apply() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Name(RenameMode::To)), true),
+            DispatchAction::Apply
+        );
+    }
+
+    // rm + cp scenario: Remove then Create in same window → pending keeps Create (last wins).
+    #[test]
+    fn rm_cp_last_event_is_create_triggers_apply() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Create(CreateKind::Any), true),
+            DispatchAction::Apply
+        );
+    }
+
+    // Rename(Both) is uncertain (two paths in one event, per-path semantic unclear).
+    #[test]
+    fn rename_both_with_existing_file_triggers_apply() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Name(RenameMode::Both)), true),
+            DispatchAction::Apply
+        );
+    }
+
+    #[test]
+    fn rename_both_with_missing_file_triggers_recheck() {
+        assert_eq!(
+            infer_dispatch_action(&EventKind::Modify(ModifyKind::Name(RenameMode::Both)), false),
+            DispatchAction::Recheck
+        );
     }
 }
 

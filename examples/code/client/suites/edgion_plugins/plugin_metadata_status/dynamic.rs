@@ -1,11 +1,12 @@
 //! PMD RefFlap scenario phase suites.
 //!
 //! Initial phase: EdgionPlugins references existing ServiceRegionRoute PMD `pmd-flap-good`
-//!                → Accepted=True.
+//!                → Accepted=True, ResolvedRefs=True.
 //! Invalid phase: EdgionPlugins references non-existent `pmd-flap-missing`
-//!                → Accepted=False (reason: Invalid).
+//!                → Accepted=True (resource is structurally valid),
+//!                  ResolvedRefs=False (reason: InvalidPluginMetaDataRef).
 //! Valid phase:   EdgionPlugins restored to reference `pmd-flap-good`
-//!                → Accepted=True (recovered).
+//!                → Accepted=True, ResolvedRefs=True (recovered).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -15,11 +16,12 @@ const NS: &str = "edgion-test";
 const EP: &str = "pmd-flap-plugin";
 
 // ---------------------------------------------------------------------------
-// Helper: fetch status.conditions for the EdgionPlugins under test.
-// Returns a single-shot result — no internal retry loop (wait_phase polls).
+// Helper: fetch a single condition (status, reason) for the EdgionPlugins
+// under test. Returns a single-shot result — no internal retry loop
+// (wait_phase polls).
 // ---------------------------------------------------------------------------
 
-async fn fetch_ep_accepted(ctx: &TestContext) -> Result<(String, String), String> {
+async fn fetch_ep_condition(ctx: &TestContext, condition_type: &str) -> Result<(String, String), String> {
     let url = format!(
         "{}/configserver/EdgionPlugins?namespace={}&name={}",
         ctx.admin_api_url(),
@@ -48,13 +50,13 @@ async fn fetch_ep_accepted(ctx: &TestContext) -> Result<(String, String), String
         .as_array()
         .ok_or_else(|| format!("EP '{}' status.conditions not present", EP))?;
 
-    let accepted = conditions
+    let cond = conditions
         .iter()
-        .find(|c| c["type"].as_str() == Some("Accepted"))
-        .ok_or_else(|| format!("EP '{}' has no Accepted condition", EP))?;
+        .find(|c| c["type"].as_str() == Some(condition_type))
+        .ok_or_else(|| format!("EP '{}' has no {} condition", EP, condition_type))?;
 
-    let status = accepted["status"].as_str().unwrap_or("").to_string();
-    let reason = accepted["reason"].as_str().unwrap_or("").to_string();
+    let status = cond["status"].as_str().unwrap_or("").to_string();
+    let reason = cond["reason"].as_str().unwrap_or("").to_string();
 
     Ok((status, reason))
 }
@@ -73,7 +75,7 @@ impl PmdFlapInitialTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match fetch_ep_accepted(&ctx).await {
+                    match fetch_ep_condition(&ctx, "Accepted").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
                             "Accepted=True as expected (pmd-flap-good PMD present)".to_string(),
@@ -81,6 +83,29 @@ impl PmdFlapInitialTestSuite {
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
                             format!("Expected Accepted=True, got status={} reason={}", status, reason),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_resolved_refs_true() -> TestCase {
+        TestCase::new(
+            "pmd_flap_initial_resolved_refs_true",
+            "EdgionPlugins referencing existing pmd-flap-good PMD should be ResolvedRefs=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match fetch_ep_condition(&ctx, "ResolvedRefs").await {
+                        Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "ResolvedRefs=True as expected (pmd-flap-good PMD resolved)".to_string(),
+                        ),
+                        Ok((status, reason)) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected ResolvedRefs=True, got status={} reason={}", status, reason),
                         ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -101,7 +126,7 @@ impl TestSuite for PmdFlapInitialTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_accepted_true()]
+        vec![Self::test_accepted_true(), Self::test_resolved_refs_true()]
     }
 }
 
@@ -112,26 +137,54 @@ impl TestSuite for PmdFlapInitialTestSuite {
 pub struct PmdFlapInvalidTestSuite;
 
 impl PmdFlapInvalidTestSuite {
-    fn test_accepted_false() -> TestCase {
+    fn test_resolved_refs_false() -> TestCase {
         TestCase::new(
-            "pmd_flap_invalid_accepted_false",
-            "EdgionPlugins referencing missing pmd-flap-missing PMD should be Accepted=False (reason: Invalid)",
+            "pmd_flap_invalid_resolved_refs_false",
+            "EdgionPlugins referencing missing pmd-flap-missing PMD should be \
+             ResolvedRefs=False (reason: InvalidPluginMetaDataRef)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match fetch_ep_accepted(&ctx).await {
-                        Ok((status, reason)) if status == "False" && reason == "Invalid" => {
+                    match fetch_ep_condition(&ctx, "ResolvedRefs").await {
+                        Ok((status, reason)) if status == "False" && reason == "InvalidPluginMetaDataRef" => {
                             TestResult::passed_with_message(
                                 start.elapsed(),
-                                "Accepted=False/Invalid as expected (pmd-flap-missing PMD not found)".to_string(),
+                                "ResolvedRefs=False/InvalidPluginMetaDataRef as expected \
+                                 (pmd-flap-missing PMD not found)"
+                                    .to_string(),
                             )
                         }
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "Expected Accepted=False/Invalid, got status={} reason={}",
+                                "Expected ResolvedRefs=False/InvalidPluginMetaDataRef, \
+                                 got status={} reason={}",
                                 status, reason
                             ),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_accepted_still_true() -> TestCase {
+        TestCase::new(
+            "pmd_flap_invalid_accepted_true",
+            "EdgionPlugins is structurally valid even when its PMD ref is missing — \
+             Accepted should remain True; the missing ref surfaces only via ResolvedRefs",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match fetch_ep_condition(&ctx, "Accepted").await {
+                        Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Accepted=True as expected (resource itself is structurally valid)".to_string(),
+                        ),
+                        Ok((status, reason)) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected Accepted=True, got status={} reason={}", status, reason),
                         ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -152,7 +205,7 @@ impl TestSuite for PmdFlapInvalidTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_accepted_false()]
+        vec![Self::test_resolved_refs_false(), Self::test_accepted_still_true()]
     }
 }
 
@@ -170,7 +223,7 @@ impl PmdFlapValidTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match fetch_ep_accepted(&ctx).await {
+                    match fetch_ep_condition(&ctx, "Accepted").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
                             "Accepted=True as expected (recovered to pmd-flap-good)".to_string(),
@@ -179,6 +232,32 @@ impl PmdFlapValidTestSuite {
                             start.elapsed(),
                             format!(
                                 "Expected Accepted=True (recovered), got status={} reason={}",
+                                status, reason
+                            ),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_resolved_refs_true_recovered() -> TestCase {
+        TestCase::new(
+            "pmd_flap_valid_resolved_refs_true_recovered",
+            "EdgionPlugins restored to pmd-flap-good PMD should be ResolvedRefs=True again",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match fetch_ep_condition(&ctx, "ResolvedRefs").await {
+                        Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "ResolvedRefs=True as expected (recovered to pmd-flap-good)".to_string(),
+                        ),
+                        Ok((status, reason)) => TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected ResolvedRefs=True (recovered), got status={} reason={}",
                                 status, reason
                             ),
                         ),
@@ -201,6 +280,9 @@ impl TestSuite for PmdFlapValidTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_accepted_true_recovered()]
+        vec![
+            Self::test_accepted_true_recovered(),
+            Self::test_resolved_refs_true_recovered(),
+        ]
     }
 }

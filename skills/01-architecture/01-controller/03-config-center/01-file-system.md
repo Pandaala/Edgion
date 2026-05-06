@@ -110,13 +110,39 @@ start(shutdown_handle)
 
 `FileSystemWatcher.runtime_phase()` 使用 `notify` 库的 `RecommendedWatcher`：
 
-1. 创建 `RecommendedWatcher`（poll interval 2s），将原始事件发送到 `mpsc::channel`
+1. 创建 `RecommendedWatcher`（poll interval 2s），将原始事件发送到 `mpsc::channel(100)`
 2. 忽略 `EventKind::Access`（只读访问不触发处理）
-3. 使用 1 秒 debounce 去抖：收集所有变更路径，定时批量分发
-4. `dispatch_file_event()` 判断文件是否存在：
-   - 存在 → 读取内容 → 发送 `Apply { path, content }`
-   - 不存在 → 发送 `Delete(key)`
+3. 使用 1 秒 interval debounce 去抖：用 `HashMap<PathBuf, EventKind>` 收集路径与**最后一次**事件类型，定时批量分发
+   - 同一 debounce 窗口内多个事件时，最新的 EventKind 覆盖旧的（`pending.insert(path, event.kind)`）
+4. `dispatch_file_event(path, last_kind)` 通过 `infer_dispatch_action` 三段判定：
+   - `Remove(_)` 或 `Modify(Name(From))` → **Delete**（明确移除或改名走，无论文件是否存在）
+   - `Create(_)` 或 `Modify(Name(To))` → **Apply**（明确创建或改名进来）
+   - 其它（`Modify(Data/Metadata/Any)`、`Any`、`Other`、`Name(Both/Any)`）→ 根据 `path.exists()`：
+     - 存在 → Apply
+     - 不存在 → **Recheck**：sleep 200ms 后再检查，仍不存在则 Delete
 5. 通过 `broadcast::channel` 按 Kind 分发给对应的 `FileSystemResourceController`
+
+### dispatch 设计决策与权衡
+
+**为什么用 EventKind 而不是仅用 path.exists()**
+
+vim、kubectl edit 等工具使用原子替换（`rename(tmp, target)`）写文件。notify 在同一 debounce 窗口内会同时产生 `Remove(target)` 和 `Create(target)` 或 `Modify(Name(Both))`，若恰好在 debounce 边界处仅看到 Remove，旧逻辑的 `!path.exists()` 会触发假 Delete → controller 误删缓存 → 写空 status → 再 Apply。引入 EventKind 后，窗口内 Create 覆盖 Remove，dispatch 看到 Create + exists=true → Apply，根因消除。
+
+**`Remove + path_exists=true → Delete`（保守设计，有意为之）**
+
+Remove 事件明确来自内核，被保守地处理为 Delete，不论 `path.exists()` 的瞬时结果。这样做的原因：
+- 正常的 atomic-replace（rename）会让 Create 覆盖 pending 中的 Remove，dispatch 时不会看到 Remove 作为最后事件
+- 若 debounce tick 恰好落在 Remove 和 Create 事件之间（毫秒级概率），pending 最后是 Remove，path 可能已重建（exists=true）。此时发出 Delete，下一个 tick 再发 Apply，造成短暂状态抖动——对 config controller 可以接受
+- 若改为 `Remove + exists=true → Recheck`，会对每个真实删除多等 200ms，且语义更复杂
+
+**Recheck 200ms 作为事件丢失兜底**
+
+`mpsc::channel(100)` 满时，Remove 事件可能被丢弃，此时 pending 中只剩 `Modify(Data)` + 文件不存在。旧逻辑靠 `!path.exists()` 偶然兜底了这种情况；新逻辑通过 Recheck 显式处理：sleep 200ms 等待可能的 in-flight create 完成，仍不存在则 Delete。
+
+**已知限制**
+
+- Recheck 期间（200ms sleep）select loop 不处理新事件，若 pending 中有多个 Recheck 路径会串行累加延迟。config dir 文件量有限，生产中极少触发。若需高吞吐，可改为 `tokio::spawn` 并发 dispatch。
+- init_phase 扫描完成后才启动 watcher，两者之间的事件会丢失（独立已知问题，待单独修复）。
 
 ## 分阶段初始化
 

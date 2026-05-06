@@ -634,6 +634,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     update_gateway_condition(conditions, cond);
                 }
                 Some(message) => {
+                    tracing::warn!(
+                        annotation = annotations::edgion::EDGION_STREAM_PLUGINS,
+                        error = %message,
+                        "Gateway-level stream plugin ref unresolved; stream plugin chain will be empty"
+                    );
                     let cond = condition_false(
                         condition_types::RESOLVED_REFS,
                         condition_reasons::INVALID_STREAM_PLUGINS_REF,
